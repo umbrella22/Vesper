@@ -25,7 +25,9 @@ use player_runtime::{
     PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerVideoDecodeInfo,
     PlayerVideoDecodeMode, PresentationState, VideoPixelFormat,
 };
-use tracing::{error, info, warn};
+use tracing::{error, info};
+#[cfg(target_os = "macos")]
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -246,6 +248,17 @@ impl DesktopPlayerApp {
         };
         let frame_texture = video_frame_texture(frame);
         let window_size = window.inner_size();
+        #[cfg(not(target_os = "macos"))]
+        let overlay = if window_size.width == 0 || window_size.height == 0 || !self.controls_visible {
+            None
+        } else {
+            render_control_overlay(
+                window_size.width,
+                window_size.height,
+                &self.runtime()?.snapshot(),
+                self.seek_preview,
+            )
+        };
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(());
         };
@@ -262,19 +275,7 @@ impl DesktopPlayerApp {
         }
 
         #[cfg(not(target_os = "macos"))]
-        if !self.controls_visible {
-            renderer.clear_overlay();
-            window.request_redraw();
-            return Ok(());
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        if let Some(overlay) = render_control_overlay(
-            window_size.width,
-            window_size.height,
-            &self.runtime()?.snapshot(),
-            self.seek_preview,
-        ) {
+        if let Some(overlay) = overlay {
             renderer.upload_overlay(&overlay);
         } else {
             renderer.clear_overlay();

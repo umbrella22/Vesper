@@ -1,14 +1,16 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use player_core::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use player_render_wgpu::RenderSurfaceConfig;
 use player_runtime::{
     DEFAULT_VIDEO_PREFETCH_CAPACITY, PlayerMediaInfo, PlayerRuntimeAdapterCapabilities,
-    PlayerRuntimeBootstrap, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoSurfaceKind,
-    PlayerVideoSurfaceTarget,
+    PlayerRuntimeBootstrap, PlayerRuntimeOptions, PlayerRuntimeStartup,
 };
 use winit::window::Window;
+
+#[cfg(target_os = "macos")]
+use player_runtime::{PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget};
 
 #[cfg(target_os = "linux")]
 use player_platform_linux::{
@@ -114,7 +116,7 @@ pub fn probe_desktop_host_runtime_uri_with_options(
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (source, options);
-        bail!("desktop host helper only supports macOS, Linux, and Windows targets")
+        anyhow::bail!("desktop host helper only supports macOS, Linux, and Windows targets")
     }
 }
 
@@ -181,25 +183,29 @@ pub fn open_desktop_host_runtime_uri_for_winit_window_with_options(
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (source, options);
-        bail!("desktop host helper only supports macOS, Linux, and Windows targets")
+        anyhow::bail!("desktop host helper only supports macOS, Linux, and Windows targets")
     }
 }
 
 pub fn runtime_options_for_winit_window(
     window: &Window,
-    mut options: PlayerRuntimeOptions,
+    options: PlayerRuntimeOptions,
 ) -> Result<PlayerRuntimeOptions> {
     #[cfg(target_os = "macos")]
     {
+        let mut options = options;
         if options.video_surface.is_none() {
             options = options.with_video_surface(macos_video_surface_target(window)?);
         }
+
+        return Ok(options);
     }
 
     #[cfg(not(target_os = "macos"))]
-    let _ = window;
-
-    Ok(options)
+    {
+        let _ = window;
+        Ok(options)
+    }
 }
 
 pub fn render_config_from_media_info(media_info: &PlayerMediaInfo) -> RenderSurfaceConfig {
@@ -254,7 +260,7 @@ fn macos_video_surface_target(window: &Window) -> Result<PlayerVideoSurfaceTarge
             kind: PlayerVideoSurfaceKind::NsView,
             handle: handle.ns_view.as_ptr() as usize,
         }),
-        raw => bail!("expected an AppKit window handle on macOS, received {raw:?}"),
+        raw => anyhow::bail!("expected an AppKit window handle on macOS, received {raw:?}"),
     }
 }
 

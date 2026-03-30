@@ -74,7 +74,47 @@ pub fn default_window_attributes(config: RenderSurfaceConfig) -> WindowAttribute
 }
 
 pub fn preferred_backends() -> wgpu::Backends {
-    wgpu::Backends::METAL
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        return wgpu::Backends::METAL;
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        return wgpu::Backends::VULKAN;
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux",
+    )))]
+    {
+        wgpu::Backends::PRIMARY
+    }
+}
+
+fn preferred_backend_label() -> &'static str {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        return "Metal";
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        return "Vulkan";
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux",
+    )))]
+    {
+        "platform-default"
+    }
 }
 
 pub struct VideoRenderer {
@@ -129,7 +169,12 @@ impl VideoRenderer {
                 compatible_surface: Some(&surface),
             })
             .await
-            .context("failed to request a Metal adapter")?;
+            .with_context(|| {
+                format!(
+                    "failed to request a {} wgpu adapter",
+                    preferred_backend_label()
+                )
+            })?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
