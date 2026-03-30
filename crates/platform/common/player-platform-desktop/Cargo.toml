@@ -1,0 +1,13 @@
+[package]
+name = "player-platform-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+player-audio-cpal = { path = "../../../audio/player-audio-cpal" }
+player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
+player-core = { path = "../../../core/player-core" }
+player-runtime = { path = "../../../core/player-runtime" }

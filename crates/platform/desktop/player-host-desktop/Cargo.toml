@@ -1,0 +1,22 @@
+[package]
+name = "player-host-desktop"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+player-core = { path = "../../../core/player-core" }
+player-render-wgpu = { path = "../../../render/player-render-wgpu" }
+player-runtime = { path = "../../../core/player-runtime" }
+winit.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+player-platform-macos = { path = "../player-platform-macos" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+player-platform-linux = { path = "../player-platform-linux" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+player-platform-windows = { path = "../player-platform-windows" }

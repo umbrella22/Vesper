@@ -1,0 +1,42 @@
+/target
+*.mp4
+
+# macOS / editor junk
+.DS_Store
+*.swp
+*.swo
+*.tmp
+*.orig
+
+# Android example local state and generated artifacts
+examples/android-compose-host/local.properties
+examples/android-compose-host/.gradle/*
+!examples/android-compose-host/.gradle/config.properties
+examples/android-compose-host/.idea/*
+!examples/android-compose-host/.idea/gradle.xml
+examples/android-compose-host/build/
+examples/android-compose-host/app/build/
+
+# Android library local state and generated artifacts
+lib/android/local.properties
+lib/android/.gradle/*
+lib/android/.idea/*
+lib/android/build/
+lib/android/vesper-player-kit/build/
+lib/android/vesper-player-kit/src/main/jniLibs/*/librust_player_android_host.so
+
+# iOS example generated project artifacts
+examples/ios-swift-host/*.xcodeproj/
+examples/ios-swift-host/*.xcworkspace/
+examples/ios-swift-host/**/*.xcuserdata/
+examples/ios-swift-host/**/*.xcuserstate
+examples/ios-swift-host/.build/
+
+# iOS library generated artifacts
+lib/ios/**/*.xcodeproj/
+lib/ios/**/*.xcworkspace/
+lib/ios/**/*.xcuserdata/
+lib/ios/**/*.xcuserstate
+lib/ios/**/*.swiftpm/*
+lib/ios/**/.build/
+lib/ios/**/*.xcframework/

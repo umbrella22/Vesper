@@ -1,0 +1,138 @@
+import CoreGraphics
+import Foundation
+import SwiftUI
+import UIKit
+
+public enum PlayerBridgeBackend: String {
+    case fakeDemo = "fake_demo"
+    case rustNativeStub = "rust_native_stub"
+}
+
+public enum TimelineKindUi: String {
+    case vod = "vod"
+    case live = "live"
+    case liveDvr = "live_dvr"
+}
+
+public struct SeekableRangeUi {
+    public let startMs: Int64
+    public let endMs: Int64
+
+    public init(startMs: Int64, endMs: Int64) {
+        self.startMs = startMs
+        self.endMs = endMs
+    }
+}
+
+public struct TimelineUiState {
+    public let kind: TimelineKindUi
+    public let isSeekable: Bool
+    public let seekableRange: SeekableRangeUi?
+    public let liveEdgeMs: Int64?
+    public let positionMs: Int64
+    public let durationMs: Int64?
+
+    public init(
+        kind: TimelineKindUi,
+        isSeekable: Bool,
+        seekableRange: SeekableRangeUi?,
+        liveEdgeMs: Int64?,
+        positionMs: Int64,
+        durationMs: Int64?
+    ) {
+        self.kind = kind
+        self.isSeekable = isSeekable
+        self.seekableRange = seekableRange
+        self.liveEdgeMs = liveEdgeMs
+        self.positionMs = positionMs
+        self.durationMs = durationMs
+    }
+
+    public var displayedRatio: Double? {
+        if let range = seekableRange, range.endMs > range.startMs {
+            let clamped = min(max(positionMs, range.startMs), range.endMs)
+            let width = Double(range.endMs - range.startMs)
+            if width <= 0 {
+                return nil
+            }
+            return min(max(Double(clamped - range.startMs) / width, 0.0), 1.0)
+        }
+
+        guard let durationMs, durationMs > 0 else {
+            return nil
+        }
+
+        return min(max(Double(positionMs) / Double(durationMs), 0.0), 1.0)
+    }
+}
+
+public enum PlaybackStateUi: String {
+    case ready = "Ready"
+    case playing = "Playing"
+    case paused = "Paused"
+    case finished = "Finished"
+}
+
+public struct PlayerHostUiState {
+    public let title: String
+    public let subtitle: String
+    public let sourceLabel: String
+    public let playbackState: PlaybackStateUi
+    public let playbackRate: Float
+    public let isBuffering: Bool
+    public let isInterrupted: Bool
+    public let timeline: TimelineUiState
+
+    public init(
+        title: String,
+        subtitle: String,
+        sourceLabel: String,
+        playbackState: PlaybackStateUi,
+        playbackRate: Float,
+        isBuffering: Bool,
+        isInterrupted: Bool,
+        timeline: TimelineUiState
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.sourceLabel = sourceLabel
+        self.playbackState = playbackState
+        self.playbackRate = playbackRate
+        self.isBuffering = isBuffering
+        self.isInterrupted = isInterrupted
+        self.timeline = timeline
+    }
+}
+
+@MainActor
+protocol PlayerBridge: AnyObject {
+    var backend: PlayerBridgeBackend { get }
+    var uiState: PlayerHostUiState { get }
+
+    func initialize()
+    func dispose()
+    func selectSource(_ source: VesperPlayerSource)
+
+    func attachSurfaceHost(_ host: UIView)
+    func detachSurfaceHost()
+
+    func play()
+    func pause()
+    func togglePause()
+    func stop()
+    func seek(by deltaMs: Int64)
+    func seek(toRatio ratio: Double)
+    func seekToLiveEdge()
+    func setPlaybackRate(_ rate: Float)
+}
+
+@MainActor
+protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
+    var publishedUiState: PlayerHostUiState { get }
+}
+
+extension PlayerBridge {
+    var isPlaying: Bool {
+        uiState.playbackState == .playing
+    }
+}

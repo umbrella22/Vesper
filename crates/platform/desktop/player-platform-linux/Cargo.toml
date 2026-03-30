@@ -1,0 +1,11 @@
+[package]
+name = "player-platform-linux"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+player-core = { path = "../../../core/player-core" }
+player-platform-desktop = { path = "../../common/player-platform-desktop" }
+player-runtime = { path = "../../../core/player-runtime" }

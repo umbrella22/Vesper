@@ -1,0 +1,153 @@
+name: Vesper Desktop CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-ci.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/**"
+      - "crates/core/**"
+      - "crates/audio/**"
+      - "crates/render/**"
+      - "crates/backend/**"
+      - "crates/platform/common/**"
+      - "crates/platform/desktop/**"
+      - "examples/basic-player/**"
+      - "docs/DESKTOP-BUILD-CHECKLIST.md"
+      - "docs/NATIVE-BACKEND-STRATEGY.md"
+      - "docs/ARCHITECTURE-DECISION.md"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/desktop-ci.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/**"
+      - "crates/core/**"
+      - "crates/audio/**"
+      - "crates/render/**"
+      - "crates/backend/**"
+      - "crates/platform/common/**"
+      - "crates/platform/desktop/**"
+      - "examples/basic-player/**"
+      - "docs/DESKTOP-BUILD-CHECKLIST.md"
+      - "docs/NATIVE-BACKEND-STRATEGY.md"
+      - "docs/ARCHITECTURE-DECISION.md"
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-matrix:
+    name: Vesper Desktop ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+            platform_crate: player-platform-linux
+          - os: macos-latest
+            label: macOS
+            platform_crate: player-platform-macos
+          - os: windows-latest
+            label: Windows
+            platform_crate: player-platform-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libasound2-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libwayland-dev
+
+      - name: Install macOS system dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install ffmpeg pkg-config
+
+      - name: Install Windows FFmpeg toolchain via vcpkg
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VcpkgRoot = Join-Path $env:RUNNER_TEMP "vcpkg"
+          git clone https://github.com/microsoft/vcpkg $VcpkgRoot
+          & "$VcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+          & "$VcpkgRoot\vcpkg.exe" install ffmpeg:x64-windows
+          "VCPKG_ROOT=$VcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DEFAULT_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install cbindgen
+        if: runner.os == 'Linux'
+        run: cargo install cbindgen --locked
+
+      - name: Verify generated FFI header
+        if: runner.os == 'Linux'
+        run: ./scripts/verify-player-ffi-header.sh
+
+      - name: Workspace check
+        run: cargo check --workspace
+
+      - name: Desktop platform tests
+        run: cargo test -p player-platform-desktop -p ${{ matrix.platform_crate }}
+
+      - name: Example host check
+        run: cargo check -p basic-player -p player-ffi
+
+      - name: Build Vesper desktop demo
+        if: github.event_name == 'workflow_dispatch'
+        run: cargo build -p basic-player --release
+
+      - name: Stage Vesper desktop artifact
+        if: github.event_name == 'workflow_dispatch' && runner.os != 'Windows'
+        run: |
+          mkdir -p artifacts/desktop
+          cp target/release/basic-player artifacts/desktop/vesper-basic-player-${{ matrix.label }}
+
+      - name: Stage Vesper desktop artifact (Windows)
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/desktop | Out-Null
+          Copy-Item target\release\basic-player.exe artifacts/desktop/vesper-basic-player-Windows.exe
+
+      - name: Upload Vesper desktop artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vesper-basic-player-${{ matrix.label }}
+          path: artifacts/desktop/**

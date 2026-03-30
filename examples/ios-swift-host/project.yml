@@ -1,0 +1,31 @@
+name: VesperPlayerHostDemo
+options:
+  bundleIdPrefix: io.github.ikaros.vesper.example
+packages:
+  VesperPlayerKit:
+    path: ../../lib/ios/VesperPlayerKit
+targets:
+  VesperPlayerHostDemo:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Sources
+    dependencies:
+      - package: VesperPlayerKit
+        product: VesperPlayerKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.ikaros.vesper.example.ioshost
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
+    info:
+      path: Sources/Info.plist
+      properties:
+        NSPhotoLibraryUsageDescription: This demo needs Photo Library access so you can pick videos for playback.
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+    scheme:
+      testTargets: []

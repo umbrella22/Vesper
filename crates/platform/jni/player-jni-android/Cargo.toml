@@ -1,0 +1,15 @@
+[package]
+name = "player-jni-android"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "rust_player_android_host"
+
+[dependencies]
+jni = "0.22.4"
+player-platform-android = { path = "../../mobile/player-platform-android" }
+player-runtime = { path = "../../../core/player-runtime" }

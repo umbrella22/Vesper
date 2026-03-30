@@ -1,0 +1,154 @@
+name: Vesper Mobile Hosts CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mobile-hosts-ci.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/**"
+      - "crates/core/**"
+      - "crates/audio/**"
+      - "crates/render/**"
+      - "crates/backend/**"
+      - "crates/platform/common/**"
+      - "crates/platform/mobile/**"
+      - "crates/platform/jni/**"
+      - "examples/android-compose-host/**"
+      - "examples/ios-swift-host/**"
+      - "docs/MOBILE-ALIGNMENT-PLAN.md"
+      - "docs/MOBILE-INTEGRATION-SHAPES.md"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/mobile-hosts-ci.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/**"
+      - "crates/core/**"
+      - "crates/audio/**"
+      - "crates/render/**"
+      - "crates/backend/**"
+      - "crates/platform/common/**"
+      - "crates/platform/mobile/**"
+      - "crates/platform/jni/**"
+      - "examples/android-compose-host/**"
+      - "examples/ios-swift-host/**"
+      - "docs/MOBILE-ALIGNMENT-PLAN.md"
+      - "docs/MOBILE-INTEGRATION-SHAPES.md"
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-hosts-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-host:
+    name: Vesper Android Host Demo
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Resolve Android SDK root
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> "$GITHUB_ENV"
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.0"
+
+      - name: Write Android local.properties
+        run: |
+          cat <<EOF > examples/android-compose-host/local.properties
+          sdk.dir=${ANDROID_SDK_ROOT}
+          EOF
+
+      - name: Check Android bridge crates
+        run: cargo check -p player-platform-android -p player-jni-android
+
+      - name: Build Android JNI libraries
+        run: ./scripts/build-android-vesper-player-kit-jni.sh debug
+
+      - name: Assemble Vesper Android host demo
+        run: gradle -p examples/android-compose-host assembleDebug
+
+      - name: Upload Vesper Android debug APK
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VesperPlayerHostDemo-android-debug-apk
+          path: examples/android-compose-host/app/build/outputs/apk/debug/*.apk
+
+  ios-host:
+    name: Vesper iOS Host Demo
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Check iOS Rust adapter crate
+        run: cargo check -p player-platform-ios
+
+      - name: Generate Xcode project
+        working-directory: examples/ios-swift-host
+        run: xcodegen generate
+
+      - name: Build Vesper iOS host demo for simulator
+        run: |
+          xcodebuild \
+            -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj \
+            -scheme VesperPlayerHostDemo \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath examples/ios-swift-host/build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload Vesper iOS simulator app
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VesperPlayerHostDemo-ios-simulator-app
+          path: examples/ios-swift-host/build/DerivedData/Build/Products/Debug-iphonesimulator/*.app

@@ -1,0 +1,161 @@
+name: VesperPlayerKit Release
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Tag to package and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mobile-lib-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+
+jobs:
+  android-lib:
+    name: VesperPlayerKit Android ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi:
+          - arm64-v8a
+          - x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Resolve Android SDK root
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> "$GITHUB_ENV"
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.0"
+
+      - name: Build VesperPlayerKit Android release asset
+        run: bash ./scripts/stage-android-vesper-player-kit-release.sh release-assets/android ${{ matrix.abi }}
+
+      - name: Upload VesperPlayerKit Android release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: VesperPlayerKit-android-${{ matrix.abi }}
+          path: release-assets/android/*.aar
+
+  ios-lib:
+    name: VesperPlayerKit iOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build VesperPlayerKit iOS release assets
+        run: bash ./scripts/stage-ios-vesper-player-kit-release.sh release-assets/ios
+
+      - name: Upload VesperPlayerKit iOS release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: VesperPlayerKit-ios
+          path: release-assets/ios/*
+
+  publish-release:
+    name: Publish VesperPlayerKit Release
+    runs-on: ubuntu-latest
+    needs:
+      - android-lib
+      - ios-lib
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Download VesperPlayerKit release bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate VesperPlayerKit release notes
+        run: bash ./scripts/generate-release-notes.sh "${RELEASE_TAG}" release-assets/RELEASE_NOTES.md
+
+      - name: Resolve release channel
+        id: release-meta
+        shell: bash
+        run: |
+          tag="${RELEASE_TAG}"
+          prerelease=true
+          if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            prerelease=false
+          fi
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: Generate VesperPlayerKit package checksums
+        run: |
+          cd release-assets
+          shopt -s nullglob
+          shasum -a 256 *.aar *.zip > SHA256SUMS.txt
+
+      - name: Publish VesperPlayerKit GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: VesperPlayerKit ${{ env.RELEASE_TAG }}
+          body_path: release-assets/RELEASE_NOTES.md
+          prerelease: ${{ steps.release-meta.outputs.prerelease }}
+          files: |
+            release-assets/*.aar
+            release-assets/*.zip
+            release-assets/SHA256SUMS.txt

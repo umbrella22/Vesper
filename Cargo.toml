@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    "crates/core/*",
+    "crates/audio/*",
+    "crates/render/*",
+    "crates/backend/*",
+    "crates/platform/common/*",
+    "crates/platform/desktop/*",
+    "crates/platform/mobile/*",
+    "crates/platform/jni/*",
+    "examples/basic-player",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.94"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+cpal = "0.17.3"
+ffmpeg-next = { version = "8.1.0", default-features = false, features = [
+    "codec",
+    "filter",
+    "format",
+    "software-resampling",
+    "software-scaling",
+] }
+pollster = "0.4.0"
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+wgpu = "29.0.1"
+winit = "0.30.13"

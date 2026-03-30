@@ -1,0 +1,11 @@
+[package]
+name = "player-backend-ffmpeg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ffmpeg-next.workspace = true
+player-core = { path = "../../core/player-core" }
