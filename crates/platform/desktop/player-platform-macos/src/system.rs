@@ -691,6 +691,7 @@ fn c_string_buffer_to_string(_buffer: &[c_char]) -> String {
 #[cfg(test)]
 mod tests {
     use std::os::raw::c_void;
+    use std::path::Path;
 
     use super::{MacosSystemAvFoundationBridgeBindings, probe_source_with_avfoundation};
     use crate::native::{
@@ -715,7 +716,11 @@ mod tests {
             return;
         }
 
-        let probe = probe_source_with_avfoundation(&MediaSource::new(test_video_path()))
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
+        let probe = probe_source_with_avfoundation(&MediaSource::new(test_video_path))
             .expect("system AVFoundation probe should succeed on macOS");
 
         assert_eq!(probe.media_info.video_streams, 1);
@@ -742,13 +747,21 @@ mod tests {
 
     #[test]
     fn system_bindings_require_surface_before_creating_native_session() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
         let bindings = MacosSystemAvFoundationBridgeBindings;
         let probe = bindings
             .probe_source(
                 &MacosAvFoundationBridgeContext {
                     video_surface: None,
                 },
-                &MediaSource::new(test_video_path()),
+                &MediaSource::new(test_video_path.clone()),
                 &PlayerRuntimeOptions::default(),
             )
             .expect("probe should succeed");
@@ -757,7 +770,7 @@ mod tests {
             MacosAvFoundationBridgeContext {
                 video_surface: None,
             },
-            &MediaSource::new(test_video_path()),
+            &MediaSource::new(test_video_path),
             &PlayerRuntimeOptions::default(),
             &probe.media_info,
             &probe.startup,
@@ -778,13 +791,17 @@ mod tests {
             return;
         }
 
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
         let bindings = MacosSystemAvFoundationBridgeBindings;
         let probe = bindings
             .probe_source(
                 &MacosAvFoundationBridgeContext {
                     video_surface: None,
                 },
-                &MediaSource::new(test_video_path()),
+                &MediaSource::new(test_video_path.clone()),
                 &PlayerRuntimeOptions::default(),
             )
             .expect("probe should succeed");
@@ -804,7 +821,7 @@ mod tests {
                 MacosAvFoundationBridgeContext {
                     video_surface: None,
                 },
-                &MediaSource::new(test_video_path()),
+                &MediaSource::new(test_video_path),
                 &options,
                 &probe.media_info,
                 &probe.startup,
@@ -824,7 +841,10 @@ mod tests {
         }
     }
 
-    fn test_video_path() -> String {
-        format!("{}/../../../../test-video.mp4", env!("CARGO_MANIFEST_DIR"))
+    fn test_video_path() -> Option<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        path.canonicalize()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 }

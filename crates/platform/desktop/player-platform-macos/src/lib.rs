@@ -625,6 +625,7 @@ fn open_software_fallback_adapter_with_factory(
 mod tests {
     use std::collections::VecDeque;
     use std::os::raw::c_void;
+    use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -657,12 +658,16 @@ mod tests {
     #[test]
     fn macos_factory_matches_host_support() {
         let factory = MacosSoftwarePlayerRuntimeAdapterFactory;
-        let result = factory.probe_source_with_options(
-            MediaSource::new(test_video_path()),
-            PlayerRuntimeOptions::default(),
-        );
 
         if cfg!(target_os = "macos") {
+            let Some(test_video_path) = test_video_path() else {
+                eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+                return;
+            };
+            let result = factory.probe_source_with_options(
+                MediaSource::new(test_video_path),
+                PlayerRuntimeOptions::default(),
+            );
             let initializer = result.expect("macos host should support the macos desktop adapter");
             let capabilities = initializer.capabilities();
             let startup = initializer.startup();
@@ -684,6 +689,10 @@ mod tests {
             );
             assert!(video_decode.fallback_reason.is_some());
         } else {
+            let result = factory.probe_source_with_options(
+                MediaSource::new("fixture.mp4"),
+                PlayerRuntimeOptions::default(),
+            );
             let error = match result {
                 Ok(_) => panic!("non-macos hosts should reject the macos adapter"),
                 Err(error) => error,
@@ -698,10 +707,14 @@ mod tests {
             return;
         }
 
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
         let factory = MacosHostPlayerRuntimeAdapterFactory;
         let initializer = factory
             .probe_source_with_options(
-                MediaSource::new(test_video_path()),
+                MediaSource::new(test_video_path),
                 PlayerRuntimeOptions::default(),
             )
             .expect("macos host factory probe should succeed");
@@ -734,6 +747,10 @@ mod tests {
             return;
         }
 
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
         let layer_handle = unsafe { player_macos_test_create_player_layer() };
         assert!(
             !layer_handle.is_null(),
@@ -747,7 +764,7 @@ mod tests {
                 handle: layer_handle as usize,
             });
         let initializer = factory
-            .probe_source_with_options(MediaSource::new(test_video_path()), options)
+            .probe_source_with_options(MediaSource::new(test_video_path), options)
             .expect("macos host factory should prefer native when a valid surface exists");
 
         let capabilities = initializer.capabilities();
@@ -903,8 +920,12 @@ mod tests {
             return;
         }
 
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
         let bootstrap = open_macos_host_runtime_source_with_options(
-            MediaSource::new(test_video_path()),
+            MediaSource::new(test_video_path),
             PlayerRuntimeOptions::default(),
         )
         .expect("host runtime should fall back to software without a video surface");
@@ -930,6 +951,10 @@ mod tests {
             return;
         }
 
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
         let layer_handle = unsafe { player_macos_test_create_player_layer() };
         assert!(
             !layer_handle.is_null(),
@@ -942,7 +967,7 @@ mod tests {
                 handle: layer_handle as usize,
             });
         let bootstrap = open_macos_host_runtime_source_with_options(
-            MediaSource::new(test_video_path()),
+            MediaSource::new(test_video_path),
             options,
         )
         .expect("host runtime should prefer native playback when a valid surface exists");
@@ -963,8 +988,12 @@ mod tests {
             return;
         }
 
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            return;
+        };
         let probe = probe_macos_host_runtime_source_with_options(
-            MediaSource::new(test_video_path()),
+            MediaSource::new(test_video_path),
             PlayerRuntimeOptions::default(),
         )
         .expect("host runtime probe should succeed");
@@ -1004,8 +1033,11 @@ mod tests {
         }
     }
 
-    fn test_video_path() -> String {
-        format!("{}/../../../../test-video.mp4", env!("CARGO_MANIFEST_DIR"))
+    fn test_video_path() -> Option<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        path.canonicalize()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     #[derive(Clone)]

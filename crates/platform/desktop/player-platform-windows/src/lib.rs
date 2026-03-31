@@ -110,6 +110,8 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{
         WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, WindowsSoftwarePlayerRuntimeAdapterFactory,
         open_windows_host_runtime_source_with_options,
@@ -124,12 +126,16 @@ mod tests {
     #[test]
     fn windows_factory_matches_host_support() {
         let factory = WindowsSoftwarePlayerRuntimeAdapterFactory;
-        let result = factory.probe_source_with_options(
-            MediaSource::new(test_video_path()),
-            PlayerRuntimeOptions::default(),
-        );
 
         if cfg!(target_os = "windows") {
+            let Some(test_video_path) = test_video_path() else {
+                eprintln!("skipping Windows fixture-backed test: test-video.mp4 is unavailable");
+                return;
+            };
+            let result = factory.probe_source_with_options(
+                MediaSource::new(test_video_path),
+                PlayerRuntimeOptions::default(),
+            );
             let initializer =
                 result.expect("windows host should support the windows desktop adapter");
             let capabilities = initializer.capabilities();
@@ -142,6 +148,10 @@ mod tests {
                 PlayerRuntimeAdapterBackendFamily::SoftwareDesktop
             );
         } else {
+            let result = factory.probe_source_with_options(
+                MediaSource::new("fixture.mp4"),
+                PlayerRuntimeOptions::default(),
+            );
             let error = match result {
                 Ok(_) => panic!("non-windows hosts should reject the windows adapter"),
                 Err(error) => error,
@@ -152,12 +162,15 @@ mod tests {
 
     #[test]
     fn windows_host_probe_matches_factory_support() {
-        let result = probe_windows_host_runtime_source_with_options(
-            MediaSource::new(test_video_path()),
-            PlayerRuntimeOptions::default(),
-        );
-
         if cfg!(target_os = "windows") {
+            let Some(test_video_path) = test_video_path() else {
+                eprintln!("skipping Windows fixture-backed test: test-video.mp4 is unavailable");
+                return;
+            };
+            let result = probe_windows_host_runtime_source_with_options(
+                MediaSource::new(test_video_path),
+                PlayerRuntimeOptions::default(),
+            );
             let probe = result.expect("windows host should support the windows host runtime probe");
             assert_eq!(probe.adapter_id, WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID);
             assert_eq!(
@@ -165,6 +178,10 @@ mod tests {
                 PlayerRuntimeAdapterBackendFamily::SoftwareDesktop
             );
         } else {
+            let result = probe_windows_host_runtime_source_with_options(
+                MediaSource::new("fixture.mp4"),
+                PlayerRuntimeOptions::default(),
+            );
             let error = result.expect_err("non-windows hosts should reject the windows host probe");
             assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
         }
@@ -172,12 +189,15 @@ mod tests {
 
     #[test]
     fn windows_host_open_matches_factory_support() {
-        let result = open_windows_host_runtime_source_with_options(
-            MediaSource::new(test_video_path()),
-            PlayerRuntimeOptions::default(),
-        );
-
         if cfg!(target_os = "windows") {
+            let Some(test_video_path) = test_video_path() else {
+                eprintln!("skipping Windows fixture-backed test: test-video.mp4 is unavailable");
+                return;
+            };
+            let result = open_windows_host_runtime_source_with_options(
+                MediaSource::new(test_video_path),
+                PlayerRuntimeOptions::default(),
+            );
             let bootstrap =
                 result.expect("windows host should support the windows host runtime open helper");
             assert_eq!(
@@ -185,6 +205,10 @@ mod tests {
                 WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
             );
         } else {
+            let result = open_windows_host_runtime_source_with_options(
+                MediaSource::new("fixture.mp4"),
+                PlayerRuntimeOptions::default(),
+            );
             let error = match result {
                 Ok(_) => panic!("non-windows hosts should reject the windows host opener"),
                 Err(error) => error,
@@ -193,7 +217,10 @@ mod tests {
         }
     }
 
-    fn test_video_path() -> String {
-        format!("{}/../../../../test-video.mp4", env!("CARGO_MANIFEST_DIR"))
+    fn test_video_path() -> Option<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        path.canonicalize()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 }
