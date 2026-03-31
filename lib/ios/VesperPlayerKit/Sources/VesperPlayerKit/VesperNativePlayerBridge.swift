@@ -28,6 +28,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var subtitleGroup: AVMediaSelectionGroup?
     private var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
+    private let resiliencePolicy: VesperPlaybackResiliencePolicy
+    private var retryTask: Task<Void, Never>?
+    private var retryAttemptCount = 0
+    private let cachePolicyToken = UUID()
 
     var uiState: PlayerHostUiState {
         publishedUiState
@@ -41,8 +45,12 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedTrackSelection
     }
 
-    init(initialSource: VesperPlayerSource? = nil) {
+    init(
+        initialSource: VesperPlayerSource? = nil,
+        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy()
+    ) {
         currentSource = initialSource
+        self.resiliencePolicy = resiliencePolicy
         publishedUiState = PlayerHostUiState(
             title: "Vesper",
             subtitle: "iOS AVPlayer native bridge",
@@ -103,30 +111,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         } catch {
             pendingAutoPlay = false
             iosHostLog("initialize failed: \(error.localizedDescription)")
-            updateState {
-                PlayerHostUiState(
-                    title: $0.title,
-                    subtitle: "iOS native bridge error: \(error.localizedDescription)",
-                    sourceLabel: $0.sourceLabel,
-                    playbackState: .ready,
-                    playbackRate: $0.playbackRate,
-                    isBuffering: false,
-                    isInterrupted: $0.isInterrupted,
-                    timeline: TimelineUiState(
-                        kind: .vod,
-                        isSeekable: true,
-                        seekableRange: SeekableRangeUi(startMs: 0, endMs: 0),
-                        liveEdgeMs: nil,
-                        positionMs: 0,
-                        durationMs: nil
-                    )
-                )
-            }
+            handlePlaybackFailure(error: error, fallbackMessage: error.localizedDescription)
         }
     }
 
     func dispose() {
         iosHostLog("dispose")
+        cancelPendingRetry(resetAttempts: true)
+        VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
         pendingAutoPlay = false
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = false
@@ -142,6 +134,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             "selectSource source=\(source.uri) label=\(source.label) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
         )
         currentSource = source
+        cancelPendingRetry(resetAttempts: true)
         pendingAutoPlay = true
         updateState {
             PlayerHostUiState(
@@ -447,9 +440,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         let url = try resolvedUrl(for: currentSource)
         iosHostLog("loadCurrentSource url=\(url.absoluteString)")
+        let cachePolicy = resolvedCachePolicy(for: currentSource)
+        VesperSharedUrlCacheCoordinator.shared.apply(
+            policy: cachePolicy,
+            token: cachePolicyToken
+        )
         let item = AVPlayerItem(url: url)
+        let bufferingPolicy = resolvedBufferingPolicy(for: currentSource)
+        item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
         let player = AVPlayer(playerItem: item)
-        player.automaticallyWaitsToMinimizeStalling = true
+        player.automaticallyWaitsToMinimizeStalling =
+            bufferingPolicy.automaticallyWaitsToMinimizeStalling
         player.defaultRate = desiredPlaybackRate
 
         removeObservers()
@@ -516,23 +517,16 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             Task { @MainActor in
                 switch item.status {
                 case .readyToPlay:
+                    self.cancelPendingRetry(resetAttempts: true)
                     self.refreshTrackCatalogAndSelection(for: item)
                     self.attemptPendingPlaybackStart(reason: "itemReadyToPlay")
                     self.refreshPlaybackState()
                 case .failed:
                     self.pendingPlaybackStart = false
-                    self.updateState {
-                        PlayerHostUiState(
-                            title: $0.title,
-                            subtitle: "iOS native bridge error: \(errorMessage)",
-                            sourceLabel: $0.sourceLabel,
-                            playbackState: .ready,
-                            playbackRate: $0.playbackRate,
-                            isBuffering: false,
-                            isInterrupted: $0.isInterrupted,
-                            timeline: $0.timeline
-                        )
-                    }
+                    self.handlePlaybackFailure(
+                        error: item.error,
+                        fallbackMessage: errorMessage
+                    )
                 case .unknown:
                     break
                 @unknown default:
@@ -913,6 +907,270 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
     }
 
+    private func cancelPendingRetry(resetAttempts: Bool) {
+        retryTask?.cancel()
+        retryTask = nil
+        if resetAttempts {
+            retryAttemptCount = 0
+        }
+    }
+
+    private func handlePlaybackFailure(error: Error?, fallbackMessage: String) {
+        let resolvedError = classifyPlaybackFailure(error, fallbackMessage: fallbackMessage)
+        iosHostLog(
+            "playbackFailure category=\(resolvedError.category.rawValue) retriable=\(resolvedError.retriable) message=\(resolvedError.message)"
+        )
+
+        if scheduleRetryIfPossible(for: resolvedError) {
+            return
+        }
+
+        updateErrorState(message: resolvedError.message)
+    }
+
+    private func updateErrorState(message: String) {
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: "iOS native bridge error: \(message)",
+                sourceLabel: $0.sourceLabel,
+                playbackState: .ready,
+                playbackRate: $0.playbackRate,
+                isBuffering: false,
+                isInterrupted: $0.isInterrupted,
+                timeline: $0.timeline
+            )
+        }
+    }
+
+    private func scheduleRetryIfPossible(for error: ResolvedBridgeError) -> Bool {
+        guard error.retriable, let currentSource, currentSource.kind == .remote else {
+            return false
+        }
+
+        let nextAttempt = retryAttemptCount + 1
+        if let maxAttempts = resiliencePolicy.retry.maxAttempts, nextAttempt > maxAttempts {
+            return false
+        }
+
+        let delayMs = retryDelayMs(forAttempt: nextAttempt)
+        retryAttemptCount = nextAttempt
+        pendingAutoPlay = true
+        pendingPlaybackStart = false
+        retryTask?.cancel()
+
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: "Retrying in \(formattedRetryDelay(delayMs)) after \(error.message)",
+                sourceLabel: $0.sourceLabel,
+                playbackState: .ready,
+                playbackRate: $0.playbackRate,
+                isBuffering: false,
+                isInterrupted: $0.isInterrupted,
+                timeline: $0.timeline
+            )
+        }
+
+        let expectedUri = currentSource.uri
+        retryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard
+                    let self,
+                    self.currentSource?.uri == expectedUri
+                else {
+                    return
+                }
+                iosHostLog("retrying playback attempt=\(nextAttempt) delayMs=\(delayMs)")
+                self.initialize()
+            }
+        }
+        return true
+    }
+
+    private func retryDelayMs(forAttempt attempt: Int) -> UInt64 {
+        let policy = resiliencePolicy.retry
+        let multiplier: Double
+        switch policy.backoff {
+        case .fixed:
+            multiplier = 1
+        case .linear:
+            multiplier = Double(attempt)
+        case .exponential:
+            multiplier = pow(2, Double(max(attempt - 1, 0)))
+        }
+
+        let computedDelay = Double(policy.baseDelayMs) * multiplier
+        return min(UInt64(computedDelay.rounded()), policy.maxDelayMs)
+    }
+
+    private func classifyPlaybackFailure(
+        _ error: Error?,
+        fallbackMessage: String
+    ) -> ResolvedBridgeError {
+        guard let error else {
+            return ResolvedBridgeError(
+                category: .platform,
+                retriable: false,
+                message: fallbackMessage
+            )
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorTimedOut,
+                NSURLErrorCannotFindHost,
+                NSURLErrorCannotConnectToHost,
+                NSURLErrorNetworkConnectionLost,
+                NSURLErrorDNSLookupFailed,
+                NSURLErrorNotConnectedToInternet:
+                return ResolvedBridgeError(
+                    category: .network,
+                    retriable: true,
+                    message: nsError.localizedDescription
+                )
+            case NSURLErrorFileDoesNotExist,
+                NSURLErrorBadURL,
+                NSURLErrorUnsupportedURL:
+                return ResolvedBridgeError(
+                    category: .source,
+                    retriable: false,
+                    message: nsError.localizedDescription
+                )
+            case NSURLErrorNoPermissionsToReadFile:
+                return ResolvedBridgeError(
+                    category: .capability,
+                    retriable: false,
+                    message: nsError.localizedDescription
+                )
+            default:
+                break
+            }
+        }
+
+        if nsError.domain == AVFoundationErrorDomain || nsError.domain == AVError.errorDomain {
+            switch AVError.Code(rawValue: nsError.code) {
+            case .decoderNotFound, .decoderTemporarilyUnavailable:
+                return ResolvedBridgeError(
+                    category: .decode,
+                    retriable: false,
+                    message: nsError.localizedDescription
+                )
+            case .fileFormatNotRecognized:
+                return ResolvedBridgeError(
+                    category: .capability,
+                    retriable: false,
+                    message: nsError.localizedDescription
+                )
+            case .contentIsUnavailable, .mediaServicesWereReset:
+                return ResolvedBridgeError(
+                    category: .platform,
+                    retriable: false,
+                    message: nsError.localizedDescription
+                )
+            default:
+                break
+            }
+        }
+
+        return ResolvedBridgeError(
+            category: .platform,
+            retriable: false,
+            message: nsError.localizedDescription
+        )
+    }
+
+    private func resolvedBufferingPolicy(for source: VesperPlayerSource) -> ResolvedBufferingPolicy {
+        let basePolicy: VesperBufferingPolicy
+        switch resiliencePolicy.buffering.preset {
+        case .default:
+            switch (source.kind, source.protocol) {
+            case (.remote, .hls), (.remote, .dash):
+                basePolicy = .resilient()
+            case (.remote, _):
+                basePolicy = .streaming()
+            case (.local, _):
+                basePolicy = VesperBufferingPolicy()
+            }
+        case .balanced:
+            basePolicy = .balanced()
+        case .streaming:
+            basePolicy = .streaming()
+        case .resilient:
+            basePolicy = .resilient()
+        case .lowLatency:
+            basePolicy = .lowLatency()
+        }
+
+        let effectiveMs =
+            resiliencePolicy.buffering.maxBufferMs
+            ?? resiliencePolicy.buffering.minBufferMs
+            ?? resiliencePolicy.buffering.bufferForPlaybackAfterRebufferMs
+            ?? resiliencePolicy.buffering.bufferForPlaybackMs
+            ?? basePolicy.maxBufferMs
+            ?? basePolicy.minBufferMs
+            ?? basePolicy.bufferForPlaybackAfterRebufferMs
+            ?? basePolicy.bufferForPlaybackMs
+            ?? 0
+
+        let automaticallyWaits = switch resiliencePolicy.buffering.preset {
+        case .lowLatency:
+            false
+        case .default where source.kind == .remote && source.protocol == .progressive:
+            true
+        default:
+            true
+        }
+
+        return ResolvedBufferingPolicy(
+            preferredForwardBufferDuration: TimeInterval(effectiveMs) / 1000.0,
+            automaticallyWaitsToMinimizeStalling: automaticallyWaits
+        )
+    }
+
+    private func resolvedCachePolicy(for source: VesperPlayerSource) -> ResolvedCachePolicy {
+        guard source.kind == .remote else {
+            return .disabled
+        }
+
+        let basePolicy: VesperCachePolicy
+        switch resiliencePolicy.cache.preset {
+        case .default:
+            switch source.protocol {
+            case .hls, .dash:
+                basePolicy = .resilient()
+            default:
+                basePolicy = .streaming()
+            }
+        case .disabled:
+            basePolicy = .disabled()
+        case .streaming:
+            basePolicy = .streaming()
+        case .resilient:
+            basePolicy = .resilient()
+        }
+
+        let maxMemoryBytes = resiliencePolicy.cache.maxMemoryBytes ?? basePolicy.maxMemoryBytes ?? 0
+        let maxDiskBytes = resiliencePolicy.cache.maxDiskBytes ?? basePolicy.maxDiskBytes ?? 0
+
+        return ResolvedCachePolicy(
+            enabled: max(maxMemoryBytes, maxDiskBytes) > 0,
+            memoryCapacity: clampToInt(maxMemoryBytes),
+            diskCapacity: clampToInt(maxDiskBytes)
+        )
+    }
+
+    private func formattedRetryDelay(_ delayMs: UInt64) -> String {
+        let seconds = Double(delayMs) / 1000.0
+        if seconds >= 10 || seconds.rounded() == seconds {
+            return "\(Int(seconds.rounded()))s"
+        }
+        return String(format: "%.1fs", seconds)
+    }
+
     private func configureAudioSessionIfNeeded() {
         do {
             let session = AVAudioSession.sharedInstance()
@@ -957,6 +1215,40 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 }
 
+private enum ResolvedBridgeErrorCategory: String {
+    case input
+    case source
+    case network
+    case decode
+    case audioOutput
+    case playback
+    case capability
+    case platform
+}
+
+private struct ResolvedBridgeError {
+    let category: ResolvedBridgeErrorCategory
+    let retriable: Bool
+    let message: String
+}
+
+private struct ResolvedBufferingPolicy {
+    let preferredForwardBufferDuration: TimeInterval
+    let automaticallyWaitsToMinimizeStalling: Bool
+}
+
+private struct ResolvedCachePolicy {
+    let enabled: Bool
+    let memoryCapacity: Int
+    let diskCapacity: Int
+
+    static let disabled = ResolvedCachePolicy(
+        enabled: false,
+        memoryCapacity: 0,
+        diskCapacity: 0
+    )
+}
+
 private struct LoadedTrackCatalogState {
     let catalog: VesperTrackCatalog
     let audioGroup: AVMediaSelectionGroup?
@@ -996,6 +1288,71 @@ private func normalizedSeekableRange(durationMs: Int64?) -> SeekableRangeUi {
 
 func iosHostLog(_ message: String) {
     print("[VesperPlayerIOSHost] \(message)")
+}
+
+private func clampToInt(_ value: Int64) -> Int {
+    guard value > 0 else {
+        return 0
+    }
+    return Int(min(value, Int64(Int.max)))
+}
+
+private final class VesperSharedUrlCacheCoordinator {
+    static let shared = VesperSharedUrlCacheCoordinator()
+
+    private let lock = NSLock()
+    private var baselineMemoryCapacity: Int?
+    private var baselineDiskCapacity: Int?
+    private var activePolicies: [UUID: ResolvedCachePolicy] = [:]
+
+    func apply(policy: ResolvedCachePolicy, token: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        captureBaselineIfNeeded()
+        activePolicies[token] = policy
+        reconfigureSharedCache()
+    }
+
+    func remove(token: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        captureBaselineIfNeeded()
+        activePolicies.removeValue(forKey: token)
+        reconfigureSharedCache()
+    }
+
+    private func captureBaselineIfNeeded() {
+        if baselineMemoryCapacity == nil {
+            baselineMemoryCapacity = URLCache.shared.memoryCapacity
+        }
+        if baselineDiskCapacity == nil {
+            baselineDiskCapacity = URLCache.shared.diskCapacity
+        }
+    }
+
+    private func reconfigureSharedCache() {
+        let baselineMemoryCapacity = baselineMemoryCapacity ?? URLCache.shared.memoryCapacity
+        let baselineDiskCapacity = baselineDiskCapacity ?? URLCache.shared.diskCapacity
+        let enabledPolicies = activePolicies.values.filter(\.enabled)
+        let requestedMemoryCapacity = enabledPolicies.map(\.memoryCapacity).max() ?? 0
+        let requestedDiskCapacity = enabledPolicies.map(\.diskCapacity).max() ?? 0
+
+        let targetMemoryCapacity = max(baselineMemoryCapacity, requestedMemoryCapacity)
+        let targetDiskCapacity = max(baselineDiskCapacity, requestedDiskCapacity)
+
+        if URLCache.shared.memoryCapacity != targetMemoryCapacity {
+            URLCache.shared.memoryCapacity = targetMemoryCapacity
+        }
+        if URLCache.shared.diskCapacity != targetDiskCapacity {
+            URLCache.shared.diskCapacity = targetDiskCapacity
+        }
+
+        iosHostLog(
+            "urlCache memoryCapacity=\(targetMemoryCapacity) diskCapacity=\(targetDiskCapacity)"
+        )
+    }
 }
 
 private func timeControlStatusName(_ status: AVPlayer.TimeControlStatus) -> String {

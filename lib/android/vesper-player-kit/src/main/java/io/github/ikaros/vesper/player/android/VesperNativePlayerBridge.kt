@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class VesperNativePlayerBridge(
     private val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
     private val initialSource: VesperPlayerSource? = null,
+    private val resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private var pendingAutoPlay = false
@@ -60,7 +61,7 @@ class VesperNativePlayerBridge(
             return
         }
 
-        runCatching { bindings.initialize(source) }
+        runCatching { bindings.initialize(source, resiliencePolicy) }
             .onSuccess {
                 Log.i(
                     TAG,
@@ -274,6 +275,12 @@ class VesperNativePlayerBridge(
                 is NativeBridgeEvent.SeekCompleted -> updateState {
                     copy(timeline = timeline.copy(positionMs = event.positionMs))
                 }
+                is NativeBridgeEvent.RetryScheduled -> updateState {
+                    copy(
+                        subtitle =
+                            "Retrying in ${formatRetryDelay(event.delayMs)} (attempt ${event.attempt})",
+                    )
+                }
                 is NativeBridgeEvent.Ended -> updateState {
                     copy(playbackState = PlaybackStateUi.Finished, isBuffering = false)
                 }
@@ -295,8 +302,20 @@ private fun sourceSubtitle(source: VesperPlayerSource): String =
             "Android JNI + ExoPlayer ready (${source.protocol.name.lowercase()} remote source)"
     }
 
+private fun formatRetryDelay(delayMs: Long): String {
+    val seconds = delayMs.toDouble() / 1_000.0
+    return if (seconds >= 10.0 || seconds == seconds.toInt().toDouble()) {
+        "${seconds.toInt()}s"
+    } else {
+        String.format("%.1fs", seconds)
+    }
+}
+
 interface VesperNativeBindings {
-    fun initialize(source: VesperPlayerSource): NativeBridgeStartup
+    fun initialize(
+        source: VesperPlayerSource,
+        resiliencePolicy: VesperPlaybackResiliencePolicy,
+    ): NativeBridgeStartup
     fun dispose()
     fun refreshSnapshot()
     fun currentTrackCatalog(): VesperTrackCatalog
@@ -319,7 +338,10 @@ interface VesperNativeBindings {
 }
 
 private class MissingVesperNativeBindings : VesperNativeBindings {
-    override fun initialize(source: VesperPlayerSource): NativeBridgeStartup {
+    override fun initialize(
+        source: VesperPlayerSource,
+        resiliencePolicy: VesperPlaybackResiliencePolicy,
+    ): NativeBridgeStartup {
         throw UnsupportedOperationException(
             VesperNativeLibrary.failureMessage() ?: "JNI bridge is not wired yet"
         )

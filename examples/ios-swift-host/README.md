@@ -55,7 +55,7 @@ The package exposes a host-facing controller layer:
 - `PlayerSurfaceContainer`
   - reusable SwiftUI surface wrapper over `UIView + AVPlayerLayer`
 
-The host UI now also has a local source-selection path through Photos picker and file importer so the source
+The host UI now also has a local source-selection path through the Photos video picker so the source
 selection behavior can converge with Android before streaming-specific UI is introduced.
 
 Those preset/demo sources intentionally live in `examples/ios-swift-host`; the reusable package under
@@ -81,7 +81,7 @@ For the demo app:
 
 1. generate or open the demo project from `project.yml`
 2. confirm the Swift host app boots with the AVPlayer native bridge
-3. validate Photos picker / file importer / `play / pause / seek / stop / rate`
+3. validate Photos video picker / `play / pause / seek / stop / rate`
 4. continue wiring `VesperNativePlayerBridge` to real Swift/ObjC callbacks into `player-platform-ios`
 
 For the reusable iOS binary artifact itself, use:

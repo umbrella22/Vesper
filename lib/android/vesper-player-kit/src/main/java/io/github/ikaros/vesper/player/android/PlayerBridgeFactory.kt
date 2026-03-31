@@ -8,12 +8,14 @@ object PlayerBridgeFactory {
     fun createDefault(
         context: Context,
         initialSource: VesperPlayerSource? = null,
+        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     ): PlayerBridge =
         when (defaultBackend) {
             PlayerBridgeBackend.FakeDemo -> FakePlayerBridge(initialSource)
             PlayerBridgeBackend.VesperNativeStub -> VesperNativePlayerBridge(
                 bindings = VesperNativeJniBindings(context.applicationContext),
                 initialSource = initialSource,
+                resiliencePolicy = resiliencePolicy,
             )
         }
 }

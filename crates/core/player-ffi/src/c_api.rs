@@ -4,7 +4,8 @@ use std::ptr;
 
 use crate::{
     FfiAbrMode as BridgeAbrMode, FfiAbrPolicy as BridgeAbrPolicy, FfiAudioInfo, FfiAudioOutputInfo,
-    FfiCommand, FfiDecodedAudioSummary, FfiError as BridgeError, FfiErrorCode as BridgeErrorCode,
+    FfiCommand, FfiDecodedAudioSummary, FfiError as BridgeError,
+    FfiErrorCategory as BridgeErrorCategory, FfiErrorCode as BridgeErrorCode,
     FfiEvent as BridgeEvent, FfiFirstFrameReady, FfiMediaInfo as BridgeMediaInfo,
     FfiMediaSourceKind as BridgeMediaSourceKind,
     FfiMediaSourceProtocol as BridgeMediaSourceProtocol, FfiPixelFormat as BridgePixelFormat,
@@ -120,6 +121,20 @@ pub enum PlayerFfiErrorCode {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiErrorCategory {
+    Input = 0,
+    Source = 1,
+    Network = 2,
+    Decode = 3,
+    AudioOutput = 4,
+    Playback = 5,
+    Capability = 6,
+    #[default]
+    Platform = 7,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerFfiCommandKind {
     #[default]
     Play = 0,
@@ -163,6 +178,8 @@ pub struct PlayerFfiHandle {
 #[derive(Debug, Default)]
 pub struct PlayerFfiError {
     pub code: PlayerFfiErrorCode,
+    pub category: PlayerFfiErrorCategory,
+    pub retriable: bool,
     pub message: *mut c_char,
 }
 
@@ -499,6 +516,21 @@ impl From<BridgeErrorCode> for PlayerFfiErrorCode {
             BridgeErrorCode::DecodeFailure => Self::DecodeFailure,
             BridgeErrorCode::SeekFailure => Self::SeekFailure,
             BridgeErrorCode::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+impl From<BridgeErrorCategory> for PlayerFfiErrorCategory {
+    fn from(value: BridgeErrorCategory) -> Self {
+        match value {
+            BridgeErrorCategory::Input => Self::Input,
+            BridgeErrorCategory::Source => Self::Source,
+            BridgeErrorCategory::Network => Self::Network,
+            BridgeErrorCategory::Decode => Self::Decode,
+            BridgeErrorCategory::AudioOutput => Self::AudioOutput,
+            BridgeErrorCategory::Playback => Self::Playback,
+            BridgeErrorCategory::Capability => Self::Capability,
+            BridgeErrorCategory::Platform => Self::Platform,
         }
     }
 }
@@ -1641,6 +1673,8 @@ fn read_uri(uri: *const c_char) -> Result<String, PlayerFfiError> {
 fn owned_bridge_error(error: BridgeError) -> PlayerFfiError {
     PlayerFfiError {
         code: error.code().into(),
+        category: error.category().into(),
+        retriable: error.is_retriable(),
         message: into_c_string_ptr(error.message().to_owned()),
     }
 }
@@ -1648,7 +1682,27 @@ fn owned_bridge_error(error: BridgeError) -> PlayerFfiError {
 fn owned_api_error(code: PlayerFfiErrorCode, message: &str) -> PlayerFfiError {
     PlayerFfiError {
         code,
+        category: api_error_category(code),
+        retriable: false,
         message: into_c_string_ptr(message.to_owned()),
+    }
+}
+
+fn api_error_category(code: PlayerFfiErrorCode) -> PlayerFfiErrorCategory {
+    match code {
+        PlayerFfiErrorCode::NullPointer
+        | PlayerFfiErrorCode::InvalidUtf8
+        | PlayerFfiErrorCode::InvalidArgument => PlayerFfiErrorCategory::Input,
+        PlayerFfiErrorCode::InvalidState | PlayerFfiErrorCode::SeekFailure => {
+            PlayerFfiErrorCategory::Playback
+        }
+        PlayerFfiErrorCode::InvalidSource => PlayerFfiErrorCategory::Source,
+        PlayerFfiErrorCode::AudioOutputUnavailable => PlayerFfiErrorCategory::AudioOutput,
+        PlayerFfiErrorCode::DecodeFailure => PlayerFfiErrorCategory::Decode,
+        PlayerFfiErrorCode::Unsupported => PlayerFfiErrorCategory::Capability,
+        PlayerFfiErrorCode::BackendFailure | PlayerFfiErrorCode::None => {
+            PlayerFfiErrorCategory::Platform
+        }
     }
 }
 

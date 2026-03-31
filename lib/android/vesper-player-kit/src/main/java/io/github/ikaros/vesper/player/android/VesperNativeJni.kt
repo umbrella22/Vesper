@@ -33,7 +33,14 @@ object VesperNativeJni {
         trackSelection: NativeTrackSelectionSnapshotPayload,
     )
     external fun reportSeekCompleted(sessionHandle: Long, positionMs: Long)
-    external fun reportError(sessionHandle: Long, codeOrdinal: Int, message: String)
+    external fun reportRetryScheduled(sessionHandle: Long, attempt: Int, delayMs: Long)
+    external fun reportError(
+        sessionHandle: Long,
+        codeOrdinal: Int,
+        categoryOrdinal: Int,
+        retriable: Boolean,
+        message: String,
+    )
     external fun play(sessionHandle: Long)
     external fun pause(sessionHandle: Long)
     external fun stop(sessionHandle: Long)

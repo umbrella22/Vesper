@@ -62,6 +62,13 @@ The optional Compose adapter exposes:
 - `rememberVesperPlayerUiState`
 - `VesperPlayerSurface`
 
+The Android library now also starts exposing first-round playback resilience knobs:
+
+- `VesperPlaybackResiliencePolicy`
+- `VesperBufferingPolicy`
+- `VesperRetryPolicy`
+- `VesperCachePolicy`
+
 The native path now also has a concrete surface strategy:
 
 - host UI stays in `Compose`

@@ -25,6 +25,17 @@ enum class NativeAbrMode {
     FixedTrack,
 }
 
+enum class NativeErrorCategory {
+    Input,
+    Source,
+    Network,
+    Decode,
+    AudioOutput,
+    Playback,
+    Capability,
+    Platform,
+}
+
 data class NativeBridgeStartup(
     val subtitle: String? = null,
 )
@@ -101,8 +112,14 @@ sealed interface NativeBridgeEvent {
     data class InterruptionChanged(val isInterrupted: Boolean) : NativeBridgeEvent
     data class VideoSurfaceChanged(val attached: Boolean) : NativeBridgeEvent
     data class SeekCompleted(val positionMs: Long) : NativeBridgeEvent
+    data class RetryScheduled(val attempt: Int, val delayMs: Long) : NativeBridgeEvent
     data class Ended(val ended: Boolean = true) : NativeBridgeEvent
-    data class Error(val message: String) : NativeBridgeEvent
+    data class Error(
+        val message: String,
+        val codeOrdinal: Int,
+        val categoryOrdinal: Int,
+        val retriable: Boolean,
+    ) : NativeBridgeEvent
 }
 
 sealed interface NativePlayerCommand {

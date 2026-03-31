@@ -10,7 +10,9 @@ pub use adapter::{
     PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer,
 };
-pub use error::{PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeResult};
+pub use error::{
+    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+};
 pub use player_core::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
     MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
@@ -24,6 +26,8 @@ pub const MAX_PLAYBACK_RATE: f32 = 3.0;
 pub const DEFAULT_VIDEO_PRESENT_EARLY_TOLERANCE: Duration = Duration::from_millis(4);
 pub const DEFAULT_VIDEO_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(16);
 pub const DEFAULT_VIDEO_PREFETCH_CAPACITY: usize = 8;
+pub const DEFAULT_RETRY_BASE_DELAY: Duration = Duration::from_millis(1_000);
+pub const DEFAULT_RETRY_MAX_DELAY: Duration = Duration::from_millis(5_000);
 
 static DEFAULT_RUNTIME_ADAPTER_FACTORY: OnceLock<&'static dyn PlayerRuntimeAdapterFactory> =
     OnceLock::new();
@@ -35,6 +39,57 @@ pub struct PlayerRuntimeOptions {
     pub video_prefetch_capacity: usize,
     pub video_present_early_tolerance: Duration,
     pub video_idle_poll_interval: Duration,
+    pub buffering_policy: PlayerBufferingPolicy,
+    pub retry_policy: PlayerRetryPolicy,
+    pub cache_policy: PlayerCachePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerBufferingPreset {
+    Default,
+    Balanced,
+    Streaming,
+    Resilient,
+    LowLatency,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerBufferingPolicy {
+    pub preset: PlayerBufferingPreset,
+    pub min_buffer: Option<Duration>,
+    pub max_buffer: Option<Duration>,
+    pub buffer_for_playback: Option<Duration>,
+    pub buffer_for_rebuffer: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerRetryBackoff {
+    Fixed,
+    Linear,
+    Exponential,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerRetryPolicy {
+    pub max_attempts: Option<u32>,
+    pub base_delay: Duration,
+    pub max_delay: Duration,
+    pub backoff: PlayerRetryBackoff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerCachePreset {
+    Default,
+    Disabled,
+    Streaming,
+    Resilient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerCachePolicy {
+    pub preset: PlayerCachePreset,
+    pub max_memory_bytes: Option<u64>,
+    pub max_disk_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +250,22 @@ pub struct PlayerRuntimeCommandResult {
     pub snapshot: PlayerSnapshot,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerResilienceMetrics {
+    pub buffering_event_count: u32,
+    pub rebuffer_count: u32,
+    pub retry_count: u32,
+    pub total_buffering_duration: Duration,
+    pub last_retry_delay: Option<Duration>,
+}
+
+#[derive(Debug, Default)]
+pub struct PlayerResilienceMetricsTracker {
+    metrics: PlayerResilienceMetrics,
+    buffering_started_at: Option<Instant>,
+    has_started_playback: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct PlayerSnapshot {
     pub source_uri: String,
@@ -206,6 +277,7 @@ pub struct PlayerSnapshot {
     pub progress: PlaybackProgress,
     pub timeline: PlayerTimelineSnapshot,
     pub media_info: PlayerMediaInfo,
+    pub resilience_metrics: PlayerResilienceMetrics,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +299,7 @@ pub enum PlayerRuntimeEvent {
     AudioOutputChanged(Option<PlayerAudioOutputInfo>),
     PlaybackRateChanged { rate: f32 },
     SeekCompleted { position: Duration },
+    RetryScheduled { attempt: u32, delay: Duration },
     Error(PlayerRuntimeError),
     Ended,
 }
@@ -268,6 +341,9 @@ impl Default for PlayerRuntimeOptions {
             video_prefetch_capacity: DEFAULT_VIDEO_PREFETCH_CAPACITY,
             video_present_early_tolerance: DEFAULT_VIDEO_PRESENT_EARLY_TOLERANCE,
             video_idle_poll_interval: DEFAULT_VIDEO_IDLE_POLL_INTERVAL,
+            buffering_policy: PlayerBufferingPolicy::default(),
+            retry_policy: PlayerRetryPolicy::default(),
+            cache_policy: PlayerCachePolicy::default(),
         }
     }
 }
@@ -276,6 +352,182 @@ impl PlayerRuntimeOptions {
     pub fn with_video_surface(mut self, video_surface: PlayerVideoSurfaceTarget) -> Self {
         self.video_surface = Some(video_surface);
         self
+    }
+
+    pub fn with_buffering_policy(mut self, buffering_policy: PlayerBufferingPolicy) -> Self {
+        self.buffering_policy = buffering_policy;
+        self
+    }
+
+    pub fn with_retry_policy(mut self, retry_policy: PlayerRetryPolicy) -> Self {
+        self.retry_policy = retry_policy;
+        self
+    }
+
+    pub fn with_cache_policy(mut self, cache_policy: PlayerCachePolicy) -> Self {
+        self.cache_policy = cache_policy;
+        self
+    }
+}
+
+impl PlayerBufferingPolicy {
+    pub fn balanced() -> Self {
+        Self {
+            preset: PlayerBufferingPreset::Balanced,
+            min_buffer: Some(Duration::from_millis(10_000)),
+            max_buffer: Some(Duration::from_millis(30_000)),
+            buffer_for_playback: Some(Duration::from_millis(1_000)),
+            buffer_for_rebuffer: Some(Duration::from_millis(2_000)),
+        }
+    }
+
+    pub fn streaming() -> Self {
+        Self {
+            preset: PlayerBufferingPreset::Streaming,
+            min_buffer: Some(Duration::from_millis(12_000)),
+            max_buffer: Some(Duration::from_millis(36_000)),
+            buffer_for_playback: Some(Duration::from_millis(1_200)),
+            buffer_for_rebuffer: Some(Duration::from_millis(2_500)),
+        }
+    }
+
+    pub fn resilient() -> Self {
+        Self {
+            preset: PlayerBufferingPreset::Resilient,
+            min_buffer: Some(Duration::from_millis(20_000)),
+            max_buffer: Some(Duration::from_millis(50_000)),
+            buffer_for_playback: Some(Duration::from_millis(1_500)),
+            buffer_for_rebuffer: Some(Duration::from_millis(3_000)),
+        }
+    }
+
+    pub fn low_latency() -> Self {
+        Self {
+            preset: PlayerBufferingPreset::LowLatency,
+            min_buffer: Some(Duration::from_millis(4_000)),
+            max_buffer: Some(Duration::from_millis(12_000)),
+            buffer_for_playback: Some(Duration::from_millis(500)),
+            buffer_for_rebuffer: Some(Duration::from_millis(1_000)),
+        }
+    }
+}
+
+impl Default for PlayerBufferingPolicy {
+    fn default() -> Self {
+        Self {
+            preset: PlayerBufferingPreset::Default,
+            min_buffer: None,
+            max_buffer: None,
+            buffer_for_playback: None,
+            buffer_for_rebuffer: None,
+        }
+    }
+}
+
+impl PlayerRetryPolicy {
+    pub fn aggressive() -> Self {
+        Self {
+            max_attempts: Some(2),
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_millis(2_000),
+            backoff: PlayerRetryBackoff::Fixed,
+        }
+    }
+
+    pub fn resilient() -> Self {
+        Self {
+            max_attempts: Some(6),
+            base_delay: Duration::from_millis(1_000),
+            max_delay: Duration::from_millis(8_000),
+            backoff: PlayerRetryBackoff::Exponential,
+        }
+    }
+}
+
+impl Default for PlayerRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: Some(3),
+            base_delay: DEFAULT_RETRY_BASE_DELAY,
+            max_delay: DEFAULT_RETRY_MAX_DELAY,
+            backoff: PlayerRetryBackoff::Linear,
+        }
+    }
+}
+
+impl PlayerCachePolicy {
+    pub fn disabled() -> Self {
+        Self {
+            preset: PlayerCachePreset::Disabled,
+            max_memory_bytes: Some(0),
+            max_disk_bytes: Some(0),
+        }
+    }
+
+    pub fn streaming() -> Self {
+        Self {
+            preset: PlayerCachePreset::Streaming,
+            max_memory_bytes: Some(8 * 1024 * 1024),
+            max_disk_bytes: Some(128 * 1024 * 1024),
+        }
+    }
+
+    pub fn resilient() -> Self {
+        Self {
+            preset: PlayerCachePreset::Resilient,
+            max_memory_bytes: Some(16 * 1024 * 1024),
+            max_disk_bytes: Some(384 * 1024 * 1024),
+        }
+    }
+}
+
+impl Default for PlayerCachePolicy {
+    fn default() -> Self {
+        Self {
+            preset: PlayerCachePreset::Default,
+            max_memory_bytes: None,
+            max_disk_bytes: None,
+        }
+    }
+}
+
+impl PlayerResilienceMetricsTracker {
+    pub fn observe_playback_state(&mut self, state: PresentationState) {
+        if state == PresentationState::Playing {
+            self.has_started_playback = true;
+        }
+    }
+
+    pub fn observe_buffering(&mut self, buffering: bool) {
+        let now = Instant::now();
+        match (buffering, self.buffering_started_at) {
+            (true, None) => {
+                self.metrics.buffering_event_count += 1;
+                if self.has_started_playback {
+                    self.metrics.rebuffer_count += 1;
+                }
+                self.buffering_started_at = Some(now);
+            }
+            (false, Some(started_at)) => {
+                self.metrics.total_buffering_duration += now.saturating_duration_since(started_at);
+                self.buffering_started_at = None;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn observe_retry_scheduled(&mut self, attempt: u32, delay: Duration) {
+        self.metrics.retry_count = self.metrics.retry_count.max(attempt);
+        self.metrics.last_retry_delay = Some(delay);
+    }
+
+    pub fn snapshot(&self) -> PlayerResilienceMetrics {
+        let mut metrics = self.metrics.clone();
+        if let Some(started_at) = self.buffering_started_at {
+            metrics.total_buffering_duration +=
+                Instant::now().saturating_duration_since(started_at);
+        }
+        metrics
     }
 }
 
@@ -620,8 +872,11 @@ fn default_runtime_adapter_factory() -> PlayerRuntimeResult<&'static dyn PlayerR
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaSourceKind, MediaSourceProtocol, PlaybackProgress, PlayerMediaInfo,
-        PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
+        MediaSourceKind, MediaSourceProtocol, PlaybackProgress, PlayerBufferingPolicy,
+        PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset, PlayerMediaInfo,
+        PlayerResilienceMetricsTracker, PlayerRetryBackoff, PlayerRetryPolicy,
+        PlayerRuntimeOptions, PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
+        PresentationState,
     };
     use std::time::Duration;
 
@@ -721,5 +976,74 @@ mod tests {
         );
         assert_eq!(timeline.live_edge, Some(Duration::from_secs(120)));
         assert_eq!(timeline.duration, Some(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn runtime_options_default_to_balanced_resilience_baseline() {
+        let options = PlayerRuntimeOptions::default();
+
+        assert_eq!(options.buffering_policy, PlayerBufferingPolicy::default());
+        assert_eq!(
+            options.retry_policy,
+            PlayerRetryPolicy {
+                max_attempts: Some(3),
+                base_delay: Duration::from_millis(1_000),
+                max_delay: Duration::from_millis(5_000),
+                backoff: PlayerRetryBackoff::Linear,
+            }
+        );
+        assert_eq!(options.cache_policy, PlayerCachePolicy::default());
+    }
+
+    #[test]
+    fn buffering_presets_offer_distinct_profiles() {
+        assert_eq!(
+            PlayerBufferingPolicy::streaming().preset,
+            PlayerBufferingPreset::Streaming
+        );
+        assert_eq!(
+            PlayerBufferingPolicy::resilient().min_buffer,
+            Some(Duration::from_millis(20_000))
+        );
+        assert_eq!(
+            PlayerBufferingPolicy::low_latency().max_buffer,
+            Some(Duration::from_millis(12_000))
+        );
+    }
+
+    #[test]
+    fn cache_presets_offer_distinct_profiles() {
+        assert_eq!(
+            PlayerCachePolicy::disabled().preset,
+            PlayerCachePreset::Disabled
+        );
+        assert_eq!(
+            PlayerCachePolicy::streaming().max_disk_bytes,
+            Some(128 * 1024 * 1024)
+        );
+        assert_eq!(
+            PlayerCachePolicy::resilient().max_memory_bytes,
+            Some(16 * 1024 * 1024)
+        );
+    }
+
+    #[test]
+    fn resilience_metrics_tracker_counts_buffering_and_retry() {
+        let mut tracker = PlayerResilienceMetricsTracker::default();
+
+        tracker.observe_buffering(true);
+        std::thread::sleep(Duration::from_millis(2));
+        tracker.observe_buffering(false);
+        tracker.observe_playback_state(PresentationState::Playing);
+        tracker.observe_buffering(true);
+        tracker.observe_buffering(false);
+        tracker.observe_retry_scheduled(2, Duration::from_millis(1_500));
+
+        let metrics = tracker.snapshot();
+        assert_eq!(metrics.buffering_event_count, 2);
+        assert_eq!(metrics.rebuffer_count, 1);
+        assert_eq!(metrics.retry_count, 2);
+        assert_eq!(metrics.last_retry_delay, Some(Duration::from_millis(1_500)));
+        assert!(metrics.total_buffering_duration >= Duration::from_millis(2));
     }
 }

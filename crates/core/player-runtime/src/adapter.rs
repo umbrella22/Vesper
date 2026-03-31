@@ -3,10 +3,11 @@ use std::time::Instant;
 use player_core::MediaSource;
 
 use crate::{
-    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntimeAdapterCapabilities,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoSurfaceTarget, PresentationState,
+    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot,
+    PlayerVideoSurfaceTarget, PresentationState,
 };
 
 pub struct PlayerRuntimeAdapterBootstrap {
@@ -79,6 +80,7 @@ pub trait PlayerRuntimeAdapter {
                 self.media_info(),
             ),
             media_info: self.media_info().clone(),
+            resilience_metrics: PlayerResilienceMetrics::default(),
         }
     }
 }

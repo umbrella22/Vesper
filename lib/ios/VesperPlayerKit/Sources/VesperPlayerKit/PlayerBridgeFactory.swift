@@ -8,12 +8,22 @@ enum PlayerBridgeFactory {
         defaultBackend
     }
 
-    static func makeDefaultBridge(initialSource: VesperPlayerSource? = nil) -> VesperPlayerController {
+    static func makeDefaultBridge(
+        initialSource: VesperPlayerSource? = nil,
+        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy()
+    ) -> VesperPlayerController {
         switch defaultBackend {
         case .fakeDemo:
-            VesperPlayerController(FakePlayerBridge(initialSource: initialSource))
+            VesperPlayerController(
+                FakePlayerBridge(initialSource: initialSource, resiliencePolicy: resiliencePolicy)
+            )
         case .rustNativeStub:
-            VesperPlayerController(VesperNativePlayerBridge(initialSource: initialSource))
+            VesperPlayerController(
+                VesperNativePlayerBridge(
+                    initialSource: initialSource,
+                    resiliencePolicy: resiliencePolicy
+                )
+            )
         }
     }
 }
@@ -24,7 +34,13 @@ public enum VesperPlayerControllerFactory {
         PlayerBridgeFactory.defaultBridgeBackend()
     }
 
-    public static func makeDefault(initialSource: VesperPlayerSource? = nil) -> VesperPlayerController {
-        PlayerBridgeFactory.makeDefaultBridge(initialSource: initialSource)
+    public static func makeDefault(
+        initialSource: VesperPlayerSource? = nil,
+        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy()
+    ) -> VesperPlayerController {
+        PlayerBridgeFactory.makeDefaultBridge(
+            initialSource: initialSource,
+            resiliencePolicy: resiliencePolicy
+        )
     }
 }

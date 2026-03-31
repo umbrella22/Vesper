@@ -17,8 +17,19 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
+import java.io.File
+import kotlin.math.pow
+import kotlin.math.roundToLong
 
 class VesperNativeJniBindings(
     context: Context,
@@ -36,7 +47,10 @@ class VesperNativeJniBindings(
         VesperTrackSelectionSnapshot()
     private var currentVideoLayoutState: NativeVideoLayoutInfo? = null
 
-    override fun initialize(source: VesperPlayerSource): NativeBridgeStartup {
+    override fun initialize(
+        source: VesperPlayerSource,
+        resiliencePolicy: VesperPlaybackResiliencePolicy,
+    ): NativeBridgeStartup {
         Log.i(TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
         dispose()
         VesperNativeLibrary.ensureLoaded()
@@ -45,9 +59,20 @@ class VesperNativeJniBindings(
         check(handle != 0L) { "native session handle must not be zero" }
         sessionHandle = handle
 
+        val mediaSourceFactory =
+            DefaultMediaSourceFactory(appContext)
+                .setDataSourceFactory(
+                    buildDataSourceFactory(appContext, source, resiliencePolicy.cache)
+                )
+                .setLoadErrorHandlingPolicy(
+                    buildLoadErrorHandlingPolicy(source, resiliencePolicy.retry) { attempt, delayMs ->
+                        VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
+                    }
+                )
         val exoPlayer =
             ExoPlayer.Builder(appContext)
-                .setLoadControl(buildLoadControl(source))
+                .setLoadControl(buildLoadControl(source, resiliencePolicy.buffering))
+                .setMediaSourceFactory(mediaSourceFactory)
                 .build()
         val listener = buildPlayerListener()
         exoPlayer.addListener(listener)
@@ -329,10 +354,13 @@ class VesperNativeJniBindings(
 
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "onPlayerError ${error.errorCodeName}: ${error.message}", error)
+                val classified = classifyPlaybackException(error)
                 sessionHandle?.let { handle ->
                     VesperNativeJni.reportError(
                         handle,
-                        BACKEND_FAILURE_ORDINAL,
+                        classified.codeOrdinal,
+                        classified.categoryOrdinal,
+                        classified.retriable,
                         error.message ?: error.errorCodeName,
                     )
                 }
@@ -403,35 +431,125 @@ class VesperNativeJniBindings(
     }
 }
 
-private fun buildLoadControl(source: VesperPlayerSource): DefaultLoadControl {
+private fun buildLoadControl(
+    source: VesperPlayerSource,
+    bufferingPolicy: VesperBufferingPolicy,
+): DefaultLoadControl {
     val builder = DefaultLoadControl.Builder()
-    return when (source.kind) {
-        VesperPlayerSourceKind.Local -> builder.build()
-        VesperPlayerSourceKind.Remote ->
-            when (source.protocol) {
-                VesperPlayerSourceProtocol.Hls,
-                VesperPlayerSourceProtocol.Dash ->
-                    builder
-                    .setBufferDurationsMs(
-                        /* minBufferMs = */ 20_000,
-                        /* maxBufferMs = */ 50_000,
-                        /* bufferForPlaybackMs = */ 1_500,
-                        /* bufferForPlaybackAfterRebufferMs = */ 3_000,
-                    )
-                    .build()
+    val resolved = resolveBufferingPolicy(source, bufferingPolicy) ?: return builder.build()
+    return builder
+        .setBufferDurationsMs(
+            resolved.minBufferMs,
+            resolved.maxBufferMs,
+            resolved.bufferForPlaybackMs,
+            resolved.bufferForPlaybackAfterRebufferMs,
+        )
+        .build()
+}
 
-                VesperPlayerSourceProtocol.Progressive ->
-                    builder
-                    .setBufferDurationsMs(
-                        /* minBufferMs = */ 12_000,
-                        /* maxBufferMs = */ 30_000,
-                        /* bufferForPlaybackMs = */ 1_000,
-                        /* bufferForPlaybackAfterRebufferMs = */ 2_000,
-                    )
-                    .build()
+private fun buildLoadErrorHandlingPolicy(
+    source: VesperPlayerSource,
+    retryPolicy: VesperRetryPolicy,
+    onRetryScheduled: (attempt: Int, delayMs: Long) -> Unit,
+): DefaultLoadErrorHandlingPolicy =
+    when (source.kind) {
+        VesperPlayerSourceKind.Local -> DefaultLoadErrorHandlingPolicy(0)
+        VesperPlayerSourceKind.Remote -> VesperLoadErrorHandlingPolicy(retryPolicy, onRetryScheduled)
+    }
 
-                else -> builder.build()
+private fun resolveBufferingPolicy(
+    source: VesperPlayerSource,
+    bufferingPolicy: VesperBufferingPolicy,
+): ResolvedBufferingPolicy? {
+    val base = when (bufferingPolicy.preset) {
+        VesperBufferingPreset.Default ->
+            when (source.kind) {
+                VesperPlayerSourceKind.Local -> null
+                VesperPlayerSourceKind.Remote ->
+                    when (source.protocol) {
+                        VesperPlayerSourceProtocol.Hls,
+                        VesperPlayerSourceProtocol.Dash -> VesperBufferingPolicy.resilient()
+                        VesperPlayerSourceProtocol.Progressive -> VesperBufferingPolicy.streaming()
+                        else -> null
+                    }
             }
+        VesperBufferingPreset.Balanced -> VesperBufferingPolicy.balanced()
+        VesperBufferingPreset.Streaming -> VesperBufferingPolicy.streaming()
+        VesperBufferingPreset.Resilient -> VesperBufferingPolicy.resilient()
+        VesperBufferingPreset.LowLatency -> VesperBufferingPolicy.lowLatency()
+    }
+
+    val merged = bufferingPolicy.mergeOnto(base)
+    val minBufferMs = merged.minBufferMs
+    val maxBufferMs = merged.maxBufferMs
+    val bufferForPlaybackMs = merged.bufferForPlaybackMs
+    val bufferForPlaybackAfterRebufferMs = merged.bufferForPlaybackAfterRebufferMs
+
+    if (
+        minBufferMs == null ||
+        maxBufferMs == null ||
+        bufferForPlaybackMs == null ||
+        bufferForPlaybackAfterRebufferMs == null
+    ) {
+        return null
+    }
+
+    return ResolvedBufferingPolicy(
+        minBufferMs = minBufferMs.coerceAtLeast(0),
+        maxBufferMs = maxBufferMs.coerceAtLeast(minBufferMs),
+        bufferForPlaybackMs = bufferForPlaybackMs.coerceAtLeast(0),
+        bufferForPlaybackAfterRebufferMs = bufferForPlaybackAfterRebufferMs.coerceAtLeast(0),
+    )
+}
+
+private data class ResolvedBufferingPolicy(
+    val minBufferMs: Int,
+    val maxBufferMs: Int,
+    val bufferForPlaybackMs: Int,
+    val bufferForPlaybackAfterRebufferMs: Int,
+)
+
+private fun VesperBufferingPolicy.mergeOnto(base: VesperBufferingPolicy?): VesperBufferingPolicy =
+    VesperBufferingPolicy(
+        preset = preset,
+        minBufferMs = minBufferMs ?: base?.minBufferMs,
+        maxBufferMs = maxBufferMs ?: base?.maxBufferMs,
+        bufferForPlaybackMs = bufferForPlaybackMs ?: base?.bufferForPlaybackMs,
+        bufferForPlaybackAfterRebufferMs =
+            bufferForPlaybackAfterRebufferMs ?: base?.bufferForPlaybackAfterRebufferMs,
+    )
+
+private class VesperLoadErrorHandlingPolicy(
+    private val retryPolicy: VesperRetryPolicy,
+    private val onRetryScheduled: (attempt: Int, delayMs: Long) -> Unit,
+) : DefaultLoadErrorHandlingPolicy(
+        when {
+            retryPolicy.maxAttempts == null -> Int.MAX_VALUE
+            retryPolicy.maxAttempts <= 0 -> 0
+            else -> retryPolicy.maxAttempts
+        }
+    ) {
+    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorInfo): Long {
+        val superDelayMs = super.getRetryDelayMsFor(loadErrorInfo)
+        if (superDelayMs == C.TIME_UNSET) {
+            return C.TIME_UNSET
+        }
+
+        val maxAttempts = retryPolicy.maxAttempts
+        if (maxAttempts != null && loadErrorInfo.errorCount > maxAttempts) {
+            return C.TIME_UNSET
+        }
+
+        val step = when (retryPolicy.backoff) {
+            VesperRetryBackoff.Fixed -> 1.0
+            VesperRetryBackoff.Linear -> loadErrorInfo.errorCount.toDouble()
+            VesperRetryBackoff.Exponential ->
+                2.0.pow((loadErrorInfo.errorCount - 1).coerceAtLeast(0).toDouble())
+        }
+        val computedDelay = (retryPolicy.baseDelayMs.toDouble() * step).roundToLong()
+        val resolvedDelay = computedDelay.coerceAtMost(retryPolicy.maxDelayMs).coerceAtLeast(0L)
+        onRetryScheduled(loadErrorInfo.errorCount, resolvedDelay)
+        return resolvedDelay
     }
 }
 
@@ -865,6 +983,56 @@ private fun buildMediaItem(source: VesperPlayerSource): MediaItem {
     return builder.build()
 }
 
+private fun buildDataSourceFactory(
+    appContext: Context,
+    source: VesperPlayerSource,
+    cachePolicy: VesperCachePolicy,
+): androidx.media3.datasource.DataSource.Factory {
+    val upstreamFactory = DefaultDataSource.Factory(appContext)
+    val resolvedCachePolicy = resolveCachePolicy(source, cachePolicy)
+    if (!resolvedCachePolicy.enabled) {
+        return upstreamFactory
+    }
+
+    val cache =
+        VesperMediaCacheStore.cache(
+            appContext = appContext,
+            maxDiskBytes = resolvedCachePolicy.maxDiskBytes,
+        )
+
+    return CacheDataSource.Factory()
+        .setCache(cache)
+        .setUpstreamDataSourceFactory(upstreamFactory)
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+}
+
+private fun resolveCachePolicy(
+    source: VesperPlayerSource,
+    cachePolicy: VesperCachePolicy,
+): ResolvedCachePolicy {
+    if (source.kind == VesperPlayerSourceKind.Local) {
+        return ResolvedCachePolicy(enabled = false, maxDiskBytes = 0L)
+    }
+
+    val basePolicy =
+        when (cachePolicy.preset) {
+            VesperCachePreset.Default ->
+                when (source.protocol) {
+                    VesperPlayerSourceProtocol.Hls,
+                    VesperPlayerSourceProtocol.Dash,
+                    -> VesperCachePolicy.resilient()
+
+                    else -> VesperCachePolicy.streaming()
+                }
+            VesperCachePreset.Disabled -> VesperCachePolicy.disabled()
+            VesperCachePreset.Streaming -> VesperCachePolicy.streaming()
+            VesperCachePreset.Resilient -> VesperCachePolicy.resilient()
+        }
+
+    val maxDiskBytes = cachePolicy.maxDiskBytes ?: basePolicy.maxDiskBytes ?: 0L
+    return ResolvedCachePolicy(enabled = maxDiskBytes > 0L, maxDiskBytes = maxDiskBytes)
+}
+
 private fun Long.normalizedOptionalMs(): Long? =
     if (this == C.TIME_UNSET || this < 0L) {
         null
@@ -886,7 +1054,116 @@ private fun Long.normalizedDurationMs(): Long =
         this
     }
 
+private data class NativePlaybackError(
+    val codeOrdinal: Int,
+    val categoryOrdinal: Int,
+    val retriable: Boolean,
+)
+
+private data class ResolvedCachePolicy(
+    val enabled: Boolean,
+    val maxDiskBytes: Long,
+)
+
+private object VesperMediaCacheStore {
+    private val caches = mutableMapOf<Long, SimpleCache>()
+    private val databaseProviders = mutableMapOf<Long, StandaloneDatabaseProvider>()
+
+    @Synchronized
+    fun cache(
+        appContext: Context,
+        maxDiskBytes: Long,
+    ): SimpleCache {
+        return caches.getOrPut(maxDiskBytes) {
+            val cacheDir =
+                File(appContext.cacheDir, "vesper-media-cache/$maxDiskBytes").apply { mkdirs() }
+            val databaseProvider =
+                databaseProviders.getOrPut(maxDiskBytes) { StandaloneDatabaseProvider(appContext) }
+            SimpleCache(
+                cacheDir,
+                LeastRecentlyUsedCacheEvictor(maxDiskBytes),
+                databaseProvider,
+            )
+        }
+    }
+}
+
+private fun classifyPlaybackException(error: PlaybackException): NativePlaybackError =
+    when (error.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        -> NativePlaybackError(
+            codeOrdinal = BACKEND_FAILURE_ORDINAL,
+            categoryOrdinal = NETWORK_CATEGORY_ORDINAL,
+            retriable = true,
+        )
+
+        PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+        PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE,
+        -> NativePlaybackError(
+            codeOrdinal = INVALID_SOURCE_ORDINAL,
+            categoryOrdinal = SOURCE_CATEGORY_ORDINAL,
+            retriable = false,
+        )
+
+        PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+        PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED,
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+        -> NativePlaybackError(
+            codeOrdinal = UNSUPPORTED_ORDINAL,
+            categoryOrdinal = CAPABILITY_CATEGORY_ORDINAL,
+            retriable = false,
+        )
+
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+        -> NativePlaybackError(
+            codeOrdinal = INVALID_SOURCE_ORDINAL,
+            categoryOrdinal = SOURCE_CATEGORY_ORDINAL,
+            retriable = false,
+        )
+
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        -> NativePlaybackError(
+            codeOrdinal = DECODE_FAILURE_ORDINAL,
+            categoryOrdinal = DECODE_CATEGORY_ORDINAL,
+            retriable = false,
+        )
+
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_OFFLOAD_INIT_FAILED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_OFFLOAD_WRITE_FAILED,
+        -> NativePlaybackError(
+            codeOrdinal = AUDIO_OUTPUT_UNAVAILABLE_ORDINAL,
+            categoryOrdinal = AUDIO_OUTPUT_CATEGORY_ORDINAL,
+            retriable = false,
+        )
+
+        else ->
+            NativePlaybackError(
+                codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                categoryOrdinal = PLATFORM_CATEGORY_ORDINAL,
+                retriable = false,
+            )
+    }
+
+private const val INVALID_SOURCE_ORDINAL = 2
 private const val BACKEND_FAILURE_ORDINAL = 3
+private const val AUDIO_OUTPUT_UNAVAILABLE_ORDINAL = 4
+private const val DECODE_FAILURE_ORDINAL = 5
+private const val UNSUPPORTED_ORDINAL = 7
+private const val SOURCE_CATEGORY_ORDINAL = 1
+private const val NETWORK_CATEGORY_ORDINAL = 2
+private const val DECODE_CATEGORY_ORDINAL = 3
+private const val AUDIO_OUTPUT_CATEGORY_ORDINAL = 4
+private const val CAPABILITY_CATEGORY_ORDINAL = 6
+private const val PLATFORM_CATEGORY_ORDINAL = 7
 private const val TAG = "VesperPlayerAndroidHost"
 private val FORMAT_NO_VALUE_FLOAT = Format.NO_VALUE.toFloat()
 

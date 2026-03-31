@@ -16,7 +16,8 @@ use player_platform_android::{
 use player_runtime::{
     MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog, MediaTrackKind,
     MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot,
-    PlayerRuntimeCommand, PlayerRuntimeErrorCode, PresentationState,
+    PlayerRuntimeCommand, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+    PresentationState,
 };
 
 const PKG: &str = "io/github/ikaros/vesper/player/android";
@@ -256,6 +257,18 @@ fn host_event_object<'local>(
                 &[JValue::Long(*position_ms as i64)],
             )
         }
+        AndroidHostEvent::RetryScheduled { attempt, delay_ms } => {
+            let class =
+                env.find_class(jni_name(format!("{PKG}/NativeBridgeEvent$RetryScheduled")))?;
+            env.new_object(
+                class,
+                method_sig("(IJ)V").method_signature(),
+                &[
+                    JValue::Int(*attempt as jint),
+                    JValue::Long(*delay_ms as i64),
+                ],
+            )
+        }
         AndroidHostEvent::Ended => {
             let class = env.find_class(jni_name(format!("{PKG}/NativeBridgeEvent$Ended")))?;
             env.new_object(
@@ -264,14 +277,24 @@ fn host_event_object<'local>(
                 &[JValue::Bool(true)],
             )
         }
-        AndroidHostEvent::Error { code, message } => {
+        AndroidHostEvent::Error {
+            code,
+            category,
+            retriable,
+            message,
+        } => {
             let class = env.find_class(jni_name(format!("{PKG}/NativeBridgeEvent$Error")))?;
             let message = env.new_string(format!("[{code:?}] {message}"))?;
             let message_object = JObject::from(message);
             env.new_object(
                 class,
-                method_sig("(Ljava/lang/String;)V").method_signature(),
-                &[JValue::Object(&message_object)],
+                method_sig("(Ljava/lang/String;IIZ)V").method_signature(),
+                &[
+                    JValue::Object(&message_object),
+                    JValue::Int(*code as jint),
+                    JValue::Int(*category as jint),
+                    JValue::Bool(*retriable),
+                ],
             )
         }
     }
@@ -434,6 +457,20 @@ fn error_code_from_ordinal(ordinal: jint) -> PlayerRuntimeErrorCode {
         6 => PlayerRuntimeErrorCode::SeekFailure,
         7 => PlayerRuntimeErrorCode::Unsupported,
         _ => PlayerRuntimeErrorCode::BackendFailure,
+    }
+}
+
+fn error_category_from_ordinal(ordinal: jint) -> PlayerRuntimeErrorCategory {
+    match ordinal {
+        0 => PlayerRuntimeErrorCategory::Input,
+        1 => PlayerRuntimeErrorCategory::Source,
+        2 => PlayerRuntimeErrorCategory::Network,
+        3 => PlayerRuntimeErrorCategory::Decode,
+        4 => PlayerRuntimeErrorCategory::AudioOutput,
+        5 => PlayerRuntimeErrorCategory::Playback,
+        6 => PlayerRuntimeErrorCategory::Capability,
+        7 => PlayerRuntimeErrorCategory::Platform,
+        _ => PlayerRuntimeErrorCategory::Platform,
     }
 }
 
@@ -899,19 +936,47 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_reportRetryScheduled(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    attempt: jint,
+    delay_ms: jlong,
+) {
+    unowned_env
+        .with_env(|env| -> JniResult<()> {
+            let _ = with_session_mut(env, session_handle, |session| {
+                session.inner.report_retry_scheduled(
+                    attempt.max(0) as u32,
+                    Duration::from_millis(delay_ms.max(0) as u64),
+                );
+            });
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_reportError(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
     code_ordinal: jint,
+    category_ordinal: jint,
+    retriable: jboolean,
     message: JString<'_>,
 ) {
     unowned_env
         .with_env(|env| -> JniResult<()> {
             let message = message.try_to_string(env)?;
             let code = error_code_from_ordinal(code_ordinal);
+            let category = error_category_from_ordinal(category_ordinal);
             let _ = with_session_mut(env, session_handle, |session| {
-                session.inner.report_error(code, message);
+                session
+                    .inner
+                    .report_runtime_error(PlayerRuntimeError::with_taxonomy(
+                        code, category, retriable, message,
+                    ));
             });
             Ok(())
         })

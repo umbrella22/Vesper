@@ -81,6 +81,16 @@ The current Android host surface is also expected to handle:
 The library intentionally does not ship built-in demo URLs or preset source choices. Those belong
 in a consuming host app such as `examples/android-compose-host`.
 
+The Android host API now also starts exposing first-round playback resilience controls:
+
+- `VesperPlaybackResiliencePolicy`
+- `VesperBufferingPolicy`
+- `VesperRetryPolicy`
+- `VesperCachePolicy`
+
+These are currently used to shape `ExoPlayer` startup buffering, retry behavior, and first-round
+disk caching for remote streams, especially `HLS / DASH`.
+
 ## Key Entry Points
 
 - `vesper-player-kit/build.gradle.kts`
@@ -98,13 +108,17 @@ in a consuming host app such as `examples/android-compose-host`.
 
 ```kotlin
 import androidx.compose.runtime.Composable
+import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.compose.VesperPlayerSurface
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerController
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
 
 @Composable
 fun DemoPlayerScreen() {
-    val controller = rememberVesperPlayerController()
+    val controller =
+        rememberVesperPlayerController(
+            resiliencePolicy = VesperPlaybackResiliencePolicy.resilient()
+        )
     val uiState = rememberVesperPlayerUiState(controller)
 
     VesperPlayerSurface(controller = controller)

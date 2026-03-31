@@ -7,10 +7,11 @@ use player_runtime::{
     MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
     MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
     PlayerAudioInfo, PlayerAudioOutputInfo, PlayerMediaInfo, PlayerRuntime, PlayerRuntimeBootstrap,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
-    PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeStartup, PlayerSeekableRange,
-    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo,
-    PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState, VideoPixelFormat,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
+    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
+    PlayerRuntimeInitializer, PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+    PlayerVideoInfo, PresentationState, VideoPixelFormat,
 };
 
 pub type FfiResult<T> = Result<T, FfiError>;
@@ -37,9 +38,23 @@ pub enum FfiErrorCode {
     Unsupported,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiErrorCategory {
+    Input,
+    Source,
+    Network,
+    Decode,
+    AudioOutput,
+    Playback,
+    Capability,
+    Platform,
+}
+
 #[derive(Debug, Clone)]
 pub struct FfiError {
     code: FfiErrorCode,
+    category: FfiErrorCategory,
+    retriable: bool,
     message: String,
 }
 
@@ -330,6 +345,14 @@ impl FfiError {
         self.code
     }
 
+    pub fn category(&self) -> FfiErrorCategory {
+        self.category
+    }
+
+    pub fn is_retriable(&self) -> bool {
+        self.retriable
+    }
+
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -361,10 +384,27 @@ impl From<PlayerRuntimeErrorCode> for FfiErrorCode {
     }
 }
 
+impl From<PlayerRuntimeErrorCategory> for FfiErrorCategory {
+    fn from(value: PlayerRuntimeErrorCategory) -> Self {
+        match value {
+            PlayerRuntimeErrorCategory::Input => Self::Input,
+            PlayerRuntimeErrorCategory::Source => Self::Source,
+            PlayerRuntimeErrorCategory::Network => Self::Network,
+            PlayerRuntimeErrorCategory::Decode => Self::Decode,
+            PlayerRuntimeErrorCategory::AudioOutput => Self::AudioOutput,
+            PlayerRuntimeErrorCategory::Playback => Self::Playback,
+            PlayerRuntimeErrorCategory::Capability => Self::Capability,
+            PlayerRuntimeErrorCategory::Platform => Self::Platform,
+        }
+    }
+}
+
 impl From<PlayerRuntimeError> for FfiError {
     fn from(value: PlayerRuntimeError) -> Self {
         Self {
             code: value.code().into(),
+            category: value.category().into(),
+            retriable: value.is_retriable(),
             message: value.message().to_owned(),
         }
     }

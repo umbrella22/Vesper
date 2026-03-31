@@ -26,6 +26,17 @@ typedef enum PlayerFfiErrorCode {
   PLAYER_FFI_ERROR_CODE_UNSUPPORTED = 10,
 } PlayerFfiErrorCode;
 
+typedef enum PlayerFfiErrorCategory {
+  PLAYER_FFI_ERROR_CATEGORY_INPUT = 0,
+  PLAYER_FFI_ERROR_CATEGORY_SOURCE = 1,
+  PLAYER_FFI_ERROR_CATEGORY_NETWORK = 2,
+  PLAYER_FFI_ERROR_CATEGORY_DECODE = 3,
+  PLAYER_FFI_ERROR_CATEGORY_AUDIO_OUTPUT = 4,
+  PLAYER_FFI_ERROR_CATEGORY_PLAYBACK = 5,
+  PLAYER_FFI_ERROR_CATEGORY_CAPABILITY = 6,
+  PLAYER_FFI_ERROR_CATEGORY_PLATFORM = 7,
+} PlayerFfiErrorCategory;
+
 typedef enum PlayerFfiEventKind {
   PLAYER_FFI_EVENT_KIND_INITIALIZED = 0,
   PLAYER_FFI_EVENT_KIND_METADATA_READY = 1,
@@ -111,6 +122,8 @@ typedef enum PlayerFfiTimelineKind {
 
 typedef struct PlayerFfiError {
   enum PlayerFfiErrorCode code;
+  enum PlayerFfiErrorCategory category;
+  bool retriable;
   char *message;
 } PlayerFfiError;
 

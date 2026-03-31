@@ -66,7 +66,9 @@ import VesperPlayerKit
 import SwiftUI
 
 struct DemoPlayerView: View {
-    @StateObject private var controller = VesperPlayerControllerFactory.makeDefault()
+    @StateObject private var controller = VesperPlayerControllerFactory.makeDefault(
+        resiliencePolicy: .resilient()
+    )
 
     var body: some View {
         let uiState = controller.uiState
@@ -86,6 +88,18 @@ struct DemoPlayerView: View {
     }
 }
 ```
+
+The iOS host API now also starts exposing first-round playback resilience controls:
+
+- `VesperPlaybackResiliencePolicy`
+- `VesperBufferingPolicy`
+- `VesperRetryPolicy`
+- `VesperCachePolicy`
+
+These currently shape `AVPlayer` buffering behavior and controlled retry/backoff for remote
+sources. Cache configuration is currently mapped as a best-effort process-wide `URLCache.shared`
+capacity hint for remote playback, and it does not pretend to offer the same transport depth that
+`Media3` exposes on Android.
 
 ## How It Relates To The Example
 

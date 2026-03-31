@@ -7,12 +7,13 @@ use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
     MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
     MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo,
-    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerResilienceMetrics, PlayerResilienceMetricsTracker, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoSurfaceKind,
-    PlayerVideoSurfaceTarget, PresentationState,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
+    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineKind,
+    PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
 };
 
 pub const IOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "ios_native";
@@ -147,6 +148,10 @@ pub enum IosNativeSessionUpdate {
     SeekCompleted {
         position: Duration,
     },
+    RetryScheduled {
+        attempt: u32,
+        delay: Duration,
+    },
     Error(PlayerRuntimeError),
 }
 
@@ -168,6 +173,7 @@ pub struct IosManagedNativeSession<C> {
     is_buffering: bool,
     playback_rate: f32,
     progress: PlaybackProgress,
+    resilience_metrics: PlayerResilienceMetricsTracker,
     events: VecDeque<PlayerRuntimeEvent>,
 }
 
@@ -266,6 +272,7 @@ pub struct IosHostSnapshot {
     pub live_edge_ms: Option<u64>,
     pub position_ms: u64,
     pub duration_ms: Option<u64>,
+    pub resilience_metrics: PlayerResilienceMetrics,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -288,9 +295,15 @@ pub enum IosHostEvent {
     SeekCompleted {
         position_ms: u64,
     },
+    RetryScheduled {
+        attempt: u32,
+        delay_ms: u64,
+    },
     Ended,
     Error {
         code: PlayerRuntimeErrorCode,
+        category: PlayerRuntimeErrorCategory,
+        retriable: bool,
         message: String,
     },
 }
@@ -449,6 +462,7 @@ impl IosHostSnapshot {
             live_edge_ms: snapshot.timeline.live_edge.map(duration_to_millis),
             position_ms: duration_to_millis(snapshot.timeline.position),
             duration_ms: snapshot.timeline.duration.map(duration_to_millis),
+            resilience_metrics: snapshot.resilience_metrics.clone(),
         }
     }
 }
@@ -478,9 +492,15 @@ impl IosHostEvent {
             PlayerRuntimeEvent::SeekCompleted { position } => Some(Self::SeekCompleted {
                 position_ms: duration_to_millis(*position),
             }),
+            PlayerRuntimeEvent::RetryScheduled { attempt, delay } => Some(Self::RetryScheduled {
+                attempt: *attempt,
+                delay_ms: duration_to_millis(*delay),
+            }),
             PlayerRuntimeEvent::Ended => Some(Self::Ended),
             PlayerRuntimeEvent::Error(error) => Some(Self::Error {
                 code: error.code(),
+                category: error.category(),
+                retriable: error.is_retriable(),
                 message: error.message().to_owned(),
             }),
             PlayerRuntimeEvent::Initialized(_)
@@ -588,6 +608,12 @@ impl IosHostBridgeSession {
         self.session.controller().report_seek_completed(position);
     }
 
+    pub fn report_retry_scheduled(&mut self, attempt: u32, delay: Duration) {
+        self.session
+            .controller()
+            .report_retry_scheduled(attempt, delay);
+    }
+
     pub fn report_interruption_changed(&mut self, interrupted: bool) {
         self.session
             .controller()
@@ -596,6 +622,10 @@ impl IosHostBridgeSession {
 
     pub fn report_error(&mut self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
         self.session.controller().report_error(code, message);
+    }
+
+    pub fn report_runtime_error(&mut self, error: PlayerRuntimeError) {
+        self.session.controller().report_runtime_error(error);
     }
 }
 
@@ -876,11 +906,19 @@ impl IosManagedNativeSessionController {
         self.push_update(IosNativeSessionUpdate::SeekCompleted { position });
     }
 
+    pub fn report_retry_scheduled(&self, attempt: u32, delay: Duration) {
+        self.push_update(IosNativeSessionUpdate::RetryScheduled { attempt, delay });
+    }
+
     pub fn report_error(&self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
         self.push_update(IosNativeSessionUpdate::Error(PlayerRuntimeError::new(
             code,
             message.into(),
         )));
+    }
+
+    pub fn report_runtime_error(&self, error: PlayerRuntimeError) {
+        self.push_update(IosNativeSessionUpdate::Error(error));
     }
 
     pub fn push_update(&self, update: IosNativeSessionUpdate) {
@@ -978,6 +1016,7 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
             is_buffering: false,
             playback_rate: DEFAULT_PLAYBACK_RATE,
             progress: PlaybackProgress::new(Duration::ZERO, None),
+            resilience_metrics: PlayerResilienceMetricsTracker::default(),
             events: VecDeque::new(),
         }
     }
@@ -1017,6 +1056,12 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     self.events
                         .push_back(PlayerRuntimeEvent::SeekCompleted { position });
                 }
+                IosNativeSessionUpdate::RetryScheduled { attempt, delay } => {
+                    self.resilience_metrics
+                        .observe_retry_scheduled(attempt, delay);
+                    self.events
+                        .push_back(PlayerRuntimeEvent::RetryScheduled { attempt, delay });
+                }
                 IosNativeSessionUpdate::Error(error) => {
                     self.events.push_back(PlayerRuntimeEvent::Error(error));
                 }
@@ -1038,6 +1083,10 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
     }
 
     fn apply_observation(&mut self, observation: IosNativeObservation) {
+        self.resilience_metrics
+            .observe_playback_state(observation.presentation_state);
+        self.resilience_metrics
+            .observe_buffering(observation.is_buffering);
         self.presentation_state = observation.presentation_state;
         self.is_buffering = observation.is_buffering;
         self.playback_rate = observation.playback_rate;
@@ -1061,6 +1110,7 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                 &self.media_info,
             ),
             media_info: self.media_info.clone(),
+            resilience_metrics: self.resilience_metrics.snapshot(),
         }
     }
 
@@ -1757,11 +1807,12 @@ mod tests {
     use player_runtime::{
         DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
         MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,
-        PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
-        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-        PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult,
-        PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoSurfaceKind,
-        PlayerVideoSurfaceTarget, PresentationState,
+        PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntimeAdapterBackendFamily,
+        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
+        PlayerRuntimeCommandResult, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
+        PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot,
+        PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
+        PresentationState,
     };
 
     #[test]
@@ -2099,6 +2150,7 @@ mod tests {
             error_message: None,
         });
         controller.report_seek_completed(Duration::from_secs(3));
+        controller.report_retry_scheduled(2, Duration::from_millis(1_500));
         controller.report_error(
             PlayerRuntimeErrorCode::BackendFailure,
             "avplayer callback failed",
@@ -2114,9 +2166,15 @@ mod tests {
         )));
         assert!(events.iter().any(|event| matches!(
             event,
+            PlayerRuntimeEvent::RetryScheduled { attempt: 2, delay }
+            if *delay == Duration::from_millis(1_500)
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
             PlayerRuntimeEvent::Error(error)
             if error.code() == PlayerRuntimeErrorCode::BackendFailure
         )));
+        assert_eq!(session.snapshot().resilience_metrics.retry_count, 2);
     }
 
     #[test]
@@ -2303,6 +2361,7 @@ mod tests {
                 true,
             ),
             media_info: test_media_info(),
+            resilience_metrics: PlayerResilienceMetrics::default(),
         };
 
         let host = IosHostSnapshot::from_player_snapshot(&snapshot);
@@ -2333,6 +2392,18 @@ mod tests {
         assert!(matches!(
             interruption,
             Some(IosHostEvent::InterruptionChanged { interrupted: true })
+        ));
+
+        let retry = IosHostEvent::from_runtime_event(&PlayerRuntimeEvent::RetryScheduled {
+            attempt: 3,
+            delay: Duration::from_secs(2),
+        });
+        assert!(matches!(
+            retry,
+            Some(IosHostEvent::RetryScheduled {
+                attempt: 3,
+                delay_ms: 2_000,
+            })
         ));
     }
 

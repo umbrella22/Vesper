@@ -7,12 +7,13 @@ use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
     MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
     MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo,
-    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerResilienceMetrics, PlayerResilienceMetricsTracker, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
-    PresentationState,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
+    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
 };
 
 pub const ANDROID_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "android_native";
@@ -42,6 +43,7 @@ pub struct AndroidHostSnapshot {
     pub live_edge_ms: Option<u64>,
     pub position_ms: u64,
     pub duration_ms: Option<u64>,
+    pub resilience_metrics: PlayerResilienceMetrics,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,9 +66,15 @@ pub enum AndroidHostEvent {
     SeekCompleted {
         position_ms: u64,
     },
+    RetryScheduled {
+        attempt: u32,
+        delay_ms: u64,
+    },
     Ended,
     Error {
         code: PlayerRuntimeErrorCode,
+        category: PlayerRuntimeErrorCategory,
+        retriable: bool,
         message: String,
     },
 }
@@ -137,6 +145,7 @@ pub struct AndroidExoSeekableRange {
 #[derive(Debug, Clone)]
 pub struct AndroidNativeObservation {
     pub presentation_state: PresentationState,
+    pub is_buffering: bool,
     pub playback_rate: f32,
     pub progress: PlaybackProgress,
     pub emitted_events: Vec<PlayerRuntimeEvent>,
@@ -146,6 +155,7 @@ pub struct AndroidNativeObservation {
 pub struct AndroidExoStateTracker {
     has_started_playback: bool,
     last_presentation_state: Option<PresentationState>,
+    last_is_buffering: Option<bool>,
     last_playback_rate: Option<f32>,
 }
 
@@ -185,6 +195,10 @@ pub enum AndroidNativeSessionUpdate {
     SeekCompleted {
         position: Duration,
     },
+    RetryScheduled {
+        attempt: u32,
+        delay: Duration,
+    },
     Error(PlayerRuntimeError),
 }
 
@@ -201,9 +215,11 @@ pub struct AndroidManagedNativeSession<C> {
     controller: AndroidManagedNativeSessionController,
     tracker: AndroidExoStateTracker,
     presentation_state: PresentationState,
+    is_buffering: bool,
     playback_rate: f32,
     progress: PlaybackProgress,
     timeline_metadata: Option<AndroidLiveTimelineMetadata>,
+    resilience_metrics: PlayerResilienceMetricsTracker,
     events: VecDeque<PlayerRuntimeEvent>,
 }
 
@@ -408,6 +424,7 @@ impl AndroidHostSnapshot {
             live_edge_ms: snapshot.timeline.live_edge.map(duration_to_millis),
             position_ms: duration_to_millis(snapshot.timeline.position),
             duration_ms: snapshot.timeline.duration.map(duration_to_millis),
+            resilience_metrics: snapshot.resilience_metrics.clone(),
         }
     }
 }
@@ -437,9 +454,15 @@ impl AndroidHostEvent {
             PlayerRuntimeEvent::SeekCompleted { position } => Some(Self::SeekCompleted {
                 position_ms: duration_to_millis(*position),
             }),
+            PlayerRuntimeEvent::RetryScheduled { attempt, delay } => Some(Self::RetryScheduled {
+                attempt: *attempt,
+                delay_ms: duration_to_millis(*delay),
+            }),
             PlayerRuntimeEvent::Ended => Some(Self::Ended),
             PlayerRuntimeEvent::Error(error) => Some(Self::Error {
                 code: error.code(),
+                category: error.category(),
+                retriable: error.is_retriable(),
                 message: error.message().to_owned(),
             }),
             PlayerRuntimeEvent::Initialized(_)
@@ -559,8 +582,18 @@ impl AndroidHostBridgeSession {
         self.session.controller().report_seek_completed(position);
     }
 
+    pub fn report_retry_scheduled(&mut self, attempt: u32, delay: Duration) {
+        self.session
+            .controller()
+            .report_retry_scheduled(attempt, delay);
+    }
+
     pub fn report_error(&mut self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
         self.session.controller().report_error(code, message);
+    }
+
+    pub fn report_runtime_error(&mut self, error: PlayerRuntimeError) {
+        self.session.controller().report_runtime_error(error);
     }
 }
 
@@ -688,6 +721,7 @@ impl PlayerRuntimeAdapter for AndroidNativePlayerRuntime {
 impl AndroidExoStateTracker {
     pub fn observe(&mut self, snapshot: &AndroidExoPlaybackSnapshot) -> AndroidNativeObservation {
         let presentation_state = self.presentation_state(snapshot);
+        let is_buffering = snapshot.playback_state == AndroidExoPlaybackState::Buffering;
         let playback_rate = sanitize_native_playback_rate(snapshot.playback_rate);
         let progress = PlaybackProgress::new(snapshot.position, snapshot.duration);
         let mut emitted_events = Vec::new();
@@ -709,14 +743,26 @@ impl AndroidExoStateTracker {
             });
         }
 
+        if self
+            .last_is_buffering
+            .map(|previous| previous != is_buffering)
+            .unwrap_or(is_buffering)
+        {
+            emitted_events.push(PlayerRuntimeEvent::BufferingChanged {
+                buffering: is_buffering,
+            });
+        }
+
         if presentation_state == PresentationState::Playing {
             self.has_started_playback = true;
         }
         self.last_presentation_state = Some(presentation_state);
+        self.last_is_buffering = Some(is_buffering);
         self.last_playback_rate = Some(playback_rate);
 
         AndroidNativeObservation {
             presentation_state,
+            is_buffering,
             playback_rate,
             progress,
             emitted_events,
@@ -728,6 +774,7 @@ impl AndroidExoStateTracker {
             self.has_started_playback = true;
         }
         self.last_presentation_state = Some(presentation_state);
+        self.last_is_buffering = Some(false);
         self.last_playback_rate = Some(playback_rate);
     }
 
@@ -778,11 +825,19 @@ impl AndroidManagedNativeSessionController {
         self.push_update(AndroidNativeSessionUpdate::SeekCompleted { position });
     }
 
+    pub fn report_retry_scheduled(&self, attempt: u32, delay: Duration) {
+        self.push_update(AndroidNativeSessionUpdate::RetryScheduled { attempt, delay });
+    }
+
     pub fn report_error(&self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
         self.push_update(AndroidNativeSessionUpdate::Error(PlayerRuntimeError::new(
             code,
             message.into(),
         )));
+    }
+
+    pub fn report_runtime_error(&self, error: PlayerRuntimeError) {
+        self.push_update(AndroidNativeSessionUpdate::Error(error));
     }
 
     pub fn push_update(&self, update: AndroidNativeSessionUpdate) {
@@ -873,9 +928,11 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
             controller,
             tracker: AndroidExoStateTracker::default(),
             presentation_state: PresentationState::Ready,
+            is_buffering: false,
             playback_rate: DEFAULT_PLAYBACK_RATE,
             progress: PlaybackProgress::new(Duration::ZERO, None),
             timeline_metadata: None,
+            resilience_metrics: PlayerResilienceMetricsTracker::default(),
             events: VecDeque::new(),
         }
     }
@@ -911,6 +968,12 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     self.events
                         .push_back(PlayerRuntimeEvent::SeekCompleted { position });
                 }
+                AndroidNativeSessionUpdate::RetryScheduled { attempt, delay } => {
+                    self.resilience_metrics
+                        .observe_retry_scheduled(attempt, delay);
+                    self.events
+                        .push_back(PlayerRuntimeEvent::RetryScheduled { attempt, delay });
+                }
                 AndroidNativeSessionUpdate::Error(error) => {
                     self.events.push_back(PlayerRuntimeEvent::Error(error));
                 }
@@ -933,7 +996,12 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
     }
 
     fn apply_observation(&mut self, observation: AndroidNativeObservation) {
+        self.resilience_metrics
+            .observe_playback_state(observation.presentation_state);
+        self.resilience_metrics
+            .observe_buffering(observation.is_buffering);
         self.presentation_state = observation.presentation_state;
+        self.is_buffering = observation.is_buffering;
         self.playback_rate = observation.playback_rate;
         self.progress = observation.progress;
         self.events.extend(observation.emitted_events);
@@ -957,11 +1025,12 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
             state: self.presentation_state,
             has_video_surface: false,
             is_interrupted: false,
-            is_buffering: false,
+            is_buffering: self.is_buffering,
             playback_rate: self.playback_rate,
             progress: self.progress,
             timeline,
             media_info: self.media_info.clone(),
+            resilience_metrics: self.resilience_metrics.snapshot(),
         }
     }
 
@@ -1580,10 +1649,11 @@ mod tests {
     use player_runtime::{
         DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
         MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,
-        PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
-        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-        PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult,
-        PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot, PresentationState,
+        PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntimeAdapterBackendFamily,
+        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
+        PlayerRuntimeCommandResult, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
+        PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot,
+        PlayerTimelineSnapshot, PresentationState,
     };
     #[test]
     fn android_factory_exposes_native_capabilities() {
@@ -1873,6 +1943,7 @@ mod tests {
             live_edge: None,
         });
         controller.report_seek_completed(Duration::from_secs(3));
+        controller.report_retry_scheduled(2, Duration::from_millis(1_500));
         controller.report_error(
             PlayerRuntimeErrorCode::BackendFailure,
             "bridge callback failed",
@@ -1888,9 +1959,15 @@ mod tests {
         )));
         assert!(events.iter().any(|event| matches!(
             event,
+            PlayerRuntimeEvent::RetryScheduled { attempt: 2, delay }
+            if *delay == Duration::from_millis(1_500)
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
             PlayerRuntimeEvent::Error(error)
             if error.code() == PlayerRuntimeErrorCode::BackendFailure
         )));
+        assert_eq!(session.snapshot().resilience_metrics.retry_count, 2);
     }
 
     #[test]
@@ -2112,6 +2189,7 @@ mod tests {
                 true,
             ),
             media_info: test_media_info(),
+            resilience_metrics: PlayerResilienceMetrics::default(),
         };
 
         let host = AndroidHostSnapshot::from_player_snapshot(&snapshot);
@@ -2139,6 +2217,18 @@ mod tests {
         assert!(matches!(
             seek,
             Some(AndroidHostEvent::SeekCompleted { position_ms: 1250 })
+        ));
+
+        let retry = AndroidHostEvent::from_runtime_event(&PlayerRuntimeEvent::RetryScheduled {
+            attempt: 3,
+            delay: Duration::from_secs(2),
+        });
+        assert!(matches!(
+            retry,
+            Some(AndroidHostEvent::RetryScheduled {
+                attempt: 3,
+                delay_ms: 2_000,
+            })
         ));
 
         let initialized = AndroidHostEvent::from_runtime_event(&PlayerRuntimeEvent::Initialized(

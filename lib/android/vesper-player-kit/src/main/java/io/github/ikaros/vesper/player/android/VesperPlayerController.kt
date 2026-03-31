@@ -67,8 +67,15 @@ object VesperPlayerControllerFactory {
     fun createDefault(
         context: Context,
         initialSource: VesperPlayerSource? = null,
+        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     ): VesperPlayerController =
-        VesperPlayerController(PlayerBridgeFactory.createDefault(context, initialSource))
+        VesperPlayerController(
+            PlayerBridgeFactory.createDefault(
+                context = context,
+                initialSource = initialSource,
+                resiliencePolicy = resiliencePolicy,
+            )
+        )
 
     fun createPreview(
         initialSource: VesperPlayerSource? = null,

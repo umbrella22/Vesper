@@ -24,6 +24,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.PlayerHostUiState
+import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
@@ -35,14 +36,19 @@ private const val DEFAULT_PROGRESS_REFRESH_INTERVAL_MS = 250L
 @Composable
 fun rememberVesperPlayerController(
     initialSource: VesperPlayerSource? = null,
+    resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
 ): VesperPlayerController {
     val isPreview = LocalInspectionMode.current
     val context = LocalContext.current.applicationContext
-    return remember(isPreview, context, initialSource) {
+    return remember(isPreview, context, initialSource, resiliencePolicy) {
         if (isPreview) {
             VesperPlayerControllerFactory.createPreview(initialSource)
         } else {
-            VesperPlayerControllerFactory.createDefault(context, initialSource)
+            VesperPlayerControllerFactory.createDefault(
+                context = context,
+                initialSource = initialSource,
+                resiliencePolicy = resiliencePolicy,
+            )
         }
     }
 }
