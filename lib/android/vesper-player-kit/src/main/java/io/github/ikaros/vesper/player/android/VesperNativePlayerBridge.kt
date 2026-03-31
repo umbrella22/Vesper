@@ -33,10 +33,15 @@ class VesperNativePlayerBridge(
             ),
         )
     )
+    private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
+    private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
     private val surfaceHost = VesperNativeSurfaceHost(bindings)
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.VesperNativeStub
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
+    override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
+    override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
+        _trackSelection.asStateFlow()
 
     init {
         bindings.setOnNativeUpdateListener(::refreshFromNative)
@@ -90,7 +95,13 @@ class VesperNativePlayerBridge(
 
     override fun dispose() {
         surfaceHost.detach()
+        bindings.setOnNativeUpdateListener(null)
         bindings.dispose()
+    }
+
+    override fun refresh() {
+        bindings.refreshSnapshot()
+        refreshFromNative()
     }
 
     override fun selectSource(source: VesperPlayerSource) {
@@ -113,12 +124,13 @@ class VesperNativePlayerBridge(
     }
 
     override fun attachSurfaceHost(host: ViewGroup) {
+        surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
         surfaceHost.attach(host)
         refreshFromNative()
     }
 
-    override fun detachSurfaceHost() {
-        surfaceHost.detach()
+    override fun detachSurfaceHost(host: ViewGroup?) {
+        surfaceHost.detach(host)
     }
 
     override fun play() {
@@ -169,7 +181,7 @@ class VesperNativePlayerBridge(
         val timeline = _uiState.value.timeline
         val position = if (timeline.seekableRange != null) {
             val range = timeline.seekableRange
-            val width = (range!!.endMs - range.startMs).toFloat()
+            val width = (range.endMs - range.startMs).toFloat()
             range.startMs + (width * ratio.coerceIn(0f, 1f)).toLong()
         } else {
             ((timeline.durationMs ?: 0L).toFloat() * ratio.coerceIn(0f, 1f)).toLong()
@@ -193,11 +205,35 @@ class VesperNativePlayerBridge(
         refreshFromNative()
     }
 
+    override fun setVideoTrackSelection(selection: VesperTrackSelection) {
+        bindings.setVideoTrackSelection(selection)
+        refreshFromNative()
+    }
+
+    override fun setAudioTrackSelection(selection: VesperTrackSelection) {
+        bindings.setAudioTrackSelection(selection)
+        refreshFromNative()
+    }
+
+    override fun setSubtitleTrackSelection(selection: VesperTrackSelection) {
+        bindings.setSubtitleTrackSelection(selection)
+        refreshFromNative()
+    }
+
+    override fun setAbrPolicy(policy: VesperAbrPolicy) {
+        bindings.setAbrPolicy(policy)
+        refreshFromNative()
+    }
+
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
     }
 
     private fun refreshFromNative() {
+        surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
+        _trackCatalog.value = bindings.currentTrackCatalog()
+        _trackSelection.value = bindings.currentTrackSelection()
+
         bindings.pollSnapshot()?.let { snapshot ->
             updateState {
                 copy(
@@ -246,6 +282,7 @@ class VesperNativePlayerBridge(
                 }
             }
         }
+
     }
 }
 
@@ -261,6 +298,10 @@ private fun sourceSubtitle(source: VesperPlayerSource): String =
 interface VesperNativeBindings {
     fun initialize(source: VesperPlayerSource): NativeBridgeStartup
     fun dispose()
+    fun refreshSnapshot()
+    fun currentTrackCatalog(): VesperTrackCatalog
+    fun currentTrackSelection(): VesperTrackSelectionSnapshot
+    fun currentVideoLayoutInfo(): NativeVideoLayoutInfo?
     fun setOnNativeUpdateListener(listener: (() -> Unit)?)
     fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind)
     fun detachSurface()
@@ -271,6 +312,10 @@ interface VesperNativeBindings {
     fun stop()
     fun seekTo(positionMs: Long)
     fun setPlaybackRate(rate: Float)
+    fun setVideoTrackSelection(selection: VesperTrackSelection)
+    fun setAudioTrackSelection(selection: VesperTrackSelection)
+    fun setSubtitleTrackSelection(selection: VesperTrackSelection)
+    fun setAbrPolicy(policy: VesperAbrPolicy)
 }
 
 private class MissingVesperNativeBindings : VesperNativeBindings {
@@ -281,6 +326,11 @@ private class MissingVesperNativeBindings : VesperNativeBindings {
     }
 
     override fun dispose() = Unit
+    override fun refreshSnapshot() = Unit
+    override fun currentTrackCatalog(): VesperTrackCatalog = VesperTrackCatalog.Empty
+    override fun currentTrackSelection(): VesperTrackSelectionSnapshot =
+        VesperTrackSelectionSnapshot()
+    override fun currentVideoLayoutInfo(): NativeVideoLayoutInfo? = null
     override fun setOnNativeUpdateListener(listener: (() -> Unit)?) = Unit
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) = Unit
     override fun detachSurface() = Unit
@@ -291,4 +341,8 @@ private class MissingVesperNativeBindings : VesperNativeBindings {
     override fun stop() = Unit
     override fun seekTo(positionMs: Long) = Unit
     override fun setPlaybackRate(rate: Float) = Unit
+    override fun setVideoTrackSelection(selection: VesperTrackSelection) = Unit
+    override fun setAudioTrackSelection(selection: VesperTrackSelection) = Unit
+    override fun setSubtitleTrackSelection(selection: VesperTrackSelection) = Unit
+    override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
 }

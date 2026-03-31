@@ -12,8 +12,8 @@ use desktop_presenter::DesktopUiPresenter;
 use desktop_ui::{CONTROL_RATES, ControlAction, SeekPreview};
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
-    normalize_desktop_host_source_uri,
-    open_desktop_host_runtime_uri_for_winit_window, probe_desktop_host_launch_plan_uri,
+    normalize_desktop_host_source_uri, open_desktop_host_runtime_uri_for_winit_window,
+    probe_desktop_host_launch_plan_uri,
 };
 use player_render_wgpu::{
     RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
@@ -38,10 +38,8 @@ const NATIVE_SURFACE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONTROL_HIDE_DELAY: Duration = Duration::from_secs(2);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
-const DESKTOP_HLS_DEMO_URL: &str =
-    "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
-const DESKTOP_DASH_DEMO_URL: &str =
-    "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
+const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
+const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -357,12 +355,8 @@ impl DesktopPlayerApp {
         };
         let snapshot = self.runtime()?.snapshot();
         let window_size = window.inner_size();
-        let Some(preview) = presenter.seek_preview_at(
-            window_size,
-            cursor_x,
-            cursor_y,
-            &snapshot,
-        ) else {
+        let Some(preview) = presenter.seek_preview_at(window_size, cursor_x, cursor_y, &snapshot)
+        else {
             return Ok(false);
         };
 
@@ -548,9 +542,12 @@ impl DesktopPlayerApp {
             self.runtime.as_ref(),
             self.ui_presenter.as_ref(),
             self.window.as_ref(),
-        )
-        {
-            ui_presenter.sync(&runtime.snapshot(), self.controls_visible, window.inner_size());
+        ) {
+            ui_presenter.sync(
+                &runtime.snapshot(),
+                self.controls_visible,
+                window.inner_size(),
+            );
         }
     }
 
@@ -684,8 +681,7 @@ impl ApplicationHandler for DesktopPlayerApp {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } =>
-            {
+            } => {
                 if let Err(error) = self.begin_seek_drag() {
                     error!(?error, "failed to start seek drag");
                     event_loop.exit();
@@ -868,7 +864,7 @@ impl ApplicationHandler for DesktopPlayerApp {
 
         self.log_runtime_events();
         self.update_window_title();
-    self.sync_ui_presenter();
+        self.sync_ui_presenter();
         if let Some(runtime) = self.runtime.as_ref() {
             if let Some(deadline) = runtime.next_deadline() {
                 let mut next_deadline = deadline;

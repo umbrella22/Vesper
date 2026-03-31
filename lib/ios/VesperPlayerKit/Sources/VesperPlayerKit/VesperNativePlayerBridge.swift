@@ -7,6 +7,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     let backend: PlayerBridgeBackend = .rustNativeStub
 
     @Published private(set) var publishedUiState: PlayerHostUiState
+    @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
+    @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
 
     private var currentSource: VesperPlayerSource?
     private var player: AVPlayer?
@@ -22,9 +24,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var isSeekingToStartAfterStop = false
     private var pendingPlayAfterStopSeek = false
     private var pendingPlaybackStart = false
+    private var audioGroup: AVMediaSelectionGroup?
+    private var subtitleGroup: AVMediaSelectionGroup?
+    private var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
+    private var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
 
     var uiState: PlayerHostUiState {
         publishedUiState
+    }
+
+    var trackCatalog: VesperTrackCatalog {
+        publishedTrackCatalog
+    }
+
+    var trackSelection: VesperTrackSelectionSnapshot {
+        publishedTrackSelection
     }
 
     init(initialSource: VesperPlayerSource? = nil) {
@@ -46,6 +60,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 durationMs: nil
             )
         )
+        publishedTrackCatalog = .empty
+        publishedTrackSelection = VesperTrackSelectionSnapshot()
     }
 
     func initialize() {
@@ -118,6 +134,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         player?.pause()
         surfaceHost?.attach(player: nil)
         player = nil
+        resetTrackState()
     }
 
     func selectSource(_ source: VesperPlayerSource) {
@@ -317,6 +334,108 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         refreshPlaybackState()
     }
 
+    func setVideoTrackSelection(_ selection: VesperTrackSelection) {
+        let trackIdText = selection.trackId ?? "nil"
+        iosHostLog(
+            "setVideoTrackSelection unsupported mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
+        )
+    }
+
+    func setAudioTrackSelection(_ selection: VesperTrackSelection) {
+        let trackIdText = selection.trackId ?? "nil"
+        iosHostLog(
+            "setAudioTrackSelection mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
+        )
+        guard let item = player?.currentItem else {
+            iosHostLog("setAudioTrackSelection ignored: no current item")
+            return
+        }
+
+        guard let group = audioGroup else {
+            iosHostLog("setAudioTrackSelection ignored: no audible media selection group")
+            return
+        }
+
+        applyTrackSelection(
+            selection,
+            kind: .audio,
+            group: group,
+            optionsByTrackId: audioOptionsByTrackId,
+            item: item
+        )
+    }
+
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {
+        let trackIdText = selection.trackId ?? "nil"
+        iosHostLog(
+            "setSubtitleTrackSelection mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
+        )
+        guard let item = player?.currentItem else {
+            iosHostLog("setSubtitleTrackSelection ignored: no current item")
+            return
+        }
+
+        guard let group = subtitleGroup else {
+            iosHostLog("setSubtitleTrackSelection ignored: no legible media selection group")
+            return
+        }
+
+        applyTrackSelection(
+            selection,
+            kind: .subtitle,
+            group: group,
+            optionsByTrackId: subtitleOptionsByTrackId,
+            item: item
+        )
+    }
+
+    func setAbrPolicy(_ policy: VesperAbrPolicy) {
+        let trackIdText = policy.trackId ?? "nil"
+        let maxBitRateText = policy.maxBitRate.map(String.init) ?? "nil"
+        let maxWidthText = policy.maxWidth.map(String.init) ?? "nil"
+        let maxHeightText = policy.maxHeight.map(String.init) ?? "nil"
+        iosHostLog(
+            "setAbrPolicy mode=\(policy.mode.rawValue) trackId=\(trackIdText) maxBitRate=\(maxBitRateText) maxWidth=\(maxWidthText) maxHeight=\(maxHeightText)"
+        )
+        guard let item = player?.currentItem else {
+            iosHostLog("setAbrPolicy ignored: no current item")
+            return
+        }
+
+        switch policy.mode {
+        case .auto:
+            item.preferredPeakBitRate = 0
+            updateTrackSelection { current in
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: current.audio,
+                    subtitle: current.subtitle,
+                    abrPolicy: .auto()
+                )
+            }
+        case .constrained:
+            guard let maxBitRate = policy.maxBitRate else {
+                iosHostLog("setAbrPolicy unsupported: constrained mode requires maxBitRate on iOS")
+                return
+            }
+            if policy.maxWidth != nil || policy.maxHeight != nil {
+                iosHostLog("setAbrPolicy unsupported: AVPlayer bridge currently supports maxBitRate only")
+                return
+            }
+            item.preferredPeakBitRate = Double(maxBitRate)
+            updateTrackSelection { current in
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: current.audio,
+                    subtitle: current.subtitle,
+                    abrPolicy: .constrained(maxBitRate: maxBitRate)
+                )
+            }
+        case .fixedTrack:
+            iosHostLog("setAbrPolicy unsupported: fixedTrack is not implemented on AVPlayer")
+        }
+    }
+
     private func loadCurrentSource() throws {
         guard let currentSource else {
             throw NSError(
@@ -335,6 +454,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         removeObservers()
         pendingPlaybackStart = false
+        resetTrackState()
         self.player = player
         surfaceHost?.attach(player: player)
         installObservers(for: player, item: item)
@@ -396,6 +516,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             Task { @MainActor in
                 switch item.status {
                 case .readyToPlay:
+                    self.refreshTrackCatalogAndSelection(for: item)
                     self.attemptPendingPlaybackStart(reason: "itemReadyToPlay")
                     self.refreshPlaybackState()
                 case .failed:
@@ -446,6 +567,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 self.handlePlaybackEnded()
             }
         }
+
+        refreshTrackCatalogAndSelection(for: item)
     }
 
     private func removeObservers() {
@@ -620,6 +743,156 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         player?.currentItem?.duration.finiteMilliseconds
     }
 
+    private func resetTrackState() {
+        audioGroup = nil
+        subtitleGroup = nil
+        audioOptionsByTrackId = [:]
+        subtitleOptionsByTrackId = [:]
+        publishedTrackCatalog = .empty
+        publishedTrackSelection = VesperTrackSelectionSnapshot()
+    }
+
+    private func updateTrackSelection(
+        _ transform: (VesperTrackSelectionSnapshot) -> VesperTrackSelectionSnapshot
+    ) {
+        publishedTrackSelection = transform(publishedTrackSelection)
+    }
+
+    private func applyTrackSelection(
+        _ selection: VesperTrackSelection,
+        kind: VesperMediaTrackKind,
+        group: AVMediaSelectionGroup,
+        optionsByTrackId: [String: AVMediaSelectionOption],
+        item: AVPlayerItem
+    ) {
+        let optionToSelect: AVMediaSelectionOption?
+        switch selection.mode {
+        case .auto:
+            optionToSelect = group.defaultOption ?? item.currentMediaSelection.selectedMediaOption(in: group)
+        case .disabled:
+            optionToSelect = nil
+        case .track:
+            guard let trackId = selection.trackId, let option = optionsByTrackId[trackId] else {
+                let trackIdText = selection.trackId ?? "nil"
+                iosHostLog(
+                    "set\(kind.rawValue.capitalized)TrackSelection ignored: trackId=\(trackIdText) is not present in the current catalog"
+                )
+                return
+            }
+            optionToSelect = option
+        }
+
+        item.select(optionToSelect, in: group)
+        updateTrackSelection { current in
+            switch kind {
+            case .video:
+                VesperTrackSelectionSnapshot(
+                    video: selection,
+                    audio: current.audio,
+                    subtitle: current.subtitle,
+                    abrPolicy: current.abrPolicy
+                )
+            case .audio:
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: selection,
+                    subtitle: current.subtitle,
+                    abrPolicy: current.abrPolicy
+                )
+            case .subtitle:
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: current.audio,
+                    subtitle: selection,
+                    abrPolicy: current.abrPolicy
+                )
+            }
+        }
+    }
+
+    private func refreshTrackCatalogAndSelection(for item: AVPlayerItem) {
+        Task { [weak self, weak item] in
+            guard let self, let item else { return }
+            let trackState = await self.loadTrackCatalogState(for: item)
+            guard self.player?.currentItem === item else { return }
+            self.audioGroup = trackState.audioGroup
+            self.subtitleGroup = trackState.subtitleGroup
+            self.audioOptionsByTrackId = trackState.audioOptionsByTrackId
+            self.subtitleOptionsByTrackId = trackState.subtitleOptionsByTrackId
+            self.publishedTrackCatalog = trackState.catalog
+        }
+    }
+
+    private func loadTrackCatalogState(for item: AVPlayerItem) async -> LoadedTrackCatalogState {
+        let asset = item.asset
+        let audibleGroup = try? await asset.loadMediaSelectionGroup(for: .audible)
+        let legibleGroup = try? await asset.loadMediaSelectionGroup(for: .legible)
+
+        var tracks: [VesperMediaTrack] = []
+        var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
+        var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
+
+        if let audibleGroup {
+            for (index, option) in audibleGroup.options.enumerated() {
+                let trackId = "audio:\(index)"
+                audioOptionsByTrackId[trackId] = option
+                tracks.append(
+                    VesperMediaTrack(
+                        id: trackId,
+                        kind: .audio,
+                        label: option.displayName,
+                        language: option.extendedLanguageTag ?? option.locale?.identifier,
+                        codec: nil,
+                        bitRate: nil,
+                        width: nil,
+                        height: nil,
+                        frameRate: nil,
+                        channels: nil,
+                        sampleRate: nil,
+                        isDefault: audibleGroup.defaultOption == option,
+                        isForced: false
+                    )
+                )
+            }
+        }
+
+        if let legibleGroup {
+            for (index, option) in legibleGroup.options.enumerated() {
+                let trackId = "subtitle:\(index)"
+                subtitleOptionsByTrackId[trackId] = option
+                tracks.append(
+                    VesperMediaTrack(
+                        id: trackId,
+                        kind: .subtitle,
+                        label: option.displayName,
+                        language: option.extendedLanguageTag ?? option.locale?.identifier,
+                        codec: nil,
+                        bitRate: nil,
+                        width: nil,
+                        height: nil,
+                        frameRate: nil,
+                        channels: nil,
+                        sampleRate: nil,
+                        isDefault: legibleGroup.defaultOption == option,
+                        isForced: option.hasMediaCharacteristic(.containsOnlyForcedSubtitles)
+                    )
+                )
+            }
+        }
+
+        return LoadedTrackCatalogState(
+            catalog: VesperTrackCatalog(
+                tracks: tracks,
+                adaptiveVideo: currentSource?.kind == .remote && currentSource?.protocol == .hls,
+                adaptiveAudio: false
+            ),
+            audioGroup: audibleGroup,
+            subtitleGroup: legibleGroup,
+            audioOptionsByTrackId: audioOptionsByTrackId,
+            subtitleOptionsByTrackId: subtitleOptionsByTrackId
+        )
+    }
+
     private func resolvedUrl(for source: VesperPlayerSource) throws -> URL {
         guard let url = URL(string: source.uri) else {
             throw NSError(
@@ -682,6 +955,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         iosHostLog("resuming deferred playback reason=\(reason)")
         startPlayback()
     }
+}
+
+private struct LoadedTrackCatalogState {
+    let catalog: VesperTrackCatalog
+    let audioGroup: AVMediaSelectionGroup?
+    let subtitleGroup: AVMediaSelectionGroup?
+    let audioOptionsByTrackId: [String: AVMediaSelectionOption]
+    let subtitleOptionsByTrackId: [String: AVMediaSelectionOption]
 }
 
 private func derivePlaybackState(

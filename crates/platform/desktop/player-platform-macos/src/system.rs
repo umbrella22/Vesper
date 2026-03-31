@@ -344,6 +344,8 @@ pub fn probe_source_with_avfoundation(
                 sample_rate: probe.audio.sample_rate,
                 channels: probe.audio.channels,
             }),
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
         };
 
         let video_decode = media_info.best_video.as_ref().map(native_video_decode_info);

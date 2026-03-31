@@ -63,13 +63,16 @@ data class PlayerHostUiState(
 interface PlayerBridge {
     val backend: PlayerBridgeBackend
     val uiState: StateFlow<PlayerHostUiState>
+    val trackCatalog: StateFlow<VesperTrackCatalog>
+    val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
 
     fun initialize()
     fun dispose()
+    fun refresh()
     fun selectSource(source: VesperPlayerSource)
 
     fun attachSurfaceHost(host: ViewGroup)
-    fun detachSurfaceHost()
+    fun detachSurfaceHost(host: ViewGroup? = null)
 
     fun play()
     fun pause()
@@ -79,4 +82,8 @@ interface PlayerBridge {
     fun seekToRatio(ratio: Float)
     fun seekToLiveEdge()
     fun setPlaybackRate(rate: Float)
+    fun setVideoTrackSelection(selection: VesperTrackSelection)
+    fun setAudioTrackSelection(selection: VesperTrackSelection)
+    fun setSubtitleTrackSelection(selection: VesperTrackSelection)
+    fun setAbrPolicy(policy: VesperAbrPolicy)
 }

@@ -966,11 +966,9 @@ mod tests {
                 kind: PlayerVideoSurfaceKind::PlayerLayer,
                 handle: layer_handle as usize,
             });
-        let bootstrap = open_macos_host_runtime_source_with_options(
-            MediaSource::new(test_video_path),
-            options,
-        )
-        .expect("host runtime should prefer native playback when a valid surface exists");
+        let bootstrap =
+            open_macos_host_runtime_source_with_options(MediaSource::new(test_video_path), options)
+                .expect("host runtime should prefer native playback when a valid surface exists");
 
         assert_eq!(
             bootstrap.runtime.adapter_id(),

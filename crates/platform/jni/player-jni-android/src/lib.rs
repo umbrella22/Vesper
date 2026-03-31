@@ -13,7 +13,11 @@ use player_platform_android::{
     AndroidExoPlaybackSnapshot, AndroidExoPlaybackState, AndroidHostBridgeSession,
     AndroidHostCommand, AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind,
 };
-use player_runtime::{PlayerRuntimeCommand, PlayerRuntimeErrorCode, PresentationState};
+use player_runtime::{
+    MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog, MediaTrackKind,
+    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot,
+    PlayerRuntimeCommand, PlayerRuntimeErrorCode, PresentationState,
+};
 
 const PKG: &str = "io/github/ikaros/vesper/player/android";
 
@@ -286,6 +290,61 @@ fn data_object_instance<'local>(
     .l()
 }
 
+fn track_selection_payload_object<'local>(
+    env: &mut Env<'local>,
+    selection: &MediaTrackSelection,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeTrackSelectionPayload")))?;
+    let track_id = match selection.track_id.as_deref() {
+        Some(track_id) => JObject::from(env.new_string(track_id)?),
+        None => JObject::null(),
+    };
+    env.new_object(
+        class,
+        method_sig("(ILjava/lang/String;)V").method_signature(),
+        &[
+            JValue::Int(match selection.mode {
+                MediaTrackSelectionMode::Auto => 0,
+                MediaTrackSelectionMode::Disabled => 1,
+                MediaTrackSelectionMode::Track => 2,
+            }),
+            JValue::Object(&track_id),
+        ],
+    )
+}
+
+fn abr_policy_payload_object<'local>(
+    env: &mut Env<'local>,
+    policy: &MediaAbrPolicy,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeAbrPolicyPayload")))?;
+    let track_id = match policy.track_id.as_deref() {
+        Some(track_id) => JObject::from(env.new_string(track_id)?),
+        None => JObject::null(),
+    };
+    let max_bit_rate = policy.max_bit_rate.unwrap_or_default();
+    let max_width = policy.max_width.unwrap_or_default();
+    let max_height = policy.max_height.unwrap_or_default();
+    env.new_object(
+        class,
+        method_sig("(ILjava/lang/String;ZJZIZI)V").method_signature(),
+        &[
+            JValue::Int(match policy.mode {
+                MediaAbrMode::Auto => 0,
+                MediaAbrMode::Constrained => 1,
+                MediaAbrMode::FixedTrack => 2,
+            }),
+            JValue::Object(&track_id),
+            JValue::Bool(policy.max_bit_rate.is_some()),
+            JValue::Long(max_bit_rate.min(i64::MAX as u64) as i64),
+            JValue::Bool(policy.max_width.is_some()),
+            JValue::Int(max_width.min(i32::MAX as u32) as i32),
+            JValue::Bool(policy.max_height.is_some()),
+            JValue::Int(max_height.min(i32::MAX as u32) as i32),
+        ],
+    )
+}
+
 fn native_command_object<'local>(
     env: &mut Env<'local>,
     command: &AndroidHostCommand,
@@ -318,6 +377,49 @@ fn native_command_object<'local>(
                 &[JValue::Float(*rate)],
             )
         }
+        AndroidHostCommand::SetVideoTrackSelection { selection } => {
+            let class = env.find_class(jni_name(format!(
+                "{PKG}/NativePlayerCommand$SetVideoTrackSelection"
+            )))?;
+            let selection = track_selection_payload_object(env, selection)?;
+            env.new_object(
+                class,
+                method_sig(&format!("(L{PKG}/NativeTrackSelectionPayload;)V")).method_signature(),
+                &[JValue::Object(&selection)],
+            )
+        }
+        AndroidHostCommand::SetAudioTrackSelection { selection } => {
+            let class = env.find_class(jni_name(format!(
+                "{PKG}/NativePlayerCommand$SetAudioTrackSelection"
+            )))?;
+            let selection = track_selection_payload_object(env, selection)?;
+            env.new_object(
+                class,
+                method_sig(&format!("(L{PKG}/NativeTrackSelectionPayload;)V")).method_signature(),
+                &[JValue::Object(&selection)],
+            )
+        }
+        AndroidHostCommand::SetSubtitleTrackSelection { selection } => {
+            let class = env.find_class(jni_name(format!(
+                "{PKG}/NativePlayerCommand$SetSubtitleTrackSelection"
+            )))?;
+            let selection = track_selection_payload_object(env, selection)?;
+            env.new_object(
+                class,
+                method_sig(&format!("(L{PKG}/NativeTrackSelectionPayload;)V")).method_signature(),
+                &[JValue::Object(&selection)],
+            )
+        }
+        AndroidHostCommand::SetAbrPolicy { policy } => {
+            let class =
+                env.find_class(jni_name(format!("{PKG}/NativePlayerCommand$SetAbrPolicy")))?;
+            let policy = abr_policy_payload_object(env, policy)?;
+            env.new_object(
+                class,
+                method_sig(&format!("(L{PKG}/NativeAbrPolicyPayload;)V")).method_signature(),
+                &[JValue::Object(&policy)],
+            )
+        }
     }
 }
 
@@ -342,6 +444,217 @@ fn exo_state_from_ordinal(ordinal: jint) -> AndroidExoPlaybackState {
         3 => AndroidExoPlaybackState::Ended,
         _ => AndroidExoPlaybackState::Idle,
     }
+}
+
+fn track_kind_from_ordinal(ordinal: jint) -> MediaTrackKind {
+    match ordinal {
+        1 => MediaTrackKind::Audio,
+        2 => MediaTrackKind::Subtitle,
+        _ => MediaTrackKind::Video,
+    }
+}
+
+fn track_selection_mode_from_ordinal(ordinal: jint) -> MediaTrackSelectionMode {
+    match ordinal {
+        1 => MediaTrackSelectionMode::Disabled,
+        2 => MediaTrackSelectionMode::Track,
+        _ => MediaTrackSelectionMode::Auto,
+    }
+}
+
+fn abr_mode_from_ordinal(ordinal: jint) -> MediaAbrMode {
+    match ordinal {
+        1 => MediaAbrMode::Constrained,
+        2 => MediaAbrMode::FixedTrack,
+        _ => MediaAbrMode::Auto,
+    }
+}
+
+fn string_from_java_object(env: &mut Env<'_>, object: JObject<'_>) -> JniResult<Option<String>> {
+    if object.is_null() {
+        return Ok(None);
+    }
+
+    let value = unsafe { JString::from_raw(env, object.into_raw() as jni::sys::jstring) };
+    Ok(Some(value.try_to_string(env)?))
+}
+
+fn string_field(
+    env: &mut Env<'_>,
+    object: &JObject<'_>,
+    field_name: &str,
+) -> JniResult<Option<String>> {
+    let value = env
+        .get_field(
+            object,
+            jni_name(field_name),
+            field_sig("Ljava/lang/String;").field_signature(),
+        )?
+        .l()?;
+    string_from_java_object(env, value)
+}
+
+fn bool_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<bool> {
+    env.get_field(
+        object,
+        jni_name(field_name),
+        field_sig("Z").field_signature(),
+    )?
+    .z()
+}
+
+fn int_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<jint> {
+    env.get_field(
+        object,
+        jni_name(field_name),
+        field_sig("I").field_signature(),
+    )?
+    .i()
+}
+
+fn long_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<jlong> {
+    env.get_field(
+        object,
+        jni_name(field_name),
+        field_sig("J").field_signature(),
+    )?
+    .j()
+}
+
+fn float_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<jfloat> {
+    env.get_field(
+        object,
+        jni_name(field_name),
+        field_sig("F").field_signature(),
+    )?
+    .f()
+}
+
+fn parse_native_track(env: &mut Env<'_>, track: JObject<'_>) -> JniResult<MediaTrack> {
+    let has_bit_rate = bool_field(env, &track, "hasBitRate")?;
+    let has_width = bool_field(env, &track, "hasWidth")?;
+    let has_height = bool_field(env, &track, "hasHeight")?;
+    let has_frame_rate = bool_field(env, &track, "hasFrameRate")?;
+    let has_channels = bool_field(env, &track, "hasChannels")?;
+    let has_sample_rate = bool_field(env, &track, "hasSampleRate")?;
+
+    Ok(MediaTrack {
+        id: string_field(env, &track, "id")?.unwrap_or_default(),
+        kind: track_kind_from_ordinal(int_field(env, &track, "kindOrdinal")?),
+        label: string_field(env, &track, "label")?,
+        language: string_field(env, &track, "language")?,
+        codec: string_field(env, &track, "codec")?,
+        bit_rate: has_bit_rate.then_some(long_field(env, &track, "bitRate")? as u64),
+        width: has_width.then_some(int_field(env, &track, "width")? as u32),
+        height: has_height.then_some(int_field(env, &track, "height")? as u32),
+        frame_rate: has_frame_rate.then_some(float_field(env, &track, "frameRate")? as f64),
+        channels: has_channels.then_some(int_field(env, &track, "channels")? as u16),
+        sample_rate: has_sample_rate.then_some(int_field(env, &track, "sampleRate")? as u32),
+        is_default: bool_field(env, &track, "isDefault")?,
+        is_forced: bool_field(env, &track, "isForced")?,
+    })
+}
+
+fn parse_native_track_catalog(
+    env: &mut Env<'_>,
+    track_catalog: JObject<'_>,
+) -> JniResult<MediaTrackCatalog> {
+    let tracks_object = env
+        .get_field(
+            &track_catalog,
+            jni_name("tracks"),
+            field_sig(format!("[L{PKG}/NativeTrackInfo;")).field_signature(),
+        )?
+        .l()?;
+
+    let mut tracks = Vec::new();
+    if !tracks_object.is_null() {
+        let tracks_array = unsafe {
+            JObjectArray::<JObject<'_>>::from_raw(env, tracks_object.into_raw() as jobjectArray)
+        };
+        let len = tracks_array.len(env)?;
+        for index in 0..len {
+            let track = tracks_array.get_element(env, index)?;
+            if !track.is_null() {
+                tracks.push(parse_native_track(env, track)?);
+            }
+        }
+    }
+
+    Ok(MediaTrackCatalog {
+        tracks,
+        adaptive_video: bool_field(env, &track_catalog, "adaptiveVideo")?,
+        adaptive_audio: bool_field(env, &track_catalog, "adaptiveAudio")?,
+    })
+}
+
+fn parse_native_track_selection(
+    env: &mut Env<'_>,
+    selection: JObject<'_>,
+) -> JniResult<MediaTrackSelection> {
+    Ok(MediaTrackSelection {
+        mode: track_selection_mode_from_ordinal(int_field(env, &selection, "modeOrdinal")?),
+        track_id: string_field(env, &selection, "trackId")?,
+    })
+}
+
+fn parse_native_abr_policy(
+    env: &mut Env<'_>,
+    abr_policy: JObject<'_>,
+) -> JniResult<MediaAbrPolicy> {
+    let has_max_bit_rate = bool_field(env, &abr_policy, "hasMaxBitRate")?;
+    let has_max_width = bool_field(env, &abr_policy, "hasMaxWidth")?;
+    let has_max_height = bool_field(env, &abr_policy, "hasMaxHeight")?;
+
+    Ok(MediaAbrPolicy {
+        mode: abr_mode_from_ordinal(int_field(env, &abr_policy, "modeOrdinal")?),
+        track_id: string_field(env, &abr_policy, "trackId")?,
+        max_bit_rate: has_max_bit_rate
+            .then_some(long_field(env, &abr_policy, "maxBitRate")? as u64),
+        max_width: has_max_width.then_some(int_field(env, &abr_policy, "maxWidth")? as u32),
+        max_height: has_max_height.then_some(int_field(env, &abr_policy, "maxHeight")? as u32),
+    })
+}
+
+fn parse_native_track_selection_snapshot(
+    env: &mut Env<'_>,
+    snapshot: JObject<'_>,
+) -> JniResult<MediaTrackSelectionSnapshot> {
+    let video = env
+        .get_field(
+            &snapshot,
+            jni_name("video"),
+            field_sig(format!("L{PKG}/NativeTrackSelectionPayload;")).field_signature(),
+        )?
+        .l()?;
+    let audio = env
+        .get_field(
+            &snapshot,
+            jni_name("audio"),
+            field_sig(format!("L{PKG}/NativeTrackSelectionPayload;")).field_signature(),
+        )?
+        .l()?;
+    let subtitle = env
+        .get_field(
+            &snapshot,
+            jni_name("subtitle"),
+            field_sig(format!("L{PKG}/NativeTrackSelectionPayload;")).field_signature(),
+        )?
+        .l()?;
+    let abr_policy = env
+        .get_field(
+            &snapshot,
+            jni_name("abrPolicy"),
+            field_sig(format!("L{PKG}/NativeAbrPolicyPayload;")).field_signature(),
+        )?
+        .l()?;
+
+    Ok(MediaTrackSelectionSnapshot {
+        video: parse_native_track_selection(env, video)?,
+        audio: parse_native_track_selection(env, audio)?,
+        subtitle: parse_native_track_selection(env, subtitle)?,
+        abr_policy: parse_native_abr_policy(env, abr_policy)?,
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -540,6 +853,33 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_applyTrackState(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    track_catalog: JObject<'_>,
+    track_selection: JObject<'_>,
+) {
+    unowned_env
+        .with_env(|env| -> JniResult<()> {
+            if track_catalog.is_null() || track_selection.is_null() {
+                return Ok(());
+            }
+
+            let track_catalog = parse_native_track_catalog(env, track_catalog)?;
+            let track_selection = parse_native_track_selection_snapshot(env, track_selection)?;
+
+            let _ = with_session_mut(env, session_handle, |session| {
+                session
+                    .inner
+                    .report_media_info(track_catalog, track_selection);
+            });
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_reportSeekCompleted(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -660,6 +1000,102 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 let _ = session
                     .inner
                     .dispatch_command(PlayerRuntimeCommand::SetPlaybackRate { rate });
+            });
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_setVideoTrackSelection(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    selection: JObject<'_>,
+) {
+    unowned_env
+        .with_env(|env| -> JniResult<()> {
+            if selection.is_null() {
+                return Ok(());
+            }
+
+            let selection = parse_native_track_selection(env, selection)?;
+            let _ = with_session_mut(env, session_handle, |session| {
+                let _ = session
+                    .inner
+                    .dispatch_command(PlayerRuntimeCommand::SetVideoTrackSelection { selection });
+            });
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_setAudioTrackSelection(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    selection: JObject<'_>,
+) {
+    unowned_env
+        .with_env(|env| -> JniResult<()> {
+            if selection.is_null() {
+                return Ok(());
+            }
+
+            let selection = parse_native_track_selection(env, selection)?;
+            let _ = with_session_mut(env, session_handle, |session| {
+                let _ = session
+                    .inner
+                    .dispatch_command(PlayerRuntimeCommand::SetAudioTrackSelection { selection });
+            });
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_setSubtitleTrackSelection(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    selection: JObject<'_>,
+) {
+    unowned_env
+        .with_env(|env| -> JniResult<()> {
+            if selection.is_null() {
+                return Ok(());
+            }
+
+            let selection = parse_native_track_selection(env, selection)?;
+            let _ = with_session_mut(env, session_handle, |session| {
+                let _ = session.inner.dispatch_command(
+                    PlayerRuntimeCommand::SetSubtitleTrackSelection { selection },
+                );
+            });
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_setAbrPolicy(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    policy: JObject<'_>,
+) {
+    unowned_env
+        .with_env(|env| -> JniResult<()> {
+            if policy.is_null() {
+                return Ok(());
+            }
+
+            let policy = parse_native_abr_policy(env, policy)?;
+            let _ = with_session_mut(env, session_handle, |session| {
+                let _ = session
+                    .inner
+                    .dispatch_command(PlayerRuntimeCommand::SetAbrPolicy { policy });
             });
             Ok(())
         })

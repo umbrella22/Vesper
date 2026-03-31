@@ -2,9 +2,7 @@
 
 use std::time::Duration;
 
-use player_runtime::{
-    PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind, PresentationState,
-};
+use player_runtime::{PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind, PresentationState};
 
 pub const CONTROL_RATES: &[(f32, &str)] = &[
     (0.5, "0.5X"),
@@ -189,11 +187,13 @@ impl DesktopUiViewModel {
         let play_pause_label = play_pause_label(snapshot.state);
         let can_scrub = is_scrubbable(snapshot.timeline.kind, snapshot.timeline.is_seekable);
         let time_label = duration
-            .map(|duration| format!(
-                "{}/{}",
-                format_duration(displayed_position),
-                format_duration(duration)
-            ))
+            .map(|duration| {
+                format!(
+                    "{}/{}",
+                    format_duration(displayed_position),
+                    format_duration(duration)
+                )
+            })
             .unwrap_or_else(|| format_duration(displayed_position));
 
         Self {
@@ -244,9 +244,7 @@ fn is_scrubbable(kind: PlayerTimelineKind, is_seekable: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DesktopUiLayoutMetrics, DesktopUiTimelineKind, DesktopUiViewModel, SeekPreview,
-    };
+    use super::{DesktopUiLayoutMetrics, DesktopUiTimelineKind, DesktopUiViewModel, SeekPreview};
     use player_runtime::{
         MediaSourceKind, MediaSourceProtocol, PlaybackProgress, PlayerMediaInfo, PlayerSnapshot,
         PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,

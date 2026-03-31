@@ -12,8 +12,9 @@ pub use adapter::{
 };
 pub use error::{PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeResult};
 pub use player_core::{
-    DecodedVideoFrame, MediaSourceKind, MediaSourceProtocol, PlaybackProgress, PresentationState,
-    VideoPixelFormat,
+    DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
+    MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
+    MediaTrackSelectionSnapshot, PlaybackProgress, PresentationState, VideoPixelFormat,
 };
 
 pub const DEFAULT_PLAYBACK_RATE: f32 = 1.0;
@@ -76,6 +77,8 @@ pub struct PlayerMediaInfo {
     pub video_streams: usize,
     pub best_video: Option<PlayerVideoInfo>,
     pub best_audio: Option<PlayerAudioInfo>,
+    pub track_catalog: MediaTrackCatalog,
+    pub track_selection: MediaTrackSelectionSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,13 +174,17 @@ pub struct PlayerRuntimeStartup {
     pub video_decode: Option<PlayerVideoDecodeInfo>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum PlayerRuntimeCommand {
     Play,
     Pause,
     TogglePause,
     SeekTo { position: Duration },
     SetPlaybackRate { rate: f32 },
+    SetVideoTrackSelection { selection: MediaTrackSelection },
+    SetAudioTrackSelection { selection: MediaTrackSelection },
+    SetSubtitleTrackSelection { selection: MediaTrackSelection },
+    SetAbrPolicy { policy: MediaAbrPolicy },
     Stop,
 }
 
@@ -335,10 +342,13 @@ impl PlayerTimelineSnapshot {
         match (media_info.source_kind, media_info.source_protocol) {
             // Without an explicit live window from the platform/backend, treat remote HLS/DASH
             // with a known duration as VOD and duration-less streams as baseline LIVE.
-            (MediaSourceKind::Remote, MediaSourceProtocol::Hls | MediaSourceProtocol::Dash) =>
+            (MediaSourceKind::Remote, MediaSourceProtocol::Hls | MediaSourceProtocol::Dash) => {
                 inferred_duration
-                    .map(|duration| Self::vod_with_duration(progress, Some(duration), supports_seek))
-                    .unwrap_or_else(|| Self::live(progress)),
+                    .map(|duration| {
+                        Self::vod_with_duration(progress, Some(duration), supports_seek)
+                    })
+                    .unwrap_or_else(|| Self::live(progress))
+            }
             _ => Self::vod_with_duration(progress, inferred_duration, supports_seek),
         }
     }
@@ -536,6 +546,34 @@ impl PlayerRuntime {
         self.dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate })
     }
 
+    pub fn set_video_track_selection(
+        &mut self,
+        selection: MediaTrackSelection,
+    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+        self.dispatch(PlayerRuntimeCommand::SetVideoTrackSelection { selection })
+    }
+
+    pub fn set_audio_track_selection(
+        &mut self,
+        selection: MediaTrackSelection,
+    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+        self.dispatch(PlayerRuntimeCommand::SetAudioTrackSelection { selection })
+    }
+
+    pub fn set_subtitle_track_selection(
+        &mut self,
+        selection: MediaTrackSelection,
+    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+        self.dispatch(PlayerRuntimeCommand::SetSubtitleTrackSelection { selection })
+    }
+
+    pub fn set_abr_policy(
+        &mut self,
+        policy: MediaAbrPolicy,
+    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+        self.dispatch(PlayerRuntimeCommand::SetAbrPolicy { policy })
+    }
+
     pub fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
@@ -602,6 +640,8 @@ mod tests {
             video_streams: 1,
             best_video: None,
             best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
         }
     }
 
@@ -645,8 +685,11 @@ mod tests {
 
     #[test]
     fn timeline_from_media_info_keeps_progressive_unknown_duration_as_vod() {
-        let media_info =
-            test_media_info(MediaSourceKind::Remote, MediaSourceProtocol::Progressive, None);
+        let media_info = test_media_info(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Progressive,
+            None,
+        );
         let timeline = PlayerTimelineSnapshot::from_media_info(
             PlaybackProgress::new(Duration::from_secs(1), None),
             true,

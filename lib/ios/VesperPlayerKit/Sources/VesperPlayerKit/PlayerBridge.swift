@@ -108,6 +108,8 @@ public struct PlayerHostUiState {
 protocol PlayerBridge: AnyObject {
     var backend: PlayerBridgeBackend { get }
     var uiState: PlayerHostUiState { get }
+    var trackCatalog: VesperTrackCatalog { get }
+    var trackSelection: VesperTrackSelectionSnapshot { get }
 
     func initialize()
     func dispose()
@@ -124,11 +126,17 @@ protocol PlayerBridge: AnyObject {
     func seek(toRatio ratio: Double)
     func seekToLiveEdge()
     func setPlaybackRate(_ rate: Float)
+    func setVideoTrackSelection(_ selection: VesperTrackSelection)
+    func setAudioTrackSelection(_ selection: VesperTrackSelection)
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection)
+    func setAbrPolicy(_ policy: VesperAbrPolicy)
 }
 
 @MainActor
 protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
     var publishedUiState: PlayerHostUiState { get }
+    var publishedTrackCatalog: VesperTrackCatalog { get }
+    var publishedTrackSelection: VesperTrackSelectionSnapshot { get }
 }
 
 extension PlayerBridge {

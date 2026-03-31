@@ -7,9 +7,19 @@ public final class VesperPlayerController: ObservableObject {
     public let backend: PlayerBridgeBackend
 
     @Published private(set) var publishedUiState: PlayerHostUiState
+    @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
+    @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
 
     public var uiState: PlayerHostUiState {
         publishedUiState
+    }
+
+    public var trackCatalog: VesperTrackCatalog {
+        publishedTrackCatalog
+    }
+
+    public var trackSelection: VesperTrackSelectionSnapshot {
+        publishedTrackSelection
     }
 
     private var bridgeObservation: AnyCancellable?
@@ -26,10 +36,16 @@ public final class VesperPlayerController: ObservableObject {
     private let seekToRatioImpl: (Double) -> Void
     private let seekToLiveEdgeImpl: () -> Void
     private let setPlaybackRateImpl: (Float) -> Void
+    private let setVideoTrackSelectionImpl: (VesperTrackSelection) -> Void
+    private let setAudioTrackSelectionImpl: (VesperTrackSelection) -> Void
+    private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) -> Void
+    private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
 
     init<Bridge: ObservablePlayerBridge>(_ bridge: Bridge) {
         backend = bridge.backend
         publishedUiState = bridge.publishedUiState
+        publishedTrackCatalog = bridge.publishedTrackCatalog
+        publishedTrackSelection = bridge.publishedTrackSelection
         initializeImpl = bridge.initialize
         disposeImpl = bridge.dispose
         selectSourceImpl = bridge.selectSource
@@ -49,10 +65,16 @@ public final class VesperPlayerController: ObservableObject {
         }
         seekToLiveEdgeImpl = bridge.seekToLiveEdge
         setPlaybackRateImpl = bridge.setPlaybackRate
+        setVideoTrackSelectionImpl = bridge.setVideoTrackSelection
+        setAudioTrackSelectionImpl = bridge.setAudioTrackSelection
+        setSubtitleTrackSelectionImpl = bridge.setSubtitleTrackSelection
+        setAbrPolicyImpl = bridge.setAbrPolicy
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
                 self.publishedUiState = bridge.publishedUiState
+                self.publishedTrackCatalog = bridge.publishedTrackCatalog
+                self.publishedTrackSelection = bridge.publishedTrackSelection
             }
         }
     }
@@ -107,6 +129,22 @@ public final class VesperPlayerController: ObservableObject {
 
     public func setPlaybackRate(_ rate: Float) {
         setPlaybackRateImpl(rate)
+    }
+
+    public func setVideoTrackSelection(_ selection: VesperTrackSelection) {
+        setVideoTrackSelectionImpl(selection)
+    }
+
+    public func setAudioTrackSelection(_ selection: VesperTrackSelection) {
+        setAudioTrackSelectionImpl(selection)
+    }
+
+    public func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {
+        setSubtitleTrackSelectionImpl(selection)
+    }
+
+    public func setAbrPolicy(_ policy: VesperAbrPolicy) {
+        setAbrPolicyImpl(policy)
     }
 
     public static let supportedPlaybackRates: [Float] = [0.5, 1.0, 1.5, 2.0, 3.0]

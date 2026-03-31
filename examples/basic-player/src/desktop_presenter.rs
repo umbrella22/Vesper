@@ -4,9 +4,9 @@ use player_runtime::PlayerSnapshot;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use crate::desktop_ui::{ControlAction, SeekPreview};
 #[cfg(target_os = "macos")]
 use crate::desktop_ui::DesktopUiLayoutMetrics;
+use crate::desktop_ui::{ControlAction, SeekPreview};
 
 #[cfg(not(target_os = "macos"))]
 use crate::host_ui::{
@@ -45,9 +45,10 @@ impl DesktopUiPresenter {
         #[cfg(target_os = "macos")]
         {
             let Self::Macos(overlay) = self;
-            if let Some(layout_metrics) =
-                DesktopUiLayoutMetrics::for_surface(window_size.width.max(1), window_size.height.max(1))
-            {
+            if let Some(layout_metrics) = DesktopUiLayoutMetrics::for_surface(
+                window_size.width.max(1),
+                window_size.height.max(1),
+            ) {
                 overlay.update(snapshot, controls_visible, layout_metrics);
             }
         }
@@ -174,7 +175,12 @@ impl DesktopUiPresenter {
                 return None;
             }
 
-            return seek_preview_for_drag(window_size.width, window_size.height, cursor_x, snapshot);
+            return seek_preview_for_drag(
+                window_size.width,
+                window_size.height,
+                cursor_x,
+                snapshot,
+            );
         }
 
         #[cfg(target_os = "macos")]

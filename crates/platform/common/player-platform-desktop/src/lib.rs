@@ -544,6 +544,13 @@ impl SoftwarePlayerRuntime {
             PlayerRuntimeCommand::SetPlaybackRate { rate } => {
                 Ok((self.set_playback_rate(rate)?, None))
             }
+            PlayerRuntimeCommand::SetVideoTrackSelection { .. }
+            | PlayerRuntimeCommand::SetAudioTrackSelection { .. }
+            | PlayerRuntimeCommand::SetSubtitleTrackSelection { .. }
+            | PlayerRuntimeCommand::SetAbrPolicy { .. } => Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "track selection and ABR control are not implemented for the software desktop runtime",
+            )),
             PlayerRuntimeCommand::Stop => self.stop(),
         }
     }
@@ -1319,6 +1326,8 @@ fn player_media_info(probe: &player_backend_ffmpeg::MediaProbe) -> PlayerMediaIn
         video_streams: probe.video_streams,
         best_video: probe.best_video.as_ref().map(player_video_info),
         best_audio: probe.best_audio.as_ref().map(player_audio_info),
+        track_catalog: Default::default(),
+        track_selection: Default::default(),
     }
 }
 

@@ -3,13 +3,14 @@ mod c_api;
 use std::time::{Duration, Instant};
 
 use player_runtime::{
-    DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady, MediaSourceKind, MediaSourceProtocol,
-    PlaybackProgress, PlayerAudioInfo, PlayerAudioOutputInfo, PlayerMediaInfo, PlayerRuntime,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
-    PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeStartup,
-    PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState,
-    VideoPixelFormat,
+    DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady, MediaAbrMode, MediaAbrPolicy,
+    MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
+    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
+    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerMediaInfo, PlayerRuntime, PlayerRuntimeBootstrap,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
+    PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeStartup, PlayerSeekableRange,
+    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo,
+    PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState, VideoPixelFormat,
 };
 
 pub type FfiResult<T> = Result<T, FfiError>;
@@ -79,6 +80,74 @@ pub enum FfiMediaSourceProtocol {
     Dash,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiTrackKind {
+    Video,
+    Audio,
+    Subtitle,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiTrack {
+    pub id: String,
+    pub kind: FfiTrackKind,
+    pub label: Option<String>,
+    pub language: Option<String>,
+    pub codec: Option<String>,
+    pub bit_rate: Option<u64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub frame_rate: Option<f64>,
+    pub channels: Option<u16>,
+    pub sample_rate: Option<u32>,
+    pub is_default: bool,
+    pub is_forced: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FfiTrackCatalog {
+    pub tracks: Vec<FfiTrack>,
+    pub adaptive_video: bool,
+    pub adaptive_audio: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiTrackSelectionMode {
+    Auto,
+    Disabled,
+    Track,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiTrackSelection {
+    pub mode: FfiTrackSelectionMode,
+    pub track_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiAbrMode {
+    Auto,
+    Constrained,
+    FixedTrack,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiAbrPolicy {
+    pub mode: FfiAbrMode,
+    pub track_id: Option<String>,
+    pub max_bit_rate: Option<u64>,
+    pub max_width: Option<u32>,
+    pub max_height: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiTrackSelectionSnapshot {
+    pub video: FfiTrackSelection,
+    pub audio: FfiTrackSelection,
+    pub subtitle: FfiTrackSelection,
+    pub abr_policy: FfiAbrPolicy,
+}
+
 #[derive(Debug, Clone)]
 pub struct FfiMediaInfo {
     pub source_uri: String,
@@ -90,6 +159,8 @@ pub struct FfiMediaInfo {
     pub video_streams: usize,
     pub best_video: Option<FfiVideoInfo>,
     pub best_audio: Option<FfiAudioInfo>,
+    pub track_catalog: FfiTrackCatalog,
+    pub track_selection: FfiTrackSelectionSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +425,169 @@ impl From<MediaSourceProtocol> for FfiMediaSourceProtocol {
     }
 }
 
+impl From<MediaTrackKind> for FfiTrackKind {
+    fn from(value: MediaTrackKind) -> Self {
+        match value {
+            MediaTrackKind::Video => Self::Video,
+            MediaTrackKind::Audio => Self::Audio,
+            MediaTrackKind::Subtitle => Self::Subtitle,
+        }
+    }
+}
+
+impl From<MediaTrack> for FfiTrack {
+    fn from(value: MediaTrack) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind.into(),
+            label: value.label,
+            language: value.language,
+            codec: value.codec,
+            bit_rate: value.bit_rate,
+            width: value.width,
+            height: value.height,
+            frame_rate: value.frame_rate,
+            channels: value.channels,
+            sample_rate: value.sample_rate,
+            is_default: value.is_default,
+            is_forced: value.is_forced,
+        }
+    }
+}
+
+impl From<&MediaTrack> for FfiTrack {
+    fn from(value: &MediaTrack) -> Self {
+        Self::from(value.clone())
+    }
+}
+
+impl From<MediaTrackCatalog> for FfiTrackCatalog {
+    fn from(value: MediaTrackCatalog) -> Self {
+        Self {
+            tracks: value.tracks.into_iter().map(FfiTrack::from).collect(),
+            adaptive_video: value.adaptive_video,
+            adaptive_audio: value.adaptive_audio,
+        }
+    }
+}
+
+impl From<&MediaTrackCatalog> for FfiTrackCatalog {
+    fn from(value: &MediaTrackCatalog) -> Self {
+        Self::from(value.clone())
+    }
+}
+
+impl From<MediaTrackSelectionMode> for FfiTrackSelectionMode {
+    fn from(value: MediaTrackSelectionMode) -> Self {
+        match value {
+            MediaTrackSelectionMode::Auto => Self::Auto,
+            MediaTrackSelectionMode::Disabled => Self::Disabled,
+            MediaTrackSelectionMode::Track => Self::Track,
+        }
+    }
+}
+
+impl From<MediaTrackSelection> for FfiTrackSelection {
+    fn from(value: MediaTrackSelection) -> Self {
+        Self {
+            mode: value.mode.into(),
+            track_id: value.track_id,
+        }
+    }
+}
+
+impl From<FfiTrackSelection> for MediaTrackSelection {
+    fn from(value: FfiTrackSelection) -> Self {
+        Self {
+            mode: value.mode.into(),
+            track_id: value.track_id,
+        }
+    }
+}
+
+impl From<&MediaTrackSelection> for FfiTrackSelection {
+    fn from(value: &MediaTrackSelection) -> Self {
+        Self::from(value.clone())
+    }
+}
+
+impl From<MediaAbrMode> for FfiAbrMode {
+    fn from(value: MediaAbrMode) -> Self {
+        match value {
+            MediaAbrMode::Auto => Self::Auto,
+            MediaAbrMode::Constrained => Self::Constrained,
+            MediaAbrMode::FixedTrack => Self::FixedTrack,
+        }
+    }
+}
+
+impl From<FfiTrackSelectionMode> for MediaTrackSelectionMode {
+    fn from(value: FfiTrackSelectionMode) -> Self {
+        match value {
+            FfiTrackSelectionMode::Auto => Self::Auto,
+            FfiTrackSelectionMode::Disabled => Self::Disabled,
+            FfiTrackSelectionMode::Track => Self::Track,
+        }
+    }
+}
+
+impl From<MediaAbrPolicy> for FfiAbrPolicy {
+    fn from(value: MediaAbrPolicy) -> Self {
+        Self {
+            mode: value.mode.into(),
+            track_id: value.track_id,
+            max_bit_rate: value.max_bit_rate,
+            max_width: value.max_width,
+            max_height: value.max_height,
+        }
+    }
+}
+
+impl From<FfiAbrMode> for MediaAbrMode {
+    fn from(value: FfiAbrMode) -> Self {
+        match value {
+            FfiAbrMode::Auto => Self::Auto,
+            FfiAbrMode::Constrained => Self::Constrained,
+            FfiAbrMode::FixedTrack => Self::FixedTrack,
+        }
+    }
+}
+
+impl From<FfiAbrPolicy> for MediaAbrPolicy {
+    fn from(value: FfiAbrPolicy) -> Self {
+        Self {
+            mode: value.mode.into(),
+            track_id: value.track_id,
+            max_bit_rate: value.max_bit_rate,
+            max_width: value.max_width,
+            max_height: value.max_height,
+        }
+    }
+}
+
+impl From<&MediaAbrPolicy> for FfiAbrPolicy {
+    fn from(value: &MediaAbrPolicy) -> Self {
+        Self::from(value.clone())
+    }
+}
+
+impl From<MediaTrackSelectionSnapshot> for FfiTrackSelectionSnapshot {
+    fn from(value: MediaTrackSelectionSnapshot) -> Self {
+        Self {
+            video: value.video.into(),
+            audio: value.audio.into(),
+            subtitle: value.subtitle.into(),
+            abr_policy: value.abr_policy.into(),
+        }
+    }
+}
+
+impl From<&MediaTrackSelectionSnapshot> for FfiTrackSelectionSnapshot {
+    fn from(value: &MediaTrackSelectionSnapshot) -> Self {
+        Self::from(value.clone())
+    }
+}
+
 impl From<PlayerMediaInfo> for FfiMediaInfo {
     fn from(value: PlayerMediaInfo) -> Self {
         Self {
@@ -366,6 +600,8 @@ impl From<PlayerMediaInfo> for FfiMediaInfo {
             video_streams: value.video_streams,
             best_video: value.best_video.map(FfiVideoInfo::from),
             best_audio: value.best_audio.map(FfiAudioInfo::from),
+            track_catalog: value.track_catalog.into(),
+            track_selection: value.track_selection.into(),
         }
     }
 }
@@ -680,6 +916,43 @@ impl FfiPlayer {
             .map_err(FfiError::from)
     }
 
+    pub fn set_video_track_selection(
+        &mut self,
+        selection: FfiTrackSelection,
+    ) -> FfiResult<FfiCommandResult> {
+        self.inner
+            .set_video_track_selection(selection.into())
+            .map(FfiCommandResult::from)
+            .map_err(FfiError::from)
+    }
+
+    pub fn set_audio_track_selection(
+        &mut self,
+        selection: FfiTrackSelection,
+    ) -> FfiResult<FfiCommandResult> {
+        self.inner
+            .set_audio_track_selection(selection.into())
+            .map(FfiCommandResult::from)
+            .map_err(FfiError::from)
+    }
+
+    pub fn set_subtitle_track_selection(
+        &mut self,
+        selection: FfiTrackSelection,
+    ) -> FfiResult<FfiCommandResult> {
+        self.inner
+            .set_subtitle_track_selection(selection.into())
+            .map(FfiCommandResult::from)
+            .map_err(FfiError::from)
+    }
+
+    pub fn set_abr_policy(&mut self, policy: FfiAbrPolicy) -> FfiResult<FfiCommandResult> {
+        self.inner
+            .set_abr_policy(policy.into())
+            .map(FfiCommandResult::from)
+            .map_err(FfiError::from)
+    }
+
     pub fn drain_events(&mut self) -> Vec<FfiEvent> {
         self.inner
             .drain_events()
@@ -705,4 +978,131 @@ impl FfiPlayer {
 
 fn duration_to_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+impl Default for FfiTrackSelection {
+    fn default() -> Self {
+        Self {
+            mode: FfiTrackSelectionMode::Auto,
+            track_id: None,
+        }
+    }
+}
+
+impl Default for FfiAbrPolicy {
+    fn default() -> Self {
+        Self {
+            mode: FfiAbrMode::Auto,
+            track_id: None,
+            max_bit_rate: None,
+            max_width: None,
+            max_height: None,
+        }
+    }
+}
+
+impl Default for FfiTrackSelectionSnapshot {
+    fn default() -> Self {
+        Self {
+            video: FfiTrackSelection::default(),
+            audio: FfiTrackSelection::default(),
+            subtitle: FfiTrackSelection {
+                mode: FfiTrackSelectionMode::Disabled,
+                track_id: None,
+            },
+            abr_policy: FfiAbrPolicy::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FfiAbrMode, FfiMediaInfo, FfiTrackKind, FfiTrackSelectionMode, MediaAbrMode,
+        MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog,
+        MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlayerMediaInfo,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn media_info_to_ffi_preserves_track_catalog_and_selection() {
+        let media_info = PlayerMediaInfo {
+            source_uri: "https://example.com/master.m3u8".to_owned(),
+            source_kind: MediaSourceKind::Remote,
+            source_protocol: MediaSourceProtocol::Hls,
+            duration: Some(Duration::from_secs(60)),
+            bit_rate: Some(2_400_000),
+            audio_streams: 2,
+            video_streams: 1,
+            best_video: None,
+            best_audio: None,
+            track_catalog: MediaTrackCatalog {
+                tracks: vec![
+                    MediaTrack {
+                        id: "video-1080p".to_owned(),
+                        kind: MediaTrackKind::Video,
+                        label: Some("1080p".to_owned()),
+                        language: None,
+                        codec: Some("avc1".to_owned()),
+                        bit_rate: Some(2_400_000),
+                        width: Some(1920),
+                        height: Some(1080),
+                        frame_rate: Some(30.0),
+                        channels: None,
+                        sample_rate: None,
+                        is_default: true,
+                        is_forced: false,
+                    },
+                    MediaTrack {
+                        id: "audio-en".to_owned(),
+                        kind: MediaTrackKind::Audio,
+                        label: Some("English".to_owned()),
+                        language: Some("en".to_owned()),
+                        codec: Some("aac".to_owned()),
+                        bit_rate: Some(128_000),
+                        width: None,
+                        height: None,
+                        frame_rate: None,
+                        channels: Some(2),
+                        sample_rate: Some(48_000),
+                        is_default: true,
+                        is_forced: false,
+                    },
+                ],
+                adaptive_video: true,
+                adaptive_audio: false,
+            },
+            track_selection: MediaTrackSelectionSnapshot {
+                video: MediaTrackSelection::track("video-1080p"),
+                audio: MediaTrackSelection::track("audio-en"),
+                subtitle: MediaTrackSelection::disabled(),
+                abr_policy: MediaAbrPolicy {
+                    mode: MediaAbrMode::FixedTrack,
+                    track_id: Some("video-1080p".to_owned()),
+                    max_bit_rate: Some(2_400_000),
+                    max_width: Some(1920),
+                    max_height: Some(1080),
+                },
+            },
+        };
+
+        let ffi = FfiMediaInfo::from(media_info);
+
+        assert_eq!(ffi.track_catalog.tracks.len(), 2);
+        assert!(ffi.track_catalog.adaptive_video);
+        assert_eq!(ffi.track_catalog.tracks[0].kind, FfiTrackKind::Video);
+        assert_eq!(ffi.track_catalog.tracks[0].bit_rate, Some(2_400_000));
+        assert_eq!(ffi.track_catalog.tracks[1].kind, FfiTrackKind::Audio);
+        assert_eq!(ffi.track_catalog.tracks[1].language.as_deref(), Some("en"));
+        assert_eq!(ffi.track_selection.video.mode, FfiTrackSelectionMode::Track);
+        assert_eq!(
+            ffi.track_selection.video.track_id.as_deref(),
+            Some("video-1080p")
+        );
+        assert_eq!(ffi.track_selection.abr_policy.mode, FfiAbrMode::FixedTrack);
+        assert_eq!(
+            ffi.track_selection.abr_policy.track_id.as_deref(),
+            Some("video-1080p")
+        );
+    }
 }

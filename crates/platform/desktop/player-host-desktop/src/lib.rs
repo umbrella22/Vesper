@@ -359,17 +359,15 @@ mod tests {
 
     #[test]
     fn normalize_desktop_source_preserves_remote_url() {
-        let source =
-            normalize_desktop_host_source_uri(HLS_REMOTE_SOURCE)
+        let source = normalize_desktop_host_source_uri(HLS_REMOTE_SOURCE)
             .expect("remote url should normalize");
         assert_eq!(source, HLS_REMOTE_SOURCE);
     }
 
     #[test]
     fn normalize_desktop_source_preserves_dash_url() {
-        let source =
-            normalize_desktop_host_source_uri(DASH_REMOTE_SOURCE)
-                .expect("dash url should normalize");
+        let source = normalize_desktop_host_source_uri(DASH_REMOTE_SOURCE)
+            .expect("dash url should normalize");
         assert_eq!(source, DASH_REMOTE_SOURCE);
     }
 
@@ -383,19 +381,15 @@ mod tests {
 
     #[test]
     fn desktop_runtime_options_expand_prefetch_for_streaming_sources() {
-        let options = desktop_runtime_options_for_source(
-            HLS_REMOTE_SOURCE,
-            PlayerRuntimeOptions::default(),
-        );
+        let options =
+            desktop_runtime_options_for_source(HLS_REMOTE_SOURCE, PlayerRuntimeOptions::default());
         assert!(options.video_prefetch_capacity > DEFAULT_VIDEO_PREFETCH_CAPACITY);
     }
 
     #[test]
     fn desktop_runtime_options_expand_prefetch_for_dash_sources() {
-        let options = desktop_runtime_options_for_source(
-            DASH_REMOTE_SOURCE,
-            PlayerRuntimeOptions::default(),
-        );
+        let options =
+            desktop_runtime_options_for_source(DASH_REMOTE_SOURCE, PlayerRuntimeOptions::default());
         assert!(options.video_prefetch_capacity > DEFAULT_VIDEO_PREFETCH_CAPACITY);
     }
 

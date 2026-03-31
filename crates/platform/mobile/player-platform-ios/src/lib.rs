@@ -4,13 +4,15 @@ use std::time::{Duration, Instant};
 
 use player_core::MediaSource;
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE,
-    PlaybackProgress, PlayerMediaInfo, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineKind,
-    PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
+    MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
+    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
+    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoSurfaceKind,
+    PlayerVideoSurfaceTarget, PresentationState,
 };
 
 pub const IOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "ios_native";
@@ -87,6 +89,9 @@ pub enum IosNativePlayerCommand {
     SeekTo { position: Duration },
     Stop,
     SetPlaybackRate { rate: f32 },
+    SetAudioTrackSelection { selection: MediaTrackSelection },
+    SetSubtitleTrackSelection { selection: MediaTrackSelection },
+    SetAbrPolicy { policy: MediaAbrPolicy },
 }
 
 pub trait IosNativeCommandSink: Send {
@@ -132,8 +137,16 @@ where
 #[derive(Debug, Clone)]
 pub enum IosNativeSessionUpdate {
     Snapshot(IosAvPlayerSnapshot),
-    InterruptionChanged { interrupted: bool },
-    SeekCompleted { position: Duration },
+    MediaInfo {
+        track_catalog: MediaTrackCatalog,
+        track_selection: MediaTrackSelectionSnapshot,
+    },
+    InterruptionChanged {
+        interrupted: bool,
+    },
+    SeekCompleted {
+        position: Duration,
+    },
     Error(PlayerRuntimeError),
 }
 
@@ -289,6 +302,9 @@ pub enum IosHostCommand {
     SeekTo { position_ms: u64 },
     Stop,
     SetPlaybackRate { rate: f32 },
+    SetAudioTrackSelection { selection: MediaTrackSelection },
+    SetSubtitleTrackSelection { selection: MediaTrackSelection },
+    SetAbrPolicy { policy: MediaAbrPolicy },
 }
 
 pub struct IosHostBridgeSession {
@@ -487,6 +503,19 @@ impl IosHostCommand {
             IosNativePlayerCommand::SetPlaybackRate { rate } => {
                 Self::SetPlaybackRate { rate: *rate }
             }
+            IosNativePlayerCommand::SetAudioTrackSelection { selection } => {
+                Self::SetAudioTrackSelection {
+                    selection: selection.clone(),
+                }
+            }
+            IosNativePlayerCommand::SetSubtitleTrackSelection { selection } => {
+                Self::SetSubtitleTrackSelection {
+                    selection: selection.clone(),
+                }
+            }
+            IosNativePlayerCommand::SetAbrPolicy { policy } => Self::SetAbrPolicy {
+                policy: policy.clone(),
+            },
         }
     }
 }
@@ -508,7 +537,7 @@ impl IosHostBridgeSession {
         }
     }
 
-    pub fn snapshot(&self) -> IosHostSnapshot {
+    pub fn snapshot(&mut self) -> IosHostSnapshot {
         IosHostSnapshot::from_player_snapshot(&self.session.snapshot())
     }
 
@@ -828,6 +857,17 @@ impl IosManagedNativeSessionController {
         self.push_update(IosNativeSessionUpdate::Snapshot(snapshot));
     }
 
+    pub fn report_media_info(
+        &self,
+        track_catalog: MediaTrackCatalog,
+        track_selection: MediaTrackSelectionSnapshot,
+    ) {
+        self.push_update(IosNativeSessionUpdate::MediaInfo {
+            track_catalog,
+            track_selection,
+        });
+    }
+
     pub fn report_interruption_changed(&self, interrupted: bool) {
         self.push_update(IosNativeSessionUpdate::InterruptionChanged { interrupted });
     }
@@ -950,6 +990,19 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         for update in self.controller.take_pending() {
             match update {
                 IosNativeSessionUpdate::Snapshot(snapshot) => self.apply_snapshot(&snapshot),
+                IosNativeSessionUpdate::MediaInfo {
+                    track_catalog,
+                    track_selection,
+                } => {
+                    if self.media_info.track_catalog != track_catalog
+                        || self.media_info.track_selection != track_selection
+                    {
+                        self.media_info.track_catalog = track_catalog;
+                        self.media_info.track_selection = track_selection;
+                        self.events
+                            .push_back(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
+                    }
+                }
                 IosNativeSessionUpdate::InterruptionChanged { interrupted } => {
                     self.apply_interruption(interrupted);
                 }
@@ -992,7 +1045,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         self.events.extend(observation.emitted_events);
     }
 
-    fn snapshot(&self) -> PlayerSnapshot {
+    fn snapshot(&mut self) -> PlayerSnapshot {
+        self.pump_pending_updates();
         PlayerSnapshot {
             source_uri: self.source_uri.clone(),
             state: self.presentation_state,
@@ -1123,9 +1177,88 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         Ok(())
     }
 
+    fn validate_track_selection_request(
+        &self,
+        kind: MediaTrackKind,
+        selection: &MediaTrackSelection,
+    ) -> PlayerRuntimeResult<MediaTrackSelection> {
+        match selection.mode {
+            MediaTrackSelectionMode::Auto => Ok(MediaTrackSelection::auto()),
+            MediaTrackSelectionMode::Disabled => Ok(MediaTrackSelection::disabled()),
+            MediaTrackSelectionMode::Track => {
+                let Some(track_id) = selection.track_id.as_deref() else {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        "track selection mode=Track requires a track id",
+                    ));
+                };
+
+                let track = self
+                    .media_info
+                    .track_catalog
+                    .tracks
+                    .iter()
+                    .find(|track| track.id == track_id)
+                    .ok_or_else(|| {
+                        PlayerRuntimeError::new(
+                            PlayerRuntimeErrorCode::InvalidArgument,
+                            format!(
+                                "track '{track_id}' is not present in the current track catalog"
+                            ),
+                        )
+                    })?;
+
+                if track.kind != kind {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        format!("track '{track_id}' is not a {:?} track", kind),
+                    ));
+                }
+
+                Ok(MediaTrackSelection::track(track_id))
+            }
+        }
+    }
+
+    fn validate_abr_policy_request(
+        &self,
+        policy: &MediaAbrPolicy,
+    ) -> PlayerRuntimeResult<MediaAbrPolicy> {
+        match policy.mode {
+            MediaAbrMode::Auto => Ok(MediaAbrPolicy::default()),
+            MediaAbrMode::Constrained => {
+                if policy.max_bit_rate.is_none() {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        "iOS constrained ABR requires max_bit_rate because AVPlayer does not expose size-only variant limits",
+                    ));
+                }
+
+                if policy.max_width.is_some() || policy.max_height.is_some() {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::Unsupported,
+                        "iOS constrained ABR currently supports max_bit_rate only",
+                    ));
+                }
+
+                Ok(MediaAbrPolicy {
+                    mode: MediaAbrMode::Constrained,
+                    track_id: None,
+                    max_bit_rate: policy.max_bit_rate,
+                    max_width: None,
+                    max_height: None,
+                })
+            }
+            MediaAbrMode::FixedTrack => Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "fixed-track ABR is not implemented for the iOS AVPlayer runtime",
+            )),
+        }
+    }
+
     fn translate_command(
         &self,
-        command: PlayerRuntimeCommand,
+        command: &PlayerRuntimeCommand,
     ) -> PlayerRuntimeResult<(bool, Vec<IosNativePlayerCommand>)> {
         match command {
             PlayerRuntimeCommand::Play => match self.presentation_state {
@@ -1168,15 +1301,51 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     ],
                 )),
             },
-            PlayerRuntimeCommand::SeekTo { position } => {
-                Ok((true, vec![IosNativePlayerCommand::SeekTo { position }]))
-            }
+            PlayerRuntimeCommand::SeekTo { position } => Ok((
+                true,
+                vec![IosNativePlayerCommand::SeekTo {
+                    position: *position,
+                }],
+            )),
             PlayerRuntimeCommand::SetPlaybackRate { rate } => {
-                let rate = self.validate_playback_rate(rate)?;
+                let rate = self.validate_playback_rate(*rate)?;
                 if (self.playback_rate - rate).abs() <= f32::EPSILON {
                     return Ok((false, Vec::new()));
                 }
                 Ok((true, vec![IosNativePlayerCommand::SetPlaybackRate { rate }]))
+            }
+            PlayerRuntimeCommand::SetVideoTrackSelection { .. } => Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "fixed video-track selection is not implemented for the iOS AVPlayer runtime",
+            )),
+            PlayerRuntimeCommand::SetAudioTrackSelection { selection } => {
+                let selection =
+                    self.validate_track_selection_request(MediaTrackKind::Audio, selection)?;
+                if self.media_info.track_selection.audio == selection {
+                    return Ok((false, Vec::new()));
+                }
+                Ok((
+                    true,
+                    vec![IosNativePlayerCommand::SetAudioTrackSelection { selection }],
+                ))
+            }
+            PlayerRuntimeCommand::SetSubtitleTrackSelection { selection } => {
+                let selection =
+                    self.validate_track_selection_request(MediaTrackKind::Subtitle, selection)?;
+                if self.media_info.track_selection.subtitle == selection {
+                    return Ok((false, Vec::new()));
+                }
+                Ok((
+                    true,
+                    vec![IosNativePlayerCommand::SetSubtitleTrackSelection { selection }],
+                ))
+            }
+            PlayerRuntimeCommand::SetAbrPolicy { policy } => {
+                let policy = self.validate_abr_policy_request(policy)?;
+                if self.media_info.track_selection.abr_policy == policy {
+                    return Ok((false, Vec::new()));
+                }
+                Ok((true, vec![IosNativePlayerCommand::SetAbrPolicy { policy }]))
             }
             PlayerRuntimeCommand::Stop => {
                 if self.presentation_state == PresentationState::Ready
@@ -1286,7 +1455,8 @@ impl<C: IosNativeCommandSink> IosNativePlayerSession for IosManagedNativeSession
         let previous_state = self.presentation_state;
         let previous_buffering = self.is_buffering;
         let previous_rate = self.playback_rate;
-        let (applied, native_commands) = self.translate_command(command)?;
+        let previous_media_info = self.media_info.clone();
+        let (applied, native_commands) = self.translate_command(&command)?;
         self.submit_commands(native_commands)?;
 
         if applied {
@@ -1337,12 +1507,26 @@ impl<C: IosNativeCommandSink> IosNativePlayerSession for IosManagedNativeSession
                 PlayerRuntimeCommand::SetPlaybackRate { rate } => {
                     self.playback_rate = rate;
                 }
+                PlayerRuntimeCommand::SetVideoTrackSelection { .. } => {}
+                PlayerRuntimeCommand::SetAudioTrackSelection { selection } => {
+                    self.media_info.track_selection.audio = selection;
+                }
+                PlayerRuntimeCommand::SetSubtitleTrackSelection { selection } => {
+                    self.media_info.track_selection.subtitle = selection;
+                }
+                PlayerRuntimeCommand::SetAbrPolicy { policy } => {
+                    self.media_info.track_selection.abr_policy = policy;
+                }
                 PlayerRuntimeCommand::Stop => {
                     self.presentation_state = PresentationState::Ready;
                     self.is_buffering = false;
                     self.progress = PlaybackProgress::new(Duration::ZERO, self.progress.duration());
                     self.emit_state_change_if_needed(previous_state);
                 }
+            }
+            if self.media_info.track_selection != previous_media_info.track_selection {
+                self.events
+                    .push_back(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
             }
             self.emit_buffering_change_if_needed(previous_buffering);
             self.emit_playback_rate_change_if_needed(previous_rate);
@@ -1407,6 +1591,8 @@ fn placeholder_media_info(source: &MediaSource) -> PlayerMediaInfo {
         video_streams: 0,
         best_video: None,
         best_audio: None,
+        track_catalog: Default::default(),
+        track_selection: Default::default(),
     }
 }
 
@@ -1569,12 +1755,13 @@ mod tests {
     };
     use player_core::MediaSource;
     use player_runtime::{
-        DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily,
-        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
-        PlayerRuntimeCommandResult, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-        PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot,
-        PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
-        PresentationState,
+        DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
+        MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,
+        PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult,
+        PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoSurfaceKind,
+        PlayerVideoSurfaceTarget, PresentationState,
     };
 
     #[test]
@@ -1790,6 +1977,85 @@ mod tests {
     }
 
     #[test]
+    fn ios_managed_session_dispatches_audio_track_selection() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingIosCommandSink::new(commands.clone());
+        let mut session = IosManagedNativeSession::new("placeholder.mp4", test_media_info(), sink);
+
+        let result = session
+            .dispatch(PlayerRuntimeCommand::SetAudioTrackSelection {
+                selection: MediaTrackSelection::track("audio-en"),
+            })
+            .expect("audio track selection should dispatch");
+
+        assert!(result.applied);
+        assert_eq!(
+            *commands.lock().expect("commands lock"),
+            vec![IosNativePlayerCommand::SetAudioTrackSelection {
+                selection: MediaTrackSelection::track("audio-en"),
+            }]
+        );
+        assert_eq!(
+            result.snapshot.media_info.track_selection.audio,
+            MediaTrackSelection::track("audio-en")
+        );
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PlayerRuntimeEvent::MetadataReady(media_info)
+                if media_info.track_selection.audio == MediaTrackSelection::track("audio-en")
+        )));
+    }
+
+    #[test]
+    fn ios_managed_session_dispatches_constrained_abr_by_bitrate() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingIosCommandSink::new(commands.clone());
+        let mut session = IosManagedNativeSession::new("placeholder.mp4", test_media_info(), sink);
+        let policy = MediaAbrPolicy {
+            mode: MediaAbrMode::Constrained,
+            track_id: None,
+            max_bit_rate: Some(1_500_000),
+            max_width: None,
+            max_height: None,
+        };
+
+        let result = session
+            .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
+                policy: policy.clone(),
+            })
+            .expect("constrained abr should dispatch");
+
+        assert!(result.applied);
+        assert_eq!(
+            *commands.lock().expect("commands lock"),
+            vec![IosNativePlayerCommand::SetAbrPolicy {
+                policy: policy.clone(),
+            }]
+        );
+        assert_eq!(
+            result.snapshot.media_info.track_selection.abr_policy,
+            policy
+        );
+    }
+
+    #[test]
+    fn ios_managed_session_rejects_video_track_selection() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingIosCommandSink::new(commands.clone());
+        let mut session = IosManagedNativeSession::new("placeholder.mp4", test_media_info(), sink);
+
+        let error = session
+            .dispatch(PlayerRuntimeCommand::SetVideoTrackSelection {
+                selection: MediaTrackSelection::track("video-main"),
+            })
+            .expect_err("video track selection should be unsupported");
+
+        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert!(commands.lock().expect("commands lock").is_empty());
+    }
+
+    #[test]
     fn ios_managed_session_updates_from_native_snapshot() {
         let commands = Arc::new(Mutex::new(Vec::new()));
         let sink = RecordingIosCommandSink::new(commands);
@@ -1851,6 +2117,32 @@ mod tests {
             PlayerRuntimeEvent::Error(error)
             if error.code() == PlayerRuntimeErrorCode::BackendFailure
         )));
+    }
+
+    #[test]
+    fn ios_managed_session_snapshot_pumps_pending_media_info_updates() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingIosCommandSink::new(commands);
+        let (mut session, controller) =
+            IosManagedNativeSession::with_controller("placeholder.mp4", test_media_info(), sink);
+        let track_selection = MediaTrackSelectionSnapshot {
+            video: MediaTrackSelection::auto(),
+            audio: MediaTrackSelection::track("audio-en"),
+            subtitle: MediaTrackSelection::track("subtitle-en"),
+            abr_policy: MediaAbrPolicy {
+                mode: MediaAbrMode::Constrained,
+                track_id: None,
+                max_bit_rate: Some(900_000),
+                max_width: None,
+                max_height: None,
+            },
+        };
+
+        controller.report_media_info(test_track_catalog(), track_selection.clone());
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.media_info.track_catalog, test_track_catalog());
+        assert_eq!(snapshot.media_info.track_selection, track_selection);
     }
 
     #[test]
@@ -2106,7 +2398,7 @@ mod tests {
 
     #[test]
     fn ios_host_bridge_session_promotes_unknown_hls_duration_to_live_snapshot() {
-        let session = IosHostBridgeSession::new("https://example.com/master.m3u8");
+        let mut session = IosHostBridgeSession::new("https://example.com/master.m3u8");
 
         let snapshot = session.snapshot();
         assert_eq!(snapshot.timeline_kind, IosHostTimelineKind::Live);
@@ -2195,6 +2487,8 @@ mod tests {
                     video_streams: 1,
                     best_video: None,
                     best_audio: None,
+                    track_catalog: test_track_catalog(),
+                    track_selection: test_track_selection(),
                 },
                 startup: PlayerRuntimeStartup {
                     ffmpeg_initialized: false,
@@ -2240,6 +2534,8 @@ mod tests {
             video_streams: 1,
             best_video: None,
             best_audio: None,
+            track_catalog: test_track_catalog(),
+            track_selection: test_track_selection(),
         }
     }
 
@@ -2260,6 +2556,8 @@ mod tests {
                     video_streams: 1,
                     best_video: None,
                     best_audio: None,
+                    track_catalog: test_track_catalog(),
+                    track_selection: test_track_selection(),
                 },
                 startup: PlayerRuntimeStartup {
                     ffmpeg_initialized: false,
@@ -2284,6 +2582,69 @@ mod tests {
                 }),
                 initial_frame: None,
             })
+        }
+    }
+
+    fn test_track_catalog() -> MediaTrackCatalog {
+        MediaTrackCatalog {
+            tracks: vec![
+                MediaTrack {
+                    id: "video-main".to_owned(),
+                    kind: MediaTrackKind::Video,
+                    label: Some("Main Video".to_owned()),
+                    language: None,
+                    codec: Some("h264".to_owned()),
+                    bit_rate: Some(2_000_000),
+                    width: Some(1280),
+                    height: Some(720),
+                    frame_rate: Some(30.0),
+                    channels: None,
+                    sample_rate: None,
+                    is_default: true,
+                    is_forced: false,
+                },
+                MediaTrack {
+                    id: "audio-en".to_owned(),
+                    kind: MediaTrackKind::Audio,
+                    label: Some("English".to_owned()),
+                    language: Some("en".to_owned()),
+                    codec: Some("aac".to_owned()),
+                    bit_rate: Some(128_000),
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    channels: Some(2),
+                    sample_rate: Some(48_000),
+                    is_default: true,
+                    is_forced: false,
+                },
+                MediaTrack {
+                    id: "subtitle-en".to_owned(),
+                    kind: MediaTrackKind::Subtitle,
+                    label: Some("English CC".to_owned()),
+                    language: Some("en".to_owned()),
+                    codec: None,
+                    bit_rate: None,
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    channels: None,
+                    sample_rate: None,
+                    is_default: false,
+                    is_forced: false,
+                },
+            ],
+            adaptive_video: true,
+            adaptive_audio: true,
+        }
+    }
+
+    fn test_track_selection() -> MediaTrackSelectionSnapshot {
+        MediaTrackSelectionSnapshot {
+            video: MediaTrackSelection::auto(),
+            audio: MediaTrackSelection::auto(),
+            subtitle: MediaTrackSelection::disabled(),
+            abr_policy: MediaAbrPolicy::default(),
         }
     }
 

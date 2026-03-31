@@ -10,20 +10,22 @@
 
 # Android example local state and generated artifacts
 examples/android-compose-host/local.properties
-examples/android-compose-host/.gradle/*
-!examples/android-compose-host/.gradle/config.properties
-examples/android-compose-host/.idea/*
-!examples/android-compose-host/.idea/gradle.xml
+examples/android-compose-host/.gradle/
+examples/android-compose-host/.idea/
+examples/android-compose-host/.kotlin/
 examples/android-compose-host/build/
 examples/android-compose-host/app/build/
 
 # Android library local state and generated artifacts
 lib/android/local.properties
-lib/android/.gradle/*
-lib/android/.idea/*
+lib/android/.gradle/
+lib/android/.idea/
+lib/android/.kotlin/
 lib/android/build/
 lib/android/vesper-player-kit/build/
-lib/android/vesper-player-kit/src/main/jniLibs/*/librust_player_android_host.so
+lib/android/vesper-player-kit-compose/build/
+lib/android/vesper-player-kit/src/main/jniLibs/*
+!lib/android/vesper-player-kit/src/main/jniLibs/.gitkeep
 
 # iOS example generated project artifacts
 examples/ios-swift-host/*.xcodeproj/

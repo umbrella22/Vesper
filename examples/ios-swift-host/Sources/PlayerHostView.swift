@@ -1,18 +1,24 @@
-import AVFoundation
 import Photos
 import PhotosUI
-import VesperPlayerKit
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
+import VesperPlayerKit
 
 struct PlayerHostView: View {
+    @Environment(\.colorScheme) private var systemColorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    @AppStorage("vesper.example.ios.theme_mode") private var themeModeRaw = ExampleThemeMode.system.rawValue
     @StateObject private var controller: VesperPlayerController
     @State private var pendingSeekRatio: Double?
-    @State private var isImporterPresented = false
-    @State private var isPhotoPickerPresented = false
-    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isVideoPickerPresented = false
     @State private var hostMessage: String?
-    @State private var remoteHlsUrl = IOS_HLS_DEMO_URL
+    @State private var remoteStreamUrl = IOS_HLS_DEMO_URL
+    @State private var controlsVisible = true
+    @State private var activeSheet: ExamplePlayerSheet?
+    @State private var isFullscreen = false
+    @State private var controlsHideTask: Task<Void, Never>?
 
     init() {
         _controller = StateObject(
@@ -22,174 +28,233 @@ struct PlayerHostView: View {
         )
     }
 
+    private var themeMode: ExampleThemeMode {
+        get { ExampleThemeMode(rawValue: themeModeRaw) ?? .system }
+        set { themeModeRaw = newValue.rawValue }
+    }
+
+    private var useDarkTheme: Bool {
+        switch themeMode {
+        case .system:
+            systemColorScheme == .dark
+        case .light:
+            false
+        case .dark:
+            true
+        }
+    }
+
+    private var isCompactLayout: Bool {
+        horizontalSizeClass != .regular
+    }
+
     var body: some View {
+        let palette = exampleHostPalette(useDarkTheme: useDarkTheme)
         let uiState = controller.uiState
+        let trackCatalog = controller.trackCatalog
+        let trackSelection = controller.trackSelection
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text(uiState.title)
-                    .font(.largeTitle.weight(.bold))
-                Text(uiState.subtitle)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                if let hostMessage {
-                    Text(hostMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                Text("Source: \(uiState.sourceLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.purple)
+        ZStack {
+            LinearGradient(
+                colors: [palette.pageTop, palette.pageBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
-                PlayerSurfaceContainer(controller: controller)
-                    .frame(height: 240)
+            if isFullscreen {
+                Color.black.ignoresSafeArea()
 
-                HStack(spacing: 8) {
-                    pill(uiState.playbackState.rawValue)
-                    pill(controller.backend.rawValue)
-                    pill("rate \(formatRate(uiState.playbackRate))x")
-                    if uiState.isBuffering {
-                        pill("buffering")
-                    }
-                    if uiState.isInterrupted {
-                        pill("interrupted")
-                    }
-                }
-
-                HStack(spacing: 10) {
-                    Button("Pick from Photos") {
-                        requestPhotoLibraryAccessAndPresentPicker()
-                    }
-                    Button("Import File") {
-                        isImporterPresented = true
-                    }
-                    Button("Use HLS Demo") {
-                        hostMessage = nil
-                        controller.selectSource(iosHlsDemoSource())
-                    }
-                }
-                .buttonStyle(.bordered)
-
-                TextField("HLS URL", text: $remoteHlsUrl)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-
-                Button("Open HLS URL") {
-                    let trimmed = remoteHlsUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard let url = URL(string: trimmed), !trimmed.isEmpty else {
-                        hostMessage = "Please enter a valid HLS URL."
-                        return
-                    }
-                    hostMessage = nil
-                    controller.selectSource(VesperPlayerSource.hls(url: url, label: "Custom HLS URL"))
-                }
-                .buttonStyle(.bordered)
-
-                if uiState.timeline.isSeekable && (uiState.timeline.kind == .vod || uiState.timeline.kind == .liveDvr) {
-                    Slider(
-                        value: Binding(
-                            get: { pendingSeekRatio ?? (uiState.timeline.displayedRatio ?? 0.0) },
-                            set: { pendingSeekRatio = $0 }
-                        ),
-                        in: 0...1,
-                        onEditingChanged: { editing in
-                            if !editing {
-                                controller.seek(toRatio: pendingSeekRatio ?? (uiState.timeline.displayedRatio ?? 0.0))
-                                pendingSeekRatio = nil
-                            } else {
-                                pendingSeekRatio = uiState.timeline.displayedRatio ?? 0.0
-                            }
-                        }
-                    )
-
-                    if uiState.timeline.kind == .liveDvr {
-                        HStack(spacing: 8) {
-                            pill(liveBadgeText(for: uiState.timeline))
-                            Button("Go Live") {
-                                controller.seekToLiveEdge()
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Text(
-                            "DVR \(formatMillis(uiState.timeline.positionMs)) / \(formatMillis(uiState.timeline.liveEdgeMs ?? uiState.timeline.durationMs ?? 0))"
+                playerStage(uiState: uiState)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+                    .ignoresSafeArea()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        ExamplePlayerHeader(
+                            sourceLabel: uiState.sourceLabel,
+                            subtitle: uiState.subtitle,
+                            palette: palette
                         )
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    } else {
-                        Text("\(formatMillis(uiState.timeline.positionMs)) / \(formatMillis(uiState.timeline.durationMs ?? 0))")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                } else if uiState.timeline.kind == .live {
-                    HStack(spacing: 8) {
-                        pill("LIVE")
-                        if let liveEdgeMs = uiState.timeline.liveEdgeMs {
-                            Text("Edge \(formatMillis(liveEdgeMs))")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } else {
-                    Text("Live timeline UI will be shown here when live/DVR backends land.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
 
-                HStack(spacing: 10) {
-                    Button("<< 5s") { controller.seek(by: -5_000) }
-                    Button(uiState.playbackState == .playing ? "Pause" : "Play") { controller.togglePause() }
-                    Button("Stop") { controller.stop() }
-                    Button("5s >>") { controller.seek(by: 5_000) }
-                }
-                .buttonStyle(.borderedProminent)
+                        playerStage(uiState: uiState)
+                            .frame(height: 248)
 
-                HStack(spacing: 10) {
-                    ForEach(VesperPlayerController.supportedPlaybackRates, id: \.self) { rate in
-                        Button("\(formatRate(rate))x") {
-                            controller.setPlaybackRate(rate)
-                        }
+                        ExampleSourceSection(
+                            palette: palette,
+                            themeMode: themeMode,
+                            remoteStreamUrl: $remoteStreamUrl,
+                            hostMessage: hostMessage,
+                            onThemeModeChange: { themeModeRaw = $0.rawValue },
+                            onPickFromPhotos: {
+                                requestPhotoLibraryAccessAndPresentPicker()
+                            },
+                            onUseHlsDemo: {
+                                hostMessage = nil
+                                controller.selectSource(iosHlsDemoSource())
+                                controlsVisible = true
+                            },
+                            onOpenRemote: {
+                                openRemoteSource()
+                            }
+                        )
                     }
+                    .padding(20)
                 }
-                .buttonStyle(.bordered)
-            }
-            .padding(20)
-        }
-        .background(Color(red: 0.956, green: 0.945, blue: 0.918))
-        .onAppear { controller.initialize() }
-        .onDisappear { controller.dispose() }
-        .photosPicker(
-            isPresented: $isPhotoPickerPresented,
-            selection: $selectedPhotoItem,
-            matching: .videos,
-            preferredItemEncoding: .current
-        )
-        .onChange(of: selectedPhotoItem) { _, item in
-            guard let item else { return }
-            Task {
-                await handlePickedPhotoItem(item)
             }
         }
-        .fileImporter(
-            isPresented: $isImporterPresented,
-            allowedContentTypes: [.movie, .mpeg4Movie, .video],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case let .success(urls) = result, let url = urls.first else { return }
-            hostMessage = nil
-            _ = url.startAccessingSecurityScopedResource()
-            controller.selectSource(.localFile(url: url))
+        .preferredColorScheme(themeMode.preferredColorScheme)
+        .statusBarHidden(isFullscreen)
+        .persistentSystemOverlays(isFullscreen ? .hidden : .visible)
+        .onAppear {
+            controller.initialize()
+            scheduleControlsAutoHide(for: uiState)
+        }
+        .onDisappear {
+            controlsHideTask?.cancel()
+            controller.dispose()
+        }
+        .onChange(of: uiState.playbackState) { _, _ in
+            scheduleControlsAutoHide(for: controller.uiState)
+        }
+        .onChange(of: uiState.isBuffering) { _, _ in
+            scheduleControlsAutoHide(for: controller.uiState)
+        }
+        .onChange(of: controlsVisible) { _, _ in
+            scheduleControlsAutoHide(for: controller.uiState)
+        }
+        .onChange(of: activeSheet) { _, _ in
+            scheduleControlsAutoHide(for: controller.uiState)
+        }
+        .onChange(of: pendingSeekRatio) { _, _ in
+            scheduleControlsAutoHide(for: controller.uiState)
+        }
+        .sheet(isPresented: $isVideoPickerPresented) {
+            ExampleVideoPicker { selection in
+                isVideoPickerPresented = false
+                guard let selection else { return }
+                hostMessage = "Preparing video from Photos..."
+                Task(priority: .userInitiated) {
+                    try? await Task.sleep(for: .milliseconds(160))
+                    await handlePickedVideoSelection(selection)
+                }
+            }
+        }
+        .sheet(item: $activeSheet) { sheet in
+            ExampleSelectionSheetContent(
+                sheet: sheet,
+                uiState: uiState,
+                trackCatalog: trackCatalog,
+                trackSelection: trackSelection,
+                onOpenSheet: { activeSheet = $0 },
+                onSelectQuality: {
+                    controller.setAbrPolicy($0)
+                    activeSheet = nil
+                },
+                onSelectAudio: {
+                    controller.setAudioTrackSelection($0)
+                    activeSheet = nil
+                },
+                onSelectSubtitle: {
+                    controller.setSubtitleTrackSelection($0)
+                    activeSheet = nil
+                },
+                onSelectSpeed: {
+                    controller.setPlaybackRate($0)
+                    activeSheet = nil
+                }
+            )
+            .presentationDetents([.height(sheetHeight(for: sheet))])
+            .presentationDragIndicator(.hidden)
         }
     }
 
     @ViewBuilder
-    private func pill(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.black.opacity(0.08), in: Capsule())
+    private func playerStage(uiState: PlayerHostUiState) -> some View {
+        ExamplePlayerStage(
+            surface: AnyView(PlayerSurfaceContainer(controller: controller)),
+            uiState: uiState,
+            controlsVisible: $controlsVisible,
+            pendingSeekRatio: $pendingSeekRatio,
+            isCompactLayout: isCompactLayout,
+            isFullscreen: isFullscreen,
+            onSeekBy: { controller.seek(by: $0) },
+            onTogglePause: { controller.togglePause() },
+            onSeekToRatio: { controller.seek(toRatio: $0) },
+            onSeekToLiveEdge: { controller.seekToLiveEdge() },
+            onToggleFullscreen: {
+                setFullscreen(!isFullscreen)
+            },
+            onOpenSheet: { activeSheet = $0 }
+        )
+    }
+
+    private func openRemoteSource() {
+        let trimmed = remoteStreamUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), !trimmed.isEmpty else {
+            hostMessage = "Please enter a valid remote URL."
+            return
+        }
+        hostMessage = nil
+        controller.selectSource(VesperPlayerSource.remoteUrl(url, label: "Custom Remote URL"))
+        controlsVisible = true
+    }
+
+    private func setFullscreen(_ fullscreen: Bool) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isFullscreen = fullscreen
+        }
+
+        Task { @MainActor in
+            updateInterfaceOrientation(forFullscreen: fullscreen)
+        }
+    }
+
+    @MainActor
+    private func updateInterfaceOrientation(forFullscreen fullscreen: Bool) {
+        let requestedOrientations: UIInterfaceOrientationMask = fullscreen ? .landscapeRight : .portrait
+
+        guard
+            let windowScene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive })
+        else {
+            return
+        }
+
+        windowScene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+
+        windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: requestedOrientations)) { error in
+            exampleIosHostLog("interface orientation update failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func scheduleControlsAutoHide(for uiState: PlayerHostUiState) {
+        controlsHideTask?.cancel()
+        guard
+            uiState.playbackState == .playing,
+            !uiState.isBuffering,
+            controlsVisible,
+            activeSheet == nil,
+            pendingSeekRatio == nil
+        else {
+            return
+        }
+
+        controlsHideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard
+                !Task.isCancelled,
+                controller.uiState.playbackState == .playing,
+                !controller.uiState.isBuffering,
+                activeSheet == nil,
+                pendingSeekRatio == nil
+            else {
+                return
+            }
+            controlsVisible = false
+        }
     }
 
     private func requestPhotoLibraryAccessAndPresentPicker() {
@@ -198,7 +263,7 @@ struct PlayerHostView: View {
         case .authorized, .limited:
             hostMessage = nil
             exampleIosHostLog("photo library access available: \(status.rawValue)")
-            isPhotoPickerPresented = true
+            isVideoPickerPresented = true
         case .notDetermined:
             exampleIosHostLog("requesting photo library access")
             Task {
@@ -216,23 +281,12 @@ struct PlayerHostView: View {
         }
     }
 
-    private func liveBadgeText(for timeline: TimelineUiState) -> String {
-        guard let liveEdgeMs = timeline.liveEdgeMs else {
-            return "LIVE"
-        }
-        let behindMs = max(liveEdgeMs - timeline.positionMs, 0)
-        if behindMs > 1_500 {
-            return "LIVE -\(formatMillis(behindMs))"
-        }
-        return "LIVE"
-    }
-
     private func handlePhotoAuthorizationStatus(_ status: PHAuthorizationStatus) {
         switch status {
         case .authorized, .limited:
             hostMessage = nil
             exampleIosHostLog("photo library access granted: \(status.rawValue)")
-            isPhotoPickerPresented = true
+            isVideoPickerPresented = true
         case .denied, .restricted:
             hostMessage = "Photo Library access is required to pick videos from Photos."
             exampleIosHostLog("photo library access denied after prompt: \(status.rawValue)")
@@ -244,42 +298,96 @@ struct PlayerHostView: View {
         }
     }
 
-    private func handlePickedPhotoItem(_ item: PhotosPickerItem) async {
+    private func handlePickedVideoSelection(_ selection: ExamplePickedVideoSelection) async {
         do {
-            if let resolved = try await resolvePickedVideo(item) {
+            if let resolved = try await resolvePickedVideo(selection) {
+                await MainActor.run {
+                    hostMessage = nil
+                    controlsVisible = true
+                }
+                try? await Task.sleep(for: .milliseconds(120))
                 await MainActor.run {
                     hostMessage = nil
                     exampleIosHostLog("picked photo video url=\(resolved.url.absoluteString)")
                     controller.selectSource(.localFile(url: resolved.url, label: resolved.label))
-                    selectedPhotoItem = nil
+                    controlsVisible = true
                 }
             } else {
                 await MainActor.run {
                     hostMessage = "Failed to load the selected video from Photos."
-                    exampleIosHostLog("picked photo video returned nil transferable")
-                    selectedPhotoItem = nil
+                    exampleIosHostLog("picked photo video returned nil provider payload")
                 }
             }
         } catch {
             await MainActor.run {
                 hostMessage = "Failed to load selected photo video: \(error.localizedDescription)"
                 exampleIosHostLog("picked photo video failed: \(error.localizedDescription)")
-                selectedPhotoItem = nil
             }
         }
     }
 
-    private func resolvePickedVideo(_ item: PhotosPickerItem) async throws -> (url: URL, label: String)? {
-        if let identifier = item.itemIdentifier,
+    private func resolvePickedVideo(_ selection: ExamplePickedVideoSelection) async throws -> (url: URL, label: String)? {
+        if let file = try await loadProviderVideoFile(selection.itemProvider) {
+            return file
+        }
+
+        if let identifier = selection.assetIdentifier,
            let original = await resolveOriginalPhotoVideo(identifier: identifier) {
             return original
         }
 
-        if let movie = try await item.loadTransferable(type: PickedVideo.self) {
-            return (movie.url, movie.url.lastPathComponent)
+        return nil
+    }
+
+    private func loadProviderVideoFile(_ itemProvider: NSItemProvider) async throws -> (url: URL, label: String)? {
+        let typeIdentifier: String
+        if itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            typeIdentifier = UTType.movie.identifier
+        } else if itemProvider.hasItemConformingToTypeIdentifier(UTType.video.identifier) {
+            typeIdentifier = UTType.video.identifier
+        } else {
+            return nil
         }
 
-        return nil
+        return try await withCheckedThrowingContinuation { continuation in
+            itemProvider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                guard let url else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                do {
+                    let persistedUrl = try persistPickedVideoFile(from: url)
+                    continuation.resume(returning: (persistedUrl, persistedUrl.lastPathComponent))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func persistPickedVideoFile(from url: URL) throws -> URL {
+        let fileExtension = url.pathExtension.isEmpty ? "mov" : url.pathExtension
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileExtension)
+
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+
+        do {
+            try FileManager.default.moveItem(at: url, to: destination)
+        } catch {
+            try FileManager.default.copyItem(at: url, to: destination)
+        }
+
+        return destination
     }
 
     private func resolveOriginalPhotoVideo(identifier: String) async -> (url: URL, label: String)? {
@@ -316,44 +424,55 @@ struct PlayerHostView: View {
     }
 }
 
-private func iosHlsDemoSource() -> VesperPlayerSource {
-    VesperPlayerSource.hls(
-        url: URL(string: IOS_HLS_DEMO_URL)!,
-        label: "HLS Demo (BipBop)"
-    )
-}
-
-private func exampleIosHostLog(_ message: String) {
-    print("[VesperPlayerIOSExample] \(message)")
-}
-
-private let IOS_HLS_DEMO_URL =
-    "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
-
-private struct PickedVideo: Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(importedContentType: .movie) { received in
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(received.file.pathExtension)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: received.file, to: destination)
-            return Self(url: destination)
-        }
+private extension UIWindowScene {
+    var keyWindow: UIWindow? {
+        windows.first(where: \.isKeyWindow)
     }
 }
 
-private func formatMillis(_ value: Int64) -> String {
-    let totalSeconds = value / 1000
-    let minutes = totalSeconds / 60
-    let seconds = totalSeconds % 60
-    return String(format: "%02d:%02d", minutes, seconds)
+private struct ExamplePickedVideoSelection {
+    let assetIdentifier: String?
+    let itemProvider: NSItemProvider
 }
 
-private func formatRate(_ value: Float) -> String {
-    String(format: "%.1f", value)
+private struct ExampleVideoPicker: UIViewControllerRepresentable {
+    let onPick: (ExamplePickedVideoSelection?) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick)
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .videos
+        configuration.selectionLimit = 1
+        configuration.preferredAssetRepresentationMode = .current
+
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let onPick: (ExamplePickedVideoSelection?) -> Void
+
+        init(onPick: @escaping (ExamplePickedVideoSelection?) -> Void) {
+            self.onPick = onPick
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            let selection = results.first.map {
+                ExamplePickedVideoSelection(
+                    assetIdentifier: $0.assetIdentifier,
+                    itemProvider: $0.itemProvider
+                )
+            }
+
+            picker.dismiss(animated: true) {
+                self.onPick(selection)
+            }
+        }
+    }
 }

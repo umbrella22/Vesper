@@ -3,15 +3,20 @@ use std::mem;
 use std::ptr;
 
 use crate::{
-    FfiAudioInfo, FfiAudioOutputInfo, FfiCommand, FfiDecodedAudioSummary, FfiError as BridgeError,
-    FfiErrorCode as BridgeErrorCode, FfiEvent as BridgeEvent, FfiFirstFrameReady,
-    FfiMediaInfo as BridgeMediaInfo, FfiMediaSourceKind as BridgeMediaSourceKind,
+    FfiAbrMode as BridgeAbrMode, FfiAbrPolicy as BridgeAbrPolicy, FfiAudioInfo, FfiAudioOutputInfo,
+    FfiCommand, FfiDecodedAudioSummary, FfiError as BridgeError, FfiErrorCode as BridgeErrorCode,
+    FfiEvent as BridgeEvent, FfiFirstFrameReady, FfiMediaInfo as BridgeMediaInfo,
+    FfiMediaSourceKind as BridgeMediaSourceKind,
     FfiMediaSourceProtocol as BridgeMediaSourceProtocol, FfiPixelFormat as BridgePixelFormat,
     FfiPlaybackState, FfiPlayer, FfiPlayerInitializer, FfiProgress as BridgeProgress,
     FfiSeekableRange as BridgeSeekableRange, FfiSnapshot as BridgeSnapshot,
     FfiStartup as BridgeStartup, FfiTimelineKind as BridgeTimelineKind,
-    FfiTimelineSnapshot as BridgeTimelineSnapshot, FfiVideoDecodeInfo as BridgeVideoDecodeInfo,
-    FfiVideoDecodeMode as BridgeVideoDecodeMode, FfiVideoFrame as BridgeVideoFrame, FfiVideoInfo,
+    FfiTimelineSnapshot as BridgeTimelineSnapshot, FfiTrack as BridgeTrack,
+    FfiTrackCatalog as BridgeTrackCatalog, FfiTrackKind as BridgeTrackKind,
+    FfiTrackSelection as BridgeTrackSelection, FfiTrackSelectionMode as BridgeTrackSelectionMode,
+    FfiTrackSelectionSnapshot as BridgeTrackSelectionSnapshot,
+    FfiVideoDecodeInfo as BridgeVideoDecodeInfo, FfiVideoDecodeMode as BridgeVideoDecodeMode,
+    FfiVideoFrame as BridgeVideoFrame, FfiVideoInfo,
 };
 
 #[repr(C)]
@@ -67,6 +72,33 @@ pub enum PlayerFfiMediaSourceProtocol {
     Progressive = 3,
     Hls = 4,
     Dash = 5,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiTrackKind {
+    #[default]
+    Video = 0,
+    Audio = 1,
+    Subtitle = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiTrackSelectionMode {
+    #[default]
+    Auto = 0,
+    Disabled = 1,
+    Track = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiAbrMode {
+    #[default]
+    Auto = 0,
+    Constrained = 1,
+    FixedTrack = 2,
 }
 
 #[repr(C)]
@@ -154,6 +186,68 @@ pub struct PlayerFfiAudioInfo {
 
 #[repr(C)]
 #[derive(Debug, Default)]
+pub struct PlayerFfiTrack {
+    pub id: *mut c_char,
+    pub kind: PlayerFfiTrackKind,
+    pub label: *mut c_char,
+    pub language: *mut c_char,
+    pub codec: *mut c_char,
+    pub has_bit_rate: bool,
+    pub bit_rate: u64,
+    pub has_width: bool,
+    pub width: u32,
+    pub has_height: bool,
+    pub height: u32,
+    pub has_frame_rate: bool,
+    pub frame_rate: f64,
+    pub has_channels: bool,
+    pub channels: u16,
+    pub has_sample_rate: bool,
+    pub sample_rate: u32,
+    pub is_default: bool,
+    pub is_forced: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiTrackCatalog {
+    pub tracks: *mut PlayerFfiTrack,
+    pub len: usize,
+    pub adaptive_video: bool,
+    pub adaptive_audio: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiTrackSelection {
+    pub mode: PlayerFfiTrackSelectionMode,
+    pub track_id: *mut c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiAbrPolicy {
+    pub mode: PlayerFfiAbrMode,
+    pub track_id: *mut c_char,
+    pub has_max_bit_rate: bool,
+    pub max_bit_rate: u64,
+    pub has_max_width: bool,
+    pub max_width: u32,
+    pub has_max_height: bool,
+    pub max_height: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiTrackSelectionSnapshot {
+    pub video: PlayerFfiTrackSelection,
+    pub audio: PlayerFfiTrackSelection,
+    pub subtitle: PlayerFfiTrackSelection,
+    pub abr_policy: PlayerFfiAbrPolicy,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
 pub struct PlayerFfiMediaInfo {
     pub source_uri: *mut c_char,
     pub source_kind: PlayerFfiMediaSourceKind,
@@ -168,6 +262,8 @@ pub struct PlayerFfiMediaInfo {
     pub best_video: PlayerFfiVideoInfo,
     pub has_best_audio: bool,
     pub best_audio: PlayerFfiAudioInfo,
+    pub track_catalog: PlayerFfiTrackCatalog,
+    pub track_selection: PlayerFfiTrackSelectionSnapshot,
 }
 
 #[repr(C)]
@@ -362,6 +458,36 @@ impl From<BridgeMediaSourceProtocol> for PlayerFfiMediaSourceProtocol {
     }
 }
 
+impl From<BridgeTrackKind> for PlayerFfiTrackKind {
+    fn from(value: BridgeTrackKind) -> Self {
+        match value {
+            BridgeTrackKind::Video => Self::Video,
+            BridgeTrackKind::Audio => Self::Audio,
+            BridgeTrackKind::Subtitle => Self::Subtitle,
+        }
+    }
+}
+
+impl From<BridgeTrackSelectionMode> for PlayerFfiTrackSelectionMode {
+    fn from(value: BridgeTrackSelectionMode) -> Self {
+        match value {
+            BridgeTrackSelectionMode::Auto => Self::Auto,
+            BridgeTrackSelectionMode::Disabled => Self::Disabled,
+            BridgeTrackSelectionMode::Track => Self::Track,
+        }
+    }
+}
+
+impl From<BridgeAbrMode> for PlayerFfiAbrMode {
+    fn from(value: BridgeAbrMode) -> Self {
+        match value {
+            BridgeAbrMode::Auto => Self::Auto,
+            BridgeAbrMode::Constrained => Self::Constrained,
+            BridgeAbrMode::FixedTrack => Self::FixedTrack,
+        }
+    }
+}
+
 impl From<BridgeErrorCode> for PlayerFfiErrorCode {
     fn from(value: BridgeErrorCode) -> Self {
         match value {
@@ -399,6 +525,100 @@ impl From<FfiAudioInfo> for PlayerFfiAudioInfo {
     }
 }
 
+impl From<BridgeTrack> for PlayerFfiTrack {
+    fn from(value: BridgeTrack) -> Self {
+        Self {
+            id: into_c_string_ptr(value.id),
+            kind: value.kind.into(),
+            label: value
+                .label
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            language: value
+                .language
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            codec: value
+                .codec
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            has_bit_rate: value.bit_rate.is_some(),
+            bit_rate: value.bit_rate.unwrap_or_default(),
+            has_width: value.width.is_some(),
+            width: value.width.unwrap_or_default(),
+            has_height: value.height.is_some(),
+            height: value.height.unwrap_or_default(),
+            has_frame_rate: value.frame_rate.is_some(),
+            frame_rate: value.frame_rate.unwrap_or_default(),
+            has_channels: value.channels.is_some(),
+            channels: value.channels.unwrap_or_default(),
+            has_sample_rate: value.sample_rate.is_some(),
+            sample_rate: value.sample_rate.unwrap_or_default(),
+            is_default: value.is_default,
+            is_forced: value.is_forced,
+        }
+    }
+}
+
+impl From<BridgeTrackCatalog> for PlayerFfiTrackCatalog {
+    fn from(value: BridgeTrackCatalog) -> Self {
+        let tracks = value
+            .tracks
+            .into_iter()
+            .map(PlayerFfiTrack::from)
+            .collect::<Vec<_>>();
+        let (tracks, len) = into_owned_struct_array(tracks);
+
+        Self {
+            tracks,
+            len,
+            adaptive_video: value.adaptive_video,
+            adaptive_audio: value.adaptive_audio,
+        }
+    }
+}
+
+impl From<BridgeTrackSelection> for PlayerFfiTrackSelection {
+    fn from(value: BridgeTrackSelection) -> Self {
+        Self {
+            mode: value.mode.into(),
+            track_id: value
+                .track_id
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+        }
+    }
+}
+
+impl From<BridgeAbrPolicy> for PlayerFfiAbrPolicy {
+    fn from(value: BridgeAbrPolicy) -> Self {
+        Self {
+            mode: value.mode.into(),
+            track_id: value
+                .track_id
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            has_max_bit_rate: value.max_bit_rate.is_some(),
+            max_bit_rate: value.max_bit_rate.unwrap_or_default(),
+            has_max_width: value.max_width.is_some(),
+            max_width: value.max_width.unwrap_or_default(),
+            has_max_height: value.max_height.is_some(),
+            max_height: value.max_height.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<BridgeTrackSelectionSnapshot> for PlayerFfiTrackSelectionSnapshot {
+    fn from(value: BridgeTrackSelectionSnapshot) -> Self {
+        Self {
+            video: value.video.into(),
+            audio: value.audio.into(),
+            subtitle: value.subtitle.into(),
+            abr_policy: value.abr_policy.into(),
+        }
+    }
+}
+
 impl From<BridgeMediaInfo> for PlayerFfiMediaInfo {
     fn from(value: BridgeMediaInfo) -> Self {
         Self {
@@ -421,6 +641,8 @@ impl From<BridgeMediaInfo> for PlayerFfiMediaInfo {
                 .best_audio
                 .map(PlayerFfiAudioInfo::from)
                 .unwrap_or_default(),
+            track_catalog: value.track_catalog.into(),
+            track_selection: value.track_selection.into(),
         }
     }
 }
@@ -955,6 +1177,206 @@ pub extern "C" fn player_ffi_player_set_playback_rate(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_player_set_video_track_selection(
+    handle: *mut PlayerFfiHandle,
+    selection: *const PlayerFfiTrackSelection,
+    out_applied: *mut bool,
+    out_snapshot: *mut PlayerFfiSnapshot,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_applied.is_null() || out_snapshot.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::NullPointer,
+                "out_applied or out_snapshot was null",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let Some(player) = player_mut(handle) else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    let selection = match read_track_selection(selection) {
+        Ok(selection) => selection,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    match player.set_video_track_selection(selection) {
+        Ok(result) => {
+            unsafe {
+                ptr::write(out_applied, result.applied);
+                ptr::write(out_snapshot, result.snapshot.into());
+            }
+            PlayerFfiCallStatus::Ok
+        }
+        Err(error) => {
+            write_error(out_error, owned_bridge_error(error));
+            PlayerFfiCallStatus::Error
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_player_set_audio_track_selection(
+    handle: *mut PlayerFfiHandle,
+    selection: *const PlayerFfiTrackSelection,
+    out_applied: *mut bool,
+    out_snapshot: *mut PlayerFfiSnapshot,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_applied.is_null() || out_snapshot.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::NullPointer,
+                "out_applied or out_snapshot was null",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let Some(player) = player_mut(handle) else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    let selection = match read_track_selection(selection) {
+        Ok(selection) => selection,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    match player.set_audio_track_selection(selection) {
+        Ok(result) => {
+            unsafe {
+                ptr::write(out_applied, result.applied);
+                ptr::write(out_snapshot, result.snapshot.into());
+            }
+            PlayerFfiCallStatus::Ok
+        }
+        Err(error) => {
+            write_error(out_error, owned_bridge_error(error));
+            PlayerFfiCallStatus::Error
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_player_set_subtitle_track_selection(
+    handle: *mut PlayerFfiHandle,
+    selection: *const PlayerFfiTrackSelection,
+    out_applied: *mut bool,
+    out_snapshot: *mut PlayerFfiSnapshot,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_applied.is_null() || out_snapshot.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::NullPointer,
+                "out_applied or out_snapshot was null",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let Some(player) = player_mut(handle) else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    let selection = match read_track_selection(selection) {
+        Ok(selection) => selection,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    match player.set_subtitle_track_selection(selection) {
+        Ok(result) => {
+            unsafe {
+                ptr::write(out_applied, result.applied);
+                ptr::write(out_snapshot, result.snapshot.into());
+            }
+            PlayerFfiCallStatus::Ok
+        }
+        Err(error) => {
+            write_error(out_error, owned_bridge_error(error));
+            PlayerFfiCallStatus::Error
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_player_set_abr_policy(
+    handle: *mut PlayerFfiHandle,
+    policy: *const PlayerFfiAbrPolicy,
+    out_applied: *mut bool,
+    out_snapshot: *mut PlayerFfiSnapshot,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_applied.is_null() || out_snapshot.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::NullPointer,
+                "out_applied or out_snapshot was null",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let Some(player) = player_mut(handle) else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    let policy = match read_abr_policy(policy) {
+        Ok(policy) => policy,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    match player.set_abr_policy(policy) {
+        Ok(result) => {
+            unsafe {
+                ptr::write(out_applied, result.applied);
+                ptr::write(out_snapshot, result.snapshot.into());
+            }
+            PlayerFfiCallStatus::Ok
+        }
+        Err(error) => {
+            write_error(out_error, owned_bridge_error(error));
+            PlayerFfiCallStatus::Error
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn player_ffi_player_drain_events(
     handle: *mut PlayerFfiHandle,
     out_events: *mut PlayerFfiEventList,
@@ -1141,6 +1563,65 @@ fn to_bridge_command(command: PlayerFfiCommandKind, position_ms: u64) -> FfiComm
     }
 }
 
+fn read_optional_c_string(
+    value: *const c_char,
+    field_name: &str,
+) -> Result<Option<String>, PlayerFfiError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let text = unsafe { CStr::from_ptr(value) };
+    let text = text.to_str().map_err(|_| {
+        owned_api_error(
+            PlayerFfiErrorCode::InvalidUtf8,
+            &format!("{field_name} was not valid UTF-8"),
+        )
+    })?;
+    Ok(Some(text.to_owned()))
+}
+
+fn read_track_selection(
+    selection: *const PlayerFfiTrackSelection,
+) -> Result<BridgeTrackSelection, PlayerFfiError> {
+    let Some(selection) = (unsafe { selection.as_ref() }) else {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            "selection pointer was null",
+        ));
+    };
+
+    Ok(BridgeTrackSelection {
+        mode: match selection.mode {
+            PlayerFfiTrackSelectionMode::Auto => BridgeTrackSelectionMode::Auto,
+            PlayerFfiTrackSelectionMode::Disabled => BridgeTrackSelectionMode::Disabled,
+            PlayerFfiTrackSelectionMode::Track => BridgeTrackSelectionMode::Track,
+        },
+        track_id: read_optional_c_string(selection.track_id, "selection.track_id")?,
+    })
+}
+
+fn read_abr_policy(policy: *const PlayerFfiAbrPolicy) -> Result<BridgeAbrPolicy, PlayerFfiError> {
+    let Some(policy) = (unsafe { policy.as_ref() }) else {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            "policy pointer was null",
+        ));
+    };
+
+    Ok(BridgeAbrPolicy {
+        mode: match policy.mode {
+            PlayerFfiAbrMode::Auto => BridgeAbrMode::Auto,
+            PlayerFfiAbrMode::Constrained => BridgeAbrMode::Constrained,
+            PlayerFfiAbrMode::FixedTrack => BridgeAbrMode::FixedTrack,
+        },
+        track_id: read_optional_c_string(policy.track_id, "policy.track_id")?,
+        max_bit_rate: policy.has_max_bit_rate.then_some(policy.max_bit_rate),
+        max_width: policy.has_max_width.then_some(policy.max_width),
+        max_height: policy.has_max_height.then_some(policy.max_height),
+    })
+}
+
 fn read_uri(uri: *const c_char) -> Result<String, PlayerFfiError> {
     if uri.is_null() {
         return Err(owned_api_error(
@@ -1221,10 +1702,53 @@ fn free_audio_info(audio: &mut PlayerFfiAudioInfo) {
     *audio = PlayerFfiAudioInfo::default();
 }
 
+fn free_track(track: &mut PlayerFfiTrack) {
+    free_c_string(&mut track.id);
+    free_c_string(&mut track.label);
+    free_c_string(&mut track.language);
+    free_c_string(&mut track.codec);
+    *track = PlayerFfiTrack::default();
+}
+
+fn free_track_catalog(track_catalog: &mut PlayerFfiTrackCatalog) {
+    if !track_catalog.tracks.is_null() {
+        unsafe {
+            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
+                track_catalog.tracks,
+                track_catalog.len,
+            ));
+            for track in boxed.iter_mut() {
+                free_track(track);
+            }
+        }
+    }
+    *track_catalog = PlayerFfiTrackCatalog::default();
+}
+
+fn free_track_selection(track_selection: &mut PlayerFfiTrackSelection) {
+    free_c_string(&mut track_selection.track_id);
+    *track_selection = PlayerFfiTrackSelection::default();
+}
+
+fn free_abr_policy(abr_policy: &mut PlayerFfiAbrPolicy) {
+    free_c_string(&mut abr_policy.track_id);
+    *abr_policy = PlayerFfiAbrPolicy::default();
+}
+
+fn free_track_selection_snapshot(track_selection: &mut PlayerFfiTrackSelectionSnapshot) {
+    free_track_selection(&mut track_selection.video);
+    free_track_selection(&mut track_selection.audio);
+    free_track_selection(&mut track_selection.subtitle);
+    free_abr_policy(&mut track_selection.abr_policy);
+    *track_selection = PlayerFfiTrackSelectionSnapshot::default();
+}
+
 fn free_media_info(media_info: &mut PlayerFfiMediaInfo) {
     free_c_string(&mut media_info.source_uri);
     free_video_info(&mut media_info.best_video);
     free_audio_info(&mut media_info.best_audio);
+    free_track_catalog(&mut media_info.track_catalog);
+    free_track_selection_snapshot(&mut media_info.track_selection);
     *media_info = PlayerFfiMediaInfo::default();
 }
 

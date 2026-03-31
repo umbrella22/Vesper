@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.core.view.isEmpty
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,13 +31,20 @@ class FakePlayerBridge(
             ),
         )
     )
+    private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
+    private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.FakeDemo
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
+    override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
+    override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
+        _trackSelection.asStateFlow()
 
     override fun initialize() = Unit
 
     override fun dispose() = Unit
+
+    override fun refresh() = Unit
 
     override fun selectSource(source: VesperPlayerSource) {
         currentSource = source
@@ -52,7 +60,7 @@ class FakePlayerBridge(
     }
 
     override fun attachSurfaceHost(host: ViewGroup) {
-        if (host.childCount == 0) {
+        if (host.isEmpty()) {
             host.addView(
                 FrameLayout(host.context).apply {
                     setBackgroundColor(0xFF000000.toInt())
@@ -65,7 +73,7 @@ class FakePlayerBridge(
         }
     }
 
-    override fun detachSurfaceHost() = Unit
+    override fun detachSurfaceHost(host: ViewGroup?) = Unit
 
     override fun play() {
         updateState {
@@ -132,6 +140,14 @@ class FakePlayerBridge(
     override fun setPlaybackRate(rate: Float) {
         updateState { copy(playbackRate = rate) }
     }
+
+    override fun setVideoTrackSelection(selection: VesperTrackSelection) = Unit
+
+    override fun setAudioTrackSelection(selection: VesperTrackSelection) = Unit
+
+    override fun setSubtitleTrackSelection(selection: VesperTrackSelection) = Unit
+
+    override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
 
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()

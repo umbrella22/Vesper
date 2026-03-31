@@ -7,7 +7,7 @@ version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
-name = "rust_player_android_host"
+name = "vesper_player_android"
 
 [dependencies]
 jni = "0.22.4"

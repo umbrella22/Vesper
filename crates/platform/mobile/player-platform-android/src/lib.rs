@@ -4,13 +4,15 @@ use std::time::{Duration, Instant};
 
 use player_core::MediaSource;
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE,
-    PlaybackProgress, PlayerMediaInfo, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot,
-    PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
+    MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
+    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
+    PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
+    PresentationState,
 };
 
 pub const ANDROID_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "android_native";
@@ -76,6 +78,10 @@ pub enum AndroidHostCommand {
     SeekTo { position_ms: u64 },
     Stop,
     SetPlaybackRate { rate: f32 },
+    SetVideoTrackSelection { selection: MediaTrackSelection },
+    SetAudioTrackSelection { selection: MediaTrackSelection },
+    SetSubtitleTrackSelection { selection: MediaTrackSelection },
+    SetAbrPolicy { policy: MediaAbrPolicy },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +156,10 @@ pub enum AndroidNativePlayerCommand {
     SeekTo { position: Duration },
     Stop,
     SetPlaybackRate { rate: f32 },
+    SetVideoTrackSelection { selection: MediaTrackSelection },
+    SetAudioTrackSelection { selection: MediaTrackSelection },
+    SetSubtitleTrackSelection { selection: MediaTrackSelection },
+    SetAbrPolicy { policy: MediaAbrPolicy },
 }
 
 pub trait AndroidNativeCommandSink: Send {
@@ -168,7 +178,13 @@ where
 #[derive(Debug, Clone)]
 pub enum AndroidNativeSessionUpdate {
     Snapshot(AndroidExoPlaybackSnapshot),
-    SeekCompleted { position: Duration },
+    MediaInfo {
+        track_catalog: MediaTrackCatalog,
+        track_selection: MediaTrackSelectionSnapshot,
+    },
+    SeekCompleted {
+        position: Duration,
+    },
     Error(PlayerRuntimeError),
 }
 
@@ -446,6 +462,24 @@ impl AndroidHostCommand {
             AndroidNativePlayerCommand::SetPlaybackRate { rate } => {
                 Self::SetPlaybackRate { rate: *rate }
             }
+            AndroidNativePlayerCommand::SetVideoTrackSelection { selection } => {
+                Self::SetVideoTrackSelection {
+                    selection: selection.clone(),
+                }
+            }
+            AndroidNativePlayerCommand::SetAudioTrackSelection { selection } => {
+                Self::SetAudioTrackSelection {
+                    selection: selection.clone(),
+                }
+            }
+            AndroidNativePlayerCommand::SetSubtitleTrackSelection { selection } => {
+                Self::SetSubtitleTrackSelection {
+                    selection: selection.clone(),
+                }
+            }
+            AndroidNativePlayerCommand::SetAbrPolicy { policy } => Self::SetAbrPolicy {
+                policy: policy.clone(),
+            },
         }
     }
 }
@@ -467,7 +501,7 @@ impl AndroidHostBridgeSession {
         }
     }
 
-    pub fn snapshot(&self) -> AndroidHostSnapshot {
+    pub fn snapshot(&mut self) -> AndroidHostSnapshot {
         AndroidHostSnapshot::from_player_snapshot(&self.session.snapshot())
     }
 
@@ -509,6 +543,16 @@ impl AndroidHostBridgeSession {
 
     pub fn apply_exo_snapshot(&mut self, snapshot: AndroidExoPlaybackSnapshot) {
         self.session.apply_snapshot(&snapshot);
+    }
+
+    pub fn report_media_info(
+        &mut self,
+        track_catalog: MediaTrackCatalog,
+        track_selection: MediaTrackSelectionSnapshot,
+    ) {
+        self.session
+            .controller()
+            .report_media_info(track_catalog, track_selection);
     }
 
     pub fn report_seek_completed(&mut self, position: Duration) {
@@ -719,6 +763,17 @@ impl AndroidManagedNativeSessionController {
         self.push_update(AndroidNativeSessionUpdate::Snapshot(snapshot));
     }
 
+    pub fn report_media_info(
+        &self,
+        track_catalog: MediaTrackCatalog,
+        track_selection: MediaTrackSelectionSnapshot,
+    ) {
+        self.push_update(AndroidNativeSessionUpdate::MediaInfo {
+            track_catalog,
+            track_selection,
+        });
+    }
+
     pub fn report_seek_completed(&self, position: Duration) {
         self.push_update(AndroidNativeSessionUpdate::SeekCompleted { position });
     }
@@ -833,6 +888,19 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         for update in self.controller.take_pending() {
             match update {
                 AndroidNativeSessionUpdate::Snapshot(snapshot) => self.apply_snapshot(&snapshot),
+                AndroidNativeSessionUpdate::MediaInfo {
+                    track_catalog,
+                    track_selection,
+                } => {
+                    if self.media_info.track_catalog != track_catalog
+                        || self.media_info.track_selection != track_selection
+                    {
+                        self.media_info.track_catalog = track_catalog;
+                        self.media_info.track_selection = track_selection;
+                        self.events
+                            .push_back(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
+                    }
+                }
                 AndroidNativeSessionUpdate::SeekCompleted { position } => {
                     self.progress = PlaybackProgress::new(position, self.progress.duration());
                     if self.presentation_state == PresentationState::Finished {
@@ -871,7 +939,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         self.events.extend(observation.emitted_events);
     }
 
-    fn snapshot(&self) -> PlayerSnapshot {
+    fn snapshot(&mut self) -> PlayerSnapshot {
+        self.pump_pending_updates();
         let timeline = self
             .timeline_metadata
             .map(|metadata| player_timeline_from_android_live_metadata(self.progress, metadata))
@@ -932,9 +1001,118 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         Ok(())
     }
 
+    fn validate_track_selection_request(
+        &self,
+        kind: MediaTrackKind,
+        selection: &MediaTrackSelection,
+    ) -> PlayerRuntimeResult<MediaTrackSelection> {
+        match selection.mode {
+            MediaTrackSelectionMode::Auto => Ok(MediaTrackSelection::auto()),
+            MediaTrackSelectionMode::Disabled => Ok(MediaTrackSelection::disabled()),
+            MediaTrackSelectionMode::Track => {
+                let Some(track_id) = selection.track_id.as_deref() else {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        "track selection mode=Track requires a track id",
+                    ));
+                };
+
+                let track = self
+                    .media_info
+                    .track_catalog
+                    .tracks
+                    .iter()
+                    .find(|track| track.id == track_id)
+                    .ok_or_else(|| {
+                        PlayerRuntimeError::new(
+                            PlayerRuntimeErrorCode::InvalidArgument,
+                            format!(
+                                "track '{track_id}' is not present in the current track catalog"
+                            ),
+                        )
+                    })?;
+
+                if track.kind != kind {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        format!("track '{track_id}' is not a {:?} track", kind),
+                    ));
+                }
+
+                Ok(MediaTrackSelection::track(track_id))
+            }
+        }
+    }
+
+    fn validate_abr_policy_request(
+        &self,
+        policy: &MediaAbrPolicy,
+    ) -> PlayerRuntimeResult<MediaAbrPolicy> {
+        match policy.mode {
+            MediaAbrMode::Auto => Ok(MediaAbrPolicy::default()),
+            MediaAbrMode::Constrained => {
+                if policy.max_bit_rate.is_none()
+                    && policy.max_width.is_none()
+                    && policy.max_height.is_none()
+                {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        "constrained ABR requires at least one bitrate or size constraint",
+                    ));
+                }
+
+                Ok(MediaAbrPolicy {
+                    mode: MediaAbrMode::Constrained,
+                    track_id: None,
+                    max_bit_rate: policy.max_bit_rate,
+                    max_width: policy.max_width,
+                    max_height: policy.max_height,
+                })
+            }
+            MediaAbrMode::FixedTrack => {
+                let Some(track_id) = policy.track_id.as_deref() else {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        "fixed-track ABR requires a video track id",
+                    ));
+                };
+
+                let track = self
+                    .media_info
+                    .track_catalog
+                    .tracks
+                    .iter()
+                    .find(|track| track.id == track_id)
+                    .ok_or_else(|| {
+                        PlayerRuntimeError::new(
+                            PlayerRuntimeErrorCode::InvalidArgument,
+                            format!(
+                                "track '{track_id}' is not present in the current track catalog"
+                            ),
+                        )
+                    })?;
+
+                if track.kind != MediaTrackKind::Video {
+                    return Err(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        format!("track '{track_id}' is not a video track"),
+                    ));
+                }
+
+                Ok(MediaAbrPolicy {
+                    mode: MediaAbrMode::FixedTrack,
+                    track_id: Some(track_id.to_owned()),
+                    max_bit_rate: None,
+                    max_width: None,
+                    max_height: None,
+                })
+            }
+        }
+    }
+
     fn translate_command(
         &self,
-        command: PlayerRuntimeCommand,
+        command: &PlayerRuntimeCommand,
     ) -> PlayerRuntimeResult<(bool, Vec<AndroidNativePlayerCommand>)> {
         match command {
             PlayerRuntimeCommand::Play => match self.presentation_state {
@@ -977,17 +1155,63 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     ],
                 )),
             },
-            PlayerRuntimeCommand::SeekTo { position } => {
-                Ok((true, vec![AndroidNativePlayerCommand::SeekTo { position }]))
-            }
+            PlayerRuntimeCommand::SeekTo { position } => Ok((
+                true,
+                vec![AndroidNativePlayerCommand::SeekTo {
+                    position: *position,
+                }],
+            )),
             PlayerRuntimeCommand::SetPlaybackRate { rate } => {
-                let rate = self.validate_playback_rate(rate)?;
+                let rate = self.validate_playback_rate(*rate)?;
                 if (self.playback_rate - rate).abs() <= f32::EPSILON {
                     return Ok((false, Vec::new()));
                 }
                 Ok((
                     true,
                     vec![AndroidNativePlayerCommand::SetPlaybackRate { rate }],
+                ))
+            }
+            PlayerRuntimeCommand::SetVideoTrackSelection { selection } => {
+                let selection =
+                    self.validate_track_selection_request(MediaTrackKind::Video, selection)?;
+                if self.media_info.track_selection.video == selection {
+                    return Ok((false, Vec::new()));
+                }
+                Ok((
+                    true,
+                    vec![AndroidNativePlayerCommand::SetVideoTrackSelection { selection }],
+                ))
+            }
+            PlayerRuntimeCommand::SetAudioTrackSelection { selection } => {
+                let selection =
+                    self.validate_track_selection_request(MediaTrackKind::Audio, selection)?;
+                if self.media_info.track_selection.audio == selection {
+                    return Ok((false, Vec::new()));
+                }
+                Ok((
+                    true,
+                    vec![AndroidNativePlayerCommand::SetAudioTrackSelection { selection }],
+                ))
+            }
+            PlayerRuntimeCommand::SetSubtitleTrackSelection { selection } => {
+                let selection =
+                    self.validate_track_selection_request(MediaTrackKind::Subtitle, selection)?;
+                if self.media_info.track_selection.subtitle == selection {
+                    return Ok((false, Vec::new()));
+                }
+                Ok((
+                    true,
+                    vec![AndroidNativePlayerCommand::SetSubtitleTrackSelection { selection }],
+                ))
+            }
+            PlayerRuntimeCommand::SetAbrPolicy { policy } => {
+                let policy = self.validate_abr_policy_request(policy)?;
+                if self.media_info.track_selection.abr_policy == policy {
+                    return Ok((false, Vec::new()));
+                }
+                Ok((
+                    true,
+                    vec![AndroidNativePlayerCommand::SetAbrPolicy { policy }],
                 ))
             }
             PlayerRuntimeCommand::Stop => {
@@ -1079,7 +1303,8 @@ impl<C: AndroidNativeCommandSink> AndroidNativePlayerSession for AndroidManagedN
     ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
         self.pump_pending_updates();
         let previous_state = self.presentation_state;
-        let (applied, native_commands) = self.translate_command(command)?;
+        let previous_media_info = self.media_info.clone();
+        let (applied, native_commands) = self.translate_command(&command)?;
         self.submit_commands(native_commands)?;
 
         if applied {
@@ -1117,10 +1342,63 @@ impl<C: AndroidNativeCommandSink> AndroidNativePlayerSession for AndroidManagedN
                 PlayerRuntimeCommand::SetPlaybackRate { rate } => {
                     self.playback_rate = rate;
                 }
+                PlayerRuntimeCommand::SetVideoTrackSelection { selection } => {
+                    let selected_track_id = selection.track_id.clone();
+                    self.media_info.track_selection.video = selection;
+                    match self.media_info.track_selection.video.mode {
+                        MediaTrackSelectionMode::Track => {
+                            self.media_info.track_selection.abr_policy = MediaAbrPolicy {
+                                mode: MediaAbrMode::FixedTrack,
+                                track_id: selected_track_id,
+                                max_bit_rate: None,
+                                max_width: None,
+                                max_height: None,
+                            };
+                        }
+                        MediaTrackSelectionMode::Auto | MediaTrackSelectionMode::Disabled => {
+                            if self.media_info.track_selection.abr_policy.mode
+                                == MediaAbrMode::FixedTrack
+                            {
+                                self.media_info.track_selection.abr_policy =
+                                    MediaAbrPolicy::default();
+                            }
+                        }
+                    }
+                }
+                PlayerRuntimeCommand::SetAudioTrackSelection { selection } => {
+                    self.media_info.track_selection.audio = selection;
+                }
+                PlayerRuntimeCommand::SetSubtitleTrackSelection { selection } => {
+                    self.media_info.track_selection.subtitle = selection;
+                }
+                PlayerRuntimeCommand::SetAbrPolicy { policy } => {
+                    let policy_mode = policy.mode;
+                    let policy_track_id = policy.track_id.clone();
+                    self.media_info.track_selection.abr_policy = policy;
+                    match policy_mode {
+                        MediaAbrMode::FixedTrack => {
+                            if let Some(track_id) = policy_track_id {
+                                self.media_info.track_selection.video =
+                                    MediaTrackSelection::track(track_id);
+                            }
+                        }
+                        MediaAbrMode::Auto | MediaAbrMode::Constrained => {
+                            if self.media_info.track_selection.video.mode
+                                == MediaTrackSelectionMode::Track
+                            {
+                                self.media_info.track_selection.video = MediaTrackSelection::auto();
+                            }
+                        }
+                    }
+                }
                 PlayerRuntimeCommand::Stop => {
                     self.presentation_state = PresentationState::Ready;
                     self.progress = PlaybackProgress::new(Duration::ZERO, self.progress.duration());
                 }
+            }
+            if self.media_info.track_selection != previous_media_info.track_selection {
+                self.events
+                    .push_back(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
             }
             self.tracker
                 .seed(self.presentation_state, self.playback_rate);
@@ -1154,6 +1432,8 @@ fn placeholder_media_info(source: &MediaSource) -> PlayerMediaInfo {
         video_streams: 0,
         best_video: None,
         best_audio: None,
+        track_catalog: Default::default(),
+        track_selection: Default::default(),
     }
 }
 
@@ -1161,7 +1441,9 @@ fn duration_to_millis(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-fn live_timeline_metadata(snapshot: &AndroidExoPlaybackSnapshot) -> Option<AndroidLiveTimelineMetadata> {
+fn live_timeline_metadata(
+    snapshot: &AndroidExoPlaybackSnapshot,
+) -> Option<AndroidLiveTimelineMetadata> {
     if !snapshot.is_live {
         return None;
     }
@@ -1296,11 +1578,12 @@ mod tests {
     };
     use player_core::MediaSource;
     use player_runtime::{
-        DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily,
-        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
-        PlayerRuntimeCommandResult, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-        PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot,
-        PlayerTimelineSnapshot, PresentationState,
+        DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
+        MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,
+        PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult,
+        PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot, PresentationState,
     };
     #[test]
     fn android_factory_exposes_native_capabilities() {
@@ -1611,6 +1894,182 @@ mod tests {
     }
 
     #[test]
+    fn android_managed_session_controller_delivers_media_info_updates() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingAndroidCommandSink::new(commands);
+        let (mut session, controller) = AndroidManagedNativeSession::with_controller(
+            "https://example.com/master.m3u8",
+            test_media_info(),
+            sink,
+        );
+
+        let track_catalog = MediaTrackCatalog {
+            tracks: vec![
+                MediaTrack {
+                    id: "video-720p".to_owned(),
+                    kind: MediaTrackKind::Video,
+                    label: Some("720p".to_owned()),
+                    language: None,
+                    codec: Some("avc1.64001f".to_owned()),
+                    bit_rate: Some(2_000_000),
+                    width: Some(1280),
+                    height: Some(720),
+                    frame_rate: Some(30.0),
+                    channels: None,
+                    sample_rate: None,
+                    is_default: true,
+                    is_forced: false,
+                },
+                MediaTrack {
+                    id: "audio-en".to_owned(),
+                    kind: MediaTrackKind::Audio,
+                    label: Some("English".to_owned()),
+                    language: Some("en".to_owned()),
+                    codec: Some("mp4a.40.2".to_owned()),
+                    bit_rate: Some(128_000),
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    channels: Some(2),
+                    sample_rate: Some(48_000),
+                    is_default: true,
+                    is_forced: false,
+                },
+            ],
+            adaptive_video: true,
+            adaptive_audio: false,
+        };
+        let track_selection = MediaTrackSelectionSnapshot {
+            video: MediaTrackSelection::track("video-720p"),
+            audio: MediaTrackSelection::track("audio-en"),
+            subtitle: MediaTrackSelection::disabled(),
+            abr_policy: MediaAbrPolicy {
+                mode: MediaAbrMode::FixedTrack,
+                track_id: Some("video-720p".to_owned()),
+                max_bit_rate: None,
+                max_width: None,
+                max_height: None,
+            },
+        };
+
+        controller.report_media_info(track_catalog.clone(), track_selection.clone());
+
+        let events = session.drain_events();
+        assert_eq!(session.media_info().track_catalog, track_catalog);
+        assert_eq!(session.media_info().track_selection, track_selection);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PlayerRuntimeEvent::MetadataReady(media_info)
+            if media_info.track_catalog == track_catalog
+                && media_info.track_selection == track_selection
+        )));
+    }
+
+    #[test]
+    fn android_managed_session_dispatches_video_track_selection() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingAndroidCommandSink::new(commands.clone());
+        let mut session = AndroidManagedNativeSession::new(
+            "https://example.com/master.m3u8",
+            test_media_info_with_tracks(),
+            sink,
+        );
+
+        let result = session
+            .dispatch(PlayerRuntimeCommand::SetVideoTrackSelection {
+                selection: MediaTrackSelection::track("video-720p"),
+            })
+            .expect("video track selection should dispatch");
+
+        assert!(result.applied);
+        assert_eq!(
+            session.media_info().track_selection.video,
+            MediaTrackSelection::track("video-720p"),
+        );
+        assert_eq!(
+            session.media_info().track_selection.abr_policy,
+            MediaAbrPolicy {
+                mode: MediaAbrMode::FixedTrack,
+                track_id: Some("video-720p".to_owned()),
+                max_bit_rate: None,
+                max_width: None,
+                max_height: None,
+            },
+        );
+        assert_eq!(
+            *commands.lock().expect("commands lock"),
+            vec![AndroidNativePlayerCommand::SetVideoTrackSelection {
+                selection: MediaTrackSelection::track("video-720p"),
+            }],
+        );
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PlayerRuntimeEvent::MetadataReady(media_info)
+            if media_info.track_selection.video == MediaTrackSelection::track("video-720p")
+                && media_info.track_selection.abr_policy.mode == MediaAbrMode::FixedTrack
+        )));
+    }
+
+    #[test]
+    fn android_managed_session_dispatches_constrained_abr_policy() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingAndroidCommandSink::new(commands.clone());
+        let mut session = AndroidManagedNativeSession::new(
+            "https://example.com/master.m3u8",
+            test_media_info_with_tracks(),
+            sink,
+        );
+
+        let policy = MediaAbrPolicy {
+            mode: MediaAbrMode::Constrained,
+            track_id: None,
+            max_bit_rate: Some(1_000_000),
+            max_width: Some(960),
+            max_height: Some(540),
+        };
+        let result = session
+            .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
+                policy: policy.clone(),
+            })
+            .expect("constrained ABR should dispatch");
+
+        assert!(result.applied);
+        assert_eq!(session.media_info().track_selection.abr_policy, policy);
+        assert_eq!(
+            *commands.lock().expect("commands lock"),
+            vec![AndroidNativePlayerCommand::SetAbrPolicy {
+                policy: policy.clone(),
+            }],
+        );
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PlayerRuntimeEvent::MetadataReady(media_info)
+            if media_info.track_selection.abr_policy == policy
+        )));
+    }
+
+    #[test]
+    fn android_managed_session_rejects_unknown_video_track_selection() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingAndroidCommandSink::new(commands);
+        let mut session = AndroidManagedNativeSession::new(
+            "https://example.com/master.m3u8",
+            test_media_info_with_tracks(),
+            sink,
+        );
+
+        let error = session
+            .dispatch(PlayerRuntimeCommand::SetVideoTrackSelection {
+                selection: MediaTrackSelection::track("missing-video"),
+            })
+            .expect_err("missing video track should fail");
+
+        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+    }
+
+    #[test]
     fn android_exoplayer_bridge_bindings_can_initialize_managed_session() {
         let bridge = AndroidExoPlayerBridge::new(
             AndroidExoPlayerBridgeContext {
@@ -1748,7 +2207,7 @@ mod tests {
 
     #[test]
     fn android_host_bridge_session_promotes_unknown_hls_duration_to_live_snapshot() {
-        let session = AndroidHostBridgeSession::new("https://example.com/master.m3u8");
+        let mut session = AndroidHostBridgeSession::new("https://example.com/master.m3u8");
 
         let snapshot = session.snapshot();
         assert_eq!(snapshot.timeline_kind, AndroidHostTimelineKind::Live);
@@ -1833,6 +2292,8 @@ mod tests {
                     video_streams: 1,
                     best_video: None,
                     best_audio: None,
+                    track_catalog: Default::default(),
+                    track_selection: Default::default(),
                 },
                 startup: PlayerRuntimeStartup {
                     ffmpeg_initialized: false,
@@ -1883,6 +2344,74 @@ mod tests {
             video_streams: 1,
             best_video: None,
             best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
+        }
+    }
+
+    fn test_media_info_with_tracks() -> PlayerMediaInfo {
+        PlayerMediaInfo {
+            source_uri: "https://example.com/master.m3u8".to_owned(),
+            source_kind: player_runtime::MediaSourceKind::Remote,
+            source_protocol: player_runtime::MediaSourceProtocol::Hls,
+            duration: Some(Duration::from_secs(120)),
+            bit_rate: None,
+            audio_streams: 1,
+            video_streams: 2,
+            best_video: None,
+            best_audio: None,
+            track_catalog: MediaTrackCatalog {
+                tracks: vec![
+                    MediaTrack {
+                        id: "video-720p".to_owned(),
+                        kind: MediaTrackKind::Video,
+                        label: Some("720p".to_owned()),
+                        language: None,
+                        codec: Some("avc1.64001f".to_owned()),
+                        bit_rate: Some(2_000_000),
+                        width: Some(1280),
+                        height: Some(720),
+                        frame_rate: Some(30.0),
+                        channels: None,
+                        sample_rate: None,
+                        is_default: true,
+                        is_forced: false,
+                    },
+                    MediaTrack {
+                        id: "audio-en".to_owned(),
+                        kind: MediaTrackKind::Audio,
+                        label: Some("English".to_owned()),
+                        language: Some("en".to_owned()),
+                        codec: Some("mp4a.40.2".to_owned()),
+                        bit_rate: Some(128_000),
+                        width: None,
+                        height: None,
+                        frame_rate: None,
+                        channels: Some(2),
+                        sample_rate: Some(48_000),
+                        is_default: true,
+                        is_forced: false,
+                    },
+                    MediaTrack {
+                        id: "text-en".to_owned(),
+                        kind: MediaTrackKind::Subtitle,
+                        label: Some("English CC".to_owned()),
+                        language: Some("en".to_owned()),
+                        codec: Some("wvtt".to_owned()),
+                        bit_rate: None,
+                        width: None,
+                        height: None,
+                        frame_rate: None,
+                        channels: None,
+                        sample_rate: None,
+                        is_default: true,
+                        is_forced: false,
+                    },
+                ],
+                adaptive_video: true,
+                adaptive_audio: false,
+            },
+            track_selection: Default::default(),
         }
     }
 
@@ -1903,6 +2432,8 @@ mod tests {
                     video_streams: 1,
                     best_video: None,
                     best_audio: None,
+                    track_catalog: Default::default(),
+                    track_selection: Default::default(),
                 },
                 startup: PlayerRuntimeStartup {
                     ffmpeg_initialized: false,

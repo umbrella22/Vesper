@@ -27,6 +27,11 @@ object VesperNativeJni {
         seekableEndMs: Long,
         liveEdgeMs: Long,
     )
+    external fun applyTrackState(
+        sessionHandle: Long,
+        trackCatalog: NativeTrackCatalog,
+        trackSelection: NativeTrackSelectionSnapshotPayload,
+    )
     external fun reportSeekCompleted(sessionHandle: Long, positionMs: Long)
     external fun reportError(sessionHandle: Long, codeOrdinal: Int, message: String)
     external fun play(sessionHandle: Long)
@@ -34,4 +39,17 @@ object VesperNativeJni {
     external fun stop(sessionHandle: Long)
     external fun seekTo(sessionHandle: Long, positionMs: Long)
     external fun setPlaybackRate(sessionHandle: Long, rate: Float)
+    external fun setVideoTrackSelection(
+        sessionHandle: Long,
+        selection: NativeTrackSelectionPayload,
+    )
+    external fun setAudioTrackSelection(
+        sessionHandle: Long,
+        selection: NativeTrackSelectionPayload,
+    )
+    external fun setSubtitleTrackSelection(
+        sessionHandle: Long,
+        selection: NativeTrackSelectionPayload,
+    )
+    external fun setAbrPolicy(sessionHandle: Long, policy: NativeAbrPolicyPayload)
 }

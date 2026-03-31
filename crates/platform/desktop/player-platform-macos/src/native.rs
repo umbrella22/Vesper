@@ -822,7 +822,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
 
     fn translate_command(
         &self,
-        command: PlayerRuntimeCommand,
+        command: &PlayerRuntimeCommand,
     ) -> PlayerRuntimeResult<(bool, Vec<MacosNativePlayerCommand>)> {
         match command {
             PlayerRuntimeCommand::Play => match self.presentation_state {
@@ -865,11 +865,14 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
                     ],
                 )),
             },
-            PlayerRuntimeCommand::SeekTo { position } => {
-                Ok((true, vec![MacosNativePlayerCommand::SeekTo { position }]))
-            }
+            PlayerRuntimeCommand::SeekTo { position } => Ok((
+                true,
+                vec![MacosNativePlayerCommand::SeekTo {
+                    position: *position,
+                }],
+            )),
             PlayerRuntimeCommand::SetPlaybackRate { rate } => {
-                let rate = self.validate_playback_rate(rate)?;
+                let rate = self.validate_playback_rate(*rate)?;
                 if (self.playback_rate - rate).abs() <= f32::EPSILON {
                     return Ok((false, Vec::new()));
                 }
@@ -878,6 +881,13 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
                     vec![MacosNativePlayerCommand::SetPlaybackRate { rate }],
                 ))
             }
+            PlayerRuntimeCommand::SetVideoTrackSelection { .. }
+            | PlayerRuntimeCommand::SetAudioTrackSelection { .. }
+            | PlayerRuntimeCommand::SetSubtitleTrackSelection { .. }
+            | PlayerRuntimeCommand::SetAbrPolicy { .. } => Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "track selection and ABR control are not implemented for the macOS native runtime yet",
+            )),
             PlayerRuntimeCommand::Stop => {
                 if self.presentation_state == PresentationState::Ready
                     && self.progress.position().is_zero()
@@ -985,7 +995,7 @@ impl<C: MacosNativeCommandSink> MacosNativePlayerSession for MacosManagedNativeS
         let previous_state = self.presentation_state;
         let previous_buffering = self.is_buffering;
         let previous_rate = self.playback_rate;
-        let (applied, native_commands) = self.translate_command(command)?;
+        let (applied, native_commands) = self.translate_command(&command)?;
         self.submit_commands(native_commands)?;
 
         if applied {
@@ -1036,6 +1046,10 @@ impl<C: MacosNativeCommandSink> MacosNativePlayerSession for MacosManagedNativeS
                 PlayerRuntimeCommand::SetPlaybackRate { rate } => {
                     self.playback_rate = rate;
                 }
+                PlayerRuntimeCommand::SetVideoTrackSelection { .. }
+                | PlayerRuntimeCommand::SetAudioTrackSelection { .. }
+                | PlayerRuntimeCommand::SetSubtitleTrackSelection { .. }
+                | PlayerRuntimeCommand::SetAbrPolicy { .. } => {}
                 PlayerRuntimeCommand::Stop => {
                     self.presentation_state = PresentationState::Ready;
                     self.is_buffering = false;
@@ -1108,6 +1122,8 @@ fn placeholder_media_info(source: &MediaSource) -> PlayerMediaInfo {
         video_streams: 0,
         best_video: None,
         best_audio: None,
+        track_catalog: Default::default(),
+        track_selection: Default::default(),
     }
 }
 

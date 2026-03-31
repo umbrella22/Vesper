@@ -60,6 +60,24 @@ typedef enum PlayerFfiMediaSourceProtocol {
   PLAYER_FFI_MEDIA_SOURCE_PROTOCOL_DASH = 5,
 } PlayerFfiMediaSourceProtocol;
 
+typedef enum PlayerFfiTrackKind {
+  PLAYER_FFI_TRACK_KIND_VIDEO = 0,
+  PLAYER_FFI_TRACK_KIND_AUDIO = 1,
+  PLAYER_FFI_TRACK_KIND_SUBTITLE = 2,
+} PlayerFfiTrackKind;
+
+typedef enum PlayerFfiTrackSelectionMode {
+  PLAYER_FFI_TRACK_SELECTION_MODE_AUTO = 0,
+  PLAYER_FFI_TRACK_SELECTION_MODE_DISABLED = 1,
+  PLAYER_FFI_TRACK_SELECTION_MODE_TRACK = 2,
+} PlayerFfiTrackSelectionMode;
+
+typedef enum PlayerFfiAbrMode {
+  PLAYER_FFI_ABR_MODE_AUTO = 0,
+  PLAYER_FFI_ABR_MODE_CONSTRAINED = 1,
+  PLAYER_FFI_ABR_MODE_FIXED_TRACK = 2,
+} PlayerFfiAbrMode;
+
 typedef enum PlayerFfiPlaybackState {
   PLAYER_FFI_PLAYBACK_STATE_READY = 0,
   PLAYER_FFI_PLAYBACK_STATE_PLAYING = 1,
@@ -142,6 +160,58 @@ typedef struct PlayerFfiAudioInfo {
   uint16_t channels;
 } PlayerFfiAudioInfo;
 
+typedef struct PlayerFfiTrack {
+  char *id;
+  enum PlayerFfiTrackKind kind;
+  char *label;
+  char *language;
+  char *codec;
+  bool has_bit_rate;
+  uint64_t bit_rate;
+  bool has_width;
+  uint32_t width;
+  bool has_height;
+  uint32_t height;
+  bool has_frame_rate;
+  double frame_rate;
+  bool has_channels;
+  uint16_t channels;
+  bool has_sample_rate;
+  uint32_t sample_rate;
+  bool is_default;
+  bool is_forced;
+} PlayerFfiTrack;
+
+typedef struct PlayerFfiTrackCatalog {
+  struct PlayerFfiTrack *tracks;
+  size_t len;
+  bool adaptive_video;
+  bool adaptive_audio;
+} PlayerFfiTrackCatalog;
+
+typedef struct PlayerFfiTrackSelection {
+  enum PlayerFfiTrackSelectionMode mode;
+  char *track_id;
+} PlayerFfiTrackSelection;
+
+typedef struct PlayerFfiAbrPolicy {
+  enum PlayerFfiAbrMode mode;
+  char *track_id;
+  bool has_max_bit_rate;
+  uint64_t max_bit_rate;
+  bool has_max_width;
+  uint32_t max_width;
+  bool has_max_height;
+  uint32_t max_height;
+} PlayerFfiAbrPolicy;
+
+typedef struct PlayerFfiTrackSelectionSnapshot {
+  struct PlayerFfiTrackSelection video;
+  struct PlayerFfiTrackSelection audio;
+  struct PlayerFfiTrackSelection subtitle;
+  struct PlayerFfiAbrPolicy abr_policy;
+} PlayerFfiTrackSelectionSnapshot;
+
 typedef struct PlayerFfiMediaInfo {
   char *source_uri;
   enum PlayerFfiMediaSourceKind source_kind;
@@ -156,6 +226,8 @@ typedef struct PlayerFfiMediaInfo {
   struct PlayerFfiVideoInfo best_video;
   bool has_best_audio;
   struct PlayerFfiAudioInfo best_audio;
+  struct PlayerFfiTrackCatalog track_catalog;
+  struct PlayerFfiTrackSelectionSnapshot track_selection;
 } PlayerFfiMediaInfo;
 
 typedef struct PlayerFfiFirstFrameReady {
@@ -297,11 +369,35 @@ enum PlayerFfiCallStatus player_ffi_player_next_deadline_delay_ms(const struct P
                                                                   uint64_t *out_delay_ms,
                                                                   struct PlayerFfiError *out_error);
 
+enum PlayerFfiCallStatus player_ffi_player_set_abr_policy(struct PlayerFfiHandle *handle,
+                                                          const struct PlayerFfiAbrPolicy *policy,
+                                                          bool *out_applied,
+                                                          struct PlayerFfiSnapshot *out_snapshot,
+                                                          struct PlayerFfiError *out_error);
+
+enum PlayerFfiCallStatus player_ffi_player_set_audio_track_selection(struct PlayerFfiHandle *handle,
+                                                                     const struct PlayerFfiTrackSelection *selection,
+                                                                     bool *out_applied,
+                                                                     struct PlayerFfiSnapshot *out_snapshot,
+                                                                     struct PlayerFfiError *out_error);
+
 enum PlayerFfiCallStatus player_ffi_player_set_playback_rate(struct PlayerFfiHandle *handle,
                                                              float playback_rate,
                                                              bool *out_applied,
                                                              struct PlayerFfiSnapshot *out_snapshot,
                                                              struct PlayerFfiError *out_error);
+
+enum PlayerFfiCallStatus player_ffi_player_set_subtitle_track_selection(struct PlayerFfiHandle *handle,
+                                                                        const struct PlayerFfiTrackSelection *selection,
+                                                                        bool *out_applied,
+                                                                        struct PlayerFfiSnapshot *out_snapshot,
+                                                                        struct PlayerFfiError *out_error);
+
+enum PlayerFfiCallStatus player_ffi_player_set_video_track_selection(struct PlayerFfiHandle *handle,
+                                                                     const struct PlayerFfiTrackSelection *selection,
+                                                                     bool *out_applied,
+                                                                     struct PlayerFfiSnapshot *out_snapshot,
+                                                                     struct PlayerFfiError *out_error);
 
 enum PlayerFfiCallStatus player_ffi_player_snapshot(const struct PlayerFfiHandle *handle,
                                                     struct PlayerFfiSnapshot *out_snapshot,

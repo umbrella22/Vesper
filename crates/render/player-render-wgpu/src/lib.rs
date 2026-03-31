@@ -984,8 +984,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DisplayRect, RenderMode, compute_display_rect, preferred_backend_label,
-        preferred_backends,
+        DisplayRect, RenderMode, compute_display_rect, preferred_backend_label, preferred_backends,
     };
 
     #[test]

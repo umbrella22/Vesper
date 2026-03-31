@@ -28,3 +28,4 @@ dependencyResolutionManagement {
 rootProject.name = "vesper-android-lib"
 
 include(":vesper-player-kit")
+include(":vesper-player-kit-compose")

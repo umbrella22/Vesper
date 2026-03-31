@@ -1,10 +1,10 @@
 mod buffered;
 
+use std::ffi::CString;
 use std::mem::size_of;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
-use std::ffi::CString;
 
 use anyhow::{Context, Result};
 use ffmpeg::codec;

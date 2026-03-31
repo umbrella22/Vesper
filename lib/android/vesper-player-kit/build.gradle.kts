@@ -1,6 +1,5 @@
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 val repoRoot = rootDir.parentFile.parentFile
@@ -30,10 +29,6 @@ android {
         consumerProguardFiles("consumer-rules.pro")
     }
 
-    buildFeatures {
-        compose = true
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -47,18 +42,9 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.02.01")
     val media3Version = "1.9.3"
-    val coroutinesVersion = "1.10.2"
-
-    api(composeBom)
-    api("androidx.compose.runtime:runtime")
-    api("androidx.compose.ui:ui")
-    api("androidx.compose.foundation:foundation")
-    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion")
 
     implementation("androidx.core:core-ktx:1.18.0")
-    implementation("androidx.compose.material3:material3")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")

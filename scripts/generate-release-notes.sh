@@ -153,8 +153,10 @@ fi
   echo
   echo "## Download Packages"
   echo
-  echo "- Android device AAR: \`VesperPlayerKit-android-arm64-v8a.aar\`"
-  echo "- Android emulator / x86_64 AAR: \`VesperPlayerKit-android-x86_64.aar\`"
+  echo "- Android core AAR for devices: \`VesperPlayerKit-android-arm64-v8a.aar\`"
+  echo "- Android Compose adapter AAR for devices: \`VesperPlayerKitCompose-android-arm64-v8a.aar\`"
+  echo "- Android core AAR for emulators / x86_64: \`VesperPlayerKit-android-x86_64.aar\`"
+  echo "- Android Compose adapter AAR for emulators / x86_64: \`VesperPlayerKitCompose-android-x86_64.aar\`"
   echo "- iOS device framework: \`VesperPlayerKit-ios-arm64.framework.zip\`"
   echo "- iOS simulator framework for Apple Silicon: \`VesperPlayerKit-ios-simulator-arm64.framework.zip\`"
   echo "- iOS simulator framework for Intel: \`VesperPlayerKit-ios-simulator-x86_64.framework.zip\`"

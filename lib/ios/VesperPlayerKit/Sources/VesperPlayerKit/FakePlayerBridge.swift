@@ -7,11 +7,21 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var currentSource: VesperPlayerSource?
 
     @Published private(set) var publishedUiState: PlayerHostUiState
+    @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
+    @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
 
     let backend: PlayerBridgeBackend = .fakeDemo
 
     var uiState: PlayerHostUiState {
         publishedUiState
+    }
+
+    var trackCatalog: VesperTrackCatalog {
+        publishedTrackCatalog
+    }
+
+    var trackSelection: VesperTrackSelectionSnapshot {
+        publishedTrackSelection
     }
 
     init(initialSource: VesperPlayerSource? = nil) {
@@ -33,6 +43,8 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 durationMs: 134_100
             )
         )
+        publishedTrackCatalog = .empty
+        publishedTrackSelection = VesperTrackSelectionSnapshot()
     }
 
     func initialize() {}
@@ -240,6 +252,14 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
         }
     }
+
+    func setVideoTrackSelection(_ selection: VesperTrackSelection) {}
+
+    func setAudioTrackSelection(_ selection: VesperTrackSelection) {}
+
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {}
+
+    func setAbrPolicy(_ policy: VesperAbrPolicy) {}
 
     private func update(_ transform: (PlayerHostUiState) -> PlayerHostUiState) {
         publishedUiState = transform(publishedUiState)

@@ -15,7 +15,8 @@ The current direction is:
   - shared Rust core, runtime, FFI, backend, render, and platform crates
 - `lib/`
   - distributable platform integration layers
-  - Android: `lib/android/vesper-player-kit`
+  - Android core: `lib/android/vesper-player-kit`
+  - Android Compose adapter: `lib/android/vesper-player-kit-compose`
   - iOS: `lib/ios/VesperPlayerKit`
 - `examples/`
   - runnable host apps that demonstrate how to consume the libraries
@@ -25,7 +26,8 @@ The current direction is:
 ## Current Platform Direction
 
 - Android
-  - `VesperPlayerKit` Android library
+  - `VesperPlayerKit` Android core library
+  - optional `VesperPlayerKitCompose` adapter for Jetpack Compose
   - native `Media3 ExoPlayer` host path
   - local file, progressive URL, HLS, and DASH inputs
 - iOS
@@ -44,13 +46,15 @@ The current direction is:
 
 ## Libraries
 
-- VesperPlayerKit for Android: `lib/android/vesper-player-kit`
+- VesperPlayerKit for Android core: `lib/android/vesper-player-kit`
+- VesperPlayerKit Compose adapter: `lib/android/vesper-player-kit-compose`
 - VesperPlayerKit for iOS: `lib/ios/VesperPlayerKit`
 
 ## Release Downloads
 
 - GitHub Releases publish mobile downloads under the VesperPlayerKit product name
-- Android packages are shipped as `VesperPlayerKit-android-<abi>.aar`
+- Android core packages are shipped as `VesperPlayerKit-android-<abi>.aar`
+- Android Compose adapter packages are shipped as `VesperPlayerKitCompose-android-<abi>.aar`
 - iOS packages are shipped as `VesperPlayerKit-ios-*.framework.zip` and `VesperPlayerKit.xcframework.zip`
 - each tagged release also includes `SHA256SUMS.txt` for package verification
 - see [docs/RELEASE-DOWNLOAD-GUIDE.md](docs/RELEASE-DOWNLOAD-GUIDE.md) for package selection guidance

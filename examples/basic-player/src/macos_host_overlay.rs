@@ -110,7 +110,10 @@ impl MacosHostOverlay {
             is_seekable: view_model.is_seekable as u8,
             controls_visible: view_model.controls_visible as u8,
             position_ms: duration_to_millis_u64(view_model.displayed_position),
-            duration_ms: view_model.duration.map(duration_to_millis_u64).unwrap_or_default(),
+            duration_ms: view_model
+                .duration
+                .map(duration_to_millis_u64)
+                .unwrap_or_default(),
             seekable_start_ms: view_model
                 .seekable_range
                 .map(|range| duration_to_millis_u64(range.start))

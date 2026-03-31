@@ -21,16 +21,18 @@ This host app is now intentionally thin:
 
 - the app shell is Compose-based
 - the actual Kotlin/JNI integration layer now lives under `lib/android/vesper-player-kit`
-- the example app consumes that library module as a normal dependency
+- the Compose adapter now lives under `lib/android/vesper-player-kit-compose`
+- the example app consumes those library modules as normal dependencies
 - the current project now boots the Rust-native bridge by default
 
 This keeps the sample app closer to real SDK consumption instead of acting like a hidden SDK layer.
 
-The host-facing Android integration surface now lives in the library module:
+The host-facing Android integration surface now lives in the library modules:
 
 - `VesperPlayerSource`
 - `VesperPlayerController`
 - `VesperPlayerSurface`
+- `rememberVesperPlayerUiState`
 
 The example Compose screen consumes those wrappers instead of binding directly to the raw bridge
 contract.
@@ -47,14 +49,18 @@ The Android library is shaped around one bridge contract with two implementation
 The default example now boots with `VesperNativePlayerBridge`, but the Compose UI and surface host
 no longer depend on that specific implementation.
 
-The library exposes a host-facing controller layer:
+The core library exposes a host-facing controller layer:
 
 - `VesperPlayerController`
   - source selection, playback commands, state flow, backend label
-- `VesperPlayerSurface`
-  - reusable Compose + `AndroidView` surface host shell
 - `VesperPlayerSource`
   - stable source DTO used by the host UI
+
+The optional Compose adapter exposes:
+
+- `rememberVesperPlayerController`
+- `rememberVesperPlayerUiState`
+- `VesperPlayerSurface`
 
 The native path now also has a concrete surface strategy:
 
@@ -81,8 +87,10 @@ Those preset URLs intentionally live in `examples/android-compose-host`; the reu
 
 - `lib/android/vesper-player-kit`
   - Android library module / future `AAR`
+- `lib/android/vesper-player-kit-compose`
+  - optional Compose adapter / future companion `AAR`
 - `examples/android-compose-host`
-  - runnable sample app that depends on `:vesper-player-kit`
+  - runnable sample app that depends on `:vesper-player-kit-compose`
 
 ## Android Studio Handoff
 
@@ -106,6 +114,8 @@ For a runnable app flow:
    - then verify Android Studio has fully installed `NDK (Side by side) 29.0.14206865`
    - if Studio installs a different NDK version, the script will automatically use the newest complete NDK under your Android SDK, or you can override it with `ANDROID_NDK_ROOT=...`
 4. confirm `.so` files landed under `lib/android/vesper-player-kit/src/main/jniLibs`
+   - expected file name: `libvesper_player_android.so`
+   - these JNI artifacts are generated locally and ignored by git
 5. run the app on an emulator/device
 6. validate the `TextureView + ExoPlayer + Rust session` playback loop
 
@@ -155,8 +165,8 @@ These choices follow current official docs:
   - host-facing controller wrapper
 - `../../lib/android/vesper-player-kit/src/main/java/.../VesperPlayerSource.kt`
   - host-facing source DTO
-- `../../lib/android/vesper-player-kit/src/main/java/.../VesperPlayerSurface.kt`
-  - reusable Compose surface host
+- `../../lib/android/vesper-player-kit-compose/src/main/java/.../VesperPlayerCompose.kt`
+  - Compose helpers, reusable surface host, UI-scoped progress refresh
 - `../../lib/android/vesper-player-kit/src/main/java/.../PlayerBridge.kt`
   - bridge-facing host contract
 - `../../lib/android/vesper-player-kit/src/main/java/.../FakePlayerBridge.kt`
@@ -165,3 +175,7 @@ These choices follow current official docs:
   - ExoPlayer-backed JNI bridge implementation
 - `scripts/build-android-vesper-player-kit-jni.sh`
   - helper for building `player-jni-android` into `lib/android/vesper-player-kit/src/main/jniLibs`
+
+The sample app now loads the branded native library name:
+
+- `System.loadLibrary("vesper_player_android")`

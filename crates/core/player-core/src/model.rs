@@ -21,6 +21,74 @@ pub struct MediaSource {
     uri: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaTrackKind {
+    Video,
+    Audio,
+    Subtitle,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaTrack {
+    pub id: String,
+    pub kind: MediaTrackKind,
+    pub label: Option<String>,
+    pub language: Option<String>,
+    pub codec: Option<String>,
+    pub bit_rate: Option<u64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub frame_rate: Option<f64>,
+    pub channels: Option<u16>,
+    pub sample_rate: Option<u32>,
+    pub is_default: bool,
+    pub is_forced: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MediaTrackCatalog {
+    pub tracks: Vec<MediaTrack>,
+    pub adaptive_video: bool,
+    pub adaptive_audio: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaTrackSelectionMode {
+    Auto,
+    Disabled,
+    Track,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaTrackSelection {
+    pub mode: MediaTrackSelectionMode,
+    pub track_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaAbrMode {
+    Auto,
+    Constrained,
+    FixedTrack,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaAbrPolicy {
+    pub mode: MediaAbrMode,
+    pub track_id: Option<String>,
+    pub max_bit_rate: Option<u64>,
+    pub max_width: Option<u32>,
+    pub max_height: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaTrackSelectionSnapshot {
+    pub video: MediaTrackSelection,
+    pub audio: MediaTrackSelection,
+    pub subtitle: MediaTrackSelection,
+    pub abr_policy: MediaAbrPolicy,
+}
+
 impl MediaSource {
     pub fn new(uri: impl Into<String>) -> Self {
         Self { uri: uri.into() }
@@ -36,6 +104,58 @@ impl MediaSource {
 
     pub fn protocol(&self) -> MediaSourceProtocol {
         classify_media_source_protocol(&self.uri)
+    }
+}
+
+impl MediaTrackSelection {
+    pub fn auto() -> Self {
+        Self {
+            mode: MediaTrackSelectionMode::Auto,
+            track_id: None,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            mode: MediaTrackSelectionMode::Disabled,
+            track_id: None,
+        }
+    }
+
+    pub fn track(track_id: impl Into<String>) -> Self {
+        Self {
+            mode: MediaTrackSelectionMode::Track,
+            track_id: Some(track_id.into()),
+        }
+    }
+}
+
+impl Default for MediaTrackSelection {
+    fn default() -> Self {
+        Self::auto()
+    }
+}
+
+impl Default for MediaAbrPolicy {
+    fn default() -> Self {
+        Self {
+            mode: MediaAbrMode::Auto,
+            track_id: None,
+            max_bit_rate: None,
+            max_width: None,
+            max_height: None,
+        }
+    }
+}
+
+impl Default for MediaTrackSelectionSnapshot {
+    fn default() -> Self {
+        Self {
+            video: MediaTrackSelection::auto(),
+            audio: MediaTrackSelection::auto(),
+            subtitle: MediaTrackSelection::disabled(),
+            abr_policy: MediaAbrPolicy::default(),
+        }
     }
 }
 
@@ -66,9 +186,7 @@ pub enum VideoPixelFormat {
 }
 
 fn classify_media_source_kind(uri: &str) -> MediaSourceKind {
-    if uri.starts_with("file://")
-        || uri.starts_with("content://")
-        || is_likely_local_file_path(uri)
+    if uri.starts_with("file://") || uri.starts_with("content://") || is_likely_local_file_path(uri)
     {
         MediaSourceKind::Local
     } else {
@@ -141,7 +259,10 @@ fn is_likely_local_file_path(uri: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MediaSource, MediaSourceKind, MediaSourceProtocol};
+    use super::{
+        MediaAbrMode, MediaSource, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
+        MediaTrackSelectionMode, MediaTrackSelectionSnapshot,
+    };
 
     #[test]
     fn classifies_local_sources() {
@@ -180,5 +301,31 @@ mod tests {
 
         let progressive = MediaSource::new("https://example.com/video.mp4");
         assert_eq!(progressive.protocol(), MediaSourceProtocol::Progressive);
+    }
+
+    #[test]
+    fn track_selection_helpers_build_expected_modes() {
+        assert_eq!(
+            MediaTrackSelection::auto().mode,
+            MediaTrackSelectionMode::Auto
+        );
+        assert_eq!(
+            MediaTrackSelection::disabled().mode,
+            MediaTrackSelectionMode::Disabled
+        );
+
+        let selected = MediaTrackSelection::track("video-main");
+        assert_eq!(selected.mode, MediaTrackSelectionMode::Track);
+        assert_eq!(selected.track_id.as_deref(), Some("video-main"));
+    }
+
+    #[test]
+    fn default_track_selection_snapshot_starts_in_auto_mode() {
+        let snapshot = MediaTrackSelectionSnapshot::default();
+
+        assert_eq!(snapshot.video.mode, MediaTrackSelectionMode::Auto);
+        assert_eq!(snapshot.audio.mode, MediaTrackSelectionMode::Auto);
+        assert_eq!(snapshot.subtitle.mode, MediaTrackSelectionMode::Disabled);
+        assert_eq!(snapshot.abr_policy.mode, MediaAbrMode::Auto);
     }
 }

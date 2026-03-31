@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$ROOT_DIR/lib/android"
-MODULE_DIR="$PROJECT_DIR/vesper-player-kit"
+CORE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit"
+COMPOSE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose"
 OUTPUT_DIR="${1:-$ROOT_DIR/dist/release/android}"
 shift || true
 
@@ -32,7 +33,9 @@ else
 No Gradle CLI was found for building Android release artifacts.
 
 Use one of these options:
-  1. Open $PROJECT_DIR in Android Studio and run :vesper-player-kit:assembleRelease
+  1. Open $PROJECT_DIR in Android Studio and run:
+       :vesper-player-kit:assembleRelease
+       :vesper-player-kit-compose:assembleRelease
   2. Add a Gradle wrapper to $PROJECT_DIR
   3. Install a global 'gradle' command and rerun this script
 EOF
@@ -51,14 +54,21 @@ for abi in "${selected_abis[@]}"; do
       ;;
   esac
 
-  rm -rf "$MODULE_DIR/src/main/jniLibs"
-  "${GRADLE_CMD[@]}" :vesper-player-kit:clean
-  RUST_ANDROID_ABIS="$abi" "${GRADLE_CMD[@]}" :vesper-player-kit:assembleRelease
+  rm -rf "$CORE_MODULE_DIR/src/main/jniLibs"
+  "${GRADLE_CMD[@]}" :vesper-player-kit:clean :vesper-player-kit-compose:clean
+  RUST_ANDROID_ABIS="$abi" "${GRADLE_CMD[@]}" \
+    :vesper-player-kit:assembleRelease \
+    :vesper-player-kit-compose:assembleRelease
 
-  INPUT_AAR="$MODULE_DIR/build/outputs/aar/vesper-player-kit-release.aar"
-  OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKit-android-$abi.aar"
-  cp "$INPUT_AAR" "$OUTPUT_AAR"
+  CORE_INPUT_AAR="$CORE_MODULE_DIR/build/outputs/aar/vesper-player-kit-release.aar"
+  CORE_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKit-android-$abi.aar"
+  cp "$CORE_INPUT_AAR" "$CORE_OUTPUT_AAR"
 
-  echo "Staged VesperPlayerKit Android AAR:"
-  echo "  $OUTPUT_AAR"
+  COMPOSE_INPUT_AAR="$COMPOSE_MODULE_DIR/build/outputs/aar/vesper-player-kit-compose-release.aar"
+  COMPOSE_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKitCompose-android-$abi.aar"
+  cp "$COMPOSE_INPUT_AAR" "$COMPOSE_OUTPUT_AAR"
+
+  echo "Staged VesperPlayerKit Android AARs:"
+  echo "  $CORE_OUTPUT_AAR"
+  echo "  $COMPOSE_OUTPUT_AAR"
 done
