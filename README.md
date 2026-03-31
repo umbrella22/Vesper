@@ -59,3 +59,12 @@ The current direction is:
 
 Vesper is still evolving and has not been opened as a stable external SDK yet. That gives us room
 to keep refining naming, API shape, runtime contracts, and release packaging before wider adoption.
+
+## License
+
+Vesper is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
+Additional attribution and future bundled-binary notes live in:
+
+- [NOTICE](NOTICE)
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)

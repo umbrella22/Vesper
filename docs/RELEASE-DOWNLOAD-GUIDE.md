@@ -119,5 +119,7 @@ They are the reusable mobile-facing VesperPlayerKit download set.
 ## Related Docs
 
 - [README.md](../README.md)
+- [NOTICE](../NOTICE)
+- [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)
 - [lib/android/README.md](../lib/android/README.md)
 - [lib/ios/VesperPlayerKit/README.md](../lib/ios/VesperPlayerKit/README.md)
