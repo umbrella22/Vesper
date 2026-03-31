@@ -25,6 +25,12 @@ This host app is now intentionally thin:
 - the default host path now boots through an `AVPlayer`-backed native bridge
 - the example app owns its own Apple HLS sample preset
 - the host can switch between that preset source and a user-picked local video file
+- the sample app now includes the first polished player shell:
+  - `System / Light / Dark` theme modes
+  - fullscreen stage
+  - quality / audio / subtitle / speed bottom sheets
+  - double-tap seek and SwiftUI previews
+  - video-only Photos picker
 
 The host-facing shape now lives in the package itself:
 
@@ -41,7 +47,7 @@ The package is shaped around one bridge contract with two implementations:
 - `FakePlayerBridge`
   - local interactive preview bridge
 - `VesperNativePlayerBridge`
-  - current `AVPlayer`-backed native host bridge, and the future landing point for Swift/ObjC callbacks into `player-platform-ios`
+  - current `AVPlayer`-backed native host bridge and the integration point for `player-platform-ios`
 
 The current SwiftUI screen now boots with the native bridge by default, while the fake bridge is
 still kept in-tree as a lightweight fallback/reference implementation.
@@ -82,7 +88,7 @@ For the demo app:
 1. generate or open the demo project from `project.yml`
 2. confirm the Swift host app boots with the AVPlayer native bridge
 3. validate Photos video picker / `play / pause / seek / stop / rate`
-4. continue wiring `VesperNativePlayerBridge` to real Swift/ObjC callbacks into `player-platform-ios`
+4. validate fullscreen, theme switching, and track/ABR sheets
 
 For the reusable iOS binary artifact itself, use:
 

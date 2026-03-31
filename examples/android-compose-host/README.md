@@ -24,6 +24,11 @@ This host app is now intentionally thin:
 - the Compose adapter now lives under `lib/android/vesper-player-kit-compose`
 - the example app consumes those library modules as normal dependencies
 - the current project now boots the Rust-native bridge by default
+- the sample app now includes the first polished player shell:
+  - `System / Light / Dark` theme modes
+  - fullscreen stage
+  - quality / audio / subtitle / speed bottom sheets
+  - double-tap seek, draggable scrubber, and Compose previews
 
 This keeps the sample app closer to real SDK consumption instead of acting like a hidden SDK layer.
 
@@ -62,7 +67,7 @@ The optional Compose adapter exposes:
 - `rememberVesperPlayerUiState`
 - `VesperPlayerSurface`
 
-The Android library now also starts exposing first-round playback resilience knobs:
+The Android library now also exposes first-round playback resilience knobs:
 
 - `VesperPlaybackResiliencePolicy`
 - `VesperBufferingPolicy`
@@ -73,7 +78,7 @@ The native path now also has a concrete surface strategy:
 
 - host UI stays in `Compose`
 - video attaches through a `TextureView`
-- the future Rust bridge plugs in through `VesperNativeJni.kt`
+- the Rust bridge plugs in through `VesperNativeJni.kt`
 - Rust-side mirror DTOs now live in `crates/platform/mobile/player-platform-android`
   - `AndroidHostSnapshot`
   - `AndroidHostEvent`

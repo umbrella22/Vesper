@@ -81,15 +81,15 @@ The current Android host surface is also expected to handle:
 The library intentionally does not ship built-in demo URLs or preset source choices. Those belong
 in a consuming host app such as `examples/android-compose-host`.
 
-The Android host API now also starts exposing first-round playback resilience controls:
+The Android host API now exposes first-round playback resilience controls:
 
 - `VesperPlaybackResiliencePolicy`
 - `VesperBufferingPolicy`
 - `VesperRetryPolicy`
 - `VesperCachePolicy`
 
-These are currently used to shape `ExoPlayer` startup buffering, retry behavior, and first-round
-disk caching for remote streams, especially `HLS / DASH`.
+These are now used to shape `ExoPlayer` startup buffering, retry behavior, and first-round disk
+caching for remote streams, especially `HLS / DASH`.
 
 ## Key Entry Points
 

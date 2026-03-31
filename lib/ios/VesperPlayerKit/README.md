@@ -89,14 +89,14 @@ struct DemoPlayerView: View {
 }
 ```
 
-The iOS host API now also starts exposing first-round playback resilience controls:
+The iOS host API now exposes first-round playback resilience controls:
 
 - `VesperPlaybackResiliencePolicy`
 - `VesperBufferingPolicy`
 - `VesperRetryPolicy`
 - `VesperCachePolicy`
 
-These currently shape `AVPlayer` buffering behavior and controlled retry/backoff for remote
+These now shape `AVPlayer` buffering behavior and controlled retry/backoff for remote
 sources. Cache configuration is currently mapped as a best-effort process-wide `URLCache.shared`
 capacity hint for remote playback, and it does not pretend to offer the same transport depth that
 `Media3` exposes on Android.
