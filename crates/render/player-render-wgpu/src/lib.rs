@@ -79,9 +79,14 @@ pub fn preferred_backends() -> wgpu::Backends {
         return wgpu::Backends::METAL;
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
-        return wgpu::Backends::VULKAN;
+        return wgpu::Backends::DX12 | wgpu::Backends::VULKAN;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return wgpu::Backends::VULKAN | wgpu::Backends::GL;
     }
 
     #[cfg(not(any(
@@ -101,9 +106,14 @@ fn preferred_backend_label() -> &'static str {
         return "Metal";
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
-        return "Vulkan";
+        return "DirectX 12 / Vulkan";
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return "Vulkan / OpenGL";
     }
 
     #[cfg(not(any(
@@ -973,7 +983,37 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DisplayRect, RenderMode, compute_display_rect};
+    use super::{
+        DisplayRect, RenderMode, compute_display_rect, preferred_backend_label,
+        preferred_backends,
+    };
+
+    #[test]
+    fn preferred_backend_configuration_matches_platform() {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            assert_eq!(preferred_backends(), wgpu::Backends::METAL);
+            assert_eq!(preferred_backend_label(), "Metal");
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(
+                preferred_backends(),
+                wgpu::Backends::DX12 | wgpu::Backends::VULKAN
+            );
+            assert_eq!(preferred_backend_label(), "DirectX 12 / Vulkan");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(
+                preferred_backends(),
+                wgpu::Backends::VULKAN | wgpu::Backends::GL
+            );
+            assert_eq!(preferred_backend_label(), "Vulkan / OpenGL");
+        }
+    }
 
     #[test]
     fn fit_preserves_aspect_ratio_inside_surface() {

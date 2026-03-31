@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
 use std::time::Duration;
 
 use player_runtime::{

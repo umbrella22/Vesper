@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "macos", allow(unused_imports))]
+
 #[cfg(not(target_os = "macos"))]
 use player_render_wgpu::RgbaOverlayFrame;
 #[cfg(not(target_os = "macos"))]
