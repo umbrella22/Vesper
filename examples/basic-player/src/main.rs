@@ -3,14 +3,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+mod desktop_presenter;
+mod desktop_ui;
 mod host_ui;
 #[cfg(target_os = "macos")]
 mod macos_host_overlay;
-use host_ui::{CONTROL_RATES, ControlAction};
-#[cfg(not(target_os = "macos"))]
-use host_ui::{
-    SeekPreview, control_action_at, render_control_overlay, seek_preview_at, seek_preview_for_drag,
-};
+use desktop_presenter::DesktopUiPresenter;
+use desktop_ui::{CONTROL_RATES, ControlAction, SeekPreview};
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
     normalize_desktop_host_source_uri,
@@ -25,9 +24,7 @@ use player_runtime::{
     PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerVideoDecodeInfo,
     PlayerVideoDecodeMode, PresentationState, VideoPixelFormat,
 };
-use tracing::{error, info};
-#[cfg(target_os = "macos")]
-use tracing::warn;
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -35,9 +32,6 @@ use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
-
-#[cfg(target_os = "macos")]
-use macos_host_overlay::MacosHostOverlay;
 
 const SEEK_STEP: Duration = Duration::from_secs(5);
 const NATIVE_SURFACE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -63,8 +57,13 @@ fn main() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = DesktopPlayerApp::new(launch_plan);
-    event_loop.run_app(&mut app)?;
-    Ok(())
+    match event_loop.run_app(&mut app) {
+        Ok(()) => Ok(()),
+        Err(run_error) => {
+            error!(?run_error, display = %run_error, "desktop event loop exited with error");
+            Err(run_error.into())
+        }
+    }
 }
 
 struct DesktopPlayerApp {
@@ -80,10 +79,8 @@ struct DesktopPlayerApp {
     pointer_inside_window: bool,
     controls_visible: bool,
     controls_hide_deadline: Option<Instant>,
-    #[cfg(not(target_os = "macos"))]
     seek_preview: Option<SeekPreview>,
-    #[cfg(target_os = "macos")]
-    host_overlay: Option<MacosHostOverlay>,
+    ui_presenter: Option<DesktopUiPresenter>,
 }
 
 impl DesktopPlayerApp {
@@ -101,10 +98,8 @@ impl DesktopPlayerApp {
             pointer_inside_window: true,
             controls_visible: true,
             controls_hide_deadline: None,
-            #[cfg(not(target_os = "macos"))]
             seek_preview: None,
-            #[cfg(target_os = "macos")]
-            host_overlay: None,
+            ui_presenter: None,
         }
     }
 
@@ -116,15 +111,14 @@ impl DesktopPlayerApp {
         let window = Arc::new(event_loop.create_window(
             default_window_attributes(self.render_config).with_title(self.window_title()),
         )?);
-        #[cfg(target_os = "macos")]
-        match MacosHostOverlay::attach(window.as_ref()) {
-            Ok(overlay) => {
-                self.host_overlay = Some(overlay);
+        match DesktopUiPresenter::attach(window.as_ref()) {
+            Ok(presenter) => {
+                self.ui_presenter = Some(presenter);
             }
             Err(error) => {
                 warn!(
                     ?error,
-                    "failed to attach macOS host overlay; keyboard controls remain available"
+                    "failed to initialize desktop UI presenter; keyboard controls remain available"
                 );
             }
         }
@@ -167,6 +161,7 @@ impl DesktopPlayerApp {
         self.render_config = launch_plan.render_config;
         self.uses_external_video_surface = capabilities.supports_external_video_surface;
         self.runtime = Some(runtime);
+        self.seek_preview = None;
 
         if capabilities.supports_frame_output {
             let initial_frame =
@@ -187,7 +182,7 @@ impl DesktopPlayerApp {
         self.title_cache = None;
         self.show_controls();
         self.update_window_title();
-        self.sync_host_overlay();
+        self.sync_ui_presenter();
         self.dispatch_command(PlayerRuntimeCommand::Play)?;
 
         Ok(())
@@ -248,17 +243,14 @@ impl DesktopPlayerApp {
         };
         let frame_texture = video_frame_texture(frame);
         let window_size = window.inner_size();
-        #[cfg(not(target_os = "macos"))]
-        let overlay = if window_size.width == 0 || window_size.height == 0 || !self.controls_visible {
-            None
-        } else {
-            render_control_overlay(
-                window_size.width,
-                window_size.height,
-                &self.runtime()?.snapshot(),
+        let overlay = self.ui_presenter.as_ref().and_then(|presenter| {
+            presenter.overlay_frame(
+                window_size,
+                &self.runtime().ok()?.snapshot(),
                 self.seek_preview,
+                self.controls_visible,
             )
-        };
+        });
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(());
         };
@@ -268,13 +260,6 @@ impl DesktopPlayerApp {
         }
 
         renderer.upload_frame(&frame_texture);
-
-        #[cfg(target_os = "macos")]
-        {
-            renderer.clear_overlay();
-        }
-
-        #[cfg(not(target_os = "macos"))]
         if let Some(overlay) = overlay {
             renderer.upload_overlay(&overlay);
         } else {
@@ -335,7 +320,7 @@ impl DesktopPlayerApp {
         }
         self.log_runtime_events();
         self.update_window_title();
-        self.sync_host_overlay();
+        self.sync_ui_presenter();
         self.refresh_overlay()?;
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
@@ -360,7 +345,6 @@ impl DesktopPlayerApp {
         self.dispatch_command(PlayerRuntimeCommand::SeekTo { position })
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn begin_seek_drag(&mut self) -> Result<bool> {
         let Some((cursor_x, cursor_y)) = self.cursor_position else {
             return Ok(false);
@@ -368,11 +352,13 @@ impl DesktopPlayerApp {
         let Some(window) = self.window.as_ref() else {
             return Ok(false);
         };
+        let Some(presenter) = self.ui_presenter.as_ref() else {
+            return Ok(false);
+        };
         let snapshot = self.runtime()?.snapshot();
         let window_size = window.inner_size();
-        let Some(preview) = seek_preview_at(
-            window_size.width,
-            window_size.height,
+        let Some(preview) = presenter.seek_preview_at(
+            window_size,
             cursor_x,
             cursor_y,
             &snapshot,
@@ -386,7 +372,6 @@ impl DesktopPlayerApp {
         Ok(true)
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn update_seek_drag(&mut self) -> Result<()> {
         if self.seek_preview.is_none() {
             return Ok(());
@@ -398,11 +383,12 @@ impl DesktopPlayerApp {
         let Some(window) = self.window.as_ref() else {
             return Ok(());
         };
+        let Some(presenter) = self.ui_presenter.as_ref() else {
+            return Ok(());
+        };
         let snapshot = self.runtime()?.snapshot();
         let window_size = window.inner_size();
-        if let Some(preview) =
-            seek_preview_for_drag(window_size.width, window_size.height, cursor_x, &snapshot)
-        {
+        if let Some(preview) = presenter.seek_preview_for_drag(window_size, cursor_x, &snapshot) {
             self.seek_preview = Some(preview);
             self.refresh_overlay()?;
         }
@@ -410,11 +396,16 @@ impl DesktopPlayerApp {
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn commit_seek_drag(&mut self) -> Result<bool> {
         let Some(preview) = self.seek_preview.take() else {
             return Ok(false);
         };
+        info!(
+            origin = "seek_drag",
+            position_secs = preview.position.as_secs_f64(),
+            ratio = preview.ratio,
+            "desktop UI seek committed"
+        );
         self.seek_to(preview.position)?;
         Ok(true)
     }
@@ -451,7 +442,7 @@ impl DesktopPlayerApp {
         }
         self.log_runtime_events();
         self.update_window_title();
-        self.sync_host_overlay();
+        self.sync_ui_presenter();
         self.refresh_overlay()?;
 
         Ok(())
@@ -470,40 +461,40 @@ impl DesktopPlayerApp {
     }
 
     fn handle_pointer_click(&mut self) -> Result<()> {
-        #[cfg(target_os = "macos")]
-        {
+        if self.renderer.is_none() {
             return Ok(());
         }
 
-        #[cfg(not(target_os = "macos"))]
-        {
-            if self.renderer.is_none() {
-                return Ok(());
-            }
-            let Some((cursor_x, cursor_y)) = self.cursor_position else {
-                return Ok(());
-            };
-            let Some(window) = self.window.as_ref() else {
-                return Ok(());
-            };
+        let Some((cursor_x, cursor_y)) = self.cursor_position else {
+            return Ok(());
+        };
+        let Some(window) = self.window.as_ref() else {
+            return Ok(());
+        };
+        let Some(presenter) = self.ui_presenter.as_ref() else {
+            return Ok(());
+        };
 
-            let window_size = window.inner_size();
-            if window_size.width == 0 || window_size.height == 0 {
-                return Ok(());
-            }
-
-            if let Some(action) = control_action_at(
-                window_size.width,
-                window_size.height,
-                cursor_x,
-                cursor_y,
-                &self.runtime()?.snapshot(),
-            ) {
-                self.perform_control_action(action)?;
-            }
-
-            Ok(())
+        let window_size = window.inner_size();
+        if let Some(action) = presenter.control_action_at(
+            window_size,
+            cursor_x,
+            cursor_y,
+            &self.runtime()?.snapshot(),
+        ) {
+            self.perform_control_action_logged("pointer_click", action)?;
         }
+
+        Ok(())
+    }
+
+    fn perform_control_action_logged(
+        &mut self,
+        origin: &'static str,
+        action: ControlAction,
+    ) -> Result<()> {
+        log_control_action(origin, action);
+        self.perform_control_action(action)
     }
 
     fn perform_control_action(&mut self, action: ControlAction) -> Result<()> {
@@ -540,7 +531,7 @@ impl DesktopPlayerApp {
         if let Err(error) = self.refresh_overlay() {
             error!(?error, "failed to refresh overlay during resize");
         }
-        self.sync_host_overlay();
+        self.sync_ui_presenter();
     }
 
     fn log_runtime_events(&mut self) {
@@ -552,20 +543,21 @@ impl DesktopPlayerApp {
         }
     }
 
-    fn sync_host_overlay(&self) {
-        #[cfg(target_os = "macos")]
-        if let (Some(runtime), Some(host_overlay)) =
-            (self.runtime.as_ref(), self.host_overlay.as_ref())
+    fn sync_ui_presenter(&self) {
+        if let (Some(runtime), Some(ui_presenter), Some(window)) = (
+            self.runtime.as_ref(),
+            self.ui_presenter.as_ref(),
+            self.window.as_ref(),
+        )
         {
-            host_overlay.update(&runtime.snapshot(), self.controls_visible);
+            ui_presenter.sync(&runtime.snapshot(), self.controls_visible, window.inner_size());
         }
     }
 
-    fn drain_host_overlay_actions(&mut self) -> Result<()> {
-        #[cfg(target_os = "macos")]
-        if let Some(host_overlay) = self.host_overlay.as_ref() {
-            for action in host_overlay.drain_actions() {
-                self.perform_control_action(action)?;
+    fn drain_ui_presenter_actions(&mut self) -> Result<()> {
+        if let Some(ui_presenter) = self.ui_presenter.as_ref() {
+            for action in ui_presenter.drain_actions() {
+                self.perform_control_action_logged("presenter", action)?;
             }
         }
 
@@ -585,7 +577,7 @@ impl DesktopPlayerApp {
         if self.pointer_inside_window {
             if !self.controls_visible {
                 self.controls_visible = true;
-                self.sync_host_overlay();
+                self.sync_ui_presenter();
                 self.refresh_overlay()?;
             }
             self.controls_hide_deadline = None;
@@ -595,7 +587,7 @@ impl DesktopPlayerApp {
         if let Some(deadline) = self.controls_hide_deadline {
             if Instant::now() >= deadline && self.controls_visible {
                 self.controls_visible = false;
-                self.sync_host_overlay();
+                self.sync_ui_presenter();
                 self.refresh_overlay()?;
             }
         }
@@ -626,6 +618,24 @@ fn video_pixel_format_label(frame: &DecodedVideoFrame) -> &'static str {
     }
 }
 
+fn log_control_action(origin: &'static str, action: ControlAction) {
+    match action {
+        ControlAction::SetRate(rate) => {
+            info!(origin, rate, "desktop UI control action");
+        }
+        ControlAction::SeekToRatio(ratio) => {
+            info!(origin, ratio, "desktop UI control action");
+        }
+        _ => {
+            info!(origin, action = ?action, "desktop UI control action");
+        }
+    }
+}
+
+fn log_keyboard_action(action: &'static str) {
+    info!(origin = "keyboard", action, "desktop keyboard action");
+}
+
 impl ApplicationHandler for DesktopPlayerApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Err(error) = self.initialize(event_loop) {
@@ -652,20 +662,18 @@ impl ApplicationHandler for DesktopPlayerApp {
                 self.cursor_position = Some((position.x, position.y));
                 self.pointer_inside_window = true;
                 self.show_controls();
-                self.sync_host_overlay();
-                #[cfg(not(target_os = "macos"))]
                 if let Err(error) = self.update_seek_drag() {
                     error!(?error, "failed to update seek drag preview");
                     event_loop.exit();
                     return;
                 }
+                self.sync_ui_presenter();
                 if let Err(error) = self.refresh_overlay() {
                     error!(?error, "failed to refresh overlay after cursor movement");
                     event_loop.exit();
                 }
             }
             WindowEvent::CursorLeft { .. } => {
-                #[cfg(not(target_os = "macos"))]
                 if self.seek_preview.is_some() {
                     return;
                 }
@@ -678,7 +686,6 @@ impl ApplicationHandler for DesktopPlayerApp {
                 ..
             } =>
             {
-                #[cfg(not(target_os = "macos"))]
                 if let Err(error) = self.begin_seek_drag() {
                     error!(?error, "failed to start seek drag");
                     event_loop.exit();
@@ -689,7 +696,6 @@ impl ApplicationHandler for DesktopPlayerApp {
                 button: MouseButton::Left,
                 ..
             } => {
-                #[cfg(not(target_os = "macos"))]
                 match self.commit_seek_drag() {
                     Ok(true) => return,
                     Ok(false) => {}
@@ -715,20 +721,26 @@ impl ApplicationHandler for DesktopPlayerApp {
                 ..
             } => match logical_key.as_ref() {
                 Key::Named(NamedKey::Escape) => event_loop.exit(),
-                Key::Named(NamedKey::Space) => self.toggle_pause(),
+                Key::Named(NamedKey::Space) => {
+                    log_keyboard_action("toggle_pause");
+                    self.toggle_pause();
+                }
                 Key::Named(NamedKey::ArrowLeft) => {
+                    log_keyboard_action("seek_back");
                     if let Err(error) = self.seek_by(SEEK_STEP, false) {
                         error!(?error, "failed to seek backward");
                         event_loop.exit();
                     }
                 }
                 Key::Named(NamedKey::ArrowRight) => {
+                    log_keyboard_action("seek_forward");
                     if let Err(error) = self.seek_by(SEEK_STEP, true) {
                         error!(?error, "failed to seek forward");
                         event_loop.exit();
                     }
                 }
                 Key::Named(NamedKey::Home) => {
+                    log_keyboard_action("seek_start");
                     if let Err(error) = self.seek_to(Duration::ZERO) {
                         error!(?error, "failed to seek to start");
                         event_loop.exit();
@@ -736,6 +748,7 @@ impl ApplicationHandler for DesktopPlayerApp {
                 }
                 Key::Named(NamedKey::End) => match self.runtime() {
                     Ok(runtime) => {
+                        log_keyboard_action("seek_end");
                         let target = runtime
                             .snapshot()
                             .media_info
@@ -755,54 +768,63 @@ impl ApplicationHandler for DesktopPlayerApp {
                     }
                 },
                 Key::Character(text) if text.eq_ignore_ascii_case("s") => {
+                    log_keyboard_action("stop");
                     if let Err(error) = self.dispatch_command(PlayerRuntimeCommand::Stop) {
                         error!(?error, "failed to stop playback");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text == "[" => {
+                    log_keyboard_action("rate_down");
                     if let Err(error) = self.step_playback_rate(-1) {
                         error!(?error, "failed to step playback rate backward");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text == "]" => {
+                    log_keyboard_action("rate_up");
                     if let Err(error) = self.step_playback_rate(1) {
                         error!(?error, "failed to step playback rate forward");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text == "0" => {
+                    log_keyboard_action("set_rate_0_5x");
                     if let Err(error) = self.set_playback_rate(0.5) {
                         error!(?error, "failed to set playback rate");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text == "1" => {
+                    log_keyboard_action("set_rate_1x");
                     if let Err(error) = self.set_playback_rate(1.0) {
                         error!(?error, "failed to set playback rate");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text == "2" => {
+                    log_keyboard_action("set_rate_2x");
                     if let Err(error) = self.set_playback_rate(2.0) {
                         error!(?error, "failed to set playback rate");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text == "3" => {
+                    log_keyboard_action("set_rate_3x");
                     if let Err(error) = self.set_playback_rate(3.0) {
                         error!(?error, "failed to set playback rate");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text.eq_ignore_ascii_case("h") => {
+                    log_keyboard_action("open_hls_demo");
                     if let Err(error) = self.open_media_source(DESKTOP_HLS_DEMO_URL.to_owned()) {
                         error!(?error, "failed to open desktop HLS demo source");
                         event_loop.exit();
                     }
                 }
                 Key::Character(text) if text.eq_ignore_ascii_case("d") => {
+                    log_keyboard_action("open_dash_demo");
                     if let Err(error) = self.open_media_source(DESKTOP_DASH_DEMO_URL.to_owned()) {
                         error!(?error, "failed to open desktop DASH demo source");
                         event_loop.exit();
@@ -832,8 +854,8 @@ impl ApplicationHandler for DesktopPlayerApp {
             return;
         }
 
-        if let Err(error) = self.drain_host_overlay_actions() {
-            error!(?error, "failed to handle host overlay action");
+        if let Err(error) = self.drain_ui_presenter_actions() {
+            error!(?error, "failed to handle desktop UI presenter action");
             event_loop.exit();
             return;
         }
@@ -846,7 +868,7 @@ impl ApplicationHandler for DesktopPlayerApp {
 
         self.log_runtime_events();
         self.update_window_title();
-        self.sync_host_overlay();
+    self.sync_ui_presenter();
         if let Some(runtime) = self.runtime.as_ref() {
             if let Some(deadline) = runtime.next_deadline() {
                 let mut next_deadline = deadline;

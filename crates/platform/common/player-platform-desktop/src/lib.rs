@@ -29,6 +29,7 @@ const AUDIO_STREAM_CHUNK_FRAMES: usize = 2_048;
 const AUDIO_STREAM_TARGET_BUFFER_DURATION: Duration = Duration::from_secs(2);
 const AUDIO_STREAM_BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const AUDIO_OUTPUT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const AUDIO_CLOCK_STALL_TOLERANCE: Duration = Duration::from_millis(250);
 const SOFTWARE_BUFFERING_GRACE_PERIOD: Duration = Duration::from_millis(120);
 
 pub fn desktop_runtime_adapter_factory() -> &'static dyn PlayerRuntimeAdapterFactory {
@@ -768,14 +769,12 @@ impl SoftwarePlayerRuntime {
     }
 
     fn playback_position(&self) -> Option<Duration> {
-        self.audio_sink
-            .as_ref()
-            .map(AudioSink::playback_position)
-            .or_else(|| {
-                self.playback_clock
-                    .as_ref()
-                    .map(PlaybackClock::playback_position)
-            })
+        select_playback_position(
+            self.audio_sink.as_ref().map(AudioSink::playback_position),
+            self.playback_clock
+                .as_ref()
+                .map(PlaybackClock::playback_position),
+        )
     }
 
     fn should_present_frame(&self, media_time: Duration) -> bool {
@@ -1358,6 +1357,24 @@ fn runtime_error(
     PlayerRuntimeError::new(code, format!("{context}: {error}"))
 }
 
+fn select_playback_position(
+    audio_position: Option<Duration>,
+    clock_position: Option<Duration>,
+) -> Option<Duration> {
+    match (audio_position, clock_position) {
+        (Some(audio_position), Some(clock_position)) => {
+            if audio_position.saturating_add(AUDIO_CLOCK_STALL_TOLERANCE) < clock_position {
+                Some(clock_position)
+            } else {
+                Some(audio_position)
+            }
+        }
+        (Some(audio_position), None) => Some(audio_position),
+        (None, Some(clock_position)) => Some(clock_position),
+        (None, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,5 +1423,25 @@ mod tests {
 
         assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
         assert!(error.message().contains("'dash' demuxer"));
+    }
+
+    #[test]
+    fn playback_position_falls_back_to_clock_when_audio_stalls() {
+        let selected = select_playback_position(
+            Some(Duration::from_millis(0)),
+            Some(Duration::from_millis(600)),
+        );
+
+        assert_eq!(selected, Some(Duration::from_millis(600)));
+    }
+
+    #[test]
+    fn playback_position_keeps_audio_clock_when_it_is_close() {
+        let selected = select_playback_position(
+            Some(Duration::from_millis(480)),
+            Some(Duration::from_millis(600)),
+        );
+
+        assert_eq!(selected, Some(Duration::from_millis(480)));
     }
 }

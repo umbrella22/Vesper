@@ -3,12 +3,12 @@ use std::ffi::{c_char, c_float, c_void};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use player_runtime::{PlayerSnapshot, PlayerTimelineKind, PresentationState};
+use player_runtime::PlayerSnapshot;
 use tracing::info;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
-use crate::host_ui::ControlAction;
+use crate::desktop_ui::{ControlAction, DesktopUiLayoutMetrics, DesktopUiViewModel};
 
 pub struct MacosHostOverlay {
     handle: *mut c_void,
@@ -39,6 +39,15 @@ struct BasicPlayerMacosOverlayState {
     seekable_start_ms: u64,
     seekable_end_ms: u64,
     playback_rate: c_float,
+    bar_height: u32,
+    padding: u32,
+    gap: u32,
+    icon_size: u32,
+    rate_width: u32,
+    progress_height: u32,
+    progress_hit_slop_top: u32,
+    progress_hit_slop_bottom: u32,
+    time_label_height: u32,
 }
 
 const ACTION_SEEK_START: u32 = 0;
@@ -87,39 +96,39 @@ impl MacosHostOverlay {
         })
     }
 
-    pub fn update(&self, snapshot: &PlayerSnapshot, controls_visible: bool) {
+    pub fn update(
+        &self,
+        snapshot: &PlayerSnapshot,
+        controls_visible: bool,
+        layout_metrics: DesktopUiLayoutMetrics,
+    ) {
+        let view_model = DesktopUiViewModel::from_snapshot(snapshot, controls_visible, None);
         let state = BasicPlayerMacosOverlayState {
-            is_playing: (snapshot.state == PresentationState::Playing) as u8,
-            has_duration: snapshot.progress.duration().is_some() as u8,
-            timeline_kind: match snapshot.timeline.kind {
-                PlayerTimelineKind::Vod => 0,
-                PlayerTimelineKind::Live => 1,
-                PlayerTimelineKind::LiveDvr => 2,
-            },
-            is_seekable: snapshot.timeline.is_seekable as u8,
-            controls_visible: controls_visible as u8,
-            position_ms: snapshot
-                .progress
-                .position()
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64,
-            duration_ms: snapshot
-                .progress
-                .duration()
-                .unwrap_or_default()
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64,
-            seekable_start_ms: snapshot
-                .timeline
+            is_playing: view_model.is_playing as u8,
+            has_duration: view_model.has_duration as u8,
+            timeline_kind: view_model.timeline_kind.as_raw(),
+            is_seekable: view_model.is_seekable as u8,
+            controls_visible: view_model.controls_visible as u8,
+            position_ms: duration_to_millis_u64(view_model.displayed_position),
+            duration_ms: view_model.duration.map(duration_to_millis_u64).unwrap_or_default(),
+            seekable_start_ms: view_model
                 .seekable_range
-                .map(|range| range.start.as_millis().min(u128::from(u64::MAX)) as u64)
+                .map(|range| duration_to_millis_u64(range.start))
                 .unwrap_or_default(),
-            seekable_end_ms: snapshot
-                .timeline
+            seekable_end_ms: view_model
                 .seekable_range
-                .map(|range| range.end.as_millis().min(u128::from(u64::MAX)) as u64)
+                .map(|range| duration_to_millis_u64(range.end))
                 .unwrap_or_default(),
-            playback_rate: snapshot.playback_rate,
+            playback_rate: view_model.playback_rate,
+            bar_height: layout_metrics.bar_height,
+            padding: layout_metrics.padding,
+            gap: layout_metrics.gap,
+            icon_size: layout_metrics.icon_size,
+            rate_width: layout_metrics.rate_width,
+            progress_height: layout_metrics.progress_height,
+            progress_hit_slop_top: layout_metrics.progress_hit_slop_top,
+            progress_hit_slop_bottom: layout_metrics.progress_hit_slop_bottom,
+            time_label_height: layout_metrics.time_label_height,
         };
 
         unsafe {
@@ -134,6 +143,10 @@ impl MacosHostOverlay {
             .map(|mut actions| actions.drain(..).collect())
             .unwrap_or_default()
     }
+}
+
+fn duration_to_millis_u64(duration: std::time::Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 impl Drop for MacosHostOverlay {

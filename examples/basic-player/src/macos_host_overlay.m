@@ -27,6 +27,15 @@ typedef struct {
     uint64_t seekable_start_ms;
     uint64_t seekable_end_ms;
     float playback_rate;
+    uint32_t bar_height;
+    uint32_t padding;
+    uint32_t gap;
+    uint32_t icon_size;
+    uint32_t rate_width;
+    uint32_t progress_height;
+    uint32_t progress_hit_slop_top;
+    uint32_t progress_hit_slop_bottom;
+    uint32_t time_label_height;
 } BasicPlayerMacosOverlayState;
 
 typedef NS_ENUM(uint32_t, BasicPlayerMacosOverlayActionKind) {
@@ -292,6 +301,15 @@ static NSString *player_format_duration(uint64_t millis) {
         .seekable_start_ms = 0,
         .seekable_end_ms = 0,
         .playback_rate = 1.0f,
+        .bar_height = 0,
+        .padding = 0,
+        .gap = 0,
+        .icon_size = 0,
+        .rate_width = 0,
+        .progress_height = 4,
+        .progress_hit_slop_top = 8,
+        .progress_hit_slop_bottom = 4,
+        .time_label_height = 14,
     };
     [self refreshVisualState];
     [self layoutControls];
@@ -340,7 +358,9 @@ static NSString *player_format_duration(uint64_t millis) {
     NSView *container_view = self.containerView ?: self.hostView;
     NSRect host_frame =
         [self.hostView convertRect:self.hostView.bounds toView:container_view];
-    CGFloat bar_height = MIN(MAX(host_frame.size.height / 5.0, 60.0), 88.0);
+    CGFloat bar_height = self.currentState.bar_height > 0
+                             ? (CGFloat)self.currentState.bar_height
+                             : MIN(MAX(host_frame.size.height / 5.0, 60.0), 88.0);
     self.overlayView.frame = NSMakeRect(
         host_frame.origin.x,
         [self overlayOriginYForHostFrame:host_frame
@@ -349,16 +369,33 @@ static NSString *player_format_duration(uint64_t millis) {
         host_frame.size.width,
         bar_height);
 
+    CGFloat progress_height = self.currentState.progress_height > 0
+                                  ? (CGFloat)self.currentState.progress_height
+                                  : 4.0;
     self.progressTrackLayer.frame =
-        CGRectMake(0.0, bar_height - 4.0, self.overlayView.bounds.size.width, 4.0);
+        CGRectMake(0.0,
+                   bar_height - progress_height,
+                   self.overlayView.bounds.size.width,
+                   progress_height);
     CGFloat progress_ratio = [self displayedProgressRatio];
     self.progressFillLayer.frame =
-        CGRectMake(0.0, bar_height - 4.0, floor(self.overlayView.bounds.size.width * progress_ratio), 4.0);
+        CGRectMake(0.0,
+                   bar_height - progress_height,
+                   floor(self.overlayView.bounds.size.width * progress_ratio),
+                   progress_height);
 
-    CGFloat padding = MAX(floor(bar_height / 5.0), 8.0);
-    CGFloat gap = MAX(floor(padding / 2.0), 8.0);
-    CGFloat icon_size = bar_height - padding * 2.0;
-    CGFloat rate_width = MAX(icon_size + 20.0, 58.0);
+    CGFloat padding = self.currentState.padding > 0
+                          ? (CGFloat)self.currentState.padding
+                          : MAX(floor(bar_height / 5.0), 8.0);
+    CGFloat gap = self.currentState.gap > 0
+                      ? (CGFloat)self.currentState.gap
+                      : MAX(floor(padding / 2.0), 8.0);
+    CGFloat icon_size = self.currentState.icon_size > 0
+                            ? (CGFloat)self.currentState.icon_size
+                            : bar_height - padding * 2.0;
+    CGFloat rate_width = self.currentState.rate_width > 0
+                             ? (CGFloat)self.currentState.rate_width
+                             : MAX(icon_size + 20.0, 58.0);
     CGFloat button_y = padding;
     CGFloat x = padding;
 
@@ -385,10 +422,13 @@ static NSString *player_format_duration(uint64_t millis) {
         rate_x += rate_width + gap;
     }
 
+    CGFloat time_label_height = self.currentState.time_label_height > 0
+                                    ? (CGFloat)self.currentState.time_label_height
+                                    : 14.0;
     self.timeLabel.frame = NSMakeRect(0.0,
-                                      button_y + floor((icon_size - 14.0) * 0.5),
+                                      floor((bar_height - time_label_height) * 0.5),
                                       self.overlayView.bounds.size.width,
-                                      14.0);
+                                      time_label_height);
 }
 
 - (CGFloat)overlayOriginYForHostFrame:(NSRect)host_frame
@@ -479,8 +519,14 @@ static NSString *player_format_duration(uint64_t millis) {
 
 - (BOOL)isPointInProgressTrack:(NSPoint)point {
     CGRect hit_rect = self.progressTrackLayer.frame;
-    hit_rect.origin.y = MAX(hit_rect.origin.y - 8.0, 0.0);
-    hit_rect.size.height += 12.0;
+    CGFloat top_slop = self.currentState.progress_hit_slop_top > 0
+                           ? (CGFloat)self.currentState.progress_hit_slop_top
+                           : 8.0;
+    CGFloat bottom_slop = self.currentState.progress_hit_slop_bottom > 0
+                              ? (CGFloat)self.currentState.progress_hit_slop_bottom
+                              : 4.0;
+    hit_rect.origin.y = MAX(hit_rect.origin.y - top_slop, 0.0);
+    hit_rect.size.height += top_slop + bottom_slop;
     return NSPointInRect(point, hit_rect);
 }
 

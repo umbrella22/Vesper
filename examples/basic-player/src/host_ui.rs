@@ -1,55 +1,13 @@
 #[cfg(not(target_os = "macos"))]
 use player_render_wgpu::RgbaOverlayFrame;
 #[cfg(not(target_os = "macos"))]
-use player_runtime::{PlayerSnapshot, PlayerTimelineKind, PresentationState};
+use player_runtime::PlayerSnapshot;
+
+pub use crate::desktop_ui::{CONTROL_RATES, ControlAction, SeekPreview};
 #[cfg(not(target_os = "macos"))]
-use std::time::Duration;
-
-pub const CONTROL_RATES: &[(f32, &str)] = &[
-    (0.5, "0.5X"),
-    (1.0, "1X"),
-    (1.5, "1.5X"),
-    (2.0, "2X"),
-    (3.0, "3X"),
-];
-
-#[derive(Debug, Clone, Copy)]
-pub enum ControlAction {
-    SeekStart,
-    SeekBack,
-    TogglePause,
-    Stop,
-    SeekForward,
-    SeekEnd,
-    SetRate(f32),
-    SeekToRatio(f32),
-}
-
-#[cfg(not(target_os = "macos"))]
-#[derive(Debug, Clone, Copy)]
-pub struct SeekPreview {
-    pub position: Duration,
-    pub ratio: f64,
-}
-
-#[cfg(not(target_os = "macos"))]
-#[derive(Debug, Clone, Copy)]
-struct Rect {
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-}
-
-#[cfg(not(target_os = "macos"))]
-impl Rect {
-    fn contains(self, x: u32, y: u32) -> bool {
-        x >= self.x
-            && x < self.x.saturating_add(self.width)
-            && y >= self.y
-            && y < self.y.saturating_add(self.height)
-    }
-}
+use crate::desktop_ui::{
+    DesktopUiLayoutMetrics, DesktopUiRect, DesktopUiViewModel, is_scrubbable_timeline,
+};
 
 #[cfg(not(target_os = "macos"))]
 #[derive(Debug, Clone, Copy)]
@@ -66,7 +24,7 @@ enum ControlVisual {
 #[cfg(not(target_os = "macos"))]
 #[derive(Debug, Clone, Copy)]
 struct ControlButton {
-    rect: Rect,
+    rect: DesktopUiRect,
     action: ControlAction,
     visual: ControlVisual,
 }
@@ -74,8 +32,10 @@ struct ControlButton {
 #[cfg(not(target_os = "macos"))]
 #[derive(Debug, Clone)]
 struct ControlLayout {
-    bar_rect: Rect,
-    progress_rect: Rect,
+    metrics: DesktopUiLayoutMetrics,
+    bar_rect: DesktopUiRect,
+    progress_rect: DesktopUiRect,
+    progress_hit_rect: DesktopUiRect,
     buttons: Vec<ControlButton>,
 }
 
@@ -91,14 +51,14 @@ pub fn render_control_overlay(
     }
 
     let layout = control_layout(frame_width, frame_height)?;
+    let view_model = DesktopUiViewModel::from_snapshot(snapshot, true, seek_preview);
     let mut overlay_bytes = vec![0; frame_width as usize * frame_height as usize * 4];
     draw_control_bar(
         &mut overlay_bytes,
         frame_width,
         frame_height,
-        snapshot,
+        &view_model,
         &layout,
-        seek_preview,
     );
 
     Some(RgbaOverlayFrame {
@@ -154,7 +114,7 @@ pub fn seek_preview_at(
     let y = cursor_y
         .round()
         .clamp(0.0, f64::from(frame_height.saturating_sub(1))) as u32;
-    if !layout.progress_rect.contains(x, y) {
+    if !layout.progress_hit_rect.contains(x, y) {
         return None;
     }
 
@@ -180,33 +140,19 @@ pub fn seek_preview_for_drag(
 
 #[cfg(not(target_os = "macos"))]
 fn control_layout(frame_width: u32, frame_height: u32) -> Option<ControlLayout> {
-    if frame_width == 0 || frame_height == 0 {
-        return None;
-    }
-
-    let bar_height = (frame_height / 5).clamp(60, 88);
-    let padding = (bar_height / 5).max(8);
-    let gap = (padding / 2).max(8);
-    let icon_size = bar_height.saturating_sub(padding * 2);
-    let rate_width = (icon_size + 20).max(58);
-    let bar_rect = Rect {
+    let metrics = DesktopUiLayoutMetrics::for_surface(frame_width, frame_height)?;
+    let bar_rect = DesktopUiRect {
         x: 0,
-        y: frame_height.saturating_sub(bar_height),
+        y: metrics.overlay_origin_y(frame_height),
         width: frame_width,
-        height: bar_height,
+        height: metrics.bar_height,
     };
-    let progress_rect = Rect {
-        x: 0,
-        y: bar_rect.y,
-        width: frame_width,
-        height: 4,
-    };
-    let y = frame_height
-        .saturating_sub(bar_height)
-        .saturating_add(padding);
+    let progress_rect = metrics.progress_rect(frame_width, frame_height);
+    let progress_hit_rect = metrics.progress_hit_rect(frame_width, frame_height);
+    let y = metrics.button_origin_y(frame_height);
 
     let mut buttons = Vec::new();
-    let mut x = padding;
+    let mut x = metrics.padding;
     for (action, visual) in [
         (ControlAction::SeekStart, ControlVisual::SeekStart),
         (ControlAction::SeekBack, ControlVisual::SeekBack),
@@ -216,38 +162,40 @@ fn control_layout(frame_width: u32, frame_height: u32) -> Option<ControlLayout> 
         (ControlAction::SeekEnd, ControlVisual::SeekEnd),
     ] {
         buttons.push(ControlButton {
-            rect: Rect {
+            rect: DesktopUiRect {
                 x,
                 y,
-                width: icon_size,
-                height: icon_size,
+                width: metrics.icon_size,
+                height: metrics.icon_size,
             },
             action,
             visual,
         });
-        x = x.saturating_add(icon_size + gap);
+        x = x.saturating_add(metrics.icon_size + metrics.gap);
     }
 
-    let total_rate_width = CONTROL_RATES.len() as u32 * rate_width
-        + CONTROL_RATES.len().saturating_sub(1) as u32 * gap;
-    let mut rate_x = frame_width.saturating_sub(padding + total_rate_width);
+    let total_rate_width = CONTROL_RATES.len() as u32 * metrics.rate_width
+        + CONTROL_RATES.len().saturating_sub(1) as u32 * metrics.gap;
+    let mut rate_x = frame_width.saturating_sub(metrics.padding + total_rate_width);
     for &(rate, label) in CONTROL_RATES {
         buttons.push(ControlButton {
-            rect: Rect {
+            rect: DesktopUiRect {
                 x: rate_x,
                 y,
-                width: rate_width,
-                height: icon_size,
+                width: metrics.rate_width,
+                height: metrics.icon_size,
             },
             action: ControlAction::SetRate(rate),
             visual: ControlVisual::Rate(label),
         });
-        rate_x = rate_x.saturating_add(rate_width + gap);
+        rate_x = rate_x.saturating_add(metrics.rate_width + metrics.gap);
     }
 
     Some(ControlLayout {
+        metrics,
         bar_rect,
         progress_rect,
+        progress_hit_rect,
         buttons,
     })
 }
@@ -257,9 +205,8 @@ fn draw_control_bar(
     frame: &mut [u8],
     frame_width: u32,
     frame_height: u32,
-    snapshot: &PlayerSnapshot,
+    view_model: &DesktopUiViewModel,
     layout: &ControlLayout,
-    seek_preview: Option<SeekPreview>,
 ) {
     fill_rect(
         frame,
@@ -276,16 +223,15 @@ fn draw_control_bar(
         layout.progress_rect,
         [255, 255, 255, 38],
     );
-    if let Some(ratio) = seek_preview
-        .map(|preview| preview.ratio)
-        .or_else(|| snapshot.timeline.displayed_ratio())
-    {
-        let progress_width = (ratio.clamp(0.0, 1.0) * f64::from(frame_width)).round() as u32;
+    if let Some(ratio) = view_model.displayed_progress_ratio {
+        let progress_width =
+            (ratio.clamp(0.0, 1.0) * f64::from(layout.progress_rect.width)).round() as u32;
         fill_rect(
             frame,
             frame_width,
             frame_height,
-            Rect {
+            DesktopUiRect {
+                x: layout.progress_rect.x,
                 width: progress_width,
                 ..layout.progress_rect
             },
@@ -296,7 +242,7 @@ fn draw_control_bar(
     for button in &layout.buttons {
         let is_active = match button.action {
             ControlAction::TogglePause => true,
-            ControlAction::SetRate(rate) => (snapshot.playback_rate - rate).abs() < 0.05,
+            ControlAction::SetRate(rate) => view_model.is_rate_active(rate),
             ControlAction::SeekToRatio(_) => false,
             _ => false,
         };
@@ -319,7 +265,7 @@ fn draw_control_bar(
         fill_rect(frame, frame_width, frame_height, button.rect, fill);
         stroke_rect(frame, frame_width, frame_height, button.rect, border, 2);
 
-        let label = button_label(*button, snapshot.state);
+        let label = button_label(*button, view_model.play_pause_label);
         let scale = match button.visual {
             ControlVisual::Rate(_) => 2,
             _ => 3,
@@ -346,32 +292,20 @@ fn draw_control_bar(
         );
     }
 
-    let displayed_position = seek_preview
-        .map(|preview| preview.position)
-        .unwrap_or(snapshot.timeline.position);
-    let time_label = format!(
-        "{}/{}",
-        format_duration(displayed_position),
-        snapshot
-            .timeline
-            .duration
-            .map(format_duration)
-            .unwrap_or_else(|| "--:--".to_owned())
-    );
     let time_scale = 2;
-    let time_width = measure_text(&time_label, time_scale);
+    let time_width = measure_text(&view_model.time_label, time_scale);
     let time_x = frame_width.saturating_sub(time_width) / 2;
     let time_y = layout
         .bar_rect
         .y
-        .saturating_add((layout.bar_rect.height.saturating_sub(14)) / 2);
+        .saturating_add(layout.metrics.time_label_offset_y());
     draw_text(
         frame,
         frame_width,
         frame_height,
         time_x,
         time_y,
-        &time_label,
+        &view_model.time_label,
         time_scale,
         [244, 246, 248, 255],
     );
@@ -379,13 +313,7 @@ fn draw_control_bar(
 
 #[cfg(not(target_os = "macos"))]
 fn preview_for_progress_ratio(snapshot: &PlayerSnapshot, ratio: f64) -> Option<SeekPreview> {
-    if !snapshot.timeline.is_seekable {
-        return None;
-    }
-    if !matches!(
-        snapshot.timeline.kind,
-        PlayerTimelineKind::Vod | PlayerTimelineKind::LiveDvr
-    ) {
+    if !is_scrubbable_timeline(snapshot) {
         return None;
     }
 
@@ -398,7 +326,7 @@ fn preview_for_progress_ratio(snapshot: &PlayerSnapshot, ratio: f64) -> Option<S
 }
 
 #[cfg(not(target_os = "macos"))]
-fn ratio_for_progress_x(progress_rect: Rect, cursor_x: f64) -> f64 {
+fn ratio_for_progress_x(progress_rect: DesktopUiRect, cursor_x: f64) -> f64 {
     if progress_rect.width == 0 {
         return 0.0;
     }
@@ -407,31 +335,16 @@ fn ratio_for_progress_x(progress_rect: Rect, cursor_x: f64) -> f64 {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn button_label(button: ControlButton, state: PresentationState) -> &'static str {
+fn button_label(button: ControlButton, play_pause_label: &'static str) -> &'static str {
     match button.visual {
         ControlVisual::SeekStart => "|<",
         ControlVisual::SeekBack => "<<",
-        ControlVisual::PlayPause => {
-            if matches!(state, PresentationState::Playing) {
-                "||"
-            } else {
-                "|>"
-            }
-        }
+        ControlVisual::PlayPause => play_pause_label,
         ControlVisual::Stop => "[]",
         ControlVisual::SeekForward => ">>",
         ControlVisual::SeekEnd => ">|",
         ControlVisual::Rate(label) => label,
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn format_duration(duration: std::time::Duration) -> String {
-    let total_seconds = duration.as_secs();
-    let minutes = total_seconds / 60;
-    let seconds = total_seconds % 60;
-
-    format!("{minutes:02}:{seconds:02}")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -470,7 +383,7 @@ fn draw_text(
                     frame,
                     frame_width,
                     frame_height,
-                    Rect {
+                    DesktopUiRect {
                         x: glyph_x.saturating_add(column * scale),
                         y: y.saturating_add(row_index as u32 * scale),
                         width: scale,
@@ -551,7 +464,13 @@ fn glyph_rows(character: char) -> Option<[u8; 7]> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn fill_rect(frame: &mut [u8], frame_width: u32, frame_height: u32, rect: Rect, color: [u8; 4]) {
+fn fill_rect(
+    frame: &mut [u8],
+    frame_width: u32,
+    frame_height: u32,
+    rect: DesktopUiRect,
+    color: [u8; 4],
+) {
     let x_end = rect.x.saturating_add(rect.width).min(frame_width);
     let y_end = rect.y.saturating_add(rect.height).min(frame_height);
     for y in rect.y.min(frame_height)..y_end {
@@ -566,7 +485,7 @@ fn stroke_rect(
     frame: &mut [u8],
     frame_width: u32,
     frame_height: u32,
-    rect: Rect,
+    rect: DesktopUiRect,
     color: [u8; 4],
     thickness: u32,
 ) {
@@ -574,7 +493,7 @@ fn stroke_rect(
         frame,
         frame_width,
         frame_height,
-        Rect {
+        DesktopUiRect {
             x: rect.x,
             y: rect.y,
             width: rect.width,
@@ -586,7 +505,7 @@ fn stroke_rect(
         frame,
         frame_width,
         frame_height,
-        Rect {
+        DesktopUiRect {
             x: rect.x,
             y: rect.y.saturating_add(rect.height.saturating_sub(thickness)),
             width: rect.width,
@@ -598,7 +517,7 @@ fn stroke_rect(
         frame,
         frame_width,
         frame_height,
-        Rect {
+        DesktopUiRect {
             x: rect.x,
             y: rect.y,
             width: thickness.min(rect.width),
@@ -610,7 +529,7 @@ fn stroke_rect(
         frame,
         frame_width,
         frame_height,
-        Rect {
+        DesktopUiRect {
             x: rect.x.saturating_add(rect.width.saturating_sub(thickness)),
             y: rect.y,
             width: thickness.min(rect.width),
