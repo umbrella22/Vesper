@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.TimelineUiState
 import io.github.ikaros.vesper.player.android.VesperAbrMode
@@ -12,109 +14,158 @@ import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionMode
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
+import java.util.Locale
 
-internal fun speedBadge(rate: Float): String = "${formatRate(rate)}x"
+@Composable
+internal fun speedBadge(rate: Float): String =
+    stringResource(R.string.example_unit_playback_rate, formatRate(rate))
 
+@Composable
 internal fun qualityButtonLabel(
     trackCatalog: VesperTrackCatalog,
     trackSelection: VesperTrackSelectionSnapshot,
-): String =
-    when (trackSelection.abrPolicy.mode) {
-        VesperAbrMode.FixedTrack ->
-            trackCatalog.videoTracks.firstOrNull { it.id == trackSelection.abrPolicy.trackId }
-                ?.let(::qualityLabel)
-                ?: "Quality"
+): String {
+    val selectedTrack =
+        trackCatalog.videoTracks.firstOrNull { it.id == trackSelection.abrPolicy.trackId }
 
+    return when (trackSelection.abrPolicy.mode) {
+        VesperAbrMode.FixedTrack ->
+            if (selectedTrack != null) {
+                qualityLabel(selectedTrack)
+            } else {
+                stringResource(R.string.example_common_quality)
+            }
         VesperAbrMode.Constrained,
         VesperAbrMode.Auto,
-        -> "Auto"
+        -> stringResource(R.string.example_common_auto)
     }
+}
 
+@Composable
 internal fun audioButtonLabel(
     trackCatalog: VesperTrackCatalog,
     trackSelection: VesperTrackSelectionSnapshot,
-): String =
-    when (trackSelection.audio.mode) {
+): String {
+    val selectedTrack =
+        trackCatalog.audioTracks.firstOrNull { it.id == trackSelection.audio.trackId }
+
+    return when (trackSelection.audio.mode) {
         VesperTrackSelectionMode.Track ->
-            trackCatalog.audioTracks.firstOrNull { it.id == trackSelection.audio.trackId }
-                ?.let(::audioLabel)
-                ?: "Audio"
-
-        else -> "Audio"
+            if (selectedTrack != null) {
+                audioLabel(selectedTrack)
+            } else {
+                stringResource(R.string.example_common_audio)
+            }
+        else -> stringResource(R.string.example_common_audio)
     }
+}
 
+@Composable
 internal fun subtitleButtonLabel(
     trackCatalog: VesperTrackCatalog,
     trackSelection: VesperTrackSelectionSnapshot,
-): String =
-    when (trackSelection.subtitle.mode) {
-        VesperTrackSelectionMode.Disabled -> "CC Off"
+): String {
+    val selectedTrack =
+        trackCatalog.subtitleTracks.firstOrNull { it.id == trackSelection.subtitle.trackId }
+
+    return when (trackSelection.subtitle.mode) {
+        VesperTrackSelectionMode.Disabled -> stringResource(R.string.example_common_cc_off)
         VesperTrackSelectionMode.Track ->
-            trackCatalog.subtitleTracks.firstOrNull { it.id == trackSelection.subtitle.trackId }
-                ?.let(::subtitleLabel)
-                ?: "Subtitles"
+            if (selectedTrack != null) {
+                subtitleLabel(selectedTrack)
+            } else {
+                stringResource(R.string.example_common_subtitles)
+            }
 
-        VesperTrackSelectionMode.Auto -> "CC Auto"
+        VesperTrackSelectionMode.Auto -> stringResource(R.string.example_common_cc_auto)
     }
+}
 
+@Composable
 internal fun qualityLabel(track: VesperMediaTrack): String =
     buildString {
         when {
             track.height != null -> append("${track.height}p")
             track.width != null && track.height != null -> append("${track.width}×${track.height}")
             track.label != null -> append(track.label)
-            else -> append("Video Track")
+            else -> append(stringResource(R.string.example_common_video_track))
         }
     }
 
-internal fun qualitySubtitle(track: VesperMediaTrack): String =
-    listOfNotNull(
-        track.codec,
-        track.bitRate?.let(::formatBitRate),
-    ).joinToString(" • ").ifBlank { "Fixed video variant" }
+@Composable
+internal fun qualitySubtitle(track: VesperMediaTrack): String {
+    val bitRate = track.bitRate
+    val bitRateText = if (bitRate != null) formatBitRate(bitRate) else null
+    return listOfNotNull(track.codec, bitRateText)
+        .joinToString(" • ")
+        .ifBlank { stringResource(R.string.example_common_fixed_video_variant) }
+}
 
+@Composable
 internal fun audioLabel(track: VesperMediaTrack): String =
-    track.label ?: track.language?.uppercase() ?: "Audio Track"
+    track.label ?: track.language?.uppercase() ?: stringResource(R.string.example_common_audio_track)
 
-internal fun audioSubtitle(track: VesperMediaTrack): String =
-    listOfNotNull(
+@Composable
+internal fun audioSubtitle(track: VesperMediaTrack): String {
+    val channelCount = track.channels
+    val sampleRateHz = track.sampleRate
+    val channels =
+        if (channelCount != null) {
+            stringResource(R.string.example_unit_audio_channels, channelCount)
+        } else {
+            null
+        }
+    val sampleRate =
+        if (sampleRateHz != null) {
+            stringResource(R.string.example_unit_audio_sample_rate_khz, sampleRateHz / 1000)
+        } else {
+            null
+        }
+    return listOfNotNull(
         track.language?.uppercase(),
-        track.channels?.let { "$it ch" },
-        track.sampleRate?.let { "${it / 1000} kHz" },
+        channels,
+        sampleRate,
         track.codec,
-    ).joinToString(" • ").ifBlank { "Audio program" }
+    ).joinToString(" • ").ifBlank { stringResource(R.string.example_common_audio_program) }
+}
 
+@Composable
 internal fun subtitleLabel(track: VesperMediaTrack): String =
-    track.label ?: track.language?.uppercase() ?: "Subtitle Track"
+    track.label ?: track.language?.uppercase() ?: stringResource(R.string.example_common_subtitle_track)
 
+@Composable
 internal fun subtitleSubtitle(track: VesperMediaTrack): String =
     listOfNotNull(
         track.language?.uppercase(),
-        if (track.isForced) "Forced" else null,
-        if (track.isDefault) "Default" else null,
-    ).joinToString(" • ").ifBlank { "Subtitle option" }
+        if (track.isForced) stringResource(R.string.example_common_forced) else null,
+        if (track.isDefault) stringResource(R.string.example_common_default) else null,
+    ).joinToString(" • ").ifBlank { stringResource(R.string.example_common_subtitle_option) }
 
+@Composable
 internal fun stageBadgeText(timeline: TimelineUiState): String =
     when (timeline.kind) {
-        TimelineKind.Live -> "Live stream"
-        TimelineKind.LiveDvr -> "Live with DVR window"
-        TimelineKind.Vod -> "Video on demand"
+        TimelineKind.Live -> stringResource(R.string.example_stage_live_stream)
+        TimelineKind.LiveDvr -> stringResource(R.string.example_stage_live_with_dvr_window)
+        TimelineKind.Vod -> stringResource(R.string.example_stage_video_on_demand)
     }
 
+@Composable
 internal fun liveButtonLabel(timeline: TimelineUiState): String {
-    val liveEdge = timeline.liveEdgeMs ?: return "Go Live"
+    val liveEdge = timeline.liveEdgeMs ?: return stringResource(R.string.example_stage_go_live)
     val behindMs = (liveEdge - timeline.positionMs).coerceAtLeast(0L)
     return if (behindMs > 1_500L) {
-        "LIVE -${formatMillis(behindMs)}"
+        stringResource(R.string.example_stage_live_behind, formatMillis(behindMs))
     } else {
-        "LIVE"
+        stringResource(R.string.example_stage_live)
     }
 }
 
+@Composable
 internal fun timelineSummary(
     timeline: TimelineUiState,
     pendingSeekRatio: Float?,
 ): String {
+    val liveEdgeMs = timeline.liveEdgeMs
     val displayedPosition =
         pendingSeekRatio?.let { ratio ->
             val range = timeline.seekableRange
@@ -127,10 +178,11 @@ internal fun timelineSummary(
 
     return when (timeline.kind) {
         TimelineKind.Live ->
-            timeline.liveEdgeMs?.let { "LIVE • Edge ${formatMillis(it)}" } ?: "LIVE"
+            liveEdgeMs?.let { stringResource(R.string.example_stage_live_edge, formatMillis(it)) }
+                ?: stringResource(R.string.example_stage_live)
 
         TimelineKind.LiveDvr -> {
-            val liveEdge = timeline.liveEdgeMs ?: timeline.durationMs ?: 0L
+            val liveEdge = liveEdgeMs ?: timeline.durationMs ?: 0L
             "${formatMillis(displayedPosition)} / ${formatMillis(liveEdge)}"
         }
 
@@ -139,21 +191,22 @@ internal fun timelineSummary(
     }
 }
 
+@Composable
 internal fun formatBitRate(value: Long): String =
     when {
-        value >= 1_000_000L -> String.format("%.1f Mbps", value / 1_000_000.0)
-        value >= 1_000L -> String.format("%.0f kbps", value / 1_000.0)
-        else -> "$value bps"
+        value >= 1_000_000L -> stringResource(R.string.example_unit_bitrate_mbps, value / 1_000_000.0)
+        value >= 1_000L -> stringResource(R.string.example_unit_bitrate_kbps, value / 1_000.0)
+        else -> stringResource(R.string.example_unit_bitrate_bps, value)
     }
 
 internal fun formatMillis(value: Long): String {
     val totalSeconds = value / 1000L
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
-    return "%02d:%02d".format(minutes, seconds)
+    return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
 }
 
-internal fun formatRate(value: Float): String = "%.1f".format(value)
+internal fun formatRate(value: Float): String = String.format(Locale.getDefault(), "%.1f", value)
 
 internal fun displayNameForUri(context: Context, uri: Uri): String {
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)

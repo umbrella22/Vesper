@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.ikaros.vesper.player.android.PlayerHostUiState
@@ -65,30 +66,30 @@ internal fun ExampleSelectionSheet(
             ) {
                 Text(
                     text = when (sheet) {
-                        ExamplePlayerSheet.Menu -> "Playback Tools"
-                        ExamplePlayerSheet.Quality -> "Quality"
-                        ExamplePlayerSheet.Audio -> "Audio"
-                        ExamplePlayerSheet.Subtitle -> "Subtitles"
-                        ExamplePlayerSheet.Speed -> "Playback Speed"
+                        ExamplePlayerSheet.Menu -> stringResource(R.string.example_common_playback_tools)
+                        ExamplePlayerSheet.Quality -> stringResource(R.string.example_common_quality)
+                        ExamplePlayerSheet.Audio -> stringResource(R.string.example_common_audio)
+                        ExamplePlayerSheet.Subtitle -> stringResource(R.string.example_common_subtitles)
+                        ExamplePlayerSheet.Speed -> stringResource(R.string.example_common_playback_speed)
                     },
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                 )
                 Text(
                     text = when (sheet) {
                         ExamplePlayerSheet.Menu ->
-                            "Open track, subtitle, quality, and speed controls without crowding the player overlay."
+                            stringResource(R.string.example_sheet_menu_subtitle)
 
                         ExamplePlayerSheet.Quality ->
-                            "Switch adaptive video or pin the stream to a specific quality track."
+                            stringResource(R.string.example_sheet_quality_subtitle)
 
                         ExamplePlayerSheet.Audio ->
-                            "Pick an audio program exposed by the current stream."
+                            stringResource(R.string.example_sheet_audio_subtitle)
 
                         ExamplePlayerSheet.Subtitle ->
-                            "Choose subtitles or turn them off."
+                            stringResource(R.string.example_sheet_subtitle_subtitle)
 
                         ExamplePlayerSheet.Speed ->
-                            "Preview playback behavior at different speeds."
+                            stringResource(R.string.example_sheet_speed_subtitle)
                     },
                     style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF98A1B3)),
                 )
@@ -102,7 +103,7 @@ internal fun ExampleSelectionSheet(
                     ExamplePlayerSheet.Menu -> {
                         item {
                             SelectionRow(
-                                title = "Playback Speed",
+                                title = stringResource(R.string.example_common_playback_speed),
                                 subtitle = speedBadge(uiState.playbackRate),
                                 selected = false,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Speed) },
@@ -110,7 +111,7 @@ internal fun ExampleSelectionSheet(
                         }
                         item {
                             SelectionRow(
-                                title = "Audio",
+                                title = stringResource(R.string.example_common_audio),
                                 subtitle = audioButtonLabel(trackCatalog, trackSelection),
                                 selected = false,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Audio) },
@@ -118,7 +119,7 @@ internal fun ExampleSelectionSheet(
                         }
                         item {
                             SelectionRow(
-                                title = "Subtitles",
+                                title = stringResource(R.string.example_common_subtitles),
                                 subtitle = subtitleButtonLabel(trackCatalog, trackSelection),
                                 selected = false,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Subtitle) },
@@ -126,7 +127,7 @@ internal fun ExampleSelectionSheet(
                         }
                         item {
                             SelectionRow(
-                                title = "Quality",
+                                title = stringResource(R.string.example_common_quality),
                                 subtitle = qualityButtonLabel(trackCatalog, trackSelection),
                                 selected = false,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Quality) },
@@ -137,11 +138,11 @@ internal fun ExampleSelectionSheet(
                     ExamplePlayerSheet.Quality -> {
                         item {
                             SelectionRow(
-                                title = "Auto",
+                                title = stringResource(R.string.example_common_auto),
                                 subtitle = if (trackCatalog.adaptiveVideo) {
-                                    "Let the player adapt quality automatically."
+                                    stringResource(R.string.example_sheet_quality_auto_subtitle)
                                 } else {
-                                    "Current route does not expose adaptive video switching."
+                                    stringResource(R.string.example_sheet_quality_auto_unavailable)
                                 },
                                 selected = trackSelection.abrPolicy.mode == VesperAbrMode.Auto,
                                 onClick = { onSelectQuality(VesperAbrPolicy.auto()) },
@@ -162,8 +163,8 @@ internal fun ExampleSelectionSheet(
                     ExamplePlayerSheet.Audio -> {
                         item {
                             SelectionRow(
-                                title = "Auto",
-                                subtitle = "Use the player's default audio selection.",
+                                title = stringResource(R.string.example_common_auto),
+                                subtitle = stringResource(R.string.example_sheet_audio_auto_subtitle),
                                 selected = trackSelection.audio.mode == VesperTrackSelectionMode.Auto,
                                 onClick = { onSelectAudio(VesperTrackSelection.auto()) },
                             )
@@ -183,16 +184,16 @@ internal fun ExampleSelectionSheet(
                     ExamplePlayerSheet.Subtitle -> {
                         item {
                             SelectionRow(
-                                title = "Off",
-                                subtitle = "Hide subtitle rendering.",
+                                title = stringResource(R.string.example_common_off),
+                                subtitle = stringResource(R.string.example_sheet_subtitle_off_subtitle),
                                 selected = trackSelection.subtitle.mode == VesperTrackSelectionMode.Disabled,
                                 onClick = { onSelectSubtitle(VesperTrackSelection.disabled()) },
                             )
                         }
                         item {
                             SelectionRow(
-                                title = "Auto",
-                                subtitle = "Use the stream's default subtitle behavior.",
+                                title = stringResource(R.string.example_common_auto),
+                                subtitle = stringResource(R.string.example_sheet_subtitle_auto_subtitle),
                                 selected = trackSelection.subtitle.mode == VesperTrackSelectionMode.Auto,
                                 onClick = { onSelectSubtitle(VesperTrackSelection.auto()) },
                             )
@@ -215,9 +216,9 @@ internal fun ExampleSelectionSheet(
                                 title = speedBadge(rate),
                                 subtitle =
                                     if (rate == uiState.playbackRate) {
-                                        "Currently active."
+                                        stringResource(R.string.example_sheet_speed_currently_active)
                                     } else {
-                                        "Apply this speed immediately."
+                                        stringResource(R.string.example_sheet_speed_apply_immediately)
                                     },
                                 selected = uiState.playbackRate == rate,
                                 onClick = { onSelectSpeed(rate) },

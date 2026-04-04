@@ -134,7 +134,7 @@ struct PlayerHostView: View {
             ExampleVideoPicker { selection in
                 isVideoPickerPresented = false
                 guard let selection else { return }
-                hostMessage = "Preparing video from Photos..."
+                hostMessage = ExampleI18n.preparingVideoFromPhotos
                 Task(priority: .userInitiated) {
                     try? await Task.sleep(for: .milliseconds(160))
                     await handlePickedVideoSelection(selection)
@@ -193,11 +193,11 @@ struct PlayerHostView: View {
     private func openRemoteSource() {
         let trimmed = remoteStreamUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), !trimmed.isEmpty else {
-            hostMessage = "Please enter a valid remote URL."
+            hostMessage = ExampleI18n.invalidRemoteUrl
             return
         }
         hostMessage = nil
-        controller.selectSource(VesperPlayerSource.remoteUrl(url, label: "Custom Remote URL"))
+        controller.selectSource(VesperPlayerSource.remoteUrl(url, label: ExampleI18n.customRemoteUrlLabel))
         controlsVisible = true
     }
 
@@ -273,10 +273,10 @@ struct PlayerHostView: View {
                 }
             }
         case .denied, .restricted:
-            hostMessage = "Photo Library access is required to pick videos from Photos."
+            hostMessage = ExampleI18n.photoLibraryAccessRequired
             exampleIosHostLog("photo library access denied: \(status.rawValue)")
         @unknown default:
-            hostMessage = "Unknown Photo Library authorization state."
+            hostMessage = ExampleI18n.unknownPhotoAuthorizationState
             exampleIosHostLog("photo library access unknown")
         }
     }
@@ -288,12 +288,12 @@ struct PlayerHostView: View {
             exampleIosHostLog("photo library access granted: \(status.rawValue)")
             isVideoPickerPresented = true
         case .denied, .restricted:
-            hostMessage = "Photo Library access is required to pick videos from Photos."
+            hostMessage = ExampleI18n.photoLibraryAccessRequired
             exampleIosHostLog("photo library access denied after prompt: \(status.rawValue)")
         case .notDetermined:
             exampleIosHostLog("photo library access still not determined")
         @unknown default:
-            hostMessage = "Unknown Photo Library authorization state."
+            hostMessage = ExampleI18n.unknownPhotoAuthorizationState
             exampleIosHostLog("photo library access unknown after prompt")
         }
     }
@@ -314,13 +314,13 @@ struct PlayerHostView: View {
                 }
             } else {
                 await MainActor.run {
-                    hostMessage = "Failed to load the selected video from Photos."
+                    hostMessage = ExampleI18n.failedToLoadSelectedVideoFromPhotos
                     exampleIosHostLog("picked photo video returned nil provider payload")
                 }
             }
         } catch {
             await MainActor.run {
-                hostMessage = "Failed to load selected photo video: \(error.localizedDescription)"
+                hostMessage = ExampleI18n.failedToLoadSelectedPhotoVideo(error.localizedDescription)
                 exampleIosHostLog("picked photo video failed: \(error.localizedDescription)")
             }
         }

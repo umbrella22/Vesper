@@ -1,0 +1,22 @@
+<resources>
+    <string name="vesper_player_title">Vesper</string>
+    <string name="vesper_bridge_native_ready">Android JNI/ExoPlayer 桥接</string>
+    <string name="vesper_bridge_preview_ready">Android 宿主预览桥接</string>
+    <string name="vesper_bridge_no_source_selected">未选择媒体源</string>
+    <string name="vesper_bridge_select_source_prompt">请选择一个媒体源开始播放</string>
+    <string name="vesper_bridge_stub_error">Android JNI 桥接桩：%1$s</string>
+    <string name="vesper_bridge_native_bindings_unavailable">原生绑定不可用</string>
+    <string name="vesper_bridge_opening_source">正在打开 %1$s</string>
+    <string name="vesper_bridge_source_local">Android JNI + ExoPlayer 已就绪（本地源）</string>
+    <string name="vesper_bridge_source_remote">Android JNI + ExoPlayer 已就绪（%1$s 远程源）</string>
+    <string name="vesper_bridge_source_surface_attached">%1$s / 已连接渲染表面</string>
+    <string name="vesper_bridge_source_surface_detached">%1$s / 已断开渲染表面</string>
+    <string name="vesper_bridge_surface_attached_no_source">Android JNI + ExoPlayer 已就绪 / 已连接渲染表面</string>
+    <string name="vesper_bridge_surface_detached_no_source">Android JNI + ExoPlayer 已就绪 / 已断开渲染表面</string>
+    <string name="vesper_bridge_retry_scheduled">将在 %1$s 后重试（第 %2$d 次）</string>
+    <string name="vesper_bridge_native_error">Android 原生桥接错误：%1$s</string>
+    <string name="vesper_bridge_preview_source_local">Android 宿主预览桥接（本地源）</string>
+    <string name="vesper_bridge_preview_source_remote">Android 宿主预览桥接（%1$s 远程源）</string>
+    <string name="vesper_bridge_retry_delay_seconds_int">%1$d秒</string>
+    <string name="vesper_bridge_retry_delay_seconds_decimal">%1$.1f秒</string>
+</resources>

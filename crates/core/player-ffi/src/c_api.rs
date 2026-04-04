@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{c_char, CStr, CString};
 use std::mem;
 use std::ptr;
 
@@ -160,6 +160,7 @@ pub enum PlayerFfiEventKind {
     Error = 9,
     Ended = 10,
     InterruptionChanged = 11,
+    RetryScheduled = 12,
 }
 
 #[repr(C)]
@@ -413,6 +414,8 @@ pub struct PlayerFfiEvent {
     pub audio_output: PlayerFfiAudioOutputInfo,
     pub playback_rate: f32,
     pub seek_position_ms: u64,
+    pub retry_attempt: u32,
+    pub retry_delay_ms: u64,
     pub error: PlayerFfiError,
 }
 
@@ -895,6 +898,12 @@ impl From<BridgeEvent> for PlayerFfiEvent {
             BridgeEvent::SeekCompleted { position_ms } => Self {
                 kind: PlayerFfiEventKind::SeekCompleted,
                 seek_position_ms: position_ms,
+                ..Self::default()
+            },
+            BridgeEvent::RetryScheduled { attempt, delay_ms } => Self {
+                kind: PlayerFfiEventKind::RetryScheduled,
+                retry_attempt: attempt,
+                retry_delay_ms: delay_ms,
                 ..Self::default()
             },
             BridgeEvent::Error(error) => Self {

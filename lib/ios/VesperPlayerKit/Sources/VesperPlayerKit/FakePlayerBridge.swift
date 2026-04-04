@@ -31,9 +31,9 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         _ = resiliencePolicy
         currentSource = initialSource
         publishedUiState = PlayerHostUiState(
-            title: "Vesper",
-            subtitle: initialSource.map(previewSourceSubtitle) ?? "iOS host preview bridge",
-            sourceLabel: initialSource?.label ?? "No source selected",
+            title: VesperPlayerI18n.playerTitle,
+            subtitle: initialSource.map(previewSourceSubtitle) ?? VesperPlayerI18n.previewBridgeReady,
+            sourceLabel: initialSource?.label ?? VesperPlayerI18n.noSourceSelected,
             playbackState: .ready,
             playbackRate: 1.0,
             isBuffering: false,
@@ -273,8 +273,8 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 private func previewSourceSubtitle(_ source: VesperPlayerSource) -> String {
     switch source.kind {
     case .local:
-        return "iOS host preview bridge (local source)"
+        return VesperPlayerI18n.previewLocalSourceSubtitle()
     case .remote:
-        return "iOS host preview bridge (\(source.protocol.rawValue) remote source)"
+        return VesperPlayerI18n.previewRemoteSourceSubtitle(source.protocol.rawValue)
     }
 }

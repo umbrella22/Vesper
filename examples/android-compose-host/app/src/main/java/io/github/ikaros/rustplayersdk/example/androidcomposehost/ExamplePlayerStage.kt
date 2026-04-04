@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -176,7 +177,7 @@ internal fun ExamplePlayerStage(
                     if (isPortrait) {
                         StageIconButton(
                             icon = Icons.Rounded.MoreVert,
-                            label = "More",
+                            label = stringResource(R.string.example_stage_more),
                             size = 38.dp,
                             iconSize = 24.dp,
                             containerAlpha = 0f,
@@ -189,25 +190,25 @@ internal fun ExamplePlayerStage(
                         ) {
                             StageIconButton(
                                 icon = Icons.Rounded.Tune,
-                                label = "Quality",
+                                label = stringResource(R.string.example_common_quality),
                                 containerAlpha = 0f,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Quality) },
                             )
                             StageIconButton(
                                 icon = Icons.Rounded.GraphicEq,
-                                label = "Audio",
+                                label = stringResource(R.string.example_common_audio),
                                 containerAlpha = 0f,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Audio) },
                             )
                             StageIconButton(
                                 icon = Icons.Rounded.ClosedCaption,
-                                label = "Subtitles",
+                                label = stringResource(R.string.example_common_subtitles),
                                 containerAlpha = 0f,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Subtitle) },
                             )
                             StageIconButton(
                                 icon = Icons.Rounded.Speed,
-                                label = "Speed",
+                                label = stringResource(R.string.example_common_playback_speed),
                                 containerAlpha = 0f,
                                 onClick = { onOpenSheet(ExamplePlayerSheet.Speed) },
                             )
@@ -224,7 +225,7 @@ internal fun ExamplePlayerStage(
                 ) {
                     StageIconButton(
                         icon = Icons.Rounded.Replay10,
-                        label = "Replay 10",
+                        label = stringResource(R.string.example_stage_replay_10),
                         size = if (isPortrait) 52.dp else 44.dp,
                         iconSize = if (isPortrait) 24.dp else 20.dp,
                         onClick = {
@@ -243,7 +244,7 @@ internal fun ExamplePlayerStage(
                     )
                     StageIconButton(
                         icon = Icons.Rounded.Forward10,
-                        label = "Forward 10",
+                        label = stringResource(R.string.example_stage_forward_10),
                         size = if (isPortrait) 52.dp else 44.dp,
                         iconSize = if (isPortrait) 24.dp else 20.dp,
                         onClick = {
@@ -307,7 +308,12 @@ internal fun ExamplePlayerStage(
                             }
                             StageIconButton(
                                 icon = if (isPortrait) Icons.Rounded.Fullscreen else Icons.Rounded.FullscreenExit,
-                                label = if (isPortrait) "Fullscreen" else "Exit Fullscreen",
+                                label =
+                                    if (isPortrait) {
+                                        stringResource(R.string.example_stage_fullscreen)
+                                    } else {
+                                        stringResource(R.string.example_stage_exit_fullscreen)
+                                    },
                                 size = if (isPortrait) 38.dp else 32.dp,
                                 iconSize = if (isPortrait) 24.dp else 18.dp,
                                 containerAlpha = 0f,
@@ -321,7 +327,7 @@ internal fun ExamplePlayerStage(
 
         if (uiState.isBuffering) {
             StageChip(
-                label = "Buffering",
+                label = stringResource(R.string.example_stage_buffering),
                 accent = Color(0xFFFFB454),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -437,7 +443,12 @@ internal fun StagePrimaryPlayButton(
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                contentDescription = if (isPlaying) "Pause" else "Play",
+                contentDescription =
+                    if (isPlaying) {
+                        stringResource(R.string.example_stage_pause)
+                    } else {
+                        stringResource(R.string.example_stage_play)
+                    },
                 modifier = Modifier.size(iconSize),
             )
         }

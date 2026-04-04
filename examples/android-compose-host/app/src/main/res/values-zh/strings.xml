@@ -1,0 +1,74 @@
+<resources>
+    <string name="app_name">Vesper 播放器宿主演示</string>
+
+    <string name="example_common_auto">自动</string>
+    <string name="example_common_off">关闭</string>
+    <string name="example_common_audio">音频</string>
+    <string name="example_common_subtitles">字幕</string>
+    <string name="example_common_quality">画质</string>
+    <string name="example_common_playback_speed">播放速度</string>
+    <string name="example_common_playback_tools">播放工具</string>
+    <string name="example_common_video_track">视频轨</string>
+    <string name="example_common_fixed_video_variant">固定视频变体</string>
+    <string name="example_common_audio_track">音轨</string>
+    <string name="example_common_audio_program">音频节目</string>
+    <string name="example_common_subtitle_track">字幕轨</string>
+    <string name="example_common_subtitle_option">字幕选项</string>
+    <string name="example_common_forced">强制</string>
+    <string name="example_common_default">默认</string>
+    <string name="example_common_cc_off">字幕关</string>
+    <string name="example_common_cc_auto">字幕自动</string>
+
+    <string name="example_theme_system">跟随系统</string>
+    <string name="example_theme_light">浅色</string>
+    <string name="example_theme_dark">深色</string>
+
+    <string name="example_sources_title">媒体源</string>
+    <string name="example_sources_subtitle">使用这些演示操作在本地文件、HLS、DASH 和自定义远程 URL 之间切换。</string>
+    <string name="example_sources_pick_video">选择视频</string>
+    <string name="example_sources_hls_demo">HLS 演示</string>
+    <string name="example_sources_dash_demo">DASH 演示</string>
+    <string name="example_sources_remote_stream_url">远程流 URL</string>
+    <string name="example_sources_theme">主题</string>
+    <string name="example_sources_open_remote_url">打开远程 URL</string>
+
+    <string name="example_sheet_menu_subtitle">打开音轨、字幕、画质和速度控制，同时避免播放器浮层过于拥挤。</string>
+    <string name="example_sheet_quality_subtitle">切换自适应视频，或将流固定到某个具体画质轨道。</string>
+    <string name="example_sheet_audio_subtitle">选择当前流暴露出来的音频节目。</string>
+    <string name="example_sheet_subtitle_subtitle">选择字幕，或将其关闭。</string>
+    <string name="example_sheet_speed_subtitle">预览不同倍速下的播放表现。</string>
+    <string name="example_sheet_quality_auto_subtitle">让播放器自动调整画质。</string>
+    <string name="example_sheet_quality_auto_unavailable">当前路径没有暴露自适应视频切换能力。</string>
+    <string name="example_sheet_audio_auto_subtitle">使用播放器默认的音频选择。</string>
+    <string name="example_sheet_subtitle_off_subtitle">隐藏字幕渲染。</string>
+    <string name="example_sheet_subtitle_auto_subtitle">使用流的默认字幕行为。</string>
+    <string name="example_sheet_speed_currently_active">当前已生效。</string>
+    <string name="example_sheet_speed_apply_immediately">立即应用这个速度。</string>
+
+    <string name="example_stage_more">更多</string>
+    <string name="example_stage_replay_10">后退 10 秒</string>
+    <string name="example_stage_forward_10">前进 10 秒</string>
+    <string name="example_stage_fullscreen">全屏</string>
+    <string name="example_stage_exit_fullscreen">退出全屏</string>
+    <string name="example_stage_buffering">缓冲中</string>
+    <string name="example_stage_play">播放</string>
+    <string name="example_stage_pause">暂停</string>
+    <string name="example_stage_live_stream">直播流</string>
+    <string name="example_stage_live_with_dvr_window">带 DVR 窗口的直播</string>
+    <string name="example_stage_video_on_demand">点播视频</string>
+    <string name="example_stage_go_live">回到直播</string>
+    <string name="example_stage_live">直播</string>
+    <string name="example_stage_live_behind">直播 -%1$s</string>
+    <string name="example_stage_live_edge">直播 • 实时点 %1$s</string>
+
+    <string name="example_source_custom_remote_label">自定义远程流</string>
+    <string name="example_source_hls_demo_label">HLS 演示（BipBop）</string>
+    <string name="example_source_dash_demo_label">DASH 演示（Envivio）</string>
+
+    <string name="example_unit_audio_channels">%1$d 声道</string>
+    <string name="example_unit_audio_sample_rate_khz">%1$d kHz</string>
+    <string name="example_unit_bitrate_mbps">%1$.1f Mbps</string>
+    <string name="example_unit_bitrate_kbps">%1$.0f kbps</string>
+    <string name="example_unit_bitrate_bps">%1$d bps</string>
+    <string name="example_unit_playback_rate">%1$sx</string>
+</resources>

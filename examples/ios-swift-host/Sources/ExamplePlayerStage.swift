@@ -183,7 +183,7 @@ struct ExamplePlayerStage: View {
                     HStack {
                         Spacer()
                         StageChip(
-                            label: "Buffering",
+                            label: ExampleI18n.buffering,
                             accent: Color(red: 1.0, green: 0.71, blue: 0.33)
                         )
                     }

@@ -35,6 +35,7 @@ class VesperNativeJniBindings(
     context: Context,
 ) : VesperNativeBindings {
     private val appContext = context.applicationContext
+    private val i18n = VesperPlayerI18n.fromContext(appContext)
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var sessionHandle: Long? = null
@@ -91,7 +92,7 @@ class VesperNativeJniBindings(
         notifyNativeUpdate()
 
         return NativeBridgeStartup(
-            subtitle = sourceSubtitle(source),
+            subtitle = i18n.sourceSubtitle(source),
         )
     }
 
@@ -1038,13 +1039,6 @@ private fun Long.normalizedOptionalMs(): Long? =
         null
     } else {
         this
-    }
-
-private fun sourceSubtitle(source: VesperPlayerSource): String =
-    when (source.kind) {
-        VesperPlayerSourceKind.Local -> "Android JNI + ExoPlayer ready (local source)"
-        VesperPlayerSourceKind.Remote ->
-            "Android JNI + ExoPlayer ready (${source.protocol.name.lowercase()} remote source)"
     }
 
 private fun Long.normalizedDurationMs(): Long =

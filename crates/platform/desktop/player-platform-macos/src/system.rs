@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use player_core::MediaSource;
-use player_platform_apple::{VIDEOTOOLBOX_BACKEND_NAME, probe_videotoolbox_hardware_decode};
+use player_platform_apple::{probe_videotoolbox_hardware_decode, VIDEOTOOLBOX_BACKEND_NAME};
 use player_runtime::{
     PlayerAudioInfo, PlayerMediaInfo, PlayerRuntimeAdapterFactory, PlayerRuntimeError,
     PlayerRuntimeErrorCode, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
@@ -695,7 +695,7 @@ mod tests {
     use std::os::raw::c_void;
     use std::path::Path;
 
-    use super::{MacosSystemAvFoundationBridgeBindings, probe_source_with_avfoundation};
+    use super::{probe_source_with_avfoundation, MacosSystemAvFoundationBridgeBindings};
     use crate::native::{
         MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext,
         MacosManagedNativeSessionController, MacosNativePlayerCommand,

@@ -1,0 +1,77 @@
+"example.common.auto" = "自动";
+"example.common.off" = "关闭";
+"example.common.audio" = "音频";
+"example.common.subtitles" = "字幕";
+"example.common.quality" = "画质";
+"example.common.playback_speed" = "播放速度";
+"example.common.playback_tools" = "播放工具";
+
+"example.theme.system" = "跟随系统";
+"example.theme.light" = "浅色";
+"example.theme.dark" = "深色";
+
+"example.sources.title" = "媒体源";
+"example.sources.subtitle" = "使用示例宿主在本地文件、HLS 演示流和自定义远程 URL 之间切换。";
+"example.sources.pick_from_photos" = "从相册选择";
+"example.sources.use_hls_demo" = "使用 HLS 演示";
+"example.sources.theme_title" = "主题";
+"example.sources.remote_url_placeholder" = "远程 URL（HLS / progressive）";
+"example.sources.open_remote_url" = "打开远程 URL";
+
+"example.message.preparing_video_from_photos" = "正在准备来自相册的视频...";
+"example.message.invalid_remote_url" = "请输入有效的远程 URL。";
+"example.message.photo_library_required" = "需要相册访问权限才能从“照片”中选择视频。";
+"example.message.unknown_photo_authorization_state" = "未知的相册授权状态。";
+"example.message.failed_to_load_selected_video_from_photos" = "无法从“照片”加载所选视频。";
+"example.message.failed_to_load_selected_photo_video" = "加载所选相册视频失败：%@";
+
+"example.source.hls_demo_label" = "HLS 演示（BipBop）";
+"example.source.custom_remote_url_label" = "自定义远程 URL";
+
+"example.quality.button_capped" = "限码率";
+"example.quality.button_pinned" = "固定";
+
+"example.subtitle.cc_off" = "字幕关";
+"example.subtitle.cc_auto" = "字幕自动";
+
+"example.stage.video_on_demand" = "点播视频";
+"example.stage.live_stream" = "直播流";
+"example.stage.live_with_dvr_window" = "带 DVR 窗口的直播";
+"example.stage.go_live" = "回到直播";
+"example.stage.live" = "直播";
+"example.stage.live_behind" = "直播 -%@";
+"example.stage.live_edge" = "直播 • 实时点 %@";
+"example.stage.buffering" = "缓冲中";
+
+"example.track.audio_track" = "音轨";
+"example.track.audio_channels" = "%d 声道";
+"example.track.audio_sample_rate_khz" = "%d kHz";
+"example.track.audio_program" = "音频节目";
+"example.track.subtitle_track" = "字幕轨";
+"example.track.subtitle_forced" = "强制";
+"example.track.subtitle_default" = "默认";
+"example.track.subtitle_option" = "字幕选项";
+
+"example.unit.bitrate_mbps" = "%.1f Mbps";
+"example.unit.bitrate_kbps" = "%.0f kbps";
+"example.unit.bitrate_bps" = "%lld bps";
+"example.unit.playback_rate" = "%.1fx";
+
+"example.abr.data_saver.title" = "省流模式";
+"example.abr.data_saver.subtitle" = "将码率限制在约 800 kbps，适合受限网络。";
+"example.abr.balanced.title" = "均衡";
+"example.abr.balanced.subtitle" = "将码率限制在约 2 Mbps，以获得更平滑的播放。";
+"example.abr.high.title" = "高画质";
+"example.abr.high.subtitle" = "将码率限制在约 5 Mbps，以获得更高的视觉质量。";
+
+"example.sheet.menu.subtitle" = "打开音轨、字幕、画质和速度控制，同时保持播放器浮层简洁。";
+"example.sheet.quality.subtitle" = "当前 AVPlayer 路径使用码率上限，而不是固定视频清晰度。";
+"example.sheet.audio.subtitle" = "从当前流暴露的可听媒体组中选择。";
+"example.sheet.subtitle.subtitle" = "可以关闭字幕、保持自动，或固定到某个具体选项。";
+"example.sheet.speed.subtitle" = "预览不同倍速下的播放表现。";
+"example.sheet.quality.auto_subtitle" = "让 AVPlayer 自动决定码率。";
+"example.sheet.audio.auto_subtitle" = "使用流的默认音频选择。";
+"example.sheet.subtitle.off_subtitle" = "禁用字幕渲染。";
+"example.sheet.subtitle.auto_subtitle" = "使用流默认的字幕行为。";
+"example.sheet.speed.currently_active" = "当前已生效。";
+"example.sheet.speed.apply_immediately" = "立即应用这个速度。";

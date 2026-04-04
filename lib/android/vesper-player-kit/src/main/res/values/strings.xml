@@ -1,0 +1,22 @@
+<resources>
+    <string name="vesper_player_title">Vesper</string>
+    <string name="vesper_bridge_native_ready">Android JNI/ExoPlayer bridge</string>
+    <string name="vesper_bridge_preview_ready">Android host preview bridge</string>
+    <string name="vesper_bridge_no_source_selected">No source selected</string>
+    <string name="vesper_bridge_select_source_prompt">Select a media source to begin playback</string>
+    <string name="vesper_bridge_stub_error">Android JNI bridge stub: %1$s</string>
+    <string name="vesper_bridge_native_bindings_unavailable">native bindings unavailable</string>
+    <string name="vesper_bridge_opening_source">Opening %1$s</string>
+    <string name="vesper_bridge_source_local">Android JNI + ExoPlayer ready (local source)</string>
+    <string name="vesper_bridge_source_remote">Android JNI + ExoPlayer ready (%1$s remote source)</string>
+    <string name="vesper_bridge_source_surface_attached">%1$s / surface attached</string>
+    <string name="vesper_bridge_source_surface_detached">%1$s / surface detached</string>
+    <string name="vesper_bridge_surface_attached_no_source">Android JNI + ExoPlayer ready / surface attached</string>
+    <string name="vesper_bridge_surface_detached_no_source">Android JNI + ExoPlayer ready / surface detached</string>
+    <string name="vesper_bridge_retry_scheduled">Retrying in %1$s (attempt %2$d)</string>
+    <string name="vesper_bridge_native_error">Android native bridge error: %1$s</string>
+    <string name="vesper_bridge_preview_source_local">Android host preview bridge (local source)</string>
+    <string name="vesper_bridge_preview_source_remote">Android host preview bridge (%1$s remote source)</string>
+    <string name="vesper_bridge_retry_delay_seconds_int">%1$ds</string>
+    <string name="vesper_bridge_retry_delay_seconds_decimal">%1$.1fs</string>
+</resources>

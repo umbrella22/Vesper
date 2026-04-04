@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,14 +95,14 @@ internal fun ExampleSourceSection(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text(
-            text = "Sources",
+            text = stringResource(R.string.example_sources_title),
             style = MaterialTheme.typography.titleMedium.copy(
                 color = palette.title,
                 fontWeight = FontWeight.Bold,
             ),
         )
         Text(
-            text = "Use these demo actions to switch among local files, HLS, DASH, and custom remote URLs.",
+            text = stringResource(R.string.example_sources_subtitle),
             style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
         )
 
@@ -110,13 +111,13 @@ internal fun ExampleSourceSection(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             OutlinedButton(onClick = onPickVideo) {
-                Text("Pick Video")
+                Text(stringResource(R.string.example_sources_pick_video))
             }
             OutlinedButton(onClick = onUseHlsDemo) {
-                Text("HLS Demo")
+                Text(stringResource(R.string.example_sources_hls_demo))
             }
             OutlinedButton(onClick = onUseDashDemo) {
-                Text("DASH Demo")
+                Text(stringResource(R.string.example_sources_dash_demo))
             }
         }
 
@@ -124,14 +125,14 @@ internal fun ExampleSourceSection(
             value = remoteStreamUrl,
             onValueChange = onRemoteStreamUrlChange,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Remote stream URL") },
+            label = { Text(stringResource(R.string.example_sources_remote_stream_url)) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             singleLine = true,
         )
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                text = "Theme",
+                text = stringResource(R.string.example_sources_theme),
                 style = MaterialTheme.typography.labelLarge.copy(
                     color = palette.title,
                     fontWeight = FontWeight.SemiBold,
@@ -143,19 +144,19 @@ internal fun ExampleSourceSection(
             ) {
                 ThemeModeChip(
                     icon = Icons.Rounded.BrightnessAuto,
-                    label = "System",
+                    label = stringResource(ExampleThemeMode.System.titleRes),
                     selected = themeMode == ExampleThemeMode.System,
                     onClick = { onThemeModeChange(ExampleThemeMode.System) },
                 )
                 ThemeModeChip(
                     icon = Icons.Rounded.LightMode,
-                    label = "Light",
+                    label = stringResource(ExampleThemeMode.Light.titleRes),
                     selected = themeMode == ExampleThemeMode.Light,
                     onClick = { onThemeModeChange(ExampleThemeMode.Light) },
                 )
                 ThemeModeChip(
                     icon = Icons.Rounded.DarkMode,
-                    label = "Dark",
+                    label = stringResource(ExampleThemeMode.Dark.titleRes),
                     selected = themeMode == ExampleThemeMode.Dark,
                     onClick = { onThemeModeChange(ExampleThemeMode.Dark) },
                 )
@@ -169,7 +170,7 @@ internal fun ExampleSourceSection(
                 contentColor = Color.White,
             ),
         ) {
-            Text("Open Remote URL")
+            Text(stringResource(R.string.example_sources_open_remote_url))
         }
     }
 }

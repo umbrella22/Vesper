@@ -11,11 +11,16 @@ object PlayerBridgeFactory {
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     ): PlayerBridge =
         when (defaultBackend) {
-            PlayerBridgeBackend.FakeDemo -> FakePlayerBridge(initialSource)
+            PlayerBridgeBackend.FakeDemo ->
+                FakePlayerBridge(
+                    initialSource = initialSource,
+                    appContext = context.applicationContext,
+                )
             PlayerBridgeBackend.VesperNativeStub -> VesperNativePlayerBridge(
                 bindings = VesperNativeJniBindings(context.applicationContext),
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
+                appContext = context.applicationContext,
             )
         }
 }

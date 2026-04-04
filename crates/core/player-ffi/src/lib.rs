@@ -304,6 +304,7 @@ pub enum FfiEvent {
     AudioOutputChanged(Option<FfiAudioOutputInfo>),
     PlaybackRateChanged { rate: f32 },
     SeekCompleted { position_ms: u64 },
+    RetryScheduled { attempt: u32, delay_ms: u64 },
     Error(FfiError),
     Ended,
 }
@@ -869,6 +870,10 @@ impl From<PlayerRuntimeEvent> for FfiEvent {
             PlayerRuntimeEvent::SeekCompleted { position } => Self::SeekCompleted {
                 position_ms: duration_to_millis(position),
             },
+            PlayerRuntimeEvent::RetryScheduled { attempt, delay } => Self::RetryScheduled {
+                attempt,
+                delay_ms: duration_to_millis(delay),
+            },
             PlayerRuntimeEvent::Error(error) => Self::Error(error.into()),
             PlayerRuntimeEvent::Ended => Self::Ended,
         }
@@ -1058,9 +1063,10 @@ impl Default for FfiTrackSelectionSnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        FfiAbrMode, FfiMediaInfo, FfiTrackKind, FfiTrackSelectionMode, MediaAbrMode,
+        FfiAbrMode, FfiEvent, FfiMediaInfo, FfiTrackKind, FfiTrackSelectionMode, MediaAbrMode,
         MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog,
         MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlayerMediaInfo,
+        PlayerRuntimeEvent,
     };
     use std::time::Duration;
 
@@ -1144,5 +1150,21 @@ mod tests {
             ffi.track_selection.abr_policy.track_id.as_deref(),
             Some("video-1080p")
         );
+    }
+
+    #[test]
+    fn retry_scheduled_event_to_ffi_preserves_attempt_and_delay() {
+        let ffi = FfiEvent::from(PlayerRuntimeEvent::RetryScheduled {
+            attempt: 2,
+            delay: Duration::from_millis(1_500),
+        });
+
+        match ffi {
+            FfiEvent::RetryScheduled { attempt, delay_ms } => {
+                assert_eq!(attempt, 2);
+                assert_eq!(delay_ms, 1_500);
+            }
+            other => panic!("expected retry scheduled event, got {other:?}"),
+        }
     }
 }

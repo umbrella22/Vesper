@@ -11,7 +11,7 @@ internal class PlayerHostViewModel(
     val controller: VesperPlayerController =
         VesperPlayerControllerFactory.createDefault(
             context = application.applicationContext,
-            initialSource = androidHlsDemoSource(),
+            initialSource = androidHlsDemoSource(application.applicationContext),
         ).also { controller ->
             controller.initialize()
         }

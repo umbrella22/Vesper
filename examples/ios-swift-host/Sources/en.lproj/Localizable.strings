@@ -1,0 +1,77 @@
+"example.common.auto" = "Auto";
+"example.common.off" = "Off";
+"example.common.audio" = "Audio";
+"example.common.subtitles" = "Subtitles";
+"example.common.quality" = "Quality";
+"example.common.playback_speed" = "Playback Speed";
+"example.common.playback_tools" = "Playback Tools";
+
+"example.theme.system" = "System";
+"example.theme.light" = "Light";
+"example.theme.dark" = "Dark";
+
+"example.sources.title" = "Sources";
+"example.sources.subtitle" = "Use the example host to switch among local files, HLS demo streams, and custom remote URLs.";
+"example.sources.pick_from_photos" = "Pick from Photos";
+"example.sources.use_hls_demo" = "Use HLS Demo";
+"example.sources.theme_title" = "Theme";
+"example.sources.remote_url_placeholder" = "Remote URL (HLS / progressive)";
+"example.sources.open_remote_url" = "Open Remote URL";
+
+"example.message.preparing_video_from_photos" = "Preparing video from Photos...";
+"example.message.invalid_remote_url" = "Please enter a valid remote URL.";
+"example.message.photo_library_required" = "Photo Library access is required to pick videos from Photos.";
+"example.message.unknown_photo_authorization_state" = "Unknown Photo Library authorization state.";
+"example.message.failed_to_load_selected_video_from_photos" = "Failed to load the selected video from Photos.";
+"example.message.failed_to_load_selected_photo_video" = "Failed to load selected photo video: %@";
+
+"example.source.hls_demo_label" = "HLS Demo (BipBop)";
+"example.source.custom_remote_url_label" = "Custom Remote URL";
+
+"example.quality.button_capped" = "Capped";
+"example.quality.button_pinned" = "Pinned";
+
+"example.subtitle.cc_off" = "CC Off";
+"example.subtitle.cc_auto" = "CC Auto";
+
+"example.stage.video_on_demand" = "Video on demand";
+"example.stage.live_stream" = "Live stream";
+"example.stage.live_with_dvr_window" = "Live with DVR window";
+"example.stage.go_live" = "Go Live";
+"example.stage.live" = "LIVE";
+"example.stage.live_behind" = "LIVE -%@";
+"example.stage.live_edge" = "LIVE • Edge %@";
+"example.stage.buffering" = "Buffering";
+
+"example.track.audio_track" = "Audio Track";
+"example.track.audio_channels" = "%d ch";
+"example.track.audio_sample_rate_khz" = "%d kHz";
+"example.track.audio_program" = "Audio program";
+"example.track.subtitle_track" = "Subtitle Track";
+"example.track.subtitle_forced" = "Forced";
+"example.track.subtitle_default" = "Default";
+"example.track.subtitle_option" = "Subtitle option";
+
+"example.unit.bitrate_mbps" = "%.1f Mbps";
+"example.unit.bitrate_kbps" = "%.0f kbps";
+"example.unit.bitrate_bps" = "%lld bps";
+"example.unit.playback_rate" = "%.1fx";
+
+"example.abr.data_saver.title" = "Data Saver";
+"example.abr.data_saver.subtitle" = "Cap bitrate near 800 kbps for constrained networks.";
+"example.abr.balanced.title" = "Balanced";
+"example.abr.balanced.subtitle" = "Cap bitrate near 2 Mbps for smoother playback.";
+"example.abr.high.title" = "High";
+"example.abr.high.subtitle" = "Cap bitrate near 5 Mbps for higher visual quality.";
+
+"example.sheet.menu.subtitle" = "Open track, subtitle, quality, and speed controls without crowding the player overlay.";
+"example.sheet.quality.subtitle" = "The current AVPlayer route uses bitrate caps instead of fixed video renditions.";
+"example.sheet.audio.subtitle" = "Choose from the audible media groups exposed by the stream.";
+"example.sheet.subtitle.subtitle" = "Turn subtitles off, keep them automatic, or pin a specific option.";
+"example.sheet.speed.subtitle" = "Preview playback behavior at different speeds.";
+"example.sheet.quality.auto_subtitle" = "Let AVPlayer decide bitrate automatically.";
+"example.sheet.audio.auto_subtitle" = "Use the stream's default audio selection.";
+"example.sheet.subtitle.off_subtitle" = "Disable subtitle rendering.";
+"example.sheet.subtitle.auto_subtitle" = "Use the stream default subtitle behavior.";
+"example.sheet.speed.currently_active" = "Currently active.";
+"example.sheet.speed.apply_immediately" = "Apply this speed immediately.";

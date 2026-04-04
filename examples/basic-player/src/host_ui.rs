@@ -5,11 +5,11 @@ use player_render_wgpu::RgbaOverlayFrame;
 #[cfg(not(target_os = "macos"))]
 use player_runtime::PlayerSnapshot;
 
-pub use crate::desktop_ui::{CONTROL_RATES, ControlAction, SeekPreview};
 #[cfg(not(target_os = "macos"))]
 use crate::desktop_ui::{
-    DesktopUiLayoutMetrics, DesktopUiRect, DesktopUiViewModel, is_scrubbable_timeline,
+    is_scrubbable_timeline, DesktopUiLayoutMetrics, DesktopUiRect, DesktopUiViewModel,
 };
+pub use crate::desktop_ui::{ControlAction, SeekPreview, CONTROL_RATES};
 
 #[cfg(not(target_os = "macos"))]
 #[derive(Debug, Clone, Copy)]

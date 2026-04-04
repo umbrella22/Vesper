@@ -9,15 +9,15 @@ mod host_ui;
 #[cfg(target_os = "macos")]
 mod macos_host_overlay;
 use desktop_presenter::DesktopUiPresenter;
-use desktop_ui::{CONTROL_RATES, ControlAction, SeekPreview};
+use desktop_ui::{ControlAction, SeekPreview, CONTROL_RATES};
 use player_host_desktop::{
-    DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
-    normalize_desktop_host_source_uri, open_desktop_host_runtime_uri_for_winit_window,
-    probe_desktop_host_launch_plan_uri,
+    canonical_desktop_host_local_path, normalize_desktop_host_source_uri,
+    open_desktop_host_runtime_uri_for_winit_window, probe_desktop_host_launch_plan_uri,
+    DesktopHostLaunchPlan as RuntimeLaunchPlan,
 };
 use player_render_wgpu::{
-    RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
-    Yuv420pVideoFrame, default_window_attributes, preferred_backends,
+    default_window_attributes, preferred_backends, RenderMode, RenderSurfaceConfig, RgbaVideoFrame,
+    VideoFrameTexture, VideoRenderer, Yuv420pVideoFrame,
 };
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, PlaybackProgress, PlayerRuntime,
@@ -1000,6 +1000,13 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
         PlayerRuntimeEvent::SeekCompleted { position } => {
             info!(position = position.as_secs_f64(), "player seek completed");
         }
+        PlayerRuntimeEvent::RetryScheduled { attempt, delay } => {
+            info!(
+                attempt,
+                delay_ms = delay.as_millis(),
+                "player retry scheduled"
+            );
+        }
         PlayerRuntimeEvent::Error(error) => {
             error!(code = ?error.code(), message = error.message(), "player runtime error");
         }
@@ -1012,8 +1019,8 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL, HLS_DEMO_CLI_FLAG,
-        resolve_media_source_argument,
+        resolve_media_source_argument, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL,
+        DESKTOP_HLS_DEMO_URL, HLS_DEMO_CLI_FLAG,
     };
 
     #[test]

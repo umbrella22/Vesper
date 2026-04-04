@@ -33,11 +33,11 @@ enum ExampleThemeMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .system:
-            "System"
+            ExampleI18n.themeSystem
         case .light:
-            "Light"
+            ExampleI18n.themeLight
         case .dark:
-            "Dark"
+            ExampleI18n.themeDark
         }
     }
 
@@ -106,6 +106,6 @@ let IOS_HLS_DEMO_URL =
 func iosHlsDemoSource() -> VesperPlayerSource {
     VesperPlayerSource.hls(
         url: URL(string: IOS_HLS_DEMO_URL)!,
-        label: "HLS Demo (BipBop)"
+        label: ExampleI18n.hlsDemoLabel
     )
 }

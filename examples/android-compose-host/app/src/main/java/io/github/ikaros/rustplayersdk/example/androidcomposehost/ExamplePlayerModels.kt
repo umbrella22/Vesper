@@ -1,5 +1,7 @@
 package io.github.ikaros.vesper.example.androidcomposehost
 
+import android.content.Context
+import androidx.annotation.StringRes
 import androidx.compose.ui.graphics.Color
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 
@@ -11,10 +13,12 @@ internal enum class ExamplePlayerSheet {
     Speed,
 }
 
-internal enum class ExampleThemeMode {
-    System,
-    Light,
-    Dark,
+internal enum class ExampleThemeMode(
+    @get:StringRes val titleRes: Int,
+) {
+    System(R.string.example_theme_system),
+    Light(R.string.example_theme_light),
+    Dark(R.string.example_theme_dark),
 }
 
 internal data class ExampleHostPalette(
@@ -62,14 +66,14 @@ internal const val ANDROID_HLS_DEMO_URL: String =
 internal const val ANDROID_DASH_DEMO_URL: String =
     "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd"
 
-internal fun androidHlsDemoSource(): VesperPlayerSource =
+internal fun androidHlsDemoSource(context: Context? = null): VesperPlayerSource =
     VesperPlayerSource.hls(
         uri = ANDROID_HLS_DEMO_URL,
-        label = "HLS Demo (BipBop)",
+        label = context?.getString(R.string.example_source_hls_demo_label) ?: "HLS Demo (BipBop)",
     )
 
-internal fun androidDashDemoSource(): VesperPlayerSource =
+internal fun androidDashDemoSource(context: Context? = null): VesperPlayerSource =
     VesperPlayerSource.dash(
         uri = ANDROID_DASH_DEMO_URL,
-        label = "DASH Demo (Envivio)",
+        label = context?.getString(R.string.example_source_dash_demo_label) ?: "DASH Demo (Envivio)",
     )

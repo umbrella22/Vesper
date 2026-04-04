@@ -4,14 +4,14 @@ use std::time::{Duration, Instant};
 
 use player_core::MediaSource;
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PLAYBACK_RATE,
-    MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress, PlayerMediaInfo,
-    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoInfo, PlayerVideoSurfaceKind,
-    PlayerVideoSurfaceTarget, PresentationState,
+    DecodedVideoFrame, FirstFrameReady, PlaybackProgress, PlayerMediaInfo,
+    PlayerResilienceMetricsTracker, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
+    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot,
+    PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+    DEFAULT_PLAYBACK_RATE, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX,
 };
 
 pub const MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_native";
@@ -140,6 +140,7 @@ pub struct MacosManagedNativeSession<C> {
     is_buffering: bool,
     playback_rate: f32,
     progress: PlaybackProgress,
+    resilience_metrics: PlayerResilienceMetricsTracker,
     first_frame_emitted: bool,
     events: VecDeque<PlayerRuntimeEvent>,
 }
@@ -629,6 +630,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
             is_buffering: false,
             playback_rate: DEFAULT_PLAYBACK_RATE,
             progress: PlaybackProgress::new(Duration::ZERO, None),
+            resilience_metrics: PlayerResilienceMetricsTracker::default(),
             first_frame_emitted: false,
             events: VecDeque::new(),
         }
@@ -668,6 +670,10 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
     }
 
     fn apply_observation(&mut self, observation: MacosNativeObservation) {
+        self.resilience_metrics
+            .observe_playback_state(observation.presentation_state);
+        self.resilience_metrics
+            .observe_buffering(observation.is_buffering);
         self.presentation_state = observation.presentation_state;
         self.is_buffering = observation.is_buffering;
         self.playback_rate = observation.playback_rate;
@@ -704,6 +710,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
             progress: self.progress,
             timeline: PlayerTimelineSnapshot::vod(self.progress, self.capabilities.supports_seek),
             media_info: self.media_info.clone(),
+            resilience_metrics: self.resilience_metrics.snapshot(),
         }
     }
 
@@ -730,6 +737,8 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
 
     fn emit_state_change_if_needed(&mut self, previous_state: PresentationState) {
         if self.presentation_state != previous_state {
+            self.resilience_metrics
+                .observe_playback_state(self.presentation_state);
             self.events
                 .push_back(PlayerRuntimeEvent::PlaybackStateChanged(
                     self.presentation_state,
@@ -748,6 +757,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
 
     fn emit_buffering_change_if_needed(&mut self, previous_buffering: bool) {
         if self.is_buffering != previous_buffering {
+            self.resilience_metrics.observe_buffering(self.is_buffering);
             self.events.push_back(PlayerRuntimeEvent::BufferingChanged {
                 buffering: self.is_buffering,
             });
@@ -1234,13 +1244,13 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MacosAvFoundationBridge,
-        MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext, MacosAvFoundationSnapshot,
-        MacosAvFoundationStateTracker, MacosManagedNativeSession,
-        MacosManagedNativeSessionController, MacosNativeCommandSink, MacosNativePlayerBridge,
-        MacosNativePlayerCommand, MacosNativePlayerProbe, MacosNativePlayerRuntimeAdapterFactory,
-        MacosNativePlayerSession, MacosNativePlayerSessionBootstrap, MacosPlayerItemStatus,
-        MacosTimeControlStatus, macos_native_capabilities,
+        macos_native_capabilities, MacosAvFoundationBridge, MacosAvFoundationBridgeBindings,
+        MacosAvFoundationBridgeContext, MacosAvFoundationSnapshot, MacosAvFoundationStateTracker,
+        MacosManagedNativeSession, MacosManagedNativeSessionController, MacosNativeCommandSink,
+        MacosNativePlayerBridge, MacosNativePlayerCommand, MacosNativePlayerProbe,
+        MacosNativePlayerRuntimeAdapterFactory, MacosNativePlayerSession,
+        MacosNativePlayerSessionBootstrap, MacosPlayerItemStatus, MacosTimeControlStatus,
+        MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
     };
     use player_core::MediaSource;
     use player_runtime::{
@@ -1332,12 +1342,10 @@ mod tests {
 
         assert_eq!(observation.presentation_state, PresentationState::Finished);
         assert_eq!(observation.playback_rate, 1.5);
-        assert!(
-            observation
-                .emitted_events
-                .iter()
-                .any(|event| matches!(event, PlayerRuntimeEvent::Ended))
-        );
+        assert!(observation
+            .emitted_events
+            .iter()
+            .any(|event| matches!(event, PlayerRuntimeEvent::Ended)));
         assert!(observation.emitted_events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::PlaybackRateChanged { rate } if (*rate - 1.5).abs() < f32::EPSILON
@@ -1361,12 +1369,10 @@ mod tests {
 
         assert_eq!(observation.presentation_state, PresentationState::Playing);
         assert!(observation.is_buffering);
-        assert!(
-            !observation
-                .emitted_events
-                .iter()
-                .any(|event| matches!(event, PlayerRuntimeEvent::PlaybackStateChanged(_)))
-        );
+        assert!(!observation
+            .emitted_events
+            .iter()
+            .any(|event| matches!(event, PlayerRuntimeEvent::PlaybackStateChanged(_))));
         assert!(observation.emitted_events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::BufferingChanged { buffering: true }
@@ -1397,11 +1403,9 @@ mod tests {
             initial_events.first(),
             Some(PlayerRuntimeEvent::Initialized(_))
         ));
-        assert!(
-            initial_events
-                .iter()
-                .any(|event| matches!(event, PlayerRuntimeEvent::MetadataReady(_)))
-        );
+        assert!(initial_events
+            .iter()
+            .any(|event| matches!(event, PlayerRuntimeEvent::MetadataReady(_))));
         assert!(initial_events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::PlaybackStateChanged(PresentationState::Ready)
@@ -1455,6 +1459,44 @@ mod tests {
             PlayerRuntimeEvent::BufferingChanged { buffering: true }
         )));
         assert!(session.snapshot().is_buffering);
+    }
+
+    #[test]
+    fn managed_session_snapshot_tracks_resilience_metrics() {
+        let mut session = MacosManagedNativeSession::new(
+            "fixture.mp4",
+            demo_media_info(),
+            FakeCommandSink::default(),
+        );
+
+        session.emit_initial_runtime_events(PlayerRuntimeStartup {
+            ffmpeg_initialized: false,
+            audio_output: None,
+            decoded_audio: None,
+            video_decode: None,
+        });
+        let _ = session.drain_events();
+
+        let result = session
+            .dispatch(PlayerRuntimeCommand::Play)
+            .expect("play should be accepted");
+        assert!(result.applied);
+        let _ = session.drain_events();
+
+        session.apply_snapshot(&MacosAvFoundationSnapshot {
+            item_status: MacosPlayerItemStatus::ReadyToPlay,
+            time_control_status: MacosTimeControlStatus::WaitingToPlay,
+            playback_rate: 1.0,
+            position: Duration::from_secs(1),
+            duration: Some(Duration::from_secs(42)),
+            reached_end: false,
+            error_message: None,
+        });
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.resilience_metrics.buffering_event_count, 1);
+        assert_eq!(snapshot.resilience_metrics.rebuffer_count, 1);
+        assert_eq!(snapshot.resilience_metrics.retry_count, 0);
     }
 
     #[test]
@@ -1768,6 +1810,8 @@ mod tests {
                 frame_rate: Some(30.0),
             }),
             best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
         }
     }
 
@@ -1790,6 +1834,8 @@ mod tests {
                     video_streams: 1,
                     best_video: None,
                     best_audio: None,
+                    track_catalog: Default::default(),
+                    track_selection: Default::default(),
                 },
                 startup: PlayerRuntimeStartup {
                     ffmpeg_initialized: false,
@@ -1881,6 +1927,8 @@ mod tests {
                         frame_rate: Some(30.0),
                     }),
                     best_audio: None,
+                    track_catalog: Default::default(),
+                    track_selection: Default::default(),
                 },
                 startup: PlayerRuntimeStartup {
                     ffmpeg_initialized: false,

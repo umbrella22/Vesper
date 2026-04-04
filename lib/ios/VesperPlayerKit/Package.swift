@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "VesperPlayerKit",
+    defaultLocalization: "en",
     platforms: [
         .iOS(.v17),
     ],
@@ -15,7 +16,10 @@ let package = Package(
     targets: [
         .target(
             name: "VesperPlayerKit",
-            path: "Sources/VesperPlayerKit"
+            path: "Sources/VesperPlayerKit",
+            resources: [
+                .process("Resources"),
+            ]
         ),
     ]
 )

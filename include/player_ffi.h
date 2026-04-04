@@ -50,6 +50,7 @@ typedef enum PlayerFfiEventKind {
   PLAYER_FFI_EVENT_KIND_ERROR = 9,
   PLAYER_FFI_EVENT_KIND_ENDED = 10,
   PLAYER_FFI_EVENT_KIND_INTERRUPTION_CHANGED = 11,
+  PLAYER_FFI_EVENT_KIND_RETRY_SCHEDULED = 12,
 } PlayerFfiEventKind;
 
 typedef enum PlayerFfiVideoDecodeMode {
@@ -262,6 +263,8 @@ typedef struct PlayerFfiEvent {
   struct PlayerFfiAudioOutputInfo audio_output;
   float playback_rate;
   uint64_t seek_position_ms;
+  uint32_t retry_attempt;
+  uint64_t retry_delay_ms;
   struct PlayerFfiError error;
 } PlayerFfiEvent;
 

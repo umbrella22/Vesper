@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.player.android
 
+import android.content.Context
 import android.util.Log
 import android.view.Surface
 import android.view.ViewGroup
@@ -11,15 +12,17 @@ class VesperNativePlayerBridge(
     private val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
     private val initialSource: VesperPlayerSource? = null,
     private val resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+    appContext: Context? = null,
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private var pendingAutoPlay = false
+    private val i18n = VesperPlayerI18n.fromContext(appContext)
 
     private val _uiState = MutableStateFlow(
         PlayerHostUiState(
-            title = "Vesper",
-            subtitle = "Android JNI/ExoPlayer bridge",
-            sourceLabel = currentSource?.label ?: "No source selected",
+            title = i18n.playerTitle(),
+            subtitle = i18n.nativeBridgeReady(),
+            sourceLabel = currentSource?.label ?: i18n.noSourceSelected(),
             playbackState = PlaybackStateUi.Ready,
             playbackRate = 1.0f,
             isBuffering = false,
@@ -52,8 +55,8 @@ class VesperNativePlayerBridge(
         val source = currentSource ?: run {
             updateState {
                 copy(
-                    subtitle = "Select a media source to begin playback",
-                    sourceLabel = "No source selected",
+                    subtitle = i18n.selectSourcePrompt(),
+                    sourceLabel = i18n.noSourceSelected(),
                     playbackState = PlaybackStateUi.Ready,
                     isBuffering = false,
                 )
@@ -85,9 +88,10 @@ class VesperNativePlayerBridge(
             .onFailure {
                 pendingAutoPlay = false
                 Log.e(TAG, "failed to initialize source=${source.uri}", it)
+                val message = it.message?.takeUnless(String::isBlank) ?: i18n.nativeBindingsUnavailable()
                 updateState {
                     copy(
-                        subtitle = "Android JNI bridge stub: ${it.message ?: "native bindings unavailable"}",
+                        subtitle = i18n.stubError(message),
                         sourceLabel = source.label,
                     )
                 }
@@ -114,7 +118,7 @@ class VesperNativePlayerBridge(
         )
         updateState {
             copy(
-                subtitle = "Opening ${source.label}",
+                subtitle = i18n.openingSource(source.label),
                 sourceLabel = source.label,
                 playbackState = PlaybackStateUi.Ready,
                 isBuffering = true,
@@ -264,11 +268,9 @@ class VesperNativePlayerBridge(
                 is NativeBridgeEvent.VideoSurfaceChanged -> updateState {
                     copy(
                         subtitle = if (event.attached) {
-                            currentSource?.let { "${sourceSubtitle(it)} / surface attached" }
-                                ?: "Android JNI + ExoPlayer ready / surface attached"
+                            i18n.surfaceAttached(currentSource?.let(::sourceSubtitle))
                         } else {
-                            currentSource?.let { "${sourceSubtitle(it)} / surface detached" }
-                                ?: "Android JNI + ExoPlayer ready / surface detached"
+                            i18n.surfaceDetached(currentSource?.let(::sourceSubtitle))
                         }
                     )
                 }
@@ -277,39 +279,24 @@ class VesperNativePlayerBridge(
                 }
                 is NativeBridgeEvent.RetryScheduled -> updateState {
                     copy(
-                        subtitle =
-                            "Retrying in ${formatRetryDelay(event.delayMs)} (attempt ${event.attempt})",
+                        subtitle = i18n.retryScheduled(i18n.retryDelay(event.delayMs), event.attempt),
                     )
                 }
                 is NativeBridgeEvent.Ended -> updateState {
                     copy(playbackState = PlaybackStateUi.Finished, isBuffering = false)
                 }
                 is NativeBridgeEvent.Error -> updateState {
-                    copy(subtitle = "Android native bridge error: ${event.message}")
+                    copy(subtitle = i18n.nativeError(event.message))
                 }
             }
         }
 
     }
+
+    private fun sourceSubtitle(source: VesperPlayerSource): String = i18n.sourceSubtitle(source)
 }
 
 private const val TAG = "VesperPlayerAndroidHost"
-
-private fun sourceSubtitle(source: VesperPlayerSource): String =
-    when (source.kind) {
-        VesperPlayerSourceKind.Local -> "Android JNI + ExoPlayer ready (local source)"
-        VesperPlayerSourceKind.Remote ->
-            "Android JNI + ExoPlayer ready (${source.protocol.name.lowercase()} remote source)"
-    }
-
-private fun formatRetryDelay(delayMs: Long): String {
-    val seconds = delayMs.toDouble() / 1_000.0
-    return if (seconds >= 10.0 || seconds == seconds.toInt().toDouble()) {
-        "${seconds.toInt()}s"
-    } else {
-        String.format("%.1fs", seconds)
-    }
-}
 
 interface VesperNativeBindings {
     fun initialize(
@@ -342,9 +329,7 @@ private class MissingVesperNativeBindings : VesperNativeBindings {
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
     ): NativeBridgeStartup {
-        throw UnsupportedOperationException(
-            VesperNativeLibrary.failureMessage() ?: "JNI bridge is not wired yet"
-        )
+        throw UnsupportedOperationException(VesperNativeLibrary.failureMessage())
     }
 
     override fun dispose() = Unit

@@ -1,0 +1,14 @@
+"vesper.player.title" = "Vesper";
+"vesper.bridge.native.ready" = "iOS AVPlayer native bridge";
+"vesper.bridge.preview.ready" = "iOS host preview bridge";
+"vesper.bridge.no_source_selected" = "No source selected";
+"vesper.bridge.select_source_prompt" = "Select a media source to begin playback";
+"vesper.bridge.invalid_media_url" = "invalid media URL";
+"vesper.bridge.native.local_source" = "iOS AVPlayer native bridge (local source)";
+"vesper.bridge.native.remote_source" = "iOS AVPlayer native bridge (%@ remote source)";
+"vesper.bridge.preview.local_source" = "iOS host preview bridge (local source)";
+"vesper.bridge.preview.remote_source" = "iOS host preview bridge (%@ remote source)";
+"vesper.bridge.native.error" = "iOS native bridge error: %@";
+"vesper.bridge.retry_scheduled" = "Retrying in %@ after %@";
+"vesper.bridge.retry_delay_seconds_int" = "%ds";
+"vesper.bridge.retry_delay_seconds_decimal" = "%.1fs";

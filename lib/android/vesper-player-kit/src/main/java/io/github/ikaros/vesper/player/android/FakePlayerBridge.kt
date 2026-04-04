@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.player.android
 
+import android.content.Context
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.core.view.isEmpty
@@ -9,14 +10,16 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class FakePlayerBridge(
     initialSource: VesperPlayerSource? = null,
+    appContext: Context? = null,
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
+    private val i18n = VesperPlayerI18n.fromContext(appContext)
 
     private val _uiState = MutableStateFlow(
         PlayerHostUiState(
-            title = "Vesper",
-            subtitle = initialSource?.let(::previewSourceSubtitle) ?: "Android host preview bridge",
-            sourceLabel = initialSource?.label ?: "No source selected",
+            title = i18n.playerTitle(),
+            subtitle = initialSource?.let(::previewSourceSubtitle) ?: i18n.previewBridgeReady(),
+            sourceLabel = initialSource?.label ?: i18n.noSourceSelected(),
             playbackState = PlaybackStateUi.Ready,
             playbackRate = 1.0f,
             isBuffering = false,
@@ -152,11 +155,7 @@ class FakePlayerBridge(
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
     }
-}
 
-private fun previewSourceSubtitle(source: VesperPlayerSource): String =
-    when (source.kind) {
-        VesperPlayerSourceKind.Local -> "Android host preview bridge (local source)"
-        VesperPlayerSourceKind.Remote ->
-            "Android host preview bridge (${source.protocol.name.lowercase()} remote source)"
-    }
+    private fun previewSourceSubtitle(source: VesperPlayerSource): String =
+        i18n.previewSourceSubtitle(source)
+}

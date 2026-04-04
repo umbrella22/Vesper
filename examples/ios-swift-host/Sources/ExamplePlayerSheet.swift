@@ -32,7 +32,7 @@ struct ExampleSelectionSheetContent: View {
                     switch sheet {
                     case .menu:
                         selectionRow(
-                            title: "Playback Speed",
+                            title: ExampleI18n.playbackSpeed,
                             subtitle: speedBadge(uiState.playbackRate),
                             selected: false
                         ) {
@@ -40,7 +40,7 @@ struct ExampleSelectionSheetContent: View {
                         }
 
                         selectionRow(
-                            title: "Audio",
+                            title: ExampleI18n.audio,
                             subtitle: audioButtonLabel(trackCatalog, trackSelection),
                             selected: false
                         ) {
@@ -48,7 +48,7 @@ struct ExampleSelectionSheetContent: View {
                         }
 
                         selectionRow(
-                            title: "Subtitles",
+                            title: ExampleI18n.subtitles,
                             subtitle: subtitleButtonLabel(trackCatalog, trackSelection),
                             selected: false
                         ) {
@@ -56,7 +56,7 @@ struct ExampleSelectionSheetContent: View {
                         }
 
                         selectionRow(
-                            title: "Quality",
+                            title: ExampleI18n.quality,
                             subtitle: qualityButtonLabel(trackSelection.abrPolicy),
                             selected: false
                         ) {
@@ -65,8 +65,8 @@ struct ExampleSelectionSheetContent: View {
 
                     case .quality:
                         selectionRow(
-                            title: "Auto",
-                            subtitle: "Let AVPlayer decide bitrate automatically.",
+                            title: ExampleI18n.auto,
+                            subtitle: ExampleI18n.qualityAutoSubtitle,
                             selected: trackSelection.abrPolicy.mode == .auto
                         ) {
                             onSelectQuality(.auto())
@@ -84,8 +84,8 @@ struct ExampleSelectionSheetContent: View {
 
                     case .audio:
                         selectionRow(
-                            title: "Auto",
-                            subtitle: "Use the stream's default audio selection.",
+                            title: ExampleI18n.auto,
+                            subtitle: ExampleI18n.audioAutoSubtitle,
                             selected: trackSelection.audio.mode == .auto
                         ) {
                             onSelectAudio(.auto())
@@ -103,16 +103,16 @@ struct ExampleSelectionSheetContent: View {
 
                     case .subtitle:
                         selectionRow(
-                            title: "Off",
-                            subtitle: "Disable subtitle rendering.",
+                            title: ExampleI18n.off,
+                            subtitle: ExampleI18n.subtitleOffSubtitle,
                             selected: trackSelection.subtitle.mode == .disabled
                         ) {
                             onSelectSubtitle(.disabled())
                         }
 
                         selectionRow(
-                            title: "Auto",
-                            subtitle: "Use the stream default subtitle behavior.",
+                            title: ExampleI18n.auto,
+                            subtitle: ExampleI18n.subtitleAutoSubtitle,
                             selected: trackSelection.subtitle.mode == .auto
                         ) {
                             onSelectSubtitle(.auto())
@@ -132,7 +132,7 @@ struct ExampleSelectionSheetContent: View {
                         ForEach(VesperPlayerController.supportedPlaybackRates, id: \.self) { rate in
                             selectionRow(
                                 title: speedBadge(rate),
-                                subtitle: rate == uiState.playbackRate ? "Currently active." : "Apply this speed immediately.",
+                                subtitle: rate == uiState.playbackRate ? ExampleI18n.speedCurrentlyActive : ExampleI18n.speedApplyImmediately,
                                 selected: rate == uiState.playbackRate
                             ) {
                                 onSelectSpeed(rate)

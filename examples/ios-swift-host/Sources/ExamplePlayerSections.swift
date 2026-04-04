@@ -36,11 +36,11 @@ struct ExampleSourceSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Sources")
+            Text(ExampleI18n.sourcesTitle)
                 .font(.title3.weight(.bold))
                 .foregroundStyle(palette.title)
 
-            Text("Use the example host to switch among local files, HLS demo streams, and custom remote URLs.")
+            Text(ExampleI18n.sourcesSubtitle)
                 .font(.footnote)
                 .foregroundStyle(palette.body)
 
@@ -52,13 +52,13 @@ struct ExampleSourceSection: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    sourceActionButton("Pick from Photos", action: onPickFromPhotos)
-                    sourceActionButton("Use HLS Demo", action: onUseHlsDemo)
+                    sourceActionButton(ExampleI18n.pickFromPhotos, action: onPickFromPhotos)
+                    sourceActionButton(ExampleI18n.useHlsDemo, action: onUseHlsDemo)
                 }
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Theme")
+                Text(ExampleI18n.themeTitle)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(palette.title)
 
@@ -76,7 +76,7 @@ struct ExampleSourceSection: View {
                 }
             }
 
-            TextField("Remote URL (HLS / progressive)", text: $remoteStreamUrl)
+            TextField(ExampleI18n.remoteUrlPlaceholder, text: $remoteStreamUrl)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .padding(.horizontal, 14)
@@ -85,7 +85,7 @@ struct ExampleSourceSection: View {
                 .foregroundStyle(palette.fieldText)
 
             Button(action: onOpenRemote) {
-                Text("Open Remote URL")
+                Text(ExampleI18n.openRemoteUrl)
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)

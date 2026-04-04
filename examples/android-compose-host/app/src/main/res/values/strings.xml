@@ -1,0 +1,74 @@
+<resources>
+    <string name="app_name">Vesper Player Host Demo</string>
+
+    <string name="example_common_auto">Auto</string>
+    <string name="example_common_off">Off</string>
+    <string name="example_common_audio">Audio</string>
+    <string name="example_common_subtitles">Subtitles</string>
+    <string name="example_common_quality">Quality</string>
+    <string name="example_common_playback_speed">Playback Speed</string>
+    <string name="example_common_playback_tools">Playback Tools</string>
+    <string name="example_common_video_track">Video Track</string>
+    <string name="example_common_fixed_video_variant">Fixed video variant</string>
+    <string name="example_common_audio_track">Audio Track</string>
+    <string name="example_common_audio_program">Audio program</string>
+    <string name="example_common_subtitle_track">Subtitle Track</string>
+    <string name="example_common_subtitle_option">Subtitle option</string>
+    <string name="example_common_forced">Forced</string>
+    <string name="example_common_default">Default</string>
+    <string name="example_common_cc_off">CC Off</string>
+    <string name="example_common_cc_auto">CC Auto</string>
+
+    <string name="example_theme_system">System</string>
+    <string name="example_theme_light">Light</string>
+    <string name="example_theme_dark">Dark</string>
+
+    <string name="example_sources_title">Sources</string>
+    <string name="example_sources_subtitle">Use these demo actions to switch among local files, HLS, DASH, and custom remote URLs.</string>
+    <string name="example_sources_pick_video">Pick Video</string>
+    <string name="example_sources_hls_demo">HLS Demo</string>
+    <string name="example_sources_dash_demo">DASH Demo</string>
+    <string name="example_sources_remote_stream_url">Remote stream URL</string>
+    <string name="example_sources_theme">Theme</string>
+    <string name="example_sources_open_remote_url">Open Remote URL</string>
+
+    <string name="example_sheet_menu_subtitle">Open track, subtitle, quality, and speed controls without crowding the player overlay.</string>
+    <string name="example_sheet_quality_subtitle">Switch adaptive video or pin the stream to a specific quality track.</string>
+    <string name="example_sheet_audio_subtitle">Pick an audio program exposed by the current stream.</string>
+    <string name="example_sheet_subtitle_subtitle">Choose subtitles or turn them off.</string>
+    <string name="example_sheet_speed_subtitle">Preview playback behavior at different speeds.</string>
+    <string name="example_sheet_quality_auto_subtitle">Let the player adapt quality automatically.</string>
+    <string name="example_sheet_quality_auto_unavailable">Current route does not expose adaptive video switching.</string>
+    <string name="example_sheet_audio_auto_subtitle">Use the player\'s default audio selection.</string>
+    <string name="example_sheet_subtitle_off_subtitle">Hide subtitle rendering.</string>
+    <string name="example_sheet_subtitle_auto_subtitle">Use the stream\'s default subtitle behavior.</string>
+    <string name="example_sheet_speed_currently_active">Currently active.</string>
+    <string name="example_sheet_speed_apply_immediately">Apply this speed immediately.</string>
+
+    <string name="example_stage_more">More</string>
+    <string name="example_stage_replay_10">Replay 10</string>
+    <string name="example_stage_forward_10">Forward 10</string>
+    <string name="example_stage_fullscreen">Fullscreen</string>
+    <string name="example_stage_exit_fullscreen">Exit Fullscreen</string>
+    <string name="example_stage_buffering">Buffering</string>
+    <string name="example_stage_play">Play</string>
+    <string name="example_stage_pause">Pause</string>
+    <string name="example_stage_live_stream">Live stream</string>
+    <string name="example_stage_live_with_dvr_window">Live with DVR window</string>
+    <string name="example_stage_video_on_demand">Video on demand</string>
+    <string name="example_stage_go_live">Go Live</string>
+    <string name="example_stage_live">LIVE</string>
+    <string name="example_stage_live_behind">LIVE -%1$s</string>
+    <string name="example_stage_live_edge">LIVE • Edge %1$s</string>
+
+    <string name="example_source_custom_remote_label">Custom Remote Stream</string>
+    <string name="example_source_hls_demo_label">HLS Demo (BipBop)</string>
+    <string name="example_source_dash_demo_label">DASH Demo (Envivio)</string>
+
+    <string name="example_unit_audio_channels">%1$d ch</string>
+    <string name="example_unit_audio_sample_rate_khz">%1$d kHz</string>
+    <string name="example_unit_bitrate_mbps">%1$.1f Mbps</string>
+    <string name="example_unit_bitrate_kbps">%1$.0f kbps</string>
+    <string name="example_unit_bitrate_bps">%1$d bps</string>
+    <string name="example_unit_playback_rate">%1$sx</string>
+</resources>

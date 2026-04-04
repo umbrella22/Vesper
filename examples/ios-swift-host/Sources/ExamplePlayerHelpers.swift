@@ -4,15 +4,15 @@ import VesperPlayerKit
 func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {
     switch policy.mode {
     case .auto:
-        "Auto"
+        ExampleI18n.auto
     case .constrained:
         if let maxBitRate = policy.maxBitRate {
             formatBitRate(maxBitRate)
         } else {
-            "Capped"
+            ExampleI18n.qualityButtonCapped
         }
     case .fixedTrack:
-        "Pinned"
+        ExampleI18n.qualityButtonPinned
     }
 }
 
@@ -20,8 +20,8 @@ func audioButtonLabel(
     _ trackCatalog: VesperTrackCatalog,
     _ trackSelection: VesperTrackSelectionSnapshot
 ) -> String {
-    guard trackSelection.audio.mode == .track else { return "Audio" }
-    return trackCatalog.audioTracks.first { $0.id == trackSelection.audio.trackId }.map(audioLabel) ?? "Audio"
+    guard trackSelection.audio.mode == .track else { return ExampleI18n.audio }
+    return trackCatalog.audioTracks.first { $0.id == trackSelection.audio.trackId }.map(audioLabel) ?? ExampleI18n.audio
 }
 
 func subtitleButtonLabel(
@@ -30,32 +30,32 @@ func subtitleButtonLabel(
 ) -> String {
     switch trackSelection.subtitle.mode {
     case .disabled:
-        "CC Off"
+        ExampleI18n.captionsOff
     case .auto:
-        "CC Auto"
+        ExampleI18n.captionsAuto
     case .track:
-        trackCatalog.subtitleTracks.first { $0.id == trackSelection.subtitle.trackId }.map(subtitleLabel) ?? "Subtitles"
+        trackCatalog.subtitleTracks.first { $0.id == trackSelection.subtitle.trackId }.map(subtitleLabel) ?? ExampleI18n.subtitles
     }
 }
 
 func stageBadgeText(_ timeline: TimelineUiState) -> String {
     switch timeline.kind {
     case .vod:
-        "Video on demand"
+        ExampleI18n.stageVideoOnDemand
     case .live:
-        "Live stream"
+        ExampleI18n.stageLiveStream
     case .liveDvr:
-        "Live with DVR window"
+        ExampleI18n.stageLiveWithDvrWindow
     }
 }
 
 func liveButtonLabel(_ timeline: TimelineUiState) -> String {
-    guard let liveEdge = timeline.liveEdgeMs else { return "Go Live" }
+    guard let liveEdge = timeline.liveEdgeMs else { return ExampleI18n.goLive }
     let behindMs = max(liveEdge - timeline.positionMs, 0)
     if behindMs > 1_500 {
-        return "LIVE -\(formatMillis(behindMs))"
+        return ExampleI18n.liveBehind(formatMillis(behindMs))
     }
-    return "LIVE"
+    return ExampleI18n.live
 }
 
 func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> String {
@@ -70,9 +70,9 @@ func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> 
     switch timeline.kind {
     case .live:
         if let liveEdge = timeline.liveEdgeMs {
-            return "LIVE • Edge \(formatMillis(liveEdge))"
+            return ExampleI18n.liveEdge(formatMillis(liveEdge))
         }
-        return "LIVE"
+        return ExampleI18n.live
     case .liveDvr:
         return "\(formatMillis(displayedPosition)) / \(formatMillis(timeline.liveEdgeMs ?? timeline.durationMs ?? 0))"
     case .vod:
@@ -81,44 +81,44 @@ func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> 
 }
 
 func speedBadge(_ value: Float) -> String {
-    String(format: "%.1fx", value)
+    ExampleI18n.playbackRate(Double(value))
 }
 
 func audioLabel(_ track: VesperMediaTrack) -> String {
-    track.label ?? track.language?.uppercased() ?? "Audio Track"
+    track.label ?? track.language?.uppercased() ?? ExampleI18n.audioTrack
 }
 
 func audioSubtitle(_ track: VesperMediaTrack) -> String {
     let parts = [
         track.language?.uppercased(),
-        track.channels.map { "\($0) ch" },
-        track.sampleRate.map { "\($0 / 1000) kHz" },
+        track.channels.map(ExampleI18n.audioChannels),
+        track.sampleRate.map { ExampleI18n.audioSampleRateKhz($0 / 1000) },
         track.codec,
     ].compactMap { $0 }
-    return parts.isEmpty ? "Audio program" : parts.joined(separator: " • ")
+    return parts.isEmpty ? ExampleI18n.audioProgram : parts.joined(separator: " • ")
 }
 
 func subtitleLabel(_ track: VesperMediaTrack) -> String {
-    track.label ?? track.language?.uppercased() ?? "Subtitle Track"
+    track.label ?? track.language?.uppercased() ?? ExampleI18n.subtitleTrack
 }
 
 func subtitleSubtitle(_ track: VesperMediaTrack) -> String {
     let parts = [
         track.language?.uppercased(),
-        track.isForced ? "Forced" : nil,
-        track.isDefault ? "Default" : nil,
+        track.isForced ? ExampleI18n.subtitleForced : nil,
+        track.isDefault ? ExampleI18n.subtitleDefault : nil,
     ].compactMap { $0 }
-    return parts.isEmpty ? "Subtitle option" : parts.joined(separator: " • ")
+    return parts.isEmpty ? ExampleI18n.subtitleOption : parts.joined(separator: " • ")
 }
 
 func formatBitRate(_ value: Int64) -> String {
     if value >= 1_000_000 {
-        return String(format: "%.1f Mbps", Double(value) / 1_000_000.0)
+        return ExampleI18n.bitRateMbps(Double(value) / 1_000_000.0)
     }
     if value >= 1_000 {
-        return String(format: "%.0f kbps", Double(value) / 1_000.0)
+        return ExampleI18n.bitRateKbps(Double(value) / 1_000.0)
     }
-    return "\(value) bps"
+    return ExampleI18n.bitRateBps(value)
 }
 
 func formatMillis(_ value: Int64) -> String {
@@ -132,53 +132,31 @@ func abrPresets() -> [AbrPreset] {
     [
         AbrPreset(
             id: "data-saver",
-            title: "Data Saver",
-            subtitle: "Cap bitrate near 800 kbps for constrained networks.",
+            title: ExampleI18n.abrPresetDataSaverTitle,
+            subtitle: ExampleI18n.abrPresetDataSaverSubtitle,
             policy: .constrained(maxBitRate: 800_000)
         ),
         AbrPreset(
             id: "balanced",
-            title: "Balanced",
-            subtitle: "Cap bitrate near 2 Mbps for smoother playback.",
+            title: ExampleI18n.abrPresetBalancedTitle,
+            subtitle: ExampleI18n.abrPresetBalancedSubtitle,
             policy: .constrained(maxBitRate: 2_000_000)
         ),
         AbrPreset(
             id: "high",
-            title: "High",
-            subtitle: "Cap bitrate near 5 Mbps for higher visual quality.",
+            title: ExampleI18n.abrPresetHighTitle,
+            subtitle: ExampleI18n.abrPresetHighSubtitle,
             policy: .constrained(maxBitRate: 5_000_000)
         ),
     ]
 }
 
 func sheetTitle(_ sheet: ExamplePlayerSheet) -> String {
-    switch sheet {
-    case .menu:
-        "Playback Tools"
-    case .quality:
-        "Quality"
-    case .audio:
-        "Audio"
-    case .subtitle:
-        "Subtitles"
-    case .speed:
-        "Playback Speed"
-    }
+    ExampleI18n.sheetTitle(sheet)
 }
 
 func sheetSubtitle(_ sheet: ExamplePlayerSheet) -> String {
-    switch sheet {
-    case .menu:
-        "Open track, subtitle, quality, and speed controls without crowding the player overlay."
-    case .quality:
-        "The current AVPlayer route uses bitrate caps instead of fixed video renditions."
-    case .audio:
-        "Choose from the audible media groups exposed by the stream."
-    case .subtitle:
-        "Turn subtitles off, keep them automatic, or pin a specific option."
-    case .speed:
-        "Preview playback behavior at different speeds."
-    }
+    ExampleI18n.sheetSubtitle(sheet)
 }
 
 func sheetHeight(for sheet: ExamplePlayerSheet) -> CGFloat {

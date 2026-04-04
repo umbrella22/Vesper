@@ -52,9 +52,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         currentSource = initialSource
         self.resiliencePolicy = resiliencePolicy
         publishedUiState = PlayerHostUiState(
-            title: "Vesper",
-            subtitle: "iOS AVPlayer native bridge",
-            sourceLabel: initialSource?.label ?? "No source selected",
+            title: VesperPlayerI18n.playerTitle,
+            subtitle: VesperPlayerI18n.nativeBridgeReady,
+            sourceLabel: initialSource?.label ?? VesperPlayerI18n.noSourceSelected,
             playbackState: .ready,
             playbackRate: 1.0,
             isBuffering: false,
@@ -77,8 +77,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             updateState {
                 PlayerHostUiState(
                     title: $0.title,
-                    subtitle: "Select a media source to begin playback",
-                    sourceLabel: "No source selected",
+                    subtitle: VesperPlayerI18n.selectSourcePrompt,
+                    sourceLabel: VesperPlayerI18n.noSourceSelected,
                     playbackState: .ready,
                     playbackRate: $0.playbackRate,
                     isBuffering: false,
@@ -434,7 +434,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "no media source selected"]
+                userInfo: [NSLocalizedDescriptionKey: VesperPlayerI18n.noSourceSelected]
             )
         }
 
@@ -892,7 +892,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "invalid media URL"]
+                userInfo: [NSLocalizedDescriptionKey: VesperPlayerI18n.invalidMediaUrl]
             )
         }
         return url
@@ -901,9 +901,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private func sourceSubtitle(for source: VesperPlayerSource) -> String {
         switch source.kind {
         case .local:
-            return "iOS AVPlayer native bridge (local source)"
+            return VesperPlayerI18n.nativeLocalSourceSubtitle()
         case .remote:
-            return "iOS AVPlayer native bridge (\(source.protocol.rawValue) remote source)"
+            return VesperPlayerI18n.nativeRemoteSourceSubtitle(source.protocol.rawValue)
         }
     }
 
@@ -932,7 +932,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         updateState {
             PlayerHostUiState(
                 title: $0.title,
-                subtitle: "iOS native bridge error: \(message)",
+                subtitle: VesperPlayerI18n.nativeBridgeError(message),
                 sourceLabel: $0.sourceLabel,
                 playbackState: .ready,
                 playbackRate: $0.playbackRate,
@@ -962,7 +962,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         updateState {
             PlayerHostUiState(
                 title: $0.title,
-                subtitle: "Retrying in \(formattedRetryDelay(delayMs)) after \(error.message)",
+                subtitle: VesperPlayerI18n.retryScheduled(delay: formattedRetryDelay(delayMs), message: error.message),
                 sourceLabel: $0.sourceLabel,
                 playbackState: .ready,
                 playbackRate: $0.playbackRate,
@@ -1166,9 +1166,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private func formattedRetryDelay(_ delayMs: UInt64) -> String {
         let seconds = Double(delayMs) / 1000.0
         if seconds >= 10 || seconds.rounded() == seconds {
-            return "\(Int(seconds.rounded()))s"
+            return VesperPlayerI18n.retryDelaySecondsInt(Int(seconds.rounded()))
         }
-        return String(format: "%.1fs", seconds)
+        return VesperPlayerI18n.retryDelaySecondsDecimal(seconds)
     }
 
     private func configureAudioSessionIfNeeded() {

@@ -1,0 +1,14 @@
+"vesper.player.title" = "Vesper";
+"vesper.bridge.native.ready" = "iOS AVPlayer 原生桥接";
+"vesper.bridge.preview.ready" = "iOS 宿主预览桥接";
+"vesper.bridge.no_source_selected" = "未选择媒体源";
+"vesper.bridge.select_source_prompt" = "请选择一个媒体源开始播放";
+"vesper.bridge.invalid_media_url" = "无效的媒体 URL";
+"vesper.bridge.native.local_source" = "iOS AVPlayer 原生桥接（本地源）";
+"vesper.bridge.native.remote_source" = "iOS AVPlayer 原生桥接（%@ 远程源）";
+"vesper.bridge.preview.local_source" = "iOS 宿主预览桥接（本地源）";
+"vesper.bridge.preview.remote_source" = "iOS 宿主预览桥接（%@ 远程源）";
+"vesper.bridge.native.error" = "iOS 原生桥接错误：%@";
+"vesper.bridge.retry_scheduled" = "%2$@ 后将在 %1$@ 后重试";
+"vesper.bridge.retry_delay_seconds_int" = "%d秒";
+"vesper.bridge.retry_delay_seconds_decimal" = "%.1f秒";

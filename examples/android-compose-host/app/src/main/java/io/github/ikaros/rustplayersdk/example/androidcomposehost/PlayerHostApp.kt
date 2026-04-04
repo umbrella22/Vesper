@@ -230,11 +230,11 @@ fun PlayerHostApp(
                                 pickVideoLauncher.launch(arrayOf("video/*"))
                             },
                             onUseHlsDemo = {
-                                controller.selectSource(androidHlsDemoSource())
+                                controller.selectSource(androidHlsDemoSource(context))
                                 controlsVisible = true
                             },
                             onUseDashDemo = {
-                                controller.selectSource(androidDashDemoSource())
+                                controller.selectSource(androidDashDemoSource(context))
                                 controlsVisible = true
                             },
                             onOpenRemote = {
@@ -243,7 +243,7 @@ fun PlayerHostApp(
                                     controller.selectSource(
                                         VesperPlayerSource.remote(
                                             uri = url,
-                                            label = "Custom Remote Stream",
+                                            label = context.getString(R.string.example_source_custom_remote_label),
                                         ),
                                     )
                                     controlsVisible = true
