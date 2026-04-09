@@ -68,12 +68,14 @@ object VesperPlayerControllerFactory {
         context: Context,
         initialSource: VesperPlayerSource? = null,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+        surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
     ): VesperPlayerController =
         VesperPlayerController(
             PlayerBridgeFactory.createDefault(
                 context = context,
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
+                surfaceKind = surfaceKind,
             )
         )
 

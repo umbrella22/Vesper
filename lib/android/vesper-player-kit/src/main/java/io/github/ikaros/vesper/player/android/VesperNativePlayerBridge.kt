@@ -13,6 +13,7 @@ class VesperNativePlayerBridge(
     private val initialSource: VesperPlayerSource? = null,
     private val resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     appContext: Context? = null,
+    surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private var pendingAutoPlay = false
@@ -39,7 +40,7 @@ class VesperNativePlayerBridge(
     )
     private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
-    private val surfaceHost = VesperNativeSurfaceHost(bindings)
+    private val surfaceHost = VesperNativeSurfaceHost(bindings, surfaceKind)
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.VesperNativeStub
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()

@@ -9,6 +9,7 @@ object PlayerBridgeFactory {
         context: Context,
         initialSource: VesperPlayerSource? = null,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+        surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
     ): PlayerBridge =
         when (defaultBackend) {
             PlayerBridgeBackend.FakeDemo ->
@@ -21,6 +22,7 @@ object PlayerBridgeFactory {
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
                 appContext = context.applicationContext,
+                surfaceKind = surfaceKind,
             )
         }
 }
