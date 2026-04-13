@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 import UIKit
 
@@ -28,7 +28,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var subtitleGroup: AVMediaSelectionGroup?
     private var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
-    private let resiliencePolicy: VesperPlaybackResiliencePolicy
+    private var resiliencePolicy: VesperPlaybackResiliencePolicy
+    private var pendingResilienceRestore: PendingResilienceRestore?
     private var retryTask: Task<Void, Never>?
     private var retryAttemptCount = 0
     private let cachePolicyToken = UUID()
@@ -119,6 +120,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
         VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
+        pendingResilienceRestore = nil
         pendingAutoPlay = false
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = false
@@ -135,6 +137,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         currentSource = source
         cancelPendingRetry(resetAttempts: true)
+        pendingResilienceRestore = nil
         pendingAutoPlay = true
         updateState {
             PlayerHostUiState(
@@ -218,7 +221,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         pendingPlaybackStart = false
         let rate = desiredPlaybackRate
-        player.defaultRate = rate
+        applyDefaultPlaybackRate(rate, to: player)
         iosHostLog("startPlayback rate=\(rate)")
         player.playImmediately(atRate: rate)
     }
@@ -308,7 +311,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let clampedRate = min(max(rate, 0.5), 3.0)
         iosHostLog("setPlaybackRate rate=\(clampedRate)")
         desiredPlaybackRate = clampedRate
-        player?.defaultRate = clampedRate
+        if let player {
+            applyDefaultPlaybackRate(clampedRate, to: player)
+        }
         if publishedUiState.playbackState == .playing {
             player?.playImmediately(atRate: clampedRate)
         }
@@ -429,12 +434,62 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
     }
 
+    func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
+        if resiliencePolicy == policy {
+            return
+        }
+
+        resiliencePolicy = policy
+        guard let currentSource else {
+            return
+        }
+
+        iosHostLog(
+            "apply resilience policy buffering=\(policy.buffering.preset.rawValue) retry=\(policy.retry.backoff.rawValue) cache=\(policy.cache.preset.rawValue)"
+        )
+        cancelPendingRetry(resetAttempts: true)
+
+        guard player != nil else {
+            return
+        }
+
+        pendingResilienceRestore = PendingResilienceRestore(
+            sourceUri: currentSource.uri,
+            state: PreservedPlaybackState.capture(
+                uiState: publishedUiState,
+                trackSelection: publishedTrackSelection
+            )
+        )
+
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: $0.subtitle,
+                sourceLabel: $0.sourceLabel,
+                playbackState: $0.playbackState,
+                playbackRate: $0.playbackRate,
+                isBuffering: true,
+                isInterrupted: $0.isInterrupted,
+                timeline: $0.timeline
+            )
+        }
+        initialize()
+    }
+
     private func loadCurrentSource() throws {
         guard let currentSource else {
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: VesperPlayerI18n.noSourceSelected]
+            )
+        }
+
+        if currentSource.kind == .remote, currentSource.protocol == .dash {
+            throw NSError(
+                domain: "io.github.ikaros.vesper.host.ios",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: VesperPlayerI18n.dashUnsupportedOnIos]
             )
         }
 
@@ -451,7 +506,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling =
             bufferingPolicy.automaticallyWaitsToMinimizeStalling
-        player.defaultRate = desiredPlaybackRate
+        applyDefaultPlaybackRate(desiredPlaybackRate, to: player)
 
         removeObservers()
         pendingPlaybackStart = false
@@ -506,7 +561,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { player, _ in
             let reason = player.reasonForWaitingToPlay?.rawValue ?? "nil"
             iosHostLog(
-                "timeControlStatus=\(timeControlStatusName(player.timeControlStatus)) reason=\(reason) rate=\(player.rate) defaultRate=\(player.defaultRate)"
+                "timeControlStatus=\(timeControlStatusName(player.timeControlStatus)) reason=\(reason) rate=\(player.rate)"
             )
         }
 
@@ -519,6 +574,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 case .readyToPlay:
                     self.cancelPendingRetry(resetAttempts: true)
                     self.refreshTrackCatalogAndSelection(for: item)
+                    self.applyPendingResilienceRestore(ifNeededFor: item, phase: .coreState)
                     self.attemptPendingPlaybackStart(reason: "itemReadyToPlay")
                     self.refreshPlaybackState()
                 case .failed:
@@ -814,13 +870,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             self.audioOptionsByTrackId = trackState.audioOptionsByTrackId
             self.subtitleOptionsByTrackId = trackState.subtitleOptionsByTrackId
             self.publishedTrackCatalog = trackState.catalog
+            self.applyPendingResilienceRestore(ifNeededFor: item, phase: .trackSelection)
         }
     }
 
     private func loadTrackCatalogState(for item: AVPlayerItem) async -> LoadedTrackCatalogState {
         let asset = item.asset
-        let audibleGroup = try? await asset.loadMediaSelectionGroup(for: .audible)
-        let legibleGroup = try? await asset.loadMediaSelectionGroup(for: .legible)
+        let audibleGroup = await loadMediaSelectionGroup(for: .audible, asset: asset)
+        let legibleGroup = await loadMediaSelectionGroup(for: .legible, asset: asset)
 
         var tracks: [VesperMediaTrack] = []
         var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
@@ -885,6 +942,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             audioOptionsByTrackId: audioOptionsByTrackId,
             subtitleOptionsByTrackId: subtitleOptionsByTrackId
         )
+    }
+
+    private func loadMediaSelectionGroup(
+        for characteristic: AVMediaCharacteristic,
+        asset: AVAsset
+    ) async -> AVMediaSelectionGroup? {
+        return try? await asset.loadMediaSelectionGroup(for: characteristic)
+    }
+
+    private func applyDefaultPlaybackRate(_ rate: Float, to player: AVPlayer) {
+        player.defaultRate = rate
     }
 
     private func resolvedUrl(for source: VesperPlayerSource) throws -> URL {
@@ -1019,6 +1087,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
 
         let nsError = error as NSError
+        if nsError.domain == "io.github.ikaros.vesper.host.ios", nsError.code == -3 {
+            return ResolvedBridgeError(
+                category: .unsupported,
+                retriable: false,
+                message: nsError.localizedDescription
+            )
+        }
         if nsError.domain == NSURLErrorDomain {
             switch nsError.code {
             case NSURLErrorTimedOut,
@@ -1186,6 +1261,93 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedUiState = transform(publishedUiState)
     }
 
+    private func applyPendingResilienceRestore(
+        ifNeededFor item: AVPlayerItem,
+        phase: PendingResilienceRestorePhase
+    ) {
+        guard
+            var pendingResilienceRestore,
+            currentSource?.uri == pendingResilienceRestore.sourceUri,
+            player?.currentItem === item
+        else {
+            return
+        }
+
+        switch phase {
+        case .coreState:
+            if pendingResilienceRestore.needsCoreStateRestore {
+                restoreCorePlaybackState(pendingResilienceRestore.state)
+                pendingResilienceRestore.needsCoreStateRestore = false
+            }
+        case .trackSelection:
+            if pendingResilienceRestore.needsTrackSelectionRestore {
+                pendingResilienceRestore.needsTrackSelectionRestore =
+                    restoreTrackSelectionsIfNeeded(pendingResilienceRestore.state, item: item)
+            }
+        }
+
+        if
+            !pendingResilienceRestore.needsCoreStateRestore &&
+                !pendingResilienceRestore.needsTrackSelectionRestore
+        {
+            self.pendingResilienceRestore = nil
+            return
+        }
+
+        self.pendingResilienceRestore = pendingResilienceRestore
+    }
+
+    private func restoreCorePlaybackState(_ state: PreservedPlaybackState) {
+        if state.seekToLiveEdge, publishedUiState.timeline.kind == .liveDvr {
+            seekToLiveEdge()
+        } else if state.restorePosition {
+            seekToPosition(max(state.positionMs, 0))
+        }
+
+        if abs(state.playbackRate - 1.0) > 0.001 {
+            setPlaybackRate(state.playbackRate)
+        }
+
+        setAbrPolicy(state.abrPolicy)
+
+        if state.shouldResumePlayback {
+            play()
+        } else if state.playbackState == .paused {
+            pause()
+        }
+    }
+
+    private func restoreTrackSelectionsIfNeeded(
+        _ state: PreservedPlaybackState,
+        item: AVPlayerItem
+    ) -> Bool {
+        if state.audioSelection.mode != .auto {
+            if let group = audioGroup {
+                applyTrackSelection(
+                    state.audioSelection,
+                    kind: .audio,
+                    group: group,
+                    optionsByTrackId: audioOptionsByTrackId,
+                    item: item
+                )
+            }
+        }
+
+        if state.subtitleSelection.mode != .auto {
+            if let group = subtitleGroup {
+                applyTrackSelection(
+                    state.subtitleSelection,
+                    kind: .subtitle,
+                    group: group,
+                    optionsByTrackId: subtitleOptionsByTrackId,
+                    item: item
+                )
+            }
+        }
+
+        return false
+    }
+
     private func canStartPlayback(_ player: AVPlayer) -> Bool {
         playbackStartDeferralReason(player) == nil
     }
@@ -1223,6 +1385,7 @@ private enum ResolvedBridgeErrorCategory: String {
     case audioOutput
     case playback
     case capability
+    case unsupported
     case platform
 }
 
@@ -1255,6 +1418,52 @@ private struct LoadedTrackCatalogState {
     let subtitleGroup: AVMediaSelectionGroup?
     let audioOptionsByTrackId: [String: AVMediaSelectionOption]
     let subtitleOptionsByTrackId: [String: AVMediaSelectionOption]
+}
+
+private enum PendingResilienceRestorePhase {
+    case coreState
+    case trackSelection
+}
+
+private struct PendingResilienceRestore {
+    let sourceUri: String
+    let state: PreservedPlaybackState
+    var needsCoreStateRestore = true
+    var needsTrackSelectionRestore = true
+}
+
+private struct PreservedPlaybackState {
+    let positionMs: Int64
+    let restorePosition: Bool
+    let seekToLiveEdge: Bool
+    let playbackRate: Float
+    let playbackState: PlaybackStateUi
+    let shouldResumePlayback: Bool
+    let audioSelection: VesperTrackSelection
+    let subtitleSelection: VesperTrackSelection
+    let abrPolicy: VesperAbrPolicy
+
+    static func capture(
+        uiState: PlayerHostUiState,
+        trackSelection: VesperTrackSelectionSnapshot
+    ) -> PreservedPlaybackState {
+        let liveEdgeMs = uiState.timeline.liveEdgeMs
+        let seekToLiveEdge =
+            uiState.timeline.kind == .liveDvr &&
+                liveEdgeMs != nil &&
+                abs((liveEdgeMs ?? 0) - uiState.timeline.positionMs) <= 1_500
+        return PreservedPlaybackState(
+            positionMs: uiState.timeline.positionMs,
+            restorePosition: uiState.timeline.isSeekable || uiState.timeline.durationMs != nil,
+            seekToLiveEdge: seekToLiveEdge,
+            playbackRate: uiState.playbackRate,
+            playbackState: uiState.playbackState,
+            shouldResumePlayback: uiState.playbackState == .playing,
+            audioSelection: trackSelection.audio,
+            subtitleSelection: trackSelection.subtitle,
+            abrPolicy: trackSelection.abrPolicy
+        )
+    }
 }
 
 private func derivePlaybackState(

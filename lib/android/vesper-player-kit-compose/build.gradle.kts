@@ -1,7 +1,16 @@
+import com.android.Version
+import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// AGP 9+ 已内建 Kotlin 支持；保留对旧 AGP 宿主的兼容。
+if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
+    apply(plugin = "org.jetbrains.kotlin.android")
+}
+apply(plugin = "org.jetbrains.kotlin.plugin.compose")
 
 android {
     namespace = "io.github.ikaros.vesper.player.android.compose"
@@ -19,6 +28,13 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+}
+
+extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 

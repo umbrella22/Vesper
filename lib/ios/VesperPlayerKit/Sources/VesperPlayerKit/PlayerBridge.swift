@@ -130,6 +130,7 @@ protocol PlayerBridge: AnyObject {
     func setAudioTrackSelection(_ selection: VesperTrackSelection)
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection)
     func setAbrPolicy(_ policy: VesperAbrPolicy)
+    func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy)
 }
 
 @MainActor

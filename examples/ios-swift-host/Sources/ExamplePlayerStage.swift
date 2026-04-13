@@ -64,10 +64,20 @@ struct ExamplePlayerStage: View {
                     VStack(spacing: 0) {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(uiState.sourceLabel)
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .lineLimit(1)
+                                HStack(spacing: 8) {
+                                    Text(uiState.sourceLabel)
+                                        .font(.headline.weight(.bold))
+                                        .foregroundStyle(.white)
+                                        .lineLimit(1)
+
+                                    if uiState.isBuffering {
+                                        StageChip(
+                                            label: ExampleI18n.buffering,
+                                            accent: Color(red: 1.0, green: 0.71, blue: 0.33),
+                                            compact: true
+                                        )
+                                    }
+                                }
                                 Text(stageBadgeText(uiState.timeline))
                                     .font(.caption)
                                     .foregroundStyle(Color.white.opacity(0.70))
@@ -175,21 +185,6 @@ struct ExamplePlayerStage: View {
                     }
                 }
                 .transition(.opacity)
-            }
-
-            if uiState.isBuffering {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        StageChip(
-                            label: ExampleI18n.buffering,
-                            accent: Color(red: 1.0, green: 0.71, blue: 0.33)
-                        )
-                    }
-                    .padding(.trailing, 18)
-                    .padding(.bottom, 18)
-                }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: isFullscreen ? 0 : 28, style: .continuous))
@@ -324,19 +319,20 @@ struct StagePillButton: View {
 struct StageChip: View {
     let label: String
     let accent: Color
+    var compact: Bool = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: compact ? 6 : 8) {
             Circle()
                 .fill(accent)
-                .frame(width: 8, height: 8)
+                .frame(width: compact ? 6 : 8, height: compact ? 6 : 8)
 
             Text(label)
-                .font(.caption.weight(.semibold))
+                .font((compact ? Font.caption2 : .caption).weight(.semibold))
                 .foregroundStyle(.white)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 5 : 7)
         .background(Color.black.opacity(0.36), in: Capsule())
         .overlay(
             Capsule()

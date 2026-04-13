@@ -12,6 +12,7 @@ internal class PlayerHostViewModel(
         VesperPlayerControllerFactory.createDefault(
             context = application.applicationContext,
             initialSource = androidHlsDemoSource(application.applicationContext),
+            resiliencePolicy = ExampleResilienceProfile.Balanced.policy,
         ).also { controller ->
             controller.initialize()
         }

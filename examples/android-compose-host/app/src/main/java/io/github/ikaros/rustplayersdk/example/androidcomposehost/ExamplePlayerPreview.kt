@@ -225,6 +225,37 @@ private fun PreviewExampleSourceSectionLight() {
 }
 
 @Preview(
+    name = "Resilience Section Light",
+    showBackground = true,
+    backgroundColor = 0xFFF2F4F9,
+    widthDp = 392,
+    heightDp = 280,
+)
+@Composable
+private fun PreviewExampleResilienceSectionLight() {
+    ExamplePreviewTheme(useDarkTheme = false) {
+        val palette = exampleHostPalette(false)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(palette.pageTop, palette.pageBottom),
+                    ),
+                )
+                .padding(18.dp),
+        ) {
+            ExampleResilienceSection(
+                palette = palette,
+                selectedProfile = ExampleResilienceProfile.Balanced,
+                isApplyingProfile = true,
+                onApplyProfile = {},
+            )
+        }
+    }
+}
+
+@Preview(
     name = "Sheet Menu Dark",
     showBackground = true,
     backgroundColor = 0xFF06080D,

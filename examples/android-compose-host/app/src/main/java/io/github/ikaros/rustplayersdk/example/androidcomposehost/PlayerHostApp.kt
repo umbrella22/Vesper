@@ -28,6 +28,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -42,6 +43,7 @@ import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
+import kotlinx.coroutines.launch
 
 @Composable
 fun PlayerHostApp(
@@ -53,6 +55,9 @@ fun PlayerHostApp(
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     var themeMode by rememberSaveable { mutableStateOf(ExampleThemeMode.System) }
+    var selectedResilienceProfile by rememberSaveable {
+        mutableStateOf(ExampleResilienceProfile.Balanced)
+    }
     val systemDarkTheme = isSystemInDarkTheme()
     val useDarkTheme =
         when (themeMode) {
@@ -84,6 +89,8 @@ fun PlayerHostApp(
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
     var activeSheet by rememberSaveable { mutableStateOf<ExamplePlayerSheet?>(null) }
     var pendingSeekRatio by remember { mutableStateOf<Float?>(null) }
+    var isApplyingResilienceProfile by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     val pickVideoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -247,6 +254,33 @@ fun PlayerHostApp(
                                         ),
                                     )
                                     controlsVisible = true
+                                }
+                            },
+                        )
+
+                        ExampleResilienceSection(
+                            palette = palette,
+                            selectedProfile = selectedResilienceProfile,
+                            isApplyingProfile = isApplyingResilienceProfile,
+                            onApplyProfile = { profile ->
+                                if (
+                                    !isApplyingResilienceProfile &&
+                                    profile != selectedResilienceProfile
+                                ) {
+                                    val previousProfile = selectedResilienceProfile
+                                    selectedResilienceProfile = profile
+                                    scope.launch {
+                                        isApplyingResilienceProfile = true
+                                        kotlinx.coroutines.yield()
+                                        val result =
+                                            runCatching {
+                                                controller.setResiliencePolicy(profile.policy)
+                                            }
+                                        if (result.isFailure) {
+                                            selectedResilienceProfile = previousProfile
+                                        }
+                                        isApplyingResilienceProfile = false
+                                    }
                                 }
                             },
                         )

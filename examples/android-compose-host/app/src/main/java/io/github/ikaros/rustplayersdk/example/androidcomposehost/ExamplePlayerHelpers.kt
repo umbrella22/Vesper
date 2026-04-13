@@ -10,7 +10,13 @@ import androidx.compose.ui.res.stringResource
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.TimelineUiState
 import io.github.ikaros.vesper.player.android.VesperAbrMode
+import io.github.ikaros.vesper.player.android.VesperBufferingPolicy
+import io.github.ikaros.vesper.player.android.VesperBufferingPreset
+import io.github.ikaros.vesper.player.android.VesperCachePolicy
+import io.github.ikaros.vesper.player.android.VesperCachePreset
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
+import io.github.ikaros.vesper.player.android.VesperRetryBackoff
+import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionMode
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
@@ -207,6 +213,89 @@ internal fun formatMillis(value: Long): String {
 }
 
 internal fun formatRate(value: Float): String = String.format(Locale.getDefault(), "%.1f", value)
+
+@Composable
+internal fun resilienceBufferingValue(policy: VesperBufferingPolicy): String =
+    "${bufferingPresetLabel(policy.preset)} · ${bufferWindowLabel(policy)}"
+
+@Composable
+internal fun resilienceRetryValue(policy: VesperRetryPolicy): String {
+    val attempts =
+        policy.maxAttempts?.let {
+            stringResource(R.string.example_resilience_retry_attempts, it)
+        } ?: stringResource(R.string.example_resilience_retry_unlimited)
+    return stringResource(
+        R.string.example_resilience_retry_value,
+        attempts,
+        retryBackoffLabel(policy.backoff),
+    )
+}
+
+@Composable
+internal fun resilienceCacheValue(policy: VesperCachePolicy): String =
+    stringResource(
+        R.string.example_resilience_cache_value,
+        cachePresetLabel(policy.preset),
+        formatStorageBytes(policy.maxMemoryBytes),
+        formatStorageBytes(policy.maxDiskBytes),
+    )
+
+@Composable
+internal fun bufferingPresetLabel(preset: VesperBufferingPreset): String =
+    when (preset) {
+        VesperBufferingPreset.Default -> stringResource(R.string.example_resilience_preset_default)
+        VesperBufferingPreset.Balanced -> stringResource(R.string.example_resilience_preset_balanced)
+        VesperBufferingPreset.Streaming -> stringResource(R.string.example_resilience_preset_streaming)
+        VesperBufferingPreset.Resilient -> stringResource(R.string.example_resilience_preset_resilient)
+        VesperBufferingPreset.LowLatency -> stringResource(R.string.example_resilience_preset_low_latency)
+    }
+
+@Composable
+internal fun cachePresetLabel(preset: VesperCachePreset): String =
+    when (preset) {
+        VesperCachePreset.Default -> stringResource(R.string.example_resilience_preset_default)
+        VesperCachePreset.Disabled -> stringResource(R.string.example_resilience_preset_disabled)
+        VesperCachePreset.Streaming -> stringResource(R.string.example_resilience_preset_streaming)
+        VesperCachePreset.Resilient -> stringResource(R.string.example_resilience_preset_resilient)
+    }
+
+@Composable
+internal fun retryBackoffLabel(backoff: VesperRetryBackoff): String =
+    when (backoff) {
+        VesperRetryBackoff.Fixed -> stringResource(R.string.example_resilience_backoff_fixed)
+        VesperRetryBackoff.Linear -> stringResource(R.string.example_resilience_backoff_linear)
+        VesperRetryBackoff.Exponential -> stringResource(R.string.example_resilience_backoff_exponential)
+    }
+
+@Composable
+internal fun bufferWindowLabel(policy: VesperBufferingPolicy): String {
+    val min = policy.minBufferMs
+    val max = policy.maxBufferMs
+    if (min == null || max == null) {
+        return stringResource(R.string.example_resilience_window_default)
+    }
+    return stringResource(R.string.example_resilience_window_range, min, max)
+}
+
+@Composable
+internal fun formatStorageBytes(value: Long?): String {
+    if (value == null) {
+        return stringResource(R.string.example_resilience_window_default)
+    }
+    if (value == 0L) {
+        return "0 B"
+    }
+    if (value >= 1024L * 1024L * 1024L) {
+        return String.format(Locale.getDefault(), "%.1f GB", value / (1024.0 * 1024.0 * 1024.0))
+    }
+    if (value >= 1024L * 1024L) {
+        return String.format(Locale.getDefault(), "%.0f MB", value / (1024.0 * 1024.0))
+    }
+    if (value >= 1024L) {
+        return String.format(Locale.getDefault(), "%.0f KB", value / 1024.0)
+    }
+    return "$value B"
+}
 
 internal fun displayNameForUri(context: Context, uri: Uri): String {
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)

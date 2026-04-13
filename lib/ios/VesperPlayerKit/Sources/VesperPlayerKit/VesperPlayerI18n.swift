@@ -7,7 +7,11 @@ enum VesperPlayerI18n {
         #if SWIFT_PACKAGE
         return .module
         #else
-        return Bundle(for: VesperPlayerI18nBundleToken.self)
+        let frameworkBundle = Bundle(for: VesperPlayerI18nBundleToken.self)
+        if frameworkBundle.url(forResource: "Localizable", withExtension: "strings", subdirectory: "en.lproj") != nil {
+            return frameworkBundle
+        }
+        return .main
         #endif
     }()
 
@@ -23,6 +27,7 @@ enum VesperPlayerI18n {
     static var noSourceSelected: String { string("vesper.bridge.no_source_selected") }
     static var selectSourcePrompt: String { string("vesper.bridge.select_source_prompt") }
     static var invalidMediaUrl: String { string("vesper.bridge.invalid_media_url") }
+    static var dashUnsupportedOnIos: String { string("vesper.bridge.dash_unsupported_ios") }
 
     static func nativeLocalSourceSubtitle() -> String {
         string("vesper.bridge.native.local_source")

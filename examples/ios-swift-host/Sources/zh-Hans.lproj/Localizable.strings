@@ -12,17 +12,53 @@
 
 "example.sources.title" = "媒体源";
 "example.sources.subtitle" = "使用示例宿主在本地文件、HLS 演示流和自定义远程 URL 之间切换。";
+"example.sources.pick_video" = "选择视频";
 "example.sources.pick_from_photos" = "从相册选择";
 "example.sources.use_hls_demo" = "使用 HLS 演示";
+"example.sources.use_dash_demo" = "DASH 演示";
+"example.sources.dash_demo_unavailable_note" = "这里保留 DASH 演示入口用于结构对齐，但当前 iOS AVPlayer 后端暂不支持 DASH 播放。";
 "example.sources.theme_title" = "主题";
 "example.sources.remote_url_placeholder" = "远程 URL（HLS / progressive）";
 "example.sources.open_remote_url" = "打开远程 URL";
 
+"example.resilience.title" = "恢复策略";
+"example.resilience.subtitle" = "运行时切换 resilience preset，并尽量保留当前媒体、播放进度和播放意图。";
+"example.resilience.applying" = "正在应用策略";
+"example.resilience.fact_buffering" = "缓冲";
+"example.resilience.fact_retry" = "重试";
+"example.resilience.fact_cache" = "缓存";
+"example.resilience.balanced" = "均衡";
+"example.resilience.balanced_subtitle" = "兼顾启动速度和日常 HLS / 远程播放的稳定性，适合作为默认配置。";
+"example.resilience.streaming" = "流媒体";
+"example.resilience.streaming_subtitle" = "偏向更稳的网络播放，增加工作缓冲区，同时保持常规重试节奏。";
+"example.resilience.resilient" = "强恢复";
+"example.resilience.resilient_subtitle" = "提升缓冲、重试预算和缓存占用，更适合不稳定网络或长时间播放。";
+"example.resilience.low_latency" = "低延迟";
+"example.resilience.low_latency_subtitle" = "减少前向缓冲和缓存，让直播边缘附近的时间线交互更灵敏。";
+"example.resilience.preset_default" = "默认";
+"example.resilience.preset_balanced" = "均衡";
+"example.resilience.preset_streaming" = "流媒体";
+"example.resilience.preset_resilient" = "强恢复";
+"example.resilience.preset_low_latency" = "低延迟";
+"example.resilience.preset_disabled" = "禁用";
+"example.resilience.backoff_fixed" = "固定";
+"example.resilience.backoff_linear" = "线性";
+"example.resilience.backoff_exponential" = "指数";
+"example.resilience.window_default" = "默认";
+"example.resilience.window_range" = "%lld-%lld 毫秒";
+"example.resilience.retry_attempts" = "%d 次";
+"example.resilience.retry_unlimited" = "不限";
+"example.resilience.retry_value" = "%@ · %@";
+"example.resilience.cache_value" = "%@ · 内存 %@ / 磁盘 %@";
+
+"example.message.preparing_selected_video" = "正在准备所选视频...";
 "example.message.preparing_video_from_photos" = "正在准备来自相册的视频...";
 "example.message.invalid_remote_url" = "请输入有效的远程 URL。";
+"example.message.dash_not_supported_on_ios" = "当前 iOS AVPlayer 后端暂不支持 DASH 流。";
 "example.message.photo_library_required" = "需要相册访问权限才能从“照片”中选择视频。";
 "example.message.unknown_photo_authorization_state" = "未知的相册授权状态。";
 "example.message.failed_to_load_selected_video_from_photos" = "无法从“照片”加载所选视频。";
+"example.message.failed_to_load_selected_local_video" = "打开所选视频失败：%@";
 "example.message.failed_to_load_selected_photo_video" = "加载所选相册视频失败：%@";
 
 "example.source.hls_demo_label" = "HLS 演示（BipBop）";

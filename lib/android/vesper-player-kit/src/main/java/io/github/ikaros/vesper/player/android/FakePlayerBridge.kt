@@ -152,6 +152,8 @@ class FakePlayerBridge(
 
     override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
 
+    override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) = Unit
+
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
     }

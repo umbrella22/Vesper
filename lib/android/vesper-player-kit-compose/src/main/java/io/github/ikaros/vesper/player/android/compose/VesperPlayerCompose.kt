@@ -42,7 +42,7 @@ fun rememberVesperPlayerController(
 ): VesperPlayerController {
     val isPreview = LocalInspectionMode.current
     val context = LocalContext.current.applicationContext
-    return remember(isPreview, context, initialSource, resiliencePolicy, surfaceKind) {
+    val controller = remember(isPreview, context, initialSource, surfaceKind) {
         if (isPreview) {
             VesperPlayerControllerFactory.createPreview(initialSource)
         } else {
@@ -54,6 +54,10 @@ fun rememberVesperPlayerController(
             )
         }
     }
+    LaunchedEffect(controller, resiliencePolicy) {
+        controller.setResiliencePolicy(resiliencePolicy)
+    }
+    return controller
 }
 
 @Composable

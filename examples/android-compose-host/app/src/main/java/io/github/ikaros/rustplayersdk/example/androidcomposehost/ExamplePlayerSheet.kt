@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.ikaros.vesper.player.android.PlayerHostUiState
 import io.github.ikaros.vesper.player.android.VesperAbrMode
@@ -52,6 +53,7 @@ internal fun ExampleSelectionSheet(
         contentColor = Color.White,
         tonalElevation = 0.dp,
         dragHandle = {},
+        sheetMaxWidth = Dp.Unspecified,
     ) {
         Column(
             modifier = Modifier

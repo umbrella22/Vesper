@@ -1,15 +1,32 @@
+import com.android.Version
+import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.library")
 }
 
-val repoRoot = rootDir.parentFile.parentFile
+// AGP 9+ 已内建 Kotlin 支持；Flutter 侧仍可能通过 AGP 8.x 引入本模块。
+if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
+    apply(plugin = "org.jetbrains.kotlin.android")
+}
+
+val repoRoot = projectDir.resolve("../../..").canonicalFile
 val rustAndroidBuildScript = repoRoot.resolve("scripts/build-android-vesper-player-kit-jni.sh")
+val rustAndroidAbis = providers.gradleProperty("vesper.player.android.abis").orNull
+
+require(rustAndroidBuildScript.isFile) {
+    "Rust Android build script not found: ${rustAndroidBuildScript.absolutePath}"
+}
 
 val buildRustAndroidHostDebug by tasks.registering(Exec::class) {
     group = "rust"
     description = "Builds debug Android JNI libraries for the Rust player host library."
     workingDir = repoRoot
     commandLine(rustAndroidBuildScript.absolutePath, "debug")
+    if (!rustAndroidAbis.isNullOrBlank()) {
+        environment("RUST_ANDROID_ABIS", rustAndroidAbis)
+    }
 }
 
 val buildRustAndroidHostRelease by tasks.registering(Exec::class) {
@@ -17,6 +34,9 @@ val buildRustAndroidHostRelease by tasks.registering(Exec::class) {
     description = "Builds release Android JNI libraries for the Rust player host library."
     workingDir = repoRoot
     commandLine(rustAndroidBuildScript.absolutePath, "release")
+    if (!rustAndroidAbis.isNullOrBlank()) {
+        environment("RUST_ANDROID_ABIS", rustAndroidAbis)
+    }
 }
 
 android {
@@ -38,6 +58,12 @@ android {
         singleVariant("release") {
             withSourcesJar()
         }
+    }
+}
+
+extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 

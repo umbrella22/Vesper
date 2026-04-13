@@ -3,6 +3,7 @@ package io.github.ikaros.vesper.example.androidcomposehost
 import android.content.Context
 import androidx.annotation.StringRes
 import androidx.compose.ui.graphics.Color
+import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 
 internal enum class ExamplePlayerSheet {
@@ -19,6 +20,38 @@ internal enum class ExampleThemeMode(
     System(R.string.example_theme_system),
     Light(R.string.example_theme_light),
     Dark(R.string.example_theme_dark),
+}
+
+internal enum class ExampleResilienceProfile(
+    @get:StringRes val titleRes: Int,
+    @get:StringRes val subtitleRes: Int,
+) {
+    Balanced(
+        R.string.example_resilience_balanced,
+        R.string.example_resilience_balanced_subtitle,
+    ),
+    Streaming(
+        R.string.example_resilience_streaming,
+        R.string.example_resilience_streaming_subtitle,
+    ),
+    Resilient(
+        R.string.example_resilience_resilient,
+        R.string.example_resilience_resilient_subtitle,
+    ),
+    LowLatency(
+        R.string.example_resilience_low_latency,
+        R.string.example_resilience_low_latency_subtitle,
+    ),
+    ;
+
+    val policy: VesperPlaybackResiliencePolicy
+        get() =
+            when (this) {
+                Balanced -> VesperPlaybackResiliencePolicy.balanced()
+                Streaming -> VesperPlaybackResiliencePolicy.streaming()
+                Resilient -> VesperPlaybackResiliencePolicy.resilient()
+                LowLatency -> VesperPlaybackResiliencePolicy.lowLatency()
+            }
 }
 
 internal data class ExampleHostPalette(

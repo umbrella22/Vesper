@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import android.view.Surface
 import android.view.ViewGroup
+import kotlin.math.absoluteValue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,11 +12,12 @@ import kotlinx.coroutines.flow.asStateFlow
 class VesperNativePlayerBridge(
     private val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
     private val initialSource: VesperPlayerSource? = null,
-    private val resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+    private var resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     appContext: Context? = null,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
+    private var hasInitializedSource = false
     private var pendingAutoPlay = false
     private val i18n = VesperPlayerI18n.fromContext(appContext)
 
@@ -67,6 +69,7 @@ class VesperNativePlayerBridge(
 
         runCatching { bindings.initialize(source, resiliencePolicy) }
             .onSuccess {
+                hasInitializedSource = true
                 Log.i(
                     TAG,
                     "initialized source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",
@@ -87,6 +90,7 @@ class VesperNativePlayerBridge(
                 refreshFromNative()
             }
             .onFailure {
+                hasInitializedSource = false
                 pendingAutoPlay = false
                 Log.e(TAG, "failed to initialize source=${source.uri}", it)
                 val message = it.message?.takeUnless(String::isBlank) ?: i18n.nativeBindingsUnavailable()
@@ -100,6 +104,7 @@ class VesperNativePlayerBridge(
     }
 
     override fun dispose() {
+        hasInitializedSource = false
         surfaceHost.detach()
         bindings.setOnNativeUpdateListener(null)
         bindings.dispose()
@@ -231,8 +236,79 @@ class VesperNativePlayerBridge(
         refreshFromNative()
     }
 
+    override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) {
+        if (resiliencePolicy == policy) {
+            return
+        }
+
+        resiliencePolicy = policy
+        val source = currentSource ?: return
+        if (!hasInitializedSource) {
+            return
+        }
+
+        val preservedState = PreservedPlaybackState.capture(
+            uiState = _uiState.value,
+            trackSelection = _trackSelection.value,
+        )
+
+        Log.i(
+            TAG,
+            "apply resilience policy buffering=${policy.buffering.preset} retry=${policy.retry.backoff} cache=${policy.cache.preset}",
+        )
+        updateState { copy(isBuffering = true) }
+        initialize()
+        restorePlaybackState(source, preservedState)
+    }
+
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
+    }
+
+    private fun restorePlaybackState(
+        source: VesperPlayerSource,
+        preservedState: PreservedPlaybackState,
+    ) {
+        if (!hasInitializedSource) {
+            return
+        }
+
+        when {
+            preservedState.seekToLiveEdge &&
+                _uiState.value.timeline.kind == TimelineKind.LiveDvr -> {
+                val liveEdge =
+                    _uiState.value.timeline.liveEdgeMs ?: _uiState.value.timeline.positionMs
+                bindings.seekTo(liveEdge)
+            }
+            preservedState.restorePosition &&
+                (source.kind == VesperPlayerSourceKind.Local ||
+                    source.kind == VesperPlayerSourceKind.Remote) -> {
+                bindings.seekTo(preservedState.positionMs.coerceAtLeast(0L))
+            }
+        }
+
+        if ((preservedState.playbackRate - 1.0f).absoluteValue > 0.001f) {
+            bindings.setPlaybackRate(preservedState.playbackRate)
+        }
+
+        if (preservedState.videoSelection.mode != VesperTrackSelectionMode.Auto) {
+            bindings.setVideoTrackSelection(preservedState.videoSelection)
+        }
+        if (preservedState.audioSelection.mode != VesperTrackSelectionMode.Auto) {
+            bindings.setAudioTrackSelection(preservedState.audioSelection)
+        }
+        if (preservedState.subtitleSelection.mode != VesperTrackSelectionMode.Auto) {
+            bindings.setSubtitleTrackSelection(preservedState.subtitleSelection)
+        }
+        bindings.setAbrPolicy(preservedState.abrPolicy)
+
+        if (preservedState.shouldResumePlayback) {
+            bindings.play()
+        } else if (preservedState.playbackState == PlaybackStateUi.Paused) {
+            bindings.pause()
+        }
+
+        refreshFromNative()
     }
 
     private fun refreshFromNative() {
@@ -298,6 +374,44 @@ class VesperNativePlayerBridge(
 }
 
 private const val TAG = "VesperPlayerAndroidHost"
+
+private data class PreservedPlaybackState(
+    val positionMs: Long,
+    val restorePosition: Boolean,
+    val seekToLiveEdge: Boolean,
+    val playbackRate: Float,
+    val playbackState: PlaybackStateUi,
+    val shouldResumePlayback: Boolean,
+    val videoSelection: VesperTrackSelection,
+    val audioSelection: VesperTrackSelection,
+    val subtitleSelection: VesperTrackSelection,
+    val abrPolicy: VesperAbrPolicy,
+) {
+    companion object {
+        fun capture(
+            uiState: PlayerHostUiState,
+            trackSelection: VesperTrackSelectionSnapshot,
+        ): PreservedPlaybackState {
+            val liveEdgeMs = uiState.timeline.liveEdgeMs
+            val seekToLiveEdge =
+                uiState.timeline.kind == TimelineKind.LiveDvr &&
+                    liveEdgeMs != null &&
+                    (liveEdgeMs - uiState.timeline.positionMs).absoluteValue <= 1_500L
+            return PreservedPlaybackState(
+                positionMs = uiState.timeline.positionMs,
+                restorePosition = uiState.timeline.isSeekable || uiState.timeline.durationMs != null,
+                seekToLiveEdge = seekToLiveEdge,
+                playbackRate = uiState.playbackRate,
+                playbackState = uiState.playbackState,
+                shouldResumePlayback = uiState.playbackState == PlaybackStateUi.Playing,
+                videoSelection = trackSelection.video,
+                audioSelection = trackSelection.audio,
+                subtitleSelection = trackSelection.subtitle,
+                abrPolicy = trackSelection.abrPolicy,
+            )
+        }
+    }
+}
 
 interface VesperNativeBindings {
     fun initialize(

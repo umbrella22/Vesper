@@ -12,17 +12,53 @@
 
 "example.sources.title" = "Sources";
 "example.sources.subtitle" = "Use the example host to switch among local files, HLS demo streams, and custom remote URLs.";
+"example.sources.pick_video" = "Pick Video";
 "example.sources.pick_from_photos" = "Pick from Photos";
 "example.sources.use_hls_demo" = "Use HLS Demo";
+"example.sources.use_dash_demo" = "DASH Demo";
+"example.sources.dash_demo_unavailable_note" = "DASH demo is shown for parity, but the current iOS AVPlayer backend does not support DASH playback.";
 "example.sources.theme_title" = "Theme";
 "example.sources.remote_url_placeholder" = "Remote URL (HLS / progressive)";
 "example.sources.open_remote_url" = "Open Remote URL";
 
+"example.resilience.title" = "Playback Resilience";
+"example.resilience.subtitle" = "Switch resilience presets at runtime and ask the player to keep the current source, progress, and playback intent when possible.";
+"example.resilience.applying" = "Applying profile";
+"example.resilience.fact_buffering" = "Buffering";
+"example.resilience.fact_retry" = "Retry";
+"example.resilience.fact_cache" = "Cache";
+"example.resilience.balanced" = "Balanced";
+"example.resilience.balanced_subtitle" = "Keep startup smooth while preserving enough headroom for everyday HLS and remote playback.";
+"example.resilience.streaming" = "Streaming";
+"example.resilience.streaming_subtitle" = "Bias toward steadier network playback with a larger working buffer and standard retries.";
+"example.resilience.resilient" = "Resilient";
+"example.resilience.resilient_subtitle" = "Increase buffering, retry budget, and cache footprint for unstable networks or long sessions.";
+"example.resilience.low_latency" = "Low Latency";
+"example.resilience.low_latency_subtitle" = "Reduce forward buffering and cache so timeline interaction stays responsive near the live edge.";
+"example.resilience.preset_default" = "Default";
+"example.resilience.preset_balanced" = "Balanced";
+"example.resilience.preset_streaming" = "Streaming";
+"example.resilience.preset_resilient" = "Resilient";
+"example.resilience.preset_low_latency" = "Low Latency";
+"example.resilience.preset_disabled" = "Disabled";
+"example.resilience.backoff_fixed" = "Fixed";
+"example.resilience.backoff_linear" = "Linear";
+"example.resilience.backoff_exponential" = "Exponential";
+"example.resilience.window_default" = "Default";
+"example.resilience.window_range" = "%lld-%lld ms";
+"example.resilience.retry_attempts" = "%d attempts";
+"example.resilience.retry_unlimited" = "Unlimited";
+"example.resilience.retry_value" = "%@ · %@";
+"example.resilience.cache_value" = "%@ · memory %@ / disk %@";
+
+"example.message.preparing_selected_video" = "Preparing selected video...";
 "example.message.preparing_video_from_photos" = "Preparing video from Photos...";
 "example.message.invalid_remote_url" = "Please enter a valid remote URL.";
+"example.message.dash_not_supported_on_ios" = "The current iOS AVPlayer backend does not support DASH streams.";
 "example.message.photo_library_required" = "Photo Library access is required to pick videos from Photos.";
 "example.message.unknown_photo_authorization_state" = "Unknown Photo Library authorization state.";
 "example.message.failed_to_load_selected_video_from_photos" = "Failed to load the selected video from Photos.";
+"example.message.failed_to_load_selected_local_video" = "Failed to open selected video: %@";
 "example.message.failed_to_load_selected_photo_video" = "Failed to load selected photo video: %@";
 
 "example.source.hls_demo_label" = "HLS Demo (BipBop)";

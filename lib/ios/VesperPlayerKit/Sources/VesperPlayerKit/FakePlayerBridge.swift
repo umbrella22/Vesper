@@ -265,6 +265,8 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setAbrPolicy(_ policy: VesperAbrPolicy) {}
 
+    func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {}
+
     private func update(_ transform: (PlayerHostUiState) -> PlayerHostUiState) {
         publishedUiState = transform(publishedUiState)
     }

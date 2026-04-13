@@ -74,10 +74,33 @@ import VesperPlayerKit
             themeMode: .system,
             remoteStreamUrl: .constant(IOS_HLS_DEMO_URL),
             hostMessage: nil,
+            dashDemoEnabled: false,
+            dashDemoNote: ExampleI18n.dashDemoUnavailableNote,
             onThemeModeChange: { _ in },
-            onPickFromPhotos: {},
+            onPickVideo: {},
             onUseHlsDemo: {},
+            onUseDashDemo: {},
             onOpenRemote: {}
+        )
+        .padding(20)
+    }
+}
+
+#Preview("Resilience Light") {
+    let palette = exampleHostPalette(useDarkTheme: false)
+    ZStack {
+        LinearGradient(
+            colors: [palette.pageTop, palette.pageBottom],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+
+        ExampleResilienceSection(
+            palette: palette,
+            selectedProfile: .balanced,
+            isApplyingProfile: true,
+            onApplyProfile: { _ in }
         )
         .padding(20)
     }

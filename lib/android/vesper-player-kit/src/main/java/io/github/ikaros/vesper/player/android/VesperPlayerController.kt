@@ -58,6 +58,9 @@ class VesperPlayerController internal constructor(
 
     fun setAbrPolicy(policy: VesperAbrPolicy) = bridge.setAbrPolicy(policy)
 
+    fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) =
+        bridge.setResiliencePolicy(policy)
+
     companion object {
         val supportedPlaybackRates: List<Float> = listOf(0.5f, 1.0f, 1.5f, 2.0f, 3.0f)
     }

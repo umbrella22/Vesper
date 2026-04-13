@@ -32,6 +32,36 @@
     <string name="example_sources_theme">Theme</string>
     <string name="example_sources_open_remote_url">Open Remote URL</string>
 
+    <string name="example_resilience_title">Playback Resilience</string>
+    <string name="example_resilience_subtitle">This card demonstrates the Android resilience policy API. Switching profiles applies directly to the current player while trying to keep the active media and playback position.</string>
+    <string name="example_resilience_balanced">Balanced</string>
+    <string name="example_resilience_balanced_subtitle">General default for most remote streams.</string>
+    <string name="example_resilience_streaming">Streaming</string>
+    <string name="example_resilience_streaming_subtitle">Increase buffer headroom to prioritize steady playback.</string>
+    <string name="example_resilience_resilient">Resilient</string>
+    <string name="example_resilience_resilient_subtitle">Use higher retry and cache budgets for unstable networks.</string>
+    <string name="example_resilience_low_latency">Low Latency</string>
+    <string name="example_resilience_low_latency_subtitle">Reduce buffer and cache usage to stay closer to live.</string>
+    <string name="example_resilience_applying">Applying policy...</string>
+    <string name="example_resilience_fact_buffering">buffering</string>
+    <string name="example_resilience_fact_retry">retry</string>
+    <string name="example_resilience_fact_cache">cache</string>
+    <string name="example_resilience_retry_attempts">%1$d attempts</string>
+    <string name="example_resilience_retry_unlimited">-</string>
+    <string name="example_resilience_retry_value">%1$s · %2$s</string>
+    <string name="example_resilience_cache_value">%1$s · memory %2$s / disk %3$s</string>
+    <string name="example_resilience_window_default">default</string>
+    <string name="example_resilience_window_range">%1$d-%2$d ms</string>
+    <string name="example_resilience_preset_default">Default</string>
+    <string name="example_resilience_preset_balanced">Balanced</string>
+    <string name="example_resilience_preset_streaming">Streaming</string>
+    <string name="example_resilience_preset_resilient">Resilient</string>
+    <string name="example_resilience_preset_low_latency">Low Latency</string>
+    <string name="example_resilience_preset_disabled">Disabled</string>
+    <string name="example_resilience_backoff_fixed">Fixed</string>
+    <string name="example_resilience_backoff_linear">Linear</string>
+    <string name="example_resilience_backoff_exponential">Exponential</string>
+
     <string name="example_sheet_menu_subtitle">Open track, subtitle, quality, and speed controls without crowding the player overlay.</string>
     <string name="example_sheet_quality_subtitle">Switch adaptive video or pin the stream to a specific quality track.</string>
     <string name="example_sheet_audio_subtitle">Pick an audio program exposed by the current stream.</string>

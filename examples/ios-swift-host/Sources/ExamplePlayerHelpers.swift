@@ -84,6 +84,88 @@ func speedBadge(_ value: Float) -> String {
     ExampleI18n.playbackRate(Double(value))
 }
 
+func resilienceBufferingValue(_ policy: VesperBufferingPolicy) -> String {
+    "\(bufferingPresetLabel(policy.preset)) · \(bufferWindowLabel(policy))"
+}
+
+func resilienceRetryValue(_ policy: VesperRetryPolicy) -> String {
+    let attempts = policy.maxAttempts.map(ExampleI18n.resilienceRetryAttempts) ?? ExampleI18n.resilienceRetryUnlimited
+    return ExampleI18n.resilienceRetryValue(attempts, retryBackoffLabel(policy.backoff))
+}
+
+func resilienceCacheValue(_ policy: VesperCachePolicy) -> String {
+    ExampleI18n.resilienceCacheValue(
+        cachePresetLabel(policy.preset),
+        formatStorageBytes(policy.maxMemoryBytes),
+        formatStorageBytes(policy.maxDiskBytes)
+    )
+}
+
+func bufferingPresetLabel(_ preset: VesperBufferingPreset) -> String {
+    switch preset {
+    case .default:
+        ExampleI18n.resiliencePresetDefault
+    case .balanced:
+        ExampleI18n.resiliencePresetBalanced
+    case .streaming:
+        ExampleI18n.resiliencePresetStreaming
+    case .resilient:
+        ExampleI18n.resiliencePresetResilient
+    case .lowLatency:
+        ExampleI18n.resiliencePresetLowLatency
+    }
+}
+
+func cachePresetLabel(_ preset: VesperCachePreset) -> String {
+    switch preset {
+    case .default:
+        ExampleI18n.resiliencePresetDefault
+    case .disabled:
+        ExampleI18n.resiliencePresetDisabled
+    case .streaming:
+        ExampleI18n.resiliencePresetStreaming
+    case .resilient:
+        ExampleI18n.resiliencePresetResilient
+    }
+}
+
+func retryBackoffLabel(_ backoff: VesperRetryBackoff) -> String {
+    switch backoff {
+    case .fixed:
+        ExampleI18n.resilienceBackoffFixed
+    case .linear:
+        ExampleI18n.resilienceBackoffLinear
+    case .exponential:
+        ExampleI18n.resilienceBackoffExponential
+    }
+}
+
+func bufferWindowLabel(_ policy: VesperBufferingPolicy) -> String {
+    guard let minBufferMs = policy.minBufferMs, let maxBufferMs = policy.maxBufferMs else {
+        return ExampleI18n.resilienceWindowDefault
+    }
+    return ExampleI18n.resilienceWindowRange(minBufferMs, maxBufferMs)
+}
+
+func formatStorageBytes(_ value: Int64?) -> String {
+    guard let value else {
+        return ExampleI18n.resilienceWindowDefault
+    }
+    if value == 0 {
+        return "0 B"
+    }
+    if value >= 1024 * 1024 * 1024 {
+        return String(format: "%.1f GB", Double(value) / (1024.0 * 1024.0 * 1024.0))
+    }
+    if value >= 1024 * 1024 {
+        return String(format: "%.0f MB", Double(value) / (1024.0 * 1024.0))
+    }
+    if value >= 1024 {
+        return String(format: "%.0f KB", Double(value) / 1024.0)
+    }
+    return "\(value) B"
+}
+
 func audioLabel(_ track: VesperMediaTrack) -> String {
     track.label ?? track.language?.uppercased() ?? ExampleI18n.audioTrack
 }

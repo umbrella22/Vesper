@@ -86,4 +86,5 @@ interface PlayerBridge {
     fun setAudioTrackSelection(selection: VesperTrackSelection)
     fun setSubtitleTrackSelection(selection: VesperTrackSelection)
     fun setAbrPolicy(policy: VesperAbrPolicy)
+    fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy)
 }

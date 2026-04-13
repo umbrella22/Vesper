@@ -160,13 +160,27 @@ internal fun ExamplePlayerStage(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(
-                            text = uiState.sourceLabel,
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = uiState.sourceLabel,
+                                modifier = Modifier.weight(1f),
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (uiState.isBuffering) {
+                                StageChip(
+                                    label = stringResource(R.string.example_stage_buffering),
+                                    accent = Color(0xFFFFB454),
+                                    compact = true,
+                                )
+                            }
+                        }
                         Text(
                             text = stageBadgeText(uiState.timeline),
                             color = Color(0xFFBFC6D6),
@@ -325,15 +339,6 @@ internal fun ExamplePlayerStage(
             }
         }
 
-        if (uiState.isBuffering) {
-            StageChip(
-                label = stringResource(R.string.example_stage_buffering),
-                accent = Color(0xFFFFB454),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(18.dp),
-            )
-        }
     }
 }
 
@@ -516,24 +521,34 @@ internal fun StageChip(
     label: String,
     accent: Color,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
+    val dotSize = if (compact) 6.dp else 8.dp
+    val horizontalPadding = if (compact) 8.dp else 10.dp
+    val verticalPadding = if (compact) 5.dp else 7.dp
+    val spacing = if (compact) 6.dp else 8.dp
     Row(
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.36f), RoundedCornerShape(999.dp))
             .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 10.dp, vertical = 7.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = horizontalPadding, vertical = verticalPadding),
+        horizontalArrangement = Arrangement.spacedBy(spacing),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(8.dp)
+                .size(dotSize)
                 .background(accent, CircleShape),
         )
         Text(
             text = label,
             color = Color.White,
-            style = MaterialTheme.typography.labelMedium,
+            style =
+                if (compact) {
+                    MaterialTheme.typography.labelSmall
+                } else {
+                    MaterialTheme.typography.labelMedium
+                },
         )
     }
 }

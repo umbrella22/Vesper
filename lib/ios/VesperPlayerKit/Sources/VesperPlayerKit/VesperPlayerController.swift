@@ -40,6 +40,7 @@ public final class VesperPlayerController: ObservableObject {
     private let setAudioTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
+    private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
 
     init<Bridge: ObservablePlayerBridge>(_ bridge: Bridge) {
         backend = bridge.backend
@@ -69,6 +70,7 @@ public final class VesperPlayerController: ObservableObject {
         setAudioTrackSelectionImpl = bridge.setAudioTrackSelection
         setSubtitleTrackSelectionImpl = bridge.setSubtitleTrackSelection
         setAbrPolicyImpl = bridge.setAbrPolicy
+        setResiliencePolicyImpl = bridge.setResiliencePolicy
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
@@ -145,6 +147,10 @@ public final class VesperPlayerController: ObservableObject {
 
     public func setAbrPolicy(_ policy: VesperAbrPolicy) {
         setAbrPolicyImpl(policy)
+    }
+
+    public func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
+        setResiliencePolicyImpl(policy)
     }
 
     public static let supportedPlaybackRates: [Float] = [0.5, 1.0, 1.5, 2.0, 3.0]

@@ -53,6 +53,54 @@ enum ExampleThemeMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum ExampleResilienceProfile: String, CaseIterable, Identifiable {
+    case balanced
+    case streaming
+    case resilient
+    case lowLatency
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .balanced:
+            ExampleI18n.resilienceBalanced
+        case .streaming:
+            ExampleI18n.resilienceStreaming
+        case .resilient:
+            ExampleI18n.resilienceResilient
+        case .lowLatency:
+            ExampleI18n.resilienceLowLatency
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .balanced:
+            ExampleI18n.resilienceBalancedSubtitle
+        case .streaming:
+            ExampleI18n.resilienceStreamingSubtitle
+        case .resilient:
+            ExampleI18n.resilienceResilientSubtitle
+        case .lowLatency:
+            ExampleI18n.resilienceLowLatencySubtitle
+        }
+    }
+
+    var policy: VesperPlaybackResiliencePolicy {
+        switch self {
+        case .balanced:
+            .balanced()
+        case .streaming:
+            .streaming()
+        case .resilient:
+            .resilient()
+        case .lowLatency:
+            .lowLatency()
+        }
+    }
+}
+
 struct ExampleHostPalette {
     let pageTop: Color
     let pageBottom: Color

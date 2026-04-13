@@ -32,6 +32,36 @@
     <string name="example_sources_theme">主题</string>
     <string name="example_sources_open_remote_url">打开远程 URL</string>
 
+    <string name="example_resilience_title">恢复策略</string>
+    <string name="example_resilience_subtitle">这里演示 resilience policy 的 Android API。切换 profile 时会直接下发到播放器，并尽量保留当前媒体与播放进度。</string>
+    <string name="example_resilience_balanced">Balanced</string>
+    <string name="example_resilience_balanced_subtitle">通用默认，适合大多数远程流。</string>
+    <string name="example_resilience_streaming">Streaming</string>
+    <string name="example_resilience_streaming_subtitle">拉大缓冲窗口，优先稳定播放。</string>
+    <string name="example_resilience_resilient">Resilient</string>
+    <string name="example_resilience_resilient_subtitle">高重试与高缓存，适合弱网回放。</string>
+    <string name="example_resilience_low_latency">Low Latency</string>
+    <string name="example_resilience_low_latency_subtitle">缩短缓冲和缓存，优先追求时延。</string>
+    <string name="example_resilience_applying">正在应用策略</string>
+    <string name="example_resilience_fact_buffering">缓冲</string>
+    <string name="example_resilience_fact_retry">重试</string>
+    <string name="example_resilience_fact_cache">缓存</string>
+    <string name="example_resilience_retry_attempts">%1$d 次</string>
+    <string name="example_resilience_retry_unlimited">-</string>
+    <string name="example_resilience_retry_value">%1$s · %2$s</string>
+    <string name="example_resilience_cache_value">%1$s · 内存 %2$s / 磁盘 %3$s</string>
+    <string name="example_resilience_window_default">默认</string>
+    <string name="example_resilience_window_range">%1$d-%2$d ms</string>
+    <string name="example_resilience_preset_default">默认</string>
+    <string name="example_resilience_preset_balanced">Balanced</string>
+    <string name="example_resilience_preset_streaming">Streaming</string>
+    <string name="example_resilience_preset_resilient">Resilient</string>
+    <string name="example_resilience_preset_low_latency">Low Latency</string>
+    <string name="example_resilience_preset_disabled">禁用</string>
+    <string name="example_resilience_backoff_fixed">固定</string>
+    <string name="example_resilience_backoff_linear">线性</string>
+    <string name="example_resilience_backoff_exponential">指数</string>
+
     <string name="example_sheet_menu_subtitle">打开音轨、字幕、画质和速度控制，同时避免播放器浮层过于拥挤。</string>
     <string name="example_sheet_quality_subtitle">切换自适应视频，或将流固定到某个具体画质轨道。</string>
     <string name="example_sheet_audio_subtitle">选择当前流暴露出来的音频节目。</string>
