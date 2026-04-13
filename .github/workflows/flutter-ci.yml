@@ -186,7 +186,7 @@ jobs:
 
   flutter-ios:
     name: Flutter iOS Host arm64
-    runs-on: macos-latest
+    runs-on: macos-15
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
@@ -206,6 +206,11 @@ jobs:
 
       - name: Show Flutter version
         run: flutter --version
+
+      - name: Enable Swift Package Manager
+        run: |
+          flutter config --enable-swift-package-manager
+          flutter config
 
       - name: Install Flutter dependencies
         working-directory: examples/flutter-host
