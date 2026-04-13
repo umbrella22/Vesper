@@ -114,6 +114,8 @@ jobs:
   ios-host:
     name: Vesper iOS Host Demo
     runs-on: macos-latest
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
     steps:
       - name: Checkout
@@ -127,6 +129,9 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Select Xcode 26.3
+        run: xcodebuild -version
 
       - name: Check iOS Rust adapter crate
         run: cargo check -p player-platform-ios

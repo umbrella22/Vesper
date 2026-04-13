@@ -88,6 +88,8 @@ jobs:
   ios-lib:
     name: VesperPlayerKit iOS
     runs-on: macos-latest
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
     steps:
       - name: Checkout
@@ -98,6 +100,9 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Select Xcode 26.3
+        run: xcodebuild -version
 
       - name: Build VesperPlayerKit iOS release assets
         run: bash ./scripts/stage-ios-vesper-player-kit-release.sh release-assets/ios
