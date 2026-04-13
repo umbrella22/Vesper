@@ -16,8 +16,6 @@ on:
       - "crates/platform/jni/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
-      - "docs/MOBILE-ALIGNMENT-PLAN.md"
-      - "docs/MOBILE-INTEGRATION-SHAPES.md"
   push:
     branches:
       - main
@@ -35,8 +33,6 @@ on:
       - "crates/platform/jni/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
-      - "docs/MOBILE-ALIGNMENT-PLAN.md"
-      - "docs/MOBILE-INTEGRATION-SHAPES.md"
   workflow_dispatch:
 
 concurrency:
@@ -45,8 +41,14 @@ concurrency:
 
 jobs:
   android-host:
-    name: Vesper Android Host Demo
+    name: Vesper Android Host Demo ${{ matrix.abi }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi:
+          - arm64-v8a
+          - x86_64
 
     steps:
       - name: Checkout
@@ -99,20 +101,34 @@ jobs:
         run: cargo check -p player-platform-android -p player-jni-android
 
       - name: Build Android JNI libraries
-        run: ./scripts/build-android-vesper-player-kit-jni.sh debug
+        run: ./scripts/build-android-vesper-player-kit-jni.sh release ${{ matrix.abi }}
 
-      - name: Assemble Vesper Android host demo
-        run: gradle -p examples/android-compose-host assembleDebug
+      - name: Assemble Vesper Android host demo release
+        run: gradle -p examples/android-compose-host -Pvesper.player.android.abis=${{ matrix.abi }} assembleRelease
 
-      - name: Upload Vesper Android debug APK
+      - name: Stage Vesper Android release APK
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          shopt -s nullglob
+          apk_files=(examples/android-compose-host/app/build/outputs/apk/release/*.apk)
+          if [[ ${#apk_files[@]} -ne 1 ]]; then
+            echo "Expected exactly one release APK, found ${#apk_files[@]}." >&2
+            printf '%s\n' "${apk_files[@]}" >&2
+            exit 1
+          fi
+
+          mkdir -p artifacts/android
+          cp "${apk_files[0]}" "artifacts/android/VesperPlayerHostDemo-${{ matrix.abi }}-release.apk"
+
+      - name: Upload Vesper Android release APK
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: VesperPlayerHostDemo-android-debug-apk
-          path: examples/android-compose-host/app/build/outputs/apk/debug/*.apk
+          name: VesperPlayerHostDemo-android-${{ matrix.abi }}-release-apk
+          path: artifacts/android/*.apk
 
   ios-host:
-    name: Vesper iOS Host Demo
+    name: Vesper iOS Host Demo arm64
     runs-on: macos-latest
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -140,20 +156,22 @@ jobs:
         working-directory: examples/ios-swift-host
         run: xcodegen generate
 
-      - name: Build Vesper iOS host demo for simulator
+      - name: Build Vesper iOS host demo release
         run: |
           xcodebuild \
             -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj \
             -scheme VesperPlayerHostDemo \
-            -sdk iphonesimulator \
-            -destination "generic/platform=iOS Simulator" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -derivedDataPath examples/ios-swift-host/build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Upload Vesper iOS simulator app
+      - name: Upload Vesper iOS release app
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: VesperPlayerHostDemo-ios-simulator-app
-          path: examples/ios-swift-host/build/DerivedData/Build/Products/Debug-iphonesimulator/*.app
+          name: VesperPlayerHostDemo-ios-arm64-release-app
+          path: examples/ios-swift-host/build/DerivedData/Build/Products/Release-iphoneos/*.app

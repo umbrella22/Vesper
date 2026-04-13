@@ -86,7 +86,7 @@ jobs:
           path: release-assets/android/*.aar
 
   ios-lib:
-    name: VesperPlayerKit iOS
+    name: VesperPlayerKit iOS arm64
     runs-on: macos-latest
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -107,10 +107,35 @@ jobs:
       - name: Build VesperPlayerKit iOS release assets
         run: bash ./scripts/stage-ios-vesper-player-kit-release.sh release-assets/ios
 
+      - name: Verify VesperPlayerKit iOS assets are arm64-only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if find release-assets/ios -type f \( -name '*x86_64*' -o -name '*i386*' \) | grep -q .; then
+            echo "Unexpected x86/i386 iOS asset was staged." >&2
+            find release-assets/ios -type f \( -name '*x86_64*' -o -name '*i386*' \)
+            exit 1
+          fi
+
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          unzip -q release-assets/ios/VesperPlayerKit.xcframework.zip -d "$temp_dir"
+
+          while IFS= read -r -d '' binary; do
+            info="$(lipo -info "$binary")"
+            echo "$info"
+
+            if [[ "$info" == *"x86_64"* || "$info" == *"i386"* ]]; then
+              echo "Found unexpected non-arm64 slice in $binary" >&2
+              exit 1
+            fi
+          done < <(find "$temp_dir" -path '*VesperPlayerKit.framework/VesperPlayerKit' -print0)
+
       - name: Upload VesperPlayerKit iOS release assets
         uses: actions/upload-artifact@v4
         with:
-          name: VesperPlayerKit-ios
+          name: VesperPlayerKit-ios-arm64
           path: release-assets/ios/*
 
   publish-release:

@@ -1,0 +1,58 @@
+group = "io.github.ikaros.vesper.player.flutter.android"
+version = "0.1.0"
+
+buildscript {
+    ext.kotlin_version = "2.3.10"
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath "com.android.tools.build:gradle:9.1.0"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+android {
+    namespace = "io.github.ikaros.vesper.player.flutter.android"
+    compileSdk = 36
+
+    defaultConfig {
+        minSdk = 26
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    def hostKitProject = findProject(":vesper-player-kit")
+    if (hostKitProject != null) {
+        implementation hostKitProject
+    } else {
+        throw new GradleException(
+            "vesper_player_android requires ':vesper-player-kit' to be included in the Android build. " +
+            "For local workspace development, include ../../lib/android/vesper-player-kit in the host app settings."
+        )
+    }
+
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
+}
+

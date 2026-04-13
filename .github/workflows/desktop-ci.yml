@@ -14,10 +14,6 @@ on:
       - "crates/platform/common/**"
       - "crates/platform/desktop/**"
       - "examples/basic-player/**"
-      - "Memory/DESKTOP-BUILD-CHECKLIST.md"
-      - "docs/NATIVE-BACKEND-STRATEGY.md"
-      - "docs/ARCHITECTURE-DECISION.md"
-      - "Memory/**"
   push:
     branches:
       - main
@@ -33,10 +29,6 @@ on:
       - "crates/platform/common/**"
       - "crates/platform/desktop/**"
       - "examples/basic-player/**"
-      - "Memory/DESKTOP-BUILD-CHECKLIST.md"
-      - "docs/NATIVE-BACKEND-STRATEGY.md"
-      - "docs/ARCHITECTURE-DECISION.md"
-      - "Memory/**"
   workflow_dispatch:
 
 concurrency:

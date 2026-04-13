@@ -1,0 +1,27 @@
+name: vesper_player
+description: Flutter-facing Vesper Player controller and Hole Punch view.
+version: 0.1.0
+homepage: https://github.com/ikaros/rust-player-sdk
+publish_to: none
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.41.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  vesper_player_android:
+    path: ../vesper_player_android
+  vesper_player_ios:
+    path: ../vesper_player_ios
+  vesper_player_platform_interface:
+    path: ../vesper_player_platform_interface
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        default_package: vesper_player_android
+      ios:
+        default_package: vesper_player_ios
