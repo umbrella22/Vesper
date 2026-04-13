@@ -5,30 +5,30 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use player_core::MediaSource;
-use player_platform_apple::{probe_videotoolbox_hardware_decode, VIDEOTOOLBOX_BACKEND_NAME};
+use player_platform_apple::{VIDEOTOOLBOX_BACKEND_NAME, probe_videotoolbox_hardware_decode};
 use player_platform_desktop::probe_platform_desktop_source_with_options;
 use player_runtime::{
-    register_default_runtime_adapter_factory, DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo,
-    PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
-    PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-    PresentationState,
+    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntime, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
+    PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
+    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
+    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState,
+    register_default_runtime_adapter_factory,
 };
 
 pub const MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_software_desktop";
 pub const MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_host";
 
 pub use native::{
-    MacosAvFoundationBridge, MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext,
-    MacosNativePlayerBridge, MacosNativePlayerProbe, MacosNativePlayerRuntimeAdapterFactory,
-    MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
+    MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MacosAvFoundationBridge,
+    MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext, MacosNativePlayerBridge,
+    MacosNativePlayerProbe, MacosNativePlayerRuntimeAdapterFactory,
 };
 pub use system::{
+    MacosSystemAvFoundationBridgeBindings,
     install_default_macos_system_native_runtime_adapter_factory,
     macos_system_native_runtime_adapter_factory, probe_source_with_avfoundation,
-    MacosSystemAvFoundationBridgeBindings,
 };
 
 #[derive(Debug, Clone)]
@@ -630,11 +630,12 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        macos_video_decode_info, open_macos_host_runtime_source_with_options,
+        MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
+        MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
+        MacosSoftwarePlayerRuntimeAdapterFactory, macos_video_decode_info,
+        open_macos_host_runtime_source_with_options,
         probe_macos_host_runtime_initializer_with_factories,
-        probe_macos_host_runtime_source_with_options, MacosHostPlayerRuntimeAdapterFactory,
-        MacosSoftwarePlayerRuntimeAdapterFactory, MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID,
-        MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        probe_macos_host_runtime_source_with_options,
     };
     use player_core::MediaSource;
     use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
@@ -730,12 +731,14 @@ mod tests {
             capabilities.adapter_id,
             MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
         );
-        assert!(startup
-            .video_decode
-            .as_ref()
-            .and_then(|info| info.fallback_reason.as_deref())
-            .unwrap_or_default()
-            .contains("requires an external video surface"));
+        assert!(
+            startup
+                .video_decode
+                .as_ref()
+                .and_then(|info| info.fallback_reason.as_deref())
+                .unwrap_or_default()
+                .contains("requires an external video surface")
+        );
     }
 
     #[test]
@@ -870,13 +873,15 @@ mod tests {
             bootstrap.runtime.capabilities().backend_family,
             PlayerRuntimeAdapterBackendFamily::SoftwareDesktop
         );
-        assert!(bootstrap
-            .startup
-            .video_decode
-            .as_ref()
-            .and_then(|info| info.fallback_reason.as_deref())
-            .unwrap_or_default()
-            .contains("native init failed"));
+        assert!(
+            bootstrap
+                .startup
+                .video_decode
+                .as_ref()
+                .and_then(|info| info.fallback_reason.as_deref())
+                .unwrap_or_default()
+                .contains("native init failed")
+        );
     }
 
     #[test]
@@ -901,11 +906,12 @@ mod tests {
             info.hardware_backend.as_deref(),
             Some(VIDEOTOOLBOX_BACKEND_NAME)
         );
-        assert!(info
-            .fallback_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("VP8"));
+        assert!(
+            info.fallback_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("VP8")
+        );
     }
 
     #[test]
@@ -928,13 +934,15 @@ mod tests {
             bootstrap.runtime.adapter_id(),
             MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
         );
-        assert!(bootstrap
-            .startup
-            .video_decode
-            .as_ref()
-            .and_then(|info| info.fallback_reason.as_deref())
-            .unwrap_or_default()
-            .contains("requires an external video surface"));
+        assert!(
+            bootstrap
+                .startup
+                .video_decode
+                .as_ref()
+                .and_then(|info| info.fallback_reason.as_deref())
+                .unwrap_or_default()
+                .contains("requires an external video surface")
+        );
     }
 
     #[test]

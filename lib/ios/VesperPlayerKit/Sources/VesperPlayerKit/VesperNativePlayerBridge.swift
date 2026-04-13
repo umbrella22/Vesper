@@ -277,30 +277,20 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func seek(by deltaMs: Int64) {
         iosHostLog("seek(by:) deltaMs=\(deltaMs)")
         let timeline = publishedUiState.timeline
-        let minimum = timeline.seekableRange?.startMs ?? 0
-        let maximum = timeline.seekableRange?.endMs ?? (timeline.durationMs ?? 0)
-        let target = min(max(timeline.positionMs + deltaMs, minimum), maximum)
+        let target = timeline.clampedPosition(timeline.positionMs + deltaMs)
         seekToPosition(target)
     }
 
     func seek(toRatio ratio: Double) {
         iosHostLog("seek(toRatio:) ratio=\(ratio)")
         let timeline = publishedUiState.timeline
-        let normalized = min(max(ratio, 0.0), 1.0)
-        let target: Int64
-
-        if let range = timeline.seekableRange, range.endMs > range.startMs {
-            target = range.startMs + Int64(Double(range.endMs - range.startMs) * normalized)
-        } else {
-            target = Int64(Double(timeline.durationMs ?? 0) * normalized)
-        }
-
+        let target = timeline.position(forRatio: ratio)
         seekToPosition(target)
     }
 
     func seekToLiveEdge() {
         let timeline = publishedUiState.timeline
-        guard let target = timeline.liveEdgeMs ?? timeline.seekableRange?.endMs else {
+        guard let target = timeline.goLivePositionMs else {
             return
         }
         iosHostLog("seekToLiveEdge targetMs=\(target)")
@@ -1455,11 +1445,9 @@ private struct PreservedPlaybackState {
         uiState: PlayerHostUiState,
         trackSelection: VesperTrackSelectionSnapshot
     ) -> PreservedPlaybackState {
-        let liveEdgeMs = uiState.timeline.liveEdgeMs
         let seekToLiveEdge =
             uiState.timeline.kind == .liveDvr &&
-                liveEdgeMs != nil &&
-                abs((liveEdgeMs ?? 0) - uiState.timeline.positionMs) <= 1_500
+                uiState.timeline.isAtLiveEdge()
         return PreservedPlaybackState(
             positionMs: uiState.timeline.positionMs,
             restorePosition: uiState.timeline.isSeekable || uiState.timeline.durationMs != nil,

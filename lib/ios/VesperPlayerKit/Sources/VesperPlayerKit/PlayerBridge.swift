@@ -64,6 +64,55 @@ public struct TimelineUiState {
 
         return min(max(Double(positionMs) / Double(durationMs), 0.0), 1.0)
     }
+
+    public var goLivePositionMs: Int64? {
+        switch kind {
+        case .vod:
+            nil
+        case .live:
+            liveEdgeMs
+        case .liveDvr:
+            liveEdgeMs ?? seekableRange?.endMs
+        }
+    }
+
+    public var liveOffsetMs: Int64? {
+        guard let liveEdgeMs = goLivePositionMs else {
+            return nil
+        }
+
+        return max(liveEdgeMs - clampedPosition(positionMs), 0)
+    }
+
+    public func clampedPosition(_ positionMs: Int64) -> Int64 {
+        if let range = seekableRange, range.endMs >= range.startMs {
+            return min(max(positionMs, range.startMs), range.endMs)
+        }
+
+        guard let durationMs else {
+            return max(positionMs, 0)
+        }
+
+        return min(max(positionMs, 0), max(durationMs, 0))
+    }
+
+    public func position(forRatio ratio: Double) -> Int64 {
+        let normalized = min(max(ratio, 0.0), 1.0)
+        if let range = seekableRange, range.endMs >= range.startMs {
+            let width = Double(range.endMs - range.startMs)
+            return clampedPosition(range.startMs + Int64(width * normalized))
+        }
+
+        return clampedPosition(Int64(Double(durationMs ?? 0) * normalized))
+    }
+
+    public func isAtLiveEdge(toleranceMs: Int64 = 1_500) -> Bool {
+        guard let liveEdgeMs = goLivePositionMs else {
+            return false
+        }
+
+        return abs(liveEdgeMs - clampedPosition(positionMs)) <= max(toleranceMs, 0)
+    }
 }
 
 public enum PlaybackStateUi: String {

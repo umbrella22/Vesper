@@ -9,15 +9,15 @@ mod host_ui;
 #[cfg(target_os = "macos")]
 mod macos_host_overlay;
 use desktop_presenter::DesktopUiPresenter;
-use desktop_ui::{ControlAction, SeekPreview, CONTROL_RATES};
+use desktop_ui::{CONTROL_RATES, ControlAction, SeekPreview};
 use player_host_desktop::{
-    canonical_desktop_host_local_path, normalize_desktop_host_source_uri,
-    open_desktop_host_runtime_uri_for_winit_window, probe_desktop_host_launch_plan_uri,
-    DesktopHostLaunchPlan as RuntimeLaunchPlan,
+    DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
+    normalize_desktop_host_source_uri, open_desktop_host_runtime_uri_for_winit_window,
+    probe_desktop_host_launch_plan_uri,
 };
 use player_render_wgpu::{
-    default_window_attributes, preferred_backends, RenderMode, RenderSurfaceConfig, RgbaVideoFrame,
-    VideoFrameTexture, VideoRenderer, Yuv420pVideoFrame,
+    RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
+    Yuv420pVideoFrame, default_window_attributes, preferred_backends,
 };
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, PlaybackProgress, PlayerRuntime,
@@ -1019,8 +1019,8 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_media_source_argument, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL,
-        DESKTOP_HLS_DEMO_URL, HLS_DEMO_CLI_FLAG,
+        DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL, HLS_DEMO_CLI_FLAG,
+        resolve_media_source_argument,
     };
 
     #[test]

@@ -566,12 +566,13 @@ private fun Map<String, Any?>.toBufferingPolicy(): VesperBufferingPolicy =
 private fun Map<String, Any?>.toRetryPolicy(): VesperRetryPolicy =
     VesperRetryPolicy(
         maxAttempts = (this["maxAttempts"] as? Number)?.toInt(),
-        baseDelayMs = (this["baseDelayMs"] as? Number)?.toLong() ?: 1_000L,
-        maxDelayMs = (this["maxDelayMs"] as? Number)?.toLong() ?: 5_000L,
+        baseDelayMs = (this["baseDelayMs"] as? Number)?.toLong(),
+        maxDelayMs = (this["maxDelayMs"] as? Number)?.toLong(),
         backoff = when (this["backoff"] as? String) {
             "fixed" -> VesperRetryBackoff.Fixed
+            "linear" -> VesperRetryBackoff.Linear
             "exponential" -> VesperRetryBackoff.Exponential
-            else -> VesperRetryBackoff.Linear
+            else -> null
         },
     )
 

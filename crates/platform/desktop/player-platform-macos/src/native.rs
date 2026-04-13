@@ -4,14 +4,14 @@ use std::time::{Duration, Instant};
 
 use player_core::MediaSource;
 use player_runtime::{
-    DecodedVideoFrame, FirstFrameReady, PlaybackProgress, PlayerMediaInfo,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PLAYBACK_RATE,
+    MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress, PlayerMediaInfo,
     PlayerResilienceMetricsTracker, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
     PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
     PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
     PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot,
     PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
-    DEFAULT_PLAYBACK_RATE, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX,
 };
 
 pub const MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_native";
@@ -1244,13 +1244,13 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        macos_native_capabilities, MacosAvFoundationBridge, MacosAvFoundationBridgeBindings,
-        MacosAvFoundationBridgeContext, MacosAvFoundationSnapshot, MacosAvFoundationStateTracker,
-        MacosManagedNativeSession, MacosManagedNativeSessionController, MacosNativeCommandSink,
-        MacosNativePlayerBridge, MacosNativePlayerCommand, MacosNativePlayerProbe,
-        MacosNativePlayerRuntimeAdapterFactory, MacosNativePlayerSession,
-        MacosNativePlayerSessionBootstrap, MacosPlayerItemStatus, MacosTimeControlStatus,
-        MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
+        MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MacosAvFoundationBridge,
+        MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext, MacosAvFoundationSnapshot,
+        MacosAvFoundationStateTracker, MacosManagedNativeSession,
+        MacosManagedNativeSessionController, MacosNativeCommandSink, MacosNativePlayerBridge,
+        MacosNativePlayerCommand, MacosNativePlayerProbe, MacosNativePlayerRuntimeAdapterFactory,
+        MacosNativePlayerSession, MacosNativePlayerSessionBootstrap, MacosPlayerItemStatus,
+        MacosTimeControlStatus, macos_native_capabilities,
     };
     use player_core::MediaSource;
     use player_runtime::{
@@ -1342,10 +1342,12 @@ mod tests {
 
         assert_eq!(observation.presentation_state, PresentationState::Finished);
         assert_eq!(observation.playback_rate, 1.5);
-        assert!(observation
-            .emitted_events
-            .iter()
-            .any(|event| matches!(event, PlayerRuntimeEvent::Ended)));
+        assert!(
+            observation
+                .emitted_events
+                .iter()
+                .any(|event| matches!(event, PlayerRuntimeEvent::Ended))
+        );
         assert!(observation.emitted_events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::PlaybackRateChanged { rate } if (*rate - 1.5).abs() < f32::EPSILON
@@ -1369,10 +1371,12 @@ mod tests {
 
         assert_eq!(observation.presentation_state, PresentationState::Playing);
         assert!(observation.is_buffering);
-        assert!(!observation
-            .emitted_events
-            .iter()
-            .any(|event| matches!(event, PlayerRuntimeEvent::PlaybackStateChanged(_))));
+        assert!(
+            !observation
+                .emitted_events
+                .iter()
+                .any(|event| matches!(event, PlayerRuntimeEvent::PlaybackStateChanged(_)))
+        );
         assert!(observation.emitted_events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::BufferingChanged { buffering: true }
@@ -1403,9 +1407,11 @@ mod tests {
             initial_events.first(),
             Some(PlayerRuntimeEvent::Initialized(_))
         ));
-        assert!(initial_events
-            .iter()
-            .any(|event| matches!(event, PlayerRuntimeEvent::MetadataReady(_))));
+        assert!(
+            initial_events
+                .iter()
+                .any(|event| matches!(event, PlayerRuntimeEvent::MetadataReady(_)))
+        );
         assert!(initial_events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::PlaybackStateChanged(PresentationState::Ready)

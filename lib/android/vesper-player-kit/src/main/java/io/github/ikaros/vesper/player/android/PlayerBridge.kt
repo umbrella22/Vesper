@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 import android.view.ViewGroup
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.absoluteValue
 
 enum class PlayerBridgeBackend {
     FakeDemo,
@@ -40,6 +41,44 @@ data class TimelineUiState(
             if (total <= 0L) return null
             return (positionMs.toFloat() / total.toFloat()).coerceIn(0f, 1f)
         }
+
+    val goLivePositionMs: Long?
+        get() = when (kind) {
+            TimelineKind.Vod -> null
+            TimelineKind.Live -> liveEdgeMs
+            TimelineKind.LiveDvr -> liveEdgeMs ?: seekableRange?.endMs
+        }
+
+    val liveOffsetMs: Long?
+        get() = goLivePositionMs?.let { liveEdge ->
+            (liveEdge - clampedPosition(positionMs)).coerceAtLeast(0L)
+        }
+
+    fun clampedPosition(positionMs: Long): Long {
+        val range = seekableRange
+        if (range != null && range.endMs >= range.startMs) {
+            return positionMs.coerceIn(range.startMs, range.endMs)
+        }
+
+        val total = durationMs ?: return positionMs.coerceAtLeast(0L)
+        return positionMs.coerceIn(0L, total.coerceAtLeast(0L))
+    }
+
+    fun positionForRatio(ratio: Float): Long {
+        val normalized = ratio.coerceIn(0f, 1f)
+        val range = seekableRange
+        if (range != null && range.endMs >= range.startMs) {
+            val width = (range.endMs - range.startMs).toFloat()
+            return clampedPosition(range.startMs + (width * normalized).toLong())
+        }
+
+        return clampedPosition(((durationMs ?: 0L).toFloat() * normalized).toLong())
+    }
+
+    fun isAtLiveEdge(toleranceMs: Long = 1_500L): Boolean {
+        val liveEdge = goLivePositionMs ?: return false
+        return (liveEdge - clampedPosition(positionMs)).absoluteValue <= toleranceMs.coerceAtLeast(0L)
+    }
 }
 
 enum class PlaybackStateUi {

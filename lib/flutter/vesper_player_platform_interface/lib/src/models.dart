@@ -228,19 +228,19 @@ final class VesperPlayerCapabilities {
   });
 
   const VesperPlayerCapabilities.unsupported()
-    : supportsLocalFiles = false,
-      supportsRemoteUrls = false,
-      supportsHls = false,
-      supportsDash = false,
-      supportsTrackCatalog = false,
-      supportsTrackSelection = false,
-      supportsAbrPolicy = false,
-      supportsResiliencePolicy = false,
-      supportsHolePunch = false,
-      supportsPlaybackRate = false,
-      supportsLiveEdgeSeeking = false,
-      isExperimental = false,
-      supportedPlaybackRates = const <double>[];
+      : supportsLocalFiles = false,
+        supportsRemoteUrls = false,
+        supportsHls = false,
+        supportsDash = false,
+        supportsTrackCatalog = false,
+        supportsTrackSelection = false,
+        supportsAbrPolicy = false,
+        supportsResiliencePolicy = false,
+        supportsHolePunch = false,
+        supportsPlaybackRate = false,
+        supportsLiveEdgeSeeking = false,
+        isExperimental = false,
+        supportedPlaybackRates = const <double>[];
 
   factory VesperPlayerCapabilities.fromMap(Map<Object?, Object?> map) {
     final rawRates = map['supportedPlaybackRates'];
@@ -259,9 +259,9 @@ final class VesperPlayerCapabilities {
       isExperimental: _decodeBool(map, 'isExperimental'),
       supportedPlaybackRates: rawRates is Iterable
           ? rawRates
-                .map((value) => value is num ? value.toDouble() : null)
-                .whereType<double>()
-                .toList(growable: false)
+              .map((value) => value is num ? value.toDouble() : null)
+              .whereType<double>()
+              .toList(growable: false)
           : const <double>[],
     );
   }
@@ -328,12 +328,12 @@ final class VesperTimeline {
   });
 
   const VesperTimeline.initial()
-    : kind = VesperTimelineKind.vod,
-      isSeekable = false,
-      positionMs = 0,
-      seekableRange = null,
-      liveEdgeMs = null,
-      durationMs = null;
+      : kind = VesperTimelineKind.vod,
+        isSeekable = false,
+        positionMs = 0,
+        seekableRange = null,
+        liveEdgeMs = null,
+        durationMs = null;
 
   factory VesperTimeline.fromMap(Map<Object?, Object?> map) {
     final rawRange = map['seekableRange'];
@@ -474,9 +474,9 @@ final class VesperTrackCatalog {
     return VesperTrackCatalog(
       tracks: rawTracks is Iterable
           ? rawTracks
-                .whereType<Map<Object?, Object?>>()
-                .map(VesperMediaTrack.fromMap)
-                .toList(growable: false)
+              .whereType<Map<Object?, Object?>>()
+              .map(VesperMediaTrack.fromMap)
+              .toList(growable: false)
           : const <VesperMediaTrack>[],
       adaptiveVideo: _decodeBool(map, 'adaptiveVideo'),
       adaptiveAudio: _decodeBool(map, 'adaptiveAudio'),
@@ -518,15 +518,15 @@ final class VesperTrackSelection {
   const VesperTrackSelection({required this.mode, this.trackId});
 
   const VesperTrackSelection.auto()
-    : mode = VesperTrackSelectionMode.auto,
-      trackId = null;
+      : mode = VesperTrackSelectionMode.auto,
+        trackId = null;
 
   const VesperTrackSelection.disabled()
-    : mode = VesperTrackSelectionMode.disabled,
-      trackId = null;
+      : mode = VesperTrackSelectionMode.disabled,
+        trackId = null;
 
   const VesperTrackSelection.track(String this.trackId)
-    : mode = VesperTrackSelectionMode.track;
+      : mode = VesperTrackSelectionMode.track;
 
   factory VesperTrackSelection.fromMap(Map<Object?, Object?> map) {
     return VesperTrackSelection(
@@ -557,24 +557,24 @@ final class VesperAbrPolicy {
   });
 
   const VesperAbrPolicy.auto()
-    : mode = VesperAbrMode.auto,
-      trackId = null,
-      maxBitRate = null,
-      maxWidth = null,
-      maxHeight = null;
+      : mode = VesperAbrMode.auto,
+        trackId = null,
+        maxBitRate = null,
+        maxWidth = null,
+        maxHeight = null;
 
   const VesperAbrPolicy.constrained({
     this.maxBitRate,
     this.maxWidth,
     this.maxHeight,
-  }) : mode = VesperAbrMode.constrained,
-       trackId = null;
+  })  : mode = VesperAbrMode.constrained,
+        trackId = null;
 
   const VesperAbrPolicy.fixedTrack(String this.trackId)
-    : mode = VesperAbrMode.fixedTrack,
-      maxBitRate = null,
-      maxWidth = null,
-      maxHeight = null;
+      : mode = VesperAbrMode.fixedTrack,
+        maxBitRate = null,
+        maxWidth = null,
+        maxHeight = null;
 
   factory VesperAbrPolicy.fromMap(Map<Object?, Object?> map) {
     return VesperAbrPolicy(
@@ -657,32 +657,32 @@ final class VesperBufferingPolicy {
   });
 
   const VesperBufferingPolicy.balanced()
-    : preset = VesperBufferingPreset.balanced,
-      minBufferMs = 10000,
-      maxBufferMs = 30000,
-      bufferForPlaybackMs = 1000,
-      bufferForPlaybackAfterRebufferMs = 2000;
+      : preset = VesperBufferingPreset.balanced,
+        minBufferMs = null,
+        maxBufferMs = null,
+        bufferForPlaybackMs = null,
+        bufferForPlaybackAfterRebufferMs = null;
 
   const VesperBufferingPolicy.streaming()
-    : preset = VesperBufferingPreset.streaming,
-      minBufferMs = 12000,
-      maxBufferMs = 36000,
-      bufferForPlaybackMs = 1200,
-      bufferForPlaybackAfterRebufferMs = 2500;
+      : preset = VesperBufferingPreset.streaming,
+        minBufferMs = null,
+        maxBufferMs = null,
+        bufferForPlaybackMs = null,
+        bufferForPlaybackAfterRebufferMs = null;
 
   const VesperBufferingPolicy.resilient()
-    : preset = VesperBufferingPreset.resilient,
-      minBufferMs = 20000,
-      maxBufferMs = 50000,
-      bufferForPlaybackMs = 1500,
-      bufferForPlaybackAfterRebufferMs = 3000;
+      : preset = VesperBufferingPreset.resilient,
+        minBufferMs = null,
+        maxBufferMs = null,
+        bufferForPlaybackMs = null,
+        bufferForPlaybackAfterRebufferMs = null;
 
   const VesperBufferingPolicy.lowLatency()
-    : preset = VesperBufferingPreset.lowLatency,
-      minBufferMs = 4000,
-      maxBufferMs = 12000,
-      bufferForPlaybackMs = 500,
-      bufferForPlaybackAfterRebufferMs = 1000;
+      : preset = VesperBufferingPreset.lowLatency,
+        minBufferMs = null,
+        maxBufferMs = null,
+        bufferForPlaybackMs = null,
+        bufferForPlaybackAfterRebufferMs = null;
 
   factory VesperBufferingPolicy.fromMap(Map<Object?, Object?> map) {
     return VesperBufferingPolicy(
@@ -721,47 +721,54 @@ final class VesperBufferingPolicy {
 final class VesperRetryPolicy {
   const VesperRetryPolicy({
     this.maxAttempts = 3,
-    this.baseDelayMs = 1000,
-    this.maxDelayMs = 5000,
-    this.backoff = VesperRetryBackoff.linear,
-  });
+    int? baseDelayMs,
+    int? maxDelayMs,
+    VesperRetryBackoff? backoff,
+  })  : _baseDelayMs = baseDelayMs,
+        _maxDelayMs = maxDelayMs,
+        _backoff = backoff;
 
   const VesperRetryPolicy.aggressive()
-    : maxAttempts = 2,
-      baseDelayMs = 500,
-      maxDelayMs = 2000,
-      backoff = VesperRetryBackoff.fixed;
+      : maxAttempts = 2,
+        _baseDelayMs = 500,
+        _maxDelayMs = 2000,
+        _backoff = VesperRetryBackoff.fixed;
 
   const VesperRetryPolicy.resilient()
-    : maxAttempts = 6,
-      baseDelayMs = 1000,
-      maxDelayMs = 8000,
-      backoff = VesperRetryBackoff.exponential;
+      : maxAttempts = 6,
+        _baseDelayMs = 1000,
+        _maxDelayMs = 8000,
+        _backoff = VesperRetryBackoff.exponential;
 
   factory VesperRetryPolicy.fromMap(Map<Object?, Object?> map) {
     return VesperRetryPolicy(
-      maxAttempts: _decodeInt(map, 'maxAttempts'),
-      baseDelayMs: _decodeInt(map, 'baseDelayMs') ?? 1000,
-      maxDelayMs: _decodeInt(map, 'maxDelayMs') ?? 5000,
-      backoff: _decodeEnum(
-        VesperRetryBackoff.values,
-        map['backoff'],
-        VesperRetryBackoff.linear,
-      ),
+      maxAttempts: _decodeInt(map, 'maxAttempts') ?? 3,
+      baseDelayMs: _decodeInt(map, 'baseDelayMs'),
+      maxDelayMs: _decodeInt(map, 'maxDelayMs'),
+      backoff: switch (map['backoff']) {
+        'fixed' => VesperRetryBackoff.fixed,
+        'linear' => VesperRetryBackoff.linear,
+        'exponential' => VesperRetryBackoff.exponential,
+        _ => null,
+      },
     );
   }
 
   final int? maxAttempts;
-  final int baseDelayMs;
-  final int maxDelayMs;
-  final VesperRetryBackoff backoff;
+  final int? _baseDelayMs;
+  final int? _maxDelayMs;
+  final VesperRetryBackoff? _backoff;
+
+  int get baseDelayMs => _baseDelayMs ?? 1000;
+  int get maxDelayMs => _maxDelayMs ?? 5000;
+  VesperRetryBackoff get backoff => _backoff ?? VesperRetryBackoff.linear;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'maxAttempts': maxAttempts,
-      'baseDelayMs': baseDelayMs,
-      'maxDelayMs': maxDelayMs,
-      'backoff': backoff.name,
+      'baseDelayMs': _baseDelayMs,
+      'maxDelayMs': _maxDelayMs,
+      'backoff': _backoff?.name,
     };
   }
 }
@@ -774,19 +781,19 @@ final class VesperCachePolicy {
   });
 
   const VesperCachePolicy.disabled()
-    : preset = VesperCachePreset.disabled,
-      maxMemoryBytes = 0,
-      maxDiskBytes = 0;
+      : preset = VesperCachePreset.disabled,
+        maxMemoryBytes = null,
+        maxDiskBytes = null;
 
   const VesperCachePolicy.streaming()
-    : preset = VesperCachePreset.streaming,
-      maxMemoryBytes = 8 * 1024 * 1024,
-      maxDiskBytes = 128 * 1024 * 1024;
+      : preset = VesperCachePreset.streaming,
+        maxMemoryBytes = null,
+        maxDiskBytes = null;
 
   const VesperCachePolicy.resilient()
-    : preset = VesperCachePreset.resilient,
-      maxMemoryBytes = 16 * 1024 * 1024,
-      maxDiskBytes = 384 * 1024 * 1024;
+      : preset = VesperCachePreset.resilient,
+        maxMemoryBytes = null,
+        maxDiskBytes = null;
 
   factory VesperCachePolicy.fromMap(Map<Object?, Object?> map) {
     return VesperCachePolicy(
@@ -821,24 +828,24 @@ final class VesperPlaybackResiliencePolicy {
   });
 
   const VesperPlaybackResiliencePolicy.balanced()
-    : buffering = const VesperBufferingPolicy.balanced(),
-      retry = const VesperRetryPolicy(),
-      cache = const VesperCachePolicy.streaming();
+      : buffering = const VesperBufferingPolicy.balanced(),
+        retry = const VesperRetryPolicy(),
+        cache = const VesperCachePolicy.streaming();
 
   const VesperPlaybackResiliencePolicy.streaming()
-    : buffering = const VesperBufferingPolicy.streaming(),
-      retry = const VesperRetryPolicy(),
-      cache = const VesperCachePolicy.streaming();
+      : buffering = const VesperBufferingPolicy.streaming(),
+        retry = const VesperRetryPolicy(),
+        cache = const VesperCachePolicy.streaming();
 
   const VesperPlaybackResiliencePolicy.resilient()
-    : buffering = const VesperBufferingPolicy.resilient(),
-      retry = const VesperRetryPolicy.resilient(),
-      cache = const VesperCachePolicy.resilient();
+      : buffering = const VesperBufferingPolicy.resilient(),
+        retry = const VesperRetryPolicy.resilient(),
+        cache = const VesperCachePolicy.resilient();
 
   const VesperPlaybackResiliencePolicy.lowLatency()
-    : buffering = const VesperBufferingPolicy.lowLatency(),
-      retry = const VesperRetryPolicy.aggressive(),
-      cache = const VesperCachePolicy.disabled();
+      : buffering = const VesperBufferingPolicy.lowLatency(),
+        retry = const VesperRetryPolicy.aggressive(),
+        cache = const VesperCachePolicy.disabled();
 
   factory VesperPlaybackResiliencePolicy.fromMap(Map<Object?, Object?> map) {
     final rawBuffering = map['buffering'];
@@ -966,20 +973,20 @@ final class VesperPlayerSnapshot {
   });
 
   const VesperPlayerSnapshot.initial()
-    : title = 'Vesper',
-      subtitle = 'Player is not initialized.',
-      sourceLabel = '',
-      playbackState = VesperPlaybackState.ready,
-      playbackRate = 1.0,
-      isBuffering = false,
-      isInterrupted = false,
-      hasVideoSurface = false,
-      timeline = const VesperTimeline.initial(),
-      backendFamily = VesperPlayerBackendFamily.unknown,
-      capabilities = const VesperPlayerCapabilities.unsupported(),
-      trackCatalog = const VesperTrackCatalog(),
-      trackSelection = const VesperTrackSelectionSnapshot(),
-      lastError = null;
+      : title = 'Vesper',
+        subtitle = 'Player is not initialized.',
+        sourceLabel = '',
+        playbackState = VesperPlaybackState.ready,
+        playbackRate = 1.0,
+        isBuffering = false,
+        isInterrupted = false,
+        hasVideoSurface = false,
+        timeline = const VesperTimeline.initial(),
+        backendFamily = VesperPlayerBackendFamily.unknown,
+        capabilities = const VesperPlayerCapabilities.unsupported(),
+        trackCatalog = const VesperTrackCatalog(),
+        trackSelection = const VesperTrackSelectionSnapshot(),
+        lastError = null;
 
   factory VesperPlayerSnapshot.fromMap(Map<Object?, Object?> map) {
     final rawTimeline = map['timeline'];

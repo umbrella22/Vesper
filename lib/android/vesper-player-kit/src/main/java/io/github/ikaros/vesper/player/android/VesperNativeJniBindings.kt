@@ -470,8 +470,7 @@ private fun resolveBufferingPolicy(
                     when (source.protocol) {
                         VesperPlayerSourceProtocol.Hls,
                         VesperPlayerSourceProtocol.Dash -> VesperBufferingPolicy.resilient()
-                        VesperPlayerSourceProtocol.Progressive -> VesperBufferingPolicy.streaming()
-                        else -> null
+                        else -> VesperBufferingPolicy.streaming()
                     }
             }
         VesperBufferingPreset.Balanced -> VesperBufferingPolicy.balanced()

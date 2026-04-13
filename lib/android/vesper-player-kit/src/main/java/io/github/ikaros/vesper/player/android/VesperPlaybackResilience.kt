@@ -67,12 +67,51 @@ enum class VesperCachePreset {
     Resilient,
 }
 
-data class VesperRetryPolicy(
+class VesperRetryPolicy(
     val maxAttempts: Int? = 3,
-    val baseDelayMs: Long = 1_000L,
-    val maxDelayMs: Long = 5_000L,
-    val backoff: VesperRetryBackoff = VesperRetryBackoff.Linear,
+    baseDelayMs: Long? = null,
+    maxDelayMs: Long? = null,
+    backoff: VesperRetryBackoff? = null,
 ) {
+    private val rawBaseDelayMs: Long? = baseDelayMs
+    private val rawMaxDelayMs: Long? = maxDelayMs
+    private val rawBackoff: VesperRetryBackoff? = backoff
+
+    val baseDelayMs: Long
+        get() = rawBaseDelayMs ?: 1_000L
+
+    val maxDelayMs: Long
+        get() = rawMaxDelayMs ?: 5_000L
+
+    val backoff: VesperRetryBackoff
+        get() = rawBackoff ?: VesperRetryBackoff.Linear
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) {
+            return true
+        }
+        if (other !is VesperRetryPolicy) {
+            return false
+        }
+
+        return maxAttempts == other.maxAttempts &&
+            rawBaseDelayMs == other.rawBaseDelayMs &&
+            rawMaxDelayMs == other.rawMaxDelayMs &&
+            rawBackoff == other.rawBackoff
+    }
+
+    override fun hashCode(): Int {
+        var result = maxAttempts ?: 0
+        result = 31 * result + (rawBaseDelayMs?.hashCode() ?: 0)
+        result = 31 * result + (rawMaxDelayMs?.hashCode() ?: 0)
+        result = 31 * result + (rawBackoff?.hashCode() ?: 0)
+        return result
+    }
+
+    override fun toString(): String =
+        "VesperRetryPolicy(maxAttempts=$maxAttempts, baseDelayMs=$rawBaseDelayMs, " +
+            "maxDelayMs=$rawMaxDelayMs, backoff=$rawBackoff)"
+
     companion object {
         fun aggressive(): VesperRetryPolicy =
             VesperRetryPolicy(

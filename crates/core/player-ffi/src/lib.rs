@@ -764,7 +764,7 @@ impl From<PlayerTimelineSnapshot> for FfiTimelineSnapshot {
             kind: value.kind.into(),
             is_seekable: value.is_seekable,
             seekable_range: value.seekable_range.map(FfiSeekableRange::from),
-            live_edge_ms: value.live_edge.map(duration_to_millis),
+            live_edge_ms: value.effective_live_edge().map(duration_to_millis),
             position_ms: duration_to_millis(value.position),
             duration_ms: value.duration.map(duration_to_millis),
             ratio: value.displayed_ratio(),
@@ -1063,10 +1063,11 @@ impl Default for FfiTrackSelectionSnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        FfiAbrMode, FfiEvent, FfiMediaInfo, FfiTrackKind, FfiTrackSelectionMode, MediaAbrMode,
-        MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog,
-        MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlayerMediaInfo,
-        PlayerRuntimeEvent,
+        FfiAbrMode, FfiEvent, FfiMediaInfo, FfiTimelineKind, FfiTimelineSnapshot, FfiTrackKind,
+        FfiTrackSelectionMode, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
+        MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+        MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo, PlayerRuntimeEvent,
+        PlayerSeekableRange, PlayerTimelineSnapshot,
     };
     use std::time::Duration;
 
@@ -1166,5 +1167,23 @@ mod tests {
             }
             other => panic!("expected retry scheduled event, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn live_dvr_timeline_to_ffi_uses_effective_live_edge() {
+        let ffi = FfiTimelineSnapshot::from(PlayerTimelineSnapshot::live_dvr(
+            PlaybackProgress::new(Duration::from_secs(84), None),
+            PlayerSeekableRange {
+                start: Duration::ZERO,
+                end: Duration::from_secs(120),
+            },
+            None,
+        ));
+
+        assert_eq!(ffi.kind, FfiTimelineKind::LiveDvr);
+        assert_eq!(ffi.seekable_range.expect("seekable range").end_ms, 120_000);
+        assert_eq!(ffi.live_edge_ms, Some(120_000));
+        assert_eq!(ffi.position_ms, 84_000);
+        assert_eq!(ffi.duration_ms, Some(120_000));
     }
 }

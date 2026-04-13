@@ -92,6 +92,13 @@ pub struct PlayerCachePolicy {
     pub max_disk_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerResolvedResiliencePolicy {
+    pub buffering_policy: PlayerBufferingPolicy,
+    pub retry_policy: PlayerRetryPolicy,
+    pub cache_policy: PlayerCachePolicy,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerVideoSurfaceKind {
     NsView,
@@ -147,6 +154,20 @@ pub enum PlayerTimelineKind {
 pub struct PlayerSeekableRange {
     pub start: Duration,
     pub end: Duration,
+}
+
+impl PlayerSeekableRange {
+    pub fn duration(&self) -> Option<Duration> {
+        self.end.checked_sub(self.start)
+    }
+
+    pub fn clamp_position(&self, position: Duration) -> Duration {
+        position.clamp(self.start, self.end)
+    }
+
+    pub fn contains(&self, position: Duration) -> bool {
+        position >= self.start && position <= self.end
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -368,9 +389,76 @@ impl PlayerRuntimeOptions {
         self.cache_policy = cache_policy;
         self
     }
+
+    pub fn resolved_resilience_policy(
+        &self,
+        source_kind: MediaSourceKind,
+        source_protocol: MediaSourceProtocol,
+    ) -> PlayerResolvedResiliencePolicy {
+        PlayerResolvedResiliencePolicy {
+            buffering_policy: self
+                .buffering_policy
+                .resolved_for_source(source_kind, source_protocol),
+            retry_policy: self.retry_policy.resolved(),
+            cache_policy: self
+                .cache_policy
+                .resolved_for_source(source_kind, source_protocol),
+        }
+    }
 }
 
 impl PlayerBufferingPolicy {
+    pub fn source_default(
+        source_kind: MediaSourceKind,
+        source_protocol: MediaSourceProtocol,
+    ) -> Option<Self> {
+        match source_kind {
+            MediaSourceKind::Local => None,
+            MediaSourceKind::Remote => match source_protocol {
+                MediaSourceProtocol::Hls | MediaSourceProtocol::Dash => Some(Self::resilient()),
+                _ => Some(Self::streaming()),
+            },
+        }
+    }
+
+    fn merge_onto(&self, base: Option<&Self>) -> Self {
+        Self {
+            preset: if self.preset == PlayerBufferingPreset::Default {
+                base.map(|policy| policy.preset).unwrap_or(self.preset)
+            } else {
+                self.preset
+            },
+            min_buffer: self
+                .min_buffer
+                .or(base.and_then(|policy| policy.min_buffer)),
+            max_buffer: self
+                .max_buffer
+                .or(base.and_then(|policy| policy.max_buffer)),
+            buffer_for_playback: self
+                .buffer_for_playback
+                .or(base.and_then(|policy| policy.buffer_for_playback)),
+            buffer_for_rebuffer: self
+                .buffer_for_rebuffer
+                .or(base.and_then(|policy| policy.buffer_for_rebuffer)),
+        }
+    }
+
+    pub fn resolved_for_source(
+        &self,
+        source_kind: MediaSourceKind,
+        source_protocol: MediaSourceProtocol,
+    ) -> Self {
+        let base = match self.preset {
+            PlayerBufferingPreset::Default => Self::source_default(source_kind, source_protocol),
+            PlayerBufferingPreset::Balanced => Some(Self::balanced()),
+            PlayerBufferingPreset::Streaming => Some(Self::streaming()),
+            PlayerBufferingPreset::Resilient => Some(Self::resilient()),
+            PlayerBufferingPreset::LowLatency => Some(Self::low_latency()),
+        };
+
+        self.merge_onto(base.as_ref())
+    }
+
     pub fn balanced() -> Self {
         Self {
             preset: PlayerBufferingPreset::Balanced,
@@ -425,6 +513,10 @@ impl Default for PlayerBufferingPolicy {
 }
 
 impl PlayerRetryPolicy {
+    pub fn resolved(&self) -> Self {
+        self.clone()
+    }
+
     pub fn aggressive() -> Self {
         Self {
             max_attempts: Some(2),
@@ -456,6 +548,50 @@ impl Default for PlayerRetryPolicy {
 }
 
 impl PlayerCachePolicy {
+    pub fn source_default(
+        source_kind: MediaSourceKind,
+        source_protocol: MediaSourceProtocol,
+    ) -> Self {
+        match source_kind {
+            MediaSourceKind::Local => Self::disabled(),
+            MediaSourceKind::Remote => match source_protocol {
+                MediaSourceProtocol::Hls | MediaSourceProtocol::Dash => Self::resilient(),
+                _ => Self::streaming(),
+            },
+        }
+    }
+
+    fn merge_onto(&self, base: &Self) -> Self {
+        Self {
+            preset: if self.preset == PlayerCachePreset::Default {
+                base.preset
+            } else {
+                self.preset
+            },
+            max_memory_bytes: self.max_memory_bytes.or(base.max_memory_bytes),
+            max_disk_bytes: self.max_disk_bytes.or(base.max_disk_bytes),
+        }
+    }
+
+    pub fn resolved_for_source(
+        &self,
+        source_kind: MediaSourceKind,
+        source_protocol: MediaSourceProtocol,
+    ) -> Self {
+        if source_kind == MediaSourceKind::Local {
+            return Self::disabled();
+        }
+
+        let base = match self.preset {
+            PlayerCachePreset::Default => Self::source_default(source_kind, source_protocol),
+            PlayerCachePreset::Disabled => Self::disabled(),
+            PlayerCachePreset::Streaming => Self::streaming(),
+            PlayerCachePreset::Resilient => Self::resilient(),
+        };
+
+        self.merge_onto(&base)
+    }
+
     pub fn disabled() -> Self {
         Self {
             preset: PlayerCachePreset::Disabled,
@@ -552,7 +688,7 @@ impl PlayerTimelineSnapshot {
         seekable_range: PlayerSeekableRange,
         live_edge: Option<Duration>,
     ) -> Self {
-        let duration = seekable_range.end.checked_sub(seekable_range.start);
+        let duration = seekable_range.duration();
         Self {
             kind: PlayerTimelineKind::LiveDvr,
             is_seekable: true,
@@ -609,28 +745,89 @@ impl PlayerTimelineSnapshot {
         self.ratio_for_position(self.position)
     }
 
+    pub fn effective_live_edge(&self) -> Option<Duration> {
+        match self.kind {
+            PlayerTimelineKind::Vod => None,
+            PlayerTimelineKind::Live => self.live_edge,
+            PlayerTimelineKind::LiveDvr => self
+                .live_edge
+                .or_else(|| self.seekable_range.map(|range| range.end)),
+        }
+    }
+
+    pub fn go_live_position(&self) -> Option<Duration> {
+        self.effective_live_edge()
+    }
+
+    pub fn clamp_position(&self, position: Duration) -> Duration {
+        if let Some(range) = self.seekable_range {
+            return range.clamp_position(position);
+        }
+
+        if let Some(duration) = self.duration {
+            return position.clamp(Duration::ZERO, duration);
+        }
+
+        position
+    }
+
+    pub fn is_position_out_of_range(&self, position: Duration) -> bool {
+        if let Some(range) = self.seekable_range {
+            return !range.contains(position);
+        }
+
+        if let Some(duration) = self.duration {
+            return position > duration;
+        }
+
+        false
+    }
+
+    pub fn validate_position(&self, position: Duration) -> PlayerRuntimeResult<Duration> {
+        if self.is_position_out_of_range(position) {
+            return Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::SeekFailure,
+                format!(
+                    "seek position {}ms is outside the current timeline window",
+                    position.as_millis()
+                ),
+            ));
+        }
+
+        Ok(position)
+    }
+
+    pub fn live_offset(&self) -> Option<Duration> {
+        let live_edge = self.effective_live_edge()?;
+        Some(live_edge.saturating_sub(self.clamp_position(self.position)))
+    }
+
+    pub fn is_at_live_edge(&self, tolerance: Duration) -> bool {
+        self.live_offset().is_some_and(|offset| offset <= tolerance)
+    }
+
     pub fn ratio_for_position(&self, position: Duration) -> Option<f64> {
         let range = self.seekable_range?;
-        let total = range.end.checked_sub(range.start)?;
+        let total = range.duration()?;
         if total.is_zero() {
             return Some(1.0);
         }
 
-        let clamped_position = position.clamp(range.start, range.end);
+        let clamped_position = range.clamp_position(position);
         let offset = clamped_position.checked_sub(range.start)?;
         Some((offset.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0))
     }
 
     pub fn position_for_ratio(&self, ratio: f64) -> Option<Duration> {
         let range = self.seekable_range?;
-        let total = range.end.checked_sub(range.start)?;
+        let total = range.duration()?;
         if total.is_zero() {
             return Some(range.start);
         }
 
         let clamped_ratio = ratio.clamp(0.0, 1.0);
         let target_offset = Duration::from_secs_f64(total.as_secs_f64() * clamped_ratio);
-        Some((range.start + target_offset).clamp(range.start, range.end))
+        Some(range.clamp_position(range.start + target_offset))
     }
 }
 
@@ -875,8 +1072,8 @@ mod tests {
         MediaSourceKind, MediaSourceProtocol, PlaybackProgress, PlayerBufferingPolicy,
         PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset, PlayerMediaInfo,
         PlayerResilienceMetricsTracker, PlayerRetryBackoff, PlayerRetryPolicy,
-        PlayerRuntimeOptions, PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
-        PresentationState,
+        PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeOptions,
+        PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
     };
     use std::time::Duration;
 
@@ -979,7 +1176,80 @@ mod tests {
     }
 
     #[test]
-    fn runtime_options_default_to_balanced_resilience_baseline() {
+    fn live_dvr_go_live_position_defaults_to_window_end() {
+        let timeline = PlayerTimelineSnapshot::live_dvr(
+            PlaybackProgress::new(Duration::from_secs(84), None),
+            PlayerSeekableRange {
+                start: Duration::from_secs(30),
+                end: Duration::from_secs(120),
+            },
+            None,
+        );
+
+        assert_eq!(timeline.go_live_position(), Some(Duration::from_secs(120)));
+        assert_eq!(
+            timeline.effective_live_edge(),
+            Some(Duration::from_secs(120))
+        );
+    }
+
+    #[test]
+    fn live_dvr_live_offset_and_live_edge_detection_follow_tolerance() {
+        let timeline = PlayerTimelineSnapshot::live_dvr(
+            PlaybackProgress::new(Duration::from_millis(118_800), None),
+            PlayerSeekableRange {
+                start: Duration::from_secs(30),
+                end: Duration::from_secs(120),
+            },
+            Some(Duration::from_secs(120)),
+        );
+
+        assert_eq!(timeline.live_offset(), Some(Duration::from_millis(1_200)));
+        assert!(timeline.is_at_live_edge(Duration::from_millis(1_500)));
+        assert!(!timeline.is_at_live_edge(Duration::from_millis(1_000)));
+    }
+
+    #[test]
+    fn timeline_clamps_positions_against_seekable_window() {
+        let timeline = PlayerTimelineSnapshot::live_dvr(
+            PlaybackProgress::new(Duration::from_secs(90), None),
+            PlayerSeekableRange {
+                start: Duration::from_secs(30),
+                end: Duration::from_secs(120),
+            },
+            Some(Duration::from_secs(120)),
+        );
+
+        assert_eq!(
+            timeline.clamp_position(Duration::from_secs(20)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            timeline.clamp_position(Duration::from_secs(150)),
+            Duration::from_secs(120)
+        );
+    }
+
+    #[test]
+    fn timeline_validate_position_rejects_live_dvr_out_of_range_seek() {
+        let timeline = PlayerTimelineSnapshot::live_dvr(
+            PlaybackProgress::new(Duration::from_secs(90), None),
+            PlayerSeekableRange {
+                start: Duration::from_secs(30),
+                end: Duration::from_secs(120),
+            },
+            Some(Duration::from_secs(120)),
+        );
+
+        let error = timeline
+            .validate_position(Duration::from_secs(10))
+            .expect_err("position before live window should fail");
+        assert_eq!(error.code(), PlayerRuntimeErrorCode::SeekFailure);
+        assert_eq!(error.category(), PlayerRuntimeErrorCategory::Playback);
+    }
+
+    #[test]
+    fn runtime_options_default_to_shared_resilience_baseline() {
         let options = PlayerRuntimeOptions::default();
 
         assert_eq!(options.buffering_policy, PlayerBufferingPolicy::default());
@@ -993,6 +1263,67 @@ mod tests {
             }
         );
         assert_eq!(options.cache_policy, PlayerCachePolicy::default());
+    }
+
+    #[test]
+    fn runtime_options_resolve_remote_unknown_to_streaming_defaults() {
+        let resolved = PlayerRuntimeOptions::default()
+            .resolved_resilience_policy(MediaSourceKind::Remote, MediaSourceProtocol::Unknown);
+
+        assert_eq!(
+            resolved.buffering_policy,
+            PlayerBufferingPolicy::streaming()
+        );
+        assert_eq!(resolved.retry_policy, PlayerRetryPolicy::default());
+        assert_eq!(resolved.cache_policy, PlayerCachePolicy::streaming());
+    }
+
+    #[test]
+    fn runtime_options_resolve_manifest_sources_to_resilient_defaults() {
+        let resolved = PlayerRuntimeOptions::default()
+            .resolved_resilience_policy(MediaSourceKind::Remote, MediaSourceProtocol::Hls);
+
+        assert_eq!(
+            resolved.buffering_policy,
+            PlayerBufferingPolicy::resilient()
+        );
+        assert_eq!(resolved.retry_policy, PlayerRetryPolicy::default());
+        assert_eq!(resolved.cache_policy, PlayerCachePolicy::resilient());
+    }
+
+    #[test]
+    fn buffering_policy_resolution_merges_explicit_overrides_onto_source_defaults() {
+        let resolved = PlayerBufferingPolicy {
+            preset: PlayerBufferingPreset::Default,
+            min_buffer: None,
+            max_buffer: Some(Duration::from_secs(40)),
+            buffer_for_playback: None,
+            buffer_for_rebuffer: None,
+        }
+        .resolved_for_source(MediaSourceKind::Remote, MediaSourceProtocol::Progressive);
+
+        assert_eq!(
+            resolved,
+            PlayerBufferingPolicy {
+                preset: PlayerBufferingPreset::Streaming,
+                min_buffer: Some(Duration::from_millis(12_000)),
+                max_buffer: Some(Duration::from_secs(40)),
+                buffer_for_playback: Some(Duration::from_millis(1_200)),
+                buffer_for_rebuffer: Some(Duration::from_millis(2_500)),
+            }
+        );
+    }
+
+    #[test]
+    fn cache_policy_resolution_disables_local_sources() {
+        let resolved = PlayerCachePolicy {
+            preset: PlayerCachePreset::Default,
+            max_memory_bytes: Some(32 * 1024 * 1024),
+            max_disk_bytes: Some(512 * 1024 * 1024),
+        }
+        .resolved_for_source(MediaSourceKind::Local, MediaSourceProtocol::File);
+
+        assert_eq!(resolved, PlayerCachePolicy::disabled());
     }
 
     #[test]

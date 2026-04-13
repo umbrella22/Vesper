@@ -111,10 +111,7 @@ class FakePlayerBridge(
     override fun seekBy(deltaMs: Long) {
         updateState {
             val timeline = timeline
-            val target = (timeline.positionMs + deltaMs).coerceIn(
-                timeline.seekableRange?.startMs ?: 0L,
-                timeline.seekableRange?.endMs ?: (timeline.durationMs ?: 0L),
-            )
+            val target = timeline.clampedPosition(timeline.positionMs + deltaMs)
             copy(timeline = timeline.copy(positionMs = target))
         }
     }
@@ -122,20 +119,14 @@ class FakePlayerBridge(
     override fun seekToRatio(ratio: Float) {
         updateState {
             val timeline = timeline
-            val range = timeline.seekableRange
-            val position = if (range != null && range.endMs >= range.startMs) {
-                val width = (range.endMs - range.startMs).toFloat()
-                range.startMs + (width * ratio.coerceIn(0f, 1f)).toLong()
-            } else {
-                ((timeline.durationMs ?: 0L).toFloat() * ratio.coerceIn(0f, 1f)).toLong()
-            }
+            val position = timeline.positionForRatio(ratio)
             copy(timeline = timeline.copy(positionMs = position))
         }
     }
 
     override fun seekToLiveEdge() {
         updateState {
-            val liveEdge = timeline.liveEdgeMs ?: timeline.seekableRange?.endMs ?: timeline.positionMs
+            val liveEdge = timeline.goLivePositionMs ?: timeline.positionMs
             copy(timeline = timeline.copy(positionMs = liveEdge))
         }
     }

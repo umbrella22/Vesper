@@ -634,19 +634,21 @@ private extension Dictionary where Key == String, Value == Any {
     }
 
     func toRetryPolicy() -> VesperRetryPolicy {
-        let backoff: VesperRetryBackoff
+        let backoff: VesperRetryBackoff?
         switch self["backoff"] as? String {
         case "fixed":
             backoff = .fixed
+        case "linear":
+            backoff = .linear
         case "exponential":
             backoff = .exponential
         default:
-            backoff = .linear
+            backoff = nil
         }
         return VesperRetryPolicy(
             maxAttempts: (self["maxAttempts"] as? NSNumber)?.intValue,
-            baseDelayMs: (self["baseDelayMs"] as? NSNumber)?.uint64Value ?? 1_000,
-            maxDelayMs: (self["maxDelayMs"] as? NSNumber)?.uint64Value ?? 5_000,
+            baseDelayMs: (self["baseDelayMs"] as? NSNumber)?.uint64Value,
+            maxDelayMs: (self["maxDelayMs"] as? NSNumber)?.uint64Value,
             backoff: backoff
         )
     }

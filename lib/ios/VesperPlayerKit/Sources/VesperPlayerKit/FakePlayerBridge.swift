@@ -161,10 +161,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func seek(by deltaMs: Int64) {
         update { current in
-            let range = current.timeline.seekableRange
-            let minimum = range?.startMs ?? 0
-            let maximum = range?.endMs ?? (current.timeline.durationMs ?? 0)
-            let target = min(max(current.timeline.positionMs + deltaMs, minimum), maximum)
+            let target = current.timeline.clampedPosition(current.timeline.positionMs + deltaMs)
             return PlayerHostUiState(
                 title: current.title,
                 subtitle: current.subtitle,
@@ -187,15 +184,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func seek(toRatio ratio: Double) {
         update { current in
-            let normalized = min(max(ratio, 0.0), 1.0)
-            let position: Int64
-
-            if let range = current.timeline.seekableRange, range.endMs >= range.startMs {
-                let width = Double(range.endMs - range.startMs)
-                position = range.startMs + Int64(width * normalized)
-            } else {
-                position = Int64(Double(current.timeline.durationMs ?? 0) * normalized)
-            }
+            let position = current.timeline.position(forRatio: ratio)
 
             return PlayerHostUiState(
                 title: current.title,
@@ -219,9 +208,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func seekToLiveEdge() {
         update { current in
-            let target = current.timeline.liveEdgeMs
-                ?? current.timeline.seekableRange?.endMs
-                ?? current.timeline.positionMs
+            let target = current.timeline.goLivePositionMs ?? current.timeline.positionMs
             return PlayerHostUiState(
                 title: current.title,
                 subtitle: current.subtitle,

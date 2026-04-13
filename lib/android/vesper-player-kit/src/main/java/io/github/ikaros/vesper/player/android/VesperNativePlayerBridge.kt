@@ -4,10 +4,10 @@ import android.content.Context
 import android.util.Log
 import android.view.Surface
 import android.view.ViewGroup
-import kotlin.math.absoluteValue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.absoluteValue
 
 class VesperNativePlayerBridge(
     private val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
@@ -180,9 +180,7 @@ class VesperNativePlayerBridge(
 
     override fun seekBy(deltaMs: Long) {
         val current = _uiState.value.timeline
-        val minimum = current.seekableRange?.startMs ?: 0L
-        val maximum = current.seekableRange?.endMs ?: (current.durationMs ?: 0L)
-        val target = (current.positionMs + deltaMs).coerceIn(minimum, maximum)
+        val target = current.clampedPosition(current.positionMs + deltaMs)
         bindings.seekTo(target)
         updateState { copy(timeline = timeline.copy(positionMs = target)) }
         refreshFromNative()
@@ -190,13 +188,7 @@ class VesperNativePlayerBridge(
 
     override fun seekToRatio(ratio: Float) {
         val timeline = _uiState.value.timeline
-        val position = if (timeline.seekableRange != null) {
-            val range = timeline.seekableRange
-            val width = (range.endMs - range.startMs).toFloat()
-            range.startMs + (width * ratio.coerceIn(0f, 1f)).toLong()
-        } else {
-            ((timeline.durationMs ?: 0L).toFloat() * ratio.coerceIn(0f, 1f)).toLong()
-        }
+        val position = timeline.positionForRatio(ratio)
         bindings.seekTo(position)
         updateState { copy(timeline = timeline.copy(positionMs = position)) }
         refreshFromNative()
@@ -204,7 +196,7 @@ class VesperNativePlayerBridge(
 
     override fun seekToLiveEdge() {
         val timeline = _uiState.value.timeline
-        val liveEdge = timeline.liveEdgeMs ?: timeline.seekableRange?.endMs ?: return
+        val liveEdge = timeline.goLivePositionMs ?: return
         bindings.seekTo(liveEdge)
         updateState { copy(timeline = timeline.copy(positionMs = liveEdge)) }
         refreshFromNative()
@@ -277,7 +269,7 @@ class VesperNativePlayerBridge(
             preservedState.seekToLiveEdge &&
                 _uiState.value.timeline.kind == TimelineKind.LiveDvr -> {
                 val liveEdge =
-                    _uiState.value.timeline.liveEdgeMs ?: _uiState.value.timeline.positionMs
+                    _uiState.value.timeline.goLivePositionMs ?: _uiState.value.timeline.positionMs
                 bindings.seekTo(liveEdge)
             }
             preservedState.restorePosition &&
@@ -392,11 +384,9 @@ private data class PreservedPlaybackState(
             uiState: PlayerHostUiState,
             trackSelection: VesperTrackSelectionSnapshot,
         ): PreservedPlaybackState {
-            val liveEdgeMs = uiState.timeline.liveEdgeMs
             val seekToLiveEdge =
                 uiState.timeline.kind == TimelineKind.LiveDvr &&
-                    liveEdgeMs != null &&
-                    (liveEdgeMs - uiState.timeline.positionMs).absoluteValue <= 1_500L
+                    uiState.timeline.isAtLiveEdge()
             return PreservedPlaybackState(
                 positionMs = uiState.timeline.positionMs,
                 restorePosition = uiState.timeline.isSeekable || uiState.timeline.durationMs != null,

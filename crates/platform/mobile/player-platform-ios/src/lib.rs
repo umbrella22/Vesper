@@ -459,7 +459,10 @@ impl IosHostSnapshot {
                     start_ms: duration_to_millis(range.start),
                     end_ms: duration_to_millis(range.end),
                 }),
-            live_edge_ms: snapshot.timeline.live_edge.map(duration_to_millis),
+            live_edge_ms: snapshot
+                .timeline
+                .effective_live_edge()
+                .map(duration_to_millis),
             position_ms: duration_to_millis(snapshot.timeline.position),
             duration_ms: snapshot.timeline.duration.map(duration_to_millis),
             resilience_metrics: snapshot.resilience_metrics.clone(),
@@ -2372,6 +2375,34 @@ mod tests {
         assert_eq!(host.position_ms, 5_000);
         assert_eq!(host.duration_ms, Some(20_000));
         assert_eq!(host.seekable_range.expect("seekable range").end_ms, 20_000);
+    }
+
+    #[test]
+    fn ios_host_snapshot_conversion_uses_effective_live_edge_for_live_dvr() {
+        let snapshot = PlayerSnapshot {
+            source_uri: "https://example.com/live.m3u8".to_owned(),
+            state: PresentationState::Playing,
+            has_video_surface: true,
+            is_interrupted: false,
+            is_buffering: false,
+            playback_rate: 1.0,
+            progress: PlaybackProgress::new(Duration::from_secs(84), None),
+            timeline: PlayerTimelineSnapshot::live_dvr(
+                PlaybackProgress::new(Duration::from_secs(84), None),
+                player_runtime::PlayerSeekableRange {
+                    start: Duration::ZERO,
+                    end: Duration::from_secs(120),
+                },
+                None,
+            ),
+            media_info: test_media_info(),
+            resilience_metrics: PlayerResilienceMetrics::default(),
+        };
+
+        let host = IosHostSnapshot::from_player_snapshot(&snapshot);
+        assert_eq!(host.timeline_kind, IosHostTimelineKind::LiveDvr);
+        assert_eq!(host.live_edge_ms, Some(120_000));
+        assert_eq!(host.position_ms, 84_000);
     }
 
     #[test]

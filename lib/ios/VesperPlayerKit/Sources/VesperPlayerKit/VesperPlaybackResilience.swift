@@ -85,20 +85,32 @@ public enum VesperCachePreset: String {
 
 public struct VesperRetryPolicy: Equatable {
     public let maxAttempts: Int?
-    public let baseDelayMs: UInt64
-    public let maxDelayMs: UInt64
-    public let backoff: VesperRetryBackoff
+    private let rawBaseDelayMs: UInt64?
+    private let rawMaxDelayMs: UInt64?
+    private let rawBackoff: VesperRetryBackoff?
+
+    public var baseDelayMs: UInt64 {
+        rawBaseDelayMs ?? 1_000
+    }
+
+    public var maxDelayMs: UInt64 {
+        rawMaxDelayMs ?? 5_000
+    }
+
+    public var backoff: VesperRetryBackoff {
+        rawBackoff ?? .linear
+    }
 
     public init(
         maxAttempts: Int? = 3,
-        baseDelayMs: UInt64 = 1_000,
-        maxDelayMs: UInt64 = 5_000,
-        backoff: VesperRetryBackoff = .linear
+        baseDelayMs: UInt64? = nil,
+        maxDelayMs: UInt64? = nil,
+        backoff: VesperRetryBackoff? = nil
     ) {
         self.maxAttempts = maxAttempts
-        self.baseDelayMs = baseDelayMs
-        self.maxDelayMs = maxDelayMs
-        self.backoff = backoff
+        rawBaseDelayMs = baseDelayMs
+        rawMaxDelayMs = maxDelayMs
+        rawBackoff = backoff
     }
 
     public static func aggressive() -> VesperRetryPolicy {
