@@ -1,6 +1,9 @@
 /target
 *.mp4
 
+# Development notes (local only, not committed)
+devnotes/
+
 # macOS / editor junk
 .DS_Store
 *.swp
@@ -23,9 +26,31 @@ lib/android/.idea/
 lib/android/.kotlin/
 lib/android/build/
 lib/android/vesper-player-kit/build/
+lib/android/vesper-player-kit-software/build/
 lib/android/vesper-player-kit-compose/build/
 lib/android/vesper-player-kit/src/main/jniLibs/*
 !lib/android/vesper-player-kit/src/main/jniLibs/.gitkeep
+lib/android/vesper-player-kit-software/src/main/jniLibs/*
+!lib/android/vesper-player-kit-software/src/main/jniLibs/.gitkeep
+
+# Android software third-party generated artifacts
+third_party/ffmpeg/android/arm64-v8a/
+third_party/ffmpeg/android/x86_64/
+third_party/ffmpeg/android/prebuilt-archives/*
+third_party/openssl/android/arm64-v8a/
+third_party/openssl/android/x86_64/
+third_party/openssl/android/prebuilt-archives/*
+third_party/libxml2/android/arm64-v8a/
+third_party/libxml2/android/x86_64/
+third_party/libxml2/android/prebuilt-archives/*
+
+# Local third-party source archives
+ffmpeg-*.tar
+ffmpeg-*.tar.*
+openssl-*.tar
+openssl-*.tar.*
+libxml2-*.tar
+libxml2-*.tar.*
 
 # iOS example generated project artifacts
 examples/ios-swift-host/*.xcodeproj/
@@ -42,3 +67,33 @@ lib/ios/**/*.xcuserstate
 lib/ios/**/*.swiftpm/*
 lib/ios/**/.build/
 lib/ios/**/*.xcframework/
+
+# Flutter plugin generated artifacts (lib/flutter/)
+lib/flutter/**/.dart_tool/
+lib/flutter/**/.idea/
+lib/flutter/**/build/
+lib/flutter/**/.swiftpm/
+lib/flutter/**/.build/
+lib/flutter/**/ios/Pods/
+lib/flutter/**/ios/.symlinks/
+lib/flutter/**/ios/Flutter/ephemeral/
+lib/flutter/**/macos/Pods/
+lib/flutter/**/macos/Flutter/ephemeral/
+lib/flutter/**/android/.gradle/
+lib/flutter/**/android/local.properties
+lib/flutter/**/*.iml
+lib/flutter/**/pubspec.lock
+
+# Flutter example generated artifacts
+examples/flutter-host/.dart_tool/
+examples/flutter-host/.idea/
+examples/flutter-host/build/
+examples/flutter-host/ios/Pods/
+examples/flutter-host/ios/.symlinks/
+examples/flutter-host/ios/Flutter/ephemeral/
+examples/flutter-host/macos/Pods/
+examples/flutter-host/macos/Flutter/ephemeral/
+examples/flutter-host/android/.gradle/
+examples/flutter-host/android/local.properties
+examples/flutter-host/*.iml
+examples/flutter-host/pubspec.lock

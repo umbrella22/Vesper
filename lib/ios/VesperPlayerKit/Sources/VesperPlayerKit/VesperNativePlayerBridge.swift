@@ -702,38 +702,43 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let item = player?.currentItem
         let seekableRange = currentSeekableRange(item: item, durationMs: durationMs)
         let kind = currentTimelineKind(durationMs: durationMs, seekableRange: seekableRange)
-        let liveEdgeMs: Int64? = switch kind {
+        let seekableRangeStartMs = seekableRange?.startMs ?? 0
+        let seekableRangeEndMs = seekableRange?.endMs ?? 0
+        let hasSeekableWindow = seekableRangeEndMs > seekableRangeStartMs
+
+        let liveEdgeMs: Int64?
+        switch kind {
         case .vod:
-            nil
-        case .live:
-            seekableRange?.endMs
-        case .liveDvr:
-            seekableRange?.endMs
+            liveEdgeMs = nil
+        case .live, .liveDvr:
+            liveEdgeMs = seekableRange?.endMs
         }
-        let isSeekable = switch kind {
-        case .vod:
-            seekableRange?.endMs ?? 0 > seekableRange?.startMs ?? 0
+
+        let isSeekable: Bool
+        switch kind {
+        case .vod, .liveDvr:
+            isSeekable = hasSeekableWindow
         case .live:
-            false
-        case .liveDvr:
-            seekableRange?.endMs ?? 0 > seekableRange?.startMs ?? 0
+            isSeekable = false
         }
-        let rawPositionMs = explicitPositionMs
-            ?? player?.currentTime().milliseconds
-            ?? publishedUiState.timeline.positionMs
+
+        let currentPositionMs = player?.currentTime().milliseconds
+        let rawPositionMs = explicitPositionMs ?? currentPositionMs ?? publishedUiState.timeline.positionMs
         let clampedPositionMs: Int64
         if let seekableRange, seekableRange.endMs >= seekableRange.startMs {
             clampedPositionMs = min(max(rawPositionMs, seekableRange.startMs), seekableRange.endMs)
         } else {
             clampedPositionMs = max(rawPositionMs, 0)
         }
-        let uiDurationMs: Int64? = switch kind {
+
+        let uiDurationMs: Int64?
+        switch kind {
         case .vod:
-            durationMs
+            uiDurationMs = durationMs
         case .live:
-            nil
+            uiDurationMs = nil
         case .liveDvr:
-            seekableRange.map { max($0.endMs - $0.startMs, 0) }
+            uiDurationMs = seekableRange.map { max($0.endMs - $0.startMs, 0) }
         }
 
         return TimelineUiState(
@@ -1180,16 +1185,19 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             basePolicy = .lowLatency()
         }
 
-        let effectiveMs =
+        let configuredBufferMs =
             resiliencePolicy.buffering.maxBufferMs
             ?? resiliencePolicy.buffering.minBufferMs
             ?? resiliencePolicy.buffering.bufferForPlaybackAfterRebufferMs
             ?? resiliencePolicy.buffering.bufferForPlaybackMs
-            ?? basePolicy.maxBufferMs
+
+        let defaultBufferMs =
+            basePolicy.maxBufferMs
             ?? basePolicy.minBufferMs
             ?? basePolicy.bufferForPlaybackAfterRebufferMs
             ?? basePolicy.bufferForPlaybackMs
-            ?? 0
+
+        let effectiveMs = configuredBufferMs ?? defaultBufferMs ?? 0
 
         let automaticallyWaits = switch resiliencePolicy.buffering.preset {
         case .lowLatency:
