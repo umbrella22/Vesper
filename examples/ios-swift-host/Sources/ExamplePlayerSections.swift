@@ -1,4 +1,5 @@
 import SwiftUI
+import VesperPlayerKit
 
 struct ExamplePlayerHeader: View {
     let sourceLabel: String
@@ -132,6 +133,72 @@ struct ExampleSourceSection: View {
             .foregroundStyle(palette.title)
             .opacity(enabled ? 1.0 : 0.46)
             .disabled(!enabled)
+    }
+}
+
+struct ExamplePlaylistSection: View {
+    let palette: ExampleHostPalette
+    let playlistQueue: [VesperPlaylistQueueItemState]
+    let onFocusPlaylistItem: (String) -> Void
+
+    var body: some View {
+        ExampleSectionShell(
+            palette: palette,
+            title: ExampleI18n.playlistTitle,
+            subtitle: ExampleI18n.playlistSubtitle
+        ) {
+            if playlistQueue.isEmpty {
+                Text(ExampleI18n.playlistEmpty)
+                    .font(.footnote)
+                    .foregroundStyle(palette.body)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(playlistQueue, id: \.item.itemId) { item in
+                        PlaylistQueueRow(
+                            label: item.item.source.label,
+                            hint: item.isActive ? ExampleI18n.playlistStatusCurrent : playlistHintLabel(item.viewportHint),
+                            active: item.isActive,
+                            palette: palette,
+                            onClick: { onFocusPlaylistItem(item.item.itemId) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct PlaylistQueueRow: View {
+    let label: String
+    let hint: String
+    let active: Bool
+    let palette: ExampleHostPalette
+    let onClick: () -> Void
+
+    var body: some View {
+        Button(action: onClick) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                Text(hint)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(active ? Color.white : palette.title)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                active ? AnyShapeStyle(palette.primaryAction) : AnyShapeStyle(palette.fieldBackground),
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(active ? Color.clear : palette.sectionStroke, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

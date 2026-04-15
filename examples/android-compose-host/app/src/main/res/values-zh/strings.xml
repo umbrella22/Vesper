@@ -31,6 +31,14 @@
     <string name="example_sources_remote_stream_url">远程流 URL</string>
     <string name="example_sources_theme">主题</string>
     <string name="example_sources_open_remote_url">打开远程 URL</string>
+    <string name="example_playlist_title">播放列表</string>
+    <string name="example_playlist_subtitle">点击演示流、本地视频或自定义远程 URL 后，媒体源会按加入顺序出现在这里。</string>
+    <string name="example_playlist_empty">播放列表里还没有媒体源。</string>
+    <string name="example_playlist_status_current">当前播放</string>
+    <string name="example_playlist_status_visible">当前可见</string>
+    <string name="example_playlist_status_near_visible">临近可见</string>
+    <string name="example_playlist_status_prefetch">仅预取</string>
+    <string name="example_playlist_status_hidden">隐藏</string>
 
     <string name="example_resilience_title">恢复策略</string>
     <string name="example_resilience_subtitle">这里演示 resilience policy 的 Android API。切换 profile 时会直接下发到播放器，并尽量保留当前媒体与播放进度。</string>

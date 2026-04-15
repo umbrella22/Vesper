@@ -86,6 +86,25 @@ import VesperPlayerKit
     }
 }
 
+#Preview("Playlist Light") {
+    let palette = exampleHostPalette(useDarkTheme: false)
+    ZStack {
+        LinearGradient(
+            colors: [palette.pageTop, palette.pageBottom],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+
+        ExamplePlaylistSection(
+            palette: palette,
+            playlistQueue: previewPlaylistQueue(),
+            onFocusPlaylistItem: { _ in }
+        )
+        .padding(20)
+    }
+}
+
 #Preview("Resilience Light") {
     let palette = exampleHostPalette(useDarkTheme: false)
     ZStack {
@@ -185,4 +204,33 @@ private func previewTrackSelection() -> VesperTrackSelectionSnapshot {
         subtitle: .track("subtitle-zh"),
         abrPolicy: .auto()
     )
+}
+
+private func previewPlaylistQueue() -> [VesperPlaylistQueueItemState] {
+    let queue = examplePlaylistQueue(
+        playlistItemIds: [
+            IOS_HLS_PLAYLIST_ITEM_ID,
+            IOS_LOCAL_PLAYLIST_ITEM_ID,
+            IOS_REMOTE_PLAYLIST_ITEM_ID,
+        ],
+        remoteSource: .remoteUrl(
+            URL(string: "https://example.com/preview.mp4")!,
+            label: ExampleI18n.customRemoteUrlLabel
+        ),
+        localSource: .localFile(
+            url: URL(fileURLWithPath: "/tmp/preview.mov"),
+            label: "Preview.mov"
+        )
+    )
+    let hints = examplePlaylistViewportHints(queue: queue, focusedItemId: IOS_HLS_PLAYLIST_ITEM_ID)
+    let hintByItemId = Dictionary(uniqueKeysWithValues: hints.map { ($0.itemId, $0.kind) })
+
+    return queue.enumerated().map { index, item in
+        VesperPlaylistQueueItemState(
+            item: item,
+            index: index,
+            viewportHint: hintByItemId[item.itemId] ?? .hidden,
+            isActive: item.itemId == IOS_HLS_PLAYLIST_ITEM_ID
+        )
+    }
 }

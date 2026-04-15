@@ -7,4 +7,5 @@ rust-version.workspace = true
 
 [dependencies]
 player-core = { path = "../../../core/player-core" }
+player-plugin-loader = { path = "../../../core/player-plugin-loader" }
 player-runtime = { path = "../../../core/player-runtime" }

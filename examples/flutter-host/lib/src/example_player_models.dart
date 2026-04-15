@@ -107,6 +107,10 @@ const String flutterHlsDemoUrl =
 
 const String flutterDashDemoUrl =
     'https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd';
+const String flutterHlsPlaylistItemId = 'hls-demo';
+const String flutterDashPlaylistItemId = 'dash-demo';
+const String flutterRemotePlaylistItemId = 'custom-remote';
+const String flutterLocalPlaylistItemId = 'local-file';
 
 const List<ExampleSource> exampleSources = <ExampleSource>[
   ExampleSource(
@@ -143,6 +147,27 @@ final class ExampleSource {
       protocol: protocol,
     );
   }
+}
+
+final class ExamplePlaylistItemViewData {
+  const ExamplePlaylistItemViewData({
+    required this.itemId,
+    required this.label,
+    required this.status,
+    required this.isActive,
+  });
+
+  final String itemId;
+  final String label;
+  final String status;
+  final bool isActive;
+}
+
+List<String> enqueuePlaylistItem(List<String> playlistItemIds, String itemId) {
+  return <String>[
+    ...playlistItemIds.where((existingItemId) => existingItemId != itemId),
+    itemId,
+  ];
 }
 
 VesperPlayerSource flutterHlsDemoSource() {

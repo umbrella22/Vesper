@@ -1,0 +1,16 @@
+[package]
+name = "player-ffi-resolver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+player-core = { path = "../player-core" }
+player-policy-resolver = { path = "../player-policy-resolver" }
+player-platform-ios = { path = "../../platform/mobile/player-platform-ios" }
+player-runtime = { path = "../player-runtime" }

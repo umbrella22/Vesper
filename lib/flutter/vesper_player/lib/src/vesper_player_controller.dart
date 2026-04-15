@@ -20,11 +20,17 @@ class VesperPlayerController {
     VesperPlayerSource? initialSource,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
+    VesperTrackPreferencePolicy trackPreferencePolicy =
+        const VesperTrackPreferencePolicy(),
+    VesperPreloadBudgetPolicy preloadBudgetPolicy =
+        const VesperPreloadBudgetPolicy(),
   }) async {
     final platform = VesperPlayerPlatform.instance;
     final result = await platform.createPlayer(
       initialSource: initialSource,
       resiliencePolicy: resiliencePolicy,
+      trackPreferencePolicy: trackPreferencePolicy,
+      preloadBudgetPolicy: preloadBudgetPolicy,
     );
     return VesperPlayerController._(
       playerId: result.playerId,

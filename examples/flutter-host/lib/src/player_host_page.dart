@@ -34,6 +34,10 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       ExampleResilienceProfile.balanced;
   bool _isApplyingResilienceProfile = false;
   bool _sheetOpen = false;
+  List<String> _playlistItemIds = <String>[flutterHlsPlaylistItemId];
+  String? _activePlaylistItemId = flutterHlsPlaylistItemId;
+  VesperPlayerSource? _queuedRemoteSource;
+  VesperPlayerSource? _queuedLocalSource;
 
   @override
   void initState() {
@@ -69,6 +73,9 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         resiliencePolicy: _selectedResilienceProfile.policy,
       );
       await nextController.initialize();
+      await nextController.selectSource(flutterHlsDemoSource());
+      _playlistItemIds = <String>[flutterHlsPlaylistItemId];
+      _activePlaylistItemId = flutterHlsPlaylistItemId;
 
       final previous = _controller;
       _controller = nextController;
@@ -122,6 +129,83 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     await controller.selectSource(source);
   }
 
+  VesperPlayerSource? _playlistSourceForItem(String itemId) {
+    return switch (itemId) {
+      flutterHlsPlaylistItemId => flutterHlsDemoSource(),
+      flutterDashPlaylistItemId => flutterDashDemoSource(),
+      flutterLocalPlaylistItemId => _queuedLocalSource,
+      flutterRemotePlaylistItemId => _queuedRemoteSource,
+      _ => null,
+    };
+  }
+
+  List<ExamplePlaylistItemViewData> _buildPlaylistItems() {
+    final activeIndex = _playlistItemIds.indexOf(_activePlaylistItemId ?? '');
+    return _playlistItemIds
+        .asMap()
+        .entries
+        .map((entry) {
+          final index = entry.key;
+          final itemId = entry.value;
+          final source = _playlistSourceForItem(itemId);
+          if (source == null) {
+            return null;
+          }
+          final isActive = itemId == _activePlaylistItemId;
+          return ExamplePlaylistItemViewData(
+            itemId: itemId,
+            label: source.label,
+            status: playlistItemStatusLabel(
+              index: index,
+              activeIndex: activeIndex,
+            ),
+            isActive: isActive,
+          );
+        })
+        .whereType<ExamplePlaylistItemViewData>()
+        .toList(growable: false);
+  }
+
+  Future<void> _activatePlaylistSource(
+    VesperPlayerController controller, {
+    required String itemId,
+    required VesperPlayerSource source,
+    VesperPlayerSource? remoteSource,
+    VesperPlayerSource? localSource,
+  }) async {
+    await _selectSource(controller, source);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      if (remoteSource != null) {
+        _queuedRemoteSource = remoteSource;
+      }
+      if (localSource != null) {
+        _queuedLocalSource = localSource;
+      }
+      _playlistItemIds = enqueuePlaylistItem(_playlistItemIds, itemId);
+      _activePlaylistItemId = itemId;
+    });
+  }
+
+  Future<void> _focusPlaylistItem(
+    VesperPlayerController controller,
+    String itemId,
+  ) async {
+    final source = _playlistSourceForItem(itemId);
+    if (source == null) {
+      return;
+    }
+    await _selectSource(controller, source);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _activePlaylistItemId = itemId;
+    });
+  }
+
   Future<void> _playCustomUrl(VesperPlayerController controller) async {
     final uri = _remoteUrlController.text.trim();
     if (uri.isEmpty) {
@@ -140,7 +224,12 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       label: '自定义远程流',
       protocol: protocol,
     );
-    await _selectSource(controller, source);
+    await _activatePlaylistSource(
+      controller,
+      itemId: flutterRemotePlaylistItemId,
+      source: source,
+      remoteSource: source,
+    );
   }
 
   Future<void> _pickLocalVideo(VesperPlayerController controller) async {
@@ -153,7 +242,12 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         uri: pickedVideo.uri,
         label: pickedVideo.label,
       );
-      await _selectSource(controller, source);
+      await _activatePlaylistSource(
+        controller,
+        itemId: flutterLocalPlaylistItemId,
+        source: source,
+        localSource: source,
+      );
       return;
     } on MissingPluginException {
       // 宿主未接 picker 时回退到手动输入，便于调试。
@@ -206,7 +300,12 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       uri: normalizedUri,
       label: localSourceLabel(normalizedUri),
     );
-    await _selectSource(controller, source);
+    await _activatePlaylistSource(
+      controller,
+      itemId: flutterLocalPlaylistItemId,
+      source: source,
+      localSource: source,
+    );
   }
 
   Future<void> _openToolSheet(
@@ -286,6 +385,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         if (controller == null) {
           return const ExampleLoadingState();
         }
+        final playlistItems = _buildPlaylistItems();
 
         return ValueListenableBuilder<VesperPlayerSnapshot>(
           valueListenable: controller.snapshotListenable,
@@ -295,6 +395,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
                     context,
                     controller,
                     snapshot,
+                    playlistItems,
                     palette,
                     asyncSnapshot,
                   )
@@ -334,6 +435,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     BuildContext context,
     VesperPlayerController controller,
     VesperPlayerSnapshot snapshot,
+    List<ExamplePlaylistItemViewData> playlistItems,
     ExampleHostPalette palette,
     AsyncSnapshot<VesperPlayerController> asyncSnapshot,
   ) {
@@ -382,11 +484,28 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
                 : '当前平台宿主暂不支持 DASH 演示。',
             onThemeModeChange: widget.onThemeModeChange,
             onPickVideo: () => unawaited(_pickLocalVideo(controller)),
-            onUseHlsDemo: () =>
-                unawaited(_selectSource(controller, flutterHlsDemoSource())),
-            onUseDashDemo: () =>
-                unawaited(_selectSource(controller, flutterDashDemoSource())),
+            onUseHlsDemo: () => unawaited(
+              _activatePlaylistSource(
+                controller,
+                itemId: flutterHlsPlaylistItemId,
+                source: flutterHlsDemoSource(),
+              ),
+            ),
+            onUseDashDemo: () => unawaited(
+              _activatePlaylistSource(
+                controller,
+                itemId: flutterDashPlaylistItemId,
+                source: flutterDashDemoSource(),
+              ),
+            ),
             onOpenRemote: () => unawaited(_playCustomUrl(controller)),
+          ),
+          const SizedBox(height: 18),
+          ExamplePlaylistSection(
+            palette: palette,
+            playlistItems: playlistItems,
+            onSelectItem: (itemId) =>
+                unawaited(_focusPlaylistItem(controller, itemId)),
           ),
           const SizedBox(height: 18),
           ExampleResilienceSection(

@@ -159,6 +159,25 @@ class _ExamplePlayerStageState extends State<ExamplePlayerStage> {
                                           compact: true,
                                         ),
                                       ],
+                                      const SizedBox(width: 8),
+                                      ExampleStageChip(
+                                        label: viewportHintLabel(
+                                          snapshot.viewportHint,
+                                        ),
+                                        accent: switch (snapshot
+                                            .viewportHint
+                                            .kind) {
+                                          VesperViewportHintKind.visible =>
+                                            const Color(0xFF4BD6A9),
+                                          VesperViewportHintKind.nearVisible =>
+                                            const Color(0xFFFFC04D),
+                                          VesperViewportHintKind.prefetchOnly =>
+                                            const Color(0xFF79B8FF),
+                                          VesperViewportHintKind.hidden =>
+                                            const Color(0xFF8B93A7),
+                                        },
+                                        compact: true,
+                                      ),
                                     ],
                                   ),
                                   const SizedBox(height: 4),

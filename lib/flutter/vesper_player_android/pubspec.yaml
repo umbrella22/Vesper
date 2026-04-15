@@ -14,6 +14,10 @@ dependencies:
   vesper_player_platform_interface:
     path: ../vesper_player_platform_interface
 
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
 flutter:
   plugin:
     implements: vesper_player
@@ -22,4 +26,3 @@ flutter:
         package: io.github.ikaros.vesper.player.flutter.android
         pluginClass: VesperPlayerAndroidPlugin
         dartPluginClass: VesperPlayerAndroid
-

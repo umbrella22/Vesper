@@ -4,20 +4,27 @@ use std::ptr;
 
 use crate::{
     FfiAbrMode as BridgeAbrMode, FfiAbrPolicy as BridgeAbrPolicy, FfiAudioInfo, FfiAudioOutputInfo,
-    FfiCommand, FfiDecodedAudioSummary, FfiError as BridgeError,
-    FfiErrorCategory as BridgeErrorCategory, FfiErrorCode as BridgeErrorCode,
-    FfiEvent as BridgeEvent, FfiFirstFrameReady, FfiMediaInfo as BridgeMediaInfo,
-    FfiMediaSourceKind as BridgeMediaSourceKind,
+    FfiBufferingPolicy as BridgeBufferingPolicy, FfiBufferingPreset as BridgeBufferingPreset,
+    FfiCachePolicy as BridgeCachePolicy, FfiCachePreset as BridgeCachePreset, FfiCommand,
+    FfiDecodedAudioSummary, FfiError as BridgeError, FfiErrorCategory as BridgeErrorCategory,
+    FfiErrorCode as BridgeErrorCode, FfiEvent as BridgeEvent, FfiFirstFrameReady,
+    FfiMediaInfo as BridgeMediaInfo, FfiMediaSourceKind as BridgeMediaSourceKind,
     FfiMediaSourceProtocol as BridgeMediaSourceProtocol, FfiPixelFormat as BridgePixelFormat,
-    FfiPlaybackState, FfiPlayer, FfiPlayerInitializer, FfiProgress as BridgeProgress,
+    FfiPlaybackState, FfiPlayer, FfiPlayerInitializer,
+    FfiPreloadBudgetPolicy as BridgePreloadBudgetPolicy, FfiProgress as BridgeProgress,
+    FfiResolvedPreloadBudgetPolicy as BridgeResolvedPreloadBudgetPolicy,
+    FfiResolvedResiliencePolicy as BridgeResolvedResiliencePolicy,
+    FfiRetryBackoff as BridgeRetryBackoff, FfiRetryPolicy as BridgeRetryPolicy,
     FfiSeekableRange as BridgeSeekableRange, FfiSnapshot as BridgeSnapshot,
     FfiStartup as BridgeStartup, FfiTimelineKind as BridgeTimelineKind,
     FfiTimelineSnapshot as BridgeTimelineSnapshot, FfiTrack as BridgeTrack,
     FfiTrackCatalog as BridgeTrackCatalog, FfiTrackKind as BridgeTrackKind,
-    FfiTrackSelection as BridgeTrackSelection, FfiTrackSelectionMode as BridgeTrackSelectionMode,
+    FfiTrackPreferences as BridgeTrackPreferences, FfiTrackSelection as BridgeTrackSelection,
+    FfiTrackSelectionMode as BridgeTrackSelectionMode,
     FfiTrackSelectionSnapshot as BridgeTrackSelectionSnapshot,
     FfiVideoDecodeInfo as BridgeVideoDecodeInfo, FfiVideoDecodeMode as BridgeVideoDecodeMode,
-    FfiVideoFrame as BridgeVideoFrame, FfiVideoInfo,
+    FfiVideoFrame as BridgeVideoFrame, FfiVideoInfo, resolve_preload_budget,
+    resolve_resilience_policy, resolve_track_preferences,
 };
 
 #[repr(C)]
@@ -73,6 +80,36 @@ pub enum PlayerFfiMediaSourceProtocol {
     Progressive = 3,
     Hls = 4,
     Dash = 5,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiBufferingPreset {
+    #[default]
+    Default = 0,
+    Balanced = 1,
+    Streaming = 2,
+    Resilient = 3,
+    LowLatency = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiRetryBackoff {
+    Fixed = 0,
+    #[default]
+    Linear = 1,
+    Exponential = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiCachePreset {
+    #[default]
+    Default = 0,
+    Disabled = 1,
+    Streaming = 2,
+    Resilient = 3,
 }
 
 #[repr(C)]
@@ -286,6 +323,86 @@ pub struct PlayerFfiMediaInfo {
 
 #[repr(C)]
 #[derive(Debug, Default)]
+pub struct PlayerFfiBufferingPolicy {
+    pub preset: PlayerFfiBufferingPreset,
+    pub has_min_buffer_ms: bool,
+    pub min_buffer_ms: u64,
+    pub has_max_buffer_ms: bool,
+    pub max_buffer_ms: u64,
+    pub has_buffer_for_playback_ms: bool,
+    pub buffer_for_playback_ms: u64,
+    pub has_buffer_for_rebuffer_ms: bool,
+    pub buffer_for_rebuffer_ms: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiRetryPolicy {
+    pub uses_default_max_attempts: bool,
+    pub has_max_attempts: bool,
+    pub max_attempts: u32,
+    pub has_base_delay_ms: bool,
+    pub base_delay_ms: u64,
+    pub has_max_delay_ms: bool,
+    pub max_delay_ms: u64,
+    pub has_backoff: bool,
+    pub backoff: PlayerFfiRetryBackoff,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiCachePolicy {
+    pub preset: PlayerFfiCachePreset,
+    pub has_max_memory_bytes: bool,
+    pub max_memory_bytes: u64,
+    pub has_max_disk_bytes: bool,
+    pub max_disk_bytes: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiResolvedResiliencePolicy {
+    pub buffering: PlayerFfiBufferingPolicy,
+    pub retry: PlayerFfiRetryPolicy,
+    pub cache: PlayerFfiCachePolicy,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiPreloadBudgetPolicy {
+    pub has_max_concurrent_tasks: bool,
+    pub max_concurrent_tasks: u32,
+    pub has_max_memory_bytes: bool,
+    pub max_memory_bytes: u64,
+    pub has_max_disk_bytes: bool,
+    pub max_disk_bytes: u64,
+    pub has_warmup_window_ms: bool,
+    pub warmup_window_ms: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiResolvedPreloadBudgetPolicy {
+    pub max_concurrent_tasks: u32,
+    pub max_memory_bytes: u64,
+    pub max_disk_bytes: u64,
+    pub warmup_window_ms: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiTrackPreferences {
+    pub preferred_audio_language: *mut c_char,
+    pub preferred_subtitle_language: *mut c_char,
+    pub select_subtitles_by_default: bool,
+    pub select_undetermined_subtitle_language: bool,
+    pub audio_selection: PlayerFfiTrackSelection,
+    pub subtitle_selection: PlayerFfiTrackSelection,
+    pub abr_policy: PlayerFfiAbrPolicy,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
 pub struct PlayerFfiAudioOutputInfo {
     pub device_name: *mut c_char,
     pub has_channels: bool,
@@ -474,6 +591,194 @@ impl From<BridgeMediaSourceProtocol> for PlayerFfiMediaSourceProtocol {
             BridgeMediaSourceProtocol::Progressive => Self::Progressive,
             BridgeMediaSourceProtocol::Hls => Self::Hls,
             BridgeMediaSourceProtocol::Dash => Self::Dash,
+        }
+    }
+}
+
+impl From<PlayerFfiMediaSourceKind> for BridgeMediaSourceKind {
+    fn from(value: PlayerFfiMediaSourceKind) -> Self {
+        match value {
+            PlayerFfiMediaSourceKind::Local => Self::Local,
+            PlayerFfiMediaSourceKind::Remote => Self::Remote,
+        }
+    }
+}
+
+impl From<PlayerFfiMediaSourceProtocol> for BridgeMediaSourceProtocol {
+    fn from(value: PlayerFfiMediaSourceProtocol) -> Self {
+        match value {
+            PlayerFfiMediaSourceProtocol::Unknown => Self::Unknown,
+            PlayerFfiMediaSourceProtocol::File => Self::File,
+            PlayerFfiMediaSourceProtocol::Content => Self::Content,
+            PlayerFfiMediaSourceProtocol::Progressive => Self::Progressive,
+            PlayerFfiMediaSourceProtocol::Hls => Self::Hls,
+            PlayerFfiMediaSourceProtocol::Dash => Self::Dash,
+        }
+    }
+}
+
+impl From<BridgeBufferingPreset> for PlayerFfiBufferingPreset {
+    fn from(value: BridgeBufferingPreset) -> Self {
+        match value {
+            BridgeBufferingPreset::Default => Self::Default,
+            BridgeBufferingPreset::Balanced => Self::Balanced,
+            BridgeBufferingPreset::Streaming => Self::Streaming,
+            BridgeBufferingPreset::Resilient => Self::Resilient,
+            BridgeBufferingPreset::LowLatency => Self::LowLatency,
+        }
+    }
+}
+
+impl From<PlayerFfiBufferingPreset> for BridgeBufferingPreset {
+    fn from(value: PlayerFfiBufferingPreset) -> Self {
+        match value {
+            PlayerFfiBufferingPreset::Default => Self::Default,
+            PlayerFfiBufferingPreset::Balanced => Self::Balanced,
+            PlayerFfiBufferingPreset::Streaming => Self::Streaming,
+            PlayerFfiBufferingPreset::Resilient => Self::Resilient,
+            PlayerFfiBufferingPreset::LowLatency => Self::LowLatency,
+        }
+    }
+}
+
+impl From<BridgeBufferingPolicy> for PlayerFfiBufferingPolicy {
+    fn from(value: BridgeBufferingPolicy) -> Self {
+        Self {
+            preset: value.preset.into(),
+            has_min_buffer_ms: value.min_buffer_ms.is_some(),
+            min_buffer_ms: value.min_buffer_ms.unwrap_or_default(),
+            has_max_buffer_ms: value.max_buffer_ms.is_some(),
+            max_buffer_ms: value.max_buffer_ms.unwrap_or_default(),
+            has_buffer_for_playback_ms: value.buffer_for_playback_ms.is_some(),
+            buffer_for_playback_ms: value.buffer_for_playback_ms.unwrap_or_default(),
+            has_buffer_for_rebuffer_ms: value.buffer_for_rebuffer_ms.is_some(),
+            buffer_for_rebuffer_ms: value.buffer_for_rebuffer_ms.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<BridgeRetryBackoff> for PlayerFfiRetryBackoff {
+    fn from(value: BridgeRetryBackoff) -> Self {
+        match value {
+            BridgeRetryBackoff::Fixed => Self::Fixed,
+            BridgeRetryBackoff::Linear => Self::Linear,
+            BridgeRetryBackoff::Exponential => Self::Exponential,
+        }
+    }
+}
+
+impl From<PlayerFfiRetryBackoff> for BridgeRetryBackoff {
+    fn from(value: PlayerFfiRetryBackoff) -> Self {
+        match value {
+            PlayerFfiRetryBackoff::Fixed => Self::Fixed,
+            PlayerFfiRetryBackoff::Linear => Self::Linear,
+            PlayerFfiRetryBackoff::Exponential => Self::Exponential,
+        }
+    }
+}
+
+impl From<BridgeRetryPolicy> for PlayerFfiRetryPolicy {
+    fn from(value: BridgeRetryPolicy) -> Self {
+        Self {
+            uses_default_max_attempts: false,
+            has_max_attempts: value.max_attempts.is_some(),
+            max_attempts: value.max_attempts.unwrap_or_default(),
+            has_base_delay_ms: true,
+            base_delay_ms: value.base_delay_ms,
+            has_max_delay_ms: true,
+            max_delay_ms: value.max_delay_ms,
+            has_backoff: true,
+            backoff: value.backoff.into(),
+        }
+    }
+}
+
+impl From<BridgeCachePreset> for PlayerFfiCachePreset {
+    fn from(value: BridgeCachePreset) -> Self {
+        match value {
+            BridgeCachePreset::Default => Self::Default,
+            BridgeCachePreset::Disabled => Self::Disabled,
+            BridgeCachePreset::Streaming => Self::Streaming,
+            BridgeCachePreset::Resilient => Self::Resilient,
+        }
+    }
+}
+
+impl From<PlayerFfiCachePreset> for BridgeCachePreset {
+    fn from(value: PlayerFfiCachePreset) -> Self {
+        match value {
+            PlayerFfiCachePreset::Default => Self::Default,
+            PlayerFfiCachePreset::Disabled => Self::Disabled,
+            PlayerFfiCachePreset::Streaming => Self::Streaming,
+            PlayerFfiCachePreset::Resilient => Self::Resilient,
+        }
+    }
+}
+
+impl From<BridgeCachePolicy> for PlayerFfiCachePolicy {
+    fn from(value: BridgeCachePolicy) -> Self {
+        Self {
+            preset: value.preset.into(),
+            has_max_memory_bytes: value.max_memory_bytes.is_some(),
+            max_memory_bytes: value.max_memory_bytes.unwrap_or_default(),
+            has_max_disk_bytes: value.max_disk_bytes.is_some(),
+            max_disk_bytes: value.max_disk_bytes.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<BridgeResolvedResiliencePolicy> for PlayerFfiResolvedResiliencePolicy {
+    fn from(value: BridgeResolvedResiliencePolicy) -> Self {
+        Self {
+            buffering: value.buffering.into(),
+            retry: value.retry.into(),
+            cache: value.cache.into(),
+        }
+    }
+}
+
+impl From<BridgePreloadBudgetPolicy> for PlayerFfiPreloadBudgetPolicy {
+    fn from(value: BridgePreloadBudgetPolicy) -> Self {
+        Self {
+            has_max_concurrent_tasks: value.max_concurrent_tasks.is_some(),
+            max_concurrent_tasks: value.max_concurrent_tasks.unwrap_or_default(),
+            has_max_memory_bytes: value.max_memory_bytes.is_some(),
+            max_memory_bytes: value.max_memory_bytes.unwrap_or_default(),
+            has_max_disk_bytes: value.max_disk_bytes.is_some(),
+            max_disk_bytes: value.max_disk_bytes.unwrap_or_default(),
+            has_warmup_window_ms: value.warmup_window_ms.is_some(),
+            warmup_window_ms: value.warmup_window_ms.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<BridgeResolvedPreloadBudgetPolicy> for PlayerFfiResolvedPreloadBudgetPolicy {
+    fn from(value: BridgeResolvedPreloadBudgetPolicy) -> Self {
+        Self {
+            max_concurrent_tasks: value.max_concurrent_tasks,
+            max_memory_bytes: value.max_memory_bytes,
+            max_disk_bytes: value.max_disk_bytes,
+            warmup_window_ms: value.warmup_window_ms,
+        }
+    }
+}
+
+impl From<BridgeTrackPreferences> for PlayerFfiTrackPreferences {
+    fn from(value: BridgeTrackPreferences) -> Self {
+        Self {
+            preferred_audio_language: value
+                .preferred_audio_language
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            preferred_subtitle_language: value
+                .preferred_subtitle_language
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            select_subtitles_by_default: value.select_subtitles_by_default,
+            select_undetermined_subtitle_language: value.select_undetermined_subtitle_language,
+            audio_selection: value.audio_selection.into(),
+            subtitle_selection: value.subtitle_selection.into(),
+            abr_policy: value.abr_policy.into(),
         }
     }
 }
@@ -953,6 +1258,118 @@ pub extern "C" fn player_ffi_initializer_probe_uri(
             PlayerFfiCallStatus::Error
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_resolve_resilience_policy(
+    source_kind: PlayerFfiMediaSourceKind,
+    source_protocol: PlayerFfiMediaSourceProtocol,
+    buffering_policy: *const PlayerFfiBufferingPolicy,
+    retry_policy: *const PlayerFfiRetryPolicy,
+    cache_policy: *const PlayerFfiCachePolicy,
+    out_policy: *mut PlayerFfiResolvedResiliencePolicy,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_policy.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "out_policy was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let buffering_policy = match read_buffering_policy(buffering_policy) {
+        Ok(policy) => policy,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+    let retry_policy = match read_retry_policy(retry_policy) {
+        Ok(policy) => policy,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+    let cache_policy = match read_cache_policy(cache_policy) {
+        Ok(policy) => policy,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let resolved = resolve_resilience_policy(
+        source_kind.into(),
+        source_protocol.into(),
+        buffering_policy,
+        retry_policy,
+        cache_policy,
+    );
+
+    unsafe {
+        ptr::write(out_policy, resolved.into());
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_resolve_preload_budget(
+    preload_budget: *const PlayerFfiPreloadBudgetPolicy,
+    out_budget: *mut PlayerFfiResolvedPreloadBudgetPolicy,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_budget.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "out_budget was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let preload_budget = match read_preload_budget(preload_budget) {
+        Ok(preload_budget) => preload_budget,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let resolved = resolve_preload_budget(preload_budget);
+    unsafe {
+        ptr::write(out_budget, resolved.into());
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_resolve_track_preferences(
+    track_preferences: *const PlayerFfiTrackPreferences,
+    out_preferences: *mut PlayerFfiTrackPreferences,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_preferences.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "out_preferences was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let track_preferences = match read_track_preferences(track_preferences) {
+        Ok(track_preferences) => track_preferences,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let resolved = resolve_track_preferences(track_preferences);
+    unsafe {
+        ptr::write(out_preferences, resolved.into());
+    }
+    PlayerFfiCallStatus::Ok
 }
 
 #[unsafe(no_mangle)]
@@ -1550,6 +1967,17 @@ pub extern "C" fn player_ffi_media_info_free(media_info: *mut PlayerFfiMediaInfo
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_track_preferences_free(
+    track_preferences: *mut PlayerFfiTrackPreferences,
+) {
+    let Some(track_preferences) = track_preferences_mut(track_preferences) else {
+        return;
+    };
+
+    free_track_preferences(track_preferences);
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn player_ffi_startup_free(startup: *mut PlayerFfiStartup) {
     let Some(startup) = startup_mut(startup) else {
         return;
@@ -1660,6 +2088,135 @@ fn read_abr_policy(policy: *const PlayerFfiAbrPolicy) -> Result<BridgeAbrPolicy,
         max_bit_rate: policy.has_max_bit_rate.then_some(policy.max_bit_rate),
         max_width: policy.has_max_width.then_some(policy.max_width),
         max_height: policy.has_max_height.then_some(policy.max_height),
+    })
+}
+
+fn read_preload_budget(
+    budget: *const PlayerFfiPreloadBudgetPolicy,
+) -> Result<BridgePreloadBudgetPolicy, PlayerFfiError> {
+    let Some(budget) = (unsafe { budget.as_ref() }) else {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            "preload budget pointer was null",
+        ));
+    };
+
+    Ok(BridgePreloadBudgetPolicy {
+        max_concurrent_tasks: budget
+            .has_max_concurrent_tasks
+            .then_some(budget.max_concurrent_tasks),
+        max_memory_bytes: budget
+            .has_max_memory_bytes
+            .then_some(budget.max_memory_bytes),
+        max_disk_bytes: budget.has_max_disk_bytes.then_some(budget.max_disk_bytes),
+        warmup_window_ms: budget
+            .has_warmup_window_ms
+            .then_some(budget.warmup_window_ms),
+    })
+}
+
+fn read_track_preferences(
+    preferences: *const PlayerFfiTrackPreferences,
+) -> Result<BridgeTrackPreferences, PlayerFfiError> {
+    let Some(preferences) = (unsafe { preferences.as_ref() }) else {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            "track preferences pointer was null",
+        ));
+    };
+
+    Ok(BridgeTrackPreferences {
+        preferred_audio_language: read_optional_c_string(
+            preferences.preferred_audio_language,
+            "preferences.preferred_audio_language",
+        )?,
+        preferred_subtitle_language: read_optional_c_string(
+            preferences.preferred_subtitle_language,
+            "preferences.preferred_subtitle_language",
+        )?,
+        select_subtitles_by_default: preferences.select_subtitles_by_default,
+        select_undetermined_subtitle_language: preferences.select_undetermined_subtitle_language,
+        audio_selection: read_track_selection(&preferences.audio_selection)?,
+        subtitle_selection: read_track_selection(&preferences.subtitle_selection)?,
+        abr_policy: read_abr_policy(&preferences.abr_policy)?,
+    })
+}
+
+fn read_buffering_policy(
+    policy: *const PlayerFfiBufferingPolicy,
+) -> Result<BridgeBufferingPolicy, PlayerFfiError> {
+    let Some(policy) = (unsafe { policy.as_ref() }) else {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            "buffering policy pointer was null",
+        ));
+    };
+
+    Ok(BridgeBufferingPolicy {
+        preset: policy.preset.into(),
+        min_buffer_ms: policy.has_min_buffer_ms.then_some(policy.min_buffer_ms),
+        max_buffer_ms: policy.has_max_buffer_ms.then_some(policy.max_buffer_ms),
+        buffer_for_playback_ms: policy
+            .has_buffer_for_playback_ms
+            .then_some(policy.buffer_for_playback_ms),
+        buffer_for_rebuffer_ms: policy
+            .has_buffer_for_rebuffer_ms
+            .then_some(policy.buffer_for_rebuffer_ms),
+    })
+}
+
+fn read_retry_policy(
+    policy: *const PlayerFfiRetryPolicy,
+) -> Result<BridgeRetryPolicy, PlayerFfiError> {
+    let Some(policy) = (unsafe { policy.as_ref() }) else {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            "retry policy pointer was null",
+        ));
+    };
+
+    Ok(BridgeRetryPolicy {
+        max_attempts: if policy.uses_default_max_attempts {
+            Some(3)
+        } else if policy.has_max_attempts {
+            Some(policy.max_attempts)
+        } else {
+            None
+        },
+        base_delay_ms: if policy.has_base_delay_ms {
+            policy.base_delay_ms
+        } else {
+            1_000
+        },
+        max_delay_ms: if policy.has_max_delay_ms {
+            policy.max_delay_ms
+        } else {
+            5_000
+        },
+        backoff: if policy.has_backoff {
+            policy.backoff.into()
+        } else {
+            BridgeRetryBackoff::Linear
+        },
+    })
+}
+
+fn read_cache_policy(
+    policy: *const PlayerFfiCachePolicy,
+) -> Result<BridgeCachePolicy, PlayerFfiError> {
+    let Some(policy) = (unsafe { policy.as_ref() }) else {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            "cache policy pointer was null",
+        ));
+    };
+
+    Ok(BridgeCachePolicy {
+        preset: policy.preset.into(),
+        max_memory_bytes: policy
+            .has_max_memory_bytes
+            .then_some(policy.max_memory_bytes),
+        max_disk_bytes: policy.has_max_disk_bytes.then_some(policy.max_disk_bytes),
     })
 }
 
@@ -1806,6 +2363,15 @@ fn free_track_selection_snapshot(track_selection: &mut PlayerFfiTrackSelectionSn
     *track_selection = PlayerFfiTrackSelectionSnapshot::default();
 }
 
+fn free_track_preferences(track_preferences: &mut PlayerFfiTrackPreferences) {
+    free_c_string(&mut track_preferences.preferred_audio_language);
+    free_c_string(&mut track_preferences.preferred_subtitle_language);
+    free_track_selection(&mut track_preferences.audio_selection);
+    free_track_selection(&mut track_preferences.subtitle_selection);
+    free_abr_policy(&mut track_preferences.abr_policy);
+    *track_preferences = PlayerFfiTrackPreferences::default();
+}
+
 fn free_media_info(media_info: &mut PlayerFfiMediaInfo) {
     free_c_string(&mut media_info.source_uri);
     free_video_info(&mut media_info.best_video);
@@ -1925,6 +2491,16 @@ fn media_info_mut(media_info: *mut PlayerFfiMediaInfo) -> Option<&'static mut Pl
     }
 
     unsafe { Some(&mut *media_info) }
+}
+
+fn track_preferences_mut(
+    track_preferences: *mut PlayerFfiTrackPreferences,
+) -> Option<&'static mut PlayerFfiTrackPreferences> {
+    if track_preferences.is_null() {
+        return None;
+    }
+
+    unsafe { Some(&mut *track_preferences) }
 }
 
 fn startup_mut(startup: *mut PlayerFfiStartup) -> Option<&'static mut PlayerFfiStartup> {

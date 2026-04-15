@@ -150,10 +150,122 @@ struct AbrPreset: Identifiable {
 
 let IOS_HLS_DEMO_URL =
     "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
+let IOS_HLS_PLAYLIST_ITEM_ID = "hls-demo"
+let IOS_REMOTE_PLAYLIST_ITEM_ID = "custom-remote"
+let IOS_LOCAL_PLAYLIST_ITEM_ID = "local-file"
 
 func iosHlsDemoSource() -> VesperPlayerSource {
     VesperPlayerSource.hls(
         url: URL(string: IOS_HLS_DEMO_URL)!,
         label: ExampleI18n.hlsDemoLabel
+    )
+}
+
+func examplePlaylistQueue(
+    playlistItemIds: [String],
+    remoteSource: VesperPlayerSource? = nil,
+    localSource: VesperPlayerSource? = nil
+) -> [VesperPlaylistQueueItem] {
+    playlistItemIds.compactMap { itemId in
+        switch itemId {
+        case IOS_HLS_PLAYLIST_ITEM_ID:
+            return VesperPlaylistQueueItem(
+                itemId: IOS_HLS_PLAYLIST_ITEM_ID,
+                source: iosHlsDemoSource(),
+                preloadProfile: VesperPlaylistItemPreloadProfile(
+                    expectedMemoryBytes: 256 * 1024,
+                    expectedDiskBytes: 512 * 1024,
+                    warmupWindowMs: 30_000
+                )
+            )
+
+        case IOS_LOCAL_PLAYLIST_ITEM_ID:
+            guard let localSource else { return nil }
+            return VesperPlaylistQueueItem(
+                itemId: IOS_LOCAL_PLAYLIST_ITEM_ID,
+                source: localSource,
+                preloadProfile: VesperPlaylistItemPreloadProfile(
+                    expectedMemoryBytes: 128 * 1024
+                )
+            )
+
+        case IOS_REMOTE_PLAYLIST_ITEM_ID:
+            guard let remoteSource else { return nil }
+            return VesperPlaylistQueueItem(
+                itemId: IOS_REMOTE_PLAYLIST_ITEM_ID,
+                source: remoteSource,
+                preloadProfile: VesperPlaylistItemPreloadProfile(
+                    expectedMemoryBytes: 256 * 1024,
+                    expectedDiskBytes: 512 * 1024,
+                    warmupWindowMs: 30_000
+                )
+            )
+
+        default:
+            return nil
+        }
+    }
+}
+
+func enqueuePlaylistItem(
+    _ playlistItemIds: [String],
+    itemId: String
+) -> [String] {
+    playlistItemIds.filter { existingItemId in
+        existingItemId != itemId
+    } + [itemId]
+}
+
+func examplePlaylistViewportHints(
+    queue: [VesperPlaylistQueueItem],
+    focusedItemId: String?
+) -> [VesperPlaylistViewportHint] {
+    guard !queue.isEmpty else {
+        return []
+    }
+
+    let focusIndex = focusedItemId
+        .flatMap { itemId in
+            queue.firstIndex(where: { $0.itemId == itemId })
+        } ?? 0
+
+    var hints = [
+        VesperPlaylistViewportHint(
+            itemId: queue[focusIndex].itemId,
+            kind: .visible,
+            order: 0
+        )
+    ]
+
+    let remainingIndexes = queue.indices
+        .filter { $0 != focusIndex }
+        .sorted {
+            let leftDistance = abs($0 - focusIndex)
+            let rightDistance = abs($1 - focusIndex)
+            if leftDistance == rightDistance {
+                return $0 < $1
+            }
+            return leftDistance < rightDistance
+        }
+
+    for (offset, index) in remainingIndexes.enumerated() {
+        let distance = abs(index - focusIndex)
+        hints.append(
+            VesperPlaylistViewportHint(
+                itemId: queue[index].itemId,
+                kind: distance == 1 ? .nearVisible : .prefetchOnly,
+                order: UInt32(offset + 1)
+            )
+        )
+    }
+
+    return hints
+}
+
+func examplePlaylistSwitchPolicy() -> VesperPlaylistSwitchPolicy {
+    VesperPlaylistSwitchPolicy(
+        autoAdvance: true,
+        repeatMode: .off,
+        failureStrategy: .skipToNext
     )
 }

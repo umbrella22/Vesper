@@ -2,10 +2,49 @@ name: VesperPlayerKit
 options:
   bundleIdPrefix: io.github.ikaros.vesper.lib
 targets:
+  VesperPlayerKitBridgeShim:
+    type: library.static
+    platform: iOS
+    deploymentTarget: "17.0"
+    preBuildScripts:
+      - name: Stage Shim Module Map
+        script: |
+          mkdir -p "${BUILT_PRODUCTS_DIR}/include/${PRODUCT_NAME}"
+          cat > "${BUILT_PRODUCTS_DIR}/include/${PRODUCT_NAME}/module.modulemap" <<'EOF'
+          module VesperPlayerKitBridgeShim {
+            header "VesperPlayerKitBridgeShim.h"
+            export *
+          }
+          EOF
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/include/$(PRODUCT_NAME)/module.modulemap
+    sources:
+      - path: Sources/VesperPlayerKitBridgeShim
+        excludes:
+          - include
+      - path: Sources/VesperPlayerKitBridgeShim/include
+        excludes:
+          - module.modulemap
+        buildPhase: headers
+        headerVisibility: public
+    settings:
+      base:
+        DEFINES_MODULE: true
+        MODULEMAP_FILE: $(BUILT_PRODUCTS_DIR)/include/$(PRODUCT_NAME)/module.modulemap
   VesperPlayerKit:
     type: framework
     platform: iOS
     deploymentTarget: "17.0"
+    dependencies:
+      - target: VesperPlayerKitBridgeShim
+        link: true
+    preBuildScripts:
+      - name: Build Rust iOS Resolver
+        script: |
+          "${SRCROOT}/../../../scripts/build-ios-player-ffi-xcframework.sh"
+        outputFiles:
+          - $(SRCROOT)/.build/rust-player-ffi/iphoneos/libplayer_ffi_resolver.a
+          - $(SRCROOT)/.build/rust-player-ffi/iphonesimulator/libplayer_ffi_resolver.a
     sources:
       - Sources/VesperPlayerKit
     settings:
@@ -14,6 +53,13 @@ targets:
         DEFINES_MODULE: true
         SKIP_INSTALL: false
         BUILD_LIBRARY_FOR_DISTRIBUTION: true
+        SWIFT_ENABLE_EXPLICIT_MODULES: false
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/.build/rust-player-ffi/$(PLATFORM_NAME)
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -lplayer_ffi_resolver
     info:
       path: Sources/Generated-Info.plist
       properties:
@@ -25,3 +71,14 @@ targets:
         CFBundlePackageType: FMWK
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+  VesperPlayerKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    dependencies:
+      - target: VesperPlayerKit
+    sources:
+      - Tests/VesperPlayerKitTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true

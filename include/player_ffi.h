@@ -121,6 +121,27 @@ typedef enum PlayerFfiTimelineKind {
   PLAYER_FFI_TIMELINE_KIND_LIVE_DVR = 2,
 } PlayerFfiTimelineKind;
 
+typedef enum PlayerFfiBufferingPreset {
+  PLAYER_FFI_BUFFERING_PRESET_DEFAULT = 0,
+  PLAYER_FFI_BUFFERING_PRESET_BALANCED = 1,
+  PLAYER_FFI_BUFFERING_PRESET_STREAMING = 2,
+  PLAYER_FFI_BUFFERING_PRESET_RESILIENT = 3,
+  PLAYER_FFI_BUFFERING_PRESET_LOW_LATENCY = 4,
+} PlayerFfiBufferingPreset;
+
+typedef enum PlayerFfiRetryBackoff {
+  PLAYER_FFI_RETRY_BACKOFF_FIXED = 0,
+  PLAYER_FFI_RETRY_BACKOFF_LINEAR = 1,
+  PLAYER_FFI_RETRY_BACKOFF_EXPONENTIAL = 2,
+} PlayerFfiRetryBackoff;
+
+typedef enum PlayerFfiCachePreset {
+  PLAYER_FFI_CACHE_PRESET_DEFAULT = 0,
+  PLAYER_FFI_CACHE_PRESET_DISABLED = 1,
+  PLAYER_FFI_CACHE_PRESET_STREAMING = 2,
+  PLAYER_FFI_CACHE_PRESET_RESILIENT = 3,
+} PlayerFfiCachePreset;
+
 typedef struct PlayerFfiError {
   enum PlayerFfiErrorCode code;
   enum PlayerFfiErrorCategory category;
@@ -330,6 +351,72 @@ typedef struct PlayerFfiSnapshot {
   struct PlayerFfiMediaInfo media_info;
 } PlayerFfiSnapshot;
 
+typedef struct PlayerFfiPreloadBudgetPolicy {
+  bool has_max_concurrent_tasks;
+  uint32_t max_concurrent_tasks;
+  bool has_max_memory_bytes;
+  uint64_t max_memory_bytes;
+  bool has_max_disk_bytes;
+  uint64_t max_disk_bytes;
+  bool has_warmup_window_ms;
+  uint64_t warmup_window_ms;
+} PlayerFfiPreloadBudgetPolicy;
+
+typedef struct PlayerFfiResolvedPreloadBudgetPolicy {
+  uint32_t max_concurrent_tasks;
+  uint64_t max_memory_bytes;
+  uint64_t max_disk_bytes;
+  uint64_t warmup_window_ms;
+} PlayerFfiResolvedPreloadBudgetPolicy;
+
+typedef struct PlayerFfiBufferingPolicy {
+  enum PlayerFfiBufferingPreset preset;
+  bool has_min_buffer_ms;
+  uint64_t min_buffer_ms;
+  bool has_max_buffer_ms;
+  uint64_t max_buffer_ms;
+  bool has_buffer_for_playback_ms;
+  uint64_t buffer_for_playback_ms;
+  bool has_buffer_for_rebuffer_ms;
+  uint64_t buffer_for_rebuffer_ms;
+} PlayerFfiBufferingPolicy;
+
+typedef struct PlayerFfiRetryPolicy {
+  bool uses_default_max_attempts;
+  bool has_max_attempts;
+  uint32_t max_attempts;
+  bool has_base_delay_ms;
+  uint64_t base_delay_ms;
+  bool has_max_delay_ms;
+  uint64_t max_delay_ms;
+  bool has_backoff;
+  enum PlayerFfiRetryBackoff backoff;
+} PlayerFfiRetryPolicy;
+
+typedef struct PlayerFfiCachePolicy {
+  enum PlayerFfiCachePreset preset;
+  bool has_max_memory_bytes;
+  uint64_t max_memory_bytes;
+  bool has_max_disk_bytes;
+  uint64_t max_disk_bytes;
+} PlayerFfiCachePolicy;
+
+typedef struct PlayerFfiResolvedResiliencePolicy {
+  struct PlayerFfiBufferingPolicy buffering;
+  struct PlayerFfiRetryPolicy retry;
+  struct PlayerFfiCachePolicy cache;
+} PlayerFfiResolvedResiliencePolicy;
+
+typedef struct PlayerFfiTrackPreferences {
+  char *preferred_audio_language;
+  char *preferred_subtitle_language;
+  bool select_subtitles_by_default;
+  bool select_undetermined_subtitle_language;
+  struct PlayerFfiTrackSelection audio_selection;
+  struct PlayerFfiTrackSelection subtitle_selection;
+  struct PlayerFfiAbrPolicy abr_policy;
+} PlayerFfiTrackPreferences;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -419,9 +506,27 @@ enum PlayerFfiCallStatus player_ffi_player_snapshot(const struct PlayerFfiHandle
                                                     struct PlayerFfiSnapshot *out_snapshot,
                                                     struct PlayerFfiError *out_error);
 
+enum PlayerFfiCallStatus player_ffi_resolve_preload_budget(const struct PlayerFfiPreloadBudgetPolicy *preload_budget,
+                                                           struct PlayerFfiResolvedPreloadBudgetPolicy *out_budget,
+                                                           struct PlayerFfiError *out_error);
+
+enum PlayerFfiCallStatus player_ffi_resolve_resilience_policy(enum PlayerFfiMediaSourceKind source_kind,
+                                                              enum PlayerFfiMediaSourceProtocol source_protocol,
+                                                              const struct PlayerFfiBufferingPolicy *buffering_policy,
+                                                              const struct PlayerFfiRetryPolicy *retry_policy,
+                                                              const struct PlayerFfiCachePolicy *cache_policy,
+                                                              struct PlayerFfiResolvedResiliencePolicy *out_policy,
+                                                              struct PlayerFfiError *out_error);
+
+enum PlayerFfiCallStatus player_ffi_resolve_track_preferences(const struct PlayerFfiTrackPreferences *track_preferences,
+                                                              struct PlayerFfiTrackPreferences *out_preferences,
+                                                              struct PlayerFfiError *out_error);
+
 void player_ffi_snapshot_free(struct PlayerFfiSnapshot *snapshot);
 
 void player_ffi_startup_free(struct PlayerFfiStartup *startup);
+
+void player_ffi_track_preferences_free(struct PlayerFfiTrackPreferences *track_preferences);
 
 void player_ffi_video_frame_free(struct PlayerFfiVideoFrame *frame);
 

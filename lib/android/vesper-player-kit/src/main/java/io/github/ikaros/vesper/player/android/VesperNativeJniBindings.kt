@@ -19,6 +19,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -28,11 +29,13 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
+import java.net.URI
 import kotlin.math.pow
 import kotlin.math.roundToLong
 
 class VesperNativeJniBindings(
     context: Context,
+    preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
 ) : VesperNativeBindings {
     private val appContext = context.applicationContext
     private val i18n = VesperPlayerI18n.fromContext(appContext)
@@ -47,10 +50,16 @@ class VesperNativeJniBindings(
     private var currentTrackSelectionState: VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
     private var currentVideoLayoutState: NativeVideoLayoutInfo? = null
+    private val preloadCoordinator =
+        VesperNativePreloadCoordinator(
+            bindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
+            preloadBudgetPolicy = preloadBudgetPolicy,
+        )
 
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
+        trackPreferencePolicy: VesperTrackPreferencePolicy,
     ): NativeBridgeStartup {
         Log.i(TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
         dispose()
@@ -59,23 +68,26 @@ class VesperNativeJniBindings(
         val handle = VesperNativeJni.createSession(source.uri)
         check(handle != 0L) { "native session handle must not be zero" }
         sessionHandle = handle
+        val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
+        val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
 
         val mediaSourceFactory =
             DefaultMediaSourceFactory(appContext)
                 .setDataSourceFactory(
-                    buildDataSourceFactory(appContext, source, resiliencePolicy.cache)
+                    buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache)
                 )
                 .setLoadErrorHandlingPolicy(
-                    buildLoadErrorHandlingPolicy(source, resiliencePolicy.retry) { attempt, delayMs ->
+                    buildLoadErrorHandlingPolicy(source, resolvedResiliencePolicy.retry) { attempt, delayMs ->
                         VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
                     }
                 )
         val exoPlayer =
             ExoPlayer.Builder(appContext)
-                .setLoadControl(buildLoadControl(source, resiliencePolicy.buffering))
+                .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build()
-        val listener = buildPlayerListener()
+        applyTrackPreferenceDefaults(exoPlayer, resolvedTrackPreferences)
+        val listener = buildPlayerListener(resolvedTrackPreferences)
         exoPlayer.addListener(listener)
         exoPlayer.setMediaItem(buildMediaItem(source))
         attachedSurface?.let { surface ->
@@ -83,6 +95,7 @@ class VesperNativeJniBindings(
             exoPlayer.setVideoSurface(surface)
         }
         exoPlayer.prepare()
+        executePreloadWarmupCommands(source)
 
         player = exoPlayer
         playerListener = listener
@@ -98,6 +111,7 @@ class VesperNativeJniBindings(
 
     override fun dispose() {
         Log.i(TAG, "dispose")
+        preloadCoordinator.dispose()
         detachSurface()
         playerListener?.let { listener ->
             player?.removeListener(listener)
@@ -290,8 +304,13 @@ class VesperNativeJniBindings(
         }
     }
 
-    private fun buildPlayerListener(): Player.Listener =
+    private fun buildPlayerListener(
+        trackPreferencePolicy: VesperTrackPreferencePolicy,
+    ): Player.Listener =
         object : Player.Listener {
+            private var pendingTrackOverrides =
+                trackPreferencePolicy.takeIf(::hasTrackBasedPreferenceOverrides)
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 Log.d(
                     TAG,
@@ -316,6 +335,12 @@ class VesperNativeJniBindings(
 
             override fun onTracksChanged(tracks: Tracks) {
                 Log.d(TAG, "onTracksChanged groups=${tracks.groups.size}")
+                player?.let { exoPlayer ->
+                    pendingTrackOverrides?.let { defaults ->
+                        applyTrackPreferenceTrackOverrides(exoPlayer, defaults)
+                        pendingTrackOverrides = null
+                    }
+                }
                 pushTrackStateToRust()
                 notifyNativeUpdate()
             }
@@ -422,6 +447,59 @@ class VesperNativeJniBindings(
         VesperNativeJni.applyTrackState(handle, trackCatalog, trackSelection)
     }
 
+    private fun executePreloadWarmupCommands(source: VesperPlayerSource) {
+        preloadCoordinator.planCurrentSource(source).forEach { command ->
+            when (command) {
+                is NativePreloadCommand.Start -> runWarmup(command.task)
+                is NativePreloadCommand.Cancel -> Unit
+            }
+        }
+    }
+
+    private fun runWarmup(task: NativePreloadTask) {
+        val source = currentSourceOrFallback(task.sourceUri)
+        val resolvedResiliencePolicy = resolveResiliencePolicy(source, VesperPlaybackResiliencePolicy())
+        val dataSourceFactory = buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache)
+        val dataSource = dataSourceFactory.createDataSource()
+
+        val readLength =
+            task.expectedMemoryBytes.coerceAtLeast(1L).coerceAtMost(DEFAULT_PRELOAD_WARMUP_READ_BYTES.toLong())
+        val dataSpec =
+            DataSpec.Builder()
+                .setUri(task.sourceUri)
+                .setLength(readLength)
+                .build()
+
+        runCatching {
+            dataSource.open(dataSpec)
+            val buffer = ByteArray(DEFAULT_PRELOAD_WARMUP_READ_BYTES)
+            dataSource.read(buffer, 0, buffer.size)
+        }.onSuccess {
+            preloadCoordinator.complete(task.taskId)
+        }.onFailure { error ->
+            preloadCoordinator.fail(
+                task.taskId,
+                NativeBridgeEvent.Error(
+                    message = error.message ?: "android preload warmup failed",
+                    codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                    categoryOrdinal = PLATFORM_CATEGORY_ORDINAL,
+                    retriable = false,
+                ),
+            )
+        }
+
+        runCatching { dataSource.close() }
+    }
+
+    private fun currentSourceOrFallback(uri: String): VesperPlayerSource {
+        return VesperPlayerSource(
+            uri = uri,
+            label = URI(uri).path.substringAfterLast('/').ifBlank { uri },
+            kind = inferSourceKind(uri),
+            protocol = inferSourceProtocol(uri),
+        )
+    }
+
     private fun notifyNativeUpdate() {
         val listener = updateListener ?: return
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -433,11 +511,10 @@ class VesperNativeJniBindings(
 }
 
 private fun buildLoadControl(
-    source: VesperPlayerSource,
-    bufferingPolicy: VesperBufferingPolicy,
+    bufferingPolicy: NativeBufferingPolicy,
 ): DefaultLoadControl {
     val builder = DefaultLoadControl.Builder()
-    val resolved = resolveBufferingPolicy(source, bufferingPolicy) ?: return builder.build()
+    val resolved = resolveBufferingPolicy(bufferingPolicy) ?: return builder.build()
     return builder
         .setBufferDurationsMs(
             resolved.minBufferMs,
@@ -450,7 +527,7 @@ private fun buildLoadControl(
 
 private fun buildLoadErrorHandlingPolicy(
     source: VesperPlayerSource,
-    retryPolicy: VesperRetryPolicy,
+    retryPolicy: NativeRetryPolicy,
     onRetryScheduled: (attempt: Int, delayMs: Long) -> Unit,
 ): DefaultLoadErrorHandlingPolicy =
     when (source.kind) {
@@ -459,31 +536,16 @@ private fun buildLoadErrorHandlingPolicy(
     }
 
 private fun resolveBufferingPolicy(
-    source: VesperPlayerSource,
-    bufferingPolicy: VesperBufferingPolicy,
+    bufferingPolicy: NativeBufferingPolicy,
 ): ResolvedBufferingPolicy? {
-    val base = when (bufferingPolicy.preset) {
-        VesperBufferingPreset.Default ->
-            when (source.kind) {
-                VesperPlayerSourceKind.Local -> null
-                VesperPlayerSourceKind.Remote ->
-                    when (source.protocol) {
-                        VesperPlayerSourceProtocol.Hls,
-                        VesperPlayerSourceProtocol.Dash -> VesperBufferingPolicy.resilient()
-                        else -> VesperBufferingPolicy.streaming()
-                    }
-            }
-        VesperBufferingPreset.Balanced -> VesperBufferingPolicy.balanced()
-        VesperBufferingPreset.Streaming -> VesperBufferingPolicy.streaming()
-        VesperBufferingPreset.Resilient -> VesperBufferingPolicy.resilient()
-        VesperBufferingPreset.LowLatency -> VesperBufferingPolicy.lowLatency()
-    }
-
-    val merged = bufferingPolicy.mergeOnto(base)
-    val minBufferMs = merged.minBufferMs
-    val maxBufferMs = merged.maxBufferMs
-    val bufferForPlaybackMs = merged.bufferForPlaybackMs
-    val bufferForPlaybackAfterRebufferMs = merged.bufferForPlaybackAfterRebufferMs
+    val minBufferMs = bufferingPolicy.minBufferMs.takeIf { bufferingPolicy.hasMinBufferMs }
+    val maxBufferMs = bufferingPolicy.maxBufferMs.takeIf { bufferingPolicy.hasMaxBufferMs }
+    val bufferForPlaybackMs =
+        bufferingPolicy.bufferForPlaybackMs.takeIf { bufferingPolicy.hasBufferForPlaybackMs }
+    val bufferForPlaybackAfterRebufferMs =
+        bufferingPolicy.bufferForPlaybackAfterRebufferMs.takeIf {
+            bufferingPolicy.hasBufferForPlaybackAfterRebufferMs
+        }
 
     if (
         minBufferMs == null ||
@@ -509,45 +571,48 @@ private data class ResolvedBufferingPolicy(
     val bufferForPlaybackAfterRebufferMs: Int,
 )
 
-private fun VesperBufferingPolicy.mergeOnto(base: VesperBufferingPolicy?): VesperBufferingPolicy =
-    VesperBufferingPolicy(
-        preset = preset,
-        minBufferMs = minBufferMs ?: base?.minBufferMs,
-        maxBufferMs = maxBufferMs ?: base?.maxBufferMs,
-        bufferForPlaybackMs = bufferForPlaybackMs ?: base?.bufferForPlaybackMs,
-        bufferForPlaybackAfterRebufferMs =
-            bufferForPlaybackAfterRebufferMs ?: base?.bufferForPlaybackAfterRebufferMs,
-    )
+private fun media3MinimumRetryCount(retryPolicy: NativeRetryPolicy): Int {
+    val maxAttempts = retryPolicy.maxAttempts.takeIf { retryPolicy.hasMaxAttempts }
+    return when {
+        maxAttempts == null -> Int.MAX_VALUE
+        maxAttempts <= 0 -> 0
+        else -> maxAttempts
+    }
+}
 
 private class VesperLoadErrorHandlingPolicy(
-    private val retryPolicy: VesperRetryPolicy,
+    private val retryPolicy: NativeRetryPolicy,
     private val onRetryScheduled: (attempt: Int, delayMs: Long) -> Unit,
-) : DefaultLoadErrorHandlingPolicy(
-        when {
-            retryPolicy.maxAttempts == null -> Int.MAX_VALUE
-            retryPolicy.maxAttempts <= 0 -> 0
-            else -> retryPolicy.maxAttempts
-        }
-    ) {
+) : DefaultLoadErrorHandlingPolicy(media3MinimumRetryCount(retryPolicy)) {
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorInfo): Long {
         val superDelayMs = super.getRetryDelayMsFor(loadErrorInfo)
         if (superDelayMs == C.TIME_UNSET) {
             return C.TIME_UNSET
         }
 
-        val maxAttempts = retryPolicy.maxAttempts
+        val maxAttempts = retryPolicy.maxAttempts.takeIf { retryPolicy.hasMaxAttempts }
         if (maxAttempts != null && loadErrorInfo.errorCount > maxAttempts) {
             return C.TIME_UNSET
         }
 
-        val step = when (retryPolicy.backoff) {
+        val backoff =
+            if (retryPolicy.hasBackoff) {
+                VesperRetryBackoff.entries.getOrElse(retryPolicy.backoffOrdinal) {
+                    VesperRetryBackoff.Linear
+                }
+            } else {
+                VesperRetryBackoff.Linear
+            }
+        val step = when (backoff) {
             VesperRetryBackoff.Fixed -> 1.0
             VesperRetryBackoff.Linear -> loadErrorInfo.errorCount.toDouble()
             VesperRetryBackoff.Exponential ->
                 2.0.pow((loadErrorInfo.errorCount - 1).coerceAtLeast(0).toDouble())
         }
-        val computedDelay = (retryPolicy.baseDelayMs.toDouble() * step).roundToLong()
-        val resolvedDelay = computedDelay.coerceAtMost(retryPolicy.maxDelayMs).coerceAtLeast(0L)
+        val baseDelayMs = retryPolicy.baseDelayMs.takeIf { retryPolicy.hasBaseDelayMs } ?: 1_000L
+        val maxDelayMs = retryPolicy.maxDelayMs.takeIf { retryPolicy.hasMaxDelayMs } ?: 5_000L
+        val computedDelay = (baseDelayMs.toDouble() * step).roundToLong()
+        val resolvedDelay = computedDelay.coerceAtMost(maxDelayMs).coerceAtLeast(0L)
         onRetryScheduled(loadErrorInfo.errorCount, resolvedDelay)
         return resolvedDelay
     }
@@ -650,6 +715,18 @@ private fun NativeTrackSelectionSnapshotPayload.toPublicTrackSelectionSnapshot()
         abrPolicy = abrPolicy.toPublicAbrPolicy(),
     )
 
+private fun NativeTrackPreferencePolicy.toPublicTrackPreferencePolicy():
+    VesperTrackPreferencePolicy =
+    VesperTrackPreferencePolicy(
+        preferredAudioLanguage = preferredAudioLanguage,
+        preferredSubtitleLanguage = preferredSubtitleLanguage,
+        selectSubtitlesByDefault = selectSubtitlesByDefault,
+        selectUndeterminedSubtitleLanguage = selectUndeterminedSubtitleLanguage,
+        audioSelection = audioSelection.toPublicTrackSelection(),
+        subtitleSelection = subtitleSelection.toPublicTrackSelection(),
+        abrPolicy = abrPolicy.toPublicAbrPolicy(),
+    )
+
 private fun VesperAbrPolicy.toNativePayload(): NativeAbrPolicyPayload =
     NativeAbrPolicyPayload(
         modeOrdinal =
@@ -666,6 +743,143 @@ private fun VesperAbrPolicy.toNativePayload(): NativeAbrPolicyPayload =
         hasMaxHeight = maxHeight != null,
         maxHeight = maxHeight ?: 0,
     )
+
+private fun VesperTrackPreferencePolicy.toNativePayload(): NativeTrackPreferencePolicy =
+    NativeTrackPreferencePolicy(
+        preferredAudioLanguage = preferredAudioLanguage,
+        preferredSubtitleLanguage = preferredSubtitleLanguage,
+        selectSubtitlesByDefault = selectSubtitlesByDefault,
+        selectUndeterminedSubtitleLanguage = selectUndeterminedSubtitleLanguage,
+        audioSelection = audioSelection.toNativePayload(),
+        subtitleSelection = subtitleSelection.toNativePayload(),
+        abrPolicy = abrPolicy.toNativePayload(),
+    )
+
+private fun hasTrackBasedPreferenceOverrides(policy: VesperTrackPreferencePolicy): Boolean =
+    policy.audioSelection.mode == VesperTrackSelectionMode.Track ||
+        policy.subtitleSelection.mode == VesperTrackSelectionMode.Track ||
+        policy.abrPolicy.mode == VesperAbrMode.FixedTrack
+
+private fun applyTrackPreferenceDefaults(
+    exoPlayer: ExoPlayer,
+    policy: VesperTrackPreferencePolicy,
+) {
+    val builder = exoPlayer.trackSelectionParameters.buildUpon()
+    applyAudioPreferenceDefaults(builder, policy)
+    applySubtitlePreferenceDefaults(builder, policy)
+    applyAbrPreferenceDefaults(builder, policy.abrPolicy)
+    exoPlayer.setTrackSelectionParameters(builder.build())
+}
+
+private fun applyAudioPreferenceDefaults(
+    builder: TrackSelectionParameters.Builder,
+    policy: VesperTrackPreferencePolicy,
+) {
+    when (policy.audioSelection.mode) {
+        VesperTrackSelectionMode.Disabled -> builder.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+        VesperTrackSelectionMode.Auto,
+        VesperTrackSelectionMode.Track,
+        -> builder.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+    }
+    builder.setPreferredAudioLanguage(policy.preferredAudioLanguage)
+}
+
+private fun applySubtitlePreferenceDefaults(
+    builder: TrackSelectionParameters.Builder,
+    policy: VesperTrackPreferencePolicy,
+) {
+    val shouldEnableText =
+        when (policy.subtitleSelection.mode) {
+            VesperTrackSelectionMode.Disabled -> false
+            VesperTrackSelectionMode.Track -> true
+            VesperTrackSelectionMode.Auto ->
+                policy.selectSubtitlesByDefault ||
+                    policy.selectUndeterminedSubtitleLanguage ||
+                    !policy.preferredSubtitleLanguage.isNullOrBlank()
+        }
+
+    builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !shouldEnableText)
+    builder.setPreferredTextLanguage(policy.preferredSubtitleLanguage)
+    builder.setSelectUndeterminedTextLanguage(policy.selectUndeterminedSubtitleLanguage)
+    builder.setIgnoredTextSelectionFlags(0)
+}
+
+private fun applyAbrPreferenceDefaults(
+    builder: TrackSelectionParameters.Builder,
+    policy: VesperAbrPolicy,
+) {
+    builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+    builder.setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+    resetAbrConstraints(builder)
+
+    when (policy.mode) {
+        VesperAbrMode.Auto,
+        VesperAbrMode.FixedTrack,
+        -> Unit
+        VesperAbrMode.Constrained -> {
+            policy.maxBitRate?.let { builder.setMaxVideoBitrate(it.clampToIntMax()) }
+            if (policy.maxWidth != null || policy.maxHeight != null) {
+                builder.setMaxVideoSize(
+                    policy.maxWidth?.coerceAtLeast(0) ?: Int.MAX_VALUE,
+                    policy.maxHeight?.coerceAtLeast(0) ?: Int.MAX_VALUE,
+                )
+            }
+        }
+    }
+}
+
+private fun applyTrackPreferenceTrackOverrides(
+    exoPlayer: ExoPlayer,
+    policy: VesperTrackPreferencePolicy,
+) {
+    val builder = exoPlayer.trackSelectionParameters.buildUpon()
+    var hasChanges = false
+
+    if (policy.audioSelection.mode == VesperTrackSelectionMode.Track) {
+        val trackId = policy.audioSelection.trackId
+        val override = trackId?.let { findTrackOverride(exoPlayer.currentTracks, C.TRACK_TYPE_AUDIO, it) }
+        if (override != null) {
+            builder.clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+            builder.setOverrideForType(override)
+            hasChanges = true
+        } else {
+            Log.w(TAG, "failed to apply default audio track preference id=$trackId")
+        }
+    }
+
+    if (policy.subtitleSelection.mode == VesperTrackSelectionMode.Track) {
+        val trackId = policy.subtitleSelection.trackId
+        val override = trackId?.let { findTrackOverride(exoPlayer.currentTracks, C.TRACK_TYPE_TEXT, it) }
+        if (override != null) {
+            builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            builder.setOverrideForType(override)
+            hasChanges = true
+        } else {
+            Log.w(TAG, "failed to apply default subtitle track preference id=$trackId")
+        }
+    }
+
+    if (policy.abrPolicy.mode == VesperAbrMode.FixedTrack) {
+        val trackId = policy.abrPolicy.trackId
+        val override =
+            trackId?.let { findTrackOverride(exoPlayer.currentTracks, C.TRACK_TYPE_VIDEO, it) }
+        if (override != null) {
+            builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+            resetAbrConstraints(builder)
+            builder.setOverrideForType(override)
+            hasChanges = true
+        } else {
+            Log.w(TAG, "failed to apply default fixed ABR track preference id=$trackId")
+        }
+    }
+
+    if (hasChanges) {
+        exoPlayer.setTrackSelectionParameters(builder.build())
+    }
+}
 
 private fun applyTrackSelectionCommand(
     exoPlayer: ExoPlayer,
@@ -985,11 +1199,10 @@ private fun buildMediaItem(source: VesperPlayerSource): MediaItem {
 
 private fun buildDataSourceFactory(
     appContext: Context,
-    source: VesperPlayerSource,
-    cachePolicy: VesperCachePolicy,
+    cachePolicy: NativeCachePolicy,
 ): androidx.media3.datasource.DataSource.Factory {
     val upstreamFactory = DefaultDataSource.Factory(appContext)
-    val resolvedCachePolicy = resolveCachePolicy(source, cachePolicy)
+    val resolvedCachePolicy = resolveCachePolicy(cachePolicy)
     if (!resolvedCachePolicy.enabled) {
         return upstreamFactory
     }
@@ -1007,31 +1220,29 @@ private fun buildDataSourceFactory(
 }
 
 private fun resolveCachePolicy(
-    source: VesperPlayerSource,
-    cachePolicy: VesperCachePolicy,
+    cachePolicy: NativeCachePolicy,
 ): ResolvedCachePolicy {
-    if (source.kind == VesperPlayerSourceKind.Local) {
-        return ResolvedCachePolicy(enabled = false, maxDiskBytes = 0L)
-    }
-
-    val basePolicy =
-        when (cachePolicy.preset) {
-            VesperCachePreset.Default ->
-                when (source.protocol) {
-                    VesperPlayerSourceProtocol.Hls,
-                    VesperPlayerSourceProtocol.Dash,
-                    -> VesperCachePolicy.resilient()
-
-                    else -> VesperCachePolicy.streaming()
-                }
-            VesperCachePreset.Disabled -> VesperCachePolicy.disabled()
-            VesperCachePreset.Streaming -> VesperCachePolicy.streaming()
-            VesperCachePreset.Resilient -> VesperCachePolicy.resilient()
-        }
-
-    val maxDiskBytes = cachePolicy.maxDiskBytes ?: basePolicy.maxDiskBytes ?: 0L
+    val maxDiskBytes = cachePolicy.maxDiskBytes.takeIf { cachePolicy.hasMaxDiskBytes } ?: 0L
     return ResolvedCachePolicy(enabled = maxDiskBytes > 0L, maxDiskBytes = maxDiskBytes)
 }
+
+private fun resolveResiliencePolicy(
+    source: VesperPlayerSource,
+    resiliencePolicy: VesperPlaybackResiliencePolicy,
+): NativeResolvedResiliencePolicy =
+    VesperNativeJni.resolveResiliencePolicy(
+        sourceKindOrdinal = source.kind.ordinal,
+        sourceProtocolOrdinal = source.protocol.ordinal,
+        bufferingPolicy = resiliencePolicy.buffering.toNativePayload(),
+        retryPolicy = resiliencePolicy.retry.toNativePayload(),
+        cachePolicy = resiliencePolicy.cache.toNativePayload(),
+    )
+
+private fun resolveTrackPreferences(
+    trackPreferencePolicy: VesperTrackPreferencePolicy,
+): VesperTrackPreferencePolicy =
+    VesperNativeJni.resolveTrackPreferences(trackPreferencePolicy.toNativePayload())
+        .toPublicTrackPreferencePolicy()
 
 private fun Long.normalizedOptionalMs(): Long? =
     if (this == C.TIME_UNSET || this < 0L) {
@@ -1168,3 +1379,30 @@ private fun exoPlaybackStateName(playbackState: Int): String =
         Player.STATE_ENDED -> "ENDED"
         else -> "UNKNOWN($playbackState)"
     }
+
+private fun inferSourceKind(uri: String): VesperPlayerSourceKind =
+    if (
+        uri.startsWith("file://", ignoreCase = true) ||
+            uri.startsWith("content://", ignoreCase = true) ||
+            uri.startsWith("/") ||
+            (!uri.contains("://") && !uri.startsWith("content:", ignoreCase = true))
+    ) {
+        VesperPlayerSourceKind.Local
+    } else {
+        VesperPlayerSourceKind.Remote
+    }
+
+private fun inferSourceProtocol(uri: String): VesperPlayerSourceProtocol {
+    val normalized = uri.lowercase()
+    val normalizedPath = normalized.substringBefore('#').substringBefore('?')
+    return when {
+        normalized.startsWith("file://") || uri.startsWith("/") -> VesperPlayerSourceProtocol.File
+        normalized.startsWith("content://") -> VesperPlayerSourceProtocol.Content
+        normalizedPath.endsWith(".m3u8") -> VesperPlayerSourceProtocol.Hls
+        normalizedPath.endsWith(".mpd") -> VesperPlayerSourceProtocol.Dash
+        normalized.startsWith("http://") || normalized.startsWith("https://") -> VesperPlayerSourceProtocol.Progressive
+        else -> VesperPlayerSourceProtocol.Unknown
+    }
+}
+
+private const val DEFAULT_PRELOAD_WARMUP_READ_BYTES = 32 * 1024

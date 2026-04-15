@@ -13,6 +13,8 @@ class VesperNativePlayerBridge(
     private val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
     private val initialSource: VesperPlayerSource? = null,
     private var resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+    private var trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
+    private val preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     appContext: Context? = null,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ) : PlayerBridge {
@@ -67,7 +69,7 @@ class VesperNativePlayerBridge(
             return
         }
 
-        runCatching { bindings.initialize(source, resiliencePolicy) }
+        runCatching { bindings.initialize(source, resiliencePolicy, trackPreferencePolicy) }
             .onSuccess {
                 hasInitializedSource = true
                 Log.i(
@@ -407,6 +409,7 @@ interface VesperNativeBindings {
     fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
+        trackPreferencePolicy: VesperTrackPreferencePolicy,
     ): NativeBridgeStartup
     fun dispose()
     fun refreshSnapshot()
@@ -433,6 +436,7 @@ private class MissingVesperNativeBindings : VesperNativeBindings {
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
+        trackPreferencePolicy: VesperTrackPreferencePolicy,
     ): NativeBridgeStartup {
         throw UnsupportedOperationException(VesperNativeLibrary.failureMessage())
     }

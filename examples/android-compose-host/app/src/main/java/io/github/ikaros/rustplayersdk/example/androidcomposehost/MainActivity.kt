@@ -13,7 +13,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
-            PlayerHostApp(controller = playerHostViewModel.controller)
+            PlayerHostApp(
+                controller = playerHostViewModel.controller,
+                playlistCoordinator = playerHostViewModel.playlistCoordinator,
+            )
         }
     }
 }

@@ -1,3 +1,7 @@
+mod download_jni;
+mod playlist_jni;
+mod preload_jni;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -13,14 +17,22 @@ use player_platform_android::{
     AndroidExoPlaybackSnapshot, AndroidExoPlaybackState, AndroidHostBridgeSession,
     AndroidHostCommand, AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind,
 };
+use player_policy_resolver::{
+    resolve_preload_budget as resolve_preload_budget_via_shared_resolver,
+    resolve_resilience_policy as resolve_resilience_policy_via_shared_resolver,
+    resolve_track_preferences as resolve_track_preferences_via_shared_resolver,
+};
 use player_runtime::{
-    MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog, MediaTrackKind,
-    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot,
-    PlayerRuntimeCommand, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
-    PresentationState,
+    MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrack,
+    MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
+    MediaTrackSelectionSnapshot, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
+    PlayerCachePreset, PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy,
+    PlayerResolvedResiliencePolicy, PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntimeCommand,
+    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+    PlayerTrackPreferencePolicy, PresentationState,
 };
 
-const PKG: &str = "io/github/ikaros/vesper/player/android";
+pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
 
 struct AndroidJniSession {
     inner: AndroidHostBridgeSession,
@@ -37,15 +49,15 @@ fn invalid_handle_error() -> &'static str {
     "invalid android JNI session handle"
 }
 
-fn jni_name(value: impl AsRef<str>) -> JNIString {
+pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
     JNIString::from(value.as_ref())
 }
 
-fn method_sig(value: &str) -> RuntimeMethodSignature {
+pub(crate) fn method_sig(value: &str) -> RuntimeMethodSignature {
     RuntimeMethodSignature::from_str(value).expect("static JNI method signature should parse")
 }
 
-fn field_sig(value: impl AsRef<str>) -> RuntimeFieldSignature {
+pub(crate) fn field_sig(value: impl AsRef<str>) -> RuntimeFieldSignature {
     RuntimeFieldSignature::from_str(value.as_ref())
         .expect("static JNI field signature should parse")
 }
@@ -313,6 +325,16 @@ fn data_object_instance<'local>(
     .l()
 }
 
+fn optional_java_string<'local>(
+    env: &mut Env<'local>,
+    value: Option<&str>,
+) -> JniResult<JObject<'local>> {
+    match value {
+        Some(value) => Ok(JObject::from(env.new_string(value)?)),
+        None => Ok(JObject::null()),
+    }
+}
+
 fn track_selection_payload_object<'local>(
     env: &mut Env<'local>,
     selection: &MediaTrackSelection,
@@ -364,6 +386,162 @@ fn abr_policy_payload_object<'local>(
             JValue::Int(max_width.min(i32::MAX as u32) as i32),
             JValue::Bool(policy.max_height.is_some()),
             JValue::Int(max_height.min(i32::MAX as u32) as i32),
+        ],
+    )
+}
+
+fn buffering_policy_object<'local>(
+    env: &mut Env<'local>,
+    policy: &PlayerBufferingPolicy,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeBufferingPolicy")))?;
+    let min_buffer_ms = policy.min_buffer.map(|value| value.as_millis() as u64);
+    let max_buffer_ms = policy.max_buffer.map(|value| value.as_millis() as u64);
+    let buffer_for_playback_ms = policy
+        .buffer_for_playback
+        .map(|value| value.as_millis() as u64);
+    let buffer_for_rebuffer_ms = policy
+        .buffer_for_rebuffer
+        .map(|value| value.as_millis() as u64);
+
+    env.new_object(
+        class,
+        method_sig("(IZIZIZIZI)V").method_signature(),
+        &[
+            JValue::Int(match policy.preset {
+                PlayerBufferingPreset::Default => 0,
+                PlayerBufferingPreset::Balanced => 1,
+                PlayerBufferingPreset::Streaming => 2,
+                PlayerBufferingPreset::Resilient => 3,
+                PlayerBufferingPreset::LowLatency => 4,
+            }),
+            JValue::Bool(min_buffer_ms.is_some()),
+            JValue::Int(min_buffer_ms.unwrap_or_default().min(i32::MAX as u64) as jint),
+            JValue::Bool(max_buffer_ms.is_some()),
+            JValue::Int(max_buffer_ms.unwrap_or_default().min(i32::MAX as u64) as jint),
+            JValue::Bool(buffer_for_playback_ms.is_some()),
+            JValue::Int(
+                buffer_for_playback_ms
+                    .unwrap_or_default()
+                    .min(i32::MAX as u64) as jint,
+            ),
+            JValue::Bool(buffer_for_rebuffer_ms.is_some()),
+            JValue::Int(
+                buffer_for_rebuffer_ms
+                    .unwrap_or_default()
+                    .min(i32::MAX as u64) as jint,
+            ),
+        ],
+    )
+}
+
+fn retry_policy_object<'local>(
+    env: &mut Env<'local>,
+    policy: &PlayerRetryPolicy,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeRetryPolicy")))?;
+    env.new_object(
+        class,
+        method_sig("(ZZIZJZJZI)V").method_signature(),
+        &[
+            JValue::Bool(false),
+            JValue::Bool(policy.max_attempts.is_some()),
+            JValue::Int(policy.max_attempts.unwrap_or_default().min(i32::MAX as u32) as jint),
+            JValue::Bool(true),
+            JValue::Long(policy.base_delay.as_millis().min(i64::MAX as u128) as jlong),
+            JValue::Bool(true),
+            JValue::Long(policy.max_delay.as_millis().min(i64::MAX as u128) as jlong),
+            JValue::Bool(true),
+            JValue::Int(match policy.backoff {
+                PlayerRetryBackoff::Fixed => 0,
+                PlayerRetryBackoff::Linear => 1,
+                PlayerRetryBackoff::Exponential => 2,
+            }),
+        ],
+    )
+}
+
+fn cache_policy_object<'local>(
+    env: &mut Env<'local>,
+    policy: &PlayerCachePolicy,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeCachePolicy")))?;
+    env.new_object(
+        class,
+        method_sig("(IZJZJ)V").method_signature(),
+        &[
+            JValue::Int(match policy.preset {
+                PlayerCachePreset::Default => 0,
+                PlayerCachePreset::Disabled => 1,
+                PlayerCachePreset::Streaming => 2,
+                PlayerCachePreset::Resilient => 3,
+            }),
+            JValue::Bool(policy.max_memory_bytes.is_some()),
+            JValue::Long(
+                policy
+                    .max_memory_bytes
+                    .unwrap_or_default()
+                    .min(i64::MAX as u64) as jlong,
+            ),
+            JValue::Bool(policy.max_disk_bytes.is_some()),
+            JValue::Long(
+                policy
+                    .max_disk_bytes
+                    .unwrap_or_default()
+                    .min(i64::MAX as u64) as jlong,
+            ),
+        ],
+    )
+}
+
+fn resolved_resilience_policy_object<'local>(
+    env: &mut Env<'local>,
+    policy: &PlayerResolvedResiliencePolicy,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeResolvedResiliencePolicy")))?;
+    let buffering = buffering_policy_object(env, &policy.buffering_policy)?;
+    let retry = retry_policy_object(env, &policy.retry_policy)?;
+    let cache = cache_policy_object(env, &policy.cache_policy)?;
+    env.new_object(
+        class,
+        method_sig(&format!(
+            "(L{PKG}/NativeBufferingPolicy;L{PKG}/NativeRetryPolicy;L{PKG}/NativeCachePolicy;)V"
+        ))
+        .method_signature(),
+        &[
+            JValue::Object(&buffering),
+            JValue::Object(&retry),
+            JValue::Object(&cache),
+        ],
+    )
+}
+
+fn track_preferences_object<'local>(
+    env: &mut Env<'local>,
+    policy: &PlayerTrackPreferencePolicy,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeTrackPreferencePolicy")))?;
+    let preferred_audio_language =
+        optional_java_string(env, policy.preferred_audio_language.as_deref())?;
+    let preferred_subtitle_language =
+        optional_java_string(env, policy.preferred_subtitle_language.as_deref())?;
+    let audio_selection = track_selection_payload_object(env, &policy.audio_selection)?;
+    let subtitle_selection = track_selection_payload_object(env, &policy.subtitle_selection)?;
+    let abr_policy = abr_policy_payload_object(env, &policy.abr_policy)?;
+    env.new_object(
+        class,
+        method_sig(&format!(
+            "(Ljava/lang/String;Ljava/lang/String;ZZL{PKG}/NativeTrackSelectionPayload;L{PKG}/NativeTrackSelectionPayload;L{PKG}/NativeAbrPolicyPayload;)V"
+        ))
+        .method_signature(),
+        &[
+            JValue::Object(&preferred_audio_language),
+            JValue::Object(&preferred_subtitle_language),
+            JValue::Bool(policy.select_subtitles_by_default),
+            JValue::Bool(policy.select_undetermined_subtitle_language),
+            JValue::Object(&audio_selection),
+            JValue::Object(&subtitle_selection),
+            JValue::Object(&abr_policy),
         ],
     )
 }
@@ -446,7 +624,7 @@ fn native_command_object<'local>(
     }
 }
 
-fn error_code_from_ordinal(ordinal: jint) -> PlayerRuntimeErrorCode {
+pub(crate) fn error_code_from_ordinal(ordinal: jint) -> PlayerRuntimeErrorCode {
     match ordinal {
         0 => PlayerRuntimeErrorCode::InvalidArgument,
         1 => PlayerRuntimeErrorCode::InvalidState,
@@ -460,7 +638,7 @@ fn error_code_from_ordinal(ordinal: jint) -> PlayerRuntimeErrorCode {
     }
 }
 
-fn error_category_from_ordinal(ordinal: jint) -> PlayerRuntimeErrorCategory {
+pub(crate) fn error_category_from_ordinal(ordinal: jint) -> PlayerRuntimeErrorCategory {
     match ordinal {
         0 => PlayerRuntimeErrorCategory::Input,
         1 => PlayerRuntimeErrorCategory::Source,
@@ -504,6 +682,51 @@ fn abr_mode_from_ordinal(ordinal: jint) -> MediaAbrMode {
         1 => MediaAbrMode::Constrained,
         2 => MediaAbrMode::FixedTrack,
         _ => MediaAbrMode::Auto,
+    }
+}
+
+fn source_kind_from_ordinal(ordinal: jint) -> MediaSourceKind {
+    match ordinal {
+        0 => MediaSourceKind::Local,
+        _ => MediaSourceKind::Remote,
+    }
+}
+
+fn source_protocol_from_ordinal(ordinal: jint) -> MediaSourceProtocol {
+    match ordinal {
+        1 => MediaSourceProtocol::File,
+        2 => MediaSourceProtocol::Content,
+        3 => MediaSourceProtocol::Progressive,
+        4 => MediaSourceProtocol::Hls,
+        5 => MediaSourceProtocol::Dash,
+        _ => MediaSourceProtocol::Unknown,
+    }
+}
+
+fn buffering_preset_from_ordinal(ordinal: jint) -> PlayerBufferingPreset {
+    match ordinal {
+        1 => PlayerBufferingPreset::Balanced,
+        2 => PlayerBufferingPreset::Streaming,
+        3 => PlayerBufferingPreset::Resilient,
+        4 => PlayerBufferingPreset::LowLatency,
+        _ => PlayerBufferingPreset::Default,
+    }
+}
+
+fn retry_backoff_from_ordinal(ordinal: jint) -> PlayerRetryBackoff {
+    match ordinal {
+        0 => PlayerRetryBackoff::Fixed,
+        2 => PlayerRetryBackoff::Exponential,
+        _ => PlayerRetryBackoff::Linear,
+    }
+}
+
+fn cache_preset_from_ordinal(ordinal: jint) -> PlayerCachePreset {
+    match ordinal {
+        1 => PlayerCachePreset::Disabled,
+        2 => PlayerCachePreset::Streaming,
+        3 => PlayerCachePreset::Resilient,
+        _ => PlayerCachePreset::Default,
     }
 }
 
@@ -653,6 +876,47 @@ fn parse_native_abr_policy(
     })
 }
 
+fn parse_native_track_preferences(
+    env: &mut Env<'_>,
+    preferences: JObject<'_>,
+) -> JniResult<PlayerTrackPreferencePolicy> {
+    let audio_selection = env
+        .get_field(
+            &preferences,
+            jni_name("audioSelection"),
+            field_sig(format!("L{PKG}/NativeTrackSelectionPayload;")).field_signature(),
+        )?
+        .l()?;
+    let subtitle_selection = env
+        .get_field(
+            &preferences,
+            jni_name("subtitleSelection"),
+            field_sig(format!("L{PKG}/NativeTrackSelectionPayload;")).field_signature(),
+        )?
+        .l()?;
+    let abr_policy = env
+        .get_field(
+            &preferences,
+            jni_name("abrPolicy"),
+            field_sig(format!("L{PKG}/NativeAbrPolicyPayload;")).field_signature(),
+        )?
+        .l()?;
+
+    Ok(PlayerTrackPreferencePolicy {
+        preferred_audio_language: string_field(env, &preferences, "preferredAudioLanguage")?,
+        preferred_subtitle_language: string_field(env, &preferences, "preferredSubtitleLanguage")?,
+        select_subtitles_by_default: bool_field(env, &preferences, "selectSubtitlesByDefault")?,
+        select_undetermined_subtitle_language: bool_field(
+            env,
+            &preferences,
+            "selectUndeterminedSubtitleLanguage",
+        )?,
+        audio_selection: parse_native_track_selection(env, audio_selection)?,
+        subtitle_selection: parse_native_track_selection(env, subtitle_selection)?,
+        abr_policy: parse_native_abr_policy(env, abr_policy)?,
+    })
+}
+
 fn parse_native_track_selection_snapshot(
     env: &mut Env<'_>,
     snapshot: JObject<'_>,
@@ -694,6 +958,117 @@ fn parse_native_track_selection_snapshot(
     })
 }
 
+fn parse_native_buffering_policy(
+    env: &mut Env<'_>,
+    policy: JObject<'_>,
+) -> JniResult<PlayerBufferingPolicy> {
+    let has_min_buffer_ms = bool_field(env, &policy, "hasMinBufferMs")?;
+    let has_max_buffer_ms = bool_field(env, &policy, "hasMaxBufferMs")?;
+    let has_buffer_for_playback_ms = bool_field(env, &policy, "hasBufferForPlaybackMs")?;
+    let has_buffer_for_rebuffer_ms =
+        bool_field(env, &policy, "hasBufferForPlaybackAfterRebufferMs")?;
+
+    Ok(PlayerBufferingPolicy {
+        preset: buffering_preset_from_ordinal(int_field(env, &policy, "presetOrdinal")?),
+        min_buffer: has_min_buffer_ms.then_some(Duration::from_millis(int_field(
+            env,
+            &policy,
+            "minBufferMs",
+        )? as u64)),
+        max_buffer: has_max_buffer_ms.then_some(Duration::from_millis(int_field(
+            env,
+            &policy,
+            "maxBufferMs",
+        )? as u64)),
+        buffer_for_playback: has_buffer_for_playback_ms.then_some(Duration::from_millis(
+            int_field(env, &policy, "bufferForPlaybackMs")? as u64,
+        )),
+        buffer_for_rebuffer: has_buffer_for_rebuffer_ms.then_some(Duration::from_millis(
+            int_field(env, &policy, "bufferForPlaybackAfterRebufferMs")? as u64,
+        )),
+    })
+}
+
+fn parse_native_retry_policy(
+    env: &mut Env<'_>,
+    policy: JObject<'_>,
+) -> JniResult<PlayerRetryPolicy> {
+    let uses_default_max_attempts = bool_field(env, &policy, "usesDefaultMaxAttempts")?;
+    let has_max_attempts = bool_field(env, &policy, "hasMaxAttempts")?;
+    let has_base_delay_ms = bool_field(env, &policy, "hasBaseDelayMs")?;
+    let has_max_delay_ms = bool_field(env, &policy, "hasMaxDelayMs")?;
+    let has_backoff = bool_field(env, &policy, "hasBackoff")?;
+
+    Ok(PlayerRetryPolicy {
+        max_attempts: if uses_default_max_attempts {
+            Some(3)
+        } else if has_max_attempts {
+            Some(int_field(env, &policy, "maxAttempts")? as u32)
+        } else {
+            None
+        },
+        base_delay: if has_base_delay_ms {
+            Duration::from_millis(long_field(env, &policy, "baseDelayMs")? as u64)
+        } else {
+            Duration::from_millis(1_000)
+        },
+        max_delay: if has_max_delay_ms {
+            Duration::from_millis(long_field(env, &policy, "maxDelayMs")? as u64)
+        } else {
+            Duration::from_millis(5_000)
+        },
+        backoff: if has_backoff {
+            retry_backoff_from_ordinal(int_field(env, &policy, "backoffOrdinal")?)
+        } else {
+            PlayerRetryBackoff::Linear
+        },
+    })
+}
+
+fn parse_native_cache_policy(
+    env: &mut Env<'_>,
+    policy: JObject<'_>,
+) -> JniResult<PlayerCachePolicy> {
+    let has_max_memory_bytes = bool_field(env, &policy, "hasMaxMemoryBytes")?;
+    let has_max_disk_bytes = bool_field(env, &policy, "hasMaxDiskBytes")?;
+
+    Ok(PlayerCachePolicy {
+        preset: cache_preset_from_ordinal(int_field(env, &policy, "presetOrdinal")?),
+        max_memory_bytes: has_max_memory_bytes
+            .then_some(long_field(env, &policy, "maxMemoryBytes")? as u64),
+        max_disk_bytes: has_max_disk_bytes
+            .then_some(long_field(env, &policy, "maxDiskBytes")? as u64),
+    })
+}
+
+fn resolve_resilience_policy_with_runtime(
+    source_kind: MediaSourceKind,
+    source_protocol: MediaSourceProtocol,
+    buffering_policy: PlayerBufferingPolicy,
+    retry_policy: PlayerRetryPolicy,
+    cache_policy: PlayerCachePolicy,
+) -> PlayerResolvedResiliencePolicy {
+    resolve_resilience_policy_via_shared_resolver(
+        source_kind,
+        source_protocol,
+        buffering_policy,
+        retry_policy,
+        cache_policy,
+    )
+}
+
+fn resolve_track_preferences_with_runtime(
+    track_preferences: PlayerTrackPreferencePolicy,
+) -> PlayerTrackPreferencePolicy {
+    resolve_track_preferences_via_shared_resolver(track_preferences)
+}
+
+pub(crate) fn resolve_preload_budget_with_runtime(
+    preload_budget: PlayerPreloadBudgetPolicy,
+) -> PlayerResolvedPreloadBudgetPolicy {
+    resolve_preload_budget_via_shared_resolver(preload_budget)
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createSession(
     mut unowned_env: EnvUnowned<'_>,
@@ -713,6 +1088,47 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                     Ok(0)
                 }
             }
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_resolveResiliencePolicy(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    source_kind_ordinal: jint,
+    source_protocol_ordinal: jint,
+    buffering_policy: JObject<'_>,
+    retry_policy: JObject<'_>,
+    cache_policy: JObject<'_>,
+) -> jobject {
+    unowned_env
+        .with_env(|env| -> JniResult<jobject> {
+            let resolved = resolve_resilience_policy_with_runtime(
+                source_kind_from_ordinal(source_kind_ordinal),
+                source_protocol_from_ordinal(source_protocol_ordinal),
+                parse_native_buffering_policy(env, buffering_policy)?,
+                parse_native_retry_policy(env, retry_policy)?,
+                parse_native_cache_policy(env, cache_policy)?,
+            );
+            Ok(resolved_resilience_policy_object(env, &resolved)?.into_raw())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_resolveTrackPreferences(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    track_preferences: JObject<'_>,
+) -> jobject {
+    unowned_env
+        .with_env(|env| -> JniResult<jobject> {
+            let resolved = resolve_track_preferences_with_runtime(parse_native_track_preferences(
+                env,
+                track_preferences,
+            )?);
+            Ok(track_preferences_object(env, &resolved)?.into_raw())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -1165,4 +1581,137 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
+        PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
+        PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy,
+        resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn runtime_resolved_policy_uses_hls_defaults_for_android_jni_bridge() {
+        let resolved = resolve_resilience_policy_with_runtime(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Hls,
+            PlayerBufferingPolicy::default(),
+            PlayerRetryPolicy::default(),
+            PlayerCachePolicy::default(),
+        );
+
+        assert_eq!(
+            resolved.buffering_policy.preset,
+            PlayerBufferingPreset::Resilient
+        );
+        assert_eq!(
+            resolved.buffering_policy.min_buffer,
+            Some(Duration::from_millis(20_000))
+        );
+        assert_eq!(resolved.cache_policy.preset, PlayerCachePreset::Resilient);
+        assert_eq!(
+            resolved.cache_policy.max_disk_bytes,
+            Some(384 * 1024 * 1024)
+        );
+        assert_eq!(resolved.retry_policy.max_attempts, Some(3));
+        assert_eq!(resolved.retry_policy.backoff, PlayerRetryBackoff::Linear);
+    }
+
+    #[test]
+    fn runtime_resolved_policy_preserves_retry_overrides_for_android_jni_bridge() {
+        let resolved = resolve_resilience_policy_with_runtime(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Progressive,
+            PlayerBufferingPolicy::default(),
+            PlayerRetryPolicy {
+                max_attempts: None,
+                base_delay: Duration::from_millis(2_000),
+                max_delay: Duration::from_millis(9_000),
+                backoff: PlayerRetryBackoff::Exponential,
+            },
+            PlayerCachePolicy::default(),
+        );
+
+        assert_eq!(resolved.retry_policy.max_attempts, None);
+        assert_eq!(
+            resolved.retry_policy.base_delay,
+            Duration::from_millis(2_000)
+        );
+        assert_eq!(
+            resolved.retry_policy.max_delay,
+            Duration::from_millis(9_000)
+        );
+        assert_eq!(
+            resolved.retry_policy.backoff,
+            PlayerRetryBackoff::Exponential
+        );
+        assert_eq!(resolved.cache_policy.preset, PlayerCachePreset::Streaming);
+    }
+
+    #[test]
+    fn runtime_resolved_track_preferences_normalize_blank_values_for_android_jni_bridge() {
+        let resolved = resolve_track_preferences_with_runtime(PlayerTrackPreferencePolicy {
+            preferred_audio_language: Some("  en-US ".to_owned()),
+            preferred_subtitle_language: Some(" ".to_owned()),
+            select_subtitles_by_default: true,
+            select_undetermined_subtitle_language: true,
+            audio_selection: MediaTrackSelection::track(" "),
+            subtitle_selection: MediaTrackSelection::track(" subtitle:eng "),
+            abr_policy: MediaAbrPolicy {
+                mode: MediaAbrMode::FixedTrack,
+                track_id: Some(" ".to_owned()),
+                max_bit_rate: Some(4_000_000),
+                max_width: Some(1_920),
+                max_height: Some(1_080),
+            },
+        });
+
+        assert_eq!(resolved.preferred_audio_language.as_deref(), Some("en-US"));
+        assert_eq!(resolved.preferred_subtitle_language, None);
+        assert_eq!(resolved.audio_selection, MediaTrackSelection::auto());
+        assert_eq!(
+            resolved.subtitle_selection,
+            MediaTrackSelection::track("subtitle:eng")
+        );
+        assert_eq!(resolved.abr_policy, MediaAbrPolicy::default());
+    }
+
+    #[test]
+    fn runtime_resolved_track_preferences_preserve_valid_constraints_for_android_jni_bridge() {
+        let resolved = resolve_track_preferences_with_runtime(PlayerTrackPreferencePolicy {
+            preferred_audio_language: Some("ja".to_owned()),
+            preferred_subtitle_language: Some("zh-Hans".to_owned()),
+            select_subtitles_by_default: true,
+            select_undetermined_subtitle_language: false,
+            audio_selection: MediaTrackSelection::auto(),
+            subtitle_selection: MediaTrackSelection::disabled(),
+            abr_policy: MediaAbrPolicy {
+                mode: MediaAbrMode::Constrained,
+                track_id: Some("ignored".to_owned()),
+                max_bit_rate: Some(3_500_000),
+                max_width: None,
+                max_height: Some(1_080),
+            },
+        });
+
+        assert_eq!(resolved.preferred_audio_language.as_deref(), Some("ja"));
+        assert_eq!(
+            resolved.preferred_subtitle_language.as_deref(),
+            Some("zh-Hans")
+        );
+        assert_eq!(resolved.subtitle_selection, MediaTrackSelection::disabled());
+        assert_eq!(
+            resolved.abr_policy,
+            MediaAbrPolicy {
+                mode: MediaAbrMode::Constrained,
+                track_id: None,
+                max_bit_rate: Some(3_500_000),
+                max_width: None,
+                max_height: Some(1_080),
+            }
+        );
+    }
 }

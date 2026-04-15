@@ -26,9 +26,13 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     init(
         initialSource: VesperPlayerSource? = nil,
-        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy()
+        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+        trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
     ) {
         _ = resiliencePolicy
+        _ = trackPreferencePolicy
+        _ = preloadBudgetPolicy
         currentSource = initialSource
         publishedUiState = PlayerHostUiState(
             title: VesperPlayerI18n.playerTitle,

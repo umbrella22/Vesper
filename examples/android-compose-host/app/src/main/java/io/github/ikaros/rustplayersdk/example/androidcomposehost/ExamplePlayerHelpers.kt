@@ -15,12 +15,75 @@ import io.github.ikaros.vesper.player.android.VesperBufferingPreset
 import io.github.ikaros.vesper.player.android.VesperCachePolicy
 import io.github.ikaros.vesper.player.android.VesperCachePreset
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
+import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHintKind
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionMode
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
 import java.util.Locale
+
+internal sealed interface ExampleLiveButtonState {
+    data object GoLive : ExampleLiveButtonState
+
+    data object Live : ExampleLiveButtonState
+
+    data class LiveBehind(
+        val behindMs: Long,
+    ) : ExampleLiveButtonState
+}
+
+internal sealed interface ExampleTimelineSummaryState {
+    data object Live : ExampleTimelineSummaryState
+
+    data class LiveEdge(
+        val liveEdgeMs: Long,
+    ) : ExampleTimelineSummaryState
+
+    data class Window(
+        val positionMs: Long,
+        val endMs: Long,
+    ) : ExampleTimelineSummaryState
+}
+
+internal fun displayedTimelinePositionMs(
+    timeline: TimelineUiState,
+    pendingSeekRatio: Float?,
+): Long = pendingSeekRatio?.let(timeline::positionForRatio) ?: timeline.clampedPosition(timeline.positionMs)
+
+internal fun liveButtonState(timeline: TimelineUiState): ExampleLiveButtonState {
+    val liveEdge = timeline.goLivePositionMs ?: return ExampleLiveButtonState.GoLive
+    val behindMs = (liveEdge - timeline.clampedPosition(timeline.positionMs)).coerceAtLeast(0L)
+    return if (behindMs > 1_500L) {
+        ExampleLiveButtonState.LiveBehind(behindMs)
+    } else {
+        ExampleLiveButtonState.Live
+    }
+}
+
+internal fun timelineSummaryState(
+    timeline: TimelineUiState,
+    pendingSeekRatio: Float?,
+): ExampleTimelineSummaryState {
+    val displayedPosition = displayedTimelinePositionMs(timeline, pendingSeekRatio)
+    return when (timeline.kind) {
+        TimelineKind.Live ->
+            timeline.goLivePositionMs?.let(ExampleTimelineSummaryState::LiveEdge)
+                ?: ExampleTimelineSummaryState.Live
+
+        TimelineKind.LiveDvr ->
+            ExampleTimelineSummaryState.Window(
+                positionMs = displayedPosition,
+                endMs = timeline.goLivePositionMs ?: timeline.durationMs ?: 0L,
+            )
+
+        TimelineKind.Vod ->
+            ExampleTimelineSummaryState.Window(
+                positionMs = displayedPosition,
+                endMs = timeline.durationMs ?: 0L,
+            )
+    }
+}
 
 @Composable
 internal fun speedBadge(rate: Float): String =
@@ -156,13 +219,21 @@ internal fun stageBadgeText(timeline: TimelineUiState): String =
     }
 
 @Composable
+internal fun playlistHintLabel(kind: VesperPlaylistViewportHintKind): String =
+    when (kind) {
+        VesperPlaylistViewportHintKind.Visible -> stringResource(R.string.example_playlist_status_visible)
+        VesperPlaylistViewportHintKind.NearVisible -> stringResource(R.string.example_playlist_status_near_visible)
+        VesperPlaylistViewportHintKind.PrefetchOnly -> stringResource(R.string.example_playlist_status_prefetch)
+        VesperPlaylistViewportHintKind.Hidden -> stringResource(R.string.example_playlist_status_hidden)
+    }
+
+@Composable
 internal fun liveButtonLabel(timeline: TimelineUiState): String {
-    val liveEdge = timeline.liveEdgeMs ?: return stringResource(R.string.example_stage_go_live)
-    val behindMs = (liveEdge - timeline.positionMs).coerceAtLeast(0L)
-    return if (behindMs > 1_500L) {
-        stringResource(R.string.example_stage_live_behind, formatMillis(behindMs))
-    } else {
-        stringResource(R.string.example_stage_live)
+    return when (val state = liveButtonState(timeline)) {
+        ExampleLiveButtonState.GoLive -> stringResource(R.string.example_stage_go_live)
+        ExampleLiveButtonState.Live -> stringResource(R.string.example_stage_live)
+        is ExampleLiveButtonState.LiveBehind ->
+            stringResource(R.string.example_stage_live_behind, formatMillis(state.behindMs))
     }
 }
 
@@ -170,32 +241,14 @@ internal fun liveButtonLabel(timeline: TimelineUiState): String {
 internal fun timelineSummary(
     timeline: TimelineUiState,
     pendingSeekRatio: Float?,
-): String {
-    val liveEdgeMs = timeline.liveEdgeMs
-    val displayedPosition =
-        pendingSeekRatio?.let { ratio ->
-            val range = timeline.seekableRange
-            if (range != null) {
-                (range.startMs + ((range.endMs - range.startMs).toFloat() * ratio)).toLong()
-            } else {
-                (((timeline.durationMs ?: 0L).toFloat()) * ratio).toLong()
-            }
-        } ?: timeline.positionMs
-
-    return when (timeline.kind) {
-        TimelineKind.Live ->
-            liveEdgeMs?.let { stringResource(R.string.example_stage_live_edge, formatMillis(it)) }
-                ?: stringResource(R.string.example_stage_live)
-
-        TimelineKind.LiveDvr -> {
-            val liveEdge = liveEdgeMs ?: timeline.durationMs ?: 0L
-            "${formatMillis(displayedPosition)} / ${formatMillis(liveEdge)}"
-        }
-
-        TimelineKind.Vod ->
-            "${formatMillis(displayedPosition)} / ${formatMillis(timeline.durationMs ?: 0L)}"
+): String =
+    when (val state = timelineSummaryState(timeline, pendingSeekRatio)) {
+        ExampleTimelineSummaryState.Live -> stringResource(R.string.example_stage_live)
+        is ExampleTimelineSummaryState.LiveEdge ->
+            stringResource(R.string.example_stage_live_edge, formatMillis(state.liveEdgeMs))
+        is ExampleTimelineSummaryState.Window ->
+            "${formatMillis(state.positionMs)} / ${formatMillis(state.endMs)}"
     }
-}
 
 @Composable
 internal fun formatBitRate(value: Long): String =

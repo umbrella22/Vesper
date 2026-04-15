@@ -11,5 +11,7 @@ name = "vesper_player_android"
 
 [dependencies]
 jni = "0.22.4"
+player-core = { path = "../../../core/player-core" }
+player-policy-resolver = { path = "../../../core/player-policy-resolver" }
 player-platform-android = { path = "../../mobile/player-platform-android" }
 player-runtime = { path = "../../../core/player-runtime" }

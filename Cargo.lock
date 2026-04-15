@@ -791,6 +791,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
 name = "jni"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1591,6 +1597,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-ffi-resolver"
+version = "0.1.0"
+dependencies = [
+ "player-core",
+ "player-platform-ios",
+ "player-policy-resolver",
+ "player-runtime",
+]
+
+[[package]]
+name = "player-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
+ "player-plugin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "player-host-desktop"
 version = "0.1.0"
 dependencies = [
@@ -1609,7 +1636,9 @@ name = "player-jni-android"
 version = "0.1.0"
 dependencies = [
  "jni 0.22.4",
+ "player-core",
  "player-platform-android",
+ "player-policy-resolver",
  "player-runtime",
 ]
 
@@ -1618,6 +1647,7 @@ name = "player-platform-android"
 version = "0.1.0"
 dependencies = [
  "player-core",
+ "player-plugin-loader",
  "player-runtime",
 ]
 
@@ -1641,6 +1671,7 @@ name = "player-platform-ios"
 version = "0.1.0"
 dependencies = [
  "player-core",
+ "player-plugin-loader",
  "player-runtime",
 ]
 
@@ -1674,6 +1705,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-plugin"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "player-plugin-loader"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "player-plugin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "player-policy-resolver"
+version = "0.1.0"
+dependencies = [
+ "player-runtime",
+]
+
+[[package]]
 name = "player-render-wgpu"
 version = "0.1.0"
 dependencies = [
@@ -1688,6 +1745,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "player-core",
+ "player-plugin",
 ]
 
 [[package]]
@@ -1989,6 +2047,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_json"
+version = "1.0.149"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2191,9 +2262,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.50.0"
+version = "1.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27ad5e34374e03cfffefc301becb44e9dc3c17584f414349ebe29ed26661822d"
+checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
 dependencies = [
  "pin-project-lite",
  "tokio-macros",
@@ -2201,9 +2272,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "2.6.1"
+version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c55a2eff8b69ce66c84f85e1da1c233edc36ceb85a2058d11b0d6a3c7e7569c"
+checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3142,3 +3213,9 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"

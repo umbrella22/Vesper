@@ -3,8 +3,16 @@ package io.github.ikaros.vesper.example.androidcomposehost
 import android.content.Context
 import androidx.annotation.StringRes
 import androidx.compose.ui.graphics.Color
+import io.github.ikaros.vesper.player.android.VesperPlaylistFailureStrategy
+import io.github.ikaros.vesper.player.android.VesperPlaylistItemPreloadProfile
+import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItem
+import io.github.ikaros.vesper.player.android.VesperPlaylistRepeatMode
+import io.github.ikaros.vesper.player.android.VesperPlaylistSwitchPolicy
+import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHint
+import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHintKind
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import kotlin.math.abs
 
 internal enum class ExamplePlayerSheet {
     Menu,
@@ -99,6 +107,11 @@ internal const val ANDROID_HLS_DEMO_URL: String =
 internal const val ANDROID_DASH_DEMO_URL: String =
     "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd"
 
+internal const val ANDROID_HLS_PLAYLIST_ITEM_ID: String = "hls-demo"
+internal const val ANDROID_DASH_PLAYLIST_ITEM_ID: String = "dash-demo"
+internal const val ANDROID_REMOTE_PLAYLIST_ITEM_ID: String = "custom-remote"
+internal const val ANDROID_LOCAL_PLAYLIST_ITEM_ID: String = "local-file"
+
 internal fun androidHlsDemoSource(context: Context? = null): VesperPlayerSource =
     VesperPlayerSource.hls(
         uri = ANDROID_HLS_DEMO_URL,
@@ -109,4 +122,131 @@ internal fun androidDashDemoSource(context: Context? = null): VesperPlayerSource
     VesperPlayerSource.dash(
         uri = ANDROID_DASH_DEMO_URL,
         label = context?.getString(R.string.example_source_dash_demo_label) ?: "DASH Demo (Envivio)",
+    )
+
+internal fun examplePlaylistQueue(
+    context: Context,
+    playlistItemIds: List<String>,
+    remoteSource: VesperPlayerSource? = null,
+    localSource: VesperPlayerSource? = null,
+): List<VesperPlaylistQueueItem> =
+    buildList {
+        playlistItemIds.forEach { itemId ->
+            when (itemId) {
+                ANDROID_HLS_PLAYLIST_ITEM_ID ->
+                    add(
+                        VesperPlaylistQueueItem(
+                            itemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                            source = androidHlsDemoSource(context),
+                            preloadProfile =
+                                VesperPlaylistItemPreloadProfile(
+                                    expectedMemoryBytes = 256 * 1024L,
+                                    expectedDiskBytes = 512 * 1024L,
+                                    warmupWindowMs = 30_000L,
+                                ),
+                        ),
+                    )
+
+                ANDROID_DASH_PLAYLIST_ITEM_ID ->
+                    add(
+                        VesperPlaylistQueueItem(
+                            itemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                            source = androidDashDemoSource(context),
+                            preloadProfile =
+                                VesperPlaylistItemPreloadProfile(
+                                    expectedMemoryBytes = 256 * 1024L,
+                                    expectedDiskBytes = 512 * 1024L,
+                                    warmupWindowMs = 30_000L,
+                                ),
+                        ),
+                    )
+
+                ANDROID_LOCAL_PLAYLIST_ITEM_ID ->
+                    localSource?.let { source ->
+                        add(
+                            VesperPlaylistQueueItem(
+                                itemId = ANDROID_LOCAL_PLAYLIST_ITEM_ID,
+                                source = source,
+                                preloadProfile =
+                                    VesperPlaylistItemPreloadProfile(expectedMemoryBytes = 128 * 1024L),
+                            ),
+                        )
+                    }
+
+                ANDROID_REMOTE_PLAYLIST_ITEM_ID ->
+                    remoteSource?.let { source ->
+                        add(
+                            VesperPlaylistQueueItem(
+                                itemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                source = source,
+                                preloadProfile =
+                                    VesperPlaylistItemPreloadProfile(
+                                        expectedMemoryBytes = 256 * 1024L,
+                                        expectedDiskBytes = 512 * 1024L,
+                                        warmupWindowMs = 30_000L,
+                                    ),
+                            ),
+                        )
+                    }
+            }
+        }
+    }
+
+internal fun enqueuePlaylistItem(
+    playlistItemIds: List<String>,
+    itemId: String,
+): List<String> =
+    buildList {
+        addAll(playlistItemIds.filterNot { existingItemId -> existingItemId == itemId })
+        add(itemId)
+    }
+
+internal fun examplePlaylistViewportHints(
+    queue: List<VesperPlaylistQueueItem>,
+    focusedItemId: String?,
+): List<VesperPlaylistViewportHint> {
+    if (queue.isEmpty()) {
+        return emptyList()
+    }
+
+    val focusIndex =
+        focusedItemId
+            ?.let { itemId -> queue.indexOfFirst { it.itemId == itemId } }
+            ?.takeIf { it >= 0 } ?: 0
+
+    return buildList {
+        add(
+            VesperPlaylistViewportHint(
+                itemId = queue[focusIndex].itemId,
+                kind = VesperPlaylistViewportHintKind.Visible,
+                order = 0,
+            ),
+        )
+
+        queue.indices
+            .filter { it != focusIndex }
+            .sortedWith(compareBy<Int> { abs(it - focusIndex) }.thenBy { it })
+            .forEachIndexed { order, index ->
+                val distance = abs(index - focusIndex)
+                add(
+                    VesperPlaylistViewportHint(
+                        itemId = queue[index].itemId,
+                        kind =
+                            if (distance == 1) {
+                                VesperPlaylistViewportHintKind.NearVisible
+                            } else {
+                                VesperPlaylistViewportHintKind.PrefetchOnly
+                            },
+                        order = order + 1,
+                    ),
+                )
+            }
+    }
+}
+
+internal fun examplePlaylistSwitchPolicy(): VesperPlaylistSwitchPolicy =
+    VesperPlaylistSwitchPolicy(
+        autoAdvance = true,
+        repeatMode = VesperPlaylistRepeatMode.Off,
+        failureStrategy = VesperPlaylistFailureStrategy.SkipToNext,
     )

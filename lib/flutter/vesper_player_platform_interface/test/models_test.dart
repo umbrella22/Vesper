@@ -2,6 +2,75 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('live dvr timeline helpers fall back to seekable window end', () {
+    const timeline = VesperTimeline(
+      kind: VesperTimelineKind.liveDvr,
+      isSeekable: true,
+      seekableRange: VesperSeekableRange(startMs: 30000, endMs: 120000),
+      liveEdgeMs: null,
+      positionMs: 90000,
+      durationMs: null,
+    );
+
+    expect(timeline.goLivePositionMs, 120000);
+    expect(timeline.liveOffsetMs, 30000);
+    expect(timeline.displayedRatio, closeTo(2 / 3, 0.0001));
+    expect(timeline.positionForRatio(1.5), 120000);
+  });
+
+  test('timeline helpers clamp positions and live edge tolerance', () {
+    const timeline = VesperTimeline(
+      kind: VesperTimelineKind.liveDvr,
+      isSeekable: true,
+      seekableRange: VesperSeekableRange(startMs: 30000, endMs: 120000),
+      liveEdgeMs: 120000,
+      positionMs: 118800,
+      durationMs: null,
+    );
+
+    expect(timeline.clampedPosition(10000), 30000);
+    expect(timeline.clampedPosition(150000), 120000);
+    expect(timeline.positionForRatio(-0.25), 30000);
+    expect(timeline.positionForRatio(0.5), 75000);
+    expect(timeline.isAtLiveEdge(), isTrue);
+    expect(timeline.isAtLiveEdge(toleranceMs: 500), isFalse);
+  });
+
+  test('live dvr helpers clamp stale positions after window shrink', () {
+    const timeline = VesperTimeline(
+      kind: VesperTimelineKind.liveDvr,
+      isSeekable: true,
+      seekableRange: VesperSeekableRange(startMs: 60000, endMs: 100000),
+      liveEdgeMs: 100000,
+      positionMs: 120000,
+      durationMs: null,
+    );
+
+    expect(timeline.clampedPosition(timeline.positionMs), 100000);
+    expect(timeline.liveOffsetMs, 0);
+    expect(timeline.displayedRatio, 1.0);
+    expect(timeline.isAtLiveEdge(), isTrue);
+  });
+
+  test('vod timeline helpers fall back to duration bounds', () {
+    const timeline = VesperTimeline(
+      kind: VesperTimelineKind.vod,
+      isSeekable: true,
+      seekableRange: null,
+      liveEdgeMs: null,
+      positionMs: 50000,
+      durationMs: 200000,
+    );
+
+    expect(timeline.goLivePositionMs, isNull);
+    expect(timeline.liveOffsetMs, isNull);
+    expect(timeline.clampedPosition(-100), 0);
+    expect(timeline.clampedPosition(250000), 200000);
+    expect(timeline.positionForRatio(0.25), 50000);
+    expect(timeline.displayedRatio, 0.25);
+    expect(timeline.isAtLiveEdge(), isFalse);
+  });
+
   test(
     'default retry policy keeps fallback getters but omits channel overrides',
     () {
@@ -12,13 +81,24 @@ void main() {
       expect(policy.maxDelayMs, 5000);
       expect(policy.backoff, VesperRetryBackoff.linear);
       expect(policy.toMap(), <String, Object?>{
-        'maxAttempts': 3,
         'baseDelayMs': null,
         'maxDelayMs': null,
         'backoff': null,
       });
     },
   );
+
+  test('retry policy can encode explicit unlimited retries', () {
+    const policy = VesperRetryPolicy(maxAttempts: null);
+
+    expect(policy.maxAttempts, isNull);
+    expect(policy.toMap(), <String, Object?>{
+      'maxAttempts': null,
+      'baseDelayMs': null,
+      'maxDelayMs': null,
+      'backoff': null,
+    });
+  });
 
   test('retry policy fromMap keeps explicit overrides only', () {
     final policy = VesperRetryPolicy.fromMap(<Object?, Object?>{
@@ -36,6 +116,22 @@ void main() {
       'baseDelayMs': null,
       'maxDelayMs': 8000,
       'backoff': 'exponential',
+    });
+  });
+
+  test('retry policy fromMap preserves explicit unlimited retries', () {
+    final policy = VesperRetryPolicy.fromMap(<Object?, Object?>{
+      'maxAttempts': null,
+      'baseDelayMs': 1500,
+    });
+
+    expect(policy.maxAttempts, isNull);
+    expect(policy.baseDelayMs, 1500);
+    expect(policy.toMap(), <String, Object?>{
+      'maxAttempts': null,
+      'baseDelayMs': 1500,
+      'maxDelayMs': null,
+      'backoff': null,
     });
   });
 
@@ -83,5 +179,148 @@ void main() {
         },
       },
     );
+  });
+
+  test('track preference policy serializes sparse overrides only', () {
+    const policy = VesperTrackPreferencePolicy(
+      preferredAudioLanguage: 'ja',
+      selectSubtitlesByDefault: true,
+      subtitleSelection: VesperTrackSelection.track('subtitle:zh-Hans'),
+      abrPolicy: VesperAbrPolicy.constrained(maxBitRate: 3500000),
+    );
+
+    expect(policy.toMap(), <String, Object?>{
+      'preferredAudioLanguage': 'ja',
+      'selectSubtitlesByDefault': true,
+      'subtitleSelection': <String, Object?>{
+        'mode': 'track',
+        'trackId': 'subtitle:zh-Hans',
+      },
+      'abrPolicy': <String, Object?>{
+        'mode': 'constrained',
+        'trackId': null,
+        'maxBitRate': 3500000,
+        'maxWidth': null,
+        'maxHeight': null,
+      },
+    });
+  });
+
+  test('track preference policy fromMap restores explicit values', () {
+    final policy = VesperTrackPreferencePolicy.fromMap(<Object?, Object?>{
+      'preferredSubtitleLanguage': 'en-US',
+      'selectUndeterminedSubtitleLanguage': true,
+      'audioSelection': <Object?, Object?>{
+        'mode': 'track',
+        'trackId': 'audio:ja-main',
+      },
+    });
+
+    expect(policy.preferredSubtitleLanguage, 'en-US');
+    expect(policy.selectUndeterminedSubtitleLanguage, isTrue);
+    expect(policy.audioSelection.mode, VesperTrackSelectionMode.track);
+    expect(policy.audioSelection.trackId, 'audio:ja-main');
+    expect(policy.subtitleSelection.mode, VesperTrackSelectionMode.disabled);
+    expect(policy.abrPolicy.mode, VesperAbrMode.auto);
+  });
+
+  test('preload budget policy serializes sparse overrides only', () {
+    const policy = VesperPreloadBudgetPolicy(
+      maxConcurrentTasks: 2,
+      maxDiskBytes: 268435456,
+    );
+
+    expect(policy.toMap(), <String, Object?>{
+      'maxConcurrentTasks': 2,
+      'maxDiskBytes': 268435456,
+    });
+  });
+
+  test('preload budget policy fromMap restores explicit values', () {
+    final policy = VesperPreloadBudgetPolicy.fromMap(<Object?, Object?>{
+      'maxMemoryBytes': 67108864,
+      'warmupWindowMs': 30000,
+    });
+
+    expect(policy.maxConcurrentTasks, isNull);
+    expect(policy.maxMemoryBytes, 67108864);
+    expect(policy.maxDiskBytes, isNull);
+    expect(policy.warmupWindowMs, 30000);
+  });
+
+  test('viewport hint classification follows visible near prefetch bands', () {
+    const visibleViewport = VesperPlayerViewport(
+      left: 0,
+      top: 100,
+      width: 200,
+      height: 120,
+    );
+    const nearViewport = VesperPlayerViewport(
+      left: 0,
+      top: 860,
+      width: 200,
+      height: 120,
+    );
+    const prefetchViewport = VesperPlayerViewport(
+      left: 0,
+      top: 1500,
+      width: 200,
+      height: 120,
+    );
+    const hiddenViewport = VesperPlayerViewport(
+      left: 0,
+      top: 2400,
+      width: 200,
+      height: 120,
+    );
+
+    expect(
+      visibleViewport.classifyHint(surfaceWidth: 400, surfaceHeight: 800).kind,
+      VesperViewportHintKind.visible,
+    );
+    expect(
+      nearViewport.classifyHint(surfaceWidth: 400, surfaceHeight: 800).kind,
+      VesperViewportHintKind.nearVisible,
+    );
+    expect(
+      prefetchViewport.classifyHint(surfaceWidth: 400, surfaceHeight: 800).kind,
+      VesperViewportHintKind.prefetchOnly,
+    );
+    expect(
+      hiddenViewport.classifyHint(surfaceWidth: 400, surfaceHeight: 800).kind,
+      VesperViewportHintKind.hidden,
+    );
+  });
+
+  test('player snapshot decodes viewport shared semantics', () {
+    const viewport = VesperPlayerViewport(
+      left: 12,
+      top: 34,
+      width: 200,
+      height: 120,
+    );
+    const viewportHint = VesperViewportHint(
+      kind: VesperViewportHintKind.visible,
+      visibleFraction: 0.75,
+    );
+
+    final snapshot = VesperPlayerSnapshot.fromMap(<Object?, Object?>{
+      'title': 'Demo',
+      'subtitle': 'Viewport',
+      'sourceLabel': 'feed://demo',
+      'playbackState': 'playing',
+      'playbackRate': 1.0,
+      'isBuffering': false,
+      'isInterrupted': false,
+      'hasVideoSurface': true,
+      'timeline': const VesperTimeline.initial().toMap(),
+      'viewport': viewport.toMap(),
+      'viewportHint': viewportHint.toMap(),
+    });
+
+    expect(snapshot.viewport?.left, 12);
+    expect(snapshot.viewport?.height, 120);
+    expect(snapshot.viewportHint.kind, VesperViewportHintKind.visible);
+    expect(snapshot.viewportHint.visibleFraction, 0.75);
   });
 }

@@ -37,9 +37,6 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   @override
   void initState() {
     super.initState();
-    if (_usesPlatformView) {
-      return;
-    }
     WidgetsBinding.instance.addObserver(_bindingObserver);
     _scheduleViewportReport();
   }
@@ -47,9 +44,6 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   @override
   void didUpdateWidget(covariant VesperPlayerView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_usesPlatformView) {
-      return;
-    }
     if (oldWidget.controller != widget.controller) {
       unawaited(oldWidget.controller.clearViewport());
       _lastViewport = null;
@@ -60,19 +54,12 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_usesPlatformView) {
-      return;
-    }
     _bindScrollable();
     _scheduleViewportReport();
   }
 
   @override
   void dispose() {
-    if (_usesPlatformView) {
-      super.dispose();
-      return;
-    }
     WidgetsBinding.instance.removeObserver(_bindingObserver);
     _scrollPosition?.removeListener(_scheduleViewportReport);
     _scrollPosition = null;
@@ -86,21 +73,21 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
 
   @override
   Widget build(BuildContext context) {
-    if (_usesPlatformView) {
-      return _buildPlatformView();
-    }
-
     _scheduleViewportReport();
+    final baseLayer = _usesPlatformView
+        ? _buildPlatformBaseLayer()
+        : const ColoredBox(color: Color(0x00000000));
+
     return SizeChangedLayoutNotifier(
       child: KeyedSubtree(
         key: _targetKey,
-        child: _buildLayeredContent(const ColoredBox(color: Color(0x00000000))),
+        child: _buildLayeredContent(baseLayer),
       ),
     );
   }
 
-  Widget _buildPlatformView() {
-    final Widget baseLayer = widget.visible
+  Widget _buildPlatformBaseLayer() {
+    return widget.visible
         ? switch (defaultTargetPlatform) {
             TargetPlatform.android => AndroidView(
               key: ValueKey<String>(
@@ -125,8 +112,6 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
             _ => const ColoredBox(color: Color(0x00000000)),
           }
         : const ColoredBox(color: Color(0x00000000));
-
-    return _buildLayeredContent(baseLayer);
   }
 
   Widget _buildLayeredContent(Widget baseLayer) {

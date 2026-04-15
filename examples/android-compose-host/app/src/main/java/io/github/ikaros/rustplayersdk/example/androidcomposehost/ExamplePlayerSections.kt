@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItemState
 import kotlin.math.max
 
 @Composable
@@ -173,6 +174,97 @@ internal fun ExampleSourceSection(
             ),
         ) {
             Text(stringResource(R.string.example_sources_open_remote_url))
+        }
+    }
+}
+
+@Composable
+internal fun ExamplePlaylistSection(
+    palette: ExampleHostPalette,
+    playlistQueue: List<VesperPlaylistQueueItemState>,
+    onFocusPlaylistItem: (String) -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_playlist_title),
+        subtitle = stringResource(R.string.example_playlist_subtitle),
+    ) {
+        if (playlistQueue.isEmpty()) {
+            Text(
+                text = stringResource(R.string.example_playlist_empty),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                playlistQueue.forEach { item ->
+                    PlaylistQueueRow(
+                        label = item.item.source.label,
+                        hint =
+                            if (item.isActive) {
+                                stringResource(R.string.example_playlist_status_current)
+                            } else {
+                                playlistHintLabel(item.viewportHint)
+                            },
+                        active = item.isActive,
+                        palette = palette,
+                        onClick = { onFocusPlaylistItem(item.item.itemId) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistQueueRow(
+    label: String,
+    hint: String,
+    active: Boolean,
+    palette: ExampleHostPalette,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (active) Color.White else palette.title,
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (active) {
+                    palette.primaryAction
+                } else {
+                    palette.fieldBackground
+                },
+                RoundedCornerShape(18.dp),
+            )
+            .border(
+                width = 1.dp,
+                color = if (active) Color.Transparent else palette.sectionStroke,
+                shape = RoundedCornerShape(18.dp),
+            ),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Text(
+                text = hint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = if (active) Color.White.copy(alpha = 0.88f) else palette.body,
+                ),
+            )
         }
     }
 }

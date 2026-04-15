@@ -1,11 +1,15 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use player_core::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use player_render_wgpu::RenderSurfaceConfig;
 use player_runtime::{
-    DEFAULT_VIDEO_PREFETCH_CAPACITY, PlayerMediaInfo, PlayerRuntimeAdapterCapabilities,
-    PlayerRuntimeBootstrap, PlayerRuntimeOptions, PlayerRuntimeStartup,
+    DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, PlayerMediaInfo,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeBootstrap, PlayerRuntimeOptions,
+    PlayerRuntimeResult, PlayerRuntimeStartup, PreloadCandidate, PreloadEvent, PreloadExecutor,
+    PreloadPlanner, PreloadSnapshot, PreloadTaskId, PreloadTaskSnapshot,
 };
 use winit::window::Window;
 
@@ -48,6 +52,97 @@ pub struct DesktopHostRuntimeProbe {
 pub struct DesktopHostLaunchProbe {
     pub launch_plan: DesktopHostLaunchPlan,
     pub runtime_probe: DesktopHostRuntimeProbe,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DesktopPreloadCommand {
+    Warmup { task: PreloadTaskSnapshot },
+    Cancel { task_id: PreloadTaskId },
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct DesktopNoopPreloadExecutor {
+    commands: Arc<Mutex<Vec<DesktopPreloadCommand>>>,
+}
+
+impl DesktopNoopPreloadExecutor {
+    pub fn drain_commands(&self) -> Vec<DesktopPreloadCommand> {
+        self.commands
+            .lock()
+            .map(|mut commands| commands.drain(..).collect())
+            .unwrap_or_default()
+    }
+}
+
+impl PreloadExecutor for DesktopNoopPreloadExecutor {
+    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+        if let Ok(mut commands) = self.commands.lock() {
+            commands.push(DesktopPreloadCommand::Warmup { task: task.clone() });
+        }
+        Ok(())
+    }
+
+    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerRuntimeResult<()> {
+        if let Ok(mut commands) = self.commands.lock() {
+            commands.push(DesktopPreloadCommand::Cancel { task_id });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct DesktopPreloadBridgeSession {
+    planner: PreloadPlanner<InMemoryPreloadBudgetProvider, DesktopNoopPreloadExecutor>,
+}
+
+impl DesktopPreloadBridgeSession {
+    pub fn new(budget_provider: InMemoryPreloadBudgetProvider) -> Self {
+        Self {
+            planner: PreloadPlanner::new(budget_provider, DesktopNoopPreloadExecutor::default()),
+        }
+    }
+
+    pub fn plan(
+        &mut self,
+        candidates: impl IntoIterator<Item = PreloadCandidate>,
+        now: Instant,
+    ) -> Vec<PreloadTaskId> {
+        self.planner.plan(candidates, now)
+    }
+
+    pub fn complete(
+        &mut self,
+        task_id: PreloadTaskId,
+    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        self.planner.complete(task_id)
+    }
+
+    pub fn fail(
+        &mut self,
+        task_id: PreloadTaskId,
+        error: player_runtime::PlayerRuntimeError,
+    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        self.planner.fail(task_id, error)
+    }
+
+    pub fn cancel(
+        &mut self,
+        task_id: PreloadTaskId,
+    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        self.planner.cancel(task_id)
+    }
+
+    pub fn drain_commands(&self) -> Vec<DesktopPreloadCommand> {
+        self.planner.executor().drain_commands()
+    }
+
+    pub fn snapshot(&self) -> PreloadSnapshot {
+        self.planner.snapshot()
+    }
+
+    pub fn drain_events(&mut self) -> Vec<PreloadEvent> {
+        self.planner.drain_events()
+    }
 }
 
 pub fn probe_desktop_host_launch_plan_uri(
@@ -269,14 +364,20 @@ mod tests {
     use std::path::Path;
 
     use super::{
+        DesktopNoopPreloadExecutor, DesktopPreloadBridgeSession, DesktopPreloadCommand,
         canonical_desktop_host_local_path, desktop_runtime_options_for_source,
         normalize_desktop_host_source_uri, render_config_from_media_info,
     };
+    use player_core::MediaSource;
     use player_render_wgpu::RenderSurfaceConfig;
     use player_runtime::{
-        DEFAULT_VIDEO_PREFETCH_CAPACITY, MediaSourceKind, MediaSourceProtocol, PlayerMediaInfo,
-        PlayerRuntimeOptions, PlayerVideoInfo,
+        DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, MediaSourceKind,
+        MediaSourceProtocol, MediaTrackCatalog, MediaTrackSelectionSnapshot, PlayerMediaInfo,
+        PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeOptions, PlayerVideoInfo,
+        PreloadBudget, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
+        PreloadEvent, PreloadExecutor, PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
     };
+    use std::time::{Duration, Instant};
 
     const HLS_REMOTE_SOURCE: &str = "https://example.com/stream/master.m3u8";
     const DASH_REMOTE_SOURCE: &str = "https://example.com/stream/manifest.mpd";
@@ -298,6 +399,8 @@ mod tests {
                 frame_rate: Some(60.0),
             }),
             best_audio: None,
+            track_catalog: MediaTrackCatalog::default(),
+            track_selection: MediaTrackSelectionSnapshot::default(),
         };
 
         assert_eq!(
@@ -326,6 +429,8 @@ mod tests {
                 frame_rate: Some(24.0),
             }),
             best_audio: None,
+            track_catalog: MediaTrackCatalog::default(),
+            track_selection: MediaTrackSelectionSnapshot::default(),
         };
 
         assert_eq!(
@@ -349,6 +454,8 @@ mod tests {
             video_streams: 0,
             best_video: None,
             best_audio: None,
+            track_catalog: MediaTrackCatalog::default(),
+            track_selection: MediaTrackSelectionSnapshot::default(),
         };
 
         assert_eq!(
@@ -403,5 +510,131 @@ mod tests {
             },
         );
         assert_eq!(options.video_prefetch_capacity, 12);
+    }
+
+    #[test]
+    fn desktop_noop_preload_executor_records_warmup_and_cancel_commands() {
+        let mut executor = DesktopNoopPreloadExecutor::default();
+        let task = sample_preload_candidate("https://example.com/current.m3u8");
+        let mut session =
+            DesktopPreloadBridgeSession::new(InMemoryPreloadBudgetProvider::new(test_budget(1)));
+        let task_id = session
+            .plan([task], Instant::now())
+            .into_iter()
+            .next()
+            .expect("desktop preload task should be planned");
+
+        let commands = session.drain_commands();
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DesktopPreloadCommand::Warmup { task } if task.task_id == task_id
+        ));
+
+        let _ = executor.cancel(task_id);
+        assert_eq!(
+            executor.drain_commands(),
+            vec![DesktopPreloadCommand::Cancel { task_id }]
+        );
+    }
+
+    #[test]
+    fn desktop_preload_bridge_releases_budget_after_completion() {
+        let mut session =
+            DesktopPreloadBridgeSession::new(InMemoryPreloadBudgetProvider::new(test_budget(1)));
+        let now = Instant::now();
+
+        let first_task_id = session
+            .plan(
+                [sample_preload_candidate("https://example.com/current.m3u8")],
+                now,
+            )
+            .into_iter()
+            .next()
+            .expect("first desktop preload task should be planned");
+        let _ = session.drain_commands();
+
+        assert!(
+            session
+                .plan(
+                    [sample_preload_candidate(
+                        "https://example.com/neighbor.m3u8"
+                    )],
+                    now
+                )
+                .is_empty()
+        );
+
+        let completed = session
+            .complete(first_task_id)
+            .expect("desktop complete should succeed")
+            .expect("desktop task should exist");
+        assert_eq!(completed.status, PreloadTaskStatus::Completed);
+
+        let follow_up = session.plan(
+            [sample_preload_candidate(
+                "https://example.com/neighbor.m3u8",
+            )],
+            now,
+        );
+        assert_eq!(follow_up.len(), 1);
+    }
+
+    #[test]
+    fn desktop_preload_bridge_records_failure_event() {
+        let mut session =
+            DesktopPreloadBridgeSession::new(InMemoryPreloadBudgetProvider::new(test_budget(1)));
+        let task_id = session
+            .plan(
+                [sample_preload_candidate("https://example.com/current.m3u8")],
+                Instant::now(),
+            )
+            .into_iter()
+            .next()
+            .expect("desktop preload task should be planned");
+
+        let failed = session
+            .fail(
+                task_id,
+                PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    "desktop preload noop executor failed",
+                ),
+            )
+            .expect("desktop fail should succeed")
+            .expect("desktop task should exist");
+        assert_eq!(failed.status, PreloadTaskStatus::Failed);
+
+        let events = session.drain_events();
+        assert!(
+            events.iter().any(
+                |event| matches!(event, PreloadEvent::Failed(task) if task.task_id == task_id)
+            )
+        );
+    }
+
+    fn test_budget(max_concurrent_tasks: u32) -> PreloadBudget {
+        PreloadBudget {
+            max_concurrent_tasks,
+            max_memory_bytes: 64,
+            max_disk_bytes: 64,
+            warmup_window: Duration::from_secs(30),
+        }
+    }
+
+    fn sample_preload_candidate(uri: &str) -> PreloadCandidate {
+        PreloadCandidate {
+            source: MediaSource::new(uri),
+            scope: PreloadBudgetScope::App,
+            kind: PreloadCandidateKind::Current,
+            selection_hint: PreloadSelectionHint::CurrentItem,
+            config: PreloadConfig {
+                priority: PreloadPriority::Critical,
+                ttl: None,
+                expected_memory_bytes: 1,
+                expected_disk_bytes: 1,
+                warmup_window: None,
+            },
+        }
     }
 }

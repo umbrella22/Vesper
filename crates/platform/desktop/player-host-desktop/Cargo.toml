@@ -8,8 +8,8 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 player-core = { path = "../../../core/player-core" }
-player-render-wgpu = { path = "../../../render/player-render-wgpu" }
 player-runtime = { path = "../../../core/player-runtime" }
+player-render-wgpu = { path = "../../../render/player-render-wgpu" }
 winit.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

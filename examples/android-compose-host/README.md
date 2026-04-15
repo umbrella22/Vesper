@@ -135,6 +135,24 @@ For the reusable library artifact itself, use:
 
 - `scripts/build-android-vesper-player-kit-aar.sh`
 
+## Host Regression
+
+The executable host regression path for this example is now:
+
+1. build JNI once for the target ABI:
+   - `./scripts/build-android-vesper-player-kit-jni.sh release arm64-v8a`
+2. run the example-level LiveDvr regression tests:
+   - `examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=arm64-v8a :app:testDebugUnitTest`
+3. optionally assemble the host app:
+   - `examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=arm64-v8a assembleRelease`
+
+The regression cases currently cover:
+
+- `Go Live` fallback to the seekable window end
+- live edge tolerance / offset behavior
+- pending seek ratio clamp
+- stale position clamp after DVR window shrink
+
 ## Tooling Notes
 
 The project is pinned to:

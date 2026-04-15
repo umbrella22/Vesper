@@ -36,6 +36,8 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
+import io.github.ikaros.vesper.player.android.VesperTrackPreferencePolicy
+import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackSelection
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionMode
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
@@ -199,10 +201,20 @@ class VesperPlayerAndroidPlugin :
                 null
             }
             "updateViewport" -> handleSessionCommand(call, result) { session ->
+                val viewportMap = requireNestedMap(call.argumentMap(), "viewport")
+                val viewportHintMap =
+                    (call.argumentMap()["viewportHint"] as? Map<*, *>)?.stringMap()
+                session.lastError = null
+                session.viewport = viewportMap.toFlutterViewport()
+                session.viewportHint =
+                    viewportHintMap?.toFlutterViewportHint() ?: FlutterViewportHint.hidden()
                 emitSnapshot(session)
                 null
             }
             "clearViewport" -> handleSessionCommand(call, result) { session ->
+                session.lastError = null
+                session.viewport = null
+                session.viewportHint = FlutterViewportHint.hidden()
                 emitSnapshot(session)
                 null
             }
@@ -248,6 +260,8 @@ class VesperPlayerAndroidPlugin :
             val arguments = call.argumentMap()
             val initialSourceMap = arguments["initialSource"] as? Map<*, *>
             val resiliencePolicyMap = arguments["resiliencePolicy"] as? Map<*, *>
+            val trackPreferencePolicyMap = arguments["trackPreferencePolicy"] as? Map<*, *>
+            val preloadBudgetPolicyMap = arguments["preloadBudgetPolicy"] as? Map<*, *>
 
             val session = PlayerSession(
                 id = UUID.randomUUID().toString(),
@@ -256,6 +270,12 @@ class VesperPlayerAndroidPlugin :
                     initialSource = initialSourceMap?.stringMap()?.toVesperPlayerSource(),
                     resiliencePolicy = resiliencePolicyMap?.stringMap()?.toResiliencePolicy()
                         ?: VesperPlaybackResiliencePolicy(),
+                    trackPreferencePolicy =
+                        trackPreferencePolicyMap?.stringMap()?.toTrackPreferencePolicy()
+                            ?: VesperTrackPreferencePolicy(),
+                    preloadBudgetPolicy =
+                        preloadBudgetPolicyMap?.stringMap()?.toPreloadBudgetPolicy()
+                            ?: VesperPreloadBudgetPolicy(),
                     surfaceKind = NativeVideoSurfaceKind.SurfaceView,
                 ),
             )
@@ -380,6 +400,8 @@ class VesperPlayerAndroidPlugin :
             "isInterrupted" to uiState.isInterrupted,
             "hasVideoSurface" to session.hasAttachedHost(),
             "timeline" to uiState.timeline.toMap(),
+            "viewport" to session.viewport?.toMap(),
+            "viewportHint" to session.viewportHint.toMap(),
             "backendFamily" to session.controller.backend.toBackendFamilyWireName(),
             "capabilities" to buildCapabilitiesMap(),
             "trackCatalog" to trackCatalog.toMap(),
@@ -457,8 +479,40 @@ private data class PlayerSession(
     var hostView: FrameLayout? = null,
     var observerJob: Job? = null,
     var lastError: Map<String, Any?>? = null,
+    var viewport: FlutterViewport? = null,
+    var viewportHint: FlutterViewportHint = FlutterViewportHint.hidden(),
 ) {
     fun hasAttachedHost(): Boolean = hostView != null
+}
+
+private data class FlutterViewport(
+    val left: Double,
+    val top: Double,
+    val width: Double,
+    val height: Double,
+) {
+    fun toMap(): Map<String, Any> =
+        mapOf(
+            "left" to left,
+            "top" to top,
+            "width" to width,
+            "height" to height,
+        )
+}
+
+private data class FlutterViewportHint(
+    val kind: String,
+    val visibleFraction: Double,
+) {
+    fun toMap(): Map<String, Any> =
+        mapOf(
+            "kind" to kind,
+            "visibleFraction" to visibleFraction,
+        )
+
+    companion object {
+        fun hidden(): FlutterViewportHint = FlutterViewportHint("hidden", 0.0)
+    }
 }
 
 private class VesperPlayerPlatformView(
@@ -547,6 +601,57 @@ private fun Map<String, Any?>.toResiliencePolicy(): VesperPlaybackResiliencePoli
     )
 }
 
+private fun Map<String, Any?>.toTrackPreferencePolicy(): VesperTrackPreferencePolicy {
+    val audioSelection =
+        (this["audioSelection"] as? Map<*, *>)?.stringMap()?.toTrackSelection()
+            ?: VesperTrackSelection.auto()
+    val subtitleSelection =
+        (this["subtitleSelection"] as? Map<*, *>)?.stringMap()?.toTrackSelection()
+            ?: VesperTrackSelection.disabled()
+    val abrPolicy =
+        (this["abrPolicy"] as? Map<*, *>)?.stringMap()?.toAbrPolicy()
+            ?: VesperAbrPolicy.auto()
+    return VesperTrackPreferencePolicy(
+        preferredAudioLanguage = this["preferredAudioLanguage"] as? String,
+        preferredSubtitleLanguage = this["preferredSubtitleLanguage"] as? String,
+        selectSubtitlesByDefault = this["selectSubtitlesByDefault"] as? Boolean ?: false,
+        selectUndeterminedSubtitleLanguage =
+            this["selectUndeterminedSubtitleLanguage"] as? Boolean ?: false,
+        audioSelection = audioSelection,
+        subtitleSelection = subtitleSelection,
+        abrPolicy = abrPolicy,
+    )
+}
+
+private fun Map<String, Any?>.toPreloadBudgetPolicy(): VesperPreloadBudgetPolicy =
+    VesperPreloadBudgetPolicy(
+        maxConcurrentTasks = (this["maxConcurrentTasks"] as? Number)?.toInt(),
+        maxMemoryBytes = (this["maxMemoryBytes"] as? Number)?.toLong(),
+        maxDiskBytes = (this["maxDiskBytes"] as? Number)?.toLong(),
+        warmupWindowMs = (this["warmupWindowMs"] as? Number)?.toLong(),
+    )
+
+private fun Map<String, Any?>.toFlutterViewport(): FlutterViewport =
+    FlutterViewport(
+        left = (this["left"] as? Number)?.toDouble() ?: 0.0,
+        top = (this["top"] as? Number)?.toDouble() ?: 0.0,
+        width = (this["width"] as? Number)?.toDouble() ?: 0.0,
+        height = (this["height"] as? Number)?.toDouble() ?: 0.0,
+    )
+
+private fun Map<String, Any?>.toFlutterViewportHint(): FlutterViewportHint =
+    FlutterViewportHint(
+        kind =
+            when (this["kind"] as? String) {
+                "visible" -> "visible"
+                "nearVisible" -> "nearVisible"
+                "prefetchOnly" -> "prefetchOnly"
+                else -> "hidden"
+            },
+        visibleFraction =
+            ((this["visibleFraction"] as? Number)?.toDouble() ?: 0.0).coerceIn(0.0, 1.0),
+    )
+
 private fun Map<String, Any?>.toBufferingPolicy(): VesperBufferingPolicy =
     VesperBufferingPolicy(
         preset = when (this["preset"] as? String) {
@@ -565,7 +670,12 @@ private fun Map<String, Any?>.toBufferingPolicy(): VesperBufferingPolicy =
 
 private fun Map<String, Any?>.toRetryPolicy(): VesperRetryPolicy =
     VesperRetryPolicy(
-        maxAttempts = (this["maxAttempts"] as? Number)?.toInt(),
+        maxAttempts =
+            when {
+                !containsKey("maxAttempts") -> 3
+                this["maxAttempts"] == null -> null
+                else -> (this["maxAttempts"] as? Number)?.toInt() ?: 3
+            },
         baseDelayMs = (this["baseDelayMs"] as? Number)?.toLong(),
         maxDelayMs = (this["maxDelayMs"] as? Number)?.toLong(),
         backoff = when (this["backoff"] as? String) {

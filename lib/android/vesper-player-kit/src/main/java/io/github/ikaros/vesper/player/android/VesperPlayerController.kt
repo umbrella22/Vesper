@@ -71,6 +71,8 @@ object VesperPlayerControllerFactory {
         context: Context,
         initialSource: VesperPlayerSource? = null,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+        trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
         surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
     ): VesperPlayerController =
         VesperPlayerController(
@@ -78,6 +80,8 @@ object VesperPlayerControllerFactory {
                 context = context,
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
+                trackPreferencePolicy = trackPreferencePolicy,
+                preloadBudgetPolicy = preloadBudgetPolicy,
                 surfaceKind = surfaceKind,
             )
         )

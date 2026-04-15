@@ -1,6 +1,56 @@
 import Foundation
 import VesperPlayerKit
 
+enum ExampleLiveButtonState: Equatable {
+    case goLive
+    case live
+    case liveBehind(Int64)
+}
+
+enum ExampleTimelineSummaryState: Equatable {
+    case live
+    case liveEdge(Int64)
+    case window(positionMs: Int64, endMs: Int64)
+}
+
+func displayedTimelinePositionMs(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> Int64 {
+    if let pendingSeekRatio {
+        return timeline.position(forRatio: pendingSeekRatio)
+    }
+    return timeline.clampedPosition(timeline.positionMs)
+}
+
+func liveButtonState(_ timeline: TimelineUiState) -> ExampleLiveButtonState {
+    guard let liveEdge = timeline.goLivePositionMs else { return .goLive }
+    let behindMs = max(liveEdge - timeline.clampedPosition(timeline.positionMs), 0)
+    if behindMs > 1_500 {
+        return .liveBehind(behindMs)
+    }
+    return .live
+}
+
+func timelineSummaryState(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> ExampleTimelineSummaryState {
+    let displayedPosition = displayedTimelinePositionMs(timeline, pendingSeekRatio: pendingSeekRatio)
+
+    switch timeline.kind {
+    case .live:
+        if let liveEdge = timeline.goLivePositionMs {
+            return .liveEdge(liveEdge)
+        }
+        return .live
+    case .liveDvr:
+        return .window(
+            positionMs: displayedPosition,
+            endMs: timeline.goLivePositionMs ?? timeline.durationMs ?? 0
+        )
+    case .vod:
+        return .window(
+            positionMs: displayedPosition,
+            endMs: timeline.durationMs ?? 0
+        )
+    }
+}
+
 func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {
     switch policy.mode {
     case .auto:
@@ -49,34 +99,38 @@ func stageBadgeText(_ timeline: TimelineUiState) -> String {
     }
 }
 
+func playlistHintLabel(_ kind: VesperPlaylistViewportHintKind) -> String {
+    switch kind {
+    case .visible:
+        ExampleI18n.playlistStatusVisible
+    case .nearVisible:
+        ExampleI18n.playlistStatusNearVisible
+    case .prefetchOnly:
+        ExampleI18n.playlistStatusPrefetch
+    case .hidden:
+        ExampleI18n.playlistStatusHidden
+    }
+}
+
 func liveButtonLabel(_ timeline: TimelineUiState) -> String {
-    guard let liveEdge = timeline.liveEdgeMs else { return ExampleI18n.goLive }
-    let behindMs = max(liveEdge - timeline.positionMs, 0)
-    if behindMs > 1_500 {
+    switch liveButtonState(timeline) {
+    case .goLive:
+        return ExampleI18n.goLive
+    case .live:
+        return ExampleI18n.live
+    case let .liveBehind(behindMs):
         return ExampleI18n.liveBehind(formatMillis(behindMs))
     }
-    return ExampleI18n.live
 }
 
 func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> String {
-    let displayedPosition: Int64 = {
-        guard let pendingSeekRatio else { return timeline.positionMs }
-        if let range = timeline.seekableRange {
-            return range.startMs + Int64(Double(range.endMs - range.startMs) * pendingSeekRatio)
-        }
-        return Int64(Double(timeline.durationMs ?? 0) * pendingSeekRatio)
-    }()
-
-    switch timeline.kind {
+    switch timelineSummaryState(timeline, pendingSeekRatio: pendingSeekRatio) {
     case .live:
-        if let liveEdge = timeline.liveEdgeMs {
-            return ExampleI18n.liveEdge(formatMillis(liveEdge))
-        }
         return ExampleI18n.live
-    case .liveDvr:
-        return "\(formatMillis(displayedPosition)) / \(formatMillis(timeline.liveEdgeMs ?? timeline.durationMs ?? 0))"
-    case .vod:
-        return "\(formatMillis(displayedPosition)) / \(formatMillis(timeline.durationMs ?? 0))"
+    case let .liveEdge(liveEdge):
+        return ExampleI18n.liveEdge(formatMillis(liveEdge))
+    case let .window(positionMs, endMs):
+        return "\(formatMillis(positionMs)) / \(formatMillis(endMs))"
     }
 }
 

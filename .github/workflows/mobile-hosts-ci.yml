@@ -103,8 +103,11 @@ jobs:
       - name: Build Android JNI libraries
         run: ./scripts/build-android-vesper-player-kit-jni.sh release ${{ matrix.abi }}
 
+      - name: Run Android host regression tests
+        run: examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=${{ matrix.abi }} :app:testDebugUnitTest
+
       - name: Assemble Vesper Android host demo release
-        run: gradle -p examples/android-compose-host -Pvesper.player.android.abis=${{ matrix.abi }} assembleRelease
+        run: examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=${{ matrix.abi }} assembleRelease
 
       - name: Stage Vesper Android release APK
         if: github.event_name == 'workflow_dispatch'
@@ -152,9 +155,24 @@ jobs:
       - name: Check iOS Rust adapter crate
         run: cargo check -p player-platform-ios
 
+      - name: Build Rust iOS resolver bundle
+        run: ./scripts/build-ios-player-ffi-xcframework.sh release
+
       - name: Generate Xcode project
         working-directory: examples/ios-swift-host
         run: xcodegen generate
+
+      - name: Run Vesper iOS host regression tests
+        run: |
+          xcodebuild \
+            -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj \
+            -scheme VesperPlayerHostDemo \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath examples/ios-swift-host/build/TestDerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test
 
       - name: Build Vesper iOS host demo release
         run: |

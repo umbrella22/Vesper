@@ -56,3 +56,13 @@ data class VesperAbrPolicy(
             )
     }
 }
+
+data class VesperTrackPreferencePolicy(
+    val preferredAudioLanguage: String? = null,
+    val preferredSubtitleLanguage: String? = null,
+    val selectSubtitlesByDefault: Boolean = false,
+    val selectUndeterminedSubtitleLanguage: Boolean = false,
+    val audioSelection: VesperTrackSelection = VesperTrackSelection.auto(),
+    val subtitleSelection: VesperTrackSelection = VesperTrackSelection.disabled(),
+    val abrPolicy: VesperAbrPolicy = VesperAbrPolicy.auto(),
+)

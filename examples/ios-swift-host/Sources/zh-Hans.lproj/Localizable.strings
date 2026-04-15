@@ -20,6 +20,14 @@
 "example.sources.theme_title" = "主题";
 "example.sources.remote_url_placeholder" = "远程 URL（HLS / progressive）";
 "example.sources.open_remote_url" = "打开远程 URL";
+"example.playlist.title" = "播放列表";
+"example.playlist.subtitle" = "点击演示流、本地视频或自定义远程 URL 后，媒体源会按加入顺序出现在这里。";
+"example.playlist.empty" = "播放列表里还没有媒体源。";
+"example.playlist.status_current" = "当前播放";
+"example.playlist.status_visible" = "当前可见";
+"example.playlist.status_near_visible" = "临近可见";
+"example.playlist.status_prefetch" = "仅预取";
+"example.playlist.status_hidden" = "隐藏";
 
 "example.resilience.title" = "恢复策略";
 "example.resilience.subtitle" = "运行时切换 resilience preset，并尽量保留当前媒体、播放进度和播放意图。";

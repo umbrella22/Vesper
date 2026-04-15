@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/services.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
@@ -25,12 +27,21 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
     VesperPlayerSource? initialSource,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
+    VesperTrackPreferencePolicy trackPreferencePolicy =
+        const VesperTrackPreferencePolicy(),
+    VesperPreloadBudgetPolicy preloadBudgetPolicy =
+        const VesperPreloadBudgetPolicy(),
   }) async {
+    final trackPreferenceMap = trackPreferencePolicy.toMap();
+    final preloadBudgetMap = preloadBudgetPolicy.toMap();
     final result =
         await _invokeMethod<Object?>('createPlayer', <String, Object?>{
-          'initialSource': initialSource?.toMap(),
-          'resiliencePolicy': resiliencePolicy.toMap(),
-        });
+      'initialSource': initialSource?.toMap(),
+      'resiliencePolicy': resiliencePolicy.toMap(),
+      if (trackPreferenceMap.isNotEmpty)
+        'trackPreferencePolicy': trackPreferenceMap,
+      if (preloadBudgetMap.isNotEmpty) 'preloadBudgetPolicy': preloadBudgetMap,
+    });
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)
         : <Object?, Object?>{};
@@ -167,9 +178,11 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
 
   @override
   Future<void> updateViewport(String playerId, VesperPlayerViewport viewport) {
+    final viewportHint = _deriveViewportHint(viewport);
     return _invokeVoid('updateViewport', <String, Object?>{
       'playerId': playerId,
       'viewport': viewport.toMap(),
+      'viewportHint': viewportHint.toMap(),
     });
   }
 
@@ -200,4 +213,19 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
       rethrow;
     }
   }
+}
+
+VesperViewportHint _deriveViewportHint(VesperPlayerViewport viewport) {
+  final view = ui.PlatformDispatcher.instance.implicitView ??
+      (ui.PlatformDispatcher.instance.views.isNotEmpty
+          ? ui.PlatformDispatcher.instance.views.first
+          : null);
+  if (view == null || view.devicePixelRatio <= 0) {
+    return const VesperViewportHint.hidden();
+  }
+
+  return viewport.classifyHint(
+    surfaceWidth: view.physicalSize.width / view.devicePixelRatio,
+    surfaceHeight: view.physicalSize.height / view.devicePixelRatio,
+  );
 }

@@ -40,6 +40,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
+import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
@@ -48,6 +49,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun PlayerHostApp(
     controller: VesperPlayerController,
+    playlistCoordinator: VesperPlaylistCoordinator,
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -84,13 +86,47 @@ fun PlayerHostApp(
     val uiState = rememberVesperPlayerUiState(controller)
     val trackCatalog by controller.trackCatalog.collectAsState()
     val trackSelection by controller.trackSelection.collectAsState()
+    val playlistSnapshot by playlistCoordinator.snapshot.collectAsState()
 
     var remoteStreamUrl by rememberSaveable { mutableStateOf(ANDROID_HLS_DEMO_URL) }
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
     var activeSheet by rememberSaveable { mutableStateOf<ExamplePlayerSheet?>(null) }
     var pendingSeekRatio by remember { mutableStateOf<Float?>(null) }
     var isApplyingResilienceProfile by remember { mutableStateOf(false) }
+    var hasHandledFinishedPlayback by remember { mutableStateOf(false) }
+    var queuedRemoteSource by remember { mutableStateOf<VesperPlayerSource?>(null) }
+    var queuedLocalSource by remember { mutableStateOf<VesperPlayerSource?>(null) }
+    var playlistItemIds by remember {
+        mutableStateOf(listOf(ANDROID_HLS_PLAYLIST_ITEM_ID))
+    }
     val scope = rememberCoroutineScope()
+
+    fun applyPlaylistQueue(
+        focusItemId: String? = playlistSnapshot.activeItem?.itemId,
+        playlistItems: List<String> = playlistItemIds,
+        remoteSource: VesperPlayerSource? = queuedRemoteSource,
+        localSource: VesperPlayerSource? = queuedLocalSource,
+    ) {
+        val queue =
+            examplePlaylistQueue(
+                context = context,
+                playlistItemIds = playlistItems,
+                remoteSource = remoteSource,
+                localSource = localSource,
+            )
+        playlistItemIds = queue.map { item -> item.itemId }
+        playlistCoordinator.replaceQueue(queue)
+        val resolvedFocusId =
+            focusItemId?.takeIf { itemId -> queue.any { item -> item.itemId == itemId } }
+                ?: queue.firstOrNull()?.itemId
+        if (resolvedFocusId == null) {
+            playlistCoordinator.clearViewportHints()
+        } else {
+            playlistCoordinator.updateViewportHints(
+                examplePlaylistViewportHints(queue, resolvedFocusId),
+            )
+        }
+    }
 
     val pickVideoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -102,13 +138,48 @@ fun PlayerHostApp(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
-        controller.selectSource(
+        val localSource =
             VesperPlayerSource.local(
                 uri = uri.toString(),
                 label = displayNameForUri(context, uri),
-            ),
+            )
+        queuedLocalSource = localSource
+        val nextPlaylistItems =
+            enqueuePlaylistItem(
+                playlistItemIds = playlistItemIds,
+                itemId = ANDROID_LOCAL_PLAYLIST_ITEM_ID,
+            )
+        applyPlaylistQueue(
+            focusItemId = ANDROID_LOCAL_PLAYLIST_ITEM_ID,
+            playlistItems = nextPlaylistItems,
+            localSource = localSource,
         )
         controlsVisible = true
+    }
+
+    LaunchedEffect(Unit) {
+        applyPlaylistQueue(focusItemId = ANDROID_HLS_PLAYLIST_ITEM_ID)
+    }
+
+    LaunchedEffect(playlistSnapshot.activeItem?.itemId) {
+        val activeItem = playlistSnapshot.activeItem ?: return@LaunchedEffect
+        val source =
+            playlistSnapshot.queue
+                .firstOrNull { it.item.itemId == activeItem.itemId }
+                ?.item?.source ?: return@LaunchedEffect
+        controller.selectSource(source)
+        controlsVisible = true
+    }
+
+    LaunchedEffect(uiState.playbackState, playlistSnapshot.activeItem?.itemId) {
+        if (uiState.playbackState != PlaybackStateUi.Finished) {
+            hasHandledFinishedPlayback = false
+            return@LaunchedEffect
+        }
+        if (!hasHandledFinishedPlayback && playlistSnapshot.activeItem != null) {
+            hasHandledFinishedPlayback = true
+            playlistCoordinator.handlePlaybackCompleted()
+        }
     }
 
     LaunchedEffect(
@@ -237,24 +308,63 @@ fun PlayerHostApp(
                                 pickVideoLauncher.launch(arrayOf("video/*"))
                             },
                             onUseHlsDemo = {
-                                controller.selectSource(androidHlsDemoSource(context))
+                                val nextPlaylistItems =
+                                    enqueuePlaylistItem(
+                                        playlistItemIds = playlistItemIds,
+                                        itemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                    )
+                                applyPlaylistQueue(
+                                    focusItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                    playlistItems = nextPlaylistItems,
+                                )
                                 controlsVisible = true
                             },
                             onUseDashDemo = {
-                                controller.selectSource(androidDashDemoSource(context))
+                                val nextPlaylistItems =
+                                    enqueuePlaylistItem(
+                                        playlistItemIds = playlistItemIds,
+                                        itemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                    )
+                                applyPlaylistQueue(
+                                    focusItemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                    playlistItems = nextPlaylistItems,
+                                )
                                 controlsVisible = true
                             },
                             onOpenRemote = {
                                 val url = remoteStreamUrl.trim()
                                 if (url.isNotEmpty()) {
-                                    controller.selectSource(
+                                    val remoteSource =
                                         VesperPlayerSource.remote(
                                             uri = url,
                                             label = context.getString(R.string.example_source_custom_remote_label),
-                                        ),
+                                        )
+                                    queuedRemoteSource = remoteSource
+                                    val nextPlaylistItems =
+                                        enqueuePlaylistItem(
+                                            playlistItemIds = playlistItemIds,
+                                            itemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                        )
+                                    applyPlaylistQueue(
+                                        focusItemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                        playlistItems = nextPlaylistItems,
+                                        remoteSource = remoteSource,
                                     )
                                     controlsVisible = true
                                 }
+                            },
+                        )
+
+                        ExamplePlaylistSection(
+                            palette = palette,
+                            playlistQueue = playlistSnapshot.queue,
+                            onFocusPlaylistItem = { itemId ->
+                                val queue =
+                                    playlistSnapshot.queue.map { itemState -> itemState.item }
+                                playlistCoordinator.updateViewportHints(
+                                    examplePlaylistViewportHints(queue, itemId),
+                                )
+                                controlsVisible = true
                             },
                         )
 
@@ -275,6 +385,7 @@ fun PlayerHostApp(
                                         val result =
                                             runCatching {
                                                 controller.setResiliencePolicy(profile.policy)
+                                                playlistCoordinator.setResiliencePolicy(profile.policy)
                                             }
                                         if (result.isFailure) {
                                             selectedResilienceProfile = previousProfile

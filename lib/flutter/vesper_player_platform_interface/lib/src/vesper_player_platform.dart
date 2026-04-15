@@ -24,7 +24,7 @@ final class VesperPlatformCreateResult {
 
 class VesperUnsupportedError extends UnsupportedError {
   VesperUnsupportedError([String? message])
-    : super(message ?? 'Vesper player is not supported on this platform.');
+      : super(message ?? 'Vesper player is not supported on this platform.');
 }
 
 abstract class VesperPlayerPlatform extends PlatformInterface {
@@ -45,6 +45,10 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     VesperPlayerSource? initialSource,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
+    VesperTrackPreferencePolicy trackPreferencePolicy =
+        const VesperTrackPreferencePolicy(),
+    VesperPreloadBudgetPolicy preloadBudgetPolicy =
+        const VesperPreloadBudgetPolicy(),
   });
 
   Stream<VesperPlayerEvent> eventsFor(String playerId);
@@ -104,6 +108,10 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
     VesperPlayerSource? initialSource,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
+    VesperTrackPreferencePolicy trackPreferencePolicy =
+        const VesperTrackPreferencePolicy(),
+    VesperPreloadBudgetPolicy preloadBudgetPolicy =
+        const VesperPreloadBudgetPolicy(),
   }) async {
     throw VesperUnsupportedError();
   }
@@ -157,19 +165,22 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
   Future<void> setVideoTrackSelection(
     String playerId,
     VesperTrackSelection selection,
-  ) async => throw VesperUnsupportedError();
+  ) async =>
+      throw VesperUnsupportedError();
 
   @override
   Future<void> setAudioTrackSelection(
     String playerId,
     VesperTrackSelection selection,
-  ) async => throw VesperUnsupportedError();
+  ) async =>
+      throw VesperUnsupportedError();
 
   @override
   Future<void> setSubtitleTrackSelection(
     String playerId,
     VesperTrackSelection selection,
-  ) async => throw VesperUnsupportedError();
+  ) async =>
+      throw VesperUnsupportedError();
 
   @override
   Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy) async =>
@@ -179,13 +190,15 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
   Future<void> setResiliencePolicy(
     String playerId,
     VesperPlaybackResiliencePolicy policy,
-  ) async => throw VesperUnsupportedError();
+  ) async =>
+      throw VesperUnsupportedError();
 
   @override
   Future<void> updateViewport(
     String playerId,
     VesperPlayerViewport viewport,
-  ) async => throw VesperUnsupportedError();
+  ) async =>
+      throw VesperUnsupportedError();
 
   @override
   Future<void> clearViewport(String playerId) async =>

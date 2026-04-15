@@ -1,0 +1,13 @@
+[package]
+name = "player-plugin-loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libloading.workspace = true
+player-plugin = { path = "../player-plugin" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

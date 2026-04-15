@@ -17,6 +17,8 @@ fi
 
 mkdir -p "$BUILD_DIR"
 
+"$ROOT_DIR/scripts/build-ios-player-ffi-xcframework.sh"
+
 (cd "$PROJECT_DIR" && xcodegen generate)
 
 rm -rf "$IOS_ARCHIVE" "$SIM_ARCHIVE" "$OUTPUT_PATH"

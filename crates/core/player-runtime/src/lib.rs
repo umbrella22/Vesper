@@ -1,5 +1,8 @@
 mod adapter;
+mod download;
 mod error;
+mod playlist;
+mod preload;
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -10,6 +13,13 @@ pub use adapter::{
     PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer,
 };
+pub use download::{
+    DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadErrorSummary,
+    DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig, DownloadProfile,
+    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot,
+    DownloadSource, DownloadStore, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState,
+    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+};
 pub use error::{
     PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
 };
@@ -17,6 +27,21 @@ pub use player_core::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
     MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
     MediaTrackSelectionSnapshot, PlaybackProgress, PresentationState, VideoPixelFormat,
+};
+pub use playlist::{
+    PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistAdvanceOutcome,
+    PlaylistAdvanceTrigger, PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent,
+    PlaylistFailureStrategy, PlaylistId, PlaylistItemPreloadProfile, PlaylistNeighborWindow,
+    PlaylistPreloadWindow, PlaylistQueueItem, PlaylistQueueItemId, PlaylistQueueItemSnapshot,
+    PlaylistRepeatMode, PlaylistSnapshot, PlaylistSwitchPolicy, PlaylistViewportHint,
+    PlaylistViewportHintKind,
+};
+pub use preload::{
+    InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, PreloadBudget, PreloadBudgetProvider,
+    PreloadBudgetScope, PreloadCacheKey, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
+    PreloadErrorSummary, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority,
+    PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId,
+    PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
 };
 
 pub const DEFAULT_PLAYBACK_RATE: f32 = 1.0;
@@ -28,6 +53,10 @@ pub const DEFAULT_VIDEO_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(16)
 pub const DEFAULT_VIDEO_PREFETCH_CAPACITY: usize = 8;
 pub const DEFAULT_RETRY_BASE_DELAY: Duration = Duration::from_millis(1_000);
 pub const DEFAULT_RETRY_MAX_DELAY: Duration = Duration::from_millis(5_000);
+pub const DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS: u32 = 2;
+pub const DEFAULT_PRELOAD_MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_PRELOAD_MAX_DISK_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_PRELOAD_WARMUP_WINDOW: Duration = Duration::from_secs(30);
 
 static DEFAULT_RUNTIME_ADAPTER_FACTORY: OnceLock<&'static dyn PlayerRuntimeAdapterFactory> =
     OnceLock::new();
@@ -42,6 +71,8 @@ pub struct PlayerRuntimeOptions {
     pub buffering_policy: PlayerBufferingPolicy,
     pub retry_policy: PlayerRetryPolicy,
     pub cache_policy: PlayerCachePolicy,
+    pub preload_budget: PlayerPreloadBudgetPolicy,
+    pub track_preferences: PlayerTrackPreferencePolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +128,33 @@ pub struct PlayerResolvedResiliencePolicy {
     pub buffering_policy: PlayerBufferingPolicy,
     pub retry_policy: PlayerRetryPolicy,
     pub cache_policy: PlayerCachePolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerPreloadBudgetPolicy {
+    pub max_concurrent_tasks: Option<u32>,
+    pub max_memory_bytes: Option<u64>,
+    pub max_disk_bytes: Option<u64>,
+    pub warmup_window: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerResolvedPreloadBudgetPolicy {
+    pub max_concurrent_tasks: u32,
+    pub max_memory_bytes: u64,
+    pub max_disk_bytes: u64,
+    pub warmup_window: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerTrackPreferencePolicy {
+    pub preferred_audio_language: Option<String>,
+    pub preferred_subtitle_language: Option<String>,
+    pub select_subtitles_by_default: bool,
+    pub select_undetermined_subtitle_language: bool,
+    pub audio_selection: MediaTrackSelection,
+    pub subtitle_selection: MediaTrackSelection,
+    pub abr_policy: MediaAbrPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,6 +423,8 @@ impl Default for PlayerRuntimeOptions {
             buffering_policy: PlayerBufferingPolicy::default(),
             retry_policy: PlayerRetryPolicy::default(),
             cache_policy: PlayerCachePolicy::default(),
+            preload_budget: PlayerPreloadBudgetPolicy::default(),
+            track_preferences: PlayerTrackPreferencePolicy::default(),
         }
     }
 }
@@ -390,6 +450,19 @@ impl PlayerRuntimeOptions {
         self
     }
 
+    pub fn with_preload_budget(mut self, preload_budget: PlayerPreloadBudgetPolicy) -> Self {
+        self.preload_budget = preload_budget;
+        self
+    }
+
+    pub fn with_track_preferences(
+        mut self,
+        track_preferences: PlayerTrackPreferencePolicy,
+    ) -> Self {
+        self.track_preferences = track_preferences;
+        self
+    }
+
     pub fn resolved_resilience_policy(
         &self,
         source_kind: MediaSourceKind,
@@ -404,6 +477,14 @@ impl PlayerRuntimeOptions {
                 .cache_policy
                 .resolved_for_source(source_kind, source_protocol),
         }
+    }
+
+    pub fn resolved_track_preferences(&self) -> PlayerTrackPreferencePolicy {
+        self.track_preferences.resolved()
+    }
+
+    pub fn resolved_preload_budget(&self) -> PlayerResolvedPreloadBudgetPolicy {
+        self.preload_budget.resolved()
     }
 }
 
@@ -624,6 +705,115 @@ impl Default for PlayerCachePolicy {
             max_memory_bytes: None,
             max_disk_bytes: None,
         }
+    }
+}
+
+impl PlayerPreloadBudgetPolicy {
+    pub fn resolved(&self) -> PlayerResolvedPreloadBudgetPolicy {
+        PlayerResolvedPreloadBudgetPolicy {
+            max_concurrent_tasks: self
+                .max_concurrent_tasks
+                .unwrap_or(DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS),
+            max_memory_bytes: self
+                .max_memory_bytes
+                .unwrap_or(DEFAULT_PRELOAD_MAX_MEMORY_BYTES),
+            max_disk_bytes: self
+                .max_disk_bytes
+                .unwrap_or(DEFAULT_PRELOAD_MAX_DISK_BYTES),
+            warmup_window: self.warmup_window.unwrap_or(DEFAULT_PRELOAD_WARMUP_WINDOW),
+        }
+    }
+}
+
+impl PlayerTrackPreferencePolicy {
+    pub fn resolved(&self) -> Self {
+        Self {
+            preferred_audio_language: normalize_optional_text(
+                self.preferred_audio_language.as_deref(),
+            ),
+            preferred_subtitle_language: normalize_optional_text(
+                self.preferred_subtitle_language.as_deref(),
+            ),
+            select_subtitles_by_default: self.select_subtitles_by_default,
+            select_undetermined_subtitle_language: self.select_undetermined_subtitle_language,
+            audio_selection: normalize_track_selection(
+                &self.audio_selection,
+                MediaTrackSelection::auto(),
+            ),
+            subtitle_selection: normalize_track_selection(
+                &self.subtitle_selection,
+                MediaTrackSelection::disabled(),
+            ),
+            abr_policy: normalize_abr_policy(&self.abr_policy),
+        }
+    }
+}
+
+impl Default for PlayerTrackPreferencePolicy {
+    fn default() -> Self {
+        Self {
+            preferred_audio_language: None,
+            preferred_subtitle_language: None,
+            select_subtitles_by_default: false,
+            select_undetermined_subtitle_language: false,
+            audio_selection: MediaTrackSelection::auto(),
+            subtitle_selection: MediaTrackSelection::disabled(),
+            abr_policy: MediaAbrPolicy::default(),
+        }
+    }
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    let normalized = value?.trim();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.to_owned())
+    }
+}
+
+fn normalize_track_selection(
+    selection: &MediaTrackSelection,
+    fallback: MediaTrackSelection,
+) -> MediaTrackSelection {
+    match selection.mode {
+        MediaTrackSelectionMode::Auto => MediaTrackSelection::auto(),
+        MediaTrackSelectionMode::Disabled => MediaTrackSelection::disabled(),
+        MediaTrackSelectionMode::Track => normalize_optional_text(selection.track_id.as_deref())
+            .map(MediaTrackSelection::track)
+            .unwrap_or(fallback),
+    }
+}
+
+fn normalize_abr_policy(policy: &MediaAbrPolicy) -> MediaAbrPolicy {
+    match policy.mode {
+        MediaAbrMode::Auto => MediaAbrPolicy::default(),
+        MediaAbrMode::Constrained => {
+            let normalized = MediaAbrPolicy {
+                mode: MediaAbrMode::Constrained,
+                track_id: None,
+                max_bit_rate: policy.max_bit_rate,
+                max_width: policy.max_width,
+                max_height: policy.max_height,
+            };
+            if normalized.max_bit_rate.is_none()
+                && normalized.max_width.is_none()
+                && normalized.max_height.is_none()
+            {
+                MediaAbrPolicy::default()
+            } else {
+                normalized
+            }
+        }
+        MediaAbrMode::FixedTrack => normalize_optional_text(policy.track_id.as_deref())
+            .map(|track_id| MediaAbrPolicy {
+                mode: MediaAbrMode::FixedTrack,
+                track_id: Some(track_id),
+                max_bit_rate: None,
+                max_width: None,
+                max_height: None,
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -1069,11 +1259,15 @@ fn default_runtime_adapter_factory() -> PlayerRuntimeResult<&'static dyn PlayerR
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaSourceKind, MediaSourceProtocol, PlaybackProgress, PlayerBufferingPolicy,
-        PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset, PlayerMediaInfo,
-        PlayerResilienceMetricsTracker, PlayerRetryBackoff, PlayerRetryPolicy,
-        PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeOptions,
-        PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
+        DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
+        DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, MediaAbrMode,
+        MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
+        MediaTrackSelectionMode, PlaybackProgress, PlayerBufferingPolicy, PlayerBufferingPreset,
+        PlayerCachePolicy, PlayerCachePreset, PlayerMediaInfo, PlayerPreloadBudgetPolicy,
+        PlayerResilienceMetricsTracker, PlayerResolvedPreloadBudgetPolicy, PlayerRetryBackoff,
+        PlayerRetryPolicy, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+        PlayerRuntimeOptions, PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
+        PlayerTrackPreferencePolicy, PresentationState,
     };
     use std::time::Duration;
 
@@ -1263,6 +1457,129 @@ mod tests {
             }
         );
         assert_eq!(options.cache_policy, PlayerCachePolicy::default());
+        assert_eq!(
+            options.track_preferences,
+            PlayerTrackPreferencePolicy::default()
+        );
+    }
+
+    #[test]
+    fn runtime_options_resolve_preload_budget_to_runtime_defaults() {
+        let resolved = PlayerRuntimeOptions::default().resolved_preload_budget();
+
+        assert_eq!(
+            resolved,
+            PlayerResolvedPreloadBudgetPolicy {
+                max_concurrent_tasks: DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS,
+                max_memory_bytes: DEFAULT_PRELOAD_MAX_MEMORY_BYTES,
+                max_disk_bytes: DEFAULT_PRELOAD_MAX_DISK_BYTES,
+                warmup_window: DEFAULT_PRELOAD_WARMUP_WINDOW,
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_preload_budget_preserves_explicit_zero_and_override_values() {
+        let resolved = PlayerRuntimeOptions::default()
+            .with_preload_budget(PlayerPreloadBudgetPolicy {
+                max_concurrent_tasks: Some(0),
+                max_memory_bytes: Some(0),
+                max_disk_bytes: Some(512 * 1024 * 1024),
+                warmup_window: Some(Duration::ZERO),
+            })
+            .resolved_preload_budget();
+
+        assert_eq!(
+            resolved,
+            PlayerResolvedPreloadBudgetPolicy {
+                max_concurrent_tasks: 0,
+                max_memory_bytes: 0,
+                max_disk_bytes: 512 * 1024 * 1024,
+                warmup_window: Duration::ZERO,
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_options_resolve_track_preferences_to_runtime_defaults() {
+        let resolved = PlayerRuntimeOptions::default().resolved_track_preferences();
+
+        assert_eq!(resolved, PlayerTrackPreferencePolicy::default());
+    }
+
+    #[test]
+    fn runtime_track_preferences_normalize_blank_values_and_invalid_overrides() {
+        let resolved = PlayerRuntimeOptions::default()
+            .with_track_preferences(PlayerTrackPreferencePolicy {
+                preferred_audio_language: Some("  en-US  ".to_owned()),
+                preferred_subtitle_language: Some("   ".to_owned()),
+                select_subtitles_by_default: true,
+                select_undetermined_subtitle_language: true,
+                audio_selection: MediaTrackSelection {
+                    mode: MediaTrackSelectionMode::Track,
+                    track_id: Some("   ".to_owned()),
+                },
+                subtitle_selection: MediaTrackSelection {
+                    mode: MediaTrackSelectionMode::Track,
+                    track_id: Some(" subtitle:eng-main ".to_owned()),
+                },
+                abr_policy: MediaAbrPolicy {
+                    mode: MediaAbrMode::FixedTrack,
+                    track_id: Some("  ".to_owned()),
+                    max_bit_rate: Some(2_000_000),
+                    max_width: Some(1_920),
+                    max_height: Some(1_080),
+                },
+            })
+            .resolved_track_preferences();
+
+        assert_eq!(resolved.preferred_audio_language.as_deref(), Some("en-US"));
+        assert_eq!(resolved.preferred_subtitle_language, None);
+        assert_eq!(resolved.audio_selection, MediaTrackSelection::auto());
+        assert_eq!(
+            resolved.subtitle_selection,
+            MediaTrackSelection::track("subtitle:eng-main")
+        );
+        assert_eq!(resolved.abr_policy, MediaAbrPolicy::default());
+    }
+
+    #[test]
+    fn runtime_track_preferences_preserve_valid_constraints() {
+        let resolved = PlayerRuntimeOptions::default()
+            .with_track_preferences(PlayerTrackPreferencePolicy {
+                preferred_audio_language: Some("ja".to_owned()),
+                preferred_subtitle_language: Some("zh-Hans".to_owned()),
+                select_subtitles_by_default: true,
+                select_undetermined_subtitle_language: false,
+                audio_selection: MediaTrackSelection::auto(),
+                subtitle_selection: MediaTrackSelection::disabled(),
+                abr_policy: MediaAbrPolicy {
+                    mode: MediaAbrMode::Constrained,
+                    track_id: Some("ignored-track-id".to_owned()),
+                    max_bit_rate: Some(4_000_000),
+                    max_width: None,
+                    max_height: Some(1_080),
+                },
+            })
+            .resolved_track_preferences();
+
+        assert_eq!(resolved.preferred_audio_language.as_deref(), Some("ja"));
+        assert_eq!(
+            resolved.preferred_subtitle_language.as_deref(),
+            Some("zh-Hans")
+        );
+        assert_eq!(resolved.audio_selection, MediaTrackSelection::auto());
+        assert_eq!(resolved.subtitle_selection, MediaTrackSelection::disabled());
+        assert_eq!(
+            resolved.abr_policy,
+            MediaAbrPolicy {
+                mode: MediaAbrMode::Constrained,
+                track_id: None,
+                max_bit_rate: Some(4_000_000),
+                max_width: None,
+                max_height: Some(1_080),
+            }
+        );
     }
 
     #[test]

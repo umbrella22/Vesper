@@ -1,5 +1,8 @@
 /target
 *.mp4
+.gradle/*
+flutter_aliplayer-7.12.0/*
+flutter_tencent/*
 
 # Development notes (local only, not committed)
 devnotes/
@@ -57,7 +60,8 @@ examples/ios-swift-host/*.xcodeproj/
 examples/ios-swift-host/*.xcworkspace/
 examples/ios-swift-host/**/*.xcuserdata/
 examples/ios-swift-host/**/*.xcuserstate
-examples/ios-swift-host/.build/
+examples/ios-swift-host/.build/*
+examples/ios-swift-host/build/*
 
 # iOS library generated artifacts
 lib/ios/**/*.xcodeproj/
@@ -65,7 +69,8 @@ lib/ios/**/*.xcworkspace/
 lib/ios/**/*.xcuserdata/
 lib/ios/**/*.xcuserstate
 lib/ios/**/*.swiftpm/*
-lib/ios/**/.build/
+lib/ios/**/.build/*
+lib/ios/**/build/*
 lib/ios/**/*.xcframework/
 
 # Flutter plugin generated artifacts (lib/flutter/)

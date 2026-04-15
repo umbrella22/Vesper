@@ -38,4 +38,16 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
     scheme:
-      testTargets: []
+      testTargets:
+        - VesperPlayerHostDemoTests
+  VesperPlayerHostDemoTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Tests/VesperPlayerHostDemoTests
+    dependencies:
+      - target: VesperPlayerHostDemo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true

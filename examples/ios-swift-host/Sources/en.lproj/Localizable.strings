@@ -20,6 +20,14 @@
 "example.sources.theme_title" = "Theme";
 "example.sources.remote_url_placeholder" = "Remote URL (HLS / progressive)";
 "example.sources.open_remote_url" = "Open Remote URL";
+"example.playlist.title" = "Playlist";
+"example.playlist.subtitle" = "Media sources appear here after you open a demo stream, a local video, or a custom remote URL.";
+"example.playlist.empty" = "No media has been added to the playlist yet.";
+"example.playlist.status_current" = "Now Playing";
+"example.playlist.status_visible" = "Visible";
+"example.playlist.status_near_visible" = "Near Visible";
+"example.playlist.status_prefetch" = "Prefetch";
+"example.playlist.status_hidden" = "Hidden";
 
 "example.resilience.title" = "Playback Resilience";
 "example.resilience.subtitle" = "Switch resilience presets at runtime and ask the player to keep the current source, progress, and playback intent when possible.";

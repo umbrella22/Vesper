@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 enum VesperPlayerSourceKind { local, remote }
 
 enum VesperPlayerSourceProtocol {
@@ -102,6 +104,8 @@ Map<Object?, Object?>? _rawMap(Object? raw) {
   }
   return null;
 }
+
+const Object _vesperRetryMaxAttemptsUnset = Object();
 
 final class VesperPlayerSource {
   const VesperPlayerSource({
@@ -363,7 +367,7 @@ final class VesperTimeline {
   double? get displayedRatio {
     final range = seekableRange;
     if (range != null && range.endMs > range.startMs) {
-      final clamped = positionMs.clamp(range.startMs, range.endMs);
+      final clamped = clampedPosition(positionMs);
       final width = range.endMs - range.startMs;
       if (width <= 0) {
         return null;
@@ -375,7 +379,55 @@ final class VesperTimeline {
     if (total == null || total <= 0) {
       return null;
     }
-    return (positionMs / total).clamp(0.0, 1.0).toDouble();
+    return (clampedPosition(positionMs) / total).clamp(0.0, 1.0).toDouble();
+  }
+
+  int? get goLivePositionMs => switch (kind) {
+        VesperTimelineKind.vod => null,
+        VesperTimelineKind.live => liveEdgeMs,
+        VesperTimelineKind.liveDvr => liveEdgeMs ?? seekableRange?.endMs,
+      };
+
+  int? get liveOffsetMs {
+    final liveEdge = goLivePositionMs;
+    if (liveEdge == null) {
+      return null;
+    }
+    return (liveEdge - clampedPosition(positionMs)).clamp(0, liveEdge);
+  }
+
+  int clampedPosition(int positionMs) {
+    final range = seekableRange;
+    if (range != null && range.endMs >= range.startMs) {
+      return positionMs.clamp(range.startMs, range.endMs);
+    }
+
+    final total = durationMs;
+    if (total == null) {
+      return positionMs < 0 ? 0 : positionMs;
+    }
+
+    return positionMs.clamp(0, total < 0 ? 0 : total);
+  }
+
+  int positionForRatio(double ratio) {
+    final normalized = ratio.clamp(0.0, 1.0).toDouble();
+    final range = seekableRange;
+    if (range != null && range.endMs >= range.startMs) {
+      final width = range.endMs - range.startMs;
+      return clampedPosition(range.startMs + (width * normalized).toInt());
+    }
+
+    return clampedPosition(((durationMs ?? 0) * normalized).toInt());
+  }
+
+  bool isAtLiveEdge({int toleranceMs = 1500}) {
+    final liveEdge = goLivePositionMs;
+    if (liveEdge == null) {
+      return false;
+    }
+    final effectiveTolerance = toleranceMs < 0 ? 0 : toleranceMs;
+    return (liveEdge - clampedPosition(positionMs)).abs() <= effectiveTolerance;
   }
 
   Map<String, Object?> toMap() {
@@ -647,6 +699,108 @@ final class VesperTrackSelectionSnapshot {
   }
 }
 
+final class VesperTrackPreferencePolicy {
+  const VesperTrackPreferencePolicy({
+    this.preferredAudioLanguage,
+    this.preferredSubtitleLanguage,
+    this.selectSubtitlesByDefault = false,
+    this.selectUndeterminedSubtitleLanguage = false,
+    this.audioSelection = const VesperTrackSelection.auto(),
+    this.subtitleSelection = const VesperTrackSelection.disabled(),
+    this.abrPolicy = const VesperAbrPolicy.auto(),
+  });
+
+  factory VesperTrackPreferencePolicy.fromMap(Map<Object?, Object?> map) {
+    final rawAudioSelection = map['audioSelection'];
+    final rawSubtitleSelection = map['subtitleSelection'];
+    final rawAbrPolicy = map['abrPolicy'];
+    return VesperTrackPreferencePolicy(
+      preferredAudioLanguage: map['preferredAudioLanguage'] as String?,
+      preferredSubtitleLanguage: map['preferredSubtitleLanguage'] as String?,
+      selectSubtitlesByDefault: _decodeBool(map, 'selectSubtitlesByDefault'),
+      selectUndeterminedSubtitleLanguage: _decodeBool(
+        map,
+        'selectUndeterminedSubtitleLanguage',
+      ),
+      audioSelection: _rawMap(rawAudioSelection) != null
+          ? VesperTrackSelection.fromMap(_rawMap(rawAudioSelection)!)
+          : const VesperTrackSelection.auto(),
+      subtitleSelection: _rawMap(rawSubtitleSelection) != null
+          ? VesperTrackSelection.fromMap(_rawMap(rawSubtitleSelection)!)
+          : const VesperTrackSelection.disabled(),
+      abrPolicy: _rawMap(rawAbrPolicy) != null
+          ? VesperAbrPolicy.fromMap(_rawMap(rawAbrPolicy)!)
+          : const VesperAbrPolicy.auto(),
+    );
+  }
+
+  final String? preferredAudioLanguage;
+  final String? preferredSubtitleLanguage;
+  final bool selectSubtitlesByDefault;
+  final bool selectUndeterminedSubtitleLanguage;
+  final VesperTrackSelection audioSelection;
+  final VesperTrackSelection subtitleSelection;
+  final VesperAbrPolicy abrPolicy;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      if (preferredAudioLanguage != null)
+        'preferredAudioLanguage': preferredAudioLanguage,
+      if (preferredSubtitleLanguage != null)
+        'preferredSubtitleLanguage': preferredSubtitleLanguage,
+      if (selectSubtitlesByDefault)
+        'selectSubtitlesByDefault': selectSubtitlesByDefault,
+      if (selectUndeterminedSubtitleLanguage)
+        'selectUndeterminedSubtitleLanguage':
+            selectUndeterminedSubtitleLanguage,
+      if (audioSelection.mode != VesperTrackSelectionMode.auto ||
+          audioSelection.trackId != null)
+        'audioSelection': audioSelection.toMap(),
+      if (subtitleSelection.mode != VesperTrackSelectionMode.disabled ||
+          subtitleSelection.trackId != null)
+        'subtitleSelection': subtitleSelection.toMap(),
+      if (abrPolicy.mode != VesperAbrMode.auto ||
+          abrPolicy.trackId != null ||
+          abrPolicy.maxBitRate != null ||
+          abrPolicy.maxWidth != null ||
+          abrPolicy.maxHeight != null)
+        'abrPolicy': abrPolicy.toMap(),
+    };
+  }
+}
+
+final class VesperPreloadBudgetPolicy {
+  const VesperPreloadBudgetPolicy({
+    this.maxConcurrentTasks,
+    this.maxMemoryBytes,
+    this.maxDiskBytes,
+    this.warmupWindowMs,
+  });
+
+  factory VesperPreloadBudgetPolicy.fromMap(Map<Object?, Object?> map) {
+    return VesperPreloadBudgetPolicy(
+      maxConcurrentTasks: _decodeInt(map, 'maxConcurrentTasks'),
+      maxMemoryBytes: _decodeInt(map, 'maxMemoryBytes'),
+      maxDiskBytes: _decodeInt(map, 'maxDiskBytes'),
+      warmupWindowMs: _decodeInt(map, 'warmupWindowMs'),
+    );
+  }
+
+  final int? maxConcurrentTasks;
+  final int? maxMemoryBytes;
+  final int? maxDiskBytes;
+  final int? warmupWindowMs;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      if (maxConcurrentTasks != null) 'maxConcurrentTasks': maxConcurrentTasks,
+      if (maxMemoryBytes != null) 'maxMemoryBytes': maxMemoryBytes,
+      if (maxDiskBytes != null) 'maxDiskBytes': maxDiskBytes,
+      if (warmupWindowMs != null) 'warmupWindowMs': warmupWindowMs,
+    };
+  }
+}
+
 final class VesperBufferingPolicy {
   const VesperBufferingPolicy({
     this.preset = VesperBufferingPreset.defaultPreset,
@@ -720,29 +874,37 @@ final class VesperBufferingPolicy {
 
 final class VesperRetryPolicy {
   const VesperRetryPolicy({
-    this.maxAttempts = 3,
+    Object? maxAttempts = _vesperRetryMaxAttemptsUnset,
     int? baseDelayMs,
     int? maxDelayMs,
     VesperRetryBackoff? backoff,
-  })  : _baseDelayMs = baseDelayMs,
+  })  : _maxAttempts = maxAttempts,
+        _baseDelayMs = baseDelayMs,
         _maxDelayMs = maxDelayMs,
         _backoff = backoff;
 
   const VesperRetryPolicy.aggressive()
-      : maxAttempts = 2,
+      : _maxAttempts = 2,
         _baseDelayMs = 500,
         _maxDelayMs = 2000,
         _backoff = VesperRetryBackoff.fixed;
 
   const VesperRetryPolicy.resilient()
-      : maxAttempts = 6,
+      : _maxAttempts = 6,
         _baseDelayMs = 1000,
         _maxDelayMs = 8000,
         _backoff = VesperRetryBackoff.exponential;
 
   factory VesperRetryPolicy.fromMap(Map<Object?, Object?> map) {
+    final rawMaxAttempts = map['maxAttempts'];
     return VesperRetryPolicy(
-      maxAttempts: _decodeInt(map, 'maxAttempts') ?? 3,
+      maxAttempts: map.containsKey('maxAttempts')
+          ? switch (rawMaxAttempts) {
+              int value => value,
+              null => null,
+              _ => _vesperRetryMaxAttemptsUnset,
+            }
+          : _vesperRetryMaxAttemptsUnset,
       baseDelayMs: _decodeInt(map, 'baseDelayMs'),
       maxDelayMs: _decodeInt(map, 'maxDelayMs'),
       backoff: switch (map['backoff']) {
@@ -754,10 +916,20 @@ final class VesperRetryPolicy {
     );
   }
 
-  final int? maxAttempts;
+  final Object? _maxAttempts;
   final int? _baseDelayMs;
   final int? _maxDelayMs;
   final VesperRetryBackoff? _backoff;
+
+  int? get maxAttempts => switch (_maxAttempts) {
+        _vesperRetryMaxAttemptsUnset => 3,
+        int value => value,
+        null => null,
+        _ => 3,
+      };
+
+  bool get hasMaxAttemptsOverride =>
+      !identical(_maxAttempts, _vesperRetryMaxAttemptsUnset);
 
   int get baseDelayMs => _baseDelayMs ?? 1000;
   int get maxDelayMs => _maxDelayMs ?? 5000;
@@ -765,7 +937,7 @@ final class VesperRetryPolicy {
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'maxAttempts': maxAttempts,
+      if (hasMaxAttemptsOverride) 'maxAttempts': _maxAttempts as int?,
       'baseDelayMs': _baseDelayMs,
       'maxDelayMs': _maxDelayMs,
       'backoff': _backoff?.name,
@@ -901,12 +1073,83 @@ final class VesperPlayerViewport {
 
   bool get isEmpty => width <= 0 || height <= 0;
 
+  VesperViewportHint classifyHint({
+    required double surfaceWidth,
+    required double surfaceHeight,
+  }) {
+    if (isEmpty || surfaceWidth <= 0 || surfaceHeight <= 0) {
+      return const VesperViewportHint.hidden();
+    }
+
+    final right = left + width;
+    final bottom = top + height;
+    final visibleWidth = _overlapExtent(left, right, 0, surfaceWidth);
+    final visibleHeight = _overlapExtent(top, bottom, 0, surfaceHeight);
+    final visibleArea = visibleWidth * visibleHeight;
+    final totalArea = width * height;
+    final visibleFraction =
+        totalArea <= 0 ? 0.0 : _clampUnit(visibleArea / totalArea);
+
+    if (visibleArea > 0) {
+      return VesperViewportHint(
+        kind: VesperViewportHintKind.visible,
+        visibleFraction: visibleFraction,
+      );
+    }
+
+    final dx = _axisGap(left, right, 0, surfaceWidth);
+    final dy = _axisGap(top, bottom, 0, surfaceHeight);
+    final edgeDistance = math.sqrt(dx * dx + dy * dy);
+    final reference = math.max(surfaceWidth, surfaceHeight);
+    final kind = edgeDistance <= reference * 0.5
+        ? VesperViewportHintKind.nearVisible
+        : edgeDistance <= reference * 1.5
+            ? VesperViewportHintKind.prefetchOnly
+            : VesperViewportHintKind.hidden;
+
+    return VesperViewportHint(kind: kind, visibleFraction: 0);
+  }
+
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'left': left,
       'top': top,
       'width': width,
       'height': height,
+    };
+  }
+}
+
+enum VesperViewportHintKind { visible, nearVisible, prefetchOnly, hidden }
+
+final class VesperViewportHint {
+  const VesperViewportHint({
+    required this.kind,
+    this.visibleFraction = 0,
+  });
+
+  const VesperViewportHint.hidden()
+      : kind = VesperViewportHintKind.hidden,
+        visibleFraction = 0;
+
+  factory VesperViewportHint.fromMap(Map<Object?, Object?> map) {
+    return VesperViewportHint(
+      kind: _decodeEnum(
+        VesperViewportHintKind.values,
+        map['kind'],
+        VesperViewportHintKind.hidden,
+      ),
+      visibleFraction: _clampUnit(_decodeDouble(map, 'visibleFraction') ?? 0),
+    );
+  }
+
+  final VesperViewportHintKind kind;
+  final double visibleFraction;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'kind': kind.name,
+      'visibleFraction': visibleFraction,
     };
   }
 }
@@ -965,6 +1208,8 @@ final class VesperPlayerSnapshot {
     required this.isInterrupted,
     required this.hasVideoSurface,
     required this.timeline,
+    this.viewport,
+    this.viewportHint = const VesperViewportHint.hidden(),
     this.backendFamily = VesperPlayerBackendFamily.unknown,
     this.capabilities = const VesperPlayerCapabilities.unsupported(),
     this.trackCatalog = const VesperTrackCatalog(),
@@ -982,6 +1227,8 @@ final class VesperPlayerSnapshot {
         isInterrupted = false,
         hasVideoSurface = false,
         timeline = const VesperTimeline.initial(),
+        viewport = null,
+        viewportHint = const VesperViewportHint.hidden(),
         backendFamily = VesperPlayerBackendFamily.unknown,
         capabilities = const VesperPlayerCapabilities.unsupported(),
         trackCatalog = const VesperTrackCatalog(),
@@ -993,6 +1240,8 @@ final class VesperPlayerSnapshot {
     final rawCapabilities = map['capabilities'];
     final rawTrackCatalog = map['trackCatalog'];
     final rawTrackSelection = map['trackSelection'];
+    final rawViewport = map['viewport'];
+    final rawViewportHint = map['viewportHint'];
     final rawLastError = map['lastError'];
     return VesperPlayerSnapshot(
       title: map['title'] as String? ?? 'Vesper',
@@ -1010,6 +1259,12 @@ final class VesperPlayerSnapshot {
       timeline: _rawMap(rawTimeline) != null
           ? VesperTimeline.fromMap(_rawMap(rawTimeline)!)
           : const VesperTimeline.initial(),
+      viewport: _rawMap(rawViewport) != null
+          ? VesperPlayerViewport.fromMap(_rawMap(rawViewport)!)
+          : null,
+      viewportHint: _rawMap(rawViewportHint) != null
+          ? VesperViewportHint.fromMap(_rawMap(rawViewportHint)!)
+          : const VesperViewportHint.hidden(),
       backendFamily: _decodeEnum(
         VesperPlayerBackendFamily.values,
         map['backendFamily'],
@@ -1039,6 +1294,8 @@ final class VesperPlayerSnapshot {
   final bool isInterrupted;
   final bool hasVideoSurface;
   final VesperTimeline timeline;
+  final VesperPlayerViewport? viewport;
+  final VesperViewportHint viewportHint;
   final VesperPlayerBackendFamily backendFamily;
   final VesperPlayerCapabilities capabilities;
   final VesperTrackCatalog trackCatalog;
@@ -1055,6 +1312,8 @@ final class VesperPlayerSnapshot {
     bool? isInterrupted,
     bool? hasVideoSurface,
     VesperTimeline? timeline,
+    VesperPlayerViewport? viewport,
+    VesperViewportHint? viewportHint,
     VesperPlayerBackendFamily? backendFamily,
     VesperPlayerCapabilities? capabilities,
     VesperTrackCatalog? trackCatalog,
@@ -1072,6 +1331,8 @@ final class VesperPlayerSnapshot {
       isInterrupted: isInterrupted ?? this.isInterrupted,
       hasVideoSurface: hasVideoSurface ?? this.hasVideoSurface,
       timeline: timeline ?? this.timeline,
+      viewport: viewport ?? this.viewport,
+      viewportHint: viewportHint ?? this.viewportHint,
       backendFamily: backendFamily ?? this.backendFamily,
       capabilities: capabilities ?? this.capabilities,
       trackCatalog: trackCatalog ?? this.trackCatalog,
@@ -1091,6 +1352,8 @@ final class VesperPlayerSnapshot {
       'isInterrupted': isInterrupted,
       'hasVideoSurface': hasVideoSurface,
       'timeline': timeline.toMap(),
+      'viewport': viewport?.toMap(),
+      'viewportHint': viewportHint.toMap(),
       'backendFamily': backendFamily.name,
       'capabilities': capabilities.toMap(),
       'trackCatalog': trackCatalog.toMap(),
@@ -1107,3 +1370,29 @@ Map<String, Object?> vesperDecodeMap(Object? raw) {
   }
   return <String, Object?>{};
 }
+
+double _overlapExtent(
+  double startA,
+  double endA,
+  double startB,
+  double endB,
+) {
+  return math.max(0, math.min(endA, endB) - math.max(startA, startB));
+}
+
+double _axisGap(
+  double startA,
+  double endA,
+  double startB,
+  double endB,
+) {
+  if (endA < startB) {
+    return startB - endA;
+  }
+  if (endB < startA) {
+    return startA - endB;
+  }
+  return 0;
+}
+
+double _clampUnit(double value) => value.clamp(0.0, 1.0).toDouble();

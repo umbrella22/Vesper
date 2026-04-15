@@ -6,12 +6,15 @@ use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady, MediaAbrMode, MediaAbrPolicy,
     MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
     MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
-    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerMediaInfo, PlayerRuntime, PlayerRuntimeBootstrap,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
-    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-    PlayerRuntimeInitializer, PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot,
-    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-    PlayerVideoInfo, PresentationState, VideoPixelFormat,
+    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy, PlayerBufferingPreset,
+    PlayerCachePolicy, PlayerCachePreset, PlayerMediaInfo, PlayerPreloadBudgetPolicy,
+    PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy, PlayerRetryBackoff,
+    PlayerRetryPolicy, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
+    PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCategory,
+    PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind,
+    PlayerTimelineSnapshot, PlayerTrackPreferencePolicy, PlayerVideoDecodeInfo,
+    PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState, VideoPixelFormat,
 };
 
 pub type FfiResult<T> = Result<T, FfiError>;
@@ -96,6 +99,88 @@ pub enum FfiMediaSourceProtocol {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiBufferingPreset {
+    Default,
+    Balanced,
+    Streaming,
+    Resilient,
+    LowLatency,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiBufferingPolicy {
+    pub preset: FfiBufferingPreset,
+    pub min_buffer_ms: Option<u64>,
+    pub max_buffer_ms: Option<u64>,
+    pub buffer_for_playback_ms: Option<u64>,
+    pub buffer_for_rebuffer_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiRetryBackoff {
+    Fixed,
+    Linear,
+    Exponential,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiRetryPolicy {
+    pub max_attempts: Option<u32>,
+    pub base_delay_ms: u64,
+    pub max_delay_ms: u64,
+    pub backoff: FfiRetryBackoff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiCachePreset {
+    Default,
+    Disabled,
+    Streaming,
+    Resilient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiCachePolicy {
+    pub preset: FfiCachePreset,
+    pub max_memory_bytes: Option<u64>,
+    pub max_disk_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiResolvedResiliencePolicy {
+    pub buffering: FfiBufferingPolicy,
+    pub retry: FfiRetryPolicy,
+    pub cache: FfiCachePolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiPreloadBudgetPolicy {
+    pub max_concurrent_tasks: Option<u32>,
+    pub max_memory_bytes: Option<u64>,
+    pub max_disk_bytes: Option<u64>,
+    pub warmup_window_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiResolvedPreloadBudgetPolicy {
+    pub max_concurrent_tasks: u32,
+    pub max_memory_bytes: u64,
+    pub max_disk_bytes: u64,
+    pub warmup_window_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiTrackPreferences {
+    pub preferred_audio_language: Option<String>,
+    pub preferred_subtitle_language: Option<String>,
+    pub select_subtitles_by_default: bool,
+    pub select_undetermined_subtitle_language: bool,
+    pub audio_selection: FfiTrackSelection,
+    pub subtitle_selection: FfiTrackSelection,
+    pub abr_policy: FfiAbrPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiTrackKind {
     Video,
     Audio,
@@ -133,7 +218,7 @@ pub enum FfiTrackSelectionMode {
     Track,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiTrackSelection {
     pub mode: FfiTrackSelectionMode,
     pub track_id: Option<String>,
@@ -146,7 +231,7 @@ pub enum FfiAbrMode {
     FixedTrack,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiAbrPolicy {
     pub mode: FfiAbrMode,
     pub track_id: Option<String>,
@@ -257,6 +342,41 @@ pub struct FfiSnapshot {
     pub progress: FfiProgress,
     pub timeline: FfiTimelineSnapshot,
     pub media_info: FfiMediaInfo,
+}
+
+pub fn resolve_resilience_policy(
+    source_kind: FfiMediaSourceKind,
+    source_protocol: FfiMediaSourceProtocol,
+    buffering_policy: FfiBufferingPolicy,
+    retry_policy: FfiRetryPolicy,
+    cache_policy: FfiCachePolicy,
+) -> FfiResolvedResiliencePolicy {
+    let options = PlayerRuntimeOptions::default()
+        .with_buffering_policy(buffering_policy.into())
+        .with_retry_policy(retry_policy.into())
+        .with_cache_policy(cache_policy.into());
+
+    FfiResolvedResiliencePolicy::from(
+        options.resolved_resilience_policy(source_kind.into(), source_protocol.into()),
+    )
+}
+
+pub fn resolve_track_preferences(track_preferences: FfiTrackPreferences) -> FfiTrackPreferences {
+    FfiTrackPreferences::from(
+        PlayerRuntimeOptions::default()
+            .with_track_preferences(track_preferences.into())
+            .resolved_track_preferences(),
+    )
+}
+
+pub fn resolve_preload_budget(
+    preload_budget: FfiPreloadBudgetPolicy,
+) -> FfiResolvedPreloadBudgetPolicy {
+    FfiResolvedPreloadBudgetPolicy::from(
+        PlayerRuntimeOptions::default()
+            .with_preload_budget(preload_budget.into())
+            .resolved_preload_budget(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -462,6 +582,231 @@ impl From<MediaSourceProtocol> for FfiMediaSourceProtocol {
             MediaSourceProtocol::Progressive => Self::Progressive,
             MediaSourceProtocol::Hls => Self::Hls,
             MediaSourceProtocol::Dash => Self::Dash,
+        }
+    }
+}
+
+impl From<FfiMediaSourceKind> for MediaSourceKind {
+    fn from(value: FfiMediaSourceKind) -> Self {
+        match value {
+            FfiMediaSourceKind::Local => Self::Local,
+            FfiMediaSourceKind::Remote => Self::Remote,
+        }
+    }
+}
+
+impl From<FfiMediaSourceProtocol> for MediaSourceProtocol {
+    fn from(value: FfiMediaSourceProtocol) -> Self {
+        match value {
+            FfiMediaSourceProtocol::Unknown => Self::Unknown,
+            FfiMediaSourceProtocol::File => Self::File,
+            FfiMediaSourceProtocol::Content => Self::Content,
+            FfiMediaSourceProtocol::Progressive => Self::Progressive,
+            FfiMediaSourceProtocol::Hls => Self::Hls,
+            FfiMediaSourceProtocol::Dash => Self::Dash,
+        }
+    }
+}
+
+impl From<PlayerBufferingPreset> for FfiBufferingPreset {
+    fn from(value: PlayerBufferingPreset) -> Self {
+        match value {
+            PlayerBufferingPreset::Default => Self::Default,
+            PlayerBufferingPreset::Balanced => Self::Balanced,
+            PlayerBufferingPreset::Streaming => Self::Streaming,
+            PlayerBufferingPreset::Resilient => Self::Resilient,
+            PlayerBufferingPreset::LowLatency => Self::LowLatency,
+        }
+    }
+}
+
+impl From<FfiBufferingPreset> for PlayerBufferingPreset {
+    fn from(value: FfiBufferingPreset) -> Self {
+        match value {
+            FfiBufferingPreset::Default => Self::Default,
+            FfiBufferingPreset::Balanced => Self::Balanced,
+            FfiBufferingPreset::Streaming => Self::Streaming,
+            FfiBufferingPreset::Resilient => Self::Resilient,
+            FfiBufferingPreset::LowLatency => Self::LowLatency,
+        }
+    }
+}
+
+impl From<PlayerBufferingPolicy> for FfiBufferingPolicy {
+    fn from(value: PlayerBufferingPolicy) -> Self {
+        Self {
+            preset: value.preset.into(),
+            min_buffer_ms: value.min_buffer.map(duration_to_millis),
+            max_buffer_ms: value.max_buffer.map(duration_to_millis),
+            buffer_for_playback_ms: value.buffer_for_playback.map(duration_to_millis),
+            buffer_for_rebuffer_ms: value.buffer_for_rebuffer.map(duration_to_millis),
+        }
+    }
+}
+
+impl From<FfiBufferingPolicy> for PlayerBufferingPolicy {
+    fn from(value: FfiBufferingPolicy) -> Self {
+        Self {
+            preset: value.preset.into(),
+            min_buffer: value.min_buffer_ms.map(Duration::from_millis),
+            max_buffer: value.max_buffer_ms.map(Duration::from_millis),
+            buffer_for_playback: value.buffer_for_playback_ms.map(Duration::from_millis),
+            buffer_for_rebuffer: value.buffer_for_rebuffer_ms.map(Duration::from_millis),
+        }
+    }
+}
+
+impl From<PlayerRetryBackoff> for FfiRetryBackoff {
+    fn from(value: PlayerRetryBackoff) -> Self {
+        match value {
+            PlayerRetryBackoff::Fixed => Self::Fixed,
+            PlayerRetryBackoff::Linear => Self::Linear,
+            PlayerRetryBackoff::Exponential => Self::Exponential,
+        }
+    }
+}
+
+impl From<FfiRetryBackoff> for PlayerRetryBackoff {
+    fn from(value: FfiRetryBackoff) -> Self {
+        match value {
+            FfiRetryBackoff::Fixed => Self::Fixed,
+            FfiRetryBackoff::Linear => Self::Linear,
+            FfiRetryBackoff::Exponential => Self::Exponential,
+        }
+    }
+}
+
+impl From<PlayerRetryPolicy> for FfiRetryPolicy {
+    fn from(value: PlayerRetryPolicy) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            base_delay_ms: duration_to_millis(value.base_delay),
+            max_delay_ms: duration_to_millis(value.max_delay),
+            backoff: value.backoff.into(),
+        }
+    }
+}
+
+impl From<FfiRetryPolicy> for PlayerRetryPolicy {
+    fn from(value: FfiRetryPolicy) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            base_delay: Duration::from_millis(value.base_delay_ms),
+            max_delay: Duration::from_millis(value.max_delay_ms),
+            backoff: value.backoff.into(),
+        }
+    }
+}
+
+impl From<PlayerCachePreset> for FfiCachePreset {
+    fn from(value: PlayerCachePreset) -> Self {
+        match value {
+            PlayerCachePreset::Default => Self::Default,
+            PlayerCachePreset::Disabled => Self::Disabled,
+            PlayerCachePreset::Streaming => Self::Streaming,
+            PlayerCachePreset::Resilient => Self::Resilient,
+        }
+    }
+}
+
+impl From<FfiCachePreset> for PlayerCachePreset {
+    fn from(value: FfiCachePreset) -> Self {
+        match value {
+            FfiCachePreset::Default => Self::Default,
+            FfiCachePreset::Disabled => Self::Disabled,
+            FfiCachePreset::Streaming => Self::Streaming,
+            FfiCachePreset::Resilient => Self::Resilient,
+        }
+    }
+}
+
+impl From<PlayerCachePolicy> for FfiCachePolicy {
+    fn from(value: PlayerCachePolicy) -> Self {
+        Self {
+            preset: value.preset.into(),
+            max_memory_bytes: value.max_memory_bytes,
+            max_disk_bytes: value.max_disk_bytes,
+        }
+    }
+}
+
+impl From<FfiCachePolicy> for PlayerCachePolicy {
+    fn from(value: FfiCachePolicy) -> Self {
+        Self {
+            preset: value.preset.into(),
+            max_memory_bytes: value.max_memory_bytes,
+            max_disk_bytes: value.max_disk_bytes,
+        }
+    }
+}
+
+impl From<PlayerResolvedResiliencePolicy> for FfiResolvedResiliencePolicy {
+    fn from(value: PlayerResolvedResiliencePolicy) -> Self {
+        Self {
+            buffering: value.buffering_policy.into(),
+            retry: value.retry_policy.into(),
+            cache: value.cache_policy.into(),
+        }
+    }
+}
+
+impl From<PlayerPreloadBudgetPolicy> for FfiPreloadBudgetPolicy {
+    fn from(value: PlayerPreloadBudgetPolicy) -> Self {
+        Self {
+            max_concurrent_tasks: value.max_concurrent_tasks,
+            max_memory_bytes: value.max_memory_bytes,
+            max_disk_bytes: value.max_disk_bytes,
+            warmup_window_ms: value.warmup_window.map(duration_to_millis),
+        }
+    }
+}
+
+impl From<FfiPreloadBudgetPolicy> for PlayerPreloadBudgetPolicy {
+    fn from(value: FfiPreloadBudgetPolicy) -> Self {
+        Self {
+            max_concurrent_tasks: value.max_concurrent_tasks,
+            max_memory_bytes: value.max_memory_bytes,
+            max_disk_bytes: value.max_disk_bytes,
+            warmup_window: value.warmup_window_ms.map(Duration::from_millis),
+        }
+    }
+}
+
+impl From<PlayerResolvedPreloadBudgetPolicy> for FfiResolvedPreloadBudgetPolicy {
+    fn from(value: PlayerResolvedPreloadBudgetPolicy) -> Self {
+        Self {
+            max_concurrent_tasks: value.max_concurrent_tasks,
+            max_memory_bytes: value.max_memory_bytes,
+            max_disk_bytes: value.max_disk_bytes,
+            warmup_window_ms: duration_to_millis(value.warmup_window),
+        }
+    }
+}
+
+impl From<PlayerTrackPreferencePolicy> for FfiTrackPreferences {
+    fn from(value: PlayerTrackPreferencePolicy) -> Self {
+        Self {
+            preferred_audio_language: value.preferred_audio_language,
+            preferred_subtitle_language: value.preferred_subtitle_language,
+            select_subtitles_by_default: value.select_subtitles_by_default,
+            select_undetermined_subtitle_language: value.select_undetermined_subtitle_language,
+            audio_selection: value.audio_selection.into(),
+            subtitle_selection: value.subtitle_selection.into(),
+            abr_policy: value.abr_policy.into(),
+        }
+    }
+}
+
+impl From<FfiTrackPreferences> for PlayerTrackPreferencePolicy {
+    fn from(value: FfiTrackPreferences) -> Self {
+        Self {
+            preferred_audio_language: value.preferred_audio_language,
+            preferred_subtitle_language: value.preferred_subtitle_language,
+            select_subtitles_by_default: value.select_subtitles_by_default,
+            select_undetermined_subtitle_language: value.select_undetermined_subtitle_language,
+            audio_selection: value.audio_selection.into(),
+            subtitle_selection: value.subtitle_selection.into(),
+            abr_policy: value.abr_policy.into(),
         }
     }
 }
@@ -1060,14 +1405,35 @@ impl Default for FfiTrackSelectionSnapshot {
     }
 }
 
+impl Default for FfiTrackPreferences {
+    fn default() -> Self {
+        Self {
+            preferred_audio_language: None,
+            preferred_subtitle_language: None,
+            select_subtitles_by_default: false,
+            select_undetermined_subtitle_language: false,
+            audio_selection: FfiTrackSelection::default(),
+            subtitle_selection: FfiTrackSelection {
+                mode: FfiTrackSelectionMode::Disabled,
+                track_id: None,
+            },
+            abr_policy: FfiAbrPolicy::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FfiAbrMode, FfiEvent, FfiMediaInfo, FfiTimelineKind, FfiTimelineSnapshot, FfiTrackKind,
-        FfiTrackSelectionMode, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
-        MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+        FfiAbrMode, FfiBufferingPolicy, FfiBufferingPreset, FfiCachePolicy, FfiCachePreset,
+        FfiEvent, FfiMediaInfo, FfiMediaSourceKind, FfiMediaSourceProtocol, FfiPreloadBudgetPolicy,
+        FfiResolvedPreloadBudgetPolicy, FfiResolvedResiliencePolicy, FfiRetryBackoff,
+        FfiRetryPolicy, FfiTimelineKind, FfiTimelineSnapshot, FfiTrackKind, FfiTrackPreferences,
+        FfiTrackSelection, FfiTrackSelectionMode, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
+        MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
         MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo, PlayerRuntimeEvent,
-        PlayerSeekableRange, PlayerTimelineSnapshot,
+        PlayerSeekableRange, PlayerTimelineSnapshot, resolve_preload_budget,
+        resolve_resilience_policy, resolve_track_preferences,
     };
     use std::time::Duration;
 
@@ -1185,5 +1551,215 @@ mod tests {
         assert_eq!(ffi.live_edge_ms, Some(120_000));
         assert_eq!(ffi.position_ms, 84_000);
         assert_eq!(ffi.duration_ms, Some(120_000));
+    }
+
+    #[test]
+    fn resolved_resilience_policy_uses_runtime_defaults_for_remote_hls() {
+        let resolved = resolve_resilience_policy(
+            FfiMediaSourceKind::Remote,
+            FfiMediaSourceProtocol::Hls,
+            FfiBufferingPolicy {
+                preset: FfiBufferingPreset::Default,
+                min_buffer_ms: None,
+                max_buffer_ms: None,
+                buffer_for_playback_ms: None,
+                buffer_for_rebuffer_ms: None,
+            },
+            FfiRetryPolicy {
+                max_attempts: Some(3),
+                base_delay_ms: 1_000,
+                max_delay_ms: 5_000,
+                backoff: FfiRetryBackoff::Linear,
+            },
+            FfiCachePolicy {
+                preset: FfiCachePreset::Default,
+                max_memory_bytes: None,
+                max_disk_bytes: None,
+            },
+        );
+
+        assert_eq!(
+            resolved,
+            FfiResolvedResiliencePolicy {
+                buffering: FfiBufferingPolicy {
+                    preset: FfiBufferingPreset::Resilient,
+                    min_buffer_ms: Some(20_000),
+                    max_buffer_ms: Some(50_000),
+                    buffer_for_playback_ms: Some(1_500),
+                    buffer_for_rebuffer_ms: Some(3_000),
+                },
+                retry: FfiRetryPolicy {
+                    max_attempts: Some(3),
+                    base_delay_ms: 1_000,
+                    max_delay_ms: 5_000,
+                    backoff: FfiRetryBackoff::Linear,
+                },
+                cache: FfiCachePolicy {
+                    preset: FfiCachePreset::Resilient,
+                    max_memory_bytes: Some(16 * 1024 * 1024),
+                    max_disk_bytes: Some(384 * 1024 * 1024),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn resolved_resilience_policy_preserves_raw_overrides_on_top_of_runtime_defaults() {
+        let resolved = resolve_resilience_policy(
+            FfiMediaSourceKind::Remote,
+            FfiMediaSourceProtocol::Progressive,
+            FfiBufferingPolicy {
+                preset: FfiBufferingPreset::Default,
+                min_buffer_ms: Some(15_000),
+                max_buffer_ms: None,
+                buffer_for_playback_ms: None,
+                buffer_for_rebuffer_ms: Some(9_000),
+            },
+            FfiRetryPolicy {
+                max_attempts: None,
+                base_delay_ms: 2_000,
+                max_delay_ms: 9_000,
+                backoff: FfiRetryBackoff::Exponential,
+            },
+            FfiCachePolicy {
+                preset: FfiCachePreset::Default,
+                max_memory_bytes: Some(1_024),
+                max_disk_bytes: None,
+            },
+        );
+
+        assert_eq!(resolved.buffering.preset, FfiBufferingPreset::Streaming);
+        assert_eq!(resolved.buffering.min_buffer_ms, Some(15_000));
+        assert_eq!(resolved.buffering.max_buffer_ms, Some(36_000));
+        assert_eq!(resolved.buffering.buffer_for_playback_ms, Some(1_200));
+        assert_eq!(resolved.buffering.buffer_for_rebuffer_ms, Some(9_000));
+        assert_eq!(resolved.retry.max_attempts, None);
+        assert_eq!(resolved.retry.base_delay_ms, 2_000);
+        assert_eq!(resolved.retry.max_delay_ms, 9_000);
+        assert_eq!(resolved.retry.backoff, FfiRetryBackoff::Exponential);
+        assert_eq!(resolved.cache.preset, FfiCachePreset::Streaming);
+        assert_eq!(resolved.cache.max_memory_bytes, Some(1_024));
+        assert_eq!(resolved.cache.max_disk_bytes, Some(128 * 1024 * 1024));
+    }
+
+    #[test]
+    fn resolved_preload_budget_uses_runtime_defaults() {
+        let resolved = resolve_preload_budget(FfiPreloadBudgetPolicy {
+            max_concurrent_tasks: None,
+            max_memory_bytes: None,
+            max_disk_bytes: None,
+            warmup_window_ms: None,
+        });
+
+        assert_eq!(
+            resolved,
+            FfiResolvedPreloadBudgetPolicy {
+                max_concurrent_tasks: 2,
+                max_memory_bytes: 64 * 1024 * 1024,
+                max_disk_bytes: 256 * 1024 * 1024,
+                warmup_window_ms: 30_000,
+            }
+        );
+    }
+
+    #[test]
+    fn resolved_preload_budget_preserves_explicit_override_values() {
+        let resolved = resolve_preload_budget(FfiPreloadBudgetPolicy {
+            max_concurrent_tasks: Some(0),
+            max_memory_bytes: Some(0),
+            max_disk_bytes: Some(768 * 1024 * 1024),
+            warmup_window_ms: Some(0),
+        });
+
+        assert_eq!(
+            resolved,
+            FfiResolvedPreloadBudgetPolicy {
+                max_concurrent_tasks: 0,
+                max_memory_bytes: 0,
+                max_disk_bytes: 768 * 1024 * 1024,
+                warmup_window_ms: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn resolved_track_preferences_normalize_invalid_inputs() {
+        let resolved = resolve_track_preferences(FfiTrackPreferences {
+            preferred_audio_language: Some("  en-US ".to_owned()),
+            preferred_subtitle_language: Some(" ".to_owned()),
+            select_subtitles_by_default: true,
+            select_undetermined_subtitle_language: true,
+            audio_selection: FfiTrackSelection {
+                mode: FfiTrackSelectionMode::Track,
+                track_id: Some("   ".to_owned()),
+            },
+            subtitle_selection: FfiTrackSelection {
+                mode: FfiTrackSelectionMode::Track,
+                track_id: Some(" subtitle:eng ".to_owned()),
+            },
+            abr_policy: super::FfiAbrPolicy {
+                mode: FfiAbrMode::FixedTrack,
+                track_id: Some(" ".to_owned()),
+                max_bit_rate: Some(4_000_000),
+                max_width: Some(1_920),
+                max_height: Some(1_080),
+            },
+        });
+
+        assert_eq!(resolved.preferred_audio_language.as_deref(), Some("en-US"));
+        assert_eq!(resolved.preferred_subtitle_language, None);
+        assert_eq!(resolved.audio_selection, FfiTrackSelection::default());
+        assert_eq!(
+            resolved.subtitle_selection,
+            FfiTrackSelection {
+                mode: FfiTrackSelectionMode::Track,
+                track_id: Some("subtitle:eng".to_owned()),
+            }
+        );
+        assert_eq!(resolved.abr_policy.mode, FfiAbrMode::Auto);
+        assert_eq!(resolved.abr_policy.track_id, None);
+        assert_eq!(resolved.abr_policy.max_bit_rate, None);
+        assert_eq!(resolved.abr_policy.max_width, None);
+        assert_eq!(resolved.abr_policy.max_height, None);
+    }
+
+    #[test]
+    fn resolved_track_preferences_preserve_valid_language_and_abr_constraints() {
+        let resolved = resolve_track_preferences(FfiTrackPreferences {
+            preferred_audio_language: Some("ja".to_owned()),
+            preferred_subtitle_language: Some("zh-Hans".to_owned()),
+            select_subtitles_by_default: true,
+            select_undetermined_subtitle_language: false,
+            audio_selection: FfiTrackSelection::default(),
+            subtitle_selection: FfiTrackSelection {
+                mode: FfiTrackSelectionMode::Disabled,
+                track_id: Some("ignored".to_owned()),
+            },
+            abr_policy: super::FfiAbrPolicy {
+                mode: FfiAbrMode::Constrained,
+                track_id: Some("ignored-track-id".to_owned()),
+                max_bit_rate: Some(3_500_000),
+                max_width: None,
+                max_height: Some(1_080),
+            },
+        });
+
+        assert_eq!(resolved.preferred_audio_language.as_deref(), Some("ja"));
+        assert_eq!(
+            resolved.preferred_subtitle_language.as_deref(),
+            Some("zh-Hans")
+        );
+        assert_eq!(
+            resolved.subtitle_selection,
+            FfiTrackSelection {
+                mode: FfiTrackSelectionMode::Disabled,
+                track_id: None,
+            }
+        );
+        assert_eq!(resolved.abr_policy.mode, FfiAbrMode::Constrained);
+        assert_eq!(resolved.abr_policy.track_id, None);
+        assert_eq!(resolved.abr_policy.max_bit_rate, Some(3_500_000));
+        assert_eq!(resolved.abr_policy.max_width, None);
+        assert_eq!(resolved.abr_policy.max_height, Some(1_080));
     }
 }

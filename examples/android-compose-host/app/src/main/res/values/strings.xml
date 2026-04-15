@@ -31,6 +31,14 @@
     <string name="example_sources_remote_stream_url">Remote stream URL</string>
     <string name="example_sources_theme">Theme</string>
     <string name="example_sources_open_remote_url">Open Remote URL</string>
+    <string name="example_playlist_title">Playlist</string>
+    <string name="example_playlist_subtitle">Media sources appear here after you open a demo stream, a local video, or a custom remote URL.</string>
+    <string name="example_playlist_empty">No media has been added to the playlist yet.</string>
+    <string name="example_playlist_status_current">Now Playing</string>
+    <string name="example_playlist_status_visible">Visible</string>
+    <string name="example_playlist_status_near_visible">Near Visible</string>
+    <string name="example_playlist_status_prefetch">Prefetch</string>
+    <string name="example_playlist_status_hidden">Hidden</string>
 
     <string name="example_resilience_title">Playback Resilience</string>
     <string name="example_resilience_subtitle">This card demonstrates the Android resilience policy API. Switching profiles applies directly to the current player while trying to keep the active media and playback position.</string>

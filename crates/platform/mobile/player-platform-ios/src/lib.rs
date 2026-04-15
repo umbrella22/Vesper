@@ -1,3 +1,7 @@
+mod download;
+mod playlist;
+mod preload;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,6 +19,10 @@ use player_runtime::{
     PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineKind,
     PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
 };
+
+pub use download::{IosDownloadBridgeSession, IosDownloadCommand};
+pub use playlist::IosPlaylistBridgeSession;
+pub use preload::{IosPreloadBridgeSession, IosPreloadCommand};
 
 pub const IOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "ios_native";
 

@@ -15,11 +15,18 @@ This folder now contains both native packaging entrypoints:
 
 You can build the iOS binary artifact through:
 
+- `scripts/build-ios-player-ffi-xcframework.sh`
 - `scripts/build-ios-vesper-player-kit-xcframework.sh`
 - `scripts/stage-ios-vesper-player-kit-release.sh`
 
+When consuming `lib/ios/VesperPlayerKit` as a local Swift Package, build the Rust resolver bundle
+first:
+
+- `scripts/build-ios-player-ffi-xcframework.sh`
+
 That script:
 
+- builds the Rust `player-ffi-resolver` Apple bundle consumed by the Swift package / shim
 - regenerates the framework project with `xcodegen`
 - archives iOS + iOS Simulator frameworks
 - creates `VesperPlayerKit.xcframework`

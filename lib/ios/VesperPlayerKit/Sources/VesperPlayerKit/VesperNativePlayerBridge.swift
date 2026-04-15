@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import Foundation
 import UIKit
+import VesperPlayerKitBridgeShim
 
 @MainActor
 final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
@@ -29,10 +30,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var resiliencePolicy: VesperPlaybackResiliencePolicy
+    private let trackPreferencePolicy: VesperTrackPreferencePolicy
+    private var resolvedTrackPreferencePolicy: VesperTrackPreferencePolicy
+    private var hasAppliedDefaultTrackPreferences = false
     private var pendingResilienceRestore: PendingResilienceRestore?
     private var retryTask: Task<Void, Never>?
     private var retryAttemptCount = 0
     private let cachePolicyToken = UUID()
+    private let preloadCoordinator: VesperNativePreloadCoordinator
 
     var uiState: PlayerHostUiState {
         publishedUiState
@@ -48,10 +53,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     init(
         initialSource: VesperPlayerSource? = nil,
-        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy()
+        resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+        trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
     ) {
         currentSource = initialSource
         self.resiliencePolicy = resiliencePolicy
+        self.trackPreferencePolicy = trackPreferencePolicy
+        resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
+        preloadCoordinator = VesperNativePreloadCoordinator(
+            budgetPolicy: preloadBudgetPolicy.resolvedForRuntime()
+        )
         publishedUiState = PlayerHostUiState(
             title: VesperPlayerI18n.playerTitle,
             subtitle: VesperPlayerI18n.nativeBridgeReady,
@@ -119,8 +131,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func dispose() {
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
+        preloadCoordinator.cancelAll()
         VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
         pendingResilienceRestore = nil
+        hasAppliedDefaultTrackPreferences = false
         pendingAutoPlay = false
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = false
@@ -485,13 +499,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         let url = try resolvedUrl(for: currentSource)
         iosHostLog("loadCurrentSource url=\(url.absoluteString)")
-        let cachePolicy = resolvedCachePolicy(for: currentSource)
+        let resolvedResiliencePolicy = resiliencePolicy.resolvedForRuntimeSource(currentSource)
+        resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
+        let cachePolicy = resolvedCachePolicy(resolvedResiliencePolicy.cache)
         VesperSharedUrlCacheCoordinator.shared.apply(
             policy: cachePolicy,
             token: cachePolicyToken
         )
+        preloadCoordinator.configure(cachePolicy: cachePolicy)
+        preloadCoordinator.warmCurrentSource(source: currentSource, url: url)
         let item = AVPlayerItem(url: url)
-        let bufferingPolicy = resolvedBufferingPolicy(for: currentSource)
+        let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling =
@@ -500,6 +518,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         removeObservers()
         pendingPlaybackStart = false
+        hasAppliedDefaultTrackPreferences = false
         resetTrackState()
         self.player = player
         surfaceHost?.attach(player: player)
@@ -793,6 +812,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         subtitleGroup = nil
         audioOptionsByTrackId = [:]
         subtitleOptionsByTrackId = [:]
+        hasAppliedDefaultTrackPreferences = false
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
     }
@@ -855,6 +875,158 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
     }
 
+    private func applyDefaultTrackPreferencesIfNeeded(for item: AVPlayerItem) {
+        guard !hasAppliedDefaultTrackPreferences else {
+            return
+        }
+
+        hasAppliedDefaultTrackPreferences = true
+        applyDefaultAudioTrackPreferenceIfPossible(item: item)
+        applyDefaultSubtitleTrackPreferenceIfPossible(item: item)
+        setAbrPolicy(resolvedTrackPreferencePolicy.abrPolicy)
+    }
+
+    private func applyDefaultAudioTrackPreferenceIfPossible(item: AVPlayerItem) {
+        guard let group = audioGroup else {
+            return
+        }
+
+        let policy = resolvedTrackPreferencePolicy
+        switch policy.audioSelection.mode {
+        case .disabled:
+            item.select(nil, in: group)
+            updateTrackSelection { current in
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: .disabled(),
+                    subtitle: current.subtitle,
+                    abrPolicy: current.abrPolicy
+                )
+            }
+        case .track:
+            applyTrackSelection(
+                policy.audioSelection,
+                kind: .audio,
+                group: group,
+                optionsByTrackId: audioOptionsByTrackId,
+                item: item
+            )
+        case .auto:
+            if
+                let match = matchingMediaOption(
+                    language: policy.preferredAudioLanguage,
+                    optionsByTrackId: audioOptionsByTrackId
+                )
+            {
+                item.select(match.option, in: group)
+            } else {
+                item.selectMediaOptionAutomatically(in: group)
+            }
+            updateTrackSelection { current in
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: .auto(),
+                    subtitle: current.subtitle,
+                    abrPolicy: current.abrPolicy
+                )
+            }
+        }
+    }
+
+    private func applyDefaultSubtitleTrackPreferenceIfPossible(item: AVPlayerItem) {
+        guard let group = subtitleGroup else {
+            return
+        }
+
+        let policy = resolvedTrackPreferencePolicy
+        switch policy.subtitleSelection.mode {
+        case .disabled:
+            item.select(nil, in: group)
+            updateTrackSelection { current in
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: current.audio,
+                    subtitle: .disabled(),
+                    abrPolicy: current.abrPolicy
+                )
+            }
+        case .track:
+            applyTrackSelection(
+                policy.subtitleSelection,
+                kind: .subtitle,
+                group: group,
+                optionsByTrackId: subtitleOptionsByTrackId,
+                item: item
+            )
+        case .auto:
+            let option =
+                matchingMediaOption(
+                    language: policy.preferredSubtitleLanguage,
+                    optionsByTrackId: subtitleOptionsByTrackId
+                )?.option
+                ?? (policy.selectUndeterminedSubtitleLanguage
+                    ? firstUndeterminedMediaOption(optionsByTrackId: subtitleOptionsByTrackId)
+                    : nil)
+                ?? (policy.selectSubtitlesByDefault ? group.defaultOption : nil)
+            item.select(option, in: group)
+            updateTrackSelection { current in
+                VesperTrackSelectionSnapshot(
+                    video: current.video,
+                    audio: current.audio,
+                    subtitle: option == nil ? .disabled() : .auto(),
+                    abrPolicy: current.abrPolicy
+                )
+            }
+        }
+    }
+
+    private func matchingMediaOption(
+        language: String?,
+        optionsByTrackId: [String: AVMediaSelectionOption]
+    ) -> (trackId: String, option: AVMediaSelectionOption)? {
+        guard let normalizedLanguage = normalizedLanguageIdentifier(language) else {
+            return nil
+        }
+
+        return optionsByTrackId.first { _, option in
+            let candidates = [
+                option.extendedLanguageTag,
+                option.locale?.identifier,
+            ]
+            return candidates.contains { candidate in
+                guard let normalizedCandidate = normalizedLanguageIdentifier(candidate) else {
+                    return false
+                }
+                return normalizedCandidate == normalizedLanguage ||
+                    normalizedCandidate.hasPrefix(normalizedLanguage + "-") ||
+                    normalizedLanguage.hasPrefix(normalizedCandidate + "-")
+            }
+        }.map { (trackId: $0.key, option: $0.value) }
+    }
+
+    private func firstUndeterminedMediaOption(
+        optionsByTrackId: [String: AVMediaSelectionOption]
+    ) -> AVMediaSelectionOption? {
+        optionsByTrackId.values.first { option in
+            normalizedLanguageIdentifier(option.extendedLanguageTag) == nil &&
+                normalizedLanguageIdentifier(option.locale?.identifier) == nil
+        }
+    }
+
+    private func normalizedLanguageIdentifier(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-")
+            .lowercased()
+        guard !normalized.isEmpty, normalized != "und" else {
+            return nil
+        }
+        return normalized
+    }
+
     private func refreshTrackCatalogAndSelection(for item: AVPlayerItem) {
         Task { [weak self, weak item] in
             guard let self, let item else { return }
@@ -865,6 +1037,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             self.audioOptionsByTrackId = trackState.audioOptionsByTrackId
             self.subtitleOptionsByTrackId = trackState.subtitleOptionsByTrackId
             self.publishedTrackCatalog = trackState.catalog
+            self.applyDefaultTrackPreferencesIfNeeded(for: item)
             self.applyPendingResilienceRestore(ifNeededFor: item, phase: .trackSelection)
         }
     }
@@ -1011,12 +1184,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             return false
         }
 
+        let retryPolicy = resiliencePolicy.resolvedForRuntimeSource(currentSource).retry
         let nextAttempt = retryAttemptCount + 1
-        if let maxAttempts = resiliencePolicy.retry.maxAttempts, nextAttempt > maxAttempts {
+        if let maxAttempts = retryPolicy.maxAttempts, nextAttempt > maxAttempts {
             return false
         }
 
-        let delayMs = retryDelayMs(forAttempt: nextAttempt)
+        let delayMs = retryDelayMs(forAttempt: nextAttempt, retryPolicy: retryPolicy)
         retryAttemptCount = nextAttempt
         pendingAutoPlay = true
         pendingPlaybackStart = false
@@ -1053,8 +1227,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         return true
     }
 
-    private func retryDelayMs(forAttempt attempt: Int) -> UInt64 {
-        let policy = resiliencePolicy.retry
+    private func retryDelayMs(forAttempt attempt: Int, retryPolicy: VesperRetryPolicy) -> UInt64 {
+        let policy = retryPolicy
         let multiplier: Double
         switch policy.backoff {
         case .fixed:
@@ -1153,47 +1327,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
     }
 
-    private func resolvedBufferingPolicy(for source: VesperPlayerSource) -> ResolvedBufferingPolicy {
-        let basePolicy: VesperBufferingPolicy
-        switch resiliencePolicy.buffering.preset {
-        case .default:
-            switch (source.kind, source.protocol) {
-            case (.remote, .hls), (.remote, .dash):
-                basePolicy = .resilient()
-            case (.remote, _):
-                basePolicy = .streaming()
-            case (.local, _):
-                basePolicy = VesperBufferingPolicy()
-            }
-        case .balanced:
-            basePolicy = .balanced()
-        case .streaming:
-            basePolicy = .streaming()
-        case .resilient:
-            basePolicy = .resilient()
-        case .lowLatency:
-            basePolicy = .lowLatency()
-        }
+    private func resolvedBufferingPolicy(_ resolvedPolicy: VesperBufferingPolicy) -> ResolvedBufferingPolicy {
+        let effectiveMs =
+            resolvedPolicy.maxBufferMs
+            ?? resolvedPolicy.minBufferMs
+            ?? resolvedPolicy.bufferForPlaybackAfterRebufferMs
+            ?? resolvedPolicy.bufferForPlaybackMs
+            ?? 0
 
-        let configuredBufferMs =
-            resiliencePolicy.buffering.maxBufferMs
-            ?? resiliencePolicy.buffering.minBufferMs
-            ?? resiliencePolicy.buffering.bufferForPlaybackAfterRebufferMs
-            ?? resiliencePolicy.buffering.bufferForPlaybackMs
-
-        let defaultBufferMs =
-            basePolicy.maxBufferMs
-            ?? basePolicy.minBufferMs
-            ?? basePolicy.bufferForPlaybackAfterRebufferMs
-            ?? basePolicy.bufferForPlaybackMs
-
-        let effectiveMs = configuredBufferMs ?? defaultBufferMs ?? 0
-
-        let automaticallyWaits = switch resiliencePolicy.buffering.preset {
+        let automaticallyWaits = switch resolvedPolicy.preset {
         case .lowLatency:
             false
-        case .default where source.kind == .remote && source.protocol == .progressive:
-            true
         default:
             true
         }
@@ -1204,30 +1348,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
     }
 
-    private func resolvedCachePolicy(for source: VesperPlayerSource) -> ResolvedCachePolicy {
-        guard source.kind == .remote else {
-            return .disabled
-        }
-
-        let basePolicy: VesperCachePolicy
-        switch resiliencePolicy.cache.preset {
-        case .default:
-            switch source.protocol {
-            case .hls, .dash:
-                basePolicy = .resilient()
-            default:
-                basePolicy = .streaming()
-            }
-        case .disabled:
-            basePolicy = .disabled()
-        case .streaming:
-            basePolicy = .streaming()
-        case .resilient:
-            basePolicy = .resilient()
-        }
-
-        let maxMemoryBytes = resiliencePolicy.cache.maxMemoryBytes ?? basePolicy.maxMemoryBytes ?? 0
-        let maxDiskBytes = resiliencePolicy.cache.maxDiskBytes ?? basePolicy.maxDiskBytes ?? 0
+    private func resolvedCachePolicy(_ resolvedPolicy: VesperCachePolicy) -> ResolvedCachePolicy {
+        let maxMemoryBytes = resolvedPolicy.maxMemoryBytes ?? 0
+        let maxDiskBytes = resolvedPolicy.maxDiskBytes ?? 0
 
         return ResolvedCachePolicy(
             enabled: max(maxMemoryBytes, maxDiskBytes) > 0,
@@ -1558,6 +1681,182 @@ private final class VesperSharedUrlCacheCoordinator {
             "urlCache memoryCapacity=\(targetMemoryCapacity) diskCapacity=\(targetDiskCapacity)"
         )
     }
+}
+
+private final class VesperNativePreloadCoordinator {
+    private let budgetPolicy: VesperPreloadBudgetPolicy
+    private var cachePolicy: ResolvedCachePolicy = .disabled
+    private var warmupTask: Task<Void, Never>?
+    private var sessionHandle: UInt64 = 0
+
+    init(budgetPolicy: VesperPreloadBudgetPolicy) {
+        self.budgetPolicy = budgetPolicy
+        sessionHandle = createPreloadSession(budgetPolicy)
+    }
+
+    func configure(cachePolicy: ResolvedCachePolicy) {
+        self.cachePolicy = cachePolicy
+    }
+
+    func warmCurrentSource(source: VesperPlayerSource, url: URL) {
+        cancelWarmupOnly()
+        guard max(cachePolicy.memoryCapacity, cachePolicy.diskCapacity) > 0 else {
+            return
+        }
+
+        let candidate = runtimePreloadCandidate(source: source)
+        guard planPreloadCandidates(handle: sessionHandle, candidates: [candidate]) else {
+            return
+        }
+
+        let commands = drainPreloadCommands(handle: sessionHandle)
+        for command in commands {
+            switch command.kind {
+            case .start:
+                let task = command.task
+                warmupTask = Task.detached(priority: .utility) {
+                    await Self.executeWarmup(handle: self.sessionHandle, task: task, url: url)
+                }
+            case .cancel:
+                warmupTask?.cancel()
+            default:
+                continue
+            }
+        }
+    }
+
+    func cancelAll() {
+        cancelWarmupOnly()
+        if sessionHandle != 0 {
+            vesper_runtime_preload_session_dispose(sessionHandle)
+            sessionHandle = 0
+        }
+    }
+
+    private func cancelWarmupOnly() {
+        warmupTask?.cancel()
+        warmupTask = nil
+    }
+
+    private func runtimePreloadCandidate(source: VesperPlayerSource) -> VesperRuntimePreloadCandidate {
+        VesperRuntimePreloadCandidate(
+            source_uri: duplicateCString(source.uri),
+            scope_kind: VesperRuntimePreloadScopeKindApp,
+            scope_id: nil,
+            candidate_kind: VesperRuntimePreloadCandidateKindCurrent,
+            selection_hint: VesperRuntimePreloadSelectionHintCurrentItem,
+            priority: VesperRuntimePreloadPriorityCritical,
+            expected_memory_bytes: UInt64(max(budgetPolicy.maxMemoryBytes ?? 32 * 1024, 0)),
+            expected_disk_bytes: UInt64(max(budgetPolicy.maxDiskBytes ?? 0, 0)),
+            has_ttl_ms: true,
+            ttl_ms: UInt64(max(budgetPolicy.warmupWindowMs ?? 30_000, 0)),
+            has_warmup_window_ms: true,
+            warmup_window_ms: UInt64(max(budgetPolicy.warmupWindowMs ?? 30_000, 0))
+        )
+    }
+
+    private static func executeWarmup(
+        handle: UInt64,
+        task: VesperRuntimePreloadTask,
+        url: URL
+    ) async {
+        let warmupBytes = max(Int64(task.expected_memory_bytes), 1)
+        var request = URLRequest(url: url)
+        request.cachePolicy = .returnCacheDataElseLoad
+        request.timeoutInterval = TimeInterval(max(Int64(task.warmup_window_ms), 1_000)) / 1000.0
+        request.setValue("bytes=0-\(max(warmupBytes - 1, 0))", forHTTPHeaderField: "Range")
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                iosHostLog(
+                    "preload warmup completed status=\(httpResponse.statusCode) url=\(url.absoluteString)"
+                )
+            }
+            _ = vesper_runtime_preload_session_complete(handle, task.task_id)
+        } catch {
+            iosHostLog("preload warmup failed: \(error.localizedDescription)")
+            error.localizedDescription.withCString { message in
+                _ = vesper_runtime_preload_session_fail(
+                    handle,
+                    task.task_id,
+                    3,
+                    7,
+                    false,
+                    message
+                )
+            }
+        }
+    }
+}
+
+private func createPreloadSession(_ budgetPolicy: VesperPreloadBudgetPolicy) -> UInt64 {
+    var resolved = VesperRuntimeResolvedPreloadBudgetPolicy(
+        max_concurrent_tasks: UInt32(max(budgetPolicy.maxConcurrentTasks ?? 0, 0)),
+        max_memory_bytes: budgetPolicy.maxMemoryBytes ?? 0,
+        max_disk_bytes: budgetPolicy.maxDiskBytes ?? 0,
+        warmup_window_ms: UInt64(max(budgetPolicy.warmupWindowMs ?? 0, 0))
+    )
+    var handle: UInt64 = 0
+    let created = withUnsafePointer(to: &resolved) { resolvedPointer in
+        withUnsafeMutablePointer(to: &handle) { handlePointer in
+            vesper_runtime_preload_session_create(resolvedPointer, handlePointer)
+        }
+    }
+    return created ? handle : 0
+}
+
+private func planPreloadCandidates(
+    handle: UInt64,
+    candidates: [VesperRuntimePreloadCandidate]
+) -> Bool {
+    guard !candidates.isEmpty else { return true }
+    var mutableCandidates = candidates
+    let planned = mutableCandidates.withUnsafeMutableBufferPointer { buffer in
+        vesper_runtime_preload_session_plan(handle, buffer.baseAddress, UInt(buffer.count))
+    }
+    for candidate in mutableCandidates {
+        if let sourceUri = candidate.source_uri {
+            free(UnsafeMutablePointer(mutating: sourceUri))
+        }
+    }
+    return planned
+}
+
+private func drainPreloadCommands(handle: UInt64) -> [VesperRuntimePreloadCommand] {
+    var commands = VesperRuntimePreloadCommandList(commands: nil, len: 0)
+    guard vesper_runtime_preload_session_drain_commands(handle, &commands),
+          let commandPointer = commands.commands,
+          commands.len > 0
+    else {
+        return []
+    }
+
+    let result = Array(UnsafeBufferPointer(start: commandPointer, count: Int(commands.len)))
+    vesper_runtime_preload_command_list_free(&commands)
+    return result
+}
+
+private func duplicateCString(_ value: String) -> UnsafePointer<CChar>? {
+    let duplicated = strdup(value)
+    guard let duplicated else {
+        return nil
+    }
+    return UnsafePointer(duplicated)
+}
+
+private extension VesperRuntimePreloadCommandKind {
+    static var start: VesperRuntimePreloadCommandKind {
+        VesperRuntimePreloadCommandKindStart
+    }
+
+    static var cancel: VesperRuntimePreloadCommandKind {
+        VesperRuntimePreloadCommandKindCancel
+    }
+}
+
+private func clampToInt64(_ value: Int64) -> Int64 {
+    max(value, 0)
 }
 
 private func timeControlStatusName(_ status: AVPlayer.TimeControlStatus) -> String {

@@ -9,6 +9,7 @@ struct PlayerHostView: View {
 
     @AppStorage("vesper.example.ios.theme_mode") private var themeModeRaw = ExampleThemeMode.system.rawValue
     @StateObject private var controller: VesperPlayerController
+    @StateObject private var playlistCoordinator: VesperPlaylistCoordinator
     @State private var pendingSeekRatio: Double?
     @State private var isVideoImporterPresented = false
     @State private var hostMessage: String?
@@ -18,12 +19,40 @@ struct PlayerHostView: View {
     @State private var isFullscreen = false
     @State private var selectedResilienceProfile: ExampleResilienceProfile = .balanced
     @State private var isApplyingResilienceProfile = false
+    @State private var hasHandledFinishedPlayback = false
     @State private var controlsHideTask: Task<Void, Never>?
+    @State private var queuedRemoteSource: VesperPlayerSource?
+    @State private var queuedLocalSource: VesperPlayerSource?
+    @State private var playlistItemIds: [String] = [IOS_HLS_PLAYLIST_ITEM_ID]
 
     init() {
+        let playlistPreloadBudgetPolicy = VesperPreloadBudgetPolicy(
+            maxConcurrentTasks: 2,
+            maxMemoryBytes: 64 * 1024 * 1024,
+            maxDiskBytes: 256 * 1024 * 1024,
+            warmupWindowMs: 30_000
+        )
         _controller = StateObject(
             wrappedValue: VesperPlayerControllerFactory.makeDefault(
-                initialSource: iosHlsDemoSource(),
+                initialSource: nil,
+                resiliencePolicy: ExampleResilienceProfile.balanced.policy,
+                preloadBudgetPolicy: VesperPreloadBudgetPolicy(
+                    maxConcurrentTasks: 0,
+                    maxMemoryBytes: 0,
+                    maxDiskBytes: 0,
+                    warmupWindowMs: 0
+                )
+            )
+        )
+        _playlistCoordinator = StateObject(
+            wrappedValue: VesperPlaylistCoordinator(
+                configuration: VesperPlaylistConfiguration(
+                    playlistId: "ios-swift-host",
+                    neighborWindow: VesperPlaylistNeighborWindow(previous: 1, next: 1),
+                    preloadWindow: VesperPlaylistPreloadWindow(nearVisible: 1, prefetchOnly: 2),
+                    switchPolicy: examplePlaylistSwitchPolicy()
+                ),
+                preloadBudgetPolicy: playlistPreloadBudgetPolicy,
                 resiliencePolicy: ExampleResilienceProfile.balanced.policy
             )
         )
@@ -54,6 +83,7 @@ struct PlayerHostView: View {
         let uiState = controller.uiState
         let trackCatalog = controller.trackCatalog
         let trackSelection = controller.trackSelection
+        let playlistSnapshot = playlistCoordinator.snapshot
 
         ZStack {
             LinearGradient(
@@ -95,13 +125,26 @@ struct PlayerHostView: View {
                             },
                             onUseHlsDemo: {
                                 hostMessage = nil
-                                controller.selectSource(iosHlsDemoSource())
+                                let nextPlaylistItemIds = enqueuePlaylistItem(
+                                    playlistItemIds,
+                                    itemId: IOS_HLS_PLAYLIST_ITEM_ID
+                                )
+                                applyPlaylistQueue(
+                                    focusItemId: IOS_HLS_PLAYLIST_ITEM_ID,
+                                    playlistItemIds: nextPlaylistItemIds
+                                )
                                 controlsVisible = true
                             },
                             onUseDashDemo: {},
                             onOpenRemote: {
                                 openRemoteSource()
                             }
+                        )
+
+                        ExamplePlaylistSection(
+                            palette: palette,
+                            playlistQueue: playlistSnapshot.queue,
+                            onFocusPlaylistItem: focusPlaylistItem
                         )
 
                         ExampleResilienceSection(
@@ -120,14 +163,40 @@ struct PlayerHostView: View {
         .persistentSystemOverlays(isFullscreen ? .hidden : .visible)
         .onAppear {
             controller.initialize()
+            if playlistSnapshot.queue.isEmpty {
+                applyPlaylistQueue(focusItemId: IOS_HLS_PLAYLIST_ITEM_ID)
+            }
             scheduleControlsAutoHide(for: uiState)
         }
         .onDisappear {
             controlsHideTask?.cancel()
+            playlistCoordinator.dispose()
             controller.dispose()
         }
-        .onChange(of: uiState.playbackState) { _, _ in
+        .onChange(of: playlistSnapshot.activeItem?.itemId) { _, activeItemId in
+            guard
+                let activeItemId,
+                let source = playlistSnapshot.queue.first(where: { $0.item.itemId == activeItemId })?.item.source
+            else {
+                handlePlaybackCompletionIfNeeded(
+                    playbackState: controller.uiState.playbackState,
+                    activeItemId: activeItemId
+                )
+                return
+            }
+            controller.selectSource(source)
+            controlsVisible = true
+            handlePlaybackCompletionIfNeeded(
+                playbackState: controller.uiState.playbackState,
+                activeItemId: activeItemId
+            )
+        }
+        .onChange(of: uiState.playbackState) { _, playbackState in
             scheduleControlsAutoHide(for: controller.uiState)
+            handlePlaybackCompletionIfNeeded(
+                playbackState: playbackState,
+                activeItemId: playlistSnapshot.activeItem?.itemId
+            )
         }
         .onChange(of: uiState.isBuffering) { _, _ in
             scheduleControlsAutoHide(for: controller.uiState)
@@ -219,6 +288,7 @@ struct PlayerHostView: View {
             isApplyingResilienceProfile = true
             await Task.yield()
             controller.setResiliencePolicy(profile.policy)
+            playlistCoordinator.setResiliencePolicy(profile.policy)
             isApplyingResilienceProfile = false
         }
     }
@@ -235,7 +305,15 @@ struct PlayerHostView: View {
             return
         }
         hostMessage = nil
-        controller.selectSource(source)
+        queuedRemoteSource = source
+        let nextPlaylistItemIds = enqueuePlaylistItem(
+            playlistItemIds,
+            itemId: IOS_REMOTE_PLAYLIST_ITEM_ID
+        )
+        applyPlaylistQueue(
+            focusItemId: IOS_REMOTE_PLAYLIST_ITEM_ID,
+            playlistItemIds: nextPlaylistItemIds
+        )
         controlsVisible = true
     }
 
@@ -300,13 +378,77 @@ struct PlayerHostView: View {
         }
     }
 
+    private func applyPlaylistQueue(
+        focusItemId: String? = nil,
+        playlistItemIds: [String]? = nil
+    ) {
+        let queue = examplePlaylistQueue(
+            playlistItemIds: playlistItemIds ?? self.playlistItemIds,
+            remoteSource: queuedRemoteSource,
+            localSource: queuedLocalSource
+        )
+        self.playlistItemIds = queue.map(\.itemId)
+        playlistCoordinator.replaceQueue(queue)
+
+        let requestedFocusItemId = focusItemId ?? playlistCoordinator.snapshot.activeItem?.itemId
+        let resolvedFocusItemId = requestedFocusItemId.flatMap { itemId in
+            queue.contains(where: { $0.itemId == itemId }) ? itemId : nil
+        } ?? queue.first?.itemId
+
+        guard let resolvedFocusItemId else {
+            playlistCoordinator.clearViewportHints()
+            return
+        }
+
+        playlistCoordinator.updateViewportHints(
+            examplePlaylistViewportHints(
+                queue: queue,
+                focusedItemId: resolvedFocusItemId
+            )
+        )
+    }
+
+    private func focusPlaylistItem(_ itemId: String) {
+        let queue = playlistCoordinator.snapshot.queue.map(\.item)
+        playlistCoordinator.updateViewportHints(
+            examplePlaylistViewportHints(
+                queue: queue,
+                focusedItemId: itemId
+            )
+        )
+        controlsVisible = true
+    }
+
+    private func handlePlaybackCompletionIfNeeded(
+        playbackState: PlaybackStateUi,
+        activeItemId: String?
+    ) {
+        guard playbackState == .finished else {
+            hasHandledFinishedPlayback = false
+            return
+        }
+        guard !hasHandledFinishedPlayback, activeItemId != nil else {
+            return
+        }
+        hasHandledFinishedPlayback = true
+        playlistCoordinator.handlePlaybackCompleted()
+    }
+
     private func handleImportedVideo(_ url: URL) async {
         do {
             let persisted = try persistImportedVideoFile(from: url)
             await MainActor.run {
                 hostMessage = nil
                 exampleIosHostLog("picked local video url=\(persisted.url.absoluteString)")
-                controller.selectSource(.localFile(url: persisted.url, label: persisted.label))
+                queuedLocalSource = .localFile(url: persisted.url, label: persisted.label)
+                let nextPlaylistItemIds = enqueuePlaylistItem(
+                    playlistItemIds,
+                    itemId: IOS_LOCAL_PLAYLIST_ITEM_ID
+                )
+                applyPlaylistQueue(
+                    focusItemId: IOS_LOCAL_PLAYLIST_ITEM_ID,
+                    playlistItemIds: nextPlaylistItemIds
+                )
                 controlsVisible = true
             }
         } catch {

@@ -65,12 +65,37 @@ String stageBadgeText(VesperTimeline timeline) {
   };
 }
 
+String viewportHintLabel(VesperViewportHint hint) {
+  return switch (hint.kind) {
+    VesperViewportHintKind.visible => '视口内',
+    VesperViewportHintKind.nearVisible => '临近视口',
+    VesperViewportHintKind.prefetchOnly => '仅预取',
+    VesperViewportHintKind.hidden => '隐藏',
+  };
+}
+
+String playlistItemStatusLabel({required int index, required int activeIndex}) {
+  if (activeIndex < 0) {
+    return '隐藏';
+  }
+  if (index == activeIndex) {
+    return '当前播放';
+  }
+
+  final distance = (index - activeIndex).abs();
+  if (distance == 1) {
+    return '临近可见';
+  }
+  return '仅预取';
+}
+
 String liveButtonLabel(VesperTimeline timeline) {
-  final liveEdge = timeline.liveEdgeMs;
+  final liveEdge = timeline.goLivePositionMs;
   if (liveEdge == null) {
     return '回到直播';
   }
-  final behindMs = (liveEdge - timeline.positionMs).clamp(0, liveEdge);
+  final behindMs = (liveEdge - timeline.clampedPosition(timeline.positionMs))
+      .clamp(0, liveEdge);
   if (behindMs > 1500) {
     return '直播 -${formatMillis(behindMs)}';
   }
@@ -79,33 +104,22 @@ String liveButtonLabel(VesperTimeline timeline) {
 
 String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
   final displayedPosition = pendingSeekRatio == null
-      ? timeline.positionMs
-      : _positionForRatio(timeline, pendingSeekRatio);
+      ? timeline.clampedPosition(timeline.positionMs)
+      : timeline.positionForRatio(pendingSeekRatio);
 
   switch (timeline.kind) {
     case VesperTimelineKind.live:
-      final liveEdge = timeline.liveEdgeMs;
+      final liveEdge = timeline.goLivePositionMs;
       if (liveEdge == null) {
         return '直播';
       }
       return '直播 • 实时点 ${formatMillis(liveEdge)}';
     case VesperTimelineKind.liveDvr:
-      final liveEdge = timeline.liveEdgeMs ?? timeline.durationMs ?? 0;
+      final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
       return '${formatMillis(displayedPosition)} / ${formatMillis(liveEdge)}';
     case VesperTimelineKind.vod:
       return '${formatMillis(displayedPosition)} / ${formatMillis(timeline.durationMs ?? 0)}';
   }
-}
-
-int _positionForRatio(VesperTimeline timeline, double ratio) {
-  final clampedRatio = ratio.clamp(0.0, 1.0);
-  final range = timeline.seekableRange;
-  if (range != null) {
-    final length = range.endMs - range.startMs;
-    return range.startMs + (length * clampedRatio).round();
-  }
-  final duration = timeline.durationMs ?? 0;
-  return (duration * clampedRatio).round();
 }
 
 String qualityButtonLabel(

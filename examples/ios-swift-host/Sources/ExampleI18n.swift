@@ -33,6 +33,14 @@ enum ExampleI18n {
     static var themeTitle: String { string("example.sources.theme_title") }
     static var remoteUrlPlaceholder: String { string("example.sources.remote_url_placeholder") }
     static var openRemoteUrl: String { string("example.sources.open_remote_url") }
+    static var playlistTitle: String { string("example.playlist.title") }
+    static var playlistSubtitle: String { string("example.playlist.subtitle") }
+    static var playlistEmpty: String { string("example.playlist.empty") }
+    static var playlistStatusCurrent: String { string("example.playlist.status_current") }
+    static var playlistStatusVisible: String { string("example.playlist.status_visible") }
+    static var playlistStatusNearVisible: String { string("example.playlist.status_near_visible") }
+    static var playlistStatusPrefetch: String { string("example.playlist.status_prefetch") }
+    static var playlistStatusHidden: String { string("example.playlist.status_hidden") }
 
     static var resilienceTitle: String { string("example.resilience.title") }
     static var resilienceSubtitle: String { string("example.resilience.subtitle") }

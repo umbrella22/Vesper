@@ -194,11 +194,20 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "updateViewport":
             handleSessionCommand(call, result: result) { session in
+                let viewportMap = try requireNestedMap(arguments: arguments(of: call), key: "viewport")
+                session.lastError = nil
+                session.viewport = viewportMap.toFlutterViewport()
+                session.viewportHint =
+                    (try nestedMap(arguments(of: call)["viewportHint"]))?.toFlutterViewportHint()
+                    ?? .hidden
                 emitSnapshot(for: session)
                 return nil
             }
         case "clearViewport":
             handleSessionCommand(call, result: result) { session in
+                session.lastError = nil
+                session.viewport = nil
+                session.viewportHint = .hidden
                 emitSnapshot(for: session)
                 return nil
             }
@@ -242,12 +251,26 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             } else {
                 resiliencePolicy = VesperPlaybackResiliencePolicy()
             }
+            let trackPreferencePolicy: VesperTrackPreferencePolicy
+            if let trackPreferencePolicyMap = try nestedMap(arguments["trackPreferencePolicy"]) {
+                trackPreferencePolicy = try trackPreferencePolicyMap.toTrackPreferencePolicy()
+            } else {
+                trackPreferencePolicy = VesperTrackPreferencePolicy()
+            }
+            let preloadBudgetPolicy: VesperPreloadBudgetPolicy
+            if let preloadBudgetPolicyMap = try nestedMap(arguments["preloadBudgetPolicy"]) {
+                preloadBudgetPolicy = preloadBudgetPolicyMap.toPreloadBudgetPolicy()
+            } else {
+                preloadBudgetPolicy = VesperPreloadBudgetPolicy()
+            }
 
             let session = PlayerSession(
                 id: UUID().uuidString,
                 controller: VesperPlayerControllerFactory.makeDefault(
                     initialSource: initialSource,
-                    resiliencePolicy: resiliencePolicy
+                    resiliencePolicy: resiliencePolicy,
+                    trackPreferencePolicy: trackPreferencePolicy,
+                    preloadBudgetPolicy: preloadBudgetPolicy
                 )
             )
             sessions[session.id] = session
@@ -341,6 +364,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "isInterrupted": uiState.isInterrupted,
             "hasVideoSurface": session.hostView != nil,
             "timeline": uiState.timeline.toMap(),
+            "viewport": flutterValue(session.viewport?.toMap()),
+            "viewportHint": session.viewportHint.toMap(),
             "backendFamily": session.controller.backend.toBackendFamilyWireName(),
             "capabilities": buildCapabilitiesMap(),
             "trackCatalog": trackCatalog.toMap(),
@@ -388,10 +413,42 @@ private final class PlayerSession {
     var hostView: PlayerSurfaceView?
     var observation: AnyCancellable?
     var lastError: [String: Any]?
+    var viewport: FlutterViewport?
+    var viewportHint: FlutterViewportHint = .hidden
 
     init(id: String, controller: VesperPlayerController) {
         self.id = id
         self.controller = controller
+    }
+}
+
+private struct FlutterViewport {
+    let left: Double
+    let top: Double
+    let width: Double
+    let height: Double
+
+    func toMap() -> [String: Any] {
+        [
+            "left": left,
+            "top": top,
+            "width": width,
+            "height": height,
+        ]
+    }
+}
+
+private struct FlutterViewportHint {
+    let kind: String
+    let visibleFraction: Double
+
+    static let hidden = FlutterViewportHint(kind: "hidden", visibleFraction: 0)
+
+    func toMap() -> [String: Any] {
+        [
+            "kind": kind,
+            "visibleFraction": visibleFraction,
+        ]
     }
 }
 
@@ -609,6 +666,61 @@ private extension Dictionary where Key == String, Value == Any {
         )
     }
 
+    func toTrackPreferencePolicy() throws -> VesperTrackPreferencePolicy {
+        let audioSelection = try (nestedMap(self["audioSelection"])?.toTrackSelection()) ?? .auto()
+        let subtitleSelection =
+            try (nestedMap(self["subtitleSelection"])?.toTrackSelection()) ?? .disabled()
+        let abrPolicy = try (nestedMap(self["abrPolicy"])?.toAbrPolicy()) ?? .auto()
+        return VesperTrackPreferencePolicy(
+            preferredAudioLanguage: self["preferredAudioLanguage"] as? String,
+            preferredSubtitleLanguage: self["preferredSubtitleLanguage"] as? String,
+            selectSubtitlesByDefault: self["selectSubtitlesByDefault"] as? Bool ?? false,
+            selectUndeterminedSubtitleLanguage:
+                self["selectUndeterminedSubtitleLanguage"] as? Bool ?? false,
+            audioSelection: audioSelection,
+            subtitleSelection: subtitleSelection,
+            abrPolicy: abrPolicy
+        )
+    }
+
+    func toPreloadBudgetPolicy() -> VesperPreloadBudgetPolicy {
+        VesperPreloadBudgetPolicy(
+            maxConcurrentTasks: (self["maxConcurrentTasks"] as? NSNumber)?.intValue,
+            maxMemoryBytes: (self["maxMemoryBytes"] as? NSNumber)?.int64Value,
+            maxDiskBytes: (self["maxDiskBytes"] as? NSNumber)?.int64Value,
+            warmupWindowMs: (self["warmupWindowMs"] as? NSNumber)?.int64Value
+        )
+    }
+
+    func toFlutterViewport() -> FlutterViewport {
+        FlutterViewport(
+            left: (self["left"] as? NSNumber)?.doubleValue ?? 0,
+            top: (self["top"] as? NSNumber)?.doubleValue ?? 0,
+            width: (self["width"] as? NSNumber)?.doubleValue ?? 0,
+            height: (self["height"] as? NSNumber)?.doubleValue ?? 0
+        )
+    }
+
+    func toFlutterViewportHint() -> FlutterViewportHint {
+        let kind: String
+        switch self["kind"] as? String {
+        case "visible":
+            kind = "visible"
+        case "nearVisible":
+            kind = "nearVisible"
+        case "prefetchOnly":
+            kind = "prefetchOnly"
+        default:
+            kind = "hidden"
+        }
+
+        let visibleFraction = max(
+            0,
+            min((self["visibleFraction"] as? NSNumber)?.doubleValue ?? 0, 1)
+        )
+        return FlutterViewportHint(kind: kind, visibleFraction: visibleFraction)
+    }
+
     func toBufferingPolicy() -> VesperBufferingPolicy {
         let preset: VesperBufferingPreset
         switch self["preset"] as? String {
@@ -645,8 +757,18 @@ private extension Dictionary where Key == String, Value == Any {
         default:
             backoff = nil
         }
+        let maxAttempts: Int?
+        if keys.contains("maxAttempts") {
+            if self["maxAttempts"] is NSNull {
+                maxAttempts = nil
+            } else {
+                maxAttempts = (self["maxAttempts"] as? NSNumber)?.intValue
+            }
+        } else {
+            maxAttempts = 3
+        }
         return VesperRetryPolicy(
-            maxAttempts: (self["maxAttempts"] as? NSNumber)?.intValue,
+            maxAttempts: maxAttempts,
             baseDelayMs: (self["baseDelayMs"] as? NSNumber)?.uint64Value,
             maxDelayMs: (self["maxDelayMs"] as? NSNumber)?.uint64Value,
             backoff: backoff

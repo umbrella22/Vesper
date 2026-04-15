@@ -85,14 +85,38 @@ XcodeGen now has two useful entrypoints:
 
 For the demo app:
 
-1. generate or open the demo project from `project.yml`
-2. confirm the Swift host app boots with the AVPlayer native bridge
-3. validate Photos video picker / `play / pause / seek / stop / rate`
-4. validate fullscreen, theme switching, and track/ABR sheets
+1. build the Rust iOS resolver bundle with `scripts/build-ios-player-ffi-xcframework.sh`
+2. generate or open the demo project from `project.yml`
+3. confirm the Swift host app boots with the AVPlayer native bridge
+4. validate Photos video picker / `play / pause / seek / stop / rate`
+5. validate fullscreen, theme switching, and track/ABR sheets
+
+The local `VesperPlayerKit` Swift package now expects that generated Rust Apple bundle to exist
+before package resolution.
 
 For the reusable iOS binary artifact itself, use:
 
 - `scripts/build-ios-vesper-player-kit-xcframework.sh`
+
+## Host Regression
+
+The executable host regression path for this example is now:
+
+1. build the Rust resolver bundle:
+   - `./scripts/build-ios-player-ffi-xcframework.sh release`
+2. generate the host project:
+   - `cd examples/ios-swift-host && xcodegen generate`
+3. run the example-level LiveDvr regression tests:
+   - `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -configuration Debug -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" test`
+4. optionally build the release app:
+   - `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -configuration Release -sdk iphoneos -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build`
+
+The regression cases currently cover:
+
+- `Go Live` fallback to the seekable window end
+- live edge tolerance / offset behavior
+- pending seek ratio clamp
+- stale position clamp after DVR window shrink
 
 ## Layout
 

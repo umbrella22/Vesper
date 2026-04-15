@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class FakePlayerBridge(
     initialSource: VesperPlayerSource? = null,
+    resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+    trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
+    preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     appContext: Context? = null,
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
