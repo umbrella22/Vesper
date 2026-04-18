@@ -9,6 +9,8 @@
 "example.theme.system" = "System";
 "example.theme.light" = "Light";
 "example.theme.dark" = "Dark";
+"example.tab.player" = "Player";
+"example.tab.downloads" = "Downloads";
 
 "example.sources.title" = "Sources";
 "example.sources.subtitle" = "Use the example host to switch among local files, HLS demo streams, and custom remote URLs.";
@@ -28,6 +30,46 @@
 "example.playlist.status_near_visible" = "Near Visible";
 "example.playlist.status_prefetch" = "Prefetch";
 "example.playlist.status_hidden" = "Hidden";
+"example.download.header_subtitle" = "This page is dedicated to download-session regression. It validates the shared download state machine and host bridge without pretending to be a full offline product flow.";
+"example.download.create_title" = "Create Download Task";
+"example.download.create_subtitle" = "Use HLS and DASH demo buttons for quick regression, or paste a remote URL to create a single foreground task.";
+"example.download.hls_demo" = "Download HLS Demo";
+"example.download.dash_demo" = "Download DASH Demo";
+"example.download.remote_url" = "Download URL";
+"example.download.create_remote_task" = "Create Remote Task";
+"example.download.tasks_title" = "Task List";
+"example.download.tasks_subtitle" = "The example keeps to foreground execution and task lifecycle regression. It does not claim background restore, offline DRM, or packaged HLS/DASH products.";
+"example.download.empty" = "No download tasks have been created yet.";
+"example.download.state_queued" = "Queued";
+"example.download.state_preparing" = "Preparing";
+"example.download.state_downloading" = "Downloading";
+"example.download.state_paused" = "Paused";
+"example.download.state_completed" = "Completed";
+"example.download.state_failed" = "Failed";
+"example.download.state_removed" = "Removed";
+"example.download.action_start" = "Start";
+"example.download.action_pause" = "Pause";
+"example.download.action_resume" = "Resume";
+"example.download.save_to_photos" = "Save to Photos";
+"example.download.remove_task" = "Remove";
+"example.download.task_meta" = "assetId: %@ · %@";
+"example.download.progress_unknown" = "Unknown progress";
+"example.download.progress_bytes" = "%@ / %@";
+"example.download.pending_task_details" = "Reading the remote manifest and building the download plan…";
+"example.download.pending_source_uri" = "Remote URL: %@";
+"example.download.completed_path" = "Output: %@";
+"example.download.error_message" = "Error: %@";
+"example.download.create_task_failed" = "Failed to create the download task.";
+"example.download.action_failed" = "The download action failed.";
+"example.download.exporting" = "Exporting MP4…";
+"example.download.export_plugin_ready" = "MP4 export plugin: installed";
+"example.download.export_plugin_missing" = "MP4 export plugin is not installed.";
+"example.download.export_progress" = "Exporting MP4… %d%%";
+"example.download.save_to_photos_title" = "Photo Library";
+"example.download.save_to_photos_success" = "Saved to Photos.";
+"example.download.save_to_photos_missing_output" = "The completed download output is unavailable.";
+"example.download.save_to_photos_failed_unknown" = "Unknown error";
+"example.download.save_to_photos_failed" = "Failed to save the downloaded video: %@";
 
 "example.resilience.title" = "Playback Resilience";
 "example.resilience.subtitle" = "Switch resilience presets at runtime and ask the player to keep the current source, progress, and playback intent when possible.";
@@ -64,12 +106,14 @@
 "example.message.invalid_remote_url" = "Please enter a valid remote URL.";
 "example.message.dash_not_supported_on_ios" = "The current iOS AVPlayer backend does not support DASH streams.";
 "example.message.photo_library_required" = "Photo Library access is required to pick videos from Photos.";
+"example.message.photo_library_add_required" = "Photo Library add access is required to save videos.";
 "example.message.unknown_photo_authorization_state" = "Unknown Photo Library authorization state.";
 "example.message.failed_to_load_selected_video_from_photos" = "Failed to load the selected video from Photos.";
 "example.message.failed_to_load_selected_local_video" = "Failed to open selected video: %@";
 "example.message.failed_to_load_selected_photo_video" = "Failed to load selected photo video: %@";
 
 "example.source.hls_demo_label" = "HLS Demo (BipBop)";
+"example.source.dash_demo_label" = "DASH Demo (Envivio)";
 "example.source.custom_remote_url_label" = "Custom Remote URL";
 
 "example.quality.button_capped" = "Capped";

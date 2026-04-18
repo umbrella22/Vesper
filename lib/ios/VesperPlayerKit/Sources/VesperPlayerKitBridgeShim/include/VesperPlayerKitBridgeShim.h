@@ -203,6 +203,7 @@ typedef struct VesperRuntimePlaylistActiveItem {
 
 typedef struct VesperRuntimeDownloadConfig {
   bool auto_start;
+  bool run_post_processors_on_completion;
   char **plugin_library_paths;
   uintptr_t plugin_library_paths_len;
 } VesperRuntimeDownloadConfig;
@@ -337,6 +338,12 @@ typedef struct VesperRuntimeDownloadEventList {
   VesperRuntimeDownloadEvent *events;
   uintptr_t len;
 } VesperRuntimeDownloadEventList;
+
+typedef struct VesperRuntimeDownloadExportCallbacks {
+  void *context;
+  void (*on_progress)(void *context, float ratio);
+  bool (*is_cancelled)(void *context);
+} VesperRuntimeDownloadExportCallbacks;
 
 typedef struct VesperRuntimeTrackSelection {
   int mode_ordinal;
@@ -495,6 +502,12 @@ bool vesper_runtime_download_session_complete_task(
     uint64_t handle,
     uint64_t task_id,
     const char *completed_path);
+
+bool vesper_runtime_download_session_export_task(
+    uint64_t handle,
+    uint64_t task_id,
+    const char *output_path,
+    VesperRuntimeDownloadExportCallbacks callbacks);
 
 bool vesper_runtime_download_session_fail_task(
     uint64_t handle,

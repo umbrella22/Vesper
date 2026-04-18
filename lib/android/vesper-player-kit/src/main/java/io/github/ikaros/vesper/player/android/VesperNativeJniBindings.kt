@@ -24,6 +24,7 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
@@ -36,6 +37,7 @@ import kotlin.math.roundToLong
 class VesperNativeJniBindings(
     context: Context,
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+    private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
 ) : VesperNativeBindings {
     private val appContext = context.applicationContext
     private val i18n = VesperPlayerI18n.fromContext(appContext)
@@ -70,6 +72,9 @@ class VesperNativeJniBindings(
         sessionHandle = handle
         val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
         val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
+        val renderersFactory =
+            DefaultRenderersFactory(appContext)
+                .setExtensionRendererMode(decoderBackend.toExtensionRendererMode())
 
         val mediaSourceFactory =
             DefaultMediaSourceFactory(appContext)
@@ -81,8 +86,12 @@ class VesperNativeJniBindings(
                         VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
                     }
                 )
+        Log.i(
+            TAG,
+            "using decoderBackend=$decoderBackend extensionRendererMode=${decoderBackend.toExtensionRendererMode()}",
+        )
         val exoPlayer =
-            ExoPlayer.Builder(appContext)
+            ExoPlayer.Builder(appContext, renderersFactory)
                 .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build()

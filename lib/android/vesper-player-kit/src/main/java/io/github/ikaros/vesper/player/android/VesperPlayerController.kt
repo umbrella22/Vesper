@@ -73,6 +73,7 @@ object VesperPlayerControllerFactory {
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
         surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
     ): VesperPlayerController =
         VesperPlayerController(
@@ -82,6 +83,7 @@ object VesperPlayerControllerFactory {
                 resiliencePolicy = resiliencePolicy,
                 trackPreferencePolicy = trackPreferencePolicy,
                 preloadBudgetPolicy = preloadBudgetPolicy,
+                decoderBackend = decoderBackend,
                 surfaceKind = surfaceKind,
             )
         )

@@ -265,6 +265,22 @@ internal fun formatMillis(value: Long): String {
     return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
 }
 
+internal fun formatBytes(value: Long?): String {
+    if (value == null || value <= 0L) {
+        return "-"
+    }
+    if (value >= 1024L * 1024L * 1024L) {
+        return String.format(Locale.getDefault(), "%.1f GB", value / (1024f * 1024f * 1024f))
+    }
+    if (value >= 1024L * 1024L) {
+        return String.format(Locale.getDefault(), "%.1f MB", value / (1024f * 1024f))
+    }
+    if (value >= 1024L) {
+        return String.format(Locale.getDefault(), "%.0f KB", value / 1024f)
+    }
+    return "$value B"
+}
+
 internal fun formatRate(value: Float): String = String.format(Locale.getDefault(), "%.1f", value)
 
 @Composable

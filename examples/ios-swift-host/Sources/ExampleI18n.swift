@@ -22,6 +22,8 @@ enum ExampleI18n {
     static var themeSystem: String { string("example.theme.system") }
     static var themeLight: String { string("example.theme.light") }
     static var themeDark: String { string("example.theme.dark") }
+    static var tabPlayer: String { string("example.tab.player") }
+    static var tabDownloads: String { string("example.tab.downloads") }
 
     static var sourcesTitle: String { string("example.sources.title") }
     static var sourcesSubtitle: String { string("example.sources.subtitle") }
@@ -41,6 +43,60 @@ enum ExampleI18n {
     static var playlistStatusNearVisible: String { string("example.playlist.status_near_visible") }
     static var playlistStatusPrefetch: String { string("example.playlist.status_prefetch") }
     static var playlistStatusHidden: String { string("example.playlist.status_hidden") }
+    static var downloadHeaderSubtitle: String { string("example.download.header_subtitle") }
+    static var downloadCreateTitle: String { string("example.download.create_title") }
+    static var downloadCreateSubtitle: String { string("example.download.create_subtitle") }
+    static var downloadHlsDemo: String { string("example.download.hls_demo") }
+    static var downloadDashDemo: String { string("example.download.dash_demo") }
+    static var downloadRemoteUrl: String { string("example.download.remote_url") }
+    static var downloadCreateRemoteTask: String { string("example.download.create_remote_task") }
+    static var downloadTasksTitle: String { string("example.download.tasks_title") }
+    static var downloadTasksSubtitle: String { string("example.download.tasks_subtitle") }
+    static var downloadEmpty: String { string("example.download.empty") }
+    static var downloadStateQueued: String { string("example.download.state_queued") }
+    static var downloadStatePreparing: String { string("example.download.state_preparing") }
+    static var downloadStateDownloading: String { string("example.download.state_downloading") }
+    static var downloadStatePaused: String { string("example.download.state_paused") }
+    static var downloadStateCompleted: String { string("example.download.state_completed") }
+    static var downloadStateFailed: String { string("example.download.state_failed") }
+    static var downloadStateRemoved: String { string("example.download.state_removed") }
+    static var downloadActionStart: String { string("example.download.action_start") }
+    static var downloadActionPause: String { string("example.download.action_pause") }
+    static var downloadActionResume: String { string("example.download.action_resume") }
+    static var downloadSaveToPhotos: String { string("example.download.save_to_photos") }
+    static var downloadRemoveTask: String { string("example.download.remove_task") }
+    static var downloadProgressUnknown: String { string("example.download.progress_unknown") }
+    static var downloadCreateTaskFailed: String { string("example.download.create_task_failed") }
+    static var downloadActionFailed: String { string("example.download.action_failed") }
+    static var downloadPendingTaskDetails: String { string("example.download.pending_task_details") }
+    static var downloadExporting: String { string("example.download.exporting") }
+    static var downloadExportPluginReady: String { string("example.download.export_plugin_ready") }
+    static var downloadExportPluginMissing: String { string("example.download.export_plugin_missing") }
+    static var downloadSaveToPhotosTitle: String { string("example.download.save_to_photos_title") }
+    static var downloadSaveToPhotosSuccess: String { string("example.download.save_to_photos_success") }
+    static var downloadSaveToPhotosMissingOutput: String { string("example.download.save_to_photos_missing_output") }
+    static var downloadSaveToPhotosFailedUnknown: String { string("example.download.save_to_photos_failed_unknown") }
+    static func downloadTaskMeta(_ assetId: String, _ state: String) -> String {
+        string("example.download.task_meta", assetId, state)
+    }
+    static func downloadProgressBytes(_ received: String, _ total: String) -> String {
+        string("example.download.progress_bytes", received, total)
+    }
+    static func downloadCompletedPath(_ path: String) -> String {
+        string("example.download.completed_path", path)
+    }
+    static func downloadPendingSourceUri(_ path: String) -> String {
+        string("example.download.pending_source_uri", path)
+    }
+    static func downloadErrorMessage(_ message: String) -> String {
+        string("example.download.error_message", message)
+    }
+    static func downloadSaveToPhotosFailed(_ reason: String) -> String {
+        string("example.download.save_to_photos_failed", reason)
+    }
+    static func downloadExportProgress(_ value: Int) -> String {
+        string("example.download.export_progress", value)
+    }
 
     static var resilienceTitle: String { string("example.resilience.title") }
     static var resilienceSubtitle: String { string("example.resilience.subtitle") }
@@ -85,6 +141,7 @@ enum ExampleI18n {
     static var invalidRemoteUrl: String { string("example.message.invalid_remote_url") }
     static var dashNotSupportedOnIos: String { string("example.message.dash_not_supported_on_ios") }
     static var photoLibraryAccessRequired: String { string("example.message.photo_library_required") }
+    static var photoLibraryAddAccessRequired: String { string("example.message.photo_library_add_required") }
     static var unknownPhotoAuthorizationState: String { string("example.message.unknown_photo_authorization_state") }
     static var failedToLoadSelectedVideoFromPhotos: String { string("example.message.failed_to_load_selected_video_from_photos") }
     static func failedToLoadSelectedLocalVideo(_ reason: String) -> String {
@@ -95,6 +152,7 @@ enum ExampleI18n {
     }
 
     static var hlsDemoLabel: String { string("example.source.hls_demo_label") }
+    static var dashDemoLabel: String { string("example.source.dash_demo_label") }
     static var customRemoteUrlLabel: String { string("example.source.custom_remote_url_label") }
 
     static var qualityButtonCapped: String { string("example.quality.button_capped") }

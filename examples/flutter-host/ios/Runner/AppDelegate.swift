@@ -1,4 +1,5 @@
 import Flutter
+import Photos
 import UIKit
 
 @main
@@ -19,11 +20,16 @@ import UIKit
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     channel.setMethodCallHandler { [weak self] call, result in
-      guard call.method == "pickVideo" else {
+      switch call.method {
+      case "pickVideo":
+        self?.presentVideoPicker(result: result)
+      case "bundledDownloadPluginLibraryPaths":
+        result(self?.bundledDownloadPluginLibraryPaths() ?? [])
+      case "saveVideoToGallery":
+        self?.handleSaveVideoToGallery(call: call, result: result)
+      default:
         result(FlutterMethodNotImplemented)
-        return
       }
-      self?.presentVideoPicker(result: result)
     }
     mediaPickerChannel = channel
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
@@ -105,5 +111,136 @@ import UIKit
     let activeScene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
     let keyWindow = activeScene?.windows.first { $0.isKeyWindow }
     return keyWindow?.rootViewController
+  }
+
+  private func bundledDownloadPluginLibraryPaths() -> [String] {
+    let fileManager = FileManager.default
+    let frameworksPath = Bundle.main.privateFrameworksPath ?? Bundle.main.bundlePath + "/Frameworks"
+    let candidates = [
+      frameworksPath + "/vesper_player_ios.framework/libplayer_ffmpeg.dylib",
+      frameworksPath + "/VesperPlayerKit.framework/libplayer_ffmpeg.dylib",
+      frameworksPath + "/libplayer_ffmpeg.dylib",
+      Bundle.main.bundlePath + "/libplayer_ffmpeg.dylib",
+    ]
+
+    return candidates.compactMap { candidate in
+      guard fileManager.fileExists(atPath: candidate) else {
+        return nil
+      }
+      return candidate
+    }
+  }
+
+  private func handleSaveVideoToGallery(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard
+      let arguments = call.arguments as? [String: Any],
+      let completedPath = (arguments["completedPath"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+      !completedPath.isEmpty
+    else {
+      result(
+        FlutterError(
+          code: "invalid_argument",
+          message: "The completed download output is unavailable.",
+          details: nil
+        )
+      )
+      return
+    }
+
+    Task {
+      do {
+        try await saveVideoToPhotoLibrary(completedPath: completedPath)
+        await MainActor.run {
+          result(nil)
+        }
+      } catch {
+        await MainActor.run {
+          result(
+            FlutterError(
+              code: "save_failed",
+              message: error.localizedDescription,
+              details: nil
+            )
+          )
+        }
+      }
+    }
+  }
+
+  private func saveVideoToPhotoLibrary(completedPath: String) async throws {
+    let fileURL = resolveCompletedFileURL(from: completedPath)
+    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+      throw ExamplePhotoLibraryExportError.missingCompletedFile
+    }
+
+    let authorizationStatus = await requestPhotoLibraryAuthorization()
+    switch authorizationStatus {
+    case .authorized, .limited:
+      break
+    case .denied, .restricted:
+      throw ExamplePhotoLibraryExportError.accessDenied
+    case .notDetermined:
+      throw ExamplePhotoLibraryExportError.accessDenied
+    @unknown default:
+      throw ExamplePhotoLibraryExportError.accessDenied
+    }
+
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      PHPhotoLibrary.shared().performChanges {
+        let request = PHAssetCreationRequest.forAsset()
+        request.addResource(with: .video, fileURL: fileURL, options: nil)
+      } completionHandler: { success, error in
+        if let error {
+          continuation.resume(throwing: error)
+          return
+        }
+        guard success else {
+          continuation.resume(throwing: ExamplePhotoLibraryExportError.saveFailed)
+          return
+        }
+        continuation.resume(returning: ())
+      }
+    }
+  }
+
+  private func requestPhotoLibraryAuthorization() async -> PHAuthorizationStatus {
+    if #available(iOS 14, *) {
+      return await withCheckedContinuation { continuation in
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+          continuation.resume(returning: status)
+        }
+      }
+    }
+
+    return await withCheckedContinuation { continuation in
+      PHPhotoLibrary.requestAuthorization { status in
+        continuation.resume(returning: status)
+      }
+    }
+  }
+
+  private func resolveCompletedFileURL(from completedPath: String) -> URL {
+    if completedPath.hasPrefix("file://"), let fileURL = URL(string: completedPath), fileURL.isFileURL {
+      return fileURL
+    }
+    return URL(fileURLWithPath: completedPath)
+  }
+}
+
+private enum ExamplePhotoLibraryExportError: LocalizedError {
+  case missingCompletedFile
+  case accessDenied
+  case saveFailed
+
+  var errorDescription: String? {
+    switch self {
+    case .missingCompletedFile:
+      return "The completed download output is unavailable."
+    case .accessDenied:
+      return "Photo Library add access is required to save videos."
+    case .saveFailed:
+      return "Failed to save the downloaded video to Photos."
+    }
   }
 }

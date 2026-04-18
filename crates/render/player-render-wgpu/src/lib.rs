@@ -144,6 +144,7 @@ pub struct VideoRenderer {
     overlay_texture_size: Option<wgpu::Extent3d>,
     video_frame_size: (u32, u32),
     render_mode: RenderMode,
+    video_viewport: Option<DisplayRect>,
 }
 
 enum UploadedVideoFrame {
@@ -375,11 +376,16 @@ impl VideoRenderer {
             overlay_texture_size: None,
             video_frame_size: (frame_size.0.max(1), frame_size.1.max(1)),
             render_mode: RenderMode::Fit,
+            video_viewport: None,
         })
     }
 
     pub fn set_render_mode(&mut self, render_mode: RenderMode) {
         self.render_mode = render_mode;
+    }
+
+    pub fn set_video_viewport(&mut self, viewport: Option<DisplayRect>) {
+        self.video_viewport = viewport;
     }
 
     pub fn render_mode(&self) -> RenderMode {
@@ -397,13 +403,22 @@ impl VideoRenderer {
     }
 
     pub fn video_display_rect(&self) -> DisplayRect {
-        compute_display_rect(
-            self.config.width,
-            self.config.height,
+        let viewport = self.video_viewport.unwrap_or(DisplayRect {
+            x: 0,
+            y: 0,
+            width: self.config.width,
+            height: self.config.height,
+        });
+        let mut rect = compute_display_rect(
+            viewport.width,
+            viewport.height,
             self.video_frame_size.0,
             self.video_frame_size.1,
             self.render_mode,
-        )
+        );
+        rect.x = rect.x.saturating_add(viewport.x);
+        rect.y = rect.y.saturating_add(viewport.y);
+        rect
     }
 
     pub fn upload_frame(&mut self, frame: &VideoFrameTexture) {

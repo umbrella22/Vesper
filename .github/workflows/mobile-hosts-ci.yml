@@ -86,6 +86,9 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      - name: Build Android FFmpeg prebuilts
+        run: bash ./scripts/build-android-ffmpeg-prebuilts.sh ${{ matrix.abi }}
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -102,6 +105,10 @@ jobs:
 
       - name: Build Android JNI libraries
         run: ./scripts/build-android-vesper-player-kit-jni.sh release ${{ matrix.abi }}
+
+      - name: Verify Android host kits do not bundle player-ffmpeg by default
+        if: matrix.abi == 'arm64-v8a'
+        run: bash ./scripts/verify-mobile-host-kit-without-player-ffmpeg.sh android
 
       - name: Run Android host regression tests
         run: examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=${{ matrix.abi }} :app:testDebugUnitTest
@@ -142,6 +149,8 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -152,11 +161,20 @@ jobs:
       - name: Select Xcode 26.3
         run: xcodebuild -version
 
+      - name: Build Apple FFmpeg prebuilts
+        run: ./scripts/build-apple-ffmpeg-prebuilts.sh ios-arm64 ios-simulator-arm64
+
+      - name: Build iOS player-ffmpeg plugin libraries
+        run: ./scripts/build-ios-player-ffmpeg-plugin.sh /tmp/vesper-ios-player-ffmpeg release ios-arm64 ios-simulator-arm64
+
       - name: Check iOS Rust adapter crate
         run: cargo check -p player-platform-ios
 
       - name: Build Rust iOS resolver bundle
         run: ./scripts/build-ios-player-ffi-xcframework.sh release
+
+      - name: Verify iOS host kit does not bundle player-ffmpeg by default
+        run: bash ./scripts/verify-mobile-host-kit-without-player-ffmpeg.sh ios
 
       - name: Generate Xcode project
         working-directory: examples/ios-swift-host

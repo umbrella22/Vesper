@@ -7,6 +7,10 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/build-android-vesper-player-kit-jni.sh"
+      - "scripts/build-android-player-ffmpeg-plugin.sh"
+      - "scripts/build-android-ffmpeg-prebuilts.sh"
+      - "scripts/build-apple-ffmpeg-prebuilts.sh"
+      - "scripts/build-ios-player-ffmpeg-plugin.sh"
       - "crates/core/**"
       - "crates/audio/**"
       - "crates/render/**"
@@ -26,6 +30,10 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/build-android-vesper-player-kit-jni.sh"
+      - "scripts/build-android-player-ffmpeg-plugin.sh"
+      - "scripts/build-android-ffmpeg-prebuilts.sh"
+      - "scripts/build-apple-ffmpeg-prebuilts.sh"
+      - "scripts/build-ios-player-ffmpeg-plugin.sh"
       - "crates/core/**"
       - "crates/audio/**"
       - "crates/render/**"
@@ -126,6 +134,9 @@ jobs:
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+
+      - name: Build Android FFmpeg prebuilts
+        run: bash ./scripts/build-android-ffmpeg-prebuilts.sh ${{ matrix.abi }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

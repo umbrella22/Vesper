@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vesper_player/vesper_player.dart';
 
-import 'example_player_helpers.dart';
+import 'example_download_planner.dart';
+import 'example_download_sections.dart';
 import 'example_local_media_picker.dart';
+import 'example_player_helpers.dart';
 import 'example_player_models.dart';
 import 'example_player_sections.dart';
 import 'example_player_sheet.dart';
@@ -27,30 +30,43 @@ class PlayerHostPage extends StatefulWidget {
 
 class _PlayerHostPageState extends State<PlayerHostPage> {
   late final TextEditingController _remoteUrlController;
+  late final TextEditingController _downloadUrlController;
   late Future<VesperPlayerController> _controllerFuture;
+  Future<VesperDownloadManager>? _downloadManagerFuture;
 
   VesperPlayerController? _controller;
+  VesperDownloadManager? _downloadManager;
+  StreamSubscription<VesperDownloadManagerEvent>? _downloadEventsSubscription;
+  ExampleHostTab _selectedTab = ExampleHostTab.player;
   ExampleResilienceProfile _selectedResilienceProfile =
       ExampleResilienceProfile.balanced;
   bool _isApplyingResilienceProfile = false;
   bool _sheetOpen = false;
   List<String> _playlistItemIds = <String>[flutterHlsPlaylistItemId];
   String? _activePlaylistItemId = flutterHlsPlaylistItemId;
+  String? _downloadMessage;
+  bool _isDownloadExportPluginInstalled = false;
   VesperPlayerSource? _queuedRemoteSource;
   VesperPlayerSource? _queuedLocalSource;
+  Set<int> _savingTaskIds = <int>{};
+  Map<int, double> _exportProgressByTaskId = <int, double>{};
+  List<ExamplePendingDownloadTask> _pendingDownloadTasks =
+      <ExamplePendingDownloadTask>[];
 
   @override
   void initState() {
     super.initState();
     _remoteUrlController = TextEditingController(text: flutterHlsDemoUrl);
+    _downloadUrlController = TextEditingController(text: flutterHlsDemoUrl);
     _controllerFuture = _createController();
   }
 
   @override
   void dispose() {
+    unawaited(_downloadEventsSubscription?.cancel() ?? Future<void>.value());
     final currentController = _controller;
     if (currentController != null) {
-      _disposeSilently(currentController);
+      _disposeControllerSilently(currentController);
     }
     unawaited(
       _controllerFuture
@@ -61,8 +77,27 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
           })
           .catchError((_) {}),
     );
+
+    final currentDownloadManager = _downloadManager;
+    if (currentDownloadManager != null) {
+      _disposeDownloadManagerSilently(currentDownloadManager);
+    }
+    final downloadManagerFuture = _downloadManagerFuture;
+    if (downloadManagerFuture != null) {
+      unawaited(
+        downloadManagerFuture
+            .then((value) {
+              if (!identical(value, currentDownloadManager)) {
+                return value.dispose();
+              }
+            })
+            .catchError((_) {}),
+      );
+    }
+
     unawaited(_restoreSystemPresentation());
     _remoteUrlController.dispose();
+    _downloadUrlController.dispose();
     super.dispose();
   }
 
@@ -80,15 +115,63 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       final previous = _controller;
       _controller = nextController;
       if (previous != null && !identical(previous, nextController)) {
-        _disposeSilently(previous);
+        _disposeControllerSilently(previous);
       }
       return nextController;
     } catch (_) {
       if (nextController != null) {
-        _disposeSilently(nextController);
+        _disposeControllerSilently(nextController);
       }
       rethrow;
     }
+  }
+
+  Future<VesperDownloadManager> _createDownloadManager() async {
+    final pluginLibraryPaths =
+        await ExampleLocalMediaPicker.bundledDownloadPluginLibraryPaths();
+    _isDownloadExportPluginInstalled = pluginLibraryPaths.isNotEmpty;
+    final manager = await VesperDownloadManager.create(
+      configuration: VesperDownloadConfiguration(
+        runPostProcessorsOnCompletion: false,
+        pluginLibraryPaths: pluginLibraryPaths,
+      ),
+    );
+    await (_downloadEventsSubscription?.cancel() ?? Future<void>.value());
+    _downloadEventsSubscription = manager.events.listen(_handleDownloadEvent);
+    final previous = _downloadManager;
+    _downloadManager = manager;
+    if (previous != null && !identical(previous, manager)) {
+      _disposeDownloadManagerSilently(previous);
+    }
+    return manager;
+  }
+
+  void _handleDownloadEvent(VesperDownloadManagerEvent event) {
+    if (!mounted) {
+      return;
+    }
+    switch (event) {
+      case VesperDownloadExportProgressEvent():
+        setState(() {
+          _exportProgressByTaskId[event.taskId] = event.ratio
+              .clamp(0, 1)
+              .toDouble();
+        });
+      case VesperDownloadSnapshotEvent():
+      case VesperDownloadErrorEvent():
+      case VesperDownloadDisposedEvent():
+        break;
+    }
+  }
+
+  Future<VesperDownloadManager> _ensureDownloadManagerFuture() {
+    final existingFuture = _downloadManagerFuture;
+    if (existingFuture != null) {
+      return existingFuture;
+    }
+    final future = _createDownloadManager();
+    _downloadManagerFuture = future;
+    return future;
   }
 
   Future<void> _applyResilienceProfile(ExampleResilienceProfile profile) async {
@@ -215,7 +298,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     final protocol = inferProtocol(uri);
     if (protocol == VesperPlayerSourceProtocol.dash &&
         !controller.capabilities.supportsDash) {
-      _showSourceMessage('当前平台宿主暂不支持 DASH 流。');
+      _showMessage('当前平台宿主暂不支持 DASH 流。');
       return;
     }
 
@@ -353,7 +436,194 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
-  void _showSourceMessage(String message) {
+  Future<void> _createDownloadTask(
+    VesperDownloadManager manager, {
+    required String assetIdPrefix,
+    required VesperPlayerSource source,
+  }) async {
+    if (Platform.isIOS && source.protocol == VesperPlayerSourceProtocol.dash) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _downloadMessage = 'iOS 侧示例暂不接入 DASH 下载。';
+      });
+      return;
+    }
+
+    final assetId = '$assetIdPrefix-${DateTime.now().millisecondsSinceEpoch}';
+    setState(() {
+      _downloadMessage = null;
+      _pendingDownloadTasks = <ExamplePendingDownloadTask>[
+        ..._pendingDownloadTasks,
+        ExamplePendingDownloadTask(
+          requestId: assetId,
+          assetId: assetId,
+          label: exampleDraftDownloadLabelFromSource(source),
+          sourceUri: source.uri,
+        ),
+      ];
+    });
+
+    int? taskId;
+    Object? error;
+    try {
+      final preparedTask = await prepareExampleDownloadTask(
+        assetId: assetId,
+        source: source,
+      );
+      taskId = await manager.createTask(
+        assetId: assetId,
+        source: preparedTask.source,
+        profile: preparedTask.profile,
+        assetIndex: preparedTask.assetIndex,
+      );
+    } catch (caughtError) {
+      error = caughtError;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _pendingDownloadTasks = _pendingDownloadTasks
+          .where((task) => task.requestId != assetId)
+          .toList(growable: false);
+      _downloadMessage = error != null
+          ? '准备下载任务失败：$error'
+          : taskId == null
+          ? '创建下载任务失败。'
+          : null;
+    });
+  }
+
+  Future<void> _createRemoteDownloadTask(VesperDownloadManager manager) async {
+    final uri = _downloadUrlController.text.trim();
+    if (uri.isEmpty) {
+      setState(() {
+        _downloadMessage = '请输入下载 URL。';
+      });
+      return;
+    }
+
+    final source = VesperPlayerSource.remote(
+      uri: uri,
+      label: exampleDraftDownloadLabelFromUri(uri),
+      protocol: inferProtocol(uri),
+    );
+    await _createDownloadTask(
+      manager,
+      assetIdPrefix: flutterRemotePlaylistItemId,
+      source: source,
+    );
+  }
+
+  Future<void> _handleDownloadPrimaryAction(
+    VesperDownloadManager manager,
+    VesperDownloadTaskSnapshot task,
+  ) async {
+    final succeeded = switch (task.state) {
+      VesperDownloadState.queued ||
+      VesperDownloadState.failed => await manager.startTask(task.taskId),
+      VesperDownloadState.preparing ||
+      VesperDownloadState.downloading => await manager.pauseTask(task.taskId),
+      VesperDownloadState.paused => await manager.resumeTask(task.taskId),
+      VesperDownloadState.completed || VesperDownloadState.removed => true,
+    };
+    if (!mounted || succeeded) {
+      return;
+    }
+    _showMessage('下载任务操作失败。');
+  }
+
+  Future<File> _createDownloadExportFile(
+    VesperDownloadTaskSnapshot task,
+  ) async {
+    final exportDirectory = Directory(
+      '${Directory.systemTemp.path}/vesper-exported-videos',
+    );
+    if (!await exportDirectory.exists()) {
+      await exportDirectory.create(recursive: true);
+    }
+    final trimmedAssetId = task.assetId.trim();
+    final safeStem =
+        (trimmedAssetId.isEmpty ? 'download-${task.taskId}' : trimmedAssetId)
+            .replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    return File('${exportDirectory.path}/$safeStem.mp4');
+  }
+
+  Future<void> _saveDownloadToGallery(
+    VesperDownloadManager manager,
+    VesperDownloadTaskSnapshot task,
+  ) async {
+    final completedPath = task.assetIndex.completedPath?.trim();
+    if (completedPath == null || completedPath.isEmpty) {
+      _showMessage('找不到已完成任务的输出文件。');
+      return;
+    }
+    if (_savingTaskIds.contains(task.taskId)) {
+      return;
+    }
+
+    final needsExport =
+        task.source.contentFormat == VesperDownloadContentFormat.hlsSegments ||
+        task.source.contentFormat == VesperDownloadContentFormat.dashSegments;
+    if (needsExport && !_isDownloadExportPluginInstalled) {
+      _showMessage('MP4 合成库未安装。');
+      return;
+    }
+    setState(() {
+      _savingTaskIds = <int>{..._savingTaskIds, task.taskId};
+      if (needsExport) {
+        _exportProgressByTaskId = <int, double>{
+          ..._exportProgressByTaskId,
+          task.taskId: 0,
+        };
+      }
+    });
+
+    File? exportFile;
+    try {
+      final gallerySourcePath = await (() async {
+        if (!needsExport) {
+          return completedPath;
+        }
+        exportFile = await _createDownloadExportFile(task);
+        if (await exportFile!.exists()) {
+          await exportFile!.delete();
+        }
+        await manager.exportTaskOutput(task.taskId, exportFile!.path);
+        return exportFile!.path;
+      })();
+      await ExampleLocalMediaPicker.saveVideoToGallery(gallerySourcePath);
+      if (!mounted) {
+        return;
+      }
+      _showMessage('已转存到系统相册。');
+    } on MissingPluginException {
+      if (mounted) {
+        _showMessage('当前宿主暂未接入相册导出能力。');
+      }
+    } on PlatformException catch (error) {
+      if (mounted) {
+        _showMessage(error.message ?? '转存到系统相册失败。');
+      }
+    } finally {
+      if (exportFile != null && await exportFile!.exists()) {
+        await exportFile!.delete();
+      }
+      if (mounted) {
+        setState(() {
+          _savingTaskIds = <int>{
+            ..._savingTaskIds.where((taskId) => taskId != task.taskId),
+          };
+          _exportProgressByTaskId = <int, double>{..._exportProgressByTaskId}
+            ..remove(task.taskId);
+        });
+      }
+    }
+  }
+
+  void _showMessage(String message) {
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) {
       return;
@@ -363,18 +633,72 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _disposeSilently(VesperPlayerController controller) {
+  void _disposeControllerSilently(VesperPlayerController controller) {
     unawaited(controller.dispose().catchError((_) {}));
+  }
+
+  void _disposeDownloadManagerSilently(VesperDownloadManager manager) {
+    unawaited(manager.dispose().catchError((_) {}));
   }
 
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
-    final isPortrait = mediaQuery.orientation == Orientation.portrait;
+    final immersivePlayer =
+        mediaQuery.orientation == Orientation.landscape &&
+        _selectedTab == ExampleHostTab.player;
     final useDarkTheme = Theme.of(context).brightness == Brightness.dark;
     final palette = exampleHostPalette(useDarkTheme);
 
-    final body = FutureBuilder<VesperPlayerController>(
+    final body = switch (_selectedTab) {
+      ExampleHostTab.player => _buildPlayerFutureContent(
+        context,
+        immersivePlayer: immersivePlayer,
+        palette: palette,
+      ),
+      ExampleHostTab.downloads => _buildDownloadFutureContent(palette),
+    };
+
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[palette.pageTop, palette.pageBottom],
+          ),
+        ),
+        child: immersivePlayer ? body : SafeArea(child: body),
+      ),
+      bottomNavigationBar: immersivePlayer
+          ? null
+          : NavigationBar(
+              selectedIndex: _selectedTab.index,
+              onDestinationSelected: (index) {
+                setState(() {
+                  _selectedTab = ExampleHostTab.values[index];
+                });
+              },
+              destinations: const <Widget>[
+                NavigationDestination(
+                  icon: Icon(Icons.video_library_rounded),
+                  label: '播放器',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.download_rounded),
+                  label: '下载',
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildPlayerFutureContent(
+    BuildContext context, {
+    required bool immersivePlayer,
+    required ExampleHostPalette palette,
+  }) {
+    return FutureBuilder<VesperPlayerController>(
       future: _controllerFuture,
       builder: (context, asyncSnapshot) {
         if (asyncSnapshot.hasError && !asyncSnapshot.hasData) {
@@ -390,16 +714,16 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         return ValueListenableBuilder<VesperPlayerSnapshot>(
           valueListenable: controller.snapshotListenable,
           builder: (context, snapshot, _) {
-            final content = isPortrait
-                ? _buildPortraitLayout(
+            final content = immersivePlayer
+                ? _buildLandscapeLayout(controller, snapshot, asyncSnapshot)
+                : _buildPortraitLayout(
                     context,
                     controller,
                     snapshot,
                     playlistItems,
                     palette,
                     asyncSnapshot,
-                  )
-                : _buildLandscapeLayout(controller, snapshot, asyncSnapshot);
+                  );
 
             return Stack(
               children: <Widget>[
@@ -415,19 +739,6 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
           },
         );
       },
-    );
-
-    return Scaffold(
-      body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[palette.pageTop, palette.pageBottom],
-          ),
-        ),
-        child: isPortrait ? SafeArea(child: body) : body,
-      ),
     );
   }
 
@@ -554,4 +865,84 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       ],
     );
   }
+
+  Widget _buildDownloadFutureContent(ExampleHostPalette palette) {
+    final downloadManagerFuture = _ensureDownloadManagerFuture();
+    return FutureBuilder<VesperDownloadManager>(
+      future: downloadManagerFuture,
+      builder: (context, asyncSnapshot) {
+        if (asyncSnapshot.hasError && !asyncSnapshot.hasData) {
+          return ExampleErrorState(error: asyncSnapshot.error);
+        }
+
+        final manager = asyncSnapshot.data ?? _downloadManager;
+        if (manager == null) {
+          return const ExampleLoadingState();
+        }
+
+        return ValueListenableBuilder<VesperDownloadSnapshot>(
+          valueListenable: manager.snapshotListenable,
+          builder: (context, snapshot, _) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  ExampleDownloadHeader(
+                    palette: palette,
+                    isDownloadExportPluginInstalled:
+                        _isDownloadExportPluginInstalled,
+                  ),
+                  if (asyncSnapshot.hasError) ...<Widget>[
+                    const SizedBox(height: 18),
+                    ExampleInlineControllerError(error: asyncSnapshot.error),
+                  ],
+                  const SizedBox(height: 18),
+                  ExampleDownloadCreateSection(
+                    palette: palette,
+                    remoteUrlController: _downloadUrlController,
+                    message: _downloadMessage,
+                    onUseHlsDemo: () => unawaited(
+                      _createDownloadTask(
+                        manager,
+                        assetIdPrefix: flutterHlsPlaylistItemId,
+                        source: flutterHlsDemoSource(),
+                      ),
+                    ),
+                    onUseDashDemo: () => unawaited(
+                      _createDownloadTask(
+                        manager,
+                        assetIdPrefix: flutterDashPlaylistItemId,
+                        source: flutterDashDemoSource(),
+                      ),
+                    ),
+                    onCreateRemote: () =>
+                        unawaited(_createRemoteDownloadTask(manager)),
+                  ),
+                  const SizedBox(height: 18),
+                  ExampleDownloadTasksSection(
+                    palette: palette,
+                    tasks: snapshot.tasks,
+                    pendingTasks: _pendingDownloadTasks,
+                    isDownloadExportPluginInstalled:
+                        _isDownloadExportPluginInstalled,
+                    savingTaskIds: _savingTaskIds,
+                    exportProgressByTaskId: _exportProgressByTaskId,
+                    onPrimaryAction: (task) =>
+                        unawaited(_handleDownloadPrimaryAction(manager, task)),
+                    onSaveToGallery: (task) =>
+                        unawaited(_saveDownloadToGallery(manager, task)),
+                    onRemoveTask: (task) =>
+                        unawaited(manager.removeTask(task.taskId)),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 }
+
+enum ExampleHostTab { player, downloads }

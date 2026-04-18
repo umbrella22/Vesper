@@ -91,6 +91,20 @@ The Android host API now exposes first-round playback resilience controls:
 These are now used to shape `ExoPlayer` startup buffering, retry behavior, and first-round disk
 caching for remote streams, especially `HLS / DASH`.
 
+The Android host API also exposes decoder selection through `VesperDecoderBackend`:
+
+- `SystemOnly`
+  - keep using platform decoders only
+- `SystemPreferred`
+  - allow optional extension decoders, but still prefer system decoders first
+- `ExtensionPreferred`
+  - allow optional extension decoders and prefer them when both paths can play the same track
+
+`vesper-player-kit` does not pull in `androidx.media3:media3-exoplayer-ffmpeg` by default, so the
+baseline AAR size stays unchanged when you do not need the FFmpeg extension. If a host app wants
+to use `SystemPreferred` or `ExtensionPreferred` with the FFmpeg extension path, it should add that
+Media3 dependency itself.
+
 ## Key Entry Points
 
 - `vesper-player-kit/build.gradle.kts`
@@ -109,6 +123,7 @@ caching for remote streams, especially `HLS / DASH`.
 ```kotlin
 import androidx.compose.runtime.Composable
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.ikaros.vesper.player.android.VesperDecoderBackend
 import io.github.ikaros.vesper.player.android.compose.VesperPlayerSurface
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerController
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
@@ -117,7 +132,8 @@ import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiStat
 fun DemoPlayerScreen() {
     val controller =
         rememberVesperPlayerController(
-            resiliencePolicy = VesperPlaybackResiliencePolicy.resilient()
+            resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
+            decoderBackend = VesperDecoderBackend.SystemOnly,
         )
     val uiState = rememberVesperPlayerUiState(controller)
 

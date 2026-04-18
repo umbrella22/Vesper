@@ -9,6 +9,8 @@
 "example.theme.system" = "跟随系统";
 "example.theme.light" = "浅色";
 "example.theme.dark" = "深色";
+"example.tab.player" = "播放器";
+"example.tab.downloads" = "下载";
 
 "example.sources.title" = "媒体源";
 "example.sources.subtitle" = "使用示例宿主在本地文件、HLS 演示流和自定义远程 URL 之间切换。";
@@ -28,6 +30,46 @@
 "example.playlist.status_near_visible" = "临近可见";
 "example.playlist.status_prefetch" = "仅预取";
 "example.playlist.status_hidden" = "隐藏";
+"example.download.header_subtitle" = "这个页面专门用于下载会话回归，重点验证共享下载状态机和宿主桥接，不把它包装成完整离线产品流程。";
+"example.download.create_title" = "创建下载任务";
+"example.download.create_subtitle" = "用 HLS 和 DASH 演示按钮快速回归，或者粘贴远程 URL 创建一个前台下载任务。";
+"example.download.hls_demo" = "下载 HLS 演示";
+"example.download.dash_demo" = "下载 DASH 演示";
+"example.download.remote_url" = "下载 URL";
+"example.download.create_remote_task" = "创建远程任务";
+"example.download.tasks_title" = "任务列表";
+"example.download.tasks_subtitle" = "这个示例保持在前台执行和任务生命周期回归层面，不宣称后台恢复、离线 DRM 或完整打包式 HLS/DASH 产品能力。";
+"example.download.empty" = "还没有创建任何下载任务。";
+"example.download.state_queued" = "排队中";
+"example.download.state_preparing" = "准备中";
+"example.download.state_downloading" = "下载中";
+"example.download.state_paused" = "已暂停";
+"example.download.state_completed" = "已完成";
+"example.download.state_failed" = "失败";
+"example.download.state_removed" = "已移除";
+"example.download.action_start" = "开始";
+"example.download.action_pause" = "暂停";
+"example.download.action_resume" = "恢复";
+"example.download.save_to_photos" = "转存到相册";
+"example.download.remove_task" = "移除";
+"example.download.task_meta" = "assetId: %@ · %@";
+"example.download.progress_unknown" = "进度未知";
+"example.download.progress_bytes" = "%@ / %@";
+"example.download.pending_task_details" = "正在读取远程清单并生成下载计划…";
+"example.download.pending_source_uri" = "远程地址：%@";
+"example.download.completed_path" = "输出位置：%@";
+"example.download.error_message" = "错误：%@";
+"example.download.create_task_failed" = "创建下载任务失败。";
+"example.download.action_failed" = "下载任务操作失败。";
+"example.download.exporting" = "正在合成 MP4";
+"example.download.export_plugin_ready" = "MP4 合成库：已安装";
+"example.download.export_plugin_missing" = "MP4 合成库未安装。";
+"example.download.export_progress" = "正在合成 MP4… %d%%";
+"example.download.save_to_photos_title" = "系统相册";
+"example.download.save_to_photos_success" = "已转存到系统相册。";
+"example.download.save_to_photos_missing_output" = "找不到已完成任务的输出文件。";
+"example.download.save_to_photos_failed_unknown" = "未知错误";
+"example.download.save_to_photos_failed" = "转存下载视频失败：%@";
 
 "example.resilience.title" = "恢复策略";
 "example.resilience.subtitle" = "运行时切换 resilience preset，并尽量保留当前媒体、播放进度和播放意图。";
@@ -64,12 +106,14 @@
 "example.message.invalid_remote_url" = "请输入有效的远程 URL。";
 "example.message.dash_not_supported_on_ios" = "当前 iOS AVPlayer 后端暂不支持 DASH 流。";
 "example.message.photo_library_required" = "需要相册访问权限才能从“照片”中选择视频。";
+"example.message.photo_library_add_required" = "需要相册写入权限才能保存下载视频。";
 "example.message.unknown_photo_authorization_state" = "未知的相册授权状态。";
 "example.message.failed_to_load_selected_video_from_photos" = "无法从“照片”加载所选视频。";
 "example.message.failed_to_load_selected_local_video" = "打开所选视频失败：%@";
 "example.message.failed_to_load_selected_photo_video" = "加载所选相册视频失败：%@";
 
 "example.source.hls_demo_label" = "HLS 演示（BipBop）";
+"example.source.dash_demo_label" = "DASH 演示（Envivio）";
 "example.source.custom_remote_url_label" = "自定义远程 URL";
 
 "example.quality.button_capped" = "限码率";

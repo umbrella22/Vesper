@@ -14,6 +14,9 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   static const EventChannel _eventChannel = EventChannel(
     'io.github.ikaros.vesper_player/events',
   );
+  static const EventChannel _downloadEventChannel = EventChannel(
+    'io.github.ikaros.vesper_player/download_events',
+  );
 
   late final Stream<VesperPlayerEvent> _events = _eventChannel
       .receiveBroadcastStream()
@@ -21,6 +24,14 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
       .map((dynamic event) => Map<Object?, Object?>.from(event as Map))
       .map(VesperPlayerEvent.fromMap)
       .asBroadcastStream();
+
+  late final Stream<VesperDownloadManagerEvent> _downloadEvents =
+      _downloadEventChannel
+          .receiveBroadcastStream()
+          .where((dynamic event) => event is Map)
+          .map((dynamic event) => Map<Object?, Object?>.from(event as Map))
+          .map(VesperDownloadManagerEvent.fromMap)
+          .asBroadcastStream();
 
   @override
   Future<VesperPlatformCreateResult> createPlayer({
@@ -190,6 +201,110 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   Future<void> clearViewport(String playerId) {
     return _invokeVoid('clearViewport', <String, Object?>{
       'playerId': playerId,
+    });
+  }
+
+  @override
+  Future<VesperPlatformDownloadCreateResult> createDownloadManager({
+    VesperDownloadConfiguration configuration =
+        const VesperDownloadConfiguration(),
+  }) async {
+    final result = await _methodChannel.invokeMethod<Object?>(
+      'createDownloadManager',
+      <String, Object?>{'configuration': configuration.toMap()},
+    );
+    final decoded = result is Map
+        ? Map<Object?, Object?>.from(result)
+        : <Object?, Object?>{};
+    return VesperPlatformDownloadCreateResult.fromMap(decoded);
+  }
+
+  @override
+  Stream<VesperDownloadManagerEvent> downloadEventsFor(String downloadId) {
+    return _downloadEvents.where((event) => event.downloadId == downloadId);
+  }
+
+  @override
+  Future<void> refreshDownloadManager(String downloadId) {
+    return _invokeVoid('refreshDownloadManager', <String, Object?>{
+      'downloadId': downloadId,
+    });
+  }
+
+  @override
+  Future<void> disposeDownloadManager(String downloadId) {
+    return _invokeVoid('disposeDownloadManager', <String, Object?>{
+      'downloadId': downloadId,
+    });
+  }
+
+  @override
+  Future<int?> createDownloadTask(
+    String downloadId, {
+    required String assetId,
+    required VesperDownloadSource source,
+    VesperDownloadProfile profile = const VesperDownloadProfile(),
+    VesperDownloadAssetIndex assetIndex = const VesperDownloadAssetIndex(),
+  }) async {
+    final result = await _methodChannel.invokeMethod<Object?>(
+      'createDownloadTask',
+      <String, Object?>{
+        'downloadId': downloadId,
+        'assetId': assetId,
+        'source': source.toMap(),
+        'profile': profile.toMap(),
+        'assetIndex': assetIndex.toMap(),
+      },
+    );
+    return result is int ? result : null;
+  }
+
+  @override
+  Future<bool> startDownloadTask(String downloadId, int taskId) async {
+    final result = await _methodChannel.invokeMethod<Object?>(
+      'startDownloadTask',
+      <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
+    );
+    return result == true;
+  }
+
+  @override
+  Future<bool> pauseDownloadTask(String downloadId, int taskId) async {
+    final result = await _methodChannel.invokeMethod<Object?>(
+      'pauseDownloadTask',
+      <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
+    );
+    return result == true;
+  }
+
+  @override
+  Future<bool> resumeDownloadTask(String downloadId, int taskId) async {
+    final result = await _methodChannel.invokeMethod<Object?>(
+      'resumeDownloadTask',
+      <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
+    );
+    return result == true;
+  }
+
+  @override
+  Future<bool> removeDownloadTask(String downloadId, int taskId) async {
+    final result = await _methodChannel.invokeMethod<Object?>(
+      'removeDownloadTask',
+      <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
+    );
+    return result == true;
+  }
+
+  @override
+  Future<void> exportDownloadTask(
+    String downloadId,
+    int taskId,
+    String outputPath,
+  ) {
+    return _invokeVoid('exportDownloadTask', <String, Object?>{
+      'downloadId': downloadId,
+      'taskId': taskId,
+      'outputPath': outputPath,
     });
   }
 

@@ -56,31 +56,4 @@ void main() {
     expect(liveButtonLabel(timeline), '直播');
     expect(timelineSummary(timeline, null), '01:10 / 01:10');
   });
-
-  test('viewport hint labels stay aligned with shared semantics', () {
-    expect(
-      viewportHintLabel(
-        const VesperViewportHint(kind: VesperViewportHintKind.visible),
-      ),
-      '视口内',
-    );
-    expect(
-      viewportHintLabel(
-        const VesperViewportHint(kind: VesperViewportHintKind.nearVisible),
-      ),
-      '临近视口',
-    );
-    expect(
-      viewportHintLabel(
-        const VesperViewportHint(kind: VesperViewportHintKind.prefetchOnly),
-      ),
-      '仅预取',
-    );
-    expect(
-      viewportHintLabel(
-        const VesperViewportHint(kind: VesperViewportHintKind.hidden),
-      ),
-      '隐藏',
-    );
-  });
 }

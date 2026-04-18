@@ -14,15 +14,18 @@ public enum VesperDownloadContentFormat: Int, Equatable {
 
 public struct VesperDownloadConfiguration: Equatable {
     public let autoStart: Bool
+    public let runPostProcessorsOnCompletion: Bool
     public let baseDirectory: URL?
     public let pluginLibraryPaths: [String]
 
     public init(
         autoStart: Bool = true,
+        runPostProcessorsOnCompletion: Bool = true,
         baseDirectory: URL? = nil,
         pluginLibraryPaths: [String] = []
     ) {
         self.autoStart = autoStart
+        self.runPostProcessorsOnCompletion = runPostProcessorsOnCompletion
         self.baseDirectory = baseDirectory
         self.pluginLibraryPaths = pluginLibraryPaths
     }
@@ -451,6 +454,36 @@ public final class VesperDownloadManager: ObservableObject {
         return removed
     }
 
+    public func exportTaskOutput(
+        taskId: VesperDownloadTaskId,
+        outputPath: String,
+        onProgress: @escaping (Float) -> Void = { _ in },
+        isCancelled: @escaping () -> Bool = { false }
+    ) async throws {
+        guard sessionHandle != 0 else {
+            throw DownloadExportBridgeError("native download session handle must not be zero")
+        }
+
+        let bindings = self.bindings
+        let sessionHandle = self.sessionHandle
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    try bindings.exportDownloadTask(
+                        sessionHandle: sessionHandle,
+                        taskId: taskId,
+                        outputPath: outputPath,
+                        onProgress: onProgress,
+                        isCancelled: isCancelled
+                    )
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     private func syncRuntimeState(processCommands: Bool) {
         guard sessionHandle != 0 else {
             snapshot = VesperDownloadSnapshot(tasks: [])
@@ -556,7 +589,7 @@ public final class VesperDownloadManager: ObservableObject {
         }
     }
 
-    internal protocol DownloadBindings {
+    internal protocol DownloadBindings: Sendable {
         func createDownloadSession(configuration: VesperDownloadConfiguration) -> UInt64
 
         func disposeDownloadSession(_ sessionHandle: UInt64)
@@ -588,6 +621,14 @@ public final class VesperDownloadManager: ObservableObject {
             taskId: UInt64,
             completedPath: String?
         ) -> Bool
+
+        func exportDownloadTask(
+            sessionHandle: UInt64,
+            taskId: UInt64,
+            outputPath: String,
+            onProgress: @escaping (Float) -> Void,
+            isCancelled: @escaping () -> Bool
+        ) throws
 
         func failDownloadTask(
             sessionHandle: UInt64,
@@ -757,10 +798,6 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 isSegment: false
             )
         }
-        if !resources.isEmpty {
-            return resources
-        }
-
         let segments = try task.assetIndex.segments.enumerated().map { index, segment in
             ForegroundDownloadEntry(
                 url: try resolveURL(segment.uri),
@@ -769,8 +806,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 isSegment: true
             )
         }
-        if !segments.isEmpty {
-            return segments
+        if !resources.isEmpty || !segments.isEmpty {
+            return resources + segments
         }
 
         return [
@@ -964,6 +1001,41 @@ private struct NativeDownloadBindings: VesperDownloadManager.DownloadBindings {
         }
     }
 
+    func exportDownloadTask(
+        sessionHandle: UInt64,
+        taskId: UInt64,
+        outputPath: String,
+        onProgress: @escaping (Float) -> Void,
+        isCancelled: @escaping () -> Bool
+    ) throws {
+        let bridge = DownloadExportProgressBridge(
+            onProgress: onProgress,
+            isCancelled: isCancelled
+        )
+        let context = bridge.retainContext()
+        let callbacks = VesperRuntimeDownloadExportCallbacks(
+            context: context,
+            on_progress: { context, ratio in
+                DownloadExportProgressBridge.fromContext(context)?.onProgress(ratio)
+            },
+            is_cancelled: { context in
+                DownloadExportProgressBridge.fromContext(context)?.isCancelled() ?? false
+            }
+        )
+        let exported = outputPath.withCString { outputPathPointer in
+            vesper_runtime_download_session_export_task(
+                sessionHandle,
+                taskId,
+                outputPathPointer,
+                callbacks
+            )
+        }
+        DownloadExportProgressBridge.releaseContext(context)
+        if !exported {
+            throw DownloadExportBridgeError("download export failed for task \(taskId)")
+        }
+    }
+
     func failDownloadTask(
         sessionHandle: UInt64,
         taskId: UInt64,
@@ -1052,6 +1124,7 @@ private func freeRuntimeDownloadConfig(_ config: inout VesperRuntimeDownloadConf
     }
     config = VesperRuntimeDownloadConfig(
         auto_start: false,
+        run_post_processors_on_completion: false,
         plugin_library_paths: nil,
         plugin_library_paths_len: 0
     )
@@ -1132,6 +1205,7 @@ private extension VesperDownloadConfiguration {
 
         return VesperRuntimeDownloadConfig(
             auto_start: autoStart,
+            run_post_processors_on_completion: runPostProcessorsOnCompletion,
             plugin_library_paths: pointer,
             plugin_library_paths_len: UInt(pluginLibraryPaths.count)
         )
@@ -1458,4 +1532,45 @@ private extension VesperRuntimeDownloadContentFormat {
         default: return nil
         }
     }
+}
+
+private final class DownloadExportProgressBridge: @unchecked Sendable {
+    let onProgress: (Float) -> Void
+    let isCancelled: () -> Bool
+
+    init(
+        onProgress: @escaping (Float) -> Void,
+        isCancelled: @escaping () -> Bool
+    ) {
+        self.onProgress = onProgress
+        self.isCancelled = isCancelled
+    }
+
+    func retainContext() -> UnsafeMutableRawPointer {
+        UnsafeMutableRawPointer(Unmanaged.passRetained(self).toOpaque())
+    }
+
+    static func releaseContext(_ context: UnsafeMutableRawPointer?) {
+        guard let context else {
+            return
+        }
+        Unmanaged<DownloadExportProgressBridge>.fromOpaque(context).release()
+    }
+
+    static func fromContext(_ context: UnsafeMutableRawPointer?) -> DownloadExportProgressBridge? {
+        guard let context else {
+            return nil
+        }
+        return Unmanaged<DownloadExportProgressBridge>.fromOpaque(context).takeUnretainedValue()
+    }
+}
+
+private struct DownloadExportBridgeError: LocalizedError {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+
+    var errorDescription: String? { message }
 }

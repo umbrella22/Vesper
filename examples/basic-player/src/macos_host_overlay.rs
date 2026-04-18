@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_float, c_void};
 use std::sync::Mutex;

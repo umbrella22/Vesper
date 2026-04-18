@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use player_plugin::ProcessorProgress;
 use player_plugin_loader::LoadedDynamicPlugin;
 use player_runtime::{
     DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadManager,
@@ -72,17 +73,33 @@ pub struct AndroidDownloadBridgeSession {
 
 impl AndroidDownloadBridgeSession {
     pub fn new(auto_start: bool) -> Self {
-        Self::new_with_plugin_library_paths(auto_start, Vec::<PathBuf>::new())
-            .expect("empty plugin configuration should not fail")
+        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let executor = AndroidDownloadExecutor::new(command_queue.clone());
+        let config = DownloadManagerConfig {
+            auto_start,
+            run_post_processors_on_completion: true,
+            post_processors: Vec::new(),
+            event_hooks: Vec::new(),
+        };
+
+        Self {
+            manager: DownloadManager::new(config, InMemoryDownloadStore::default(), executor),
+            command_queue,
+        }
     }
 
     pub fn new_with_plugin_library_paths(
         auto_start: bool,
+        run_post_processors_on_completion: bool,
         plugin_library_paths: impl IntoIterator<Item = PathBuf>,
     ) -> PlayerRuntimeResult<Self> {
         let command_queue = Arc::new(Mutex::new(VecDeque::new()));
         let executor = AndroidDownloadExecutor::new(command_queue.clone());
-        let config = download_manager_config(auto_start, plugin_library_paths)?;
+        let config = download_manager_config(
+            auto_start,
+            run_post_processors_on_completion,
+            plugin_library_paths,
+        )?;
 
         Ok(Self {
             manager: DownloadManager::new(config, InMemoryDownloadStore::default(), executor),
@@ -175,6 +192,16 @@ impl AndroidDownloadBridgeSession {
         self.manager.snapshot()
     }
 
+    pub fn export_task_output(
+        &self,
+        task_id: DownloadTaskId,
+        output_path: Option<PathBuf>,
+        progress: &dyn ProcessorProgress,
+    ) -> PlayerRuntimeResult<PathBuf> {
+        self.manager
+            .export_task_output(task_id, output_path.as_deref(), progress)
+    }
+
     pub fn drain_events(&mut self) -> Vec<DownloadEvent> {
         self.manager.drain_events()
     }
@@ -189,6 +216,7 @@ impl AndroidDownloadBridgeSession {
 
 fn download_manager_config(
     auto_start: bool,
+    run_post_processors_on_completion: bool,
     plugin_library_paths: impl IntoIterator<Item = PathBuf>,
 ) -> PlayerRuntimeResult<DownloadManagerConfig> {
     let mut post_processors = Vec::new();
@@ -215,6 +243,7 @@ fn download_manager_config(
 
     Ok(DownloadManagerConfig {
         auto_start,
+        run_post_processors_on_completion,
         post_processors,
         event_hooks,
     })
@@ -385,6 +414,7 @@ mod tests {
     fn android_download_bridge_rejects_missing_plugin_library() {
         let error = AndroidDownloadBridgeSession::new_with_plugin_library_paths(
             false,
+            true,
             vec![PathBuf::from("/tmp/vesper-missing-plugin.so")],
         )
         .expect_err("missing plugin should fail");

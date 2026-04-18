@@ -1,4 +1,6 @@
 import 'events.dart';
+import 'download_events.dart';
+import 'download_models.dart';
 import 'models.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
@@ -20,6 +22,25 @@ final class VesperPlatformCreateResult {
 
   final String playerId;
   final VesperPlayerSnapshot snapshot;
+}
+
+final class VesperPlatformDownloadCreateResult {
+  const VesperPlatformDownloadCreateResult({
+    required this.downloadId,
+    required this.snapshot,
+  });
+
+  factory VesperPlatformDownloadCreateResult.fromMap(
+      Map<Object?, Object?> map) {
+    return VesperPlatformDownloadCreateResult(
+      downloadId: map['downloadId'] as String? ?? '',
+      snapshot:
+          VesperDownloadSnapshot.fromMap(vesperDecodeMap(map['snapshot'])),
+    );
+  }
+
+  final String downloadId;
+  final VesperDownloadSnapshot snapshot;
 }
 
 class VesperUnsupportedError extends UnsupportedError {
@@ -100,6 +121,39 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
   Future<void> updateViewport(String playerId, VesperPlayerViewport viewport);
 
   Future<void> clearViewport(String playerId);
+
+  Future<VesperPlatformDownloadCreateResult> createDownloadManager({
+    VesperDownloadConfiguration configuration =
+        const VesperDownloadConfiguration(),
+  });
+
+  Stream<VesperDownloadManagerEvent> downloadEventsFor(String downloadId);
+
+  Future<void> refreshDownloadManager(String downloadId);
+
+  Future<void> disposeDownloadManager(String downloadId);
+
+  Future<int?> createDownloadTask(
+    String downloadId, {
+    required String assetId,
+    required VesperDownloadSource source,
+    VesperDownloadProfile profile = const VesperDownloadProfile(),
+    VesperDownloadAssetIndex assetIndex = const VesperDownloadAssetIndex(),
+  });
+
+  Future<bool> startDownloadTask(String downloadId, int taskId);
+
+  Future<bool> pauseDownloadTask(String downloadId, int taskId);
+
+  Future<bool> resumeDownloadTask(String downloadId, int taskId);
+
+  Future<bool> removeDownloadTask(String downloadId, int taskId);
+
+  Future<void> exportDownloadTask(
+    String downloadId,
+    int taskId,
+    String outputPath,
+  );
 }
 
 final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
@@ -202,5 +256,59 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
 
   @override
   Future<void> clearViewport(String playerId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<VesperPlatformDownloadCreateResult> createDownloadManager({
+    VesperDownloadConfiguration configuration =
+        const VesperDownloadConfiguration(),
+  }) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Stream<VesperDownloadManagerEvent> downloadEventsFor(String downloadId) {
+    return const Stream<VesperDownloadManagerEvent>.empty();
+  }
+
+  @override
+  Future<void> refreshDownloadManager(String downloadId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<void> disposeDownloadManager(String downloadId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<int?> createDownloadTask(
+    String downloadId, {
+    required String assetId,
+    required VesperDownloadSource source,
+    VesperDownloadProfile profile = const VesperDownloadProfile(),
+    VesperDownloadAssetIndex assetIndex = const VesperDownloadAssetIndex(),
+  }) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<bool> startDownloadTask(String downloadId, int taskId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<bool> pauseDownloadTask(String downloadId, int taskId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<bool> resumeDownloadTask(String downloadId, int taskId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<bool> removeDownloadTask(String downloadId, int taskId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<void> exportDownloadTask(
+    String downloadId,
+    int taskId,
+    String outputPath,
+  ) async =>
       throw VesperUnsupportedError();
 }

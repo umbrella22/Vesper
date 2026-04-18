@@ -15,11 +15,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 typealias VesperDownloadAssetId = String
 typealias VesperDownloadTaskId = Long
@@ -33,6 +37,7 @@ enum class VesperDownloadContentFormat {
 
 data class VesperDownloadConfiguration(
     val autoStart: Boolean = true,
+    val runPostProcessorsOnCompletion: Boolean = true,
     val baseDirectory: File? = null,
     val pluginLibraryPaths: List<String> = emptyList(),
 )
@@ -162,6 +167,12 @@ interface VesperDownloadExecutionReporter {
         taskId: VesperDownloadTaskId,
         error: VesperDownloadError,
     )
+}
+
+interface NativeDownloadExportProgressCallback {
+    fun onProgress(ratio: Float)
+
+    fun isCancelled(): Boolean = false
 }
 
 interface VesperDownloadExecutor {
@@ -310,6 +321,32 @@ class VesperDownloadManager internal constructor(
         return removed
     }
 
+    suspend fun exportTaskOutput(
+        taskId: VesperDownloadTaskId,
+        outputPath: String,
+        onProgress: (Float) -> Unit = {},
+        isCancelled: () -> Boolean = { false },
+    ) {
+        check(sessionHandle != 0L) { "native download session handle must not be zero" }
+        withContext(runtimeDispatcher) {
+            val exported =
+                bindings.exportDownloadTask(
+                    sessionHandle = sessionHandle,
+                    taskId = taskId,
+                    outputPath = outputPath,
+                    progressCallback =
+                        object : NativeDownloadExportProgressCallback {
+                            override fun onProgress(ratio: Float) {
+                                onProgress(ratio.coerceIn(0f, 1f))
+                            }
+
+                            override fun isCancelled(): Boolean = isCancelled()
+                        },
+                )
+            check(exported) { "download export failed for task $taskId" }
+        }
+    }
+
     private fun syncRuntimeState(processCommands: Boolean) {
         if (sessionHandle == 0L) {
             _snapshot.value = VesperDownloadSnapshot(emptyList())
@@ -455,6 +492,13 @@ class VesperDownloadManager internal constructor(
             nowEpochMs: Long,
         ): Boolean
 
+        fun exportDownloadTask(
+            sessionHandle: Long,
+            taskId: Long,
+            outputPath: String,
+            progressCallback: NativeDownloadExportProgressCallback?,
+        ): Boolean
+
         fun failDownloadTask(
             sessionHandle: Long,
             taskId: Long,
@@ -546,6 +590,19 @@ class VesperDownloadManager internal constructor(
                 taskId = taskId,
                 completedPath = completedPath,
                 nowEpochMs = nowEpochMs,
+            )
+
+        override fun exportDownloadTask(
+            sessionHandle: Long,
+            taskId: Long,
+            outputPath: String,
+            progressCallback: NativeDownloadExportProgressCallback?,
+        ): Boolean =
+            VesperNativeJni.exportDownloadTask(
+                sessionHandle = sessionHandle,
+                taskId = taskId,
+                outputPath = outputPath,
+                progressCallback = progressCallback,
             )
 
         override fun failDownloadTask(
@@ -645,12 +702,15 @@ private class VesperForegroundDownloadExecutor(
         val job =
             scope.launch {
                 try {
+                    val downloadContext = currentCoroutineContext()
+                    downloadContext.ensureActive()
                     val plan = buildExecutionPlan(task)
                     var receivedBytes = 0L
                     var receivedSegments = 0
                     val trackSegments = task.assetIndex.segments.isNotEmpty()
 
-                    plan.forEachIndexed { index, entry ->
+                    for ((index, entry) in plan.withIndex()) {
+                        downloadContext.ensureActive()
                         val outputFile = resolveOutputFile(task, entry, index)
                         outputFile.parentFile?.mkdirs()
                         if (outputFile.exists()) {
@@ -662,10 +722,12 @@ private class VesperForegroundDownloadExecutor(
                                 sourceUri = entry.uri,
                                 destination = outputFile,
                             ) { writtenBytes ->
+                                downloadContext.ensureActive()
                                 val nextBytes = receivedBytes + writtenBytes
                                 reporter.updateProgress(task.taskId, nextBytes, receivedSegments)
                             }
 
+                        downloadContext.ensureActive()
                         receivedBytes += bytesWritten
                         if (trackSegments && entry.isSegment) {
                             receivedSegments += 1
@@ -673,6 +735,7 @@ private class VesperForegroundDownloadExecutor(
                         reporter.updateProgress(task.taskId, receivedBytes, receivedSegments)
                     }
 
+                    downloadContext.ensureActive()
                     reporter.complete(task.taskId, resolveCompletedPath(task, plan))
                 } catch (_: CancellationException) {
                     return@launch
@@ -708,10 +771,6 @@ private class VesperForegroundDownloadExecutor(
                     isSegment = false,
                 )
             }
-        if (resources.isNotEmpty()) {
-            return resources
-        }
-
         val segments =
             task.assetIndex.segments.mapIndexed { index, segment ->
                 ForegroundDownloadEntry(
@@ -724,8 +783,11 @@ private class VesperForegroundDownloadExecutor(
                     isSegment = true,
                 )
             }
-        if (segments.isNotEmpty()) {
-            return segments
+        if (resources.isNotEmpty() || segments.isNotEmpty()) {
+            return buildList {
+                addAll(resources)
+                addAll(segments)
+            }
         }
 
         val fallbackUri = task.source.manifestUri ?: task.source.source.uri
@@ -781,27 +843,39 @@ private class VesperForegroundDownloadExecutor(
             task.assetId.ifBlank { task.taskId.toString() },
         )
 
-    private fun copyUriToFile(
+    private suspend fun copyUriToFile(
         sourceUri: String,
         destination: File,
         onProgress: (Long) -> Unit,
     ): Long {
+        val copyContext = currentCoroutineContext()
         val dataSource = dataSourceFactory.createDataSource()
         val dataSpec = DataSpec.Builder().setUri(sourceUri).build()
         var totalWritten = 0L
         var reportedBytes = 0L
         FileOutputStream(destination).use { output ->
             try {
-                dataSource.open(dataSpec)
+                copyContext.ensureActive()
+                runInterruptible {
+                    dataSource.open(dataSpec)
+                }
                 val buffer = ByteArray(64 * 1024)
                 while (true) {
-                    val read = dataSource.read(buffer, 0, buffer.size)
+                    copyContext.ensureActive()
+                    val read =
+                        runInterruptible {
+                            dataSource.read(buffer, 0, buffer.size)
+                        }
                     if (read == -1) {
                         break
                     }
-                    output.write(buffer, 0, read)
+                    copyContext.ensureActive()
+                    runInterruptible {
+                        output.write(buffer, 0, read)
+                    }
                     totalWritten += read.toLong()
                     if (totalWritten - reportedBytes >= ANDROID_DOWNLOAD_PROGRESS_STEP_BYTES) {
+                        copyContext.ensureActive()
                         reportedBytes = totalWritten
                         onProgress(totalWritten)
                     }
@@ -824,6 +898,7 @@ private data class ForegroundDownloadEntry(
 private fun VesperDownloadConfiguration.toNativePayload(): NativeDownloadConfig =
     NativeDownloadConfig(
         autoStart = autoStart,
+        runPostProcessorsOnCompletion = runPostProcessorsOnCompletion,
         pluginLibraryPaths = pluginLibraryPaths.toTypedArray(),
     )
 

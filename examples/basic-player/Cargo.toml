@@ -9,10 +9,20 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 pollster.workspace = true
+player-core = { path = "../../crates/core/player-core" }
+player-ffmpeg = { path = "../../crates/extension/player-ffmpeg" }
 player-backend-ffmpeg = { path = "../../crates/backend/player-backend-ffmpeg" }
 player-host-desktop = { path = "../../crates/platform/desktop/player-host-desktop" }
+player-plugin = { path = "../../crates/core/player-plugin" }
 player-render-wgpu = { path = "../../crates/render/player-render-wgpu" }
 player-runtime = { path = "../../crates/core/player-runtime" }
+quick-xml = "0.39.2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 winit.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+player-platform-macos = { path = "../../crates/platform/desktop/player-platform-macos" }
+
+[dev-dependencies]
+player-plugin-loader = { path = "../../crates/core/player-plugin-loader" }

@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ikaros.vesper.player.android.NativeVideoSurfaceKind
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.PlayerHostUiState
+import io.github.ikaros.vesper.player.android.VesperDecoderBackend
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
@@ -38,11 +39,12 @@ private const val DEFAULT_PROGRESS_REFRESH_INTERVAL_MS = 250L
 fun rememberVesperPlayerController(
     initialSource: VesperPlayerSource? = null,
     resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+    decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ): VesperPlayerController {
     val isPreview = LocalInspectionMode.current
     val context = LocalContext.current.applicationContext
-    val controller = remember(isPreview, context, initialSource, surfaceKind) {
+    val controller = remember(isPreview, context, initialSource, decoderBackend, surfaceKind) {
         if (isPreview) {
             VesperPlayerControllerFactory.createPreview(initialSource)
         } else {
@@ -50,6 +52,7 @@ fun rememberVesperPlayerController(
                 context = context,
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
+                decoderBackend = decoderBackend,
                 surfaceKind = surfaceKind,
             )
         }

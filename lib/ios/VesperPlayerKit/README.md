@@ -108,6 +108,34 @@ sources. Cache configuration is currently mapped as a best-effort process-wide `
 capacity hint for remote playback, and it does not pretend to offer the same transport depth that
 `Media3` exposes on Android.
 
+The iOS host API also exposes a lightweight hardware decode probe:
+
+- `VesperCodecSupport.hardwareDecodeSupported(for:)`
+
+It currently normalizes the common `H264 / AVC / AVC1` and `HEVC / H265 / HVC1 / HEV1` aliases and
+checks VideoToolbox support for the requested codec. Unknown codec names return `false`.
+
+## Download Flow Notes
+
+`VesperDownloadManager` can manage single-file and segmented downloads, but remote segmented sources
+work best when the host app performs a small planning step before calling `createTask(...)`.
+
+Recommended host flow for remote HLS on iOS:
+
+- show an optimistic "preparing" row in the UI immediately after the user taps create
+- read the remote manifest in the background and build `VesperDownloadAssetIndex(resources +
+  segments)` plus a dedicated `targetDirectory`
+- call `createTask(...)` only after the prepared source / profile / asset index are ready
+
+Additional notes:
+
+- the foreground executor now downloads `assetIndex.resources + assetIndex.segments` together when
+  both are provided
+- pause / resume / remove should always be keyed by `taskId`; do not merge multiple tasks by URL in
+  host UI state
+- the current iOS example only wires this segmented download path for HLS; DASH stays explicitly
+  unsupported on the AVPlayer backend
+
 ## How It Relates To The Example
 
 `examples/ios-swift-host` now imports `VesperPlayerKit` as a local package dependency.

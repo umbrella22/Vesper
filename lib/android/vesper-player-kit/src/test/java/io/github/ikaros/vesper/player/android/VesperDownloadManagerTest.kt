@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -121,6 +122,7 @@ class VesperDownloadManagerTest {
                 configuration =
                     VesperDownloadConfiguration(
                         autoStart = false,
+                        runPostProcessorsOnCompletion = false,
                         pluginLibraryPaths =
                             listOf(
                                 "/data/local/tmp/libplayer_ffmpeg.so",
@@ -139,6 +141,44 @@ class VesperDownloadManagerTest {
             ),
             bindings.createdConfig?.pluginLibraryPaths?.toList(),
         )
+        assertEquals(false, bindings.createdConfig?.runPostProcessorsOnCompletion)
+        manager.dispose()
+    }
+
+    @Test
+    fun exportTaskOutputForwardsProgressAndCancellationToBindings() = runBlocking {
+        val bindings = FakeDownloadBindings(autoStart = false)
+        val manager =
+            VesperDownloadManager(
+                configuration = VesperDownloadConfiguration(autoStart = false),
+                executor = RecordingDownloadExecutor(),
+                bindings = bindings,
+                runtimeDispatcher = Dispatchers.Unconfined,
+            )
+
+        val taskId =
+            manager.createTask(
+                assetId = "asset-a",
+                source =
+                    VesperDownloadSource(
+                        source =
+                            VesperPlayerSource.remote(
+                                uri = "https://example.com/video.m3u8",
+                                label = "Video",
+                                protocol = VesperPlayerSourceProtocol.Hls,
+                            ),
+                    ),
+            )
+
+        manager.exportTaskOutput(
+            taskId = taskId ?: error("task must be created"),
+            outputPath = "/tmp/exported.mp4",
+            onProgress = bindings.forwardedProgress::add,
+            isCancelled = { true },
+        )
+
+        assertEquals(listOf(0.25f, 1.0f), bindings.forwardedProgress)
+        assertEquals(true, bindings.exportWasCancelled)
         manager.dispose()
     }
 }
@@ -151,6 +191,8 @@ private class FakeDownloadBindings(
     private val events = mutableListOf<NativeDownloadEvent>()
     private var nextTaskId = 1L
     var createdConfig: NativeDownloadConfig? = null
+    val forwardedProgress = mutableListOf<Float>()
+    var exportWasCancelled: Boolean = false
 
     override fun createDownloadSession(config: NativeDownloadConfig): Long {
         createdConfig = config
@@ -265,6 +307,18 @@ private class FakeDownloadBindings(
                 events += NativeDownloadEvent.StateChanged(updated)
             }
         }
+
+    override fun exportDownloadTask(
+        sessionHandle: Long,
+        taskId: Long,
+        outputPath: String,
+        progressCallback: NativeDownloadExportProgressCallback?,
+    ): Boolean {
+        progressCallback?.onProgress(0.25f)
+        progressCallback?.onProgress(1.0f)
+        exportWasCancelled = progressCallback?.isCancelled() ?: false
+        return true
+    }
 
     override fun failDownloadTask(
         sessionHandle: Long,

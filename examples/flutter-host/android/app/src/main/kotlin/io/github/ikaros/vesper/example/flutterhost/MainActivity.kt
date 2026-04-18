@@ -3,9 +3,11 @@ package io.github.ikaros.vesper.example.flutterhost
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import dalvik.system.BaseDexClassLoader
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
   private var pendingPickerResult: MethodChannel.Result? = null
@@ -18,6 +20,8 @@ class MainActivity : FlutterActivity() {
     ).setMethodCallHandler { call, result ->
       when (call.method) {
         "pickVideo" -> launchVideoPicker(result)
+        "bundledDownloadPluginLibraryPaths" -> result.success(bundledDownloadPluginLibraryPaths())
+        "saveVideoToGallery" -> saveVideoToGallery(call, result)
         else -> result.notImplemented()
       }
     }
@@ -97,6 +101,48 @@ class MainActivity : FlutterActivity() {
       }
     }
     return fallback ?: "本地视频"
+  }
+
+  private fun bundledDownloadPluginLibraryPaths(): List<String> {
+    val libraryName = "player_ffmpeg"
+    val resolvedPath =
+      (classLoader as? BaseDexClassLoader)?.findLibrary(libraryName)?.takeIf { path ->
+        path.isNotBlank() && File(path).isFile
+      }
+        ?: run {
+          val nativeLibraryDir = applicationInfo.nativeLibraryDir
+          val pluginLibrary =
+            nativeLibraryDir?.let { directory ->
+              File(directory, System.mapLibraryName(libraryName))
+            }
+          pluginLibrary?.takeIf(File::isFile)?.absolutePath
+        }
+    return resolvedPath?.let(::listOf) ?: emptyList()
+  }
+
+  private fun saveVideoToGallery(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
+    val completedPath = call.argument<String>("completedPath")?.trim()
+    if (completedPath.isNullOrEmpty()) {
+      result.error("invalid_argument", "The completed download output is unavailable.", null)
+      return
+    }
+
+    Thread {
+      runCatching {
+        saveVideoToGallery(this, completedPath)
+      }.fold(
+        onSuccess = {
+          runOnUiThread {
+            result.success(null)
+          }
+        },
+        onFailure = { error ->
+          runOnUiThread {
+            result.error("save_failed", error.message, null)
+          }
+        },
+      )
+    }.start()
   }
 
   companion object {

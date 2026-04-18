@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
 use std::ptr;
 use std::slice;
@@ -11,6 +11,7 @@ use player_platform_ios::{
     IosDownloadBridgeSession, IosDownloadCommand, IosPlaylistBridgeSession,
     IosPreloadBridgeSession, IosPreloadCommand,
 };
+use player_plugin::ProcessorProgress;
 use player_policy_resolver::{
     resolve_preload_budget as resolve_preload_budget_with_runtime,
     resolve_resilience_policy as resolve_resilience_policy_with_runtime,
@@ -132,6 +133,14 @@ pub struct PlayerFfiError {
     pub category: PlayerFfiErrorCategory,
     pub retriable: bool,
     pub message: *mut c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayerFfiDownloadExportCallbacks {
+    pub context: *mut c_void,
+    pub on_progress: Option<unsafe extern "C" fn(context: *mut c_void, ratio: f32)>,
+    pub is_cancelled: Option<unsafe extern "C" fn(context: *mut c_void) -> bool>,
 }
 
 #[repr(C)]
@@ -446,6 +455,7 @@ pub struct PlayerFfiPlaylistActiveItem {
 #[derive(Debug, Default)]
 pub struct PlayerFfiDownloadConfig {
     pub auto_start: bool,
+    pub run_post_processors_on_completion: bool,
     pub plugin_library_paths: *mut *mut c_char,
     pub plugin_library_paths_len: usize,
 }
@@ -453,6 +463,7 @@ pub struct PlayerFfiDownloadConfig {
 #[derive(Debug, Default)]
 struct ResolvedDownloadConfig {
     auto_start: bool,
+    run_post_processors_on_completion: bool,
     plugin_library_paths: Vec<PathBuf>,
 }
 
@@ -998,6 +1009,7 @@ pub extern "C" fn player_ffi_download_session_create(
     let handle = NEXT_DOWNLOAD_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let session = match IosDownloadBridgeSession::new_with_plugin_library_paths(
         config.auto_start,
+        config.run_post_processors_on_completion,
         config.plugin_library_paths,
     ) {
         Ok(session) => session,
@@ -1028,6 +1040,33 @@ pub extern "C" fn player_ffi_download_session_create(
 pub extern "C" fn player_ffi_download_session_dispose(handle: u64) {
     if let Ok(mut sessions) = download_sessions().lock() {
         sessions.remove(&handle);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FfiDownloadExportProgress {
+    callbacks: PlayerFfiDownloadExportCallbacks,
+}
+
+// SAFETY: this callback table is an FFI contract provided by the host for the
+// duration of a single synchronous export call.
+unsafe impl Send for FfiDownloadExportProgress {}
+// SAFETY: same reasoning as above; the host-provided callback context is
+// expected to be safe for shared access during the export call.
+unsafe impl Sync for FfiDownloadExportProgress {}
+
+impl ProcessorProgress for FfiDownloadExportProgress {
+    fn on_progress(&self, ratio: f32) {
+        if let Some(on_progress) = self.callbacks.on_progress {
+            unsafe { on_progress(self.callbacks.context, ratio) };
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.callbacks
+            .is_cancelled
+            .map(|is_cancelled| unsafe { is_cancelled(self.callbacks.context) })
+            .unwrap_or(false)
     }
 }
 
@@ -1285,6 +1324,63 @@ pub extern "C" fn player_ffi_download_session_complete_task(
         write_error(out_error, runtime_error_to_ffi(error));
         return PlayerFfiCallStatus::Error;
     }
+    PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_download_session_export_task(
+    handle: u64,
+    task_id: u64,
+    output_path: *const c_char,
+    callbacks: PlayerFfiDownloadExportCallbacks,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    let output_path = match read_optional_c_string(output_path, "output_path") {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "output_path was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let progress = FfiDownloadExportProgress { callbacks };
+    let Ok(mut sessions) = download_sessions().lock() else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "download session registry lock failed",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+    let Some(session) = sessions.get_mut(&handle) else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "invalid download session handle",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    if let Err(error) = session.export_task_output(
+        player_runtime::DownloadTaskId::from_raw(task_id),
+        Some(PathBuf::from(output_path)),
+        &progress,
+    ) {
+        write_error(out_error, runtime_error_to_ffi(error));
+        return PlayerFfiCallStatus::Error;
+    }
+
     PlayerFfiCallStatus::Ok
 }
 
@@ -2206,6 +2302,7 @@ fn read_download_config(
     };
     Ok(ResolvedDownloadConfig {
         auto_start: config.auto_start,
+        run_post_processors_on_completion: config.run_post_processors_on_completion,
         plugin_library_paths: read_string_list(
             config.plugin_library_paths,
             config.plugin_library_paths_len,

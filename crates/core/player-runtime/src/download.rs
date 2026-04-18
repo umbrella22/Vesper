@@ -253,8 +253,11 @@ pub enum DownloadEvent {
 }
 
 #[derive(Default)]
+// 若未来新增必填字段，需同步更新 player-platform-{android,ios}/src/download.rs::new()
+// 的默认构造，避免空配置路径与 new_with_plugin_library_paths 路径再次漂移。
 pub struct DownloadManagerConfig {
     pub auto_start: bool,
+    pub run_post_processors_on_completion: bool,
     pub post_processors: Vec<Arc<dyn PostDownloadProcessor>>,
     pub event_hooks: Vec<Arc<dyn PipelineEventHook>>,
 }
@@ -263,6 +266,10 @@ impl fmt::Debug for DownloadManagerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DownloadManagerConfig")
             .field("auto_start", &self.auto_start)
+            .field(
+                "run_post_processors_on_completion",
+                &self.run_post_processors_on_completion,
+            )
             .field("post_processors_len", &self.post_processors.len())
             .field("event_hooks_len", &self.event_hooks.len())
             .finish()
@@ -633,9 +640,13 @@ where
             finalized.progress.received_segments = total_segments;
         }
 
-        let processed_output_path = match self.run_post_processors(&finalized) {
-            Ok(path) => path,
-            Err(error) => return self.fail_task(task_id, error, now),
+        let processed_output_path = if self.config.run_post_processors_on_completion {
+            match self.run_post_processors(&finalized) {
+                Ok(path) => path,
+                Err(error) => return self.fail_task(task_id, error, now),
+            }
+        } else {
+            finalized.asset_index.completed_path.clone()
         };
 
         self.update_task(task_id, now, |task| {
@@ -651,6 +662,47 @@ where
                 task.progress.received_segments = total_segments;
             }
         })
+    }
+
+    pub fn export_task_output(
+        &self,
+        task_id: DownloadTaskId,
+        output_path: Option<&Path>,
+        progress: &dyn ProcessorProgress,
+    ) -> PlayerRuntimeResult<PathBuf> {
+        let Some(snapshot) = self.store.task(task_id) else {
+            return Err(PlayerRuntimeError::with_category(
+                PlayerRuntimeErrorCode::InvalidArgument,
+                PlayerRuntimeErrorCategory::Input,
+                format!("download task {} was not found for export", task_id.get()),
+            ));
+        };
+
+        if snapshot.status != DownloadTaskStatus::Completed {
+            return Err(PlayerRuntimeError::with_category(
+                PlayerRuntimeErrorCode::InvalidState,
+                PlayerRuntimeErrorCategory::Playback,
+                format!(
+                    "download task {} must be completed before export",
+                    snapshot.task_id.get()
+                ),
+            ));
+        }
+
+        match snapshot.source.content_format {
+            DownloadContentFormat::SingleFile => resolve_single_file_path(&snapshot),
+            DownloadContentFormat::HlsSegments | DownloadContentFormat::DashSegments => {
+                self.export_processed_output(&snapshot, output_path, progress)
+            }
+            DownloadContentFormat::Unknown => Err(PlayerRuntimeError::with_category(
+                PlayerRuntimeErrorCode::Unsupported,
+                PlayerRuntimeErrorCategory::Capability,
+                format!(
+                    "download task {} has unknown content format for export",
+                    snapshot.task_id.get()
+                ),
+            )),
+        }
     }
 
     pub fn fail_task(
@@ -806,6 +858,89 @@ where
         }
 
         Ok(current_completed_path)
+    }
+
+    fn export_processed_output(
+        &self,
+        snapshot: &DownloadTaskSnapshot,
+        output_path: Option<&Path>,
+        progress: &dyn ProcessorProgress,
+    ) -> PlayerRuntimeResult<PathBuf> {
+        let mut current_input = self.completed_download_info(snapshot)?;
+        let mut current_completed_path = snapshot.asset_index.completed_path.clone();
+        let mut ran_processor = false;
+
+        for processor in &self.config.post_processors {
+            let input_kind = current_input.content_format.kind();
+            if !processor
+                .supported_input_formats()
+                .iter()
+                .any(|supported| *supported == input_kind)
+            {
+                continue;
+            }
+
+            let resolved_output_path = if ran_processor {
+                derive_processor_output_path(
+                    snapshot,
+                    current_completed_path.as_deref(),
+                    processor,
+                )?
+            } else if let Some(output_path) = output_path {
+                output_path.to_path_buf()
+            } else {
+                derive_processor_output_path(
+                    snapshot,
+                    current_completed_path.as_deref(),
+                    processor,
+                )?
+            };
+
+            ran_processor = true;
+            self.dispatch_pipeline_event(PipelineEvent::PostProcessStarted {
+                task_id: snapshot.task_id.get().to_string(),
+                processor: processor.name().to_owned(),
+            });
+
+            match processor.process(&current_input, &resolved_output_path, progress) {
+                Ok(ProcessorOutput::MuxedFile { path, .. }) => {
+                    self.dispatch_pipeline_event(PipelineEvent::PostProcessCompleted {
+                        task_id: snapshot.task_id.get().to_string(),
+                        output_path: path.display().to_string(),
+                    });
+                    current_completed_path = Some(path.clone());
+                    current_input = CompletedDownloadInfo {
+                        asset_id: snapshot.asset_id.as_str().to_owned(),
+                        task_id: Some(snapshot.task_id.get().to_string()),
+                        content_format: CompletedContentFormat::SingleFile { path },
+                        metadata: current_input.metadata.clone(),
+                    };
+                }
+                Ok(ProcessorOutput::Skipped) => {}
+                Err(error) => {
+                    self.dispatch_pipeline_event(PipelineEvent::PostProcessFailed {
+                        task_id: snapshot.task_id.get().to_string(),
+                        error: error.to_string(),
+                    });
+                    return Err(map_processor_error(processor.name(), error));
+                }
+            }
+        }
+
+        if ran_processor {
+            if let Some(path) = current_completed_path {
+                return Ok(path);
+            }
+        }
+
+        Err(PlayerRuntimeError::with_category(
+            PlayerRuntimeErrorCode::Unsupported,
+            PlayerRuntimeErrorCategory::Capability,
+            format!(
+                "download task {} has no post-download processor available for export",
+                snapshot.task_id.get()
+            ),
+        ))
     }
 
     fn completed_download_info(
@@ -1057,6 +1192,16 @@ fn map_processor_error(processor_name: &str, error: ProcessorError) -> PlayerRun
             PlayerRuntimeErrorCategory::Capability,
             format!("post-processor `{processor_name}` does not support this download format"),
         ),
+        ProcessorError::PayloadCodec(message) => PlayerRuntimeError::with_category(
+            PlayerRuntimeErrorCode::BackendFailure,
+            PlayerRuntimeErrorCategory::Platform,
+            format!("post-processor `{processor_name}` exchanged invalid payload: {message}"),
+        ),
+        ProcessorError::AbiViolation(message) => PlayerRuntimeError::with_category(
+            PlayerRuntimeErrorCode::BackendFailure,
+            PlayerRuntimeErrorCategory::Platform,
+            format!("post-processor `{processor_name}` violated plugin ABI: {message}"),
+        ),
         ProcessorError::OutputPath(message) => PlayerRuntimeError::with_category(
             PlayerRuntimeErrorCode::InvalidArgument,
             PlayerRuntimeErrorCategory::Input,
@@ -1082,6 +1227,7 @@ mod tests {
         DownloadManagerConfig, DownloadProfile, DownloadResourceRecord, DownloadSegmentRecord,
         DownloadSource, DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
     };
+    use crate::download::NoopProcessorProgress;
     use crate::{PlayerRuntimeError, PlayerRuntimeErrorCode};
     use player_core::MediaSource;
     use player_plugin::{
@@ -1153,6 +1299,20 @@ mod tests {
     #[derive(Debug, Default)]
     struct FailingProcessor;
 
+    #[derive(Debug, Default)]
+    struct RecordingProgress {
+        ratios: Mutex<Vec<f32>>,
+    }
+
+    impl RecordingProgress {
+        fn ratios(&self) -> Vec<f32> {
+            match self.ratios.lock() {
+                Ok(ratios) => ratios.clone(),
+                Err(poisoned) => poisoned.into_inner().clone(),
+            }
+        }
+    }
+
     impl PostDownloadProcessor for FailingProcessor {
         fn name(&self) -> &str {
             "failing-processor"
@@ -1195,6 +1355,15 @@ mod tests {
             match self.events.lock() {
                 Ok(mut events) => events.push(event.clone()),
                 Err(poisoned) => poisoned.into_inner().push(event.clone()),
+            }
+        }
+    }
+
+    impl ProcessorProgress for RecordingProgress {
+        fn on_progress(&self, ratio: f32) {
+            match self.ratios.lock() {
+                Ok(mut ratios) => ratios.push(ratio),
+                Err(poisoned) => poisoned.into_inner().push(ratio),
             }
         }
     }
@@ -1248,6 +1417,7 @@ mod tests {
     fn manager_creates_and_auto_starts_tasks() {
         let config = DownloadManagerConfig {
             auto_start: true,
+            run_post_processors_on_completion: true,
             ..DownloadManagerConfig::default()
         };
         let store = InMemoryDownloadStore::default();
@@ -1279,6 +1449,7 @@ mod tests {
     fn manager_can_pause_resume_and_remove_tasks() {
         let config = DownloadManagerConfig {
             auto_start: true,
+            run_post_processors_on_completion: true,
             ..DownloadManagerConfig::default()
         };
         let store = InMemoryDownloadStore::default();
@@ -1322,6 +1493,7 @@ mod tests {
     fn manager_updates_progress_tracks_asset_index_and_completes() {
         let config = DownloadManagerConfig {
             auto_start: false,
+            run_post_processors_on_completion: true,
             ..DownloadManagerConfig::default()
         };
         let store = InMemoryDownloadStore::default();
@@ -1373,6 +1545,7 @@ mod tests {
         let hook = Arc::new(RecordingHook::default());
         let config = DownloadManagerConfig {
             auto_start: true,
+            run_post_processors_on_completion: true,
             event_hooks: vec![hook.clone()],
             ..DownloadManagerConfig::default()
         };
@@ -1422,6 +1595,7 @@ mod tests {
         let processor = Arc::new(RecordingProcessor::default());
         let config = DownloadManagerConfig {
             auto_start: false,
+            run_post_processors_on_completion: true,
             post_processors: vec![processor.clone()],
             event_hooks: vec![hook.clone()],
         };
@@ -1496,6 +1670,7 @@ mod tests {
         let processor = Arc::new(FailingProcessor);
         let config = DownloadManagerConfig {
             auto_start: false,
+            run_post_processors_on_completion: true,
             post_processors: vec![processor],
             event_hooks: vec![hook.clone()],
         };
@@ -1545,5 +1720,110 @@ mod tests {
             PipelineEvent::DownloadTaskFailed { error, .. }
                 if error.contains("failing-processor")
         )));
+    }
+
+    #[test]
+    fn manager_exports_completed_segment_download_with_progress() {
+        let hook = Arc::new(RecordingHook::default());
+        let processor = Arc::new(RecordingProcessor::default());
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: false,
+            post_processors: vec![processor.clone()],
+            event_hooks: vec![hook.clone()],
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = InMemoryDownloadExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile {
+                    target_directory: Some(PathBuf::from("/tmp/offline")),
+                    ..DownloadProfile::default()
+                },
+                segmented_asset_index(1024),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let _ = manager
+            .complete_task(
+                task_id,
+                Some(PathBuf::from("/tmp/offline/playlist.m3u8")),
+                now,
+            )
+            .expect("complete should succeed");
+
+        let progress = RecordingProgress::default();
+        let exported = manager
+            .export_task_output(
+                task_id,
+                Some(PathBuf::from("/tmp/gallery/exported.mp4").as_path()),
+                &progress,
+            )
+            .expect("export should succeed");
+
+        assert_eq!(exported, PathBuf::from("/tmp/gallery/exported.mp4"));
+        assert_eq!(progress.ratios(), vec![1.0]);
+
+        let invocations = processor.invocations();
+        assert_eq!(invocations.len(), 1);
+        assert!(matches!(
+            &invocations[0].0.content_format,
+            player_plugin::CompletedContentFormat::HlsSegments { manifest_path, .. }
+                if manifest_path == &PathBuf::from("/tmp/offline/playlist.m3u8")
+        ));
+        assert_eq!(invocations[0].1, PathBuf::from("/tmp/gallery/exported.mp4"));
+
+        let events = hook.events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PipelineEvent::PostProcessCompleted { output_path, .. }
+                if output_path == "/tmp/gallery/exported.mp4"
+        )));
+    }
+
+    #[test]
+    fn manager_exports_completed_single_file_download_without_processor() {
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = InMemoryDownloadExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                DownloadSource::new(
+                    MediaSource::new("file:///tmp/input.mp4"),
+                    DownloadContentFormat::SingleFile,
+                ),
+                DownloadProfile::default(),
+                DownloadAssetIndex::default(),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let _ = manager
+            .complete_task(task_id, Some(PathBuf::from("/tmp/input.mp4")), now)
+            .expect("complete should succeed");
+
+        let exported = manager
+            .export_task_output(
+                task_id,
+                Some(PathBuf::from("/tmp/ignored.mp4").as_path()),
+                &NoopProcessorProgress,
+            )
+            .expect("single-file export should reuse original path");
+
+        assert_eq!(exported, PathBuf::from("/tmp/input.mp4"));
     }
 }

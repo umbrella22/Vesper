@@ -469,7 +469,7 @@ private fun AdaptiveChipWrap(
 }
 
 @Composable
-private fun ExampleSectionShell(
+internal fun ExampleSectionShell(
     palette: ExampleHostPalette,
     title: String,
     subtitle: String,

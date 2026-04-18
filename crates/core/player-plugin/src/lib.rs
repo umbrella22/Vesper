@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 mod abi;
 mod capability;
 mod hook;

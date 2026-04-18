@@ -33,4 +33,29 @@ abstract final class ExampleLocalMediaPicker {
       message: 'Native picker returned an unexpected payload.',
     );
   }
+
+  static Future<List<String>> bundledDownloadPluginLibraryPaths() async {
+    final response = await _channel.invokeMethod<Object?>(
+      'bundledDownloadPluginLibraryPaths',
+    );
+    if (response == null) {
+      return const <String>[];
+    }
+    if (response is List<Object?>) {
+      return response
+          .map((value) => value?.toString() ?? '')
+          .where((value) => value.isNotEmpty)
+          .toList(growable: false);
+    }
+    throw PlatformException(
+      code: 'invalid_result',
+      message: 'Native plugin path lookup returned an unexpected payload.',
+    );
+  }
+
+  static Future<void> saveVideoToGallery(String completedPath) async {
+    await _channel.invokeMethod<void>('saveVideoToGallery', <String, Object?>{
+      'completedPath': completedPath,
+    });
+  }
 }

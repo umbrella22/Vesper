@@ -15,6 +15,7 @@ class VesperNativePlayerBridge(
     private var resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     private var trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
     private val preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+    private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
     appContext: Context? = null,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ) : PlayerBridge {
@@ -74,7 +75,7 @@ class VesperNativePlayerBridge(
                 hasInitializedSource = true
                 Log.i(
                     TAG,
-                    "initialized source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",
+                    "initialized source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol} decoderBackend=$decoderBackend",
                 )
                 surfaceHost.reattachIfAvailable()
                 val shouldAutoPlay = pendingAutoPlay

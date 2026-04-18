@@ -1,1 +1,2 @@
 "NSPhotoLibraryUsageDescription" = "此示例需要访问相册，方便你选择视频进行播放。";
+"NSPhotoLibraryAddUsageDescription" = "此示例需要相册写入权限，方便你把已完成下载转存到系统相册。";

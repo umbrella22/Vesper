@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::Path;
 use std::sync::Arc;
@@ -8,7 +10,8 @@ use player_plugin::{
     ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
     VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL, VesperPipelineEventHookApi,
     VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind,
-    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    VesperPluginProcessResult, VesperPluginProgressCallbacks, VesperPluginResultStatus,
+    VesperPostDownloadProcessorApi,
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -37,6 +40,16 @@ pub enum PluginLoadError {
     InvalidUtf8 { field: &'static str },
     #[error("failed to decode plugin capabilities JSON: {0}")]
     DecodeCapabilities(#[source] serde_json::Error),
+    #[error("plugin capabilities payload violates ABI: {0}")]
+    CapabilitiesAbiViolation(String),
+}
+
+#[derive(Debug, Error)]
+enum PluginPayloadError {
+    #[error("plugin payload pointer is null while len is {len}")]
+    NullPayloadWithLength { len: usize },
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Debug)]
@@ -50,20 +63,29 @@ impl LoadedDynamicPlugin {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, PluginLoadError> {
         let path = path.as_ref();
         let path_string = path.display().to_string();
+        // SAFETY: `path` comes from the caller, and the resulting `Library` is
+        // stored in `LibraryHolder` so any symbols borrowed from it stay valid.
         let library =
             unsafe { Library::new(path) }.map_err(|source| PluginLoadError::OpenLibrary {
                 path: path_string,
                 source,
             })?;
 
+        // SAFETY: the symbol name is a static NUL-terminated byte string and
+        // the plugin contract requires it to have the `VesperPluginEntryPoint`
+        // signature.
         let entry = unsafe { library.get::<VesperPluginEntryPoint>(VESPER_PLUGIN_ENTRY_SYMBOL) }
             .map_err(|source| PluginLoadError::ResolveEntrySymbol {
                 symbol: "vesper_plugin_entry",
                 source,
             })?;
 
+        // SAFETY: the plugin entry point follows the shared ABI and returns a
+        // process-lifetime descriptor pointer when loading succeeds.
         let descriptor_ptr = unsafe { entry() };
         let descriptor =
+            // SAFETY: `descriptor_ptr` came from `vesper_plugin_entry`; the ABI
+            // guarantees it points to a valid descriptor or null on failure.
             unsafe { descriptor_ptr.as_ref() }.ok_or(PluginLoadError::NullDescriptor)?;
         let library = Arc::new(LibraryHolder { library });
         Self::from_descriptor(Some(library), descriptor)
@@ -100,11 +122,18 @@ impl LoadedDynamicPlugin {
         match descriptor.plugin_kind {
             VesperPluginKind::PostDownloadProcessor => {
                 let api_ptr = descriptor.api.cast::<VesperPostDownloadProcessorApi>();
-                let api = unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                    field: "post_download_processor_api",
-                })?;
-                let processor =
-                    DynamicPostDownloadProcessor::new(library, descriptor_name.clone(), *api)?;
+                let api =
+                    // SAFETY: `descriptor.api` must point at the ABI table that
+                    // matches `plugin_kind` when the plugin exports a valid
+                    // descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "post_download_processor_api",
+                    })?;
+                let processor = DynamicPostDownloadProcessor::new(
+                    library,
+                    descriptor_name.clone(),
+                    CheckedPostDownloadProcessorApi::try_from(*api)?,
+                )?;
                 Ok(Self {
                     name: descriptor_name,
                     post_download_processor: Some(Arc::new(processor)),
@@ -113,10 +142,18 @@ impl LoadedDynamicPlugin {
             }
             VesperPluginKind::PipelineEventHook => {
                 let api_ptr = descriptor.api.cast::<VesperPipelineEventHookApi>();
-                let api = unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                    field: "pipeline_event_hook_api",
-                })?;
-                let hook = DynamicPipelineEventHook::new(library, descriptor_name.clone(), *api)?;
+                let api =
+                    // SAFETY: `descriptor.api` must point at the ABI table that
+                    // matches `plugin_kind` when the plugin exports a valid
+                    // descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "pipeline_event_hook_api",
+                    })?;
+                let hook = DynamicPipelineEventHook::new(
+                    library,
+                    descriptor_name.clone(),
+                    CheckedPipelineEventHookApi::try_from(*api)?,
+                )?;
                 Ok(Self {
                     name: descriptor_name,
                     post_download_processor: None,
@@ -133,18 +170,109 @@ struct LibraryHolder {
     library: Library,
 }
 
+type DestroyFn = unsafe extern "C" fn(context: *mut c_void);
+type NameFn = unsafe extern "C" fn(context: *mut c_void) -> *const c_char;
+type CapabilitiesJsonFn = unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes;
+type FreeBytesFn = unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes);
+type ProcessJsonFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    input_json: *const u8,
+    input_json_len: usize,
+    output_path: *const c_char,
+    progress: VesperPluginProgressCallbacks,
+) -> VesperPluginProcessResult;
+type OnEventJsonFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    event_json: *const u8,
+    event_json_len: usize,
+) -> bool;
+
+#[derive(Debug, Clone, Copy)]
+struct CheckedPostDownloadProcessorApi {
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
+    name: Option<NameFn>,
+    capabilities_json: CapabilitiesJsonFn,
+    free_bytes: FreeBytesFn,
+    process_json: ProcessJsonFn,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through
+// `PostDownloadProcessor`.
+unsafe impl Send for CheckedPostDownloadProcessorApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedPostDownloadProcessorApi {}
+
+impl TryFrom<VesperPostDownloadProcessorApi> for CheckedPostDownloadProcessorApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperPostDownloadProcessorApi) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            capabilities_json: api.capabilities_json.ok_or(PluginLoadError::MissingField {
+                field: "post_download_processor_api.capabilities_json",
+            })?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "post_download_processor_api.free_bytes",
+            })?,
+            process_json: api.process_json.ok_or(PluginLoadError::MissingField {
+                field: "post_download_processor_api.process_json",
+            })?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CheckedPipelineEventHookApi {
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
+    name: Option<NameFn>,
+    on_event_json: OnEventJsonFn,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through
+// `PipelineEventHook`.
+unsafe impl Send for CheckedPipelineEventHookApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedPipelineEventHookApi {}
+
+impl TryFrom<VesperPipelineEventHookApi> for CheckedPipelineEventHookApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperPipelineEventHookApi) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            on_event_json: api.on_event_json.ok_or(PluginLoadError::MissingField {
+                field: "pipeline_event_hook_api.on_event_json",
+            })?,
+        })
+    }
+}
+
 #[derive(Debug)]
 struct DynamicPostDownloadProcessorInner {
     #[allow(dead_code)]
     library: Option<Arc<LibraryHolder>>,
     name: String,
-    api: VesperPostDownloadProcessorApi,
+    api: CheckedPostDownloadProcessorApi,
     capabilities: ProcessorCapabilities,
 }
 
 impl Drop for DynamicPostDownloadProcessorInner {
     fn drop(&mut self) {
         if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
             unsafe { destroy(self.api.context) };
         }
     }
@@ -159,10 +287,12 @@ impl DynamicPostDownloadProcessor {
     fn new(
         library: Option<Arc<LibraryHolder>>,
         fallback_name: String,
-        api: VesperPostDownloadProcessorApi,
+        api: CheckedPostDownloadProcessorApi,
     ) -> Result<Self, PluginLoadError> {
-        ensure_processor_api(&api)?;
         let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
             let name_ptr = unsafe { name_fn(api.context) };
             if name_ptr.is_null() {
                 fallback_name
@@ -173,11 +303,14 @@ impl DynamicPostDownloadProcessor {
             fallback_name
         };
         let capabilities = decode_plugin_bytes::<ProcessorCapabilities>(
-            unsafe { api.capabilities_json.expect("checked")(api.context) },
+            // SAFETY: the validated API guarantees `capabilities_json` and
+            // `free_bytes` are present and use the shared `VesperPluginBytes`
+            // ownership contract documented in `player-plugin`.
+            unsafe { (api.capabilities_json)(api.context) },
             api.free_bytes,
             api.context,
         )
-        .map_err(PluginLoadError::DecodeCapabilities)?;
+        .map_err(map_capabilities_payload_error)?;
 
         Ok(Self {
             inner: Arc::new(DynamicPostDownloadProcessorInner {
@@ -210,7 +343,7 @@ impl PostDownloadProcessor for DynamicPostDownloadProcessor {
         progress: &dyn ProcessorProgress,
     ) -> Result<ProcessorOutput, ProcessorError> {
         let input_json = serde_json::to_vec(input).map_err(|error| {
-            ProcessorError::MuxFailed(format!(
+            ProcessorError::PayloadCodec(format!(
                 "serialize dynamic plugin input for `{}` failed: {error}",
                 self.inner.name
             ))
@@ -229,8 +362,12 @@ impl PostDownloadProcessor for DynamicPostDownloadProcessor {
             is_cancelled: Some(progress_is_cancelled),
         };
 
+        // SAFETY: the validated plugin API guarantees `process_json` is present.
+        // `input_json` and `output_path` live for the duration of the call, and
+        // the ABI contract documents that `callbacks.context` is only valid
+        // during this synchronous invocation.
         let result = unsafe {
-            self.inner.api.process_json.expect("checked")(
+            (self.inner.api.process_json)(
                 self.inner.api.context,
                 input_json.as_ptr(),
                 input_json.len(),
@@ -245,23 +382,13 @@ impl PostDownloadProcessor for DynamicPostDownloadProcessor {
                 self.inner.api.free_bytes,
                 self.inner.api.context,
             )
-            .map_err(|error| {
-                ProcessorError::MuxFailed(format!(
-                    "decode plugin `{}` success payload failed: {error}",
-                    self.inner.name
-                ))
-            }),
+            .map_err(|error| map_plugin_payload_error(&self.inner.name, "success", error)),
             VesperPluginResultStatus::Failure => decode_plugin_bytes::<ProcessorError>(
                 result.payload,
                 self.inner.api.free_bytes,
                 self.inner.api.context,
             )
-            .map_err(|error| {
-                ProcessorError::MuxFailed(format!(
-                    "decode plugin `{}` error payload failed: {error}",
-                    self.inner.name
-                ))
-            })
+            .map_err(|error| map_plugin_payload_error(&self.inner.name, "error", error))
             .and_then(Err),
         }
     }
@@ -273,12 +400,14 @@ struct DynamicPipelineEventHookInner {
     library: Option<Arc<LibraryHolder>>,
     #[allow(dead_code)]
     name: String,
-    api: VesperPipelineEventHookApi,
+    api: CheckedPipelineEventHookApi,
 }
 
 impl Drop for DynamicPipelineEventHookInner {
     fn drop(&mut self) {
         if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
             unsafe { destroy(self.api.context) };
         }
     }
@@ -293,15 +422,12 @@ impl DynamicPipelineEventHook {
     fn new(
         library: Option<Arc<LibraryHolder>>,
         fallback_name: String,
-        api: VesperPipelineEventHookApi,
+        api: CheckedPipelineEventHookApi,
     ) -> Result<Self, PluginLoadError> {
-        if api.on_event_json.is_none() {
-            return Err(PluginLoadError::MissingField {
-                field: "pipeline_event_hook_api.on_event_json",
-            });
-        }
-
         let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
             let name_ptr = unsafe { name_fn(api.context) };
             if name_ptr.is_null() {
                 fallback_name
@@ -324,8 +450,11 @@ impl PipelineEventHook for DynamicPipelineEventHook {
             return;
         };
 
+        // SAFETY: the validated hook API guarantees `on_event_json` is present,
+        // and `event_json` remains alive for the duration of this synchronous
+        // callback.
         let _ = unsafe {
-            self.inner.api.on_event_json.expect("checked")(
+            (self.inner.api.on_event_json)(
                 self.inner.api.context,
                 event_json.as_ptr(),
                 event_json.len(),
@@ -339,32 +468,17 @@ struct ProgressAdapter<'a> {
 }
 
 unsafe extern "C" fn progress_on_progress(context: *mut c_void, ratio: f32) {
+    // SAFETY: `context` is created from `ProgressAdapter` immediately before the
+    // synchronous `process_json` call and remains valid until that call returns.
     let adapter = unsafe { &*(context.cast::<ProgressAdapter<'_>>()) };
     adapter.progress.on_progress(ratio);
 }
 
 unsafe extern "C" fn progress_is_cancelled(context: *mut c_void) -> bool {
+    // SAFETY: `context` is created from `ProgressAdapter` immediately before the
+    // synchronous `process_json` call and remains valid until that call returns.
     let adapter = unsafe { &*(context.cast::<ProgressAdapter<'_>>()) };
     adapter.progress.is_cancelled()
-}
-
-fn ensure_processor_api(api: &VesperPostDownloadProcessorApi) -> Result<(), PluginLoadError> {
-    if api.capabilities_json.is_none() {
-        return Err(PluginLoadError::MissingField {
-            field: "post_download_processor_api.capabilities_json",
-        });
-    }
-    if api.free_bytes.is_none() {
-        return Err(PluginLoadError::MissingField {
-            field: "post_download_processor_api.free_bytes",
-        });
-    }
-    if api.process_json.is_none() {
-        return Err(PluginLoadError::MissingField {
-            field: "post_download_processor_api.process_json",
-        });
-    }
-    Ok(())
 }
 
 fn c_string_field(pointer: *const c_char, field: &'static str) -> Result<String, PluginLoadError> {
@@ -372,6 +486,8 @@ fn c_string_field(pointer: *const c_char, field: &'static str) -> Result<String,
         return Err(PluginLoadError::MissingField { field });
     }
 
+    // SAFETY: `pointer` has been checked for null and the plugin ABI requires
+    // all string fields to be valid NUL-terminated strings.
     let value = unsafe { CStr::from_ptr(pointer) };
     value
         .to_str()
@@ -379,23 +495,56 @@ fn c_string_field(pointer: *const c_char, field: &'static str) -> Result<String,
         .map_err(|_| PluginLoadError::InvalidUtf8 { field })
 }
 
+fn map_plugin_payload_error(
+    plugin_name: &str,
+    payload_kind: &str,
+    error: PluginPayloadError,
+) -> ProcessorError {
+    match error {
+        PluginPayloadError::NullPayloadWithLength { len } => ProcessorError::AbiViolation(format!(
+            "plugin `{plugin_name}` returned {payload_kind} payload with null data pointer and len {len}"
+        )),
+        PluginPayloadError::Json(error) => ProcessorError::PayloadCodec(format!(
+            "decode plugin `{plugin_name}` {payload_kind} payload failed: {error}"
+        )),
+    }
+}
+
+fn map_capabilities_payload_error(error: PluginPayloadError) -> PluginLoadError {
+    match error {
+        PluginPayloadError::NullPayloadWithLength { len } => {
+            PluginLoadError::CapabilitiesAbiViolation(format!(
+                "plugin returned capabilities payload with null data pointer and len {len}"
+            ))
+        }
+        PluginPayloadError::Json(error) => PluginLoadError::DecodeCapabilities(error),
+    }
+}
+
 fn decode_plugin_bytes<T: DeserializeOwned>(
     payload: VesperPluginBytes,
-    free_bytes: Option<unsafe extern "C" fn(*mut c_void, VesperPluginBytes)>,
+    free_bytes: FreeBytesFn,
     context: *mut c_void,
-) -> Result<T, serde_json::Error> {
-    let bytes = if payload.data.is_null() || payload.len == 0 {
+) -> Result<T, PluginPayloadError> {
+    let payload_has_null_data = payload.data.is_null();
+    let bytes = if payload_has_null_data || payload.len == 0 {
         Vec::new()
     } else {
+        // SAFETY: the plugin ABI requires non-null payloads to point to
+        // `payload.len` initialized bytes until `free_bytes` is called.
         let slice = unsafe { std::slice::from_raw_parts(payload.data, payload.len) };
         slice.to_vec()
     };
 
-    if let Some(free_bytes) = free_bytes {
-        unsafe { free_bytes(context, payload) };
+    // SAFETY: `free_bytes` is the validated deallocator paired with this
+    // payload, and the payload is not used again after this call.
+    unsafe { free_bytes(context, payload) };
+
+    if payload_has_null_data && payload.len > 0 {
+        return Err(PluginPayloadError::NullPayloadWithLength { len: payload.len });
     }
 
-    serde_json::from_slice(&bytes)
+    serde_json::from_slice(&bytes).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -523,6 +672,78 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_post_download_processor_reports_payload_codec_errors() {
+        let api = VesperPostDownloadProcessorApi {
+            process_json: Some(fixture_payload_codec_process_json),
+            ..fixture_processor_api()
+        };
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::PostDownloadProcessor,
+            plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperPostDownloadProcessorApi).cast(),
+        };
+
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load plugin");
+        let processor = plugin
+            .post_download_processor()
+            .expect("processor should be available");
+        let error = processor
+            .process(
+                &CompletedDownloadInfo {
+                    asset_id: "asset-a".to_owned(),
+                    task_id: Some("1".to_owned()),
+                    content_format: CompletedContentFormat::SingleFile {
+                        path: PathBuf::from("/tmp/input.mp4"),
+                    },
+                    metadata: DownloadMetadata::default(),
+                },
+                Path::new("/tmp/output.mp4"),
+                &RecordingProgress::default(),
+            )
+            .expect_err("invalid payload should fail");
+
+        assert!(matches!(error, ProcessorError::PayloadCodec(_)));
+        assert!(error.to_string().contains("success payload"));
+    }
+
+    #[test]
+    fn dynamic_post_download_processor_reports_abi_violations() {
+        let api = VesperPostDownloadProcessorApi {
+            process_json: Some(fixture_null_payload_process_json),
+            ..fixture_processor_api()
+        };
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::PostDownloadProcessor,
+            plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperPostDownloadProcessorApi).cast(),
+        };
+
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load plugin");
+        let processor = plugin
+            .post_download_processor()
+            .expect("processor should be available");
+        let error = processor
+            .process(
+                &CompletedDownloadInfo {
+                    asset_id: "asset-a".to_owned(),
+                    task_id: Some("1".to_owned()),
+                    content_format: CompletedContentFormat::SingleFile {
+                        path: PathBuf::from("/tmp/input.mp4"),
+                    },
+                    metadata: DownloadMetadata::default(),
+                },
+                Path::new("/tmp/output.mp4"),
+                &RecordingProgress::default(),
+            )
+            .expect_err("null payload pointer should fail");
+
+        assert!(matches!(error, ProcessorError::AbiViolation(_)));
+        assert!(error.to_string().contains("null data pointer"));
+    }
+
+    #[test]
     #[ignore = "requires a built player-ffmpeg shared library artifact"]
     fn dynamic_loader_opens_real_player_ffmpeg_shared_library() {
         let plugin_path = resolve_player_ffmpeg_plugin_path()
@@ -621,16 +842,22 @@ mod tests {
         output_path: *const c_char,
         progress: player_plugin::VesperPluginProgressCallbacks,
     ) -> VesperPluginProcessResult {
+        // SAFETY: the fixture passes a valid input buffer for the duration of
+        // this synchronous callback.
         let input_json = unsafe { std::slice::from_raw_parts(input_json, input_json_len) };
         let input: CompletedDownloadInfo =
             serde_json::from_slice(input_json).expect("deserialize input");
         assert_eq!(input.asset_id, "asset-a");
 
         if let Some(on_progress) = progress.on_progress {
+            // SAFETY: the host-side fixture keeps `progress.context` alive for
+            // the duration of this synchronous call.
             unsafe { on_progress(progress.context, 0.5) };
+            // SAFETY: same as above for the second progress update.
             unsafe { on_progress(progress.context, 1.0) };
         }
 
+        // SAFETY: the fixture provides a valid NUL-terminated UTF-8 path.
         let output_path = unsafe { std::ffi::CStr::from_ptr(output_path) }
             .to_str()
             .expect("output path utf8");
@@ -645,11 +872,42 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn fixture_payload_codec_process_json(
+        _context: *mut c_void,
+        _input_json: *const u8,
+        _input_json_len: usize,
+        _output_path: *const c_char,
+        _progress: player_plugin::VesperPluginProgressCallbacks,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Success,
+            payload: VesperPluginBytes::from_vec(b"not-json".to_vec()),
+        }
+    }
+
+    unsafe extern "C" fn fixture_null_payload_process_json(
+        _context: *mut c_void,
+        _input_json: *const u8,
+        _input_json_len: usize,
+        _output_path: *const c_char,
+        _progress: player_plugin::VesperPluginProgressCallbacks,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Success,
+            payload: VesperPluginBytes {
+                data: std::ptr::null_mut(),
+                len: 4,
+            },
+        }
+    }
+
     unsafe extern "C" fn fixture_hook_on_event_json(
         _context: *mut c_void,
         event_json: *const u8,
         event_json_len: usize,
     ) -> bool {
+        // SAFETY: the fixture passes a valid event buffer for the duration of
+        // this synchronous callback.
         let event_json = unsafe { std::slice::from_raw_parts(event_json, event_json_len) };
         let event: PipelineEvent = serde_json::from_slice(event_json).expect("deserialize event");
         if let Ok(mut events) = EVENTS.lock() {
@@ -659,6 +917,8 @@ mod tests {
     }
 
     unsafe extern "C" fn fixture_free_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
+        // SAFETY: the fixture only reclaims buffers it allocated with
+        // `VesperPluginBytes::from_vec`.
         let _ = unsafe { payload.into_vec() };
     }
 

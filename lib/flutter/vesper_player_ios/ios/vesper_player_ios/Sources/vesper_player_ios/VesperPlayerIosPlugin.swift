@@ -7,8 +7,11 @@ import VesperPlayerKit
 public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var methodChannel: FlutterMethodChannel?
     private var eventChannel: FlutterEventChannel?
-    @MainActor private var eventSink: FlutterEventSink?
-    @MainActor private var sessions: [String: PlayerSession] = [:]
+    private var downloadEventChannel: FlutterEventChannel?
+    @MainActor fileprivate var eventSink: FlutterEventSink?
+    @MainActor fileprivate var downloadEventSink: FlutterEventSink?
+    @MainActor fileprivate var sessions: [String: PlayerSession] = [:]
+    @MainActor fileprivate var downloadSessions: [String: DownloadSession] = [:]
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = VesperPlayerIosPlugin()
@@ -20,9 +23,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             name: eventChannelName,
             binaryMessenger: registrar.messenger()
         )
+        let downloadEventChannel = FlutterEventChannel(
+            name: downloadEventChannelName,
+            binaryMessenger: registrar.messenger()
+        )
 
         instance.methodChannel = methodChannel
         instance.eventChannel = eventChannel
+        instance.downloadEventChannel = downloadEventChannel
 
         methodChannel.setMethodCallHandler { [weak instance] call, result in
             guard let instance else {
@@ -32,6 +40,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             instance.handle(call, result: result)
         }
         eventChannel.setStreamHandler(instance)
+        downloadEventChannel.setStreamHandler(DownloadEventStreamHandler(plugin: instance))
         registrar.register(PlayerViewFactory(plugin: instance), withId: playerViewType)
     }
 
@@ -64,9 +73,23 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         switch call.method {
         case "createPlayer":
             handleCreatePlayer(call, result: result)
+        case "createDownloadManager":
+            handleCreateDownloadManager(call, result: result)
         case "disposePlayer":
             handleSessionCommand(call, result: result) { session in
                 disposeSession(session)
+                return nil
+            }
+        case "refreshDownloadManager":
+            handleDownloadSessionCommand(call, result: result) { session in
+                session.lastError = nil
+                session.manager.refresh()
+                emitDownloadSnapshot(for: session)
+                return nil
+            }
+        case "disposeDownloadManager":
+            handleDownloadSessionCommand(call, result: result) { session in
+                disposeDownloadSession(session)
                 return nil
             }
         case "initialize":
@@ -211,6 +234,41 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 emitSnapshot(for: session)
                 return nil
             }
+        case "createDownloadTask":
+            handleDownloadSessionCommand(call, result: result) { session in
+                let arguments = arguments(of: call)
+                guard let assetId = arguments["assetId"] as? String, !assetId.isEmpty else {
+                    throw PluginError.missingArgument("assetId")
+                }
+                let sourceMap = try requireNestedMap(arguments: arguments, key: "source")
+                let profileMap = try requireNestedMap(arguments: arguments, key: "profile")
+                let assetIndexMap = try requireNestedMap(arguments: arguments, key: "assetIndex")
+                session.lastError = nil
+                return session.manager.createTask(
+                    assetId: assetId,
+                    source: try sourceMap.toDownloadSource(),
+                    profile: profileMap.toDownloadProfile(),
+                    assetIndex: assetIndexMap.toDownloadAssetIndex()
+                )
+            }
+        case "startDownloadTask":
+            handleDownloadTaskAction(call, result: result) { session, taskId in
+                session.manager.startTask(taskId)
+            }
+        case "pauseDownloadTask":
+            handleDownloadTaskAction(call, result: result) { session, taskId in
+                session.manager.pauseTask(taskId)
+            }
+        case "resumeDownloadTask":
+            handleDownloadTaskAction(call, result: result) { session, taskId in
+                session.manager.resumeTask(taskId)
+            }
+        case "removeDownloadTask":
+            handleDownloadTaskAction(call, result: result) { session, taskId in
+                session.manager.removeTask(taskId)
+            }
+        case "exportDownloadTask":
+            handleDownloadExportTask(call, result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -286,6 +344,32 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func handleCreateDownloadManager(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            let configurationMap = try requireNestedMap(arguments: arguments, key: "configuration")
+            let session = DownloadSession(
+                id: UUID().uuidString,
+                manager: VesperDownloadManager(
+                    configuration: configurationMap.toDownloadConfiguration()
+                )
+            )
+            downloadSessions[session.id] = session
+            observeDownloadSession(session)
+
+            result([
+                "downloadId": session.id,
+                "snapshot": buildDownloadSnapshotMap(for: session),
+            ])
+        } catch {
+            result(asDownloadFlutterError(error, code: "vesper_download_create_failed"))
+        }
+    }
+
+    @MainActor
     private func handleSessionCommand(
         _ call: FlutterMethodCall,
         result: @escaping FlutterResult,
@@ -315,11 +399,115 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func handleDownloadSessionCommand(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult,
+        action: (DownloadSession) throws -> Any?
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            guard let downloadId = arguments["downloadId"] as? String, !downloadId.isEmpty else {
+                throw PluginError.missingArgument("downloadId")
+            }
+            guard let session = downloadSessions[downloadId] else {
+                throw PluginError.unknownDownload(downloadId)
+            }
+
+            let value = try action(session)
+            result(value)
+        } catch {
+            if
+                let downloadId = arguments(of: call)["downloadId"] as? String,
+                let session = downloadSessions[downloadId]
+            {
+                session.lastError = downloadErrorMap(from: error)
+                emitDownloadError(for: session, error: error)
+            }
+            result(asDownloadFlutterError(error, code: "vesper_download_operation_failed"))
+        }
+    }
+
+    @MainActor
+    private func handleDownloadTaskAction(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult,
+        action: (DownloadSession, VesperDownloadTaskId) throws -> Bool
+    ) {
+        handleDownloadSessionCommand(call, result: result) { session in
+            let arguments = arguments(of: call)
+            guard let taskId = (arguments["taskId"] as? NSNumber)?.uint64Value else {
+                throw PluginError.missingArgument("taskId")
+            }
+            session.lastError = nil
+            return try action(session, taskId)
+        }
+    }
+
+    @MainActor
+    private func handleDownloadExportTask(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            guard let downloadId = arguments["downloadId"] as? String, !downloadId.isEmpty else {
+                throw PluginError.missingArgument("downloadId")
+            }
+            guard let session = downloadSessions[downloadId] else {
+                throw PluginError.unknownDownload(downloadId)
+            }
+            guard let taskId = (arguments["taskId"] as? NSNumber)?.uint64Value else {
+                throw PluginError.missingArgument("taskId")
+            }
+            guard let outputPath = arguments["outputPath"] as? String, !outputPath.isEmpty else {
+                throw PluginError.missingArgument("outputPath")
+            }
+
+            session.lastError = nil
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await session.manager.exportTaskOutput(
+                        taskId: taskId,
+                        outputPath: outputPath,
+                        onProgress: { [weak self] ratio in
+                            Task { @MainActor [weak self] in
+                                self?.emitDownloadExportProgress(
+                                    for: session,
+                                    taskId: taskId,
+                                    ratio: ratio
+                                )
+                            }
+                        }
+                    )
+                    result(nil)
+                } catch {
+                    session.lastError = downloadErrorMap(from: error)
+                    emitDownloadError(for: session, error: error)
+                    result(asDownloadFlutterError(error, code: "vesper_download_operation_failed"))
+                }
+            }
+        } catch {
+            result(asDownloadFlutterError(error, code: "vesper_download_operation_failed"))
+        }
+    }
+
+    @MainActor
     private func observeSession(_ session: PlayerSession) {
         session.observation = session.controller.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.emitSnapshot(for: session)
+            }
+        }
+    }
+
+    @MainActor
+    private func observeDownloadSession(_ session: DownloadSession) {
+        session.observation = session.manager.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.emitDownloadSnapshot(for: session)
             }
         }
     }
@@ -340,6 +528,39 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "type": "error",
             "error": session.lastError ?? errorMap(from: error),
             "snapshot": buildSnapshotMap(for: session),
+        ])
+    }
+
+    @MainActor
+    fileprivate func emitDownloadSnapshot(for session: DownloadSession) {
+        downloadEventSink?([
+            "downloadId": session.id,
+            "type": "snapshot",
+            "snapshot": buildDownloadSnapshotMap(for: session),
+        ])
+    }
+
+    @MainActor
+    private func emitDownloadError(for session: DownloadSession, error: Error) {
+        downloadEventSink?([
+            "downloadId": session.id,
+            "type": "error",
+            "error": session.lastError ?? downloadErrorMap(from: error),
+            "snapshot": buildDownloadSnapshotMap(for: session),
+        ])
+    }
+
+    @MainActor
+    private func emitDownloadExportProgress(
+        for session: DownloadSession,
+        taskId: VesperDownloadTaskId,
+        ratio: Float
+    ) {
+        downloadEventSink?([
+            "downloadId": session.id,
+            "type": "exportProgress",
+            "taskId": NSNumber(value: taskId),
+            "ratio": Double(max(0, min(1, ratio))),
         ])
     }
 
@@ -394,6 +615,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func buildDownloadSnapshotMap(for session: DownloadSession) -> [String: Any] {
+        [
+            "tasks": session.manager.snapshot.tasks.map(\.toMap),
+        ]
+    }
+
+    @MainActor
     private func disposeSession(_ session: PlayerSession) {
         session.observation?.cancel()
         session.controller.detachSurfaceHost()
@@ -402,6 +630,17 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         sessions.removeValue(forKey: session.id)
         emitEvent([
             "playerId": session.id,
+            "type": "disposed",
+        ])
+    }
+
+    @MainActor
+    private func disposeDownloadSession(_ session: DownloadSession) {
+        session.observation?.cancel()
+        session.manager.dispose()
+        downloadSessions.removeValue(forKey: session.id)
+        downloadEventSink?([
+            "downloadId": session.id,
             "type": "disposed",
         ])
     }
@@ -419,6 +658,18 @@ private final class PlayerSession {
     init(id: String, controller: VesperPlayerController) {
         self.id = id
         self.controller = controller
+    }
+}
+
+private final class DownloadSession {
+    let id: String
+    let manager: VesperDownloadManager
+    var observation: AnyCancellable?
+    var lastError: [String: Any]?
+
+    init(id: String, manager: VesperDownloadManager) {
+        self.id = id
+        self.manager = manager
     }
 }
 
@@ -507,6 +758,30 @@ private final class PlayerPlatformView: NSObject, FlutterPlatformView {
     }
 }
 
+private final class DownloadEventStreamHandler: NSObject, FlutterStreamHandler {
+    private weak var plugin: VesperPlayerIosPlugin?
+
+    init(plugin: VesperPlayerIosPlugin) {
+        self.plugin = plugin
+    }
+
+    func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        Task { @MainActor [weak plugin] in
+            guard let plugin else { return }
+            plugin.downloadEventSink = events
+            plugin.downloadSessions.values.forEach { plugin.emitDownloadSnapshot(for: $0) }
+        }
+        return nil
+    }
+
+    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        Task { @MainActor [weak plugin] in
+            plugin?.downloadEventSink = nil
+        }
+        return nil
+    }
+}
+
 private enum PluginError: LocalizedError {
     case missingArgument(String)
     case invalidNestedMap(String)
@@ -515,6 +790,7 @@ private enum PluginError: LocalizedError {
     case invalidAbrPolicy(String)
     case unsupported(String)
     case unknownPlayer(String)
+    case unknownDownload(String)
 
     var errorDescription: String? {
         switch self {
@@ -532,6 +808,8 @@ private enum PluginError: LocalizedError {
             message
         case let .unknownPlayer(playerId):
             "Unknown playerId: \(playerId)"
+        case let .unknownDownload(downloadId):
+            "Unknown downloadId: \(downloadId)"
         }
     }
 }
@@ -623,6 +901,37 @@ private extension Dictionary where Key == String, Value == Any {
         .validatedForIosBackend()
     }
 
+    func toRawVesperPlayerSource() throws -> VesperPlayerSource {
+        guard let uri = self["uri"] as? String, !uri.isEmpty else {
+            throw PluginError.invalidSource("Missing source uri.")
+        }
+        let label = self["label"] as? String ?? uri
+        let kind = (self["kind"] as? String) == "remote"
+            ? VesperPlayerSourceKind.remote
+            : VesperPlayerSourceKind.local
+        let `protocol`: VesperPlayerSourceProtocol
+        switch self["protocol"] as? String {
+        case "file":
+            `protocol` = .file
+        case "content":
+            `protocol` = .content
+        case "progressive":
+            `protocol` = .progressive
+        case "hls":
+            `protocol` = .hls
+        case "dash":
+            `protocol` = .dash
+        default:
+            `protocol` = .unknown
+        }
+        return try VesperPlayerSource(
+            uri: uri,
+            label: label,
+            kind: kind,
+            protocol: `protocol`
+        )
+    }
+
     func toTrackSelection() throws -> VesperTrackSelection {
         switch self["mode"] as? String {
         case "disabled":
@@ -692,6 +1001,108 @@ private extension Dictionary where Key == String, Value == Any {
         )
     }
 
+    func toDownloadConfiguration() -> VesperDownloadConfiguration {
+        VesperDownloadConfiguration(
+            autoStart: self["autoStart"] as? Bool ?? true,
+            runPostProcessorsOnCompletion:
+                self["runPostProcessorsOnCompletion"] as? Bool ?? true,
+            baseDirectory: (self["baseDirectory"] as? String).map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            },
+            pluginLibraryPaths:
+                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
+                    value as? String
+                } ?? []
+        )
+    }
+
+    func toDownloadSource() throws -> VesperDownloadSource {
+        let contentFormat: VesperDownloadContentFormat
+        switch self["contentFormat"] as? String {
+        case "hlsSegments":
+            contentFormat = .hlsSegments
+        case "dashSegments":
+            contentFormat = .dashSegments
+        case "singleFile":
+            contentFormat = .singleFile
+        default:
+            contentFormat = .unknown
+        }
+        return VesperDownloadSource(
+            source: try requireNestedMap(arguments: self, key: "source").toRawVesperPlayerSource(),
+            contentFormat: contentFormat,
+            manifestUri: self["manifestUri"] as? String
+        )
+    }
+
+    func toDownloadProfile() -> VesperDownloadProfile {
+        VesperDownloadProfile(
+            variantId: self["variantId"] as? String,
+            preferredAudioLanguage: self["preferredAudioLanguage"] as? String,
+            preferredSubtitleLanguage: self["preferredSubtitleLanguage"] as? String,
+            selectedTrackIds:
+                (self["selectedTrackIds"] as? [Any])?.compactMap { value in
+                    value as? String
+                } ?? [],
+            targetDirectory: (self["targetDirectory"] as? String).map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            },
+            allowMeteredNetwork: self["allowMeteredNetwork"] as? Bool ?? false
+        )
+    }
+
+    func toDownloadAssetIndex() -> VesperDownloadAssetIndex {
+        let contentFormat: VesperDownloadContentFormat
+        switch self["contentFormat"] as? String {
+        case "hlsSegments":
+            contentFormat = .hlsSegments
+        case "dashSegments":
+            contentFormat = .dashSegments
+        case "singleFile":
+            contentFormat = .singleFile
+        default:
+            contentFormat = .unknown
+        }
+        return VesperDownloadAssetIndex(
+            contentFormat: contentFormat,
+            version: self["version"] as? String,
+            etag: self["etag"] as? String,
+            checksum: self["checksum"] as? String,
+            totalSizeBytes: (self["totalSizeBytes"] as? NSNumber)?.uint64Value,
+            resources:
+                (self["resources"] as? [Any])?.compactMap { value in
+                    stringKeyedMap(value)?.toDownloadResourceRecord()
+                } ?? [],
+            segments:
+                (self["segments"] as? [Any])?.compactMap { value in
+                    stringKeyedMap(value)?.toDownloadSegmentRecord()
+                } ?? [],
+            completedPath: self["completedPath"] as? String
+        )
+    }
+
+    func toDownloadResourceRecord() -> VesperDownloadResourceRecord {
+        VesperDownloadResourceRecord(
+            resourceId: self["resourceId"] as? String ?? "",
+            uri: self["uri"] as? String ?? "",
+            relativePath: self["relativePath"] as? String,
+            sizeBytes: (self["sizeBytes"] as? NSNumber)?.uint64Value,
+            etag: self["etag"] as? String,
+            checksum: self["checksum"] as? String
+        )
+    }
+
+    func toDownloadSegmentRecord() -> VesperDownloadSegmentRecord {
+        VesperDownloadSegmentRecord(
+            segmentId: self["segmentId"] as? String ?? "",
+            uri: self["uri"] as? String ?? "",
+            relativePath: self["relativePath"] as? String,
+            sequence: (self["sequence"] as? NSNumber)?.uint64Value,
+            sizeBytes: (self["sizeBytes"] as? NSNumber)?.uint64Value,
+            checksum: self["checksum"] as? String
+        )
+    }
+
     func toFlutterViewport() -> FlutterViewport {
         FlutterViewport(
             left: (self["left"] as? NSNumber)?.doubleValue ?? 0,
@@ -714,9 +1125,9 @@ private extension Dictionary where Key == String, Value == Any {
             kind = "hidden"
         }
 
-        let visibleFraction = max(
+        let visibleFraction = Swift.max(
             0,
-            min((self["visibleFraction"] as? NSNumber)?.doubleValue ?? 0, 1)
+            Swift.min((self["visibleFraction"] as? NSNumber)?.doubleValue ?? 0, 1)
         )
         return FlutterViewportHint(kind: kind, visibleFraction: visibleFraction)
     }
@@ -875,6 +1286,118 @@ private extension VesperAbrPolicy {
     }
 }
 
+private extension VesperPlayerSource {
+    func toMap() -> [String: Any] {
+        [
+            "uri": uri,
+            "label": label,
+            "kind": kind.rawValue,
+            "protocol": `protocol`.rawValue,
+        ]
+    }
+}
+
+private extension VesperDownloadTaskSnapshot {
+    var toMap: [String: Any] {
+        [
+            "taskId": taskId,
+            "assetId": assetId,
+            "source": source.toMap,
+            "profile": profile.toMap,
+            "state": state.toWireName(),
+            "progress": progress.toMap,
+            "assetIndex": assetIndex.toMap,
+            "error": flutterValue(error?.toMap),
+        ]
+    }
+}
+
+private extension VesperDownloadSource {
+    var toMap: [String: Any] {
+        [
+            "source": source.toMap(),
+            "contentFormat": contentFormat.toWireName(),
+            "manifestUri": flutterValue(manifestUri),
+        ]
+    }
+}
+
+private extension VesperDownloadProfile {
+    var toMap: [String: Any] {
+        [
+            "variantId": flutterValue(variantId),
+            "preferredAudioLanguage": flutterValue(preferredAudioLanguage),
+            "preferredSubtitleLanguage": flutterValue(preferredSubtitleLanguage),
+            "selectedTrackIds": selectedTrackIds,
+            "targetDirectory": flutterValue(targetDirectory?.path),
+            "allowMeteredNetwork": allowMeteredNetwork,
+        ]
+    }
+}
+
+private extension VesperDownloadProgressSnapshot {
+    var toMap: [String: Any] {
+        [
+            "receivedBytes": receivedBytes,
+            "totalBytes": flutterValue(totalBytes),
+            "receivedSegments": receivedSegments,
+            "totalSegments": flutterValue(totalSegments),
+        ]
+    }
+}
+
+private extension VesperDownloadAssetIndex {
+    var toMap: [String: Any] {
+        [
+            "contentFormat": contentFormat.toWireName(),
+            "version": flutterValue(version),
+            "etag": flutterValue(etag),
+            "checksum": flutterValue(checksum),
+            "totalSizeBytes": flutterValue(totalSizeBytes),
+            "resources": resources.map(\.toMap),
+            "segments": segments.map(\.toMap),
+            "completedPath": flutterValue(completedPath),
+        ]
+    }
+}
+
+private extension VesperDownloadResourceRecord {
+    var toMap: [String: Any] {
+        [
+            "resourceId": resourceId,
+            "uri": uri,
+            "relativePath": flutterValue(relativePath),
+            "sizeBytes": flutterValue(sizeBytes),
+            "etag": flutterValue(etag),
+            "checksum": flutterValue(checksum),
+        ]
+    }
+}
+
+private extension VesperDownloadSegmentRecord {
+    var toMap: [String: Any] {
+        [
+            "segmentId": segmentId,
+            "uri": uri,
+            "relativePath": flutterValue(relativePath),
+            "sequence": flutterValue(sequence),
+            "sizeBytes": flutterValue(sizeBytes),
+            "checksum": flutterValue(checksum),
+        ]
+    }
+}
+
+private extension VesperDownloadError {
+    var toMap: [String: Any] {
+        [
+            "codeOrdinal": codeOrdinal,
+            "categoryOrdinal": categoryOrdinal,
+            "retriable": retriable,
+            "message": message,
+        ]
+    }
+}
+
 private func flutterValue(_ value: Any?) -> Any {
     value ?? NSNull()
 }
@@ -902,11 +1425,28 @@ private func errorMap(from error: Error) -> [String: Any] {
     ]
 }
 
+private func downloadErrorMap(from error: Error) -> [String: Any] {
+    [
+        "codeOrdinal": 0,
+        "categoryOrdinal": 0,
+        "retriable": false,
+        "message": error.localizedDescription,
+    ]
+}
+
 private func asFlutterError(_ error: Error, code: String) -> FlutterError {
     FlutterError(
         code: code,
         message: error.localizedDescription,
         details: errorMap(from: error)
+    )
+}
+
+private func asDownloadFlutterError(_ error: Error, code: String) -> FlutterError {
+    FlutterError(
+        code: code,
+        message: error.localizedDescription,
+        details: downloadErrorMap(from: error)
     )
 }
 
@@ -997,7 +1537,44 @@ private extension VesperAbrMode {
     }
 }
 
+private extension VesperDownloadState {
+    func toWireName() -> String {
+        switch self {
+        case .queued:
+            "queued"
+        case .preparing:
+            "preparing"
+        case .downloading:
+            "downloading"
+        case .paused:
+            "paused"
+        case .completed:
+            "completed"
+        case .failed:
+            "failed"
+        case .removed:
+            "removed"
+        }
+    }
+}
+
+private extension VesperDownloadContentFormat {
+    func toWireName() -> String {
+        switch self {
+        case .hlsSegments:
+            "hlsSegments"
+        case .dashSegments:
+            "dashSegments"
+        case .singleFile:
+            "singleFile"
+        case .unknown:
+            "unknown"
+        }
+    }
+}
+
 private let methodChannelName = "io.github.ikaros.vesper_player"
 private let eventChannelName = "io.github.ikaros.vesper_player/events"
+private let downloadEventChannelName = "io.github.ikaros.vesper_player/download_events"
 private let playerViewType = "io.github.ikaros.vesper_player/platform_view"
 private let iosDashUnsupportedMessage = "DASH streams are not supported by the iOS AVPlayer backend."

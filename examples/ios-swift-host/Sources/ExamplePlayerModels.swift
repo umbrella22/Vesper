@@ -53,6 +53,11 @@ enum ExampleThemeMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum ExampleHostTab: Hashable {
+    case player
+    case downloads
+}
+
 enum ExampleResilienceProfile: String, CaseIterable, Identifiable {
     case balanced
     case streaming
@@ -150,7 +155,10 @@ struct AbrPreset: Identifiable {
 
 let IOS_HLS_DEMO_URL =
     "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
+let IOS_DASH_DEMO_URL =
+    "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd"
 let IOS_HLS_PLAYLIST_ITEM_ID = "hls-demo"
+let IOS_DASH_PLAYLIST_ITEM_ID = "dash-demo"
 let IOS_REMOTE_PLAYLIST_ITEM_ID = "custom-remote"
 let IOS_LOCAL_PLAYLIST_ITEM_ID = "local-file"
 
@@ -158,6 +166,13 @@ func iosHlsDemoSource() -> VesperPlayerSource {
     VesperPlayerSource.hls(
         url: URL(string: IOS_HLS_DEMO_URL)!,
         label: ExampleI18n.hlsDemoLabel
+    )
+}
+
+func iosDashDemoSource() -> VesperPlayerSource {
+    VesperPlayerSource.dash(
+        url: URL(string: IOS_DASH_DEMO_URL)!,
+        label: ExampleI18n.dashDemoLabel
     )
 }
 
@@ -172,6 +187,17 @@ func examplePlaylistQueue(
             return VesperPlaylistQueueItem(
                 itemId: IOS_HLS_PLAYLIST_ITEM_ID,
                 source: iosHlsDemoSource(),
+                preloadProfile: VesperPlaylistItemPreloadProfile(
+                    expectedMemoryBytes: 256 * 1024,
+                    expectedDiskBytes: 512 * 1024,
+                    warmupWindowMs: 30_000
+                )
+            )
+
+        case IOS_DASH_PLAYLIST_ITEM_ID:
+            return VesperPlaylistQueueItem(
+                itemId: IOS_DASH_PLAYLIST_ITEM_ID,
+                source: iosDashDemoSource(),
                 preloadProfile: VesperPlaylistItemPreloadProfile(
                     expectedMemoryBytes: 256 * 1024,
                     expectedDiskBytes: 512 * 1024,

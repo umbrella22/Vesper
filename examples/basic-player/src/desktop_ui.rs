@@ -22,12 +22,76 @@ pub enum ControlAction {
     SeekEnd,
     SetRate(f32),
     SeekToRatio(f32),
+    OpenLocalFile,
+    OpenHlsDemo,
+    OpenDashDemo,
+    SelectSidebarTab(DesktopSidebarTab),
+    FocusPlaylistItem(usize),
+    CreateDownloadHlsDemo,
+    CreateDownloadDashDemo,
+    CreateDownloadCurrentSource,
+    DownloadPrimaryAction(u64),
+    DownloadExport(u64),
+    DownloadRemove(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SeekPreview {
     pub position: Duration,
     pub ratio: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopSidebarTab {
+    Playlist,
+    Downloads,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopPlaylistItemViewData {
+    pub label: String,
+    pub status: String,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopPendingDownloadTaskViewData {
+    pub asset_id: String,
+    pub label: String,
+    pub source_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DesktopDownloadTaskViewData {
+    pub task_id: u64,
+    pub label: String,
+    pub status: String,
+    pub progress_summary: String,
+    pub progress_ratio: Option<f32>,
+    pub completed_path: Option<String>,
+    pub error_message: Option<String>,
+    pub primary_action_label: Option<String>,
+    pub export_action_label: Option<String>,
+    pub is_export_enabled: bool,
+    pub is_remove_enabled: bool,
+    pub is_exporting: bool,
+    pub export_progress: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DesktopOverlayViewModel {
+    pub source_label: String,
+    pub playback_state_label: String,
+    pub subtitle: String,
+    pub controls_opacity: f32,
+    pub cursor_position: Option<(u32, u32)>,
+    pub sidebar_tab: DesktopSidebarTab,
+    pub playlist_items: Vec<DesktopPlaylistItemViewData>,
+    pub pending_downloads: Vec<DesktopPendingDownloadTaskViewData>,
+    pub download_tasks: Vec<DesktopDownloadTaskViewData>,
+    pub host_message: Option<String>,
+    pub download_message: Option<String>,
+    pub export_plugin_installed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +282,15 @@ impl DesktopUiViewModel {
     }
 }
 
+pub fn playback_state_label(state: PresentationState) -> &'static str {
+    match state {
+        PresentationState::Ready => "READY",
+        PresentationState::Playing => "PLAYING",
+        PresentationState::Paused => "PAUSED",
+        PresentationState::Finished => "FINISHED",
+    }
+}
+
 pub fn is_scrubbable_timeline(snapshot: &PlayerSnapshot) -> bool {
     is_scrubbable(snapshot.timeline.kind, snapshot.timeline.is_seekable)
 }
@@ -246,7 +319,8 @@ fn is_scrubbable(kind: PlayerTimelineKind, is_seekable: bool) -> bool {
 mod tests {
     use super::{DesktopUiLayoutMetrics, DesktopUiTimelineKind, DesktopUiViewModel, SeekPreview};
     use player_runtime::{
-        MediaSourceKind, MediaSourceProtocol, PlaybackProgress, PlayerMediaInfo, PlayerSnapshot,
+        MediaSourceKind, MediaSourceProtocol, MediaTrackCatalog, MediaTrackSelectionSnapshot,
+        PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerSnapshot,
         PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
     };
     use std::time::Duration;
@@ -365,7 +439,10 @@ mod tests {
                 video_streams: 0,
                 best_video: None,
                 best_audio: None,
+                track_catalog: MediaTrackCatalog::default(),
+                track_selection: MediaTrackSelectionSnapshot::default(),
             },
+            resilience_metrics: PlayerResilienceMetrics::default(),
         }
     }
 }

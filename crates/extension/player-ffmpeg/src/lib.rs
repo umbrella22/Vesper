@@ -76,13 +76,13 @@ unsafe extern "C" fn processor_process_json(
     let processor = unsafe { &*(context.cast::<FfmpegPostDownloadProcessor>()) };
     let result = decode_input(input_json, input_json_len).and_then(|input| {
         if output_path.is_null() {
-            return Err(ProcessorError::OutputPath(
+            return Err(ProcessorError::AbiViolation(
                 "plugin output path pointer must not be null".to_owned(),
             ));
         }
         let output_path = unsafe { CStr::from_ptr(output_path) }
             .to_str()
-            .map_err(|error| ProcessorError::OutputPath(error.to_string()))?;
+            .map_err(|error| ProcessorError::AbiViolation(error.to_string()))?;
         let progress = CallbackProgress {
             callbacks: progress,
         };
@@ -106,13 +106,13 @@ fn decode_input(
     input_json_len: usize,
 ) -> Result<CompletedDownloadInfo, ProcessorError> {
     if input_json.is_null() {
-        return Err(ProcessorError::MuxFailed(
+        return Err(ProcessorError::AbiViolation(
             "plugin input JSON pointer must not be null".to_owned(),
         ));
     }
 
     let payload = unsafe { std::slice::from_raw_parts(input_json, input_json_len) };
-    serde_json::from_slice(payload).map_err(|error| ProcessorError::MuxFailed(error.to_string()))
+    serde_json::from_slice(payload).map_err(|error| ProcessorError::PayloadCodec(error.to_string()))
 }
 
 fn serialize_payload<T: serde::Serialize>(value: &T) -> VesperPluginBytes {
@@ -143,8 +143,8 @@ impl player_plugin::ProcessorProgress for CallbackProgress {
 
 #[cfg(test)]
 mod tests {
-    use super::vesper_plugin_entry;
-    use player_plugin::{VESPER_PLUGIN_ABI_VERSION, VesperPluginKind};
+    use super::{decode_input, vesper_plugin_entry};
+    use player_plugin::{ProcessorError, VESPER_PLUGIN_ABI_VERSION, VesperPluginKind};
 
     #[test]
     fn exported_descriptor_matches_expected_plugin_metadata() {
@@ -157,5 +157,20 @@ mod tests {
         );
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());
+    }
+
+    #[test]
+    fn decode_input_rejects_null_pointer_as_abi_violation() {
+        let error = decode_input(std::ptr::null(), 0).expect_err("null input should fail");
+
+        assert!(matches!(error, ProcessorError::AbiViolation(_)));
+    }
+
+    #[test]
+    fn decode_input_rejects_invalid_json_as_payload_codec_error() {
+        let error = decode_input(b"not-json".as_ptr(), b"not-json".len())
+            .expect_err("invalid json should fail");
+
+        assert!(matches!(error, ProcessorError::PayloadCodec(_)));
     }
 }

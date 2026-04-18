@@ -16,6 +16,11 @@ pub enum VesperPluginResultStatus {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// ABI-safe byte buffer transferred between the host and a plugin.
+///
+/// The producer must allocate the buffer from `Vec<u8>` inside the same dynamic
+/// library that later reclaims it through the matching `free_bytes` callback.
+/// `data` may be null only when `len == 0`.
 pub struct VesperPluginBytes {
     pub data: *mut u8,
     pub len: usize,
@@ -60,6 +65,11 @@ impl VesperPluginBytes {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// Host-provided callbacks used by a post-download processor to report progress.
+///
+/// `context` is borrowed for the duration of a single synchronous
+/// `process_json` call. Plugins must not store it after `process_json`
+/// returns, and callbacks must be invoked on the same thread before returning.
 pub struct VesperPluginProgressCallbacks {
     pub context: *mut c_void,
     pub on_progress: Option<unsafe extern "C" fn(context: *mut c_void, ratio: f32)>,
@@ -86,6 +96,11 @@ impl Default for VesperPluginProgressCallbacks {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperPostDownloadProcessorApi::process_json`.
+///
+/// When `status` is `Success`, `payload` must encode a `ProcessorOutput` JSON
+/// document. When `status` is `Failure`, it must encode a `ProcessorError`
+/// JSON document.
 pub struct VesperPluginProcessResult {
     pub status: VesperPluginResultStatus,
     pub payload: VesperPluginBytes,
@@ -102,6 +117,13 @@ impl Default for VesperPluginProcessResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// C ABI exposed by a post-download processor plugin.
+///
+/// `capabilities_json` and `process_json` must return `VesperPluginBytes`
+/// values that are reclaimed with the matching `free_bytes` callback from the
+/// same dynamic library. `process_json` must complete synchronously and must
+/// not retain the `VesperPluginProgressCallbacks::context` pointer after it
+/// returns.
 pub struct VesperPostDownloadProcessorApi {
     pub context: *mut c_void,
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
@@ -129,6 +151,10 @@ unsafe impl Sync for VesperPostDownloadProcessorApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// C ABI exposed by a pipeline event hook plugin.
+///
+/// `on_event_json` receives one UTF-8 JSON event payload per call and must not
+/// retain any host-owned pointers after the callback returns.
 pub struct VesperPipelineEventHookApi {
     pub context: *mut c_void,
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
@@ -152,6 +178,10 @@ unsafe impl Sync for VesperPipelineEventHookApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// Plugin descriptor exported by `vesper_plugin_entry`.
+///
+/// `plugin_name` must be a valid NUL-terminated UTF-8 string and `api` must
+/// point to the ABI table matching `plugin_kind`.
 pub struct VesperPluginDescriptor {
     pub abi_version: u32,
     pub plugin_kind: VesperPluginKind,
@@ -159,7 +189,10 @@ pub struct VesperPluginDescriptor {
     pub api: *const c_void,
 }
 
+/// Entry point exported by every plugin dynamic library.
 pub type VesperPluginEntryPoint = unsafe extern "C" fn() -> *const VesperPluginDescriptor;
 
+/// Current ABI version shared by the host and plugin crates.
 pub const VESPER_PLUGIN_ABI_VERSION: u32 = 1;
+/// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

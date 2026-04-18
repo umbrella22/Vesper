@@ -3,9 +3,32 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val configuredAndroidAbis =
+    providers.gradleProperty("vesper.player.android.abis").orNull
+        ?.split(',', ' ')
+        ?.map(String::trim)
+        ?.filter(String::isNotEmpty)
+        ?: listOf("arm64-v8a")
+
+val workspaceRootDir = rootProject.layout.projectDirectory.dir("../..")
+val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
+val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
+val playerFfmpegPluginBuildProfile =
+    providers.provider {
+        if (gradle.startParameter.taskNames.any { taskName ->
+                taskName.contains("Release", ignoreCase = true)
+            }
+        ) {
+            "release"
+        } else {
+            "debug"
+        }
+    }
+
 android {
     namespace = "io.github.ikaros.vesper.example.androidcomposehost"
     compileSdk = 36
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "io.github.ikaros.vesper.example.androidcomposehost"
@@ -13,6 +36,10 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+
+        ndk {
+            abiFilters += configuredAndroidAbis
+        }
     }
 
     buildFeatures {
@@ -22,6 +49,17 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        getByName("main").jniLibs.srcDir(playerFfmpegPluginJniLibsDirFile)
+    }
+
+    packaging {
+        jniLibs {
+            // 例子里需要把 remux 插件暴露成稳定文件路径，便于交给动态插件加载器。
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -41,4 +79,36 @@ dependencies {
     implementation(project(":vesper-player-kit-compose"))
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+val buildPlayerFfmpegAndroidPlugin by tasks.registering(Exec::class) {
+    description = "Builds the Android player-ffmpeg plugin libraries used by the example host."
+    group = "vesper"
+
+    val scriptFile = workspaceRootDir.file("scripts/build-android-player-ffmpeg-plugin.sh")
+
+    inputs.file(scriptFile)
+    inputs.file(workspaceRootDir.file("Cargo.toml"))
+    inputs.file(workspaceRootDir.file("Cargo.lock"))
+    inputs.dir(workspaceRootDir.dir("crates/extension/player-ffmpeg"))
+    inputs.dir(workspaceRootDir.dir("crates/core/player-plugin"))
+    inputs.dir(workspaceRootDir.dir("third_party/ffmpeg/android"))
+    inputs.property("abis", configuredAndroidAbis)
+    inputs.property("profile", playerFfmpegPluginBuildProfile)
+    outputs.dir(playerFfmpegPluginJniLibsDirFile)
+
+    workingDir = workspaceRootDir.asFile
+
+    doFirst {
+        commandLine(
+            scriptFile.asFile.absolutePath,
+            playerFfmpegPluginJniLibsDirFile.absolutePath,
+            playerFfmpegPluginBuildProfile.get(),
+            *configuredAndroidAbis.toTypedArray(),
+        )
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(buildPlayerFfmpegAndroidPlugin)
 }

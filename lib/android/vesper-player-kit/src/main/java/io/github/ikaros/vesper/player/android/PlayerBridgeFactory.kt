@@ -11,6 +11,7 @@ object PlayerBridgeFactory {
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
         surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
     ): PlayerBridge =
         when (defaultBackend) {
@@ -27,11 +28,13 @@ object PlayerBridgeFactory {
                     VesperNativeJniBindings(
                         context = context.applicationContext,
                         preloadBudgetPolicy = preloadBudgetPolicy,
+                        decoderBackend = decoderBackend,
                     ),
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
                 trackPreferencePolicy = trackPreferencePolicy,
                 preloadBudgetPolicy = preloadBudgetPolicy,
+                decoderBackend = decoderBackend,
                 appContext = context.applicationContext,
                 surfaceKind = surfaceKind,
             )

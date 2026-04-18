@@ -84,6 +84,10 @@ pub enum ProcessorOutput {
 pub enum ProcessorError {
     #[error("unsupported input format: {0:?}")]
     UnsupportedFormat(ContentFormatKind),
+    #[error("payload codec error: {0}")]
+    PayloadCodec(String),
+    #[error("plugin ABI violation: {0}")]
+    AbiViolation(String),
     #[error("mux failed: {0}")]
     MuxFailed(String),
     #[error("output path error: {0}")]

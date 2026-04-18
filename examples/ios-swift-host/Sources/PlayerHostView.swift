@@ -1,3 +1,4 @@
+import Photos
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -10,13 +11,18 @@ struct PlayerHostView: View {
     @AppStorage("vesper.example.ios.theme_mode") private var themeModeRaw = ExampleThemeMode.system.rawValue
     @StateObject private var controller: VesperPlayerController
     @StateObject private var playlistCoordinator: VesperPlaylistCoordinator
+    @StateObject private var downloadManager: VesperDownloadManager
     @State private var pendingSeekRatio: Double?
     @State private var isVideoImporterPresented = false
     @State private var hostMessage: String?
+    @State private var downloadMessage: String?
+    @State private var downloadAlertMessage: String?
     @State private var remoteStreamUrl = IOS_HLS_DEMO_URL
+    @State private var downloadRemoteUrl = IOS_HLS_DEMO_URL
     @State private var controlsVisible = true
     @State private var activeSheet: ExamplePlayerSheet?
     @State private var isFullscreen = false
+    @State private var selectedTab: ExampleHostTab = .player
     @State private var selectedResilienceProfile: ExampleResilienceProfile = .balanced
     @State private var isApplyingResilienceProfile = false
     @State private var hasHandledFinishedPlayback = false
@@ -24,6 +30,9 @@ struct PlayerHostView: View {
     @State private var queuedRemoteSource: VesperPlayerSource?
     @State private var queuedLocalSource: VesperPlayerSource?
     @State private var playlistItemIds: [String] = [IOS_HLS_PLAYLIST_ITEM_ID]
+    @State private var pendingDownloadTasks: [ExamplePendingDownloadTask] = []
+    @State private var savingTaskIds: Set<VesperDownloadTaskId> = []
+    @State private var exportProgressByTaskId: [VesperDownloadTaskId: Float] = [:]
 
     init() {
         let playlistPreloadBudgetPolicy = VesperPreloadBudgetPolicy(
@@ -56,6 +65,14 @@ struct PlayerHostView: View {
                 resiliencePolicy: ExampleResilienceProfile.balanced.policy
             )
         )
+        _downloadManager = StateObject(
+            wrappedValue: VesperDownloadManager(
+                configuration: VesperDownloadConfiguration(
+                    runPostProcessorsOnCompletion: false,
+                    pluginLibraryPaths: bundledDownloadPluginLibraryPaths()
+                )
+            )
+        )
     }
 
     private var themeMode: ExampleThemeMode {
@@ -78,12 +95,17 @@ struct PlayerHostView: View {
         horizontalSizeClass != .regular
     }
 
+    private var isDownloadExportPluginInstalled: Bool {
+        !bundledDownloadPluginLibraryPaths().isEmpty
+    }
+
     var body: some View {
         let palette = exampleHostPalette(useDarkTheme: useDarkTheme)
         let uiState = controller.uiState
         let trackCatalog = controller.trackCatalog
         let trackSelection = controller.trackSelection
         let playlistSnapshot = playlistCoordinator.snapshot
+        let downloadSnapshot = downloadManager.snapshot
 
         ZStack {
             LinearGradient(
@@ -101,61 +123,27 @@ struct PlayerHostView: View {
                     .background(Color.black)
                     .ignoresSafeArea()
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ExamplePlayerHeader(
-                            sourceLabel: uiState.sourceLabel,
-                            subtitle: uiState.subtitle,
-                            palette: palette
-                        )
-
-                        playerStage(uiState: uiState)
-                            .frame(height: 248)
-
-                        ExampleSourceSection(
-                            palette: palette,
-                            themeMode: themeMode,
-                            remoteStreamUrl: $remoteStreamUrl,
-                            hostMessage: hostMessage,
-                            dashDemoEnabled: false,
-                            dashDemoNote: ExampleI18n.dashDemoUnavailableNote,
-                            onThemeModeChange: { themeModeRaw = $0.rawValue },
-                            onPickVideo: {
-                                pickVideo()
-                            },
-                            onUseHlsDemo: {
-                                hostMessage = nil
-                                let nextPlaylistItemIds = enqueuePlaylistItem(
-                                    playlistItemIds,
-                                    itemId: IOS_HLS_PLAYLIST_ITEM_ID
-                                )
-                                applyPlaylistQueue(
-                                    focusItemId: IOS_HLS_PLAYLIST_ITEM_ID,
-                                    playlistItemIds: nextPlaylistItemIds
-                                )
-                                controlsVisible = true
-                            },
-                            onUseDashDemo: {},
-                            onOpenRemote: {
-                                openRemoteSource()
-                            }
-                        )
-
-                        ExamplePlaylistSection(
-                            palette: palette,
-                            playlistQueue: playlistSnapshot.queue,
-                            onFocusPlaylistItem: focusPlaylistItem
-                        )
-
-                        ExampleResilienceSection(
-                            palette: palette,
-                            selectedProfile: selectedResilienceProfile,
-                            isApplyingProfile: isApplyingResilienceProfile,
-                            onApplyProfile: applyResilienceProfile
-                        )
+                TabView(selection: $selectedTab) {
+                    playerPage(
+                        palette: palette,
+                        uiState: uiState,
+                        playlistSnapshot: playlistSnapshot
+                    )
+                    .tag(ExampleHostTab.player)
+                    .tabItem {
+                        Label(ExampleI18n.tabPlayer, systemImage: "play.rectangle.fill")
                     }
-                    .padding(20)
+
+                    downloadPage(
+                        palette: palette,
+                        downloadSnapshot: downloadSnapshot
+                    )
+                    .tag(ExampleHostTab.downloads)
+                    .tabItem {
+                        Label(ExampleI18n.tabDownloads, systemImage: "arrow.down.circle.fill")
+                    }
                 }
+                .tint(palette.primaryAction)
             }
         }
         .preferredColorScheme(themeMode.preferredColorScheme)
@@ -170,6 +158,7 @@ struct PlayerHostView: View {
         }
         .onDisappear {
             controlsHideTask?.cancel()
+            downloadManager.dispose()
             playlistCoordinator.dispose()
             controller.dispose()
         }
@@ -256,6 +245,137 @@ struct PlayerHostView: View {
             .presentationDetents([.height(sheetHeight(for: sheet))])
             .presentationDragIndicator(.hidden)
         }
+        .alert(
+            ExampleI18n.downloadSaveToPhotosTitle,
+            isPresented: Binding(
+                get: { downloadAlertMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        downloadAlertMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                downloadAlertMessage = nil
+            }
+        } message: {
+            Text(downloadAlertMessage ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private func playerPage(
+        palette: ExampleHostPalette,
+        uiState: PlayerHostUiState,
+        playlistSnapshot: VesperPlaylistSnapshot
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                ExamplePlayerHeader(
+                    sourceLabel: uiState.sourceLabel,
+                    subtitle: uiState.subtitle,
+                    palette: palette
+                )
+
+                playerStage(uiState: uiState)
+                    .frame(height: 248)
+
+                ExampleSourceSection(
+                    palette: palette,
+                    themeMode: themeMode,
+                    remoteStreamUrl: $remoteStreamUrl,
+                    hostMessage: hostMessage,
+                    dashDemoEnabled: false,
+                    dashDemoNote: ExampleI18n.dashDemoUnavailableNote,
+                    onThemeModeChange: { themeModeRaw = $0.rawValue },
+                    onPickVideo: {
+                        pickVideo()
+                    },
+                    onUseHlsDemo: {
+                        hostMessage = nil
+                        let nextPlaylistItemIds = enqueuePlaylistItem(
+                            playlistItemIds,
+                            itemId: IOS_HLS_PLAYLIST_ITEM_ID
+                        )
+                        applyPlaylistQueue(
+                            focusItemId: IOS_HLS_PLAYLIST_ITEM_ID,
+                            playlistItemIds: nextPlaylistItemIds
+                        )
+                        controlsVisible = true
+                    },
+                    onUseDashDemo: {},
+                    onOpenRemote: {
+                        openRemoteSource()
+                    }
+                )
+
+                ExamplePlaylistSection(
+                    palette: palette,
+                    playlistQueue: playlistSnapshot.queue,
+                    onFocusPlaylistItem: focusPlaylistItem
+                )
+
+                ExampleResilienceSection(
+                    palette: palette,
+                    selectedProfile: selectedResilienceProfile,
+                    isApplyingProfile: isApplyingResilienceProfile,
+                    onApplyProfile: applyResilienceProfile
+                )
+            }
+            .padding(20)
+        }
+    }
+
+    @ViewBuilder
+    private func downloadPage(
+        palette: ExampleHostPalette,
+        downloadSnapshot: VesperDownloadSnapshot
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                ExampleDownloadHeader(
+                    palette: palette,
+                    isDownloadExportPluginInstalled: isDownloadExportPluginInstalled
+                )
+
+                ExampleDownloadCreateSection(
+                    palette: palette,
+                    remoteUrl: $downloadRemoteUrl,
+                    message: downloadMessage,
+                    onUseHlsDemo: {
+                        createDownloadTask(
+                            assetIdPrefix: IOS_HLS_PLAYLIST_ITEM_ID,
+                            source: iosHlsDemoSource()
+                        )
+                    },
+                    onUseDashDemo: {
+                        createDownloadTask(
+                            assetIdPrefix: IOS_DASH_PLAYLIST_ITEM_ID,
+                            source: iosDashDemoSource()
+                        )
+                    },
+                    onCreateRemote: {
+                        openRemoteDownloadSource()
+                    }
+                )
+
+                ExampleDownloadTasksSection(
+                    palette: palette,
+                    tasks: downloadSnapshot.tasks,
+                    pendingTasks: pendingDownloadTasks,
+                    isDownloadExportPluginInstalled: isDownloadExportPluginInstalled,
+                    savingTaskIds: savingTaskIds,
+                    exportProgressByTaskId: exportProgressByTaskId,
+                    onPrimaryAction: handleDownloadPrimaryAction,
+                    onSaveToPhotos: saveDownloadToPhotos,
+                    onRemoveTask: { task in
+                        _ = downloadManager.removeTask(task.taskId)
+                    }
+                )
+            }
+            .padding(20)
+        }
     }
 
     @ViewBuilder
@@ -275,7 +395,7 @@ struct PlayerHostView: View {
                 setFullscreen(!isFullscreen)
             },
             onOpenSheet: { activeSheet = $0 }
-            )
+        )
     }
 
     private func applyResilienceProfile(_ profile: ExampleResilienceProfile) {
@@ -315,6 +435,143 @@ struct PlayerHostView: View {
             playlistItemIds: nextPlaylistItemIds
         )
         controlsVisible = true
+    }
+
+    private func openRemoteDownloadSource() {
+        let trimmed = downloadRemoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), !trimmed.isEmpty else {
+            downloadMessage = ExampleI18n.invalidRemoteUrl
+            return
+        }
+        createDownloadTask(
+            assetIdPrefix: IOS_REMOTE_PLAYLIST_ITEM_ID,
+            source: .remoteUrl(url, label: exampleDraftDownloadLabel(for: url))
+        )
+    }
+
+    private func createDownloadTask(
+        assetIdPrefix: String,
+        source: VesperPlayerSource
+    ) {
+        let assetId = "\(assetIdPrefix)-\(Int(Date().timeIntervalSince1970 * 1000.0))"
+        if source.protocol == .dash {
+            downloadMessage = ExampleI18n.dashNotSupportedOnIos
+            return
+        }
+
+        pendingDownloadTasks.append(
+            ExamplePendingDownloadTask(
+                id: assetId,
+                assetId: assetId,
+                label: exampleDraftDownloadLabel(source),
+                sourceUri: source.uri
+            )
+        )
+
+        Task {
+            do {
+                let preparedTask = try await prepareExampleDownloadTask(assetId: assetId, source: source)
+                await MainActor.run {
+                    let taskId = downloadManager.createTask(
+                        assetId: assetId,
+                        source: preparedTask.source,
+                        profile: preparedTask.profile,
+                        assetIndex: preparedTask.assetIndex
+                    )
+                    pendingDownloadTasks.removeAll { $0.id == assetId }
+                    downloadMessage = taskId == nil ? ExampleI18n.downloadCreateTaskFailed : nil
+                }
+            } catch {
+                await MainActor.run {
+                    pendingDownloadTasks.removeAll { $0.id == assetId }
+                    downloadMessage = ExampleI18n.downloadCreateTaskFailed
+                }
+            }
+        }
+    }
+
+    private func handleDownloadPrimaryAction(_ task: VesperDownloadTaskSnapshot) {
+        let succeeded: Bool
+        switch task.state {
+        case .queued, .failed:
+            succeeded = downloadManager.startTask(task.taskId)
+        case .preparing, .downloading:
+            succeeded = downloadManager.pauseTask(task.taskId)
+        case .paused:
+            succeeded = downloadManager.resumeTask(task.taskId)
+        case .completed, .removed:
+            succeeded = true
+        }
+        if !succeeded {
+            downloadMessage = ExampleI18n.downloadActionFailed
+        }
+    }
+
+    private func saveDownloadToPhotos(_ task: VesperDownloadTaskSnapshot) {
+        guard
+            let completedPath = task.assetIndex.completedPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !completedPath.isEmpty
+        else {
+            downloadAlertMessage = ExampleI18n.downloadSaveToPhotosMissingOutput
+            return
+        }
+        guard !savingTaskIds.contains(task.taskId) else {
+            return
+        }
+
+        let needsExport =
+            task.source.contentFormat == .hlsSegments ||
+            task.source.contentFormat == .dashSegments
+        guard !needsExport || isDownloadExportPluginInstalled else {
+            downloadAlertMessage = ExampleI18n.downloadExportPluginMissing
+            return
+        }
+
+        Task {
+            await MainActor.run {
+                savingTaskIds.insert(task.taskId)
+                if needsExport {
+                    exportProgressByTaskId[task.taskId] = 0
+                }
+            }
+            var exportURL: URL?
+            do {
+                let gallerySourcePath: String
+                if needsExport {
+                    exportURL = try createDownloadExportFile(for: task)
+                    try? FileManager.default.removeItem(at: exportURL!)
+                    try await downloadManager.exportTaskOutput(
+                        taskId: task.taskId,
+                        outputPath: exportURL!.path,
+                        onProgress: { ratio in
+                            Task { @MainActor in
+                                exportProgressByTaskId[task.taskId] =
+                                    max(Float(0), min(Float(1), ratio))
+                            }
+                        }
+                    )
+                    gallerySourcePath = exportURL!.path
+                } else {
+                    gallerySourcePath = completedPath
+                }
+
+                try await saveVideoToPhotoLibrary(completedPath: gallerySourcePath)
+                await MainActor.run {
+                    downloadAlertMessage = ExampleI18n.downloadSaveToPhotosSuccess
+                }
+            } catch {
+                await MainActor.run {
+                    downloadAlertMessage = ExampleI18n.downloadSaveToPhotosFailed(error.localizedDescription)
+                }
+            }
+            if let exportURL {
+                try? FileManager.default.removeItem(at: exportURL)
+            }
+            await MainActor.run {
+                savingTaskIds.remove(task.taskId)
+                exportProgressByTaskId.removeValue(forKey: task.taskId)
+            }
+        }
     }
 
     private func pickVideo() {
@@ -485,10 +742,85 @@ struct PlayerHostView: View {
         return (destination, url.lastPathComponent)
     }
 
+    private func saveVideoToPhotoLibrary(completedPath: String) async throws {
+        let fileURL = resolveCompletedFileURL(from: completedPath)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw ExamplePhotoLibraryExportError.missingCompletedFile
+        }
+
+        let authorizationStatus = await requestPhotoLibraryAuthorization()
+        switch authorizationStatus {
+        case .authorized, .limited:
+            break
+        case .denied, .restricted, .notDetermined:
+            throw ExamplePhotoLibraryExportError.accessDenied
+        @unknown default:
+            throw ExamplePhotoLibraryExportError.accessDenied
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .video, fileURL: fileURL, options: nil)
+            } completionHandler: { success, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard success else {
+                    continuation.resume(throwing: ExamplePhotoLibraryExportError.saveFailed)
+                    return
+                }
+                continuation.resume(returning: ())
+            }
+        }
+    }
+
+    private func requestPhotoLibraryAuthorization() async -> PHAuthorizationStatus {
+        if #available(iOS 14, *) {
+            return await withCheckedContinuation { continuation in
+                PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                    continuation.resume(returning: status)
+                }
+            }
+        }
+
+        return await withCheckedContinuation { continuation in
+            PHPhotoLibrary.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    private func resolveCompletedFileURL(from completedPath: String) -> URL {
+        if completedPath.hasPrefix("file://"),
+           let fileURL = URL(string: completedPath),
+           fileURL.isFileURL {
+            return fileURL
+        }
+        return URL(fileURLWithPath: completedPath)
+    }
 }
 
 private extension UIWindowScene {
     var keyWindow: UIWindow? {
         windows.first(where: \.isKeyWindow)
+    }
+}
+
+private enum ExamplePhotoLibraryExportError: LocalizedError {
+    case missingCompletedFile
+    case accessDenied
+    case saveFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .missingCompletedFile:
+            return ExampleI18n.downloadSaveToPhotosMissingOutput
+        case .accessDenied:
+            return ExampleI18n.photoLibraryAddAccessRequired
+        case .saveFailed:
+            return ExampleI18n.downloadSaveToPhotosFailed(ExampleI18n.downloadSaveToPhotosFailedUnknown)
+        }
     }
 }

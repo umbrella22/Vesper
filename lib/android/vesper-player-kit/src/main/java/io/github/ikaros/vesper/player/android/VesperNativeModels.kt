@@ -95,6 +95,7 @@ class NativeResolvedPreloadBudgetPolicy(
 
 class NativeDownloadConfig(
     @JvmField val autoStart: Boolean,
+    @JvmField val runPostProcessorsOnCompletion: Boolean,
     @JvmField val pluginLibraryPaths: Array<String> = emptyArray(),
 )
 

@@ -20,6 +20,8 @@
 	<string>1</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>This demo needs Photo Library access so you can pick videos for playback.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>This demo needs Photo Library add access so you can save completed downloads.</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

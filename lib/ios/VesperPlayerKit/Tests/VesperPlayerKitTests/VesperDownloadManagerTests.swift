@@ -96,6 +96,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         let manager = VesperDownloadManager(
             configuration: VesperDownloadConfiguration(
                 autoStart: false,
+                runPostProcessorsOnCompletion: false,
                 pluginLibraryPaths: [
                     "/Applications/VesperPlayerKit.framework/libplayer_ffmpeg.dylib",
                     "/Applications/VesperPlayerKit.framework/libvesper_metrics.dylib",
@@ -113,16 +114,48 @@ final class VesperDownloadManagerTests: XCTestCase {
                 "/Applications/VesperPlayerKit.framework/libvesper_metrics.dylib",
             ]
         )
+        XCTAssertEqual(bindings.createdConfiguration?.runPostProcessorsOnCompletion, false)
+    }
+
+    func testExportTaskOutputForwardsProgressAndCancellationToBindings() async throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let manager = VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: RecordingDownloadExecutor(),
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+
+        let taskId = manager.createTask(
+            assetId: "asset-a",
+            source: VesperDownloadSource(
+                source: .remoteUrl(URL(string: "https://example.com/video.m3u8")!, label: "Video")
+            )
+        )
+
+        try await manager.exportTaskOutput(
+            taskId: taskId ?? 0,
+            outputPath: "/tmp/exported.mp4",
+            onProgress: { ratio in
+                bindings.forwardedProgress.append(ratio)
+            },
+            isCancelled: { true }
+        )
+
+        XCTAssertEqual(bindings.forwardedProgress, [0.25, 1.0])
+        XCTAssertEqual(bindings.exportWasCancelled, true)
     }
 }
 
-private final class FakeDownloadBindings: VesperDownloadManager.DownloadBindings {
+private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadManager.DownloadBindings {
     private let autoStart: Bool
     private var tasks: [UInt64: StoredDownloadTask] = [:]
     private var commands: [StoredRuntimeCommand] = []
     private var events: [StoredRuntimeEvent] = []
     private var nextTaskId: UInt64 = 1
     private(set) var createdConfiguration: VesperDownloadConfiguration?
+    var forwardedProgress: [Float] = []
+    var exportWasCancelled = false
 
     init(autoStart: Bool) {
         self.autoStart = autoStart
@@ -229,6 +262,18 @@ private final class FakeDownloadBindings: VesperDownloadManager.DownloadBindings
             events.append(.init(kind: .stateChanged, task: updated))
             return updated
         }
+    }
+
+    func exportDownloadTask(
+        sessionHandle: UInt64,
+        taskId: UInt64,
+        outputPath: String,
+        onProgress: @escaping (Float) -> Void,
+        isCancelled: @escaping () -> Bool
+    ) throws {
+        onProgress(0.25)
+        onProgress(1.0)
+        exportWasCancelled = isCancelled()
     }
 
     func failDownloadTask(

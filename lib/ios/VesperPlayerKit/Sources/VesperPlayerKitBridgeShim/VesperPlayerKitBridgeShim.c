@@ -260,6 +260,7 @@ typedef struct PlayerFfiPlaylistActiveItem {
 
 typedef struct PlayerFfiDownloadConfig {
   bool auto_start;
+  bool run_post_processors_on_completion;
   char **plugin_library_paths;
   uintptr_t plugin_library_paths_len;
 } PlayerFfiDownloadConfig;
@@ -394,6 +395,12 @@ typedef struct PlayerFfiDownloadEventList {
   PlayerFfiDownloadEvent *events;
   uintptr_t len;
 } PlayerFfiDownloadEventList;
+
+typedef struct PlayerFfiDownloadExportCallbacks {
+  void *context;
+  void (*on_progress)(void *context, float ratio);
+  bool (*is_cancelled)(void *context);
+} PlayerFfiDownloadExportCallbacks;
 
 extern PlayerFfiCallStatus player_ffi_preload_session_create(
     const PlayerFfiResolvedPreloadBudgetPolicy *preload_budget,
@@ -537,6 +544,13 @@ extern PlayerFfiCallStatus player_ffi_download_session_complete_task(
     uint64_t handle,
     uint64_t task_id,
     const char *completed_path,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_download_session_export_task(
+    uint64_t handle,
+    uint64_t task_id,
+    const char *output_path,
+    PlayerFfiDownloadExportCallbacks callbacks,
     PlayerFfiError *out_error);
 
 extern PlayerFfiCallStatus player_ffi_download_session_fail_task(
@@ -1447,6 +1461,28 @@ bool vesper_runtime_download_session_complete_task(
           handle,
           task_id,
           completed_path,
+          &ffi_error),
+      &ffi_error);
+}
+
+bool vesper_runtime_download_session_export_task(
+    uint64_t handle,
+    uint64_t task_id,
+    const char *output_path,
+    VesperRuntimeDownloadExportCallbacks callbacks) {
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  PlayerFfiDownloadExportCallbacks ffi_callbacks = {
+      .context = callbacks.context,
+      .on_progress = callbacks.on_progress,
+      .is_cancelled = callbacks.is_cancelled,
+  };
+  return call_playlist_status(
+      player_ffi_download_session_export_task(
+          handle,
+          task_id,
+          output_path,
+          ffi_callbacks,
           &ffi_error),
       &ffi_error);
 }

@@ -141,17 +141,16 @@ fn remux_manifest_to_mp4(
         .into_processor_error()
     })?;
 
-    let mut stream_mapping = vec![0; input_context.nb_streams() as _];
+    let mut stream_mapping = vec![-1; input_context.nb_streams() as _];
     let mut input_time_bases = vec![Rational(0, 1); input_context.nb_streams() as _];
     let mut output_stream_index = 0;
 
     for (input_stream_index, input_stream) in input_context.streams().enumerate() {
         let medium = input_stream.parameters().medium();
-        if medium != media::Type::Audio
-            && medium != media::Type::Video
-            && medium != media::Type::Subtitle
-        {
-            stream_mapping[input_stream_index] = -1;
+        // 相册导出以“稳定得到可播放 MP4”为目标，这里只保留音视频流。
+        // 某些 HLS/DASH 示例里的字幕轨或附加流直接 remux 到 MP4 时会在 write_header
+        // 阶段被 muxer 拒绝，导致整个导出失败。
+        if medium != media::Type::Audio && medium != media::Type::Video {
             continue;
         }
 
@@ -172,6 +171,14 @@ fn remux_manifest_to_mp4(
         unsafe {
             (*output_stream.parameters().as_mut_ptr()).codec_tag = 0;
         }
+    }
+
+    if output_stream_index == 0 {
+        return Err(FfmpegProcessorError::Remux(format!(
+            "manifest `{}` does not contain any MP4-compatible audio/video streams",
+            manifest_path.display()
+        ))
+        .into_processor_error());
     }
 
     output_context.set_metadata(input_context.metadata().to_owned());

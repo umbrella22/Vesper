@@ -1,27 +1,50 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+mod desktop_download;
+mod desktop_file_dialog;
+mod desktop_overlay_ui;
 mod desktop_presenter;
+mod desktop_symbols;
 mod desktop_ui;
 mod host_ui;
 #[cfg(target_os = "macos")]
 mod macos_host_overlay;
+use desktop_download::{
+    DesktopDownloadController, PendingDownloadTask, PreparedDownloadTask,
+    download_primary_action_label, download_progress_summary, download_status_label,
+    draft_download_label, make_asset_id, normalized_progress_ratio, prepare_download_task,
+};
+use desktop_file_dialog::pick_local_media_file;
+use desktop_overlay_ui::playback_stage_rect;
 use desktop_presenter::DesktopUiPresenter;
-use desktop_ui::{CONTROL_RATES, ControlAction, SeekPreview};
+use desktop_ui::{
+    CONTROL_RATES, ControlAction, DesktopDownloadTaskViewData, DesktopOverlayViewModel,
+    DesktopPendingDownloadTaskViewData, DesktopPlaylistItemViewData, DesktopSidebarTab,
+    SeekPreview, playback_state_label,
+};
+use player_core::MediaSource;
+#[cfg(not(target_os = "macos"))]
+use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window;
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
-    normalize_desktop_host_source_uri, open_desktop_host_runtime_uri_for_winit_window,
-    probe_desktop_host_launch_plan_uri,
+    normalize_desktop_host_source_uri, probe_desktop_host_launch_plan_uri,
 };
+#[cfg(target_os = "macos")]
+use player_platform_macos::macos_runtime_adapter_factory;
 use player_render_wgpu::{
-    RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
+    DisplayRect, RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
     Yuv420pVideoFrame, default_window_attributes, preferred_backends,
 };
 use player_runtime::{
-    DecodedAudioSummary, DecodedVideoFrame, PlaybackProgress, PlayerRuntime,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerVideoDecodeInfo,
+    DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
+    PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntime,
+    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo,
     PlayerVideoDecodeMode, PresentationState, VideoPixelFormat,
 };
 use tracing::{error, info, warn};
@@ -36,10 +59,52 @@ use winit::window::{Window, WindowId};
 const SEEK_STEP: Duration = Duration::from_secs(5);
 const NATIVE_SURFACE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONTROL_HIDE_DELAY: Duration = Duration::from_secs(2);
+const CONTROL_FADE_DURATION: Duration = Duration::from_millis(220);
+const CONTROL_FADE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
+
+#[derive(Debug, Clone)]
+struct DesktopPlaylistEntry {
+    source_uri: String,
+    label: String,
+}
+
+#[derive(Debug)]
+enum PlannerEvent {
+    Prepared {
+        asset_id: String,
+        prepared: PreparedDownloadTask,
+    },
+    Failed {
+        asset_id: String,
+        error: String,
+    },
+}
+
+#[derive(Debug)]
+enum LaunchEvent {
+    Prepared {
+        request_id: u64,
+        source: String,
+        label: String,
+        launch_plan: RuntimeLaunchPlan,
+    },
+    Failed {
+        request_id: u64,
+        label: String,
+        error: String,
+    },
+}
+
+#[derive(Debug)]
+enum FileDialogEvent {
+    Selected(PathBuf),
+    Cancelled,
+    Failed(String),
+}
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -49,12 +114,11 @@ fn main() -> Result<()> {
         .init();
 
     let source = resolve_media_source_uri()?;
-    let launch_plan = build_launch_plan(source)?;
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = DesktopPlayerApp::new(launch_plan);
+    let mut app = DesktopPlayerApp::new(source);
     match event_loop.run_app(&mut app) {
         Ok(()) => Ok(()),
         Err(run_error) => {
@@ -77,17 +141,40 @@ struct DesktopPlayerApp {
     pointer_inside_window: bool,
     controls_visible: bool,
     controls_hide_deadline: Option<Instant>,
+    controls_opacity: f32,
+    controls_animation_tick: Instant,
     seek_preview: Option<SeekPreview>,
     ui_presenter: Option<DesktopUiPresenter>,
+    playlist_entries: Vec<DesktopPlaylistEntry>,
+    active_playlist_index: usize,
+    sidebar_tab: DesktopSidebarTab,
+    download_controller: DesktopDownloadController,
+    pending_downloads: Vec<PendingDownloadTask>,
+    planner_tx: Sender<PlannerEvent>,
+    planner_rx: Receiver<PlannerEvent>,
+    launch_tx: Sender<LaunchEvent>,
+    launch_rx: Receiver<LaunchEvent>,
+    file_dialog_tx: Sender<FileDialogEvent>,
+    file_dialog_rx: Receiver<FileDialogEvent>,
+    next_launch_request_id: u64,
+    active_launch_request_id: Option<u64>,
+    open_file_dialog_pending: bool,
+    host_message: Option<String>,
+    download_message: Option<String>,
 }
 
 impl DesktopPlayerApp {
-    fn new(launch_plan: RuntimeLaunchPlan) -> Self {
+    fn new(source: String) -> Self {
+        let initial_source = source;
+        let initial_label = source_display_label(&initial_source);
+        let (planner_tx, planner_rx) = mpsc::channel();
+        let (launch_tx, launch_rx) = mpsc::channel();
+        let (file_dialog_tx, file_dialog_rx) = mpsc::channel();
         Self {
-            source: launch_plan.source,
+            source: initial_source.clone(),
             runtime: None,
             last_frame: None,
-            render_config: launch_plan.render_config,
+            render_config: RenderSurfaceConfig::default(),
             uses_external_video_surface: false,
             window: None,
             renderer: None,
@@ -96,9 +183,426 @@ impl DesktopPlayerApp {
             pointer_inside_window: true,
             controls_visible: true,
             controls_hide_deadline: None,
+            controls_opacity: 1.0,
+            controls_animation_tick: Instant::now(),
             seek_preview: None,
             ui_presenter: None,
+            playlist_entries: vec![DesktopPlaylistEntry {
+                source_uri: initial_source,
+                label: initial_label,
+            }],
+            active_playlist_index: 0,
+            sidebar_tab: DesktopSidebarTab::Playlist,
+            download_controller: DesktopDownloadController::new(),
+            pending_downloads: Vec::new(),
+            planner_tx,
+            planner_rx,
+            launch_tx,
+            launch_rx,
+            file_dialog_tx,
+            file_dialog_rx,
+            next_launch_request_id: 1,
+            active_launch_request_id: None,
+            open_file_dialog_pending: false,
+            host_message: None,
+            download_message: None,
         }
+    }
+
+    fn overlay_view_model(
+        &self,
+        snapshot: &player_runtime::PlayerSnapshot,
+    ) -> DesktopOverlayViewModel {
+        let playlist_items = self
+            .playlist_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| DesktopPlaylistItemViewData {
+                label: entry.label.clone(),
+                status: if index == self.active_playlist_index {
+                    "CURRENT".to_owned()
+                } else {
+                    "READY".to_owned()
+                },
+                is_active: index == self.active_playlist_index,
+            })
+            .collect::<Vec<_>>();
+        let pending_downloads = self
+            .pending_downloads
+            .iter()
+            .map(|task| DesktopPendingDownloadTaskViewData {
+                asset_id: task.asset_id.clone(),
+                label: task.label.clone(),
+                source_uri: task.source_uri.clone(),
+            })
+            .collect::<Vec<_>>();
+        let download_tasks = self
+            .download_controller
+            .tasks()
+            .into_iter()
+            .filter(|task| task.status != player_runtime::DownloadTaskStatus::Removed)
+            .map(|task| {
+                let export_state = self.download_controller.export_state(task.task_id);
+                let completed_path = self
+                    .download_controller
+                    .exported_path(task.task_id)
+                    .map(|path| path.display().to_string())
+                    .or_else(|| {
+                        task.asset_index
+                            .completed_path
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                    });
+                DesktopDownloadTaskViewData {
+                    task_id: task.task_id.get(),
+                    label: self
+                        .download_controller
+                        .label_for_asset(task.asset_id.as_str())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| source_display_label(task.source.source.uri())),
+                    status: download_status_label(task.status).to_owned(),
+                    progress_summary: download_progress_summary(&task),
+                    progress_ratio: normalized_progress_ratio(&task.progress),
+                    completed_path,
+                    error_message: task
+                        .error_summary
+                        .as_ref()
+                        .map(|error| error.message.clone()),
+                    primary_action_label: download_primary_action_label(task.status)
+                        .map(str::to_owned),
+                    export_action_label: (task.status
+                        == player_runtime::DownloadTaskStatus::Completed
+                        && task.source.content_format
+                            != player_runtime::DownloadContentFormat::SingleFile)
+                        .then_some("EXPORT MP4".to_owned()),
+                    is_export_enabled: task.status == player_runtime::DownloadTaskStatus::Completed
+                        && !export_state.in_progress
+                        && task.source.content_format
+                            != player_runtime::DownloadContentFormat::SingleFile,
+                    is_remove_enabled: task.status != player_runtime::DownloadTaskStatus::Removed,
+                    is_exporting: export_state.in_progress,
+                    export_progress: export_state
+                        .ratio
+                        .or_else(|| normalized_progress_ratio(&task.progress)),
+                }
+            })
+            .collect::<Vec<_>>();
+        let source_label = self
+            .playlist_entries
+            .get(self.active_playlist_index)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_else(|| source_display_label(&self.source));
+        let subtitle = active_source_subtitle(snapshot);
+
+        DesktopOverlayViewModel {
+            source_label,
+            playback_state_label: playback_state_label(snapshot.state).to_owned(),
+            subtitle,
+            controls_opacity: self.controls_opacity,
+            cursor_position: if self.pointer_inside_window {
+                self.cursor_position
+                    .map(|(x, y)| (x.max(0.0).round() as u32, y.max(0.0).round() as u32))
+            } else {
+                None
+            },
+            sidebar_tab: self.sidebar_tab,
+            playlist_items,
+            pending_downloads,
+            download_tasks,
+            host_message: self.host_message.clone(),
+            download_message: self.download_message.clone(),
+            export_plugin_installed: self.download_controller.export_plugin_installed(),
+        }
+    }
+
+    fn host_snapshot(&self) -> PlayerSnapshot {
+        let source = MediaSource::new(self.source.clone());
+        PlayerSnapshot {
+            source_uri: self.source.clone(),
+            state: PresentationState::Ready,
+            has_video_surface: true,
+            is_interrupted: false,
+            is_buffering: self.active_launch_request_id.is_some(),
+            playback_rate: 1.0,
+            progress: PlaybackProgress::new(Duration::ZERO, None),
+            timeline: PlayerTimelineSnapshot {
+                kind: PlayerTimelineKind::Vod,
+                is_seekable: false,
+                seekable_range: None,
+                live_edge: None,
+                position: Duration::ZERO,
+                duration: None,
+            },
+            media_info: PlayerMediaInfo {
+                source_uri: self.source.clone(),
+                source_kind: source.kind(),
+                source_protocol: source.protocol(),
+                duration: None,
+                bit_rate: None,
+                audio_streams: 0,
+                video_streams: 0,
+                best_video: None,
+                best_audio: None,
+                track_catalog: MediaTrackCatalog::default(),
+                track_selection: MediaTrackSelectionSnapshot::default(),
+            },
+            resilience_metrics: PlayerResilienceMetrics::default(),
+        }
+    }
+
+    fn placeholder_frame_texture(&self) -> VideoFrameTexture {
+        let width = self.render_config.width.max(1);
+        let height = self.render_config.height.max(1);
+        let mut bytes = vec![0; width as usize * height as usize * 4];
+        for chunk in bytes.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&[8, 12, 18, 255]);
+        }
+        VideoFrameTexture::Rgba(RgbaVideoFrame {
+            width,
+            height,
+            bytes,
+        })
+    }
+
+    fn current_source_label(&self) -> String {
+        self.playlist_entries
+            .get(self.active_playlist_index)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_else(|| source_display_label(&self.source))
+    }
+
+    fn register_playlist_source(&mut self, source_uri: &str, label: Option<String>) {
+        if let Some(index) = self
+            .playlist_entries
+            .iter()
+            .position(|entry| entry.source_uri == source_uri)
+        {
+            if let Some(label) = label {
+                self.playlist_entries[index].label = label;
+            }
+            self.active_playlist_index = index;
+            return;
+        }
+
+        self.playlist_entries.push(DesktopPlaylistEntry {
+            source_uri: source_uri.to_owned(),
+            label: label.unwrap_or_else(|| source_display_label(source_uri)),
+        });
+        self.active_playlist_index = self.playlist_entries.len().saturating_sub(1);
+    }
+
+    fn stage_display_rect_for_size(&self, size: PhysicalSize<u32>) -> DisplayRect {
+        let stage_rect = playback_stage_rect(size.width, size.height);
+        DisplayRect {
+            x: stage_rect.x,
+            y: stage_rect.y,
+            width: stage_rect.width.max(1),
+            height: stage_rect.height.max(1),
+        }
+    }
+
+    fn sync_renderer_stage_viewport(&mut self) {
+        let size = self
+            .window
+            .as_ref()
+            .map(|window| window.inner_size())
+            .unwrap_or(PhysicalSize::new(
+                self.render_config.width.max(1),
+                self.render_config.height.max(1),
+            ));
+        let stage_rect = self.stage_display_rect_for_size(size);
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_video_viewport(Some(stage_rect));
+        }
+    }
+
+    fn request_source_launch(&mut self, source: String, label: Option<String>) -> Result<()> {
+        let label = label.unwrap_or_else(|| source_display_label(&source));
+        let request_id = self.next_launch_request_id;
+        self.next_launch_request_id = self.next_launch_request_id.saturating_add(1);
+        self.active_launch_request_id = Some(request_id);
+        self.host_message = Some(format!("LOADING {label}"));
+        self.seek_preview = None;
+        self.show_controls();
+        self.title_cache = None;
+        self.update_window_title();
+        self.refresh_overlay()?;
+
+        let launch_tx = self.launch_tx.clone();
+        thread::spawn(move || {
+            let event = match build_launch_plan(source.clone()) {
+                Ok(launch_plan) => LaunchEvent::Prepared {
+                    request_id,
+                    source,
+                    label,
+                    launch_plan,
+                },
+                Err(error) => LaunchEvent::Failed {
+                    request_id,
+                    label,
+                    error: error.to_string(),
+                },
+            };
+            let _ = launch_tx.send(event);
+        });
+
+        Ok(())
+    }
+
+    fn queue_download_planner(&mut self, source_uri: String, label: String) {
+        let asset_prefix = match MediaSource::new(source_uri.clone()).protocol() {
+            player_core::MediaSourceProtocol::Hls => "hls",
+            player_core::MediaSourceProtocol::Dash => "dash",
+            _ => "file",
+        };
+        let asset_id = make_asset_id(asset_prefix);
+        let draft_label = draft_download_label(&label, &source_uri);
+        self.pending_downloads.push(PendingDownloadTask {
+            asset_id: asset_id.clone(),
+            label: draft_label,
+            source_uri: source_uri.clone(),
+        });
+        self.sidebar_tab = DesktopSidebarTab::Downloads;
+        self.download_message = Some(format!("Preparing {source_uri}"));
+
+        let planner_tx = self.planner_tx.clone();
+        thread::spawn(move || {
+            let source = MediaSource::new(source_uri.clone());
+            let event = match prepare_download_task(&asset_id, &source, &label) {
+                Ok(prepared) => PlannerEvent::Prepared { asset_id, prepared },
+                Err(error) => PlannerEvent::Failed {
+                    asset_id,
+                    error: error.to_string(),
+                },
+            };
+            let _ = planner_tx.send(event);
+        });
+    }
+
+    fn drain_planner_events(&mut self) -> Result<bool> {
+        let mut changed = false;
+        loop {
+            match self.planner_rx.try_recv() {
+                Ok(PlannerEvent::Prepared { asset_id, prepared }) => {
+                    self.pending_downloads
+                        .retain(|task| task.asset_id != asset_id);
+                    let resolved_label = prepared.resolved_label.clone();
+                    self.download_controller.create_prepared_task(
+                        asset_id,
+                        resolved_label.clone(),
+                        prepared,
+                    )?;
+                    self.download_message = Some(format!("Queued {resolved_label}"));
+                    changed = true;
+                }
+                Ok(PlannerEvent::Failed { asset_id, error }) => {
+                    self.pending_downloads
+                        .retain(|task| task.asset_id != asset_id);
+                    self.download_message = Some(error);
+                    changed = true;
+                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        Ok(changed)
+    }
+
+    fn drain_launch_events(&mut self) -> Result<bool> {
+        let mut changed = false;
+        loop {
+            match self.launch_rx.try_recv() {
+                Ok(LaunchEvent::Prepared {
+                    request_id,
+                    source,
+                    label,
+                    launch_plan,
+                }) => {
+                    if self.active_launch_request_id != Some(request_id) {
+                        continue;
+                    }
+                    self.active_launch_request_id = None;
+                    self.host_message = None;
+                    let window = self
+                        .window
+                        .as_ref()
+                        .cloned()
+                        .context("window missing while activating launch plan")?;
+                    match self.activate_launch_plan(launch_plan, window.clone()) {
+                        Ok(()) => {
+                            self.register_playlist_source(&source, Some(label));
+                            self.sync_ui_presenter();
+                            self.refresh_overlay()?;
+                            window.request_redraw();
+                        }
+                        Err(error) => {
+                            warn!(
+                                ?error,
+                                source = source.as_str(),
+                                "failed to activate media source"
+                            );
+                            self.host_message = Some("FAILED TO OPEN SOURCE".to_owned());
+                            self.refresh_overlay()?;
+                        }
+                    }
+                    changed = true;
+                }
+                Ok(LaunchEvent::Failed {
+                    request_id,
+                    label,
+                    error,
+                }) => {
+                    if self.active_launch_request_id != Some(request_id) {
+                        continue;
+                    }
+                    self.active_launch_request_id = None;
+                    self.host_message = Some(format!("FAILED TO LOAD {label}"));
+                    warn!(
+                        label = label.as_str(),
+                        error = error.as_str(),
+                        "failed to prepare media launch plan"
+                    );
+                    self.refresh_overlay()?;
+                    changed = true;
+                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        Ok(changed)
+    }
+
+    fn drain_download_updates(&mut self) -> Result<bool> {
+        let updates = self.download_controller.poll();
+        if let Some(message) = updates.messages.last() {
+            self.download_message = Some(message.clone());
+        }
+        Ok(updates.changed)
+    }
+
+    fn drain_file_dialog_events(&mut self) -> Result<bool> {
+        let mut changed = false;
+        loop {
+            match self.file_dialog_rx.try_recv() {
+                Ok(FileDialogEvent::Selected(path)) => {
+                    self.open_file_dialog_pending = false;
+                    info!(path = %path.display(), "opening selected local media file");
+                    self.open_dropped_file(path)?;
+                    changed = true;
+                }
+                Ok(FileDialogEvent::Cancelled) => {
+                    self.open_file_dialog_pending = false;
+                    info!("local media file selection cancelled");
+                }
+                Ok(FileDialogEvent::Failed(error)) => {
+                    self.open_file_dialog_pending = false;
+                    warn!(
+                        error = error.as_str(),
+                        "failed to open local media file picker"
+                    );
+                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        Ok(changed)
     }
 
     fn initialize(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
@@ -121,11 +625,7 @@ impl DesktopPlayerApp {
             }
         }
         self.window = Some(window.clone());
-        let launch_plan = RuntimeLaunchPlan {
-            source: self.source.clone(),
-            render_config: self.render_config,
-        };
-        self.activate_launch_plan(launch_plan, window)?;
+        self.request_source_launch(self.source.clone(), Some(self.current_source_label()))?;
 
         Ok(())
     }
@@ -142,7 +642,7 @@ impl DesktopPlayerApp {
                 startup,
             },
             capabilities,
-        ) = open_desktop_host_runtime_uri_for_winit_window(&launch_plan.source, window.as_ref())?;
+        ) = open_basic_player_runtime_for_window(&launch_plan.source, window.as_ref())?;
 
         info!(
             adapter_id = runtime.adapter_id(),
@@ -160,16 +660,22 @@ impl DesktopPlayerApp {
         self.uses_external_video_surface = capabilities.supports_external_video_surface;
         self.runtime = Some(runtime);
         self.seek_preview = None;
+        self.host_message = None;
 
         if capabilities.supports_frame_output {
             let initial_frame =
                 initial_frame.context("desktop runtime did not provide an initial frame")?;
-            let mut renderer = pollster::block_on(VideoRenderer::new(
-                window.clone(),
-                (initial_frame.width, initial_frame.height),
-            ))?;
-            renderer.set_render_mode(RenderMode::Fit);
-            self.renderer = Some(renderer);
+            if self.renderer.is_none() {
+                let mut renderer = pollster::block_on(VideoRenderer::new(
+                    window.clone(),
+                    (initial_frame.width, initial_frame.height),
+                ))?;
+                renderer.set_render_mode(RenderMode::Fit);
+                self.renderer = Some(renderer);
+            } else if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_render_mode(RenderMode::Fit);
+            }
+            self.sync_renderer_stage_viewport();
             self.last_frame = None;
             self.apply_frame(initial_frame)?;
         } else {
@@ -228,12 +734,18 @@ impl DesktopPlayerApp {
     }
 
     fn refresh_overlay(&mut self) -> Result<()> {
+        if self.runtime.is_none() {
+            return self.refresh_host_overlay();
+        }
         let window = self
             .window
             .as_ref()
             .cloned()
             .context("window missing while playback is active")?;
         let Some(frame) = self.last_frame.as_ref() else {
+            if self.host_message.is_some() {
+                return self.refresh_host_overlay();
+            }
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_overlay();
             }
@@ -241,12 +753,14 @@ impl DesktopPlayerApp {
         };
         let frame_texture = video_frame_texture(frame);
         let window_size = window.inner_size();
+        let snapshot = self.runtime()?.snapshot();
+        let overlay_view_model = self.overlay_view_model(&snapshot);
         let overlay = self.ui_presenter.as_ref().and_then(|presenter| {
             presenter.overlay_frame(
                 window_size,
-                &self.runtime().ok()?.snapshot(),
+                &snapshot,
                 self.seek_preview,
-                self.controls_visible,
+                &overlay_view_model,
             )
         });
         let Some(renderer) = self.renderer.as_mut() else {
@@ -266,6 +780,56 @@ impl DesktopPlayerApp {
 
         window.request_redraw();
 
+        Ok(())
+    }
+
+    fn refresh_host_overlay(&mut self) -> Result<()> {
+        let window = self
+            .window
+            .as_ref()
+            .cloned()
+            .context("window missing while host overlay is active")?;
+        let window_size = window.inner_size();
+        if window_size.width == 0 || window_size.height == 0 {
+            return Ok(());
+        }
+        if self.host_message.is_none() {
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.clear_overlay();
+                window.request_redraw();
+            }
+            return Ok(());
+        }
+        if self.renderer.is_none() {
+            let mut renderer = pollster::block_on(VideoRenderer::new(
+                window.clone(),
+                (
+                    self.render_config.width.max(1),
+                    self.render_config.height.max(1),
+                ),
+            ))?;
+            renderer.set_render_mode(RenderMode::Fit);
+            self.renderer = Some(renderer);
+        }
+        self.sync_renderer_stage_viewport();
+
+        let snapshot = self.host_snapshot();
+        let overlay_view_model = self.overlay_view_model(&snapshot);
+        let overlay = self.ui_presenter.as_ref().and_then(|presenter| {
+            presenter.overlay_frame(window_size, &snapshot, None, &overlay_view_model)
+        });
+        let frame_texture = self.placeholder_frame_texture();
+        let renderer = self
+            .renderer
+            .as_mut()
+            .context("renderer missing while host overlay is active")?;
+        renderer.upload_frame(&frame_texture);
+        if let Some(overlay) = overlay {
+            renderer.upload_overlay(&overlay);
+        } else {
+            renderer.clear_overlay();
+        }
+        window.request_redraw();
         Ok(())
     }
 
@@ -344,6 +908,9 @@ impl DesktopPlayerApp {
     }
 
     fn begin_seek_drag(&mut self) -> Result<bool> {
+        if self.runtime.is_none() {
+            return Ok(false);
+        }
         let Some((cursor_x, cursor_y)) = self.cursor_position else {
             return Ok(false);
         };
@@ -354,9 +921,15 @@ impl DesktopPlayerApp {
             return Ok(false);
         };
         let snapshot = self.runtime()?.snapshot();
+        let overlay_view_model = self.overlay_view_model(&snapshot);
         let window_size = window.inner_size();
-        let Some(preview) = presenter.seek_preview_at(window_size, cursor_x, cursor_y, &snapshot)
-        else {
+        let Some(preview) = presenter.seek_preview_at(
+            window_size,
+            cursor_x,
+            cursor_y,
+            &snapshot,
+            &overlay_view_model,
+        ) else {
             return Ok(false);
         };
 
@@ -367,6 +940,9 @@ impl DesktopPlayerApp {
     }
 
     fn update_seek_drag(&mut self) -> Result<()> {
+        if self.runtime.is_none() {
+            return Ok(());
+        }
         if self.seek_preview.is_none() {
             return Ok(());
         }
@@ -381,8 +957,11 @@ impl DesktopPlayerApp {
             return Ok(());
         };
         let snapshot = self.runtime()?.snapshot();
+        let overlay_view_model = self.overlay_view_model(&snapshot);
         let window_size = window.inner_size();
-        if let Some(preview) = presenter.seek_preview_for_drag(window_size, cursor_x, &snapshot) {
+        if let Some(preview) =
+            presenter.seek_preview_for_drag(window_size, cursor_x, &snapshot, &overlay_view_model)
+        {
             self.seek_preview = Some(preview);
             self.refresh_overlay()?;
         }
@@ -411,19 +990,52 @@ impl DesktopPlayerApp {
     }
 
     fn open_media_source(&mut self, source: String) -> Result<()> {
-        let launch_plan = build_launch_plan(source)?;
-        let window = self
-            .window
-            .as_ref()
-            .cloned()
-            .context("window missing while opening a new media source")?;
-        self.activate_launch_plan(launch_plan, window)
+        let label = source_display_label(&source);
+        self.open_media_source_with_label(source, Some(label))
+    }
+
+    fn open_media_source_with_label(
+        &mut self,
+        source: String,
+        label: Option<String>,
+    ) -> Result<()> {
+        self.request_source_launch(source, label)
     }
 
     fn open_dropped_file(&mut self, path: PathBuf) -> Result<()> {
         let source = canonical_desktop_host_local_path(&path)?;
         info!(source = source.as_str(), "opening dropped media source");
-        self.open_media_source(source)
+        let label = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| source_display_label(&source));
+        self.open_media_source_with_label(source, Some(label))
+    }
+
+    fn request_open_file_dialog(&mut self) -> Result<()> {
+        if self.open_file_dialog_pending {
+            return Ok(());
+        }
+
+        self.open_file_dialog_pending = true;
+        self.show_controls();
+        self.refresh_overlay()?;
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+
+        let file_dialog_tx = self.file_dialog_tx.clone();
+        thread::spawn(move || {
+            let event = match pick_local_media_file() {
+                Ok(Some(path)) => FileDialogEvent::Selected(path),
+                Ok(None) => FileDialogEvent::Cancelled,
+                Err(error) => FileDialogEvent::Failed(error.to_string()),
+            };
+            let _ = file_dialog_tx.send(event);
+        });
+
+        Ok(())
     }
 
     fn set_playback_rate(&mut self, rate: f32) -> Result<()> {
@@ -455,6 +1067,9 @@ impl DesktopPlayerApp {
     }
 
     fn handle_pointer_click(&mut self) -> Result<()> {
+        if self.runtime.is_none() {
+            return Ok(());
+        }
         if self.renderer.is_none() {
             return Ok(());
         }
@@ -470,11 +1085,14 @@ impl DesktopPlayerApp {
         };
 
         let window_size = window.inner_size();
+        let snapshot = self.runtime()?.snapshot();
+        let overlay_view_model = self.overlay_view_model(&snapshot);
         if let Some(action) = presenter.control_action_at(
             window_size,
             cursor_x,
             cursor_y,
-            &self.runtime()?.snapshot(),
+            &snapshot,
+            &overlay_view_model,
         ) {
             self.perform_control_action_logged("pointer_click", action)?;
         }
@@ -492,7 +1110,7 @@ impl DesktopPlayerApp {
     }
 
     fn perform_control_action(&mut self, action: ControlAction) -> Result<()> {
-        match action {
+        let result = match action {
             ControlAction::SeekStart => self.seek_to(Duration::ZERO),
             ControlAction::SeekBack => self.seek_by(SEEK_STEP, false),
             ControlAction::TogglePause => self.dispatch_command(PlayerRuntimeCommand::TogglePause),
@@ -515,13 +1133,72 @@ impl DesktopPlayerApp {
                 };
                 self.seek_to(position)
             }
+            ControlAction::OpenLocalFile => self.request_open_file_dialog(),
+            ControlAction::OpenHlsDemo => self.open_media_source_with_label(
+                DESKTOP_HLS_DEMO_URL.to_owned(),
+                Some("HLS DEMO".to_owned()),
+            ),
+            ControlAction::OpenDashDemo => self.open_media_source_with_label(
+                DESKTOP_DASH_DEMO_URL.to_owned(),
+                Some("DASH DEMO".to_owned()),
+            ),
+            ControlAction::SelectSidebarTab(tab) => {
+                self.sidebar_tab = tab;
+                Ok(())
+            }
+            ControlAction::FocusPlaylistItem(index) => {
+                let Some(entry) = self.playlist_entries.get(index).cloned() else {
+                    return Ok(());
+                };
+                self.open_media_source_with_label(entry.source_uri, Some(entry.label))
+            }
+            ControlAction::CreateDownloadHlsDemo => {
+                self.queue_download_planner(DESKTOP_HLS_DEMO_URL.to_owned(), "HLS DEMO".to_owned());
+                Ok(())
+            }
+            ControlAction::CreateDownloadDashDemo => {
+                self.queue_download_planner(
+                    DESKTOP_DASH_DEMO_URL.to_owned(),
+                    "DASH DEMO".to_owned(),
+                );
+                Ok(())
+            }
+            ControlAction::CreateDownloadCurrentSource => {
+                self.queue_download_planner(self.source.clone(), self.current_source_label());
+                Ok(())
+            }
+            ControlAction::DownloadPrimaryAction(task_id) => {
+                self.download_controller
+                    .trigger_primary_action(player_runtime::DownloadTaskId::from_raw(task_id))?;
+                self.sidebar_tab = DesktopSidebarTab::Downloads;
+                Ok(())
+            }
+            ControlAction::DownloadExport(task_id) => {
+                self.download_controller
+                    .request_export(player_runtime::DownloadTaskId::from_raw(task_id))?;
+                self.sidebar_tab = DesktopSidebarTab::Downloads;
+                Ok(())
+            }
+            ControlAction::DownloadRemove(task_id) => {
+                self.download_controller
+                    .remove_task(player_runtime::DownloadTaskId::from_raw(task_id))?;
+                Ok(())
+            }
+        };
+
+        self.sync_ui_presenter();
+        self.refresh_overlay()?;
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
+        result
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.resize(size);
         }
+        self.sync_renderer_stage_viewport();
         if let Err(error) = self.refresh_overlay() {
             error!(?error, "failed to refresh overlay during resize");
         }
@@ -543,11 +1220,9 @@ impl DesktopPlayerApp {
             self.ui_presenter.as_ref(),
             self.window.as_ref(),
         ) {
-            ui_presenter.sync(
-                &runtime.snapshot(),
-                self.controls_visible,
-                window.inner_size(),
-            );
+            let snapshot = runtime.snapshot();
+            let overlay_view_model = self.overlay_view_model(&snapshot);
+            ui_presenter.sync(&snapshot, &overlay_view_model, window.inner_size());
         }
     }
 
@@ -563,33 +1238,97 @@ impl DesktopPlayerApp {
 
     fn show_controls(&mut self) {
         self.controls_visible = true;
-        self.controls_hide_deadline = None;
+        self.controls_hide_deadline = self
+            .controls_should_auto_hide()
+            .then_some(Instant::now() + CONTROL_HIDE_DELAY);
     }
 
     fn schedule_controls_hide(&mut self) {
-        self.controls_hide_deadline = Some(Instant::now() + CONTROL_HIDE_DELAY);
+        if self.controls_forced_visible() {
+            return;
+        }
+        self.controls_hide_deadline = Some(Instant::now());
     }
 
-    fn update_controls_visibility(&mut self) -> Result<()> {
-        if self.pointer_inside_window {
+    fn update_controls_visibility(&mut self) -> Result<bool> {
+        let now = Instant::now();
+        let mut changed = false;
+
+        if self.controls_forced_visible() {
             if !self.controls_visible {
                 self.controls_visible = true;
-                self.sync_ui_presenter();
-                self.refresh_overlay()?;
+                changed = true;
             }
             self.controls_hide_deadline = None;
-            return Ok(());
-        }
-
-        if let Some(deadline) = self.controls_hide_deadline {
-            if Instant::now() >= deadline && self.controls_visible {
+        } else if let Some(hide_deadline) = self.controls_hide_deadline
+            && now >= hide_deadline
+        {
+            self.controls_hide_deadline = None;
+            if self.controls_visible {
                 self.controls_visible = false;
-                self.sync_ui_presenter();
-                self.refresh_overlay()?;
+                changed = true;
             }
         }
 
-        Ok(())
+        let elapsed = now.saturating_duration_since(self.controls_animation_tick);
+        self.controls_animation_tick = now;
+        let target_opacity = if self.controls_visible { 1.0 } else { 0.0 };
+        let step = (elapsed.as_secs_f32() / CONTROL_FADE_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        let previous_opacity = self.controls_opacity;
+        if self.controls_opacity < target_opacity {
+            self.controls_opacity = (self.controls_opacity + step).min(target_opacity);
+        } else if self.controls_opacity > target_opacity {
+            self.controls_opacity = (self.controls_opacity - step).max(target_opacity);
+        }
+        if (self.controls_opacity - previous_opacity).abs() > f32::EPSILON {
+            changed = true;
+        }
+
+        Ok(changed)
+    }
+
+    fn controls_forced_visible(&self) -> bool {
+        self.host_message.is_some()
+            || self.active_launch_request_id.is_some()
+            || self.seek_preview.is_some()
+    }
+
+    fn controls_should_auto_hide(&self) -> bool {
+        self.pointer_inside_window && !self.controls_forced_visible()
+    }
+
+    fn controls_animation_deadline(&self) -> Option<Instant> {
+        let target_opacity = if self.controls_visible { 1.0 } else { 0.0 };
+        ((self.controls_opacity - target_opacity).abs() > 0.01)
+            .then_some(Instant::now() + CONTROL_FADE_FRAME_INTERVAL)
+    }
+}
+
+fn open_basic_player_runtime_for_window(
+    source: &str,
+    _window: &Window,
+) -> Result<(
+    PlayerRuntimeBootstrap,
+    player_runtime::PlayerRuntimeAdapterCapabilities,
+)> {
+    #[cfg(target_os = "macos")]
+    {
+        // basic-player 的桌面控制层现在统一依赖 Rust overlay，因此在 macOS 上
+        // 显式锁定 software desktop runtime。对于 HLS / DASH master manifest，
+        // host strategy 在探测阶段可能暂时拿不到 best_video，随后误判成 native path，
+        // 导致 overlay 失效、旧 frame 残留，并让切源看起来像“没有生效”。
+        let bootstrap = PlayerRuntime::open_uri_with_options_and_factory(
+            source.to_owned(),
+            PlayerRuntimeOptions::default(),
+            macos_runtime_adapter_factory(),
+        )?;
+        let capabilities = bootstrap.runtime.capabilities();
+        return Ok((bootstrap, capabilities));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        open_desktop_host_runtime_uri_for_winit_window(source.to_owned(), _window)
     }
 }
 
@@ -819,6 +1558,13 @@ impl ApplicationHandler for DesktopPlayerApp {
                         event_loop.exit();
                     }
                 }
+                Key::Character(text) if text.eq_ignore_ascii_case("o") => {
+                    log_keyboard_action("open_local_file");
+                    if let Err(error) = self.perform_control_action(ControlAction::OpenLocalFile) {
+                        error!(?error, "failed to open local media file");
+                        event_loop.exit();
+                    }
+                }
                 Key::Character(text) if text.eq_ignore_ascii_case("d") => {
                     log_keyboard_action("open_dash_demo");
                     if let Err(error) = self.open_media_source(DESKTOP_DASH_DEMO_URL.to_owned()) {
@@ -844,10 +1590,90 @@ impl ApplicationHandler for DesktopPlayerApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Err(error) = self.update_controls_visibility() {
-            error!(?error, "failed to update control visibility");
-            event_loop.exit();
-            return;
+        match self.update_controls_visibility() {
+            Ok(changed) => {
+                if changed {
+                    self.sync_ui_presenter();
+                    if let Err(error) = self.refresh_overlay() {
+                        error!(
+                            ?error,
+                            "failed to refresh overlay after control visibility update"
+                        );
+                        event_loop.exit();
+                        return;
+                    }
+                }
+            }
+            Err(error) => {
+                error!(?error, "failed to update control visibility");
+                event_loop.exit();
+                return;
+            }
+        }
+
+        match self.drain_launch_events() {
+            Ok(changed) => {
+                if changed {
+                    self.sync_ui_presenter();
+                }
+            }
+            Err(error) => {
+                error!(?error, "failed to handle prepared desktop media launches");
+                event_loop.exit();
+                return;
+            }
+        }
+
+        match self.drain_file_dialog_events() {
+            Ok(changed) => {
+                if changed {
+                    self.sync_ui_presenter();
+                }
+            }
+            Err(error) => {
+                error!(?error, "failed to handle local file dialog events");
+                event_loop.exit();
+                return;
+            }
+        }
+
+        match self.drain_planner_events() {
+            Ok(changed) => {
+                if changed {
+                    self.sync_ui_presenter();
+                    if let Err(error) = self.refresh_overlay() {
+                        error!(?error, "failed to refresh overlay after planning downloads");
+                        event_loop.exit();
+                        return;
+                    }
+                }
+            }
+            Err(error) => {
+                error!(?error, "failed to handle prepared desktop download tasks");
+                event_loop.exit();
+                return;
+            }
+        }
+
+        match self.drain_download_updates() {
+            Ok(changed) => {
+                if changed {
+                    self.sync_ui_presenter();
+                    if let Err(error) = self.refresh_overlay() {
+                        error!(
+                            ?error,
+                            "failed to refresh overlay after desktop download update"
+                        );
+                        event_loop.exit();
+                        return;
+                    }
+                }
+            }
+            Err(error) => {
+                error!(?error, "failed to process desktop download updates");
+                event_loop.exit();
+                return;
+            }
         }
 
         if let Err(error) = self.drain_ui_presenter_actions() {
@@ -865,11 +1691,15 @@ impl ApplicationHandler for DesktopPlayerApp {
         self.log_runtime_events();
         self.update_window_title();
         self.sync_ui_presenter();
+        let controls_animation_deadline = self.controls_animation_deadline();
         if let Some(runtime) = self.runtime.as_ref() {
             if let Some(deadline) = runtime.next_deadline() {
                 let mut next_deadline = deadline;
                 if let Some(hide_deadline) = self.controls_hide_deadline {
                     next_deadline = next_deadline.min(hide_deadline);
+                }
+                if let Some(animation_deadline) = controls_animation_deadline {
+                    next_deadline = next_deadline.min(animation_deadline);
                 }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if self.uses_external_video_surface {
@@ -877,12 +1707,33 @@ impl ApplicationHandler for DesktopPlayerApp {
                 if let Some(hide_deadline) = self.controls_hide_deadline {
                     next_deadline = next_deadline.min(hide_deadline);
                 }
+                if let Some(animation_deadline) = controls_animation_deadline {
+                    next_deadline = next_deadline.min(animation_deadline);
+                }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if let Some(hide_deadline) = self.controls_hide_deadline {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(hide_deadline));
+                let next_deadline = controls_animation_deadline
+                    .map(|animation_deadline| hide_deadline.min(animation_deadline))
+                    .unwrap_or(hide_deadline);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
+            } else if let Some(animation_deadline) = controls_animation_deadline {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(animation_deadline));
             } else {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
+        } else if self.active_launch_request_id.is_some() {
+            if let Some(hide_deadline) = self.controls_hide_deadline {
+                let next_deadline = controls_animation_deadline
+                    .map(|animation_deadline| hide_deadline.min(animation_deadline))
+                    .unwrap_or(hide_deadline);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
+            } else if let Some(animation_deadline) = controls_animation_deadline {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(animation_deadline));
+            } else {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+        } else if let Some(animation_deadline) = controls_animation_deadline {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(animation_deadline));
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
         }
@@ -1053,4 +1904,32 @@ fn format_duration(duration: Duration) -> String {
     let seconds = total_seconds % 60;
 
     format!("{minutes:02}:{seconds:02}")
+}
+
+fn source_display_label(source_uri: &str) -> String {
+    if source_uri == DESKTOP_HLS_DEMO_URL {
+        return "HLS DEMO".to_owned();
+    }
+    if source_uri == DESKTOP_DASH_DEMO_URL {
+        return "DASH DEMO".to_owned();
+    }
+    draft_download_label("", source_uri)
+}
+
+fn active_source_subtitle(snapshot: &player_runtime::PlayerSnapshot) -> String {
+    let protocol = match MediaSource::new(snapshot.source_uri.clone()).protocol() {
+        player_core::MediaSourceProtocol::Hls => "HLS",
+        player_core::MediaSourceProtocol::Dash => "DASH",
+        player_core::MediaSourceProtocol::Progressive => "FILE",
+        player_core::MediaSourceProtocol::File => "LOCAL",
+        player_core::MediaSourceProtocol::Content => "CONTENT",
+        player_core::MediaSourceProtocol::Unknown => "SOURCE",
+    };
+    let resolution = snapshot
+        .media_info
+        .best_video
+        .as_ref()
+        .map(|video| format!("{}X{}", video.width, video.height))
+        .unwrap_or_else(|| "UNKNOWN".to_owned());
+    format!("{protocol} {resolution}")
 }

@@ -16,11 +16,22 @@ class MainFlutterWindow: NSWindow {
       binaryMessenger: flutterViewController.engine.binaryMessenger
     )
     channel.setMethodCallHandler { [weak self] call, result in
-      guard call.method == "pickVideo" else {
+      switch call.method {
+      case "pickVideo":
+        self?.presentVideoPicker(result: result)
+      case "bundledDownloadPluginLibraryPaths":
+        result(self?.bundledDownloadPluginLibraryPaths() ?? [])
+      case "saveVideoToGallery":
+        result(
+          FlutterError(
+            code: "unsupported",
+            message: "The macOS host does not export downloads to the system photo library.",
+            details: nil
+          )
+        )
+      default:
         result(FlutterMethodNotImplemented)
-        return
       }
-      self?.presentVideoPicker(result: result)
     }
     mediaPickerChannel = channel
 
@@ -44,6 +55,22 @@ class MainFlutterWindow: NSWindow {
           "label": url.lastPathComponent,
         ]
       )
+    }
+  }
+
+  private func bundledDownloadPluginLibraryPaths() -> [String] {
+    let fileManager = FileManager.default
+    let candidates = [
+      Bundle.main.privateFrameworksPath?.appending("/libplayer_ffmpeg.dylib"),
+      Bundle.main.bundlePath + "/Frameworks/libplayer_ffmpeg.dylib",
+      Bundle.main.bundlePath + "/libplayer_ffmpeg.dylib",
+    ]
+
+    return candidates.compactMap { candidate in
+      guard let candidate, fileManager.fileExists(atPath: candidate) else {
+        return nil
+      }
+      return candidate
     }
   }
 }

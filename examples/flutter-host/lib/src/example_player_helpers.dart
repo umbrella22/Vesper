@@ -65,15 +65,6 @@ String stageBadgeText(VesperTimeline timeline) {
   };
 }
 
-String viewportHintLabel(VesperViewportHint hint) {
-  return switch (hint.kind) {
-    VesperViewportHintKind.visible => '视口内',
-    VesperViewportHintKind.nearVisible => '临近视口',
-    VesperViewportHintKind.prefetchOnly => '仅预取',
-    VesperViewportHintKind.hidden => '隐藏',
-  };
-}
-
 String playlistItemStatusLabel({required int index, required int activeIndex}) {
   if (activeIndex < 0) {
     return '隐藏';
@@ -145,10 +136,10 @@ String audioButtonLabel(
   VesperTrackCatalog trackCatalog,
   VesperTrackSelectionSnapshot trackSelection,
 ) {
-  final selectedTrack = trackCatalog.audioTracks
-      .where((track) => track.id == trackSelection.audio.trackId)
-      .cast<VesperMediaTrack?>()
-      .firstOrNull;
+  final selectedTrack = firstWhereOrNull<VesperMediaTrack>(
+    trackCatalog.audioTracks,
+    (track) => track.id == trackSelection.audio.trackId,
+  );
 
   return switch (trackSelection.audio.mode) {
     VesperTrackSelectionMode.track when selectedTrack != null => audioLabel(
@@ -162,10 +153,10 @@ String subtitleButtonLabel(
   VesperTrackCatalog trackCatalog,
   VesperTrackSelectionSnapshot trackSelection,
 ) {
-  final selectedTrack = trackCatalog.subtitleTracks
-      .where((track) => track.id == trackSelection.subtitle.trackId)
-      .cast<VesperMediaTrack?>()
-      .firstOrNull;
+  final selectedTrack = firstWhereOrNull<VesperMediaTrack>(
+    trackCatalog.subtitleTracks,
+    (track) => track.id == trackSelection.subtitle.trackId,
+  );
 
   return switch (trackSelection.subtitle.mode) {
     VesperTrackSelectionMode.disabled => '字幕关',
@@ -301,4 +292,29 @@ String formatBytes(int? value) {
     return '${(value / 1024).toStringAsFixed(0)} KB';
   }
   return '$value B';
+}
+
+String formatDownloadBytes(int? value) {
+  if (value == null || value <= 0) {
+    return '-';
+  }
+  if (value >= 1024 * 1024 * 1024) {
+    return '${(value / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+  if (value >= 1024 * 1024) {
+    return '${(value / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  if (value >= 1024) {
+    return '${(value / 1024).toStringAsFixed(0)} KB';
+  }
+  return '$value B';
+}
+
+T? firstWhereOrNull<T>(Iterable<T> values, bool Function(T value) test) {
+  for (final value in values) {
+    if (test(value)) {
+      return value;
+    }
+  }
+  return null;
 }

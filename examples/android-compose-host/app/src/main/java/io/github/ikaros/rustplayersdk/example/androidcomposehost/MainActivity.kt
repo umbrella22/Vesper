@@ -16,6 +16,8 @@ class MainActivity : ComponentActivity() {
             PlayerHostApp(
                 controller = playerHostViewModel.controller,
                 playlistCoordinator = playerHostViewModel.playlistCoordinator,
+                downloadManager = playerHostViewModel.downloadManager,
+                isDownloadExportPluginInstalled = playerHostViewModel.isDownloadExportPluginInstalled,
             )
         }
     }

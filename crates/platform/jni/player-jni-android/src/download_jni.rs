@@ -5,11 +5,12 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
-use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
+use jni::objects::{Global, JClass, JObject, JObjectArray, JString, JValue};
 use jni::sys::{jboolean, jint, jlong, jobject, jobjectArray};
-use jni::{Env, EnvUnowned};
+use jni::{Env, EnvUnowned, JavaVM};
 use player_core::MediaSource;
 use player_platform_android::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
+use player_plugin::ProcessorProgress;
 use player_runtime::{
     DownloadAssetIndex, DownloadContentFormat, DownloadEvent, DownloadProfile,
     DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
@@ -27,7 +28,47 @@ struct AndroidJniDownloadSession {
 #[derive(Debug)]
 struct AndroidDownloadSessionConfig {
     auto_start: bool,
+    run_post_processors_on_completion: bool,
     plugin_library_paths: Vec<PathBuf>,
+}
+
+struct JniDownloadExportProgress {
+    java_vm: JavaVM,
+    callback: Option<Global<JObject<'static>>>,
+}
+
+impl ProcessorProgress for JniDownloadExportProgress {
+    fn on_progress(&self, ratio: f32) {
+        let Some(callback) = self.callback.as_ref() else {
+            return;
+        };
+        let _: JniResult<()> = self.java_vm.attach_current_thread_for_scope(|env| {
+            env.call_method(
+                callback.as_obj(),
+                jni_name("onProgress"),
+                method_sig("(F)V").method_signature(),
+                &[JValue::Float(ratio)],
+            )?;
+            Ok(())
+        });
+    }
+
+    fn is_cancelled(&self) -> bool {
+        let Some(callback) = self.callback.as_ref() else {
+            return false;
+        };
+        self.java_vm
+            .attach_current_thread_for_scope(|env| {
+                let value = env.call_method(
+                    callback.as_obj(),
+                    jni_name("isCancelled"),
+                    method_sig("()Z").method_signature(),
+                    &[],
+                )?;
+                value.z()
+            })
+            .unwrap_or(false)
+    }
 }
 
 static NEXT_DOWNLOAD_SESSION_HANDLE: AtomicI64 = AtomicI64::new(1);
@@ -91,6 +132,7 @@ fn new_download_session(config: AndroidDownloadSessionConfig) -> Result<jlong, S
     let session = AndroidJniDownloadSession {
         inner: AndroidDownloadBridgeSession::new_with_plugin_library_paths(
             config.auto_start,
+            config.run_post_processors_on_completion,
             config.plugin_library_paths,
         )
         .map_err(|error| error.to_string())?,
@@ -193,6 +235,11 @@ fn download_config_from_java(
 ) -> JniResult<AndroidDownloadSessionConfig> {
     Ok(AndroidDownloadSessionConfig {
         auto_start: bool_field(env, &config, "autoStart")?,
+        run_post_processors_on_completion: bool_field(
+            env,
+            &config,
+            "runPostProcessorsOnCompletion",
+        )?,
         plugin_library_paths: string_array_field(env, &config, "pluginLibraryPaths")?
             .into_iter()
             .map(PathBuf::from)
@@ -908,6 +955,48 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 return Ok(false as jboolean);
             };
             Ok(result.is_ok() as jboolean)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_exportDownloadTask(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    task_id: jlong,
+    output_path: JString<'_>,
+    progress_callback: JObject<'_>,
+) -> jboolean {
+    unowned_env
+        .with_env(|env| -> JniResult<jboolean> {
+            let output_path = output_path.try_to_string(env)?;
+            let java_vm = env.get_java_vm()?;
+            let callback = if progress_callback.is_null() {
+                None
+            } else {
+                Some(env.new_global_ref(progress_callback)?)
+            };
+            let progress = JniDownloadExportProgress { java_vm, callback };
+            let Some(result) = with_download_session(env, session_handle, |session| {
+                session.inner.export_task_output(
+                    player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                    Some(PathBuf::from(output_path)),
+                    &progress,
+                )
+            }) else {
+                return Ok(false as jboolean);
+            };
+            match result {
+                Ok(_) => Ok(true as jboolean),
+                Err(error) => {
+                    env.throw_new(
+                        jni_name("java/lang/IllegalStateException"),
+                        jni_name(error.to_string()),
+                    )?;
+                    Ok(false as jboolean)
+                }
+            }
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

@@ -68,6 +68,12 @@ object VesperNativeJni {
         completedPath: String,
         nowEpochMs: Long,
     ): Boolean
+    external fun exportDownloadTask(
+        sessionHandle: Long,
+        taskId: Long,
+        outputPath: String,
+        progressCallback: NativeDownloadExportProgressCallback?,
+    ): Boolean
     external fun failDownloadTask(
         sessionHandle: Long,
         taskId: Long,
