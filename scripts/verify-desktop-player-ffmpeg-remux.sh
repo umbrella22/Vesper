@@ -72,6 +72,10 @@ ensure_tool_available() {
   fi
 }
 
+is_ci_environment() {
+  [[ "${CI:-}" == "true" || -n "${GITHUB_ACTIONS:-}" ]]
+}
+
 resolve_plugin_path() {
   local library_name="$1"
   local target_dir="$2"
@@ -129,6 +133,10 @@ run_example_test() {
   ensure_tool_available ffprobe
 
   if [[ ! -f "$ROOT_DIR/test-video.mp4" ]]; then
+    if is_ci_environment; then
+      echo "Desktop remux fixture is missing in CI, skipping example remux verification: $ROOT_DIR/test-video.mp4" >&2
+      return 0
+    fi
     echo "Desktop remux fixture is missing: $ROOT_DIR/test-video.mp4" >&2
     exit 1
   fi

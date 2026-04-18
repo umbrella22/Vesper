@@ -347,13 +347,12 @@ build_android_libxml2_prebuilt() {
       --prefix="$install_dir" \
       --enable-shared \
       --disable-static \
+      --without-iconv \
       --without-python \
       --without-lzma \
       --without-icu \
-      --without-ftp \
       --without-http \
       --without-legacy \
-      --without-docbook \
       --without-html
 
     make -j"$MAKE_JOBS"
