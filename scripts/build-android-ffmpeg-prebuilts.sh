@@ -12,8 +12,9 @@ FFMPEG_SOURCE_URL="${VESPER_ANDROID_FFMPEG_SOURCE_URL:-https://ffmpeg.org/releas
 FFMPEG_SOURCE_ARCHIVE="${VESPER_ANDROID_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/${FFMPEG_ARCHIVE_NAME}}"
 FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/android}"
 OPENSSL_VERSION="${VESPER_ANDROID_OPENSSL_VERSION:-3.6.1}"
+OPENSSL_SERIES="${OPENSSL_VERSION%.*}"
 OPENSSL_ARCHIVE_NAME="openssl-${OPENSSL_VERSION}.tar.gz"
-OPENSSL_SOURCE_URL="${VESPER_ANDROID_OPENSSL_SOURCE_URL:-https://www.openssl.org/source/${OPENSSL_ARCHIVE_NAME}}"
+OPENSSL_SOURCE_URL="${VESPER_ANDROID_OPENSSL_SOURCE_URL:-https://www.openssl-library.org/source/${OPENSSL_ARCHIVE_NAME}}"
 OPENSSL_SOURCE_ARCHIVE="${VESPER_ANDROID_OPENSSL_SOURCE_ARCHIVE:-$ROOT_DIR/third_party/openssl/android/prebuilt-archives/${OPENSSL_ARCHIVE_NAME}}"
 LIBXML2_VERSION="${VESPER_ANDROID_LIBXML2_VERSION:-2.14.6}"
 LIBXML2_SERIES="${LIBXML2_VERSION%.*}"
@@ -172,7 +173,9 @@ resolve_host_tag() {
 
 download_if_missing() {
   local archive_path="$1"
-  local archive_url="$2"
+  shift
+  local archive_url
+  local download_succeeded=0
 
   if [[ -f "$archive_path" ]]; then
     return 0
@@ -184,9 +187,28 @@ download_if_missing() {
   fi
 
   mkdir -p "$(dirname "$archive_path")"
-  echo "Downloading source archive:"
-  echo "  $archive_url"
-  curl --fail --location --silent --show-error --output "$archive_path" "$archive_url"
+
+  for archive_url in "$@"; do
+    echo "Downloading source archive:"
+    echo "  $archive_url"
+    if curl --fail --location --silent --show-error --output "$archive_path" "$archive_url"; then
+      download_succeeded=1
+      break
+    fi
+
+    rm -f "$archive_path"
+    echo "Source download failed, trying next mirror if available." >&2
+  done
+
+  if [[ "$download_succeeded" != "1" ]]; then
+    echo "Unable to download source archive into:" >&2
+    echo "  $archive_path" >&2
+    echo "Tried source URLs:" >&2
+    for archive_url in "$@"; do
+      echo "  $archive_url" >&2
+    done
+    exit 1
+  fi
 }
 
 ensure_command() {
@@ -242,7 +264,12 @@ build_android_openssl_prebuilt() {
 
   ensure_command perl
   ensure_command make
-  download_if_missing "$OPENSSL_SOURCE_ARCHIVE" "$OPENSSL_SOURCE_URL"
+  download_if_missing \
+    "$OPENSSL_SOURCE_ARCHIVE" \
+    "$OPENSSL_SOURCE_URL" \
+    "https://www.openssl.org/source/${OPENSSL_ARCHIVE_NAME}" \
+    "https://www.openssl-library.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}" \
+    "https://www.openssl.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}"
   extract_source_tree "$OPENSSL_SOURCE_ARCHIVE" "$source_dir"
 
   rm -rf "$install_dir"
@@ -264,7 +291,6 @@ build_android_openssl_prebuilt() {
 
     perl ./Configure \
       "$openssl_target" \
-      "-D__ANDROID_API__=$ANDROID_API_LEVEL" \
       shared \
       no-tests \
       no-unit-test \

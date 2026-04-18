@@ -39,14 +39,13 @@ Current iOS download package names:
 
 - `VesperPlayerKit-ios-arm64.framework.zip`
 - `VesperPlayerKit-ios-simulator-arm64.framework.zip`
-- `VesperPlayerKit-ios-simulator-x86_64.framework.zip`
 - `VesperPlayerKit.xcframework.zip`
 
 Download guidance:
 
 - use `VesperPlayerKit-ios-arm64.framework.zip` for device-only packaging
-- use the simulator-specific framework zip that matches your host CPU when validating in Simulator
-- use `VesperPlayerKit.xcframework.zip` when you want one distributable Apple package that covers both device and simulator targets
+- use `VesperPlayerKit-ios-simulator-arm64.framework.zip` when validating on Apple Silicon iOS Simulator
+- use `VesperPlayerKit.xcframework.zip` when you want one distributable Apple package that covers device + Apple Silicon simulator targets
 - see [newDoc/RELEASE-DOWNLOAD-GUIDE.md](../../../newDoc/RELEASE-DOWNLOAD-GUIDE.md) for the full package-selection guide
 
 ## What The Package Exposes

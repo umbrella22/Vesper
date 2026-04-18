@@ -159,7 +159,6 @@ fi
   echo "- Android Compose adapter AAR for emulators / x86_64: \`VesperPlayerKitCompose-android-x86_64.aar\`"
   echo "- iOS device framework: \`VesperPlayerKit-ios-arm64.framework.zip\`"
   echo "- iOS simulator framework for Apple Silicon: \`VesperPlayerKit-ios-simulator-arm64.framework.zip\`"
-  echo "- iOS simulator framework for Intel: \`VesperPlayerKit-ios-simulator-x86_64.framework.zip\`"
   echo "- Combined Apple package: \`VesperPlayerKit.xcframework.zip\`"
   echo "- Integrity checksums: \`SHA256SUMS.txt\`"
   echo
