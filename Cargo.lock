@@ -1592,6 +1592,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-download"
+version = "0.1.0"
+dependencies = [
+ "player-core",
+ "player-plugin",
+]
+
+[[package]]
 name = "player-ffi"
 version = "0.1.0"
 dependencies = [
@@ -1715,6 +1723,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-playlist"
+version = "0.1.0"
+dependencies = [
+ "player-core",
+ "player-download",
+ "player-preload",
+]
+
+[[package]]
 name = "player-plugin"
 version = "0.1.0"
 dependencies = [
@@ -1741,6 +1758,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-preload"
+version = "0.1.0"
+dependencies = [
+ "player-core",
+ "player-download",
+]
+
+[[package]]
 name = "player-render-wgpu"
 version = "0.1.0"
 dependencies = [
@@ -1753,9 +1778,10 @@ dependencies = [
 name = "player-runtime"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "player-core",
- "player-plugin",
+ "player-download",
+ "player-playlist",
+ "player-preload",
 ]
 
 [[package]]

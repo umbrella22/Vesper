@@ -1,8 +1,8 @@
+use std::borrow::Borrow;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
 use std::ptr;
 use std::slice;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -243,28 +243,109 @@ pub struct PlayerFfiTrackPreferences {
     pub abr_policy: PlayerFfiAbrPolicy,
 }
 
-static NEXT_PRELOAD_SESSION_HANDLE: AtomicU64 = AtomicU64::new(1);
-static PRELOAD_SESSIONS: OnceLock<Mutex<std::collections::HashMap<u64, IosPreloadBridgeSession>>> =
+#[derive(Debug)]
+struct HandleRegistry<T> {
+    slots: Vec<HandleSlot<T>>,
+    free_slots: Vec<u32>,
+}
+
+#[derive(Debug)]
+struct HandleSlot<T> {
+    generation: u32,
+    value: Option<T>,
+}
+
+impl<T> Default for HandleRegistry<T> {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            free_slots: Vec::new(),
+        }
+    }
+}
+
+impl<T> HandleRegistry<T> {
+    fn insert(&mut self, value: T) -> u64 {
+        if let Some(slot_index) = self.free_slots.pop() {
+            let slot = &mut self.slots[slot_index as usize];
+            slot.generation = next_generation(slot.generation);
+            slot.value = Some(value);
+            return encode_handle(slot_index, slot.generation);
+        }
+
+        let slot_index = self.slots.len() as u32;
+        self.slots.push(HandleSlot {
+            generation: 1,
+            value: Some(value),
+        });
+        encode_handle(slot_index, 1)
+    }
+
+    fn get(&self, handle: impl Borrow<u64>) -> Option<&T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get(slot_index as usize)?;
+        (slot.generation == generation)
+            .then_some(slot.value.as_ref())
+            .flatten()
+    }
+
+    fn get_mut(&mut self, handle: impl Borrow<u64>) -> Option<&mut T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get_mut(slot_index as usize)?;
+        (slot.generation == generation)
+            .then_some(slot.value.as_mut())
+            .flatten()
+    }
+
+    fn remove(&mut self, handle: impl Borrow<u64>) -> Option<T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get_mut(slot_index as usize)?;
+        if slot.generation != generation {
+            return None;
+        }
+        let value = slot.value.take()?;
+        self.free_slots.push(slot_index);
+        Some(value)
+    }
+}
+
+fn encode_handle(slot_index: u32, generation: u32) -> u64 {
+    let slot_id = u64::from(slot_index) + 1;
+    (slot_id << 32) | u64::from(generation.max(1))
+}
+
+fn decode_handle(handle: u64) -> Option<(u32, u32)> {
+    if handle == 0 {
+        return None;
+    }
+    let slot_id = (handle >> 32) as u32;
+    let generation = handle as u32;
+    if slot_id == 0 || generation == 0 {
+        return None;
+    }
+    Some((slot_id - 1, generation))
+}
+
+fn next_generation(generation: u32) -> u32 {
+    generation.wrapping_add(1).max(1)
+}
+
+static PRELOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPreloadBridgeSession>>> = OnceLock::new();
+static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<IosDownloadBridgeSession>>> =
     OnceLock::new();
-static NEXT_DOWNLOAD_SESSION_HANDLE: AtomicU64 = AtomicU64::new(1);
-static DOWNLOAD_SESSIONS: OnceLock<
-    Mutex<std::collections::HashMap<u64, IosDownloadBridgeSession>>,
-> = OnceLock::new();
-static NEXT_PLAYLIST_SESSION_HANDLE: AtomicU64 = AtomicU64::new(1);
-static PLAYLIST_SESSIONS: OnceLock<
-    Mutex<std::collections::HashMap<u64, IosPlaylistBridgeSession>>,
-> = OnceLock::new();
+static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaylistBridgeSession>>> =
+    OnceLock::new();
 
-fn preload_sessions() -> &'static Mutex<std::collections::HashMap<u64, IosPreloadBridgeSession>> {
-    PRELOAD_SESSIONS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+fn preload_sessions() -> &'static Mutex<HandleRegistry<IosPreloadBridgeSession>> {
+    PRELOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
-fn download_sessions() -> &'static Mutex<std::collections::HashMap<u64, IosDownloadBridgeSession>> {
-    DOWNLOAD_SESSIONS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+fn download_sessions() -> &'static Mutex<HandleRegistry<IosDownloadBridgeSession>> {
+    DOWNLOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
-fn playlist_sessions() -> &'static Mutex<std::collections::HashMap<u64, IosPlaylistBridgeSession>> {
-    PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+fn playlist_sessions() -> &'static Mutex<HandleRegistry<IosPlaylistBridgeSession>> {
+    PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 #[repr(C)]
@@ -739,7 +820,6 @@ pub extern "C" fn player_ffi_preload_session_create(
         return PlayerFfiCallStatus::Error;
     };
 
-    let handle = NEXT_PRELOAD_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let budget_provider = player_runtime::InMemoryPreloadBudgetProvider::new(PreloadBudget {
         max_concurrent_tasks: preload_budget.max_concurrent_tasks,
         max_memory_bytes: preload_budget.max_memory_bytes,
@@ -758,7 +838,7 @@ pub extern "C" fn player_ffi_preload_session_create(
         );
         return PlayerFfiCallStatus::Error;
     };
-    sessions.insert(handle, session);
+    let handle = sessions.insert(session);
     unsafe {
         ptr::write(out_handle, handle);
     }
@@ -1006,7 +1086,6 @@ pub extern "C" fn player_ffi_download_session_create(
         }
     };
 
-    let handle = NEXT_DOWNLOAD_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let session = match IosDownloadBridgeSession::new_with_plugin_library_paths(
         config.auto_start,
         config.run_post_processors_on_completion,
@@ -1029,7 +1108,7 @@ pub extern "C" fn player_ffi_download_session_create(
         );
         return PlayerFfiCallStatus::Error;
     };
-    sessions.insert(handle, session);
+    let handle = sessions.insert(session);
     unsafe {
         ptr::write(out_handle, handle);
     }
@@ -1685,7 +1764,6 @@ pub extern "C" fn player_ffi_playlist_session_create(
         return PlayerFfiCallStatus::Error;
     };
 
-    let handle = NEXT_PLAYLIST_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let session = IosPlaylistBridgeSession::new(
         config.0,
         config.1,
@@ -1707,7 +1785,7 @@ pub extern "C" fn player_ffi_playlist_session_create(
         );
         return PlayerFfiCallStatus::Error;
     };
-    sessions.insert(handle, session);
+    let handle = sessions.insert(session);
     unsafe {
         ptr::write(out_handle, handle);
     }
@@ -3555,4 +3633,23 @@ impl From<MediaAbrPolicy> for PlayerFfiAbrPolicy {
 
 fn duration_to_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HandleRegistry;
+
+    #[test]
+    fn ffi_handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle() {
+        let mut registry = HandleRegistry::default();
+        let first = registry.insert(7_u32);
+
+        assert_eq!(registry.get(first), Some(&7));
+        assert_eq!(registry.remove(first), Some(7));
+
+        let second = registry.insert(9_u32);
+        assert_ne!(first, second);
+        assert!(registry.get(first).is_none());
+        assert_eq!(registry.get(second), Some(&9));
+    }
 }

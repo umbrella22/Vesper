@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use player_core::MediaSource;
-
-use crate::{
-    PlayerRuntimeError, PlayerRuntimeResult, PreloadBudgetProvider, PreloadCandidate,
-    PreloadCandidateKind, PreloadConfig, PreloadEvent, PreloadExecutor, PreloadPlanner,
-    PreloadPriority, PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId,
+use player_download::{PlayerRuntimeError, PlayerRuntimeResult};
+use player_preload::{
+    PreloadBudgetProvider, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind,
+    PreloadConfig, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority,
+    PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId,
     PreloadTaskSnapshot, PreloadTaskStatus,
 };
 
@@ -686,7 +686,7 @@ where
 
     fn desired_candidates(&self) -> HashMap<String, PreloadCandidate> {
         let mut desired = HashMap::new();
-        let scope = crate::PreloadBudgetScope::Playlist(self.playlist_id.as_str().to_owned());
+        let scope = PreloadBudgetScope::Playlist(self.playlist_id.as_str().to_owned());
 
         if let Some(active_index) = self.current_index() {
             if let Some(active_item) = self.queue.get(active_index) {
@@ -776,7 +776,7 @@ where
         &self,
         desired: &mut HashMap<String, PreloadCandidate>,
         item: &PlaylistQueueItem,
-        scope: crate::PreloadBudgetScope,
+        scope: PreloadBudgetScope,
         kind: PreloadCandidateKind,
         selection_hint: PreloadSelectionHint,
         priority: PreloadPriority,
@@ -880,10 +880,10 @@ mod tests {
     use super::{
         PlaylistActivationReason, PlaylistAdvanceOutcome, PlaylistCoordinator,
         PlaylistCoordinatorConfig, PlaylistFailureStrategy, PlaylistItemPreloadProfile,
-        PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistViewportHint,
-        PlaylistViewportHintKind,
+        PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistSwitchPolicy,
+        PlaylistViewportHint, PlaylistViewportHintKind,
     };
-    use crate::{
+    use player_preload::{
         InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, PreloadBudget, PreloadTaskStatus,
     };
 
@@ -1094,7 +1094,7 @@ mod tests {
         let mut repeat_one = PlaylistCoordinator::new(
             "playlist-b",
             PlaylistCoordinatorConfig {
-                switch_policy: crate::playlist::PlaylistSwitchPolicy {
+                switch_policy: PlaylistSwitchPolicy {
                     auto_advance: true,
                     repeat_mode: PlaylistRepeatMode::One,
                     failure_strategy: PlaylistFailureStrategy::Pause,

@@ -2,8 +2,7 @@ mod download_jni;
 mod playlist_jni;
 mod preload_jni;
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::borrow::Borrow;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -34,15 +33,103 @@ use player_runtime::{
 
 pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
 
+#[derive(Debug)]
+pub(crate) struct HandleRegistry<T> {
+    slots: Vec<HandleSlot<T>>,
+    free_slots: Vec<u32>,
+}
+
+#[derive(Debug)]
+struct HandleSlot<T> {
+    generation: u32,
+    value: Option<T>,
+}
+
+impl<T> Default for HandleRegistry<T> {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            free_slots: Vec::new(),
+        }
+    }
+}
+
+impl<T> HandleRegistry<T> {
+    pub(crate) fn insert(&mut self, value: T) -> i64 {
+        if let Some(slot_index) = self.free_slots.pop() {
+            let slot = &mut self.slots[slot_index as usize];
+            slot.generation = next_generation(slot.generation);
+            slot.value = Some(value);
+            return encode_handle(slot_index, slot.generation);
+        }
+
+        let slot_index = self.slots.len() as u32;
+        self.slots.push(HandleSlot {
+            generation: 1,
+            value: Some(value),
+        });
+        encode_handle(slot_index, 1)
+    }
+
+    pub(crate) fn get(&self, handle: impl Borrow<i64>) -> Option<&T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get(slot_index as usize)?;
+        (slot.generation == generation)
+            .then_some(slot.value.as_ref())
+            .flatten()
+    }
+
+    pub(crate) fn get_mut(&mut self, handle: impl Borrow<i64>) -> Option<&mut T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get_mut(slot_index as usize)?;
+        (slot.generation == generation)
+            .then_some(slot.value.as_mut())
+            .flatten()
+    }
+
+    pub(crate) fn remove(&mut self, handle: impl Borrow<i64>) -> Option<T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get_mut(slot_index as usize)?;
+        if slot.generation != generation {
+            return None;
+        }
+        let value = slot.value.take()?;
+        self.free_slots.push(slot_index);
+        Some(value)
+    }
+}
+
+fn encode_handle(slot_index: u32, generation: u32) -> i64 {
+    let slot_id = u64::from(slot_index) + 1;
+    let raw = (slot_id << 32) | u64::from(generation.max(1));
+    raw as i64
+}
+
+fn decode_handle(handle: i64) -> Option<(u32, u32)> {
+    if handle == 0 {
+        return None;
+    }
+    let raw = handle as u64;
+    let slot_id = (raw >> 32) as u32;
+    let generation = raw as u32;
+    if slot_id == 0 || generation == 0 {
+        return None;
+    }
+    Some((slot_id - 1, generation))
+}
+
+fn next_generation(generation: u32) -> u32 {
+    generation.wrapping_add(1).max(1)
+}
+
 struct AndroidJniSession {
     inner: AndroidHostBridgeSession,
 }
 
-static NEXT_SESSION_HANDLE: AtomicI64 = AtomicI64::new(1);
-static SESSIONS: OnceLock<Mutex<HashMap<i64, AndroidJniSession>>> = OnceLock::new();
+static SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniSession>>> = OnceLock::new();
 
-fn sessions() -> &'static Mutex<HashMap<i64, AndroidJniSession>> {
-    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+fn sessions() -> &'static Mutex<HandleRegistry<AndroidJniSession>> {
+    SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 fn invalid_handle_error() -> &'static str {
@@ -85,15 +172,13 @@ fn with_session_mut<R>(
 }
 
 fn new_session(source_uri: String) -> Result<jlong, &'static str> {
-    let handle = NEXT_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let session = AndroidJniSession {
         inner: AndroidHostBridgeSession::new(source_uri),
     };
     let Ok(mut guard) = sessions().lock() else {
         return Err("failed to lock session registry");
     };
-    guard.insert(handle, session);
-    Ok(handle)
+    Ok(guard.insert(session))
 }
 
 fn boxed_long<'local>(env: &mut Env<'local>, value: Option<u64>) -> JniResult<JObject<'local>> {
@@ -1586,12 +1671,26 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
-        PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
-        PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy,
+        HandleRegistry, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
+        MediaTrackSelection, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
+        PlayerCachePreset, PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy,
         resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime,
     };
     use std::time::Duration;
+
+    #[test]
+    fn handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle() {
+        let mut registry = HandleRegistry::default();
+        let first = registry.insert(11_u32);
+
+        assert_eq!(registry.get(first), Some(&11));
+        assert_eq!(registry.remove(first), Some(11));
+
+        let second = registry.insert(22_u32);
+        assert_ne!(first, second);
+        assert!(registry.get(first).is_none());
+        assert_eq!(registry.get(second), Some(&22));
+    }
 
     #[test]
     fn runtime_resolved_policy_uses_hls_defaults_for_android_jni_bridge() {

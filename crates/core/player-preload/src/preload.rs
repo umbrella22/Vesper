@@ -3,11 +3,47 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use player_core::MediaSource;
-
-use crate::{
-    PlayerResolvedPreloadBudgetPolicy, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-    PlayerRuntimeErrorCode, PlayerRuntimeResult,
+use player_download::{
+    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
 };
+
+pub const DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS: u32 = 2;
+pub const DEFAULT_PRELOAD_MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_PRELOAD_MAX_DISK_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_PRELOAD_WARMUP_WINDOW: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerPreloadBudgetPolicy {
+    pub max_concurrent_tasks: Option<u32>,
+    pub max_memory_bytes: Option<u64>,
+    pub max_disk_bytes: Option<u64>,
+    pub warmup_window: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerResolvedPreloadBudgetPolicy {
+    pub max_concurrent_tasks: u32,
+    pub max_memory_bytes: u64,
+    pub max_disk_bytes: u64,
+    pub warmup_window: Duration,
+}
+
+impl PlayerPreloadBudgetPolicy {
+    pub fn resolved(&self) -> PlayerResolvedPreloadBudgetPolicy {
+        PlayerResolvedPreloadBudgetPolicy {
+            max_concurrent_tasks: self
+                .max_concurrent_tasks
+                .unwrap_or(DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS),
+            max_memory_bytes: self
+                .max_memory_bytes
+                .unwrap_or(DEFAULT_PRELOAD_MAX_MEMORY_BYTES),
+            max_disk_bytes: self
+                .max_disk_bytes
+                .unwrap_or(DEFAULT_PRELOAD_MAX_DISK_BYTES),
+            warmup_window: self.warmup_window.unwrap_or(DEFAULT_PRELOAD_WARMUP_WINDOW),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PreloadTaskId(u64);
@@ -706,8 +742,8 @@ mod tests {
         PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadEvent, PreloadPlanner,
         PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
     };
-    use crate::{PlayerRuntimeError, PlayerRuntimeErrorCode};
     use player_core::MediaSource;
+    use player_download::{PlayerRuntimeError, PlayerRuntimeErrorCode};
     use std::time::{Duration, Instant};
 
     fn budget(

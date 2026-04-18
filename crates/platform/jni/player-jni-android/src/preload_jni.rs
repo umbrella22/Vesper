@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -16,19 +14,19 @@ use player_runtime::{
 };
 
 use crate::{
-    PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name, method_sig,
-    resolve_preload_budget_with_runtime,
+    HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
+    method_sig, resolve_preload_budget_with_runtime,
 };
 
 struct AndroidJniPreloadSession {
     inner: AndroidPreloadBridgeSession,
 }
 
-static NEXT_PRELOAD_SESSION_HANDLE: AtomicI64 = AtomicI64::new(1);
-static PRELOAD_SESSIONS: OnceLock<Mutex<HashMap<i64, AndroidJniPreloadSession>>> = OnceLock::new();
+static PRELOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniPreloadSession>>> =
+    OnceLock::new();
 
-fn preload_sessions() -> &'static Mutex<HashMap<i64, AndroidJniPreloadSession>> {
-    PRELOAD_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+fn preload_sessions() -> &'static Mutex<HandleRegistry<AndroidJniPreloadSession>> {
+    PRELOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 fn invalid_preload_handle_error() -> &'static str {
@@ -58,15 +56,13 @@ fn with_preload_session_mut<R>(
 }
 
 fn new_preload_session(budget: PreloadBudget) -> Result<jlong, &'static str> {
-    let handle = NEXT_PRELOAD_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let session = AndroidJniPreloadSession {
         inner: AndroidPreloadBridgeSession::new(InMemoryPreloadBudgetProvider::new(budget)),
     };
     let Ok(mut guard) = preload_sessions().lock() else {
         return Err("failed to lock preload session registry");
     };
-    guard.insert(handle, session);
-    Ok(handle)
+    Ok(guard.insert(session))
 }
 
 fn optional_java_string<'local>(

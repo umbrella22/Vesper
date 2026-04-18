@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -16,20 +14,19 @@ use player_runtime::{
 };
 
 use crate::{
-    PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name, method_sig,
-    preload_jni::preload_command_object,
+    HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
+    method_sig, preload_jni::preload_command_object,
 };
 
 struct AndroidJniPlaylistSession {
     inner: AndroidPlaylistBridgeSession,
 }
 
-static NEXT_PLAYLIST_SESSION_HANDLE: AtomicI64 = AtomicI64::new(1);
-static PLAYLIST_SESSIONS: OnceLock<Mutex<HashMap<i64, AndroidJniPlaylistSession>>> =
+static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniPlaylistSession>>> =
     OnceLock::new();
 
-fn playlist_sessions() -> &'static Mutex<HashMap<i64, AndroidJniPlaylistSession>> {
-    PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+fn playlist_sessions() -> &'static Mutex<HandleRegistry<AndroidJniPlaylistSession>> {
+    PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 fn invalid_playlist_handle_error() -> &'static str {
@@ -85,15 +82,13 @@ fn new_playlist_session(
     config: PlaylistCoordinatorConfig,
     budget: PreloadBudget,
 ) -> Result<jlong, &'static str> {
-    let handle = NEXT_PLAYLIST_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let session = AndroidJniPlaylistSession {
         inner: AndroidPlaylistBridgeSession::new(playlist_id, config, budget),
     };
     let Ok(mut guard) = playlist_sessions().lock() else {
         return Err("failed to lock playlist session registry");
     };
-    guard.insert(handle, session);
-    Ok(handle)
+    Ok(guard.insert(session))
 }
 
 fn bool_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<bool> {

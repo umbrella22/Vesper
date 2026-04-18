@@ -1,8 +1,4 @@
 mod adapter;
-mod download;
-mod error;
-mod playlist;
-mod preload;
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -13,22 +9,20 @@ pub use adapter::{
     PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer,
 };
-pub use download::{
-    DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadErrorSummary,
-    DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig, DownloadProfile,
-    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot,
-    DownloadSource, DownloadStore, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState,
-    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
-};
-pub use error::{
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
-};
 pub use player_core::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
     MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
     MediaTrackSelectionSnapshot, PlaybackProgress, PresentationState, VideoPixelFormat,
 };
-pub use playlist::{
+pub use player_download::{
+    DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadErrorSummary,
+    DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig, DownloadProfile,
+    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot,
+    DownloadSource, DownloadStore, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState,
+    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore, PlayerRuntimeError,
+    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+};
+pub use player_playlist::{
     PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistAdvanceOutcome,
     PlaylistAdvanceTrigger, PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent,
     PlaylistFailureStrategy, PlaylistId, PlaylistItemPreloadProfile, PlaylistNeighborWindow,
@@ -36,13 +30,55 @@ pub use playlist::{
     PlaylistRepeatMode, PlaylistSnapshot, PlaylistSwitchPolicy, PlaylistViewportHint,
     PlaylistViewportHintKind,
 };
-pub use preload::{
-    InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, PreloadBudget, PreloadBudgetProvider,
-    PreloadBudgetScope, PreloadCacheKey, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
-    PreloadErrorSummary, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority,
-    PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId,
-    PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
+pub use player_preload::{
+    DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
+    DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, InMemoryPreloadBudgetProvider,
+    InMemoryPreloadExecutor, PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy,
+    PreloadBudget, PreloadBudgetProvider, PreloadBudgetScope, PreloadCacheKey, PreloadCandidate,
+    PreloadCandidateKind, PreloadConfig, PreloadErrorSummary, PreloadEvent, PreloadExecutor,
+    PreloadPlanner, PreloadPriority, PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity,
+    PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
 };
+
+pub mod download {
+    pub use player_download::{
+        DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadErrorSummary,
+        DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig, DownloadProfile,
+        DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot,
+        DownloadSource, DownloadStore, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState,
+        DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+    };
+}
+
+pub mod error {
+    pub use player_download::{
+        PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+    };
+}
+
+pub mod preload {
+    pub use player_preload::{
+        DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
+        DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW,
+        InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, PlayerPreloadBudgetPolicy,
+        PlayerResolvedPreloadBudgetPolicy, PreloadBudget, PreloadBudgetProvider,
+        PreloadBudgetScope, PreloadCacheKey, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
+        PreloadErrorSummary, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority,
+        PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId,
+        PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
+    };
+}
+
+pub mod playlist {
+    pub use player_playlist::{
+        PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision,
+        PlaylistAdvanceOutcome, PlaylistAdvanceTrigger, PlaylistCoordinator,
+        PlaylistCoordinatorConfig, PlaylistEvent, PlaylistFailureStrategy, PlaylistId,
+        PlaylistItemPreloadProfile, PlaylistNeighborWindow, PlaylistPreloadWindow,
+        PlaylistQueueItem, PlaylistQueueItemId, PlaylistQueueItemSnapshot, PlaylistRepeatMode,
+        PlaylistSnapshot, PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
+    };
+}
 
 pub const DEFAULT_PLAYBACK_RATE: f32 = 1.0;
 pub const MIN_PLAYBACK_RATE: f32 = 0.5;
@@ -53,10 +89,6 @@ pub const DEFAULT_VIDEO_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(16)
 pub const DEFAULT_VIDEO_PREFETCH_CAPACITY: usize = 8;
 pub const DEFAULT_RETRY_BASE_DELAY: Duration = Duration::from_millis(1_000);
 pub const DEFAULT_RETRY_MAX_DELAY: Duration = Duration::from_millis(5_000);
-pub const DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS: u32 = 2;
-pub const DEFAULT_PRELOAD_MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
-pub const DEFAULT_PRELOAD_MAX_DISK_BYTES: u64 = 256 * 1024 * 1024;
-pub const DEFAULT_PRELOAD_WARMUP_WINDOW: Duration = Duration::from_secs(30);
 
 static DEFAULT_RUNTIME_ADAPTER_FACTORY: OnceLock<&'static dyn PlayerRuntimeAdapterFactory> =
     OnceLock::new();
@@ -128,22 +160,6 @@ pub struct PlayerResolvedResiliencePolicy {
     pub buffering_policy: PlayerBufferingPolicy,
     pub retry_policy: PlayerRetryPolicy,
     pub cache_policy: PlayerCachePolicy,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PlayerPreloadBudgetPolicy {
-    pub max_concurrent_tasks: Option<u32>,
-    pub max_memory_bytes: Option<u64>,
-    pub max_disk_bytes: Option<u64>,
-    pub warmup_window: Option<Duration>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlayerResolvedPreloadBudgetPolicy {
-    pub max_concurrent_tasks: u32,
-    pub max_memory_bytes: u64,
-    pub max_disk_bytes: u64,
-    pub warmup_window: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -704,23 +720,6 @@ impl Default for PlayerCachePolicy {
             preset: PlayerCachePreset::Default,
             max_memory_bytes: None,
             max_disk_bytes: None,
-        }
-    }
-}
-
-impl PlayerPreloadBudgetPolicy {
-    pub fn resolved(&self) -> PlayerResolvedPreloadBudgetPolicy {
-        PlayerResolvedPreloadBudgetPolicy {
-            max_concurrent_tasks: self
-                .max_concurrent_tasks
-                .unwrap_or(DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS),
-            max_memory_bytes: self
-                .max_memory_bytes
-                .unwrap_or(DEFAULT_PRELOAD_MAX_MEMORY_BYTES),
-            max_disk_bytes: self
-                .max_disk_bytes
-                .unwrap_or(DEFAULT_PRELOAD_MAX_DISK_BYTES),
-            warmup_window: self.warmup_window.unwrap_or(DEFAULT_PRELOAD_WARMUP_WINDOW),
         }
     }
 }

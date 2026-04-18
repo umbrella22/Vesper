@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -18,7 +16,8 @@ use player_runtime::{
 };
 
 use crate::{
-    PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name, method_sig,
+    HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
+    method_sig,
 };
 
 struct AndroidJniDownloadSession {
@@ -71,12 +70,11 @@ impl ProcessorProgress for JniDownloadExportProgress {
     }
 }
 
-static NEXT_DOWNLOAD_SESSION_HANDLE: AtomicI64 = AtomicI64::new(1);
-static DOWNLOAD_SESSIONS: OnceLock<Mutex<HashMap<i64, AndroidJniDownloadSession>>> =
+static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniDownloadSession>>> =
     OnceLock::new();
 
-fn download_sessions() -> &'static Mutex<HashMap<i64, AndroidJniDownloadSession>> {
-    DOWNLOAD_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+fn download_sessions() -> &'static Mutex<HandleRegistry<AndroidJniDownloadSession>> {
+    DOWNLOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 fn invalid_download_handle_error() -> &'static str {
@@ -128,7 +126,6 @@ fn with_download_session<R>(
 }
 
 fn new_download_session(config: AndroidDownloadSessionConfig) -> Result<jlong, String> {
-    let handle = NEXT_DOWNLOAD_SESSION_HANDLE.fetch_add(1, Ordering::Relaxed);
     let session = AndroidJniDownloadSession {
         inner: AndroidDownloadBridgeSession::new_with_plugin_library_paths(
             config.auto_start,
@@ -140,8 +137,7 @@ fn new_download_session(config: AndroidDownloadSessionConfig) -> Result<jlong, S
     let Ok(mut guard) = download_sessions().lock() else {
         return Err("failed to lock download session registry".to_owned());
     };
-    guard.insert(handle, session);
-    Ok(handle)
+    Ok(guard.insert(session))
 }
 
 fn optional_java_string<'local>(
