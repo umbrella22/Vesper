@@ -11,10 +11,10 @@ FFMPEG_ARCHIVE_NAME="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_SOURCE_URL="${VESPER_ANDROID_FFMPEG_SOURCE_URL:-https://ffmpeg.org/releases/${FFMPEG_ARCHIVE_NAME}}"
 FFMPEG_SOURCE_ARCHIVE="${VESPER_ANDROID_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/${FFMPEG_ARCHIVE_NAME}}"
 FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/android}"
-OPENSSL_VERSION="${VESPER_ANDROID_OPENSSL_VERSION:-3.6.1}"
+OPENSSL_VERSION="${VESPER_ANDROID_OPENSSL_VERSION:-3.6.2}"
 OPENSSL_SERIES="${OPENSSL_VERSION%.*}"
 OPENSSL_ARCHIVE_NAME="openssl-${OPENSSL_VERSION}.tar.gz"
-OPENSSL_SOURCE_URL="${VESPER_ANDROID_OPENSSL_SOURCE_URL:-https://www.openssl-library.org/source/${OPENSSL_ARCHIVE_NAME}}"
+OPENSSL_SOURCE_URL="${VESPER_ANDROID_OPENSSL_SOURCE_URL:-https://www.openssl.org/source/${OPENSSL_ARCHIVE_NAME}}"
 OPENSSL_SOURCE_ARCHIVE="${VESPER_ANDROID_OPENSSL_SOURCE_ARCHIVE:-$ROOT_DIR/third_party/openssl/android/prebuilt-archives/${OPENSSL_ARCHIVE_NAME}}"
 LIBXML2_VERSION="${VESPER_ANDROID_LIBXML2_VERSION:-2.14.6}"
 LIBXML2_SERIES="${LIBXML2_VERSION%.*}"
@@ -176,6 +176,8 @@ download_if_missing() {
   shift
   local archive_url
   local download_succeeded=0
+  local curl_output
+  local -a curl_failures=()
 
   if [[ -f "$archive_path" ]]; then
     return 0
@@ -191,13 +193,16 @@ download_if_missing() {
   for archive_url in "$@"; do
     echo "Downloading source archive:"
     echo "  $archive_url"
-    if curl --fail --location --silent --show-error --output "$archive_path" "$archive_url"; then
+    if curl_output="$(curl --fail --location --silent --show-error --output "$archive_path" "$archive_url" 2>&1)"; then
       download_succeeded=1
       break
     fi
 
     rm -f "$archive_path"
-    echo "Source download failed, trying next mirror if available." >&2
+    if [[ -n "$curl_output" ]]; then
+      curl_failures+=("$archive_url"$'\n'"$curl_output")
+    fi
+    echo "Source download failed for $archive_url, trying next mirror if available." >&2
   done
 
   if [[ "$download_succeeded" != "1" ]]; then
@@ -207,6 +212,12 @@ download_if_missing() {
     for archive_url in "$@"; do
       echo "  $archive_url" >&2
     done
+    if [[ ${#curl_failures[@]} -gt 0 ]]; then
+      echo "curl failure details:" >&2
+      for curl_output in "${curl_failures[@]}"; do
+        printf '%s\n' "$curl_output" >&2
+      done
+    fi
     exit 1
   fi
 }
@@ -267,9 +278,9 @@ build_android_openssl_prebuilt() {
   download_if_missing \
     "$OPENSSL_SOURCE_ARCHIVE" \
     "$OPENSSL_SOURCE_URL" \
-    "https://www.openssl.org/source/${OPENSSL_ARCHIVE_NAME}" \
-    "https://www.openssl-library.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}" \
-    "https://www.openssl.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}"
+    "https://www.openssl.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}" \
+    "https://www.openssl-library.org/source/${OPENSSL_ARCHIVE_NAME}" \
+    "https://www.openssl-library.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}"
   extract_source_tree "$OPENSSL_SOURCE_ARCHIVE" "$source_dir"
 
   rm -rf "$install_dir"

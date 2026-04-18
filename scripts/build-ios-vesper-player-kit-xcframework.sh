@@ -55,17 +55,20 @@ resolve_simulator_archs() {
 }
 
 build_archive() {
-  local destination="$1"
+  local sdk="$1"
   local archive_path="$2"
   shift 2
 
   xcodebuild archive \
     -project "$PROJECT_FILE" \
     -scheme VesperPlayerKit \
-    -destination "$destination" \
+    -sdk "$sdk" \
     -archivePath "$archive_path" \
     SKIP_INSTALL=NO \
     BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_REQUIRED=NO \
+    SUPPORTS_MACCATALYST=NO \
     "$@"
 }
 
@@ -126,7 +129,7 @@ done
 rm -rf "${SIMULATOR_BUILD_ARCHIVES[@]}"
 
 build_archive \
-  "generic/platform=iOS" \
+  iphoneos \
   "$IOS_ARCHIVE"
 
 for index in "${!SIMULATOR_ARCHS[@]}"; do
@@ -134,7 +137,7 @@ for index in "${!SIMULATOR_ARCHS[@]}"; do
   archive_path="${SIMULATOR_BUILD_ARCHIVES[$index]}"
 
   build_archive \
-    "generic/platform=iOS Simulator" \
+    iphonesimulator \
     "$archive_path" \
     ARCHS="$arch" \
     ONLY_ACTIVE_ARCH=YES
