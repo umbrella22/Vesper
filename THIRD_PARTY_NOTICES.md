@@ -20,6 +20,15 @@ That means this file is primarily a forward-looking release checklist for
 future downloadable artifacts, especially where FFmpeg or other media runtime
 libraries are redistributed together with Vesper.
 
+Release gate:
+
+- if any Android, iOS, desktop, or other shipped artifact starts bundling
+  FFmpeg or any other third-party binary, update this file before cutting that
+  release
+- the existence of helper scripts such as `scripts/build-android-ffmpeg-prebuilts.sh`
+  or `scripts/build-apple-ffmpeg-prebuilts.sh` does not satisfy redistribution
+  notice obligations by itself
+
 ## Planned Third-Party Runtime Tracking
 
 When a release artifact bundles a third-party runtime, add an entry here with:

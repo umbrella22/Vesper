@@ -122,13 +122,13 @@ For a runnable app flow:
    - or `scripts/build-android-vesper-player-kit-jni.sh release`
    - or run Gradle tasks on `:vesper-player-kit`
    - if this fails, first verify Rust targets are installed:
-     - `rustup target add aarch64-linux-android x86_64-linux-android`
+     - `rustup target add aarch64-linux-android`
    - then verify Android Studio has fully installed `NDK (Side by side) 29.0.14206865`
    - if Studio installs a different NDK version, the script will automatically use the newest complete NDK under your Android SDK, or you can override it with `ANDROID_NDK_ROOT=...`
 4. confirm `.so` files landed under `lib/android/vesper-player-kit/src/main/jniLibs`
    - expected file name: `libvesper_player_android.so`
    - these JNI artifacts are generated locally and ignored by git
-5. run the app on an emulator/device
+5. run the app on an arm64 emulator or physical device
 6. validate the `TextureView + ExoPlayer + Rust session` playback loop
 
 For the reusable library artifact itself, use:

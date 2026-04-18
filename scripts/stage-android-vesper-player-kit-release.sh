@@ -10,7 +10,6 @@ shift || true
 
 DEFAULT_ABIS=(
   "arm64-v8a"
-  "x86_64"
 )
 
 selected_abis=("$@")
@@ -46,7 +45,7 @@ mkdir -p "$OUTPUT_DIR"
 
 for abi in "${selected_abis[@]}"; do
   case "$abi" in
-    arm64-v8a|x86_64)
+    arm64-v8a)
       ;;
     *)
       echo "Unsupported Android ABI: $abi" >&2

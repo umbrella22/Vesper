@@ -30,7 +30,6 @@ jobs:
       matrix:
         abi:
           - arm64-v8a
-          - x86_64
 
     steps:
       - name: Checkout
@@ -42,7 +41,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2

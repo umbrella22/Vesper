@@ -27,7 +27,6 @@ OPENSSL_ANDROID_DIR="${VESPER_ANDROID_OPENSSL_OUTPUT_DIR:-$ROOT_DIR/third_party/
 LIBXML2_ANDROID_DIR="${VESPER_ANDROID_LIBXML2_OUTPUT_DIR:-$ROOT_DIR/third_party/libxml2/android}"
 DEFAULT_ABIS=(
   "arm64-v8a"
-  "x86_64"
 )
 
 resolve_selected_abis() {
@@ -49,11 +48,11 @@ resolve_selected_abis() {
 
   for token in "${resolved[@]}"; do
     case "$token" in
-      arm64-v8a|x86_64)
+      arm64-v8a)
         ;;
       *)
         echo "Unsupported Android ABI: $token" >&2
-        echo "Supported ABIs: arm64-v8a, x86_64" >&2
+        echo "Supported ABIs: arm64-v8a" >&2
         exit 1
         ;;
     esac
@@ -67,9 +66,6 @@ map_abi_to_rust_target() {
     arm64-v8a)
       echo "aarch64-linux-android"
       ;;
-    x86_64)
-      echo "x86_64-linux-android"
-      ;;
     *)
       return 1
       ;;
@@ -80,9 +76,6 @@ map_abi_to_ffmpeg_arch() {
   case "$1" in
     arm64-v8a)
       echo "aarch64"
-      ;;
-    x86_64)
-      echo "x86_64"
       ;;
     *)
       return 1
@@ -95,9 +88,6 @@ map_abi_to_ffmpeg_cpu() {
     arm64-v8a)
       echo "armv8-a"
       ;;
-    x86_64)
-      echo "x86_64"
-      ;;
     *)
       return 1
       ;;
@@ -108,9 +98,6 @@ map_abi_to_openssl_target() {
   case "$1" in
     arm64-v8a)
       echo "android-arm64"
-      ;;
-    x86_64)
-      echo "android-x86_64"
       ;;
     *)
       return 1

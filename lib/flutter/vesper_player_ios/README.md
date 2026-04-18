@@ -1,76 +1,96 @@
 # vesper_player_ios
 
-[`vesper_player`] 的 iOS 平台实现包，基于 **AVPlayer** 与 **Vesper iOS Host Kit**（`lib/ios/VesperPlayerKit`）。
+The iOS implementation package for `vesper_player`.
 
-此包由 `vesper_player` 在 iOS 上自动注册，**普通应用开发者无需直接依赖此包**。
+It is built on AVPlayer and the Vesper iOS host kit in `lib/ios/VesperPlayerKit`.
+The package is registered automatically by `vesper_player`, so most app code
+does not need to depend on it directly.
 
-## 平台能力
+## Platform Capabilities
 
-| 格式 / 功能 | 状态 |
+| Format / feature | Status |
 |---|---|
-| 本地文件 | ✅ |
+| Local files | ✅ |
 | Progressive HTTP | ✅ |
 | HLS | ✅ |
-| DASH | ❌ AVPlayer 后端不支持 |
-| 直播（Live） | ✅ |
-| DVR 直播（LiveDvr） | ✅ |
-| 轨道选择（视频 / 音频 / 字幕） | ✅ |
-| 自适应比特率（ABR） | ⚠️ 当前仅支持 `constrained`（maxBitRate 约束）；FixedTrack 模式能力有限 |
-| 缓冲 / 重试 / 缓存策略 | ✅ |
-| 下载管理 | ✅ |
-| 预加载 | ✅ |
+| DASH | ❌ Not supported by the AVPlayer backend |
+| Live streams | ✅ |
+| Live DVR | ✅ |
+| Track selection (video / audio / subtitles) | ✅ |
+| Adaptive bitrate (ABR) | ⚠️ `constrained` is supported today; `fixedTrack` remains limited |
+| Buffering / retry / cache policy | ✅ |
+| Download management | ✅ |
+| Preload | ✅ |
 
-> **DASH 说明**：DASH 源的数据模型与 DTO 已有落点，但当前 AVPlayer 后端会明确返回 `unsupported`，不应在 iOS 上使用 `VesperPlayerSource.dash()`。可通过 `controller.snapshot.capabilities.supportsDash` 在运行时检查。
+> The DASH DTOs already exist, but the AVPlayer backend reports DASH as
+> unsupported. Do not use `VesperPlayerSource.dash()` on iOS. Check
+> `controller.snapshot.capabilities.supportsDash` if you need a runtime guard.
 
-## 下载链路说明
+## Recommended Download Planning Flow
 
-iOS 侧如果只是把一个远程 `.m3u8` URL 直接传给 `createTask(...)`，宿主通常只能得到“manifest 入口”，不适合作为真正离线保存或后续 remux 的基础。
+If you pass a remote `.m3u8` URL directly into `createTask(...)`, the host
+usually ends up with only the manifest entry point, which is not enough for a
+real offline save or a later remux step.
 
-推荐链路是：
+Recommended flow:
 
-1. 用户点击创建任务时，宿主 UI 先插入一个“准备中”的占位任务。
-2. 后台读取远程 HLS manifest，预先生成 `VesperDownloadAssetIndex.resources + segments`。
-3. 再调用 `createTask(...)` 创建真实任务，让下载器去拉取 manifest 资源和媒体分片。
+1. Insert a temporary "preparing" task in the host UI as soon as the user taps download
+2. Read the remote HLS manifest in the background and build
+   `VesperDownloadAssetIndex.resources + segments`
+3. Create the real task only after the asset plan is ready, so the downloader
+   fetches both manifest resources and media segments
 
-当前仓库里的 iOS native example 和 Flutter example 都已经按这条链路实现；同时 iOS example 仍然**明确跳过 DASH 下载入口**，不把它伪装成已支持能力。
+The native iOS example and the Flutter example in this repository already
+follow that flow. The iOS example also continues to skip DASH download entry
+points instead of pretending that DASH is supported.
 
-## 技术说明
+## Technical Notes
 
-- **播放后端**：AVPlayer，通过 `VesperPlayerController` Swift facade 封装
-- **Flutter 集成**：`MethodChannel` + `EventChannel`，通道 ID 为 `io.github.ikaros.vesper_player`
-- **视图承载**：`UiKitView`（PlatformView），视图类型 ID 为 `io.github.ikaros.vesper_player/platform_view`
-- **Rust 运行时**：通过 C FFI（`player-ffi-resolver` XCFramework）桥接 `player-runtime`，共享 defaults / timeline / resilience / playlist 语义
+- Playback backend: AVPlayer behind the `VesperPlayerController` Swift facade
+- Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
+- View embedding: `UiKitView` with view type `io.github.ikaros.vesper_player/platform_view`
+- Rust runtime: bridged through the `player-ffi-resolver` XCFramework so defaults, timeline, resilience, and playlist behavior stay aligned with the shared runtime
 
-## 可选 `player-ffmpeg` remux 插件
+## Optional `player-ffmpeg` Remux Plugin
 
-iOS 侧如果要把 HLS / DASH 下载结果导出为 `.mp4`，宿主 app 需要把 `player-ffmpeg` 动态库嵌进 app bundle，并把 `libplayer_ffmpeg.dylib` 的真实路径传给 `VesperDownloadConfiguration.pluginLibraryPaths`。
+If the host app wants to export downloaded HLS or DASH content to `.mp4`, it
+must embed the `player-ffmpeg` dynamic library into the app bundle and pass the
+real `libplayer_ffmpeg.dylib` path through
+`VesperDownloadConfiguration.pluginLibraryPaths`.
 
-典型接法：
+Typical setup:
 
-1. 在 app target 增加 Xcode Run Script phase：
+1. Add an Xcode Run Script phase to the app target:
+
    ```sh
    /bin/bash "$SRCROOT/../../../scripts/embed-ios-player-ffmpeg-plugin.sh" "vesper_player_ios.framework"
    ```
-   如果是原生 iOS host kit，则把参数换成 `VesperPlayerKit.framework`
-2. 运行时从 `Bundle.main.privateFrameworksPath` / app `Frameworks` 目录查找 `libplayer_ffmpeg.dylib`
-3. 把查到的绝对路径传给下载管理器配置
 
-当前 Apple 侧 FFmpeg 预编译也是**按需触发**的：只有在宿主显式执行嵌入脚本时才会构建 / 拷贝对应 dylib。脚本目前支持例如 `VESPER_APPLE_FFMPEG_ENABLE_DASH=0` 这种粗粒度裁剪，但还没有细到 demuxer / muxer / protocol / codec 白名单级别。
+   For the native iOS host kit, replace the argument with `VesperPlayerKit.framework`.
 
-仓库里的两个 iOS example 已默认这样做：
+2. Resolve `libplayer_ffmpeg.dylib` at runtime from `Bundle.main.privateFrameworksPath`
+   or the app `Frameworks` directory
+3. Pass the resolved absolute path into the download manager configuration
+
+Apple FFmpeg prebuilts are also built on demand. The current scripts support
+coarse feature gates such as `VESPER_APPLE_FFMPEG_ENABLE_DASH=0`, but not
+fine-grained trimming by demuxer, muxer, protocol, or codec.
+
+Both iOS examples in this repository already embed the plugin that way:
 
 - `examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj`
 - `examples/flutter-host/ios/Runner.xcodeproj`
 
-注意：iOS 仅支持 **app bundle 内已签名** 的动态库，不支持从网络下载或沙盒外部注入未签名插件。
+Note that iOS only allows signed dynamic libraries that are already inside the
+app bundle. Loading unsigned or remotely downloaded plugins is not supported.
 
-## 最低版本要求
+## Minimum Requirements
 
 - iOS 14.0+
 - Flutter 3.41.0+
 
-## 相关资源
+## Related Resources
 
-- 主包：[`vesper_player`]
-- 平台接口：[`vesper_player_platform_interface`]
-- iOS Host Kit 源码：`lib/ios/VesperPlayerKit`
+- Main package: `vesper_player`
+- Platform contract: `vesper_player_platform_interface`
+- iOS host kit source: `lib/ios/VesperPlayerKit`

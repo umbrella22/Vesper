@@ -37,14 +37,12 @@ GitHub Releases now publish VesperPlayerKit for Android downloads through:
 Current Android download package names:
 
 - `VesperPlayerKit-android-arm64-v8a.aar`
-- `VesperPlayerKit-android-x86_64.aar`
 - `VesperPlayerKitCompose-android-arm64-v8a.aar`
-- `VesperPlayerKitCompose-android-x86_64.aar`
 
 Download guidance:
 
 - use `arm64-v8a` for physical Android devices
-- use `x86_64` for desktop emulators and simulator-style validation
+- use an arm64 Android emulator when emulator-side validation is needed
 - see [newDoc/RELEASE-DOWNLOAD-GUIDE.md](../../newDoc/RELEASE-DOWNLOAD-GUIDE.md) for the full package-selection guide
 
 ## Packaging Helper

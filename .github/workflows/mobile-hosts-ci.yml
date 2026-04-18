@@ -48,7 +48,6 @@ jobs:
       matrix:
         abi:
           - arm64-v8a
-          - x86_64
 
     steps:
       - name: Checkout
@@ -57,7 +56,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -107,7 +106,6 @@ jobs:
         run: ./scripts/build-android-vesper-player-kit-jni.sh release ${{ matrix.abi }}
 
       - name: Verify Android host kits do not bundle player-ffmpeg by default
-        if: matrix.abi == 'arm64-v8a'
         run: bash ./scripts/verify-mobile-host-kit-without-player-ffmpeg.sh android
 
       - name: Run Android host regression tests

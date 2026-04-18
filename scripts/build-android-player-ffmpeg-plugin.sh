@@ -25,7 +25,6 @@ ANDROID_NDK_VERSION="29.0.14206865"
 ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
 DEFAULT_ABIS=(
   "arm64-v8a"
-  "x86_64"
 )
 
 resolve_selected_abis() {
@@ -47,11 +46,11 @@ resolve_selected_abis() {
 
   for token in "${resolved[@]}"; do
     case "$token" in
-      arm64-v8a|x86_64)
+      arm64-v8a)
         ;;
       *)
         echo "Unsupported Android ABI: $token" >&2
-        echo "Supported ABIs: arm64-v8a, x86_64" >&2
+        echo "Supported ABIs: arm64-v8a" >&2
         exit 1
         ;;
     esac
@@ -64,9 +63,6 @@ map_abi_to_rust_target() {
   case "$1" in
     arm64-v8a)
       echo "aarch64-linux-android"
-      ;;
-    x86_64)
-      echo "x86_64-linux-android"
       ;;
     *)
       return 1

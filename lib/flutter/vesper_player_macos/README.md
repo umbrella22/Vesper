@@ -1,10 +1,12 @@
 # vesper_player_macos
 
-[`vesper_player`] 的 macOS 平台实现包。
+The macOS implementation package for `vesper_player`.
 
-> ⚠️ **实验性**：此包当前处于实验阶段，尚无真实后端实现，API 行为与能力矩阵与移动端不完全对齐，不建议在生产环境使用。
+> Experimental: this package does not yet ship a real playback backend. Its API
+> behavior and capability matrix are not fully aligned with the mobile
+> implementations, so it should not be considered production-ready.
 
-## 当前状态
+## Current State
 
 ```dart
 abstract final class VesperPlayerMacosPackage {
@@ -12,17 +14,21 @@ abstract final class VesperPlayerMacosPackage {
 }
 ```
 
-- 包结构与注册机制已就位
-- 无真实播放后端；所有播放操作将通过 `VesperPlayerCapabilities` 报告为不支持
-- 无 CI 路径
+- Package structure and registration hooks are already in place
+- No real playback backend is wired yet
+- Unsupported operations are reported through `VesperPlayerCapabilities`
+- No dedicated CI path exists yet
 
-## 计划方向
+## Planned Direction
 
-macOS 后端将采用 **native-first** 路线（AVFoundation），并在基础控制闭环（本地文件 / 基础流媒体 / 状态链路）验证后逐步补齐能力。
+The macOS backend is expected to stay native-first and use AVFoundation. The
+current plan is to validate the basic control loop first, including local files,
+basic streaming, and the core state pipeline, then fill in the remaining
+capabilities gradually.
 
-具体进展见项目 ROADMAP.md 的 Phase 4。
+See Phase 4 in the repository roadmap for the broader direction.
 
-## 相关资源
+## Related Resources
 
-- 主包：[`vesper_player`]
-- 平台接口：[`vesper_player_platform_interface`]
+- Main package: `vesper_player`
+- Platform contract: `vesper_player_platform_interface`

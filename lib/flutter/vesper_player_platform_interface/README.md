@@ -1,92 +1,95 @@
 # vesper_player_platform_interface
 
-`vesper_player` 的平台接口包，定义跨平台共享的抽象类、数据模型和事件协议。
+The shared platform interface for `vesper_player`.
 
-此包遵循 [Flutter federated plugin] 规范，面向**平台插件开发者**，普通应用开发者应直接使用 [`vesper_player`] 主包。
+This package defines the cross-platform abstractions, DTOs, and event contracts
+used by the federated Flutter plugin. It is intended for platform plugin
+authors. Application code should usually depend on `vesper_player` directly.
 
-## 包含内容
+## What This Package Contains
 
-### 平台抽象
+### Platform abstraction
 
-- `VesperPlayerPlatform` — 所有平台实现必须继承的抽象基类
-- `VesperPlatformCreateResult` — `createPlayer` 的结果类型
+- `VesperPlayerPlatform`: the abstract base class every platform package must extend
+- `VesperPlatformCreateResult`: the result type returned by `createPlayer`
 
-### 播放器数据模型
+### Player data models
 
-| 类型 | 描述 |
+| Type | Description |
 |---|---|
-| `VesperPlayerSource` | 媒体源（本地文件 / 远程 URL / HLS / DASH） |
-| `VesperPlayerSnapshot` | 播放器完整状态快照 |
-| `VesperPlayerCapabilities` | 当前后端的能力集合 |
-| `VesperTimeline` | 播放时间线（VOD / Live / LiveDvr） |
-| `VesperSeekableRange` | 可寻位范围（DVR 直播时间窗口） |
-| `VesperTrackCatalog` | 媒体轨道目录（视频 / 音频 / 字幕） |
-| `VesperMediaTrack` | 单条媒体轨道的详情 |
-| `VesperTrackSelection` | 轨道选择指令（auto / disabled / 指定 track） |
-| `VesperTrackSelectionSnapshot` | 当前轨道选择状态 |
-| `VesperAbrPolicy` | 自适应比特率策略（auto / constrained / fixedTrack） |
-| `VesperTrackPreferencePolicy` | 语言与默认轨道偏好策略 |
-| `VesperPlaybackResiliencePolicy` | 抗弹性总策略（包含缓冲 / 重试 / 缓存） |
-| `VesperBufferingPolicy` | 缓冲策略（预设或自定义参数） |
-| `VesperRetryPolicy` | 重试策略（最大次数 / 退避模式 / 延迟范围） |
-| `VesperCachePolicy` | 缓存策略（内存 / 磁盘配额） |
-| `VesperPreloadBudgetPolicy` | 预加载预算（并发任务数 / 内存 / 磁盘 / 热身窗口） |
-| `VesperPlayerViewport` | 视口矩形（用于 viewport hint 归一化） |
-| `VesperViewportHint` | 视口可见性 hint（Visible / NearVisible / PrefetchOnly / Hidden） |
-| `VesperPlayerError` | 播放错误（含分类与可重试标志） |
+| `VesperPlayerSource` | Media source definition for local files, remote URLs, HLS, or DASH |
+| `VesperPlayerSnapshot` | Full player state snapshot |
+| `VesperPlayerCapabilities` | Capability set reported by the active backend |
+| `VesperTimeline` | Playback timeline for VOD, live, and live DVR |
+| `VesperSeekableRange` | Seekable range, mainly for DVR windows |
+| `VesperTrackCatalog` | Available video, audio, and subtitle tracks |
+| `VesperMediaTrack` | Details for a single media track |
+| `VesperTrackSelection` | Track selection command: auto, disabled, or explicit track |
+| `VesperTrackSelectionSnapshot` | Current track selection state |
+| `VesperAbrPolicy` | Adaptive bitrate policy: auto, constrained, or fixed track |
+| `VesperTrackPreferencePolicy` | Preferred languages and default track preferences |
+| `VesperPlaybackResiliencePolicy` | Top-level buffering, retry, and cache policy |
+| `VesperBufferingPolicy` | Buffering policy presets or explicit values |
+| `VesperRetryPolicy` | Retry attempts, backoff mode, and delay limits |
+| `VesperCachePolicy` | Memory and disk cache policy |
+| `VesperPreloadBudgetPolicy` | Preload budget for concurrency, memory, disk, and warm windows |
+| `VesperPlayerViewport` | Normalized viewport rectangle used for viewport hints |
+| `VesperViewportHint` | Visibility hint: visible, near visible, prefetch only, or hidden |
+| `VesperPlayerError` | Playback error with category and retryability metadata |
 
-### 播放器事件
+### Player events
 
-| 事件类型 | 触发时机 |
+| Event type | Emitted when |
 |---|---|
-| `VesperPlayerSnapshotEvent` | 播放器状态变化 |
-| `VesperPlayerErrorEvent` | 发生错误 |
-| `VesperPlayerDisposedEvent` | 播放器已销毁 |
+| `VesperPlayerSnapshotEvent` | Player state changes |
+| `VesperPlayerErrorEvent` | A playback error occurs |
+| `VesperPlayerDisposedEvent` | The player is disposed |
 
-### 下载数据模型
+### Download data models
 
-| 类型 | 描述 |
+| Type | Description |
 |---|---|
-| `VesperDownloadConfiguration` | 下载管理器配置 |
-| `VesperDownloadSource` | 下载源（含内容格式） |
-| `VesperDownloadProfile` | 下载配置（语言 / 轨道 / 目录 / 网络限制） |
-| `VesperDownloadAssetIndex` | 资产索引（分片 / 版本 / 校验 / 大小） |
-| `VesperDownloadTaskSnapshot` | 单个下载任务快照 |
-| `VesperDownloadSnapshot` | 所有下载任务的汇总快照 |
-| `VesperDownloadProgressSnapshot` | 下载进度（字节数 / 分片数 / 完成比例） |
-| `VesperDownloadError` | 下载错误 |
+| `VesperDownloadConfiguration` | Download manager configuration |
+| `VesperDownloadSource` | Download source including content format |
+| `VesperDownloadProfile` | Download preferences such as language, tracks, directory, and network limits |
+| `VesperDownloadAssetIndex` | Planned resources, segments, size, version, and checksum metadata |
+| `VesperDownloadTaskSnapshot` | Snapshot for a single task |
+| `VesperDownloadSnapshot` | Aggregate snapshot for all tasks |
+| `VesperDownloadProgressSnapshot` | Byte, segment, and ratio-based progress |
+| `VesperDownloadError` | Download-specific error model |
 
-### 下载事件
+### Download events
 
-| 事件类型 | 触发时机 |
+| Event type | Emitted when |
 |---|---|
-| `VesperDownloadSnapshotEvent` | 下载状态变化 |
-| `VesperDownloadErrorEvent` | 下载发生错误 |
-| `VesperDownloadDisposedEvent` | 下载管理器已销毁 |
+| `VesperDownloadSnapshotEvent` | Download state changes |
+| `VesperDownloadErrorEvent` | A download error occurs |
+| `VesperDownloadDisposedEvent` | The download manager is disposed |
 
-### 枚举
+### Enums
 
 ```dart
-VesperPlayerSourceKind        // local / remote
-VesperPlayerSourceProtocol    // file / content / progressive / hls / dash / unknown
-VesperPlaybackState           // ready / playing / paused / finished
-VesperTimelineKind            // vod / live / liveDvr
-VesperPlayerBackendFamily     // androidHostKit / iosHostKit / macosFfi / softwareFallback / fakeDemo
-VesperMediaTrackKind          // video / audio / subtitle
-VesperTrackSelectionMode      // auto / disabled / track
-VesperAbrMode                 // auto / constrained / fixedTrack
-VesperBufferingPreset         // defaultPreset / balanced / streaming / resilient / lowLatency
-VesperRetryBackoff            // fixed / linear / exponential
-VesperCachePreset             // defaultPreset / disabled / streaming / resilient
-VesperPlayerErrorCategory     // input / source / network / decode / audioOutput / playback / capability / platform / unsupported
-VesperViewportHintKind        // visible / nearVisible / prefetchOnly / hidden
-VesperDownloadContentFormat   // hlsSegments / dashSegments / singleFile / unknown
-VesperDownloadState           // queued / preparing / downloading / paused / completed / failed / removed
+VesperPlayerSourceKind
+VesperPlayerSourceProtocol
+VesperPlaybackState
+VesperTimelineKind
+VesperPlayerBackendFamily
+VesperMediaTrackKind
+VesperTrackSelectionMode
+VesperAbrMode
+VesperBufferingPreset
+VesperRetryBackoff
+VesperCachePreset
+VesperPlayerErrorCategory
+VesperViewportHintKind
+VesperDownloadContentFormat
+VesperDownloadState
 ```
 
-## 实现新平台插件
+## Implementing A New Platform Package
 
-继承 `VesperPlayerPlatform` 并在 `registerWith()` 中注册：
+Extend `VesperPlayerPlatform` and register your implementation in
+`registerWith()`:
 
 ```dart
 class VesperPlayerMyPlatform extends VesperPlayerPlatform {
@@ -96,17 +99,20 @@ class VesperPlayerMyPlatform extends VesperPlayerPlatform {
 
   @override
   Future<VesperPlatformCreateResult> createPlayer({...}) async {
-    // 平台实现
+    // Platform implementation.
   }
 
-  // 实现其余抽象方法...
+  // Implement the remaining abstract members here.
 }
 ```
 
-未实现的方法默认抛出 `VesperPlayerError.unsupported()`，确保上层可以通过 `VesperPlayerCapabilities` 进行能力检查而不是捕获异常。
+Methods that remain unimplemented should report
+`VesperPlayerError.unsupported()`. That keeps capability checks explicit and
+lets apps branch on `VesperPlayerCapabilities` instead of depending on
+exceptions.
 
-## 相关资源
+## Related Packages
 
-- 主包：[`vesper_player`]
-- Android 实现：[`vesper_player_android`]
-- iOS 实现：[`vesper_player_ios`]
+- `vesper_player`
+- `vesper_player_android`
+- `vesper_player_ios`
