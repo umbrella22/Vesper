@@ -11,10 +11,19 @@ FFMPEG_ARCHIVE_NAME="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_SOURCE_URL="${VESPER_ANDROID_FFMPEG_SOURCE_URL:-https://ffmpeg.org/releases/${FFMPEG_ARCHIVE_NAME}}"
 FFMPEG_SOURCE_ARCHIVE="${VESPER_ANDROID_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/${FFMPEG_ARCHIVE_NAME}}"
 FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/android}"
+OPENSSL_VERSION="${VESPER_ANDROID_OPENSSL_VERSION:-3.6.1}"
+OPENSSL_ARCHIVE_NAME="openssl-${OPENSSL_VERSION}.tar.gz"
+OPENSSL_SOURCE_URL="${VESPER_ANDROID_OPENSSL_SOURCE_URL:-https://www.openssl.org/source/${OPENSSL_ARCHIVE_NAME}}"
+OPENSSL_SOURCE_ARCHIVE="${VESPER_ANDROID_OPENSSL_SOURCE_ARCHIVE:-$ROOT_DIR/third_party/openssl/android/prebuilt-archives/${OPENSSL_ARCHIVE_NAME}}"
+LIBXML2_VERSION="${VESPER_ANDROID_LIBXML2_VERSION:-2.14.6}"
+LIBXML2_SERIES="${LIBXML2_VERSION%.*}"
+LIBXML2_ARCHIVE_NAME="libxml2-${LIBXML2_VERSION}.tar.xz"
+LIBXML2_SOURCE_URL="${VESPER_ANDROID_LIBXML2_SOURCE_URL:-https://download.gnome.org/sources/libxml2/${LIBXML2_SERIES}/${LIBXML2_ARCHIVE_NAME}}"
+LIBXML2_SOURCE_ARCHIVE="${VESPER_ANDROID_LIBXML2_SOURCE_ARCHIVE:-$ROOT_DIR/third_party/libxml2/android/prebuilt-archives/${LIBXML2_ARCHIVE_NAME}}"
 TLS_BACKEND="${VESPER_ANDROID_FFMPEG_TLS_BACKEND:-openssl}"
 ENABLE_DASH="${VESPER_ANDROID_FFMPEG_ENABLE_DASH:-1}"
-OPENSSL_ANDROID_DIR="${ROOT_DIR}/third_party/openssl/android"
-LIBXML2_ANDROID_DIR="${ROOT_DIR}/third_party/libxml2/android"
+OPENSSL_ANDROID_DIR="${VESPER_ANDROID_OPENSSL_OUTPUT_DIR:-$ROOT_DIR/third_party/openssl/android}"
+LIBXML2_ANDROID_DIR="${VESPER_ANDROID_LIBXML2_OUTPUT_DIR:-$ROOT_DIR/third_party/libxml2/android}"
 DEFAULT_ABIS=(
   "arm64-v8a"
   "x86_64"
@@ -94,6 +103,20 @@ map_abi_to_ffmpeg_cpu() {
   esac
 }
 
+map_abi_to_openssl_target() {
+  case "$1" in
+    arm64-v8a)
+      echo "android-arm64"
+      ;;
+    x86_64)
+      echo "android-x86_64"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 resolve_ndk_root() {
   local candidate
 
@@ -156,14 +179,23 @@ download_if_missing() {
   fi
 
   if ! command -v curl >/dev/null 2>&1; then
-    echo "curl is required to download FFmpeg source archives." >&2
+    echo "curl is required to download source archives." >&2
     exit 1
   fi
 
   mkdir -p "$(dirname "$archive_path")"
-  echo "Downloading FFmpeg source archive:"
+  echo "Downloading source archive:"
   echo "  $archive_url"
   curl --fail --location --silent --show-error --output "$archive_path" "$archive_url"
+}
+
+ensure_command() {
+  local command_name="$1"
+
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "Missing required command: $command_name" >&2
+    exit 1
+  fi
 }
 
 ensure_dependency_dir() {
@@ -174,6 +206,15 @@ ensure_dependency_dir() {
     echo "$message" >&2
     exit 1
   fi
+}
+
+extract_source_tree() {
+  local archive_path="$1"
+  local destination_dir="$2"
+
+  rm -rf "$destination_dir"
+  mkdir -p "$destination_dir"
+  tar -xf "$archive_path" -C "$destination_dir" --strip-components=1
 }
 
 resolve_make_jobs() {
@@ -188,6 +229,128 @@ resolve_make_jobs() {
   fi
 
   echo 4
+}
+
+build_android_openssl_prebuilt() {
+  local abi="$1"
+  local openssl_target="$2"
+  local toolchain_target="$3"
+  local install_dir="$OPENSSL_ANDROID_DIR/$abi"
+  local source_dir="$temp_dir/openssl-$abi"
+  local cc="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang"
+  local cxx="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang++"
+
+  ensure_command perl
+  ensure_command make
+  download_if_missing "$OPENSSL_SOURCE_ARCHIVE" "$OPENSSL_SOURCE_URL"
+  extract_source_tree "$OPENSSL_SOURCE_ARCHIVE" "$source_dir"
+
+  rm -rf "$install_dir"
+  mkdir -p "$install_dir"
+
+  echo "Building Android OpenSSL prebuilt for $abi"
+
+  (
+    cd "$source_dir"
+    export ANDROID_NDK_HOME="$ANDROID_NDK_ROOT"
+    export ANDROID_NDK_ROOT
+    export PATH="$TOOLCHAIN_BIN_DIR:$PATH"
+    export CC="$cc"
+    export CXX="$cxx"
+    export AR="$TOOLCHAIN_BIN_DIR/llvm-ar"
+    export AS="$cc"
+    export RANLIB="$TOOLCHAIN_BIN_DIR/llvm-ranlib"
+    export STRIP="$TOOLCHAIN_BIN_DIR/llvm-strip"
+
+    perl ./Configure \
+      "$openssl_target" \
+      "-D__ANDROID_API__=$ANDROID_API_LEVEL" \
+      shared \
+      no-tests \
+      no-unit-test \
+      --prefix="$install_dir" \
+      --openssldir="$install_dir/ssl"
+
+    make -j"$MAKE_JOBS"
+    make install_sw
+  )
+}
+
+build_android_libxml2_prebuilt() {
+  local abi="$1"
+  local toolchain_target="$2"
+  local install_dir="$LIBXML2_ANDROID_DIR/$abi"
+  local source_dir="$temp_dir/libxml2-$abi-source"
+  local build_dir="$temp_dir/libxml2-$abi-build"
+  local cc="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang"
+  local cxx="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang++"
+
+  ensure_command make
+  download_if_missing "$LIBXML2_SOURCE_ARCHIVE" "$LIBXML2_SOURCE_URL"
+  extract_source_tree "$LIBXML2_SOURCE_ARCHIVE" "$source_dir"
+
+  rm -rf "$install_dir" "$build_dir"
+  mkdir -p "$install_dir" "$build_dir"
+
+  echo "Building Android libxml2 prebuilt for $abi"
+
+  (
+    cd "$build_dir"
+    export CC="$cc"
+    export CXX="$cxx"
+    export AR="$TOOLCHAIN_BIN_DIR/llvm-ar"
+    export RANLIB="$TOOLCHAIN_BIN_DIR/llvm-ranlib"
+    export STRIP="$TOOLCHAIN_BIN_DIR/llvm-strip"
+    export PKG_CONFIG_ALLOW_CROSS=1
+    export CPPFLAGS="-I$SYSROOT/usr/include"
+    export LDFLAGS="-L$SYSROOT/usr/lib"
+
+    "$source_dir/configure" \
+      --host="$toolchain_target" \
+      --prefix="$install_dir" \
+      --enable-shared \
+      --disable-static \
+      --without-python \
+      --without-lzma \
+      --without-icu \
+      --without-ftp \
+      --without-http \
+      --without-legacy \
+      --without-docbook \
+      --without-html
+
+    make -j"$MAKE_JOBS"
+    make install
+  )
+}
+
+ensure_android_openssl_prebuilt() {
+  local abi="$1"
+  local toolchain_target="$2"
+  local openssl_target="$3"
+  local openssl_dir="$OPENSSL_ANDROID_DIR/$abi"
+
+  if [[ -d "$openssl_dir/lib/pkgconfig" ]]; then
+    return 0
+  fi
+
+  echo "Android OpenSSL prebuilt for ABI $abi is missing locally; restoring from cached archive or official source."
+  build_android_openssl_prebuilt "$abi" "$openssl_target" "$toolchain_target"
+  ensure_dependency_dir "$openssl_dir/lib/pkgconfig" "Failed to provision Android OpenSSL prebuilt for ABI $abi: $openssl_dir"
+}
+
+ensure_android_libxml2_prebuilt() {
+  local abi="$1"
+  local toolchain_target="$2"
+  local libxml2_dir="$LIBXML2_ANDROID_DIR/$abi"
+
+  if [[ -d "$libxml2_dir/lib/pkgconfig" ]]; then
+    return 0
+  fi
+
+  echo "Android libxml2 prebuilt for ABI $abi is missing locally; restoring from cached archive or official source."
+  build_android_libxml2_prebuilt "$abi" "$toolchain_target"
+  ensure_dependency_dir "$libxml2_dir/lib/pkgconfig" "Failed to provision Android libxml2 prebuilt for ABI $abi: $libxml2_dir"
 }
 
 selected_abis=()
@@ -270,6 +433,7 @@ for abi in "${selected_abis[@]}"; do
   ffmpeg_arch="$(map_abi_to_ffmpeg_arch "$abi")"
   ffmpeg_cpu="$(map_abi_to_ffmpeg_cpu "$abi")"
   toolchain_target="$(map_abi_to_rust_target "$abi")"
+  openssl_target="$(map_abi_to_openssl_target "$abi")"
   cc="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang"
   cxx="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang++"
   install_dir="$FFMPEG_OUTPUT_DIR/$abi"
@@ -281,14 +445,14 @@ for abi in "${selected_abis[@]}"; do
   extra_cflags=(-fPIC)
   extra_ldflags=(-Wl,-z,max-page-size=16384)
 
-  ensure_dependency_dir "$openssl_dir/lib/pkgconfig" "Missing Android OpenSSL prebuilt for ABI $abi: $openssl_dir"
+  ensure_android_openssl_prebuilt "$abi" "$toolchain_target" "$openssl_target"
   pkg_config_paths+=("$openssl_dir/lib/pkgconfig")
   extra_cflags+=("-I$openssl_dir/include")
   extra_ldflags+=("-L$openssl_dir/lib")
   configure_args+=(--enable-openssl --enable-version3)
 
   if [[ "$ENABLE_DASH" == "1" ]]; then
-    ensure_dependency_dir "$libxml2_dir/lib/pkgconfig" "Missing Android libxml2 prebuilt for ABI $abi: $libxml2_dir"
+    ensure_android_libxml2_prebuilt "$abi" "$toolchain_target"
     pkg_config_paths+=("$libxml2_dir/lib/pkgconfig")
     extra_cflags+=("-I$libxml2_dir/include")
     extra_ldflags+=("-L$libxml2_dir/lib")

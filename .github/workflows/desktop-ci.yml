@@ -152,6 +152,10 @@ jobs:
       - name: Example host check
         run: cargo check -p basic-player -p player-ffi
 
+      - name: Verify desktop player-ffmpeg remux path
+        if: runner.os == 'macOS'
+        run: ./scripts/verify-desktop-player-ffmpeg-remux.sh
+
       - name: Build Vesper desktop demo
         if: github.event_name == 'workflow_dispatch'
         run: cargo build -p basic-player --release

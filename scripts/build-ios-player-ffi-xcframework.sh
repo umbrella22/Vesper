@@ -23,12 +23,9 @@ fi
 DEVICE_TARGET="aarch64-apple-ios"
 SIMULATOR_TARGETS=(
   "aarch64-apple-ios-sim"
+  "x86_64-apple-ios"
 )
-
 installed_targets="$(rustup target list --installed)"
-if [[ "$installed_targets" == *"x86_64-apple-ios"* ]]; then
-  SIMULATOR_TARGETS+=("x86_64-apple-ios")
-fi
 
 require_target() {
   local target="$1"

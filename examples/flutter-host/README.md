@@ -34,6 +34,7 @@ The executable regression path for this example is:
    - `cd examples/flutter-host && flutter test`
 3. optionally build Android / iOS host artifacts:
    - `cd examples/flutter-host && flutter build apk --release`
+   - `./scripts/build-ios-player-ffi-xcframework.sh release`
    - `cd examples/flutter-host && flutter build ios --release --no-codesign`
 
 The current host regression cases cover:
