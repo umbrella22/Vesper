@@ -6,12 +6,15 @@ PROJECT_DIR="$ROOT_DIR/lib/android"
 MODULE_TASK="${1:-assembleRelease}"
 FALLBACK_WRAPPER="$ROOT_DIR/examples/android-compose-host/gradlew"
 CACHED_GRADLE_BIN="$(
-  find \
+  for gradle_cache_dir in \
     "$ROOT_DIR/examples/android-compose-host/.gradle/wrapper/dists" \
-    "$ROOT_DIR/.gradle/wrapper/dists" \
-    -path '*/gradle-9.4.0/bin/gradle' \
-    -type f \
-    2>/dev/null | head -n 1
+    "$ROOT_DIR/.gradle/wrapper/dists"; do
+    [[ -d "$gradle_cache_dir" ]] || continue
+    find "$gradle_cache_dir" \
+      -path '*/gradle-9.4.0/bin/gradle' \
+      -type f \
+      -print -quit
+  done | head -n 1
 )"
 
 if [[ -x "$PROJECT_DIR/gradlew" ]]; then
