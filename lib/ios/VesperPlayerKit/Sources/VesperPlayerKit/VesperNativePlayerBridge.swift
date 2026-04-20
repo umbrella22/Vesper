@@ -10,6 +10,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedLastError: VesperPlayerError?
 
     private var currentSource: VesperPlayerSource?
     private var player: AVPlayer?
@@ -51,6 +52,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedTrackSelection
     }
 
+    var lastError: VesperPlayerError? {
+        publishedLastError
+    }
+
     init(
         initialSource: VesperPlayerSource? = nil,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
@@ -83,9 +88,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
+        publishedLastError = nil
     }
 
     func initialize() {
+        clearLastError()
         guard let currentSource else {
             updateState {
                 PlayerHostUiState(
@@ -129,6 +136,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func dispose() {
+        clearLastError()
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
         preloadCoordinator.cancelAll()
@@ -146,6 +154,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func selectSource(_ source: VesperPlayerSource) {
+        clearLastError()
         iosHostLog(
             "selectSource source=\(source.uri) label=\(source.label) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
         )
@@ -204,6 +213,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func play() {
+        clearLastError()
         if player == nil {
             pendingAutoPlay = true
             initialize()
@@ -241,6 +251,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func pause() {
+        clearLastError()
         iosHostLog("pause")
         player?.pause()
         refreshPlaybackState()
@@ -256,6 +267,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func stop() {
+        clearLastError()
         iosHostLog("stop")
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = true
@@ -289,6 +301,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func seek(by deltaMs: Int64) {
+        clearLastError()
         iosHostLog("seek(by:) deltaMs=\(deltaMs)")
         let timeline = publishedUiState.timeline
         let target = timeline.clampedPosition(timeline.positionMs + deltaMs)
@@ -296,6 +309,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func seek(toRatio ratio: Double) {
+        clearLastError()
         iosHostLog("seek(toRatio:) ratio=\(ratio)")
         let timeline = publishedUiState.timeline
         let target = timeline.position(forRatio: ratio)
@@ -303,6 +317,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func seekToLiveEdge() {
+        clearLastError()
         let timeline = publishedUiState.timeline
         guard let target = timeline.goLivePositionMs else {
             return
@@ -312,6 +327,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func setPlaybackRate(_ rate: Float) {
+        clearLastError()
         let clampedRate = min(max(rate, 0.5), 3.0)
         iosHostLog("setPlaybackRate rate=\(clampedRate)")
         desiredPlaybackRate = clampedRate
@@ -338,12 +354,15 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setVideoTrackSelection(_ selection: VesperTrackSelection) {
         let trackIdText = selection.trackId ?? "nil"
-        iosHostLog(
-            "setVideoTrackSelection unsupported mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
+        reportCommandError(
+            category: .unsupported,
+            message:
+                "setVideoTrackSelection is not implemented on iOS AVPlayer (mode=\(selection.mode.rawValue), trackId=\(trackIdText))"
         )
     }
 
     func setAudioTrackSelection(_ selection: VesperTrackSelection) {
+        clearLastError()
         let trackIdText = selection.trackId ?? "nil"
         iosHostLog(
             "setAudioTrackSelection mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
@@ -368,6 +387,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {
+        clearLastError()
         let trackIdText = selection.trackId ?? "nil"
         iosHostLog(
             "setSubtitleTrackSelection mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
@@ -392,6 +412,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func setAbrPolicy(_ policy: VesperAbrPolicy) {
+        clearLastError()
         let trackIdText = policy.trackId ?? "nil"
         let maxBitRateText = policy.maxBitRate.map(String.init) ?? "nil"
         let maxWidthText = policy.maxWidth.map(String.init) ?? "nil"
@@ -399,6 +420,35 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         iosHostLog(
             "setAbrPolicy mode=\(policy.mode.rawValue) trackId=\(trackIdText) maxBitRate=\(maxBitRateText) maxWidth=\(maxWidthText) maxHeight=\(maxHeightText)"
         )
+        let hasResolutionLimit = policy.maxWidth != nil || policy.maxHeight != nil
+        switch policy.mode {
+        case .constrained:
+            guard policy.maxBitRate != nil || hasResolutionLimit else {
+                reportCommandError(
+                    category: .unsupported,
+                    message:
+                        "setAbrPolicy constrained mode requires maxBitRate or maxWidth/maxHeight on iOS"
+                )
+                return
+            }
+            if hasResolutionLimit && (policy.maxWidth == nil || policy.maxHeight == nil) {
+                reportCommandError(
+                    category: .unsupported,
+                    message:
+                        "setAbrPolicy constrained mode requires both maxWidth and maxHeight for AVPlayer resolution limits"
+                )
+                return
+            }
+        case .fixedTrack:
+            reportCommandError(
+                category: .unsupported,
+                message: "setAbrPolicy fixedTrack is not implemented on iOS AVPlayer"
+            )
+            return
+        case .auto:
+            break
+        }
+
         guard let item = player?.currentItem else {
             iosHostLog("setAbrPolicy ignored: no current item")
             return
@@ -407,6 +457,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         switch policy.mode {
         case .auto:
             item.preferredPeakBitRate = 0
+            item.preferredMaximumResolution = .zero
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
                     video: current.video,
@@ -416,29 +467,34 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 )
             }
         case .constrained:
-            guard let maxBitRate = policy.maxBitRate else {
-                iosHostLog("setAbrPolicy unsupported: constrained mode requires maxBitRate on iOS")
-                return
+            item.preferredPeakBitRate = policy.maxBitRate.map(Double.init) ?? 0
+            if let maxWidth = policy.maxWidth, let maxHeight = policy.maxHeight {
+                item.preferredMaximumResolution = CGSize(
+                    width: CGFloat(maxWidth),
+                    height: CGFloat(maxHeight)
+                )
+            } else {
+                item.preferredMaximumResolution = .zero
             }
-            if policy.maxWidth != nil || policy.maxHeight != nil {
-                iosHostLog("setAbrPolicy unsupported: AVPlayer bridge currently supports maxBitRate only")
-                return
-            }
-            item.preferredPeakBitRate = Double(maxBitRate)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
                     video: current.video,
                     audio: current.audio,
                     subtitle: current.subtitle,
-                    abrPolicy: .constrained(maxBitRate: maxBitRate)
+                    abrPolicy: .constrained(
+                        maxBitRate: policy.maxBitRate,
+                        maxWidth: policy.maxWidth,
+                        maxHeight: policy.maxHeight
+                    )
                 )
             }
         case .fixedTrack:
-            iosHostLog("setAbrPolicy unsupported: fixedTrack is not implemented on AVPlayer")
+            return
         }
     }
 
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
+        clearLastError()
         if resiliencePolicy == policy {
             return
         }
@@ -1151,11 +1207,25 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
     }
 
+    private func clearLastError() {
+        publishedLastError = nil
+    }
+
+    private func reportCommandError(category: VesperPlayerErrorCategory, message: String) {
+        iosHostLog("commandError category=\(category.rawValue) message=\(message)")
+        publishedLastError = VesperPlayerError(
+            message: message,
+            category: category,
+            retriable: false
+        )
+    }
+
     private func handlePlaybackFailure(error: Error?, fallbackMessage: String) {
         let resolvedError = classifyPlaybackFailure(error, fallbackMessage: fallbackMessage)
         iosHostLog(
             "playbackFailure category=\(resolvedError.category.rawValue) retriable=\(resolvedError.retriable) message=\(resolvedError.message)"
         )
+        publishedLastError = resolvedError.toPlayerError()
 
         if scheduleRetryIfPossible(for: resolvedError) {
             return
@@ -1498,22 +1568,18 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 }
 
-private enum ResolvedBridgeErrorCategory: String {
-    case input
-    case source
-    case network
-    case decode
-    case audioOutput
-    case playback
-    case capability
-    case unsupported
-    case platform
-}
-
 private struct ResolvedBridgeError {
-    let category: ResolvedBridgeErrorCategory
+    let category: VesperPlayerErrorCategory
     let retriable: Bool
     let message: String
+
+    func toPlayerError() -> VesperPlayerError {
+        VesperPlayerError(
+            message: message,
+            category: category,
+            retriable: retriable
+        )
+    }
 }
 
 private struct ResolvedBufferingPolicy {

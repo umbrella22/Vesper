@@ -9,6 +9,7 @@ public final class VesperPlayerController: ObservableObject {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedLastError: VesperPlayerError?
 
     public var uiState: PlayerHostUiState {
         publishedUiState
@@ -20,6 +21,10 @@ public final class VesperPlayerController: ObservableObject {
 
     public var trackSelection: VesperTrackSelectionSnapshot {
         publishedTrackSelection
+    }
+
+    public var lastError: VesperPlayerError? {
+        publishedLastError
     }
 
     private var bridgeObservation: AnyCancellable?
@@ -47,6 +52,7 @@ public final class VesperPlayerController: ObservableObject {
         publishedUiState = bridge.publishedUiState
         publishedTrackCatalog = bridge.publishedTrackCatalog
         publishedTrackSelection = bridge.publishedTrackSelection
+        publishedLastError = bridge.publishedLastError
         initializeImpl = bridge.initialize
         disposeImpl = bridge.dispose
         selectSourceImpl = bridge.selectSource
@@ -77,6 +83,7 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedUiState = bridge.publishedUiState
                 self.publishedTrackCatalog = bridge.publishedTrackCatalog
                 self.publishedTrackSelection = bridge.publishedTrackSelection
+                self.publishedLastError = bridge.publishedLastError
             }
         }
     }

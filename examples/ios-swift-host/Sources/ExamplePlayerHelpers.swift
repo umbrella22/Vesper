@@ -56,7 +56,14 @@ func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {
     case .auto:
         ExampleI18n.auto
     case .constrained:
-        if let maxBitRate = policy.maxBitRate {
+        if let maxWidth = policy.maxWidth, let maxHeight = policy.maxHeight {
+            let resolutionLabel = "\(maxWidth)x\(maxHeight)"
+            if let maxBitRate = policy.maxBitRate {
+                "\(resolutionLabel) / \(formatBitRate(maxBitRate))"
+            } else {
+                resolutionLabel
+            }
+        } else if let maxBitRate = policy.maxBitRate {
             formatBitRate(maxBitRate)
         } else {
             ExampleI18n.qualityButtonCapped
@@ -690,19 +697,19 @@ func abrPresets() -> [AbrPreset] {
             id: "data-saver",
             title: ExampleI18n.abrPresetDataSaverTitle,
             subtitle: ExampleI18n.abrPresetDataSaverSubtitle,
-            policy: .constrained(maxBitRate: 800_000)
+            policy: .constrained(maxBitRate: 800_000, maxWidth: 854, maxHeight: 480)
         ),
         AbrPreset(
             id: "balanced",
             title: ExampleI18n.abrPresetBalancedTitle,
             subtitle: ExampleI18n.abrPresetBalancedSubtitle,
-            policy: .constrained(maxBitRate: 2_000_000)
+            policy: .constrained(maxBitRate: 2_000_000, maxWidth: 1280, maxHeight: 720)
         ),
         AbrPreset(
             id: "high",
             title: ExampleI18n.abrPresetHighTitle,
             subtitle: ExampleI18n.abrPresetHighSubtitle,
-            policy: .constrained(maxBitRate: 5_000_000)
+            policy: .constrained(maxBitRate: 5_000_000, maxWidth: 1920, maxHeight: 1080)
         ),
     ]
 }

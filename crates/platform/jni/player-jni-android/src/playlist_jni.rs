@@ -1,4 +1,4 @@
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
@@ -15,12 +15,10 @@ use player_runtime::{
 
 use crate::{
     HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
-    method_sig, preload_jni::preload_command_object,
+    lock_or_recover, method_sig, preload_jni::preload_command_object, run_jni_entry,
 };
 
-struct AndroidJniPlaylistSession {
-    inner: AndroidPlaylistBridgeSession,
-}
+type AndroidJniPlaylistSession = Arc<Mutex<AndroidPlaylistBridgeSession>>;
 
 static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniPlaylistSession>>> =
     OnceLock::new();
@@ -36,45 +34,44 @@ fn invalid_playlist_handle_error() -> &'static str {
 fn with_playlist_session_mut<R>(
     env: &mut Env<'_>,
     handle: jlong,
-    f: impl FnOnce(&mut AndroidJniPlaylistSession) -> R,
+    f: impl FnOnce(&mut AndroidPlaylistBridgeSession) -> R,
 ) -> Option<R> {
-    let Ok(mut guard) = playlist_sessions().lock() else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalStateException"),
-            jni_name("failed to lock playlist session registry"),
-        );
-        return None;
+    let session = {
+        let guard = lock_or_recover(playlist_sessions());
+        let Some(session) = guard.get(&handle).cloned() else {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalArgumentException"),
+                jni_name(invalid_playlist_handle_error()),
+            );
+            return None;
+        };
+        session
     };
-    let Some(session) = guard.get_mut(&handle) else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalArgumentException"),
-            jni_name(invalid_playlist_handle_error()),
-        );
-        return None;
-    };
-    Some(f(session))
+
+    // 持有 session 锁期间不要回调 Java，也不要触发会重入 JNI 的析构链路。
+    let mut session = lock_or_recover(session.as_ref());
+    Some(f(&mut session))
 }
 
 fn with_playlist_session<R>(
     env: &mut Env<'_>,
     handle: jlong,
-    f: impl FnOnce(&AndroidJniPlaylistSession) -> R,
+    f: impl FnOnce(&AndroidPlaylistBridgeSession) -> R,
 ) -> Option<R> {
-    let Ok(guard) = playlist_sessions().lock() else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalStateException"),
-            jni_name("failed to lock playlist session registry"),
-        );
-        return None;
+    let session = {
+        let guard = lock_or_recover(playlist_sessions());
+        let Some(session) = guard.get(&handle).cloned() else {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalArgumentException"),
+                jni_name(invalid_playlist_handle_error()),
+            );
+            return None;
+        };
+        session
     };
-    let Some(session) = guard.get(&handle) else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalArgumentException"),
-            jni_name(invalid_playlist_handle_error()),
-        );
-        return None;
-    };
-    Some(f(session))
+
+    let session = lock_or_recover(session.as_ref());
+    Some(f(&session))
 }
 
 fn new_playlist_session(
@@ -82,13 +79,17 @@ fn new_playlist_session(
     config: PlaylistCoordinatorConfig,
     budget: PreloadBudget,
 ) -> Result<jlong, &'static str> {
-    let session = AndroidJniPlaylistSession {
-        inner: AndroidPlaylistBridgeSession::new(playlist_id, config, budget),
-    };
-    let Ok(mut guard) = playlist_sessions().lock() else {
-        return Err("failed to lock playlist session registry");
-    };
-    Ok(guard.insert(session))
+    let session = Arc::new(Mutex::new(AndroidPlaylistBridgeSession::new(
+        playlist_id,
+        config,
+        budget,
+    )));
+    let mut guard = lock_or_recover(playlist_sessions());
+    let handle = guard.insert(session);
+    if handle == 0 {
+        return Err("android JNI playlist session registry overflow");
+    }
+    Ok(handle)
 }
 
 fn bool_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<bool> {
@@ -250,24 +251,32 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     config: JObject<'_>,
     preload_budget: JObject<'_>,
 ) -> jlong {
-    unowned_env
-        .with_env(|env| -> JniResult<jlong> {
-            let (playlist_id, config) = playlist_config_from_java(env, config)?;
-            let budget = resolved_preload_budget_from_java(env, preload_budget)?;
-            Ok(new_playlist_session(playlist_id, config, budget).unwrap_or_default())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jlong> {
+                let (playlist_id, config) = playlist_config_from_java(env, config)?;
+                let budget = resolved_preload_budget_from_java(env, preload_budget)?;
+                Ok(new_playlist_session(playlist_id, config, budget).unwrap_or_default())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposePlaylistSession(
-    _unowned_env: EnvUnowned<'_>,
+    mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    if let Ok(mut guard) = playlist_sessions().lock() {
-        guard.remove(&session_handle);
-    }
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|_env| -> JniResult<()> {
+                let mut guard = lock_or_recover(playlist_sessions());
+                guard.remove(&session_handle);
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -278,28 +287,30 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     queue: jobjectArray,
     now_epoch_ms: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let queue_array =
-                unsafe { JObjectArray::<JObject<'_>>::from_raw(env, queue as jobjectArray) };
-            let len = queue_array.len(env)?;
-            let mut rust_queue = Vec::with_capacity(len as usize);
-            for index in 0..len {
-                let item = queue_array.get_element(env, index)?;
-                if !item.is_null() {
-                    rust_queue.push(playlist_queue_item_from_java(env, item)?);
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let queue_array =
+                    unsafe { JObjectArray::<JObject<'_>>::from_raw(env, queue as jobjectArray) };
+                let len = queue_array.len(env)?;
+                let mut rust_queue = Vec::with_capacity(len as usize);
+                for index in 0..len {
+                    let item = queue_array.get_element(env, index)?;
+                    if !item.is_null() {
+                        rust_queue.push(playlist_queue_item_from_java(env, item)?);
+                    }
                 }
-            }
 
-            let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
-                session.inner.replace_queue(rust_queue, Instant::now());
-            }) else {
-                return Ok(false as jboolean);
-            };
-            let _ = now_epoch_ms;
-            Ok(true as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
+                    session.replace_queue(rust_queue, Instant::now());
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                let _ = now_epoch_ms;
+                Ok(true as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -310,30 +321,30 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     hints: jobjectArray,
     now_epoch_ms: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let hints_array =
-                unsafe { JObjectArray::<JObject<'_>>::from_raw(env, hints as jobjectArray) };
-            let len = hints_array.len(env)?;
-            let mut rust_hints = Vec::with_capacity(len as usize);
-            for index in 0..len {
-                let hint = hints_array.get_element(env, index)?;
-                if !hint.is_null() {
-                    rust_hints.push(playlist_viewport_hint_from_java(env, hint)?);
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let hints_array =
+                    unsafe { JObjectArray::<JObject<'_>>::from_raw(env, hints as jobjectArray) };
+                let len = hints_array.len(env)?;
+                let mut rust_hints = Vec::with_capacity(len as usize);
+                for index in 0..len {
+                    let hint = hints_array.get_element(env, index)?;
+                    if !hint.is_null() {
+                        rust_hints.push(playlist_viewport_hint_from_java(env, hint)?);
+                    }
                 }
-            }
 
-            let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .update_viewport_hints(rust_hints, Instant::now());
-            }) else {
-                return Ok(false as jboolean);
-            };
-            let _ = now_epoch_ms;
-            Ok(true as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
+                    session.update_viewport_hints(rust_hints, Instant::now());
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                let _ = now_epoch_ms;
+                Ok(true as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -343,17 +354,19 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     now_epoch_ms: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
-                session.inner.clear_viewport_hints(Instant::now());
-            }) else {
-                return Ok(false as jboolean);
-            };
-            let _ = now_epoch_ms;
-            Ok(true as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
+                    session.clear_viewport_hints(Instant::now());
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                let _ = now_epoch_ms;
+                Ok(true as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 fn advance_playlist(
@@ -361,16 +374,18 @@ fn advance_playlist(
     session_handle: jlong,
     advance: impl FnOnce(&mut AndroidPlaylistBridgeSession, Instant),
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
-                advance(&mut session.inner, Instant::now());
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(true as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(()) = with_playlist_session_mut(env, session_handle, |session| {
+                    advance(session, Instant::now());
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(true as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -427,19 +442,21 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobject {
-    unowned_env
-        .with_env(|env| -> JniResult<jobject> {
-            let active_item =
-                with_playlist_session(env, session_handle, |session| session.inner.active_item())
-                    .unwrap_or(None);
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobject> {
+                let active_item =
+                    with_playlist_session(env, session_handle, |session| session.active_item())
+                        .unwrap_or(None);
 
-            let Some(active_item) = active_item else {
-                return Ok(JObject::null().into_raw());
-            };
+                let Some(active_item) = active_item else {
+                    return Ok(JObject::null().into_raw());
+                };
 
-            Ok(playlist_active_item_object(env, &active_item)?.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                Ok(playlist_active_item_object(env, &active_item)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -448,28 +465,31 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobjectArray {
-    unowned_env
-        .with_env(|env| -> JniResult<jobjectArray> {
-            let Some(commands) = with_playlist_session_mut(env, session_handle, |session| {
-                session.inner.drain_commands()
-            }) else {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobjectArray> {
+                let Some(commands) = with_playlist_session_mut(env, session_handle, |session| {
+                    session.drain_commands()
+                }) else {
+                    let command_class =
+                        env.find_class(jni_name(format!("{PKG}/NativePreloadCommand")))?;
+                    let array: JObjectArray<'_> =
+                        env.new_object_array(0, command_class, JObject::null())?;
+                    return Ok(array.into_raw());
+                };
+
                 let command_class =
                     env.find_class(jni_name(format!("{PKG}/NativePreloadCommand")))?;
                 let array: JObjectArray<'_> =
-                    env.new_object_array(0, command_class, JObject::null())?;
-                return Ok(array.into_raw());
-            };
-
-            let command_class = env.find_class(jni_name(format!("{PKG}/NativePreloadCommand")))?;
-            let array: JObjectArray<'_> =
-                env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
-            for (index, command) in commands.iter().enumerate() {
-                let object = preload_command_object(env, command)?;
-                array.set_element(env, index, object)?;
-            }
-            Ok(array.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                    env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
+                for (index, command) in commands.iter().enumerate() {
+                    let object = preload_command_object(env, command)?;
+                    array.set_element(env, index, object)?;
+                }
+                Ok(array.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -479,18 +499,18 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     task_id: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let Some(result) = with_playlist_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .complete_preload_task(PreloadTaskId::from_raw(task_id.max(0) as u64))
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(result) = with_playlist_session_mut(env, session_handle, |session| {
+                    session.complete_preload_task(PreloadTaskId::from_raw(task_id.max(0) as u64))
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -504,23 +524,23 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     retriable: jboolean,
     message: JString<'_>,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let message = message.try_to_string(env)?;
-            let error = PlayerRuntimeError::with_taxonomy(
-                error_code_from_ordinal(code_ordinal),
-                error_category_from_ordinal(category_ordinal),
-                (retriable as u8) != 0,
-                message,
-            );
-            let Some(result) = with_playlist_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .fail_preload_task(PreloadTaskId::from_raw(task_id.max(0) as u64), error)
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let message = message.try_to_string(env)?;
+                let error = PlayerRuntimeError::with_taxonomy(
+                    error_code_from_ordinal(code_ordinal),
+                    error_category_from_ordinal(category_ordinal),
+                    (retriable as u8) != 0,
+                    message,
+                );
+                let Some(result) = with_playlist_session_mut(env, session_handle, |session| {
+                    session.fail_preload_task(PreloadTaskId::from_raw(task_id.max(0) as u64), error)
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }

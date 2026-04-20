@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
@@ -17,12 +17,10 @@ use player_runtime::{
 
 use crate::{
     HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
-    method_sig,
+    lock_or_recover, method_sig, run_jni_entry, u64_to_jlong_saturating,
 };
 
-struct AndroidJniDownloadSession {
-    inner: AndroidDownloadBridgeSession,
-}
+type AndroidJniDownloadSession = Arc<Mutex<AndroidDownloadBridgeSession>>;
 
 #[derive(Debug)]
 struct AndroidDownloadSessionConfig {
@@ -84,60 +82,62 @@ fn invalid_download_handle_error() -> &'static str {
 fn with_download_session_mut<R>(
     env: &mut Env<'_>,
     handle: jlong,
-    f: impl FnOnce(&mut AndroidJniDownloadSession) -> R,
+    f: impl FnOnce(&mut AndroidDownloadBridgeSession) -> R,
 ) -> Option<R> {
-    let Ok(mut guard) = download_sessions().lock() else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalStateException"),
-            jni_name("failed to lock download session registry"),
-        );
-        return None;
+    let session = {
+        let guard = lock_or_recover(download_sessions());
+        let Some(session) = guard.get(&handle).cloned() else {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalArgumentException"),
+                jni_name(invalid_download_handle_error()),
+            );
+            return None;
+        };
+        session
     };
-    let Some(session) = guard.get_mut(&handle) else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalArgumentException"),
-            jni_name(invalid_download_handle_error()),
-        );
-        return None;
-    };
-    Some(f(session))
+
+    // 持有 session 锁期间禁止回调 Java，避免同一 handle 发生重入阻塞。
+    let mut session = lock_or_recover(session.as_ref());
+    Some(f(&mut session))
 }
 
 fn with_download_session<R>(
     env: &mut Env<'_>,
     handle: jlong,
-    f: impl FnOnce(&AndroidJniDownloadSession) -> R,
+    f: impl FnOnce(&AndroidDownloadBridgeSession) -> R,
 ) -> Option<R> {
-    let Ok(guard) = download_sessions().lock() else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalStateException"),
-            jni_name("failed to lock download session registry"),
-        );
-        return None;
+    let session = {
+        let guard = lock_or_recover(download_sessions());
+        let Some(session) = guard.get(&handle).cloned() else {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalArgumentException"),
+                jni_name(invalid_download_handle_error()),
+            );
+            return None;
+        };
+        session
     };
-    let Some(session) = guard.get(&handle) else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalArgumentException"),
-            jni_name(invalid_download_handle_error()),
-        );
-        return None;
-    };
-    Some(f(session))
+
+    // 只读路径同样会持有 session 锁，闭包内不要触发会重入 JNI 的 Java 回调。
+    let session = lock_or_recover(session.as_ref());
+    Some(f(&session))
 }
 
 fn new_download_session(config: AndroidDownloadSessionConfig) -> Result<jlong, String> {
-    let session = AndroidJniDownloadSession {
-        inner: AndroidDownloadBridgeSession::new_with_plugin_library_paths(
+    let session = Arc::new(Mutex::new(
+        AndroidDownloadBridgeSession::new_with_plugin_library_paths(
             config.auto_start,
             config.run_post_processors_on_completion,
             config.plugin_library_paths,
         )
         .map_err(|error| error.to_string())?,
-    };
-    let Ok(mut guard) = download_sessions().lock() else {
-        return Err("failed to lock download session registry".to_owned());
-    };
-    Ok(guard.insert(session))
+    ));
+    let mut guard = lock_or_recover(download_sessions());
+    let handle = guard.insert(session);
+    if handle == 0 {
+        return Err("android JNI download session registry overflow".to_owned());
+    }
+    Ok(handle)
 }
 
 fn optional_java_string<'local>(
@@ -482,7 +482,9 @@ fn download_resource_record_object<'local>(
             JValue::Object(&uri),
             JValue::Object(&relative_path),
             JValue::Bool(resource.size_bytes.is_some()),
-            JValue::Long(resource.size_bytes.unwrap_or_default().min(i64::MAX as u64) as i64),
+            JValue::Long(u64_to_jlong_saturating(
+                resource.size_bytes.unwrap_or_default(),
+            )),
             JValue::Object(&etag),
             JValue::Object(&checksum),
         ],
@@ -515,9 +517,13 @@ fn download_segment_record_object<'local>(
             JValue::Object(&uri),
             JValue::Object(&relative_path),
             JValue::Bool(segment.sequence.is_some()),
-            JValue::Long(segment.sequence.unwrap_or_default().min(i64::MAX as u64) as i64),
+            JValue::Long(u64_to_jlong_saturating(
+                segment.sequence.unwrap_or_default(),
+            )),
             JValue::Bool(segment.size_bytes.is_some()),
-            JValue::Long(segment.size_bytes.unwrap_or_default().min(i64::MAX as u64) as i64),
+            JValue::Long(u64_to_jlong_saturating(
+                segment.size_bytes.unwrap_or_default(),
+            )),
             JValue::Object(&checksum),
         ],
     )
@@ -577,12 +583,9 @@ fn download_asset_index_object<'local>(
             JValue::Object(&etag),
             JValue::Object(&checksum),
             JValue::Bool(asset_index.total_size_bytes.is_some()),
-            JValue::Long(
-                asset_index
-                    .total_size_bytes
-                    .unwrap_or_default()
-                    .min(i64::MAX as u64) as i64,
-            ),
+            JValue::Long(u64_to_jlong_saturating(
+                asset_index.total_size_bytes.unwrap_or_default(),
+            )),
             JValue::Object(&resources_array),
             JValue::Object(&segments_array),
             JValue::Object(&completed_path),
@@ -599,14 +602,11 @@ fn download_progress_object<'local>(
         class,
         method_sig("(JZJIZI)V").method_signature(),
         &[
-            JValue::Long(progress.received_bytes.min(i64::MAX as u64) as i64),
+            JValue::Long(u64_to_jlong_saturating(progress.received_bytes)),
             JValue::Bool(progress.total_bytes.is_some()),
-            JValue::Long(
-                progress
-                    .total_bytes
-                    .unwrap_or_default()
-                    .min(i64::MAX as u64) as i64,
-            ),
+            JValue::Long(u64_to_jlong_saturating(
+                progress.total_bytes.unwrap_or_default(),
+            )),
             JValue::Int(progress.received_segments.min(i32::MAX as u32) as jint),
             JValue::Bool(progress.total_segments.is_some()),
             JValue::Int(
@@ -642,7 +642,7 @@ fn download_task_object<'local>(
         ))
         .method_signature(),
         &[
-            JValue::Long(task.task_id.get().min(i64::MAX as u64) as i64),
+            JValue::Long(u64_to_jlong_saturating(task.task_id.get())),
             JValue::Object(&asset_id),
             JValue::Object(&source),
             JValue::Object(&profile),
@@ -700,7 +700,7 @@ fn download_command_object<'local>(
             env.new_object(
                 class,
                 method_sig("(J)V").method_signature(),
-                &[JValue::Long(task_id.get().min(i64::MAX as u64) as i64)],
+                &[JValue::Long(u64_to_jlong_saturating(task_id.get()))],
             )
         }
         AndroidDownloadCommand::Resume { task } => {
@@ -717,7 +717,7 @@ fn download_command_object<'local>(
             env.new_object(
                 class,
                 method_sig("(J)V").method_signature(),
-                &[JValue::Long(task_id.get().min(i64::MAX as u64) as i64)],
+                &[JValue::Long(u64_to_jlong_saturating(task_id.get()))],
             )
         }
     }
@@ -767,32 +767,40 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     config: JObject<'_>,
 ) -> jlong {
-    unowned_env
-        .with_env(|env| -> JniResult<jlong> {
-            let config = download_config_from_java(env, config)?;
-            match new_download_session(config) {
-                Ok(handle) => Ok(handle),
-                Err(message) => {
-                    env.throw_new(
-                        jni_name("java/lang/IllegalStateException"),
-                        jni_name(message),
-                    )?;
-                    Ok(0)
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jlong> {
+                let config = download_config_from_java(env, config)?;
+                match new_download_session(config) {
+                    Ok(handle) => Ok(handle),
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(message),
+                        )?;
+                        Ok(0)
+                    }
                 }
-            }
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeDownloadSession(
-    _unowned_env: EnvUnowned<'_>,
+    mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    if let Ok(mut guard) = download_sessions().lock() {
-        guard.remove(&session_handle);
-    }
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|_env| -> JniResult<()> {
+                let mut guard = lock_or_recover(download_sessions());
+                guard.remove(&session_handle);
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -806,24 +814,24 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     asset_index: JObject<'_>,
     _now_epoch_ms: jlong,
 ) -> jlong {
-    unowned_env
-        .with_env(|env| -> JniResult<jlong> {
-            let asset_id = asset_id.try_to_string(env)?;
-            let source = download_source_from_java(env, source)?;
-            let profile = download_profile_from_java(env, profile)?;
-            let asset_index = download_asset_index_from_java(env, asset_index)?;
-            let Some(result) = with_download_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .create_task(asset_id, source, profile, asset_index, Instant::now())
-            }) else {
-                return Ok(0);
-            };
-            Ok(result
-                .map(|task_id| task_id.get().min(i64::MAX as u64) as i64)
-                .unwrap_or_default())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jlong> {
+                let asset_id = asset_id.try_to_string(env)?;
+                let source = download_source_from_java(env, source)?;
+                let profile = download_profile_from_java(env, profile)?;
+                let asset_index = download_asset_index_from_java(env, asset_index)?;
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    session.create_task(asset_id, source, profile, asset_index, Instant::now())
+                }) else {
+                    return Ok(0);
+                };
+                Ok(result
+                    .map(|task_id| u64_to_jlong_saturating(task_id.get()))
+                    .unwrap_or_default())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 fn mutate_download_task(
@@ -836,20 +844,22 @@ fn mutate_download_task(
         Instant,
     ) -> player_runtime::PlayerRuntimeResult<Option<DownloadTaskSnapshot>>,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let Some(result) = with_download_session_mut(env, session_handle, |session| {
-                mutate(
-                    &mut session.inner,
-                    player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
-                    Instant::now(),
-                )
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    mutate(
+                        session,
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        Instant::now(),
+                    )
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -910,21 +920,23 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     received_segments: jint,
     _now_epoch_ms: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let Some(result) = with_download_session_mut(env, session_handle, |session| {
-                session.inner.update_progress(
-                    player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
-                    received_bytes.max(0) as u64,
-                    received_segments.max(0) as u32,
-                    Instant::now(),
-                )
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    session.update_progress(
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        received_bytes.max(0) as u64,
+                        received_segments.max(0) as u32,
+                        Instant::now(),
+                    )
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -936,23 +948,25 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     completed_path: JString<'_>,
     _now_epoch_ms: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let completed_path = completed_path.try_to_string(env)?;
-            let completed_path =
-                (!completed_path.trim().is_empty()).then_some(PathBuf::from(completed_path));
-            let Some(result) = with_download_session_mut(env, session_handle, |session| {
-                session.inner.complete_task(
-                    player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
-                    completed_path,
-                    Instant::now(),
-                )
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let completed_path = completed_path.try_to_string(env)?;
+                let completed_path =
+                    (!completed_path.trim().is_empty()).then_some(PathBuf::from(completed_path));
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    session.complete_task(
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        completed_path,
+                        Instant::now(),
+                    )
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -964,37 +978,39 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     output_path: JString<'_>,
     progress_callback: JObject<'_>,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let output_path = output_path.try_to_string(env)?;
-            let java_vm = env.get_java_vm()?;
-            let callback = if progress_callback.is_null() {
-                None
-            } else {
-                Some(env.new_global_ref(progress_callback)?)
-            };
-            let progress = JniDownloadExportProgress { java_vm, callback };
-            let Some(result) = with_download_session(env, session_handle, |session| {
-                session.inner.export_task_output(
-                    player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
-                    Some(PathBuf::from(output_path)),
-                    &progress,
-                )
-            }) else {
-                return Ok(false as jboolean);
-            };
-            match result {
-                Ok(_) => Ok(true as jboolean),
-                Err(error) => {
-                    env.throw_new(
-                        jni_name("java/lang/IllegalStateException"),
-                        jni_name(error.to_string()),
-                    )?;
-                    Ok(false as jboolean)
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let output_path = output_path.try_to_string(env)?;
+                let java_vm = env.get_java_vm()?;
+                let callback = if progress_callback.is_null() {
+                    None
+                } else {
+                    Some(env.new_global_ref(progress_callback)?)
+                };
+                let progress = JniDownloadExportProgress { java_vm, callback };
+                let Some(result) = with_download_session(env, session_handle, |session| {
+                    session.export_task_output(
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        Some(PathBuf::from(output_path)),
+                        &progress,
+                    )
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                match result {
+                    Ok(_) => Ok(true as jboolean),
+                    Err(error) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(error.to_string()),
+                        )?;
+                        Ok(false as jboolean)
+                    }
                 }
-            }
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1009,27 +1025,29 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     message: JString<'_>,
     _now_epoch_ms: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let message = message.try_to_string(env)?;
-            let error = PlayerRuntimeError::with_taxonomy(
-                error_code_from_ordinal(code_ordinal),
-                error_category_from_ordinal(category_ordinal),
-                (retriable as u8) != 0,
-                message,
-            );
-            let Some(result) = with_download_session_mut(env, session_handle, |session| {
-                session.inner.fail_task(
-                    player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
-                    error,
-                    Instant::now(),
-                )
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let message = message.try_to_string(env)?;
+                let error = PlayerRuntimeError::with_taxonomy(
+                    error_code_from_ordinal(code_ordinal),
+                    error_category_from_ordinal(category_ordinal),
+                    (retriable as u8) != 0,
+                    message,
+                );
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    session.fail_task(
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        error,
+                        Instant::now(),
+                    )
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1054,31 +1072,33 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobject {
-    unowned_env
-        .with_env(|env| -> JniResult<jobject> {
-            let snapshot =
-                with_download_session(env, session_handle, |session| session.inner.snapshot());
-            let Some(snapshot) = snapshot else {
-                return Ok(JObject::null().into_raw());
-            };
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobject> {
+                let snapshot =
+                    with_download_session(env, session_handle, |session| session.snapshot());
+                let Some(snapshot) = snapshot else {
+                    return Ok(JObject::null().into_raw());
+                };
 
-            let task_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadTask")))?;
-            let tasks_array: JObjectArray<'_> =
-                env.new_object_array(snapshot.tasks.len() as i32, task_class, JObject::null())?;
-            for (index, task) in snapshot.tasks.iter().enumerate() {
-                let object = download_task_object(env, task)?;
-                tasks_array.set_element(env, index, object)?;
-            }
+                let task_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadTask")))?;
+                let tasks_array: JObjectArray<'_> =
+                    env.new_object_array(snapshot.tasks.len() as i32, task_class, JObject::null())?;
+                for (index, task) in snapshot.tasks.iter().enumerate() {
+                    let object = download_task_object(env, task)?;
+                    tasks_array.set_element(env, index, object)?;
+                }
 
-            let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadSnapshot")))?;
-            let snapshot = env.new_object(
-                class,
-                method_sig(&format!("([L{PKG}/NativeDownloadTask;)V")).method_signature(),
-                &[JValue::Object(&tasks_array)],
-            )?;
-            Ok(snapshot.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadSnapshot")))?;
+                let snapshot = env.new_object(
+                    class,
+                    method_sig(&format!("([L{PKG}/NativeDownloadTask;)V")).method_signature(),
+                    &[JValue::Object(&tasks_array)],
+                )?;
+                Ok(snapshot.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1087,28 +1107,31 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobjectArray {
-    unowned_env
-        .with_env(|env| -> JniResult<jobjectArray> {
-            let Some(commands) = with_download_session_mut(env, session_handle, |session| {
-                session.inner.drain_commands()
-            }) else {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobjectArray> {
+                let Some(commands) = with_download_session_mut(env, session_handle, |session| {
+                    session.drain_commands()
+                }) else {
+                    let command_class =
+                        env.find_class(jni_name(format!("{PKG}/NativeDownloadCommand")))?;
+                    let array: JObjectArray<'_> =
+                        env.new_object_array(0, command_class, JObject::null())?;
+                    return Ok(array.into_raw());
+                };
+
                 let command_class =
                     env.find_class(jni_name(format!("{PKG}/NativeDownloadCommand")))?;
                 let array: JObjectArray<'_> =
-                    env.new_object_array(0, command_class, JObject::null())?;
-                return Ok(array.into_raw());
-            };
-
-            let command_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadCommand")))?;
-            let array: JObjectArray<'_> =
-                env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
-            for (index, command) in commands.iter().enumerate() {
-                let object = download_command_object(env, command)?;
-                array.set_element(env, index, object)?;
-            }
-            Ok(array.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                    env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
+                for (index, command) in commands.iter().enumerate() {
+                    let object = download_command_object(env, command)?;
+                    array.set_element(env, index, object)?;
+                }
+                Ok(array.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1117,25 +1140,28 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobjectArray {
-    unowned_env
-        .with_env(|env| -> JniResult<jobjectArray> {
-            let Some(events) = with_download_session_mut(env, session_handle, |session| {
-                session.inner.drain_events()
-            }) else {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobjectArray> {
+                let Some(events) = with_download_session_mut(env, session_handle, |session| {
+                    session.drain_events()
+                }) else {
+                    let event_class =
+                        env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent")))?;
+                    let array: JObjectArray<'_> =
+                        env.new_object_array(0, event_class, JObject::null())?;
+                    return Ok(array.into_raw());
+                };
+
                 let event_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent")))?;
                 let array: JObjectArray<'_> =
-                    env.new_object_array(0, event_class, JObject::null())?;
-                return Ok(array.into_raw());
-            };
-
-            let event_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent")))?;
-            let array: JObjectArray<'_> =
-                env.new_object_array(events.len() as i32, event_class, JObject::null())?;
-            for (index, event) in events.iter().enumerate() {
-                let object = download_event_object(env, event)?;
-                array.set_element(env, index, object)?;
-            }
-            Ok(array.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                    env.new_object_array(events.len() as i32, event_class, JObject::null())?;
+                for (index, event) in events.iter().enumerate() {
+                    let object = download_event_object(env, event)?;
+                    array.set_element(env, index, object)?;
+                }
+                Ok(array.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }

@@ -153,12 +153,37 @@ public struct PlayerHostUiState {
     }
 }
 
+public enum VesperPlayerErrorCategory: String, Equatable {
+    case input
+    case source
+    case network
+    case decode
+    case audioOutput
+    case playback
+    case capability
+    case unsupported
+    case platform
+}
+
+public struct VesperPlayerError: Equatable {
+    public let message: String
+    public let category: VesperPlayerErrorCategory
+    public let retriable: Bool
+
+    public init(message: String, category: VesperPlayerErrorCategory, retriable: Bool) {
+        self.message = message
+        self.category = category
+        self.retriable = retriable
+    }
+}
+
 @MainActor
 protocol PlayerBridge: AnyObject {
     var backend: PlayerBridgeBackend { get }
     var uiState: PlayerHostUiState { get }
     var trackCatalog: VesperTrackCatalog { get }
     var trackSelection: VesperTrackSelectionSnapshot { get }
+    var lastError: VesperPlayerError? { get }
 
     func initialize()
     func dispose()
@@ -187,6 +212,7 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
     var publishedUiState: PlayerHostUiState { get }
     var publishedTrackCatalog: VesperTrackCatalog { get }
     var publishedTrackSelection: VesperTrackSelectionSnapshot { get }
+    var publishedLastError: VesperPlayerError? { get }
 }
 
 extension PlayerBridge {

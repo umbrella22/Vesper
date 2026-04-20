@@ -323,4 +323,34 @@ void main() {
     expect(snapshot.viewportHint.kind, VesperViewportHintKind.visible);
     expect(snapshot.viewportHint.visibleFraction, 0.75);
   });
+
+  test('player snapshot decodes host lastError shared semantics', () {
+    final snapshot = VesperPlayerSnapshot.fromMap(<Object?, Object?>{
+      'title': 'Demo',
+      'subtitle': 'Unsupported',
+      'sourceLabel': 'feed://demo',
+      'playbackState': 'ready',
+      'playbackRate': 1.0,
+      'isBuffering': false,
+      'isInterrupted': false,
+      'hasVideoSurface': false,
+      'timeline': const VesperTimeline.initial().toMap(),
+      'lastError': <Object?, Object?>{
+        'message':
+            'setVideoTrackSelection is not implemented on iOS AVPlayer.',
+        'category': 'unsupported',
+        'retriable': false,
+      },
+    });
+
+    expect(
+      snapshot.lastError?.message,
+      'setVideoTrackSelection is not implemented on iOS AVPlayer.',
+    );
+    expect(
+      snapshot.lastError?.category,
+      VesperPlayerErrorCategory.unsupported,
+    );
+    expect(snapshot.lastError?.retriable, isFalse);
+  });
 }

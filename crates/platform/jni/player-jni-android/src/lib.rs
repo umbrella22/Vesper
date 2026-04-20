@@ -2,8 +2,10 @@ mod download_jni;
 mod playlist_jni;
 mod preload_jni;
 
+use std::any::Any;
 use std::borrow::Borrow;
-use std::sync::{Mutex, OnceLock};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
@@ -37,6 +39,7 @@ pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
 pub(crate) struct HandleRegistry<T> {
     slots: Vec<HandleSlot<T>>,
     free_slots: Vec<u32>,
+    next_generation_seed: u32,
 }
 
 #[derive(Debug)]
@@ -50,25 +53,41 @@ impl<T> Default for HandleRegistry<T> {
         Self {
             slots: Vec::new(),
             free_slots: Vec::new(),
+            next_generation_seed: 0,
         }
     }
 }
 
 impl<T> HandleRegistry<T> {
+    fn allocate_generation(&mut self) -> u32 {
+        let generation = next_generation(self.next_generation_seed);
+        self.next_generation_seed = generation;
+        generation
+    }
+
     pub(crate) fn insert(&mut self, value: T) -> i64 {
+        let generation = self.allocate_generation();
         if let Some(slot_index) = self.free_slots.pop() {
             let slot = &mut self.slots[slot_index as usize];
-            slot.generation = next_generation(slot.generation);
+            slot.generation = generation;
             slot.value = Some(value);
-            return encode_handle(slot_index, slot.generation);
+            return encode_handle(slot_index, generation);
+        }
+
+        debug_assert!(
+            self.slots.len() < u32::MAX as usize,
+            "HandleRegistry exhausted u32 slot space"
+        );
+        if self.slots.len() >= u32::MAX as usize {
+            return 0;
         }
 
         let slot_index = self.slots.len() as u32;
         self.slots.push(HandleSlot {
-            generation: 1,
+            generation,
             value: Some(value),
         });
-        encode_handle(slot_index, 1)
+        encode_handle(slot_index, generation)
     }
 
     pub(crate) fn get(&self, handle: impl Borrow<i64>) -> Option<&T> {
@@ -76,14 +95,6 @@ impl<T> HandleRegistry<T> {
         let slot = self.slots.get(slot_index as usize)?;
         (slot.generation == generation)
             .then_some(slot.value.as_ref())
-            .flatten()
-    }
-
-    pub(crate) fn get_mut(&mut self, handle: impl Borrow<i64>) -> Option<&mut T> {
-        let (slot_index, generation) = decode_handle(*handle.borrow())?;
-        let slot = self.slots.get_mut(slot_index as usize)?;
-        (slot.generation == generation)
-            .then_some(slot.value.as_mut())
             .flatten()
     }
 
@@ -95,7 +106,25 @@ impl<T> HandleRegistry<T> {
         }
         let value = slot.value.take()?;
         self.free_slots.push(slot_index);
+        self.compact_tail();
         Some(value)
+    }
+
+    fn compact_tail(&mut self) {
+        let Some(last_used_index) = self.slots.iter().rposition(|slot| slot.value.is_some()) else {
+            self.slots.clear();
+            self.free_slots.clear();
+            return;
+        };
+
+        let new_len = last_used_index + 1;
+        if new_len == self.slots.len() {
+            return;
+        }
+
+        self.slots.truncate(new_len);
+        self.free_slots
+            .retain(|slot_index| (*slot_index as usize) < new_len);
     }
 }
 
@@ -122,9 +151,55 @@ fn next_generation(generation: u32) -> u32 {
     generation.wrapping_add(1).max(1)
 }
 
-struct AndroidJniSession {
-    inner: AndroidHostBridgeSession,
+pub(crate) fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return format!("Rust panic crossed JNI boundary: {message}");
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return format!("Rust panic crossed JNI boundary: {message}");
+    }
+    "Rust panic crossed JNI boundary".to_owned()
+}
+
+fn throw_panic_exception(unowned_env: &mut EnvUnowned<'_>, message: &str) {
+    let _ = unowned_env
+        .with_env(|env| -> JniResult<()> {
+            env.throw_new(jni_name("java/lang/RuntimeException"), jni_name(message))?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+pub(crate) fn run_jni_entry<T: Default>(
+    unowned_env: &mut EnvUnowned<'_>,
+    f: impl FnOnce(&mut EnvUnowned<'_>) -> T,
+) -> T {
+    match catch_unwind(AssertUnwindSafe(|| f(unowned_env))) {
+        Ok(value) => value,
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            throw_panic_exception(unowned_env, &message);
+            T::default()
+        }
+    }
+}
+
+pub(crate) fn u64_to_jlong_saturating(value: u64) -> jlong {
+    value.min(i64::MAX as u64) as jlong
+}
+
+pub(crate) fn u128_to_jlong_saturating(value: u128) -> jlong {
+    value.min(i64::MAX as u128) as jlong
+}
+
+type AndroidJniSession = Arc<Mutex<AndroidHostBridgeSession>>;
 
 static SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniSession>>> = OnceLock::new();
 
@@ -141,44 +216,49 @@ pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
 }
 
 pub(crate) fn method_sig(value: &str) -> RuntimeMethodSignature {
-    RuntimeMethodSignature::from_str(value).expect("static JNI method signature should parse")
+    match RuntimeMethodSignature::from_str(value) {
+        Ok(signature) => signature,
+        Err(_) => unreachable!("static JNI method signature should parse"),
+    }
 }
 
 pub(crate) fn field_sig(value: impl AsRef<str>) -> RuntimeFieldSignature {
-    RuntimeFieldSignature::from_str(value.as_ref())
-        .expect("static JNI field signature should parse")
+    match RuntimeFieldSignature::from_str(value.as_ref()) {
+        Ok(signature) => signature,
+        Err(_) => unreachable!("static JNI field signature should parse"),
+    }
 }
 
 fn with_session_mut<R>(
     env: &mut Env<'_>,
     handle: jlong,
-    f: impl FnOnce(&mut AndroidJniSession) -> R,
+    f: impl FnOnce(&mut AndroidHostBridgeSession) -> R,
 ) -> Option<R> {
-    let Ok(mut guard) = sessions().lock() else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalStateException"),
-            jni_name("failed to lock session registry"),
-        );
-        return None;
+    let session = {
+        let guard = lock_or_recover(sessions());
+        let Some(session) = guard.get(&handle).cloned() else {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalArgumentException"),
+                jni_name(invalid_handle_error()),
+            );
+            return None;
+        };
+        session
     };
-    let Some(session) = guard.get_mut(&handle) else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalArgumentException"),
-            jni_name(invalid_handle_error()),
-        );
-        return None;
-    };
-    Some(f(session))
+
+    // 持有 session 锁期间禁止调用任何 `env.call_*`，也不要触发可能重入 JNI 的析构路径。
+    let mut session = lock_or_recover(session.as_ref());
+    Some(f(&mut session))
 }
 
 fn new_session(source_uri: String) -> Result<jlong, &'static str> {
-    let session = AndroidJniSession {
-        inner: AndroidHostBridgeSession::new(source_uri),
-    };
-    let Ok(mut guard) = sessions().lock() else {
-        return Err("failed to lock session registry");
-    };
-    Ok(guard.insert(session))
+    let session = Arc::new(Mutex::new(AndroidHostBridgeSession::new(source_uri)));
+    let mut guard = lock_or_recover(sessions());
+    let handle = guard.insert(session);
+    if handle == 0 {
+        return Err("android JNI session registry overflow");
+    }
+    Ok(handle)
 }
 
 fn boxed_long<'local>(env: &mut Env<'local>, value: Option<u64>) -> JniResult<JObject<'local>> {
@@ -188,7 +268,7 @@ fn boxed_long<'local>(env: &mut Env<'local>, value: Option<u64>) -> JniResult<JO
                 jni_name("java/lang/Long"),
                 jni_name("valueOf"),
                 method_sig("(J)Ljava/lang/Long;").method_signature(),
-                &[JValue::Long(value as i64)],
+                &[JValue::Long(u64_to_jlong_saturating(value))],
             )?
             .l(),
         None => Ok(JObject::null()),
@@ -243,8 +323,8 @@ fn host_snapshot_object<'local>(
                 class,
                 method_sig("(JJ)V").method_signature(),
                 &[
-                    JValue::Long(range.start_ms as i64),
-                    JValue::Long(range.end_ms as i64),
+                    JValue::Long(u64_to_jlong_saturating(range.start_ms)),
+                    JValue::Long(u64_to_jlong_saturating(range.end_ms)),
                 ],
             )?
         }
@@ -266,7 +346,7 @@ fn host_snapshot_object<'local>(
             JValue::Bool(snapshot.is_seekable),
             JValue::Object(&seekable_range),
             JValue::Object(&live_edge),
-            JValue::Long(snapshot.position_ms as i64),
+            JValue::Long(u64_to_jlong_saturating(snapshot.position_ms)),
             JValue::Object(&duration),
         ],
     )?;
@@ -351,7 +431,7 @@ fn host_event_object<'local>(
             env.new_object(
                 class,
                 method_sig("(J)V").method_signature(),
-                &[JValue::Long(*position_ms as i64)],
+                &[JValue::Long(u64_to_jlong_saturating(*position_ms))],
             )
         }
         AndroidHostEvent::RetryScheduled { attempt, delay_ms } => {
@@ -362,7 +442,7 @@ fn host_event_object<'local>(
                 method_sig("(IJ)V").method_signature(),
                 &[
                     JValue::Int(*attempt as jint),
-                    JValue::Long(*delay_ms as i64),
+                    JValue::Long(u64_to_jlong_saturating(*delay_ms)),
                 ],
             )
         }
@@ -466,7 +546,7 @@ fn abr_policy_payload_object<'local>(
             }),
             JValue::Object(&track_id),
             JValue::Bool(policy.max_bit_rate.is_some()),
-            JValue::Long(max_bit_rate.min(i64::MAX as u64) as i64),
+            JValue::Long(u64_to_jlong_saturating(max_bit_rate)),
             JValue::Bool(policy.max_width.is_some()),
             JValue::Int(max_width.min(i32::MAX as u32) as i32),
             JValue::Bool(policy.max_height.is_some()),
@@ -533,9 +613,9 @@ fn retry_policy_object<'local>(
             JValue::Bool(policy.max_attempts.is_some()),
             JValue::Int(policy.max_attempts.unwrap_or_default().min(i32::MAX as u32) as jint),
             JValue::Bool(true),
-            JValue::Long(policy.base_delay.as_millis().min(i64::MAX as u128) as jlong),
+            JValue::Long(u128_to_jlong_saturating(policy.base_delay.as_millis())),
             JValue::Bool(true),
-            JValue::Long(policy.max_delay.as_millis().min(i64::MAX as u128) as jlong),
+            JValue::Long(u128_to_jlong_saturating(policy.max_delay.as_millis())),
             JValue::Bool(true),
             JValue::Int(match policy.backoff {
                 PlayerRetryBackoff::Fixed => 0,
@@ -562,19 +642,13 @@ fn cache_policy_object<'local>(
                 PlayerCachePreset::Resilient => 3,
             }),
             JValue::Bool(policy.max_memory_bytes.is_some()),
-            JValue::Long(
-                policy
-                    .max_memory_bytes
-                    .unwrap_or_default()
-                    .min(i64::MAX as u64) as jlong,
-            ),
+            JValue::Long(u64_to_jlong_saturating(
+                policy.max_memory_bytes.unwrap_or_default(),
+            )),
             JValue::Bool(policy.max_disk_bytes.is_some()),
-            JValue::Long(
-                policy
-                    .max_disk_bytes
-                    .unwrap_or_default()
-                    .min(i64::MAX as u64) as jlong,
-            ),
+            JValue::Long(u64_to_jlong_saturating(
+                policy.max_disk_bytes.unwrap_or_default(),
+            )),
         ],
     )
 }
@@ -647,7 +721,7 @@ fn native_command_object<'local>(
             env.new_object(
                 class,
                 method_sig("(J)V").method_signature(),
-                &[JValue::Long(*position_ms as i64)],
+                &[JValue::Long(u64_to_jlong_saturating(*position_ms))],
             )
         }
         AndroidHostCommand::Stop => {
@@ -1160,21 +1234,23 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     source_uri: JString<'_>,
 ) -> jlong {
-    unowned_env
-        .with_env(|env| -> JniResult<jlong> {
-            let source_uri = source_uri.try_to_string(env)?;
-            match new_session(source_uri) {
-                Ok(handle) => Ok(handle),
-                Err(message) => {
-                    env.throw_new(
-                        jni_name("java/lang/IllegalStateException"),
-                        jni_name(message),
-                    )?;
-                    Ok(0)
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jlong> {
+                let source_uri = source_uri.try_to_string(env)?;
+                match new_session(source_uri) {
+                    Ok(handle) => Ok(handle),
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(message),
+                        )?;
+                        Ok(0)
+                    }
                 }
-            }
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1187,18 +1263,20 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     retry_policy: JObject<'_>,
     cache_policy: JObject<'_>,
 ) -> jobject {
-    unowned_env
-        .with_env(|env| -> JniResult<jobject> {
-            let resolved = resolve_resilience_policy_with_runtime(
-                source_kind_from_ordinal(source_kind_ordinal),
-                source_protocol_from_ordinal(source_protocol_ordinal),
-                parse_native_buffering_policy(env, buffering_policy)?,
-                parse_native_retry_policy(env, retry_policy)?,
-                parse_native_cache_policy(env, cache_policy)?,
-            );
-            Ok(resolved_resilience_policy_object(env, &resolved)?.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobject> {
+                let resolved = resolve_resilience_policy_with_runtime(
+                    source_kind_from_ordinal(source_kind_ordinal),
+                    source_protocol_from_ordinal(source_protocol_ordinal),
+                    parse_native_buffering_policy(env, buffering_policy)?,
+                    parse_native_retry_policy(env, retry_policy)?,
+                    parse_native_cache_policy(env, cache_policy)?,
+                );
+                Ok(resolved_resilience_policy_object(env, &resolved)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1207,15 +1285,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     track_preferences: JObject<'_>,
 ) -> jobject {
-    unowned_env
-        .with_env(|env| -> JniResult<jobject> {
-            let resolved = resolve_track_preferences_with_runtime(parse_native_track_preferences(
-                env,
-                track_preferences,
-            )?);
-            Ok(track_preferences_object(env, &resolved)?.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobject> {
+                let resolved = resolve_track_preferences_with_runtime(
+                    parse_native_track_preferences(env, track_preferences)?,
+                );
+                Ok(track_preferences_object(env, &resolved)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1224,14 +1303,15 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    unowned_env
-        .with_env(|_env| -> JniResult<()> {
-            if let Ok(mut guard) = sessions().lock() {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|_env| -> JniResult<()> {
+                let mut guard = lock_or_recover(sessions());
                 guard.remove(&session_handle);
-            }
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1242,14 +1322,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _surface: JObject<'_>,
     _surface_kind_ordinal: jint,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                session.inner.set_surface_attached(true);
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.set_surface_attached(true);
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1258,14 +1340,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                session.inner.set_surface_attached(false);
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.set_surface_attached(false);
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1274,16 +1358,18 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobject {
-    unowned_env
-        .with_env(|env| -> JniResult<jobject> {
-            let Some(snapshot) =
-                with_session_mut(env, session_handle, |session| session.inner.snapshot())
-            else {
-                return Ok(JObject::null().into_raw());
-            };
-            Ok(host_snapshot_object(env, &snapshot)?.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobject> {
+                let Some(snapshot) =
+                    with_session_mut(env, session_handle, |session| session.snapshot())
+                else {
+                    return Ok(JObject::null().into_raw());
+                };
+                Ok(host_snapshot_object(env, &snapshot)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1292,24 +1378,26 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobjectArray {
-    unowned_env
-        .with_env(|env| -> JniResult<jobjectArray> {
-            let Some(events) =
-                with_session_mut(env, session_handle, |session| session.inner.drain_events())
-            else {
-                return Ok(std::ptr::null_mut());
-            };
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobjectArray> {
+                let Some(events) =
+                    with_session_mut(env, session_handle, |session| session.drain_events())
+                else {
+                    return Ok(std::ptr::null_mut());
+                };
 
-            let event_class = env.find_class(jni_name(format!("{PKG}/NativeBridgeEvent")))?;
-            let array: JObjectArray<'_> =
-                env.new_object_array(events.len() as i32, event_class, JObject::null())?;
-            for (index, event) in events.iter().enumerate() {
-                let object = host_event_object(env, event)?;
-                array.set_element(env, index, object)?;
-            }
-            Ok(array.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                let event_class = env.find_class(jni_name(format!("{PKG}/NativeBridgeEvent")))?;
+                let array: JObjectArray<'_> =
+                    env.new_object_array(events.len() as i32, event_class, JObject::null())?;
+                for (index, event) in events.iter().enumerate() {
+                    let object = host_event_object(env, event)?;
+                    array.set_element(env, index, object)?;
+                }
+                Ok(array.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1318,24 +1406,27 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobjectArray {
-    unowned_env
-        .with_env(|env| -> JniResult<jobjectArray> {
-            let Some(commands) = with_session_mut(env, session_handle, |session| {
-                session.inner.drain_native_commands()
-            }) else {
-                return Ok(std::ptr::null_mut());
-            };
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobjectArray> {
+                let Some(commands) = with_session_mut(env, session_handle, |session| {
+                    session.drain_native_commands()
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
 
-            let command_class = env.find_class(jni_name(format!("{PKG}/NativePlayerCommand")))?;
-            let array: JObjectArray<'_> =
-                env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
-            for (index, command) in commands.iter().enumerate() {
-                let object = native_command_object(env, command)?;
-                array.set_element(env, index, object)?;
-            }
-            Ok(array.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                let command_class =
+                    env.find_class(jni_name(format!("{PKG}/NativePlayerCommand")))?;
+                let array: JObjectArray<'_> =
+                    env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
+                for (index, command) in commands.iter().enumerate() {
+                    let object = native_command_object(env, command)?;
+                    array.set_element(env, index, object)?;
+                }
+                Ok(array.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1354,40 +1445,44 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     seekable_end_ms: jlong,
     live_edge_ms: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let snapshot = AndroidExoPlaybackSnapshot {
-                playback_state: exo_state_from_ordinal(playback_state_ordinal),
-                play_when_ready,
-                playback_rate,
-                position: Duration::from_millis(position_ms.max(0) as u64),
-                duration: if duration_ms >= 0 {
-                    Some(Duration::from_millis(duration_ms as u64))
-                } else {
-                    None
-                },
-                is_live,
-                is_seekable,
-                seekable_range: if seekable_start_ms >= 0 && seekable_end_ms >= seekable_start_ms {
-                    Some(player_platform_android::AndroidExoSeekableRange {
-                        start: Duration::from_millis(seekable_start_ms as u64),
-                        end: Duration::from_millis(seekable_end_ms as u64),
-                    })
-                } else {
-                    None
-                },
-                live_edge: if live_edge_ms >= 0 {
-                    Some(Duration::from_millis(live_edge_ms as u64))
-                } else {
-                    None
-                },
-            };
-            let _ = with_session_mut(env, session_handle, |session| {
-                session.inner.apply_exo_snapshot(snapshot);
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let snapshot = AndroidExoPlaybackSnapshot {
+                    playback_state: exo_state_from_ordinal(playback_state_ordinal),
+                    play_when_ready,
+                    playback_rate,
+                    position: Duration::from_millis(position_ms.max(0) as u64),
+                    duration: if duration_ms >= 0 {
+                        Some(Duration::from_millis(duration_ms as u64))
+                    } else {
+                        None
+                    },
+                    is_live,
+                    is_seekable,
+                    seekable_range: if seekable_start_ms >= 0
+                        && seekable_end_ms >= seekable_start_ms
+                    {
+                        Some(player_platform_android::AndroidExoSeekableRange {
+                            start: Duration::from_millis(seekable_start_ms as u64),
+                            end: Duration::from_millis(seekable_end_ms as u64),
+                        })
+                    } else {
+                        None
+                    },
+                    live_edge: if live_edge_ms >= 0 {
+                        Some(Duration::from_millis(live_edge_ms as u64))
+                    } else {
+                        None
+                    },
+                };
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.apply_exo_snapshot(snapshot);
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1398,23 +1493,23 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     track_catalog: JObject<'_>,
     track_selection: JObject<'_>,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            if track_catalog.is_null() || track_selection.is_null() {
-                return Ok(());
-            }
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                if track_catalog.is_null() || track_selection.is_null() {
+                    return Ok(());
+                }
 
-            let track_catalog = parse_native_track_catalog(env, track_catalog)?;
-            let track_selection = parse_native_track_selection_snapshot(env, track_selection)?;
+                let track_catalog = parse_native_track_catalog(env, track_catalog)?;
+                let track_selection = parse_native_track_selection_snapshot(env, track_selection)?;
 
-            let _ = with_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .report_media_info(track_catalog, track_selection);
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.report_media_info(track_catalog, track_selection);
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1424,16 +1519,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     position_ms: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .report_seek_completed(Duration::from_millis(position_ms.max(0) as u64));
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.report_seek_completed(Duration::from_millis(position_ms.max(0) as u64));
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1444,17 +1539,19 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     attempt: jint,
     delay_ms: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                session.inner.report_retry_scheduled(
-                    attempt.max(0) as u32,
-                    Duration::from_millis(delay_ms.max(0) as u64),
-                );
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.report_retry_scheduled(
+                        attempt.max(0) as u32,
+                        Duration::from_millis(delay_ms.max(0) as u64),
+                    );
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1467,21 +1564,21 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     retriable: jboolean,
     message: JString<'_>,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let message = message.try_to_string(env)?;
-            let code = error_code_from_ordinal(code_ordinal);
-            let category = error_category_from_ordinal(category_ordinal);
-            let _ = with_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .report_runtime_error(PlayerRuntimeError::with_taxonomy(
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let message = message.try_to_string(env)?;
+                let code = error_code_from_ordinal(code_ordinal);
+                let category = error_category_from_ordinal(category_ordinal);
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.report_runtime_error(PlayerRuntimeError::with_taxonomy(
                         code, category, retriable, message,
                     ));
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1490,14 +1587,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session.inner.dispatch_command(PlayerRuntimeCommand::Play);
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ = session.dispatch_command(PlayerRuntimeCommand::Play);
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1506,14 +1605,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session.inner.dispatch_command(PlayerRuntimeCommand::Pause);
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ = session.dispatch_command(PlayerRuntimeCommand::Pause);
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1522,14 +1623,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session.inner.dispatch_command(PlayerRuntimeCommand::Stop);
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ = session.dispatch_command(PlayerRuntimeCommand::Stop);
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1539,18 +1642,18 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     position_ms: jlong,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session
-                    .inner
-                    .dispatch_command(PlayerRuntimeCommand::SeekTo {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ = session.dispatch_command(PlayerRuntimeCommand::SeekTo {
                         position: Duration::from_millis(position_ms.max(0) as u64),
                     });
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1560,16 +1663,17 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     rate: jfloat,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session
-                    .inner
-                    .dispatch_command(PlayerRuntimeCommand::SetPlaybackRate { rate });
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ =
+                        session.dispatch_command(PlayerRuntimeCommand::SetPlaybackRate { rate });
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1579,21 +1683,24 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     selection: JObject<'_>,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            if selection.is_null() {
-                return Ok(());
-            }
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                if selection.is_null() {
+                    return Ok(());
+                }
 
-            let selection = parse_native_track_selection(env, selection)?;
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session
-                    .inner
-                    .dispatch_command(PlayerRuntimeCommand::SetVideoTrackSelection { selection });
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                let selection = parse_native_track_selection(env, selection)?;
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ =
+                        session.dispatch_command(PlayerRuntimeCommand::SetVideoTrackSelection {
+                            selection,
+                        });
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1603,21 +1710,24 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     selection: JObject<'_>,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            if selection.is_null() {
-                return Ok(());
-            }
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                if selection.is_null() {
+                    return Ok(());
+                }
 
-            let selection = parse_native_track_selection(env, selection)?;
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session
-                    .inner
-                    .dispatch_command(PlayerRuntimeCommand::SetAudioTrackSelection { selection });
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                let selection = parse_native_track_selection(env, selection)?;
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ =
+                        session.dispatch_command(PlayerRuntimeCommand::SetAudioTrackSelection {
+                            selection,
+                        });
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1627,21 +1737,24 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     selection: JObject<'_>,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            if selection.is_null() {
-                return Ok(());
-            }
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                if selection.is_null() {
+                    return Ok(());
+                }
 
-            let selection = parse_native_track_selection(env, selection)?;
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session.inner.dispatch_command(
-                    PlayerRuntimeCommand::SetSubtitleTrackSelection { selection },
-                );
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                let selection = parse_native_track_selection(env, selection)?;
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ =
+                        session.dispatch_command(PlayerRuntimeCommand::SetSubtitleTrackSelection {
+                            selection,
+                        });
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -1651,21 +1764,21 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     policy: JObject<'_>,
 ) {
-    unowned_env
-        .with_env(|env| -> JniResult<()> {
-            if policy.is_null() {
-                return Ok(());
-            }
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                if policy.is_null() {
+                    return Ok(());
+                }
 
-            let policy = parse_native_abr_policy(env, policy)?;
-            let _ = with_session_mut(env, session_handle, |session| {
-                let _ = session
-                    .inner
-                    .dispatch_command(PlayerRuntimeCommand::SetAbrPolicy { policy });
-            });
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                let policy = parse_native_abr_policy(env, policy)?;
+                let _ = with_session_mut(env, session_handle, |session| {
+                    let _ = session.dispatch_command(PlayerRuntimeCommand::SetAbrPolicy { policy });
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[cfg(test)]
@@ -1690,6 +1803,22 @@ mod tests {
         assert_ne!(first, second);
         assert!(registry.get(first).is_none());
         assert_eq!(registry.get(second), Some(&22));
+    }
+
+    #[test]
+    fn handle_registry_truncates_trailing_empty_slots() {
+        let mut registry = HandleRegistry::default();
+        let first = registry.insert(11_u32);
+        let second = registry.insert(22_u32);
+
+        assert_eq!(registry.slots.len(), 2);
+        assert_eq!(registry.remove(second), Some(22));
+        assert_eq!(registry.slots.len(), 1);
+        assert!(registry.free_slots.is_empty());
+
+        assert_eq!(registry.remove(first), Some(11));
+        assert!(registry.slots.is_empty());
+        assert!(registry.free_slots.is_empty());
     }
 
     #[test]

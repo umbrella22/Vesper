@@ -294,10 +294,24 @@ typedef struct PlayerFfiEventList {
   size_t len;
 } PlayerFfiEventList;
 
+/**
+ * Opaque initializer handle returned by `player_ffi_initializer_probe_uri`.
+ *
+ * Handles are not thread-safe. The caller must serialize all `player_ffi_*`
+ * calls that share the same handle. Concurrent calls on the same handle from
+ * different threads are undefined behavior.
+ */
 typedef struct PlayerFfiInitializerHandle {
   uint8_t _private;
 } PlayerFfiInitializerHandle;
 
+/**
+ * Opaque player handle returned by `player_ffi_initializer_initialize`.
+ *
+ * Handles are not thread-safe. The caller must serialize all `player_ffi_*`
+ * calls that share the same handle. Concurrent calls on the same handle from
+ * different threads are undefined behavior.
+ */
 typedef struct PlayerFfiHandle {
   uint8_t _private;
 } PlayerFfiHandle;
@@ -427,6 +441,13 @@ void player_ffi_event_list_free(struct PlayerFfiEventList *events);
 
 void player_ffi_initializer_destroy(struct PlayerFfiInitializerHandle *handle);
 
+/**
+ * Consumes `handle` and initializes a player instance.
+ *
+ * On both success and error, `handle` is consumed and must not be passed to
+ * `player_ffi_initializer_destroy` or any other `player_ffi_initializer_*`
+ * function afterwards.
+ */
 enum PlayerFfiCallStatus player_ffi_initializer_initialize(struct PlayerFfiInitializerHandle *handle,
                                                            struct PlayerFfiHandle **out_player,
                                                            bool *out_has_initial_frame,
@@ -455,6 +476,12 @@ enum PlayerFfiCallStatus player_ffi_player_advance(struct PlayerFfiHandle *handl
 
 void player_ffi_player_destroy(struct PlayerFfiHandle *handle);
 
+/**
+ * Dispatches a player command and writes the resulting snapshot.
+ *
+ * `out_frame` is optional. Pass `NULL` when the caller does not need an
+ * immediate frame payload for this dispatch.
+ */
 enum PlayerFfiCallStatus player_ffi_player_dispatch(struct PlayerFfiHandle *handle,
                                                     enum PlayerFfiCommandKind command,
                                                     uint64_t position_ms,

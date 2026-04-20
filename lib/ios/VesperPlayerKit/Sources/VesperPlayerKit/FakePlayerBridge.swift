@@ -9,6 +9,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedLastError: VesperPlayerError?
 
     let backend: PlayerBridgeBackend = .fakeDemo
 
@@ -22,6 +23,10 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     var trackSelection: VesperTrackSelectionSnapshot {
         publishedTrackSelection
+    }
+
+    var lastError: VesperPlayerError? {
+        publishedLastError
     }
 
     init(
@@ -53,6 +58,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
+        publishedLastError = nil
     }
 
     func initialize() {}

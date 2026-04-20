@@ -526,7 +526,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         emitEvent([
             "playerId": session.id,
             "type": "error",
-            "error": session.lastError ?? errorMap(from: error),
+            "error": resolvedPlayerErrorMap(for: session) ?? errorMap(from: error),
             "snapshot": buildSnapshotMap(for: session),
         ])
     }
@@ -574,6 +574,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         let uiState = session.controller.uiState
         let trackCatalog = session.controller.trackCatalog
         let trackSelection = session.controller.trackSelection
+        let lastError = resolvedPlayerErrorMap(for: session)
 
         return [
             "title": uiState.title,
@@ -591,8 +592,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "capabilities": buildCapabilitiesMap(),
             "trackCatalog": trackCatalog.toMap(),
             "trackSelection": trackSelection.toMap(),
-            "lastError": flutterValue(session.lastError),
+            "lastError": flutterValue(lastError),
         ]
+    }
+
+    @MainActor
+    private func resolvedPlayerErrorMap(for session: PlayerSession) -> [String: Any]? {
+        session.controller.lastError?.toMap ?? session.lastError
     }
 
     @MainActor
@@ -1394,6 +1400,16 @@ private extension VesperDownloadError {
             "categoryOrdinal": categoryOrdinal,
             "retriable": retriable,
             "message": message,
+        ]
+    }
+}
+
+private extension VesperPlayerError {
+    var toMap: [String: Any] {
+        [
+            "message": message,
+            "category": category.rawValue,
+            "retriable": retriable,
         ]
     }
 }

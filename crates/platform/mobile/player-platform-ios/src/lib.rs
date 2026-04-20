@@ -1288,17 +1288,19 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         match policy.mode {
             MediaAbrMode::Auto => Ok(MediaAbrPolicy::default()),
             MediaAbrMode::Constrained => {
-                if policy.max_bit_rate.is_none() {
+                let has_resolution_limit = policy.max_width.is_some() || policy.max_height.is_some();
+                if policy.max_bit_rate.is_none() && !has_resolution_limit {
                     return Err(PlayerRuntimeError::new(
                         PlayerRuntimeErrorCode::InvalidArgument,
-                        "iOS constrained ABR requires max_bit_rate because AVPlayer does not expose size-only variant limits",
+                        "iOS constrained ABR requires at least one max_bit_rate or max_width/max_height limit",
                     ));
                 }
 
-                if policy.max_width.is_some() || policy.max_height.is_some() {
+                if has_resolution_limit && (policy.max_width.is_none() || policy.max_height.is_none())
+                {
                     return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::Unsupported,
-                        "iOS constrained ABR currently supports max_bit_rate only",
+                        PlayerRuntimeErrorCode::InvalidArgument,
+                        "iOS constrained ABR resolution limits require both max_width and max_height",
                     ));
                 }
 
@@ -1306,8 +1308,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     mode: MediaAbrMode::Constrained,
                     track_id: None,
                     max_bit_rate: policy.max_bit_rate,
-                    max_width: None,
-                    max_height: None,
+                    max_width: policy.max_width,
+                    max_height: policy.max_height,
                 })
             }
             MediaAbrMode::FixedTrack => Err(PlayerRuntimeError::new(
@@ -2099,6 +2101,60 @@ mod tests {
             result.snapshot.media_info.track_selection.abr_policy,
             policy
         );
+    }
+
+    #[test]
+    fn ios_managed_session_dispatches_constrained_abr_by_resolution() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingIosCommandSink::new(commands.clone());
+        let mut session = IosManagedNativeSession::new("placeholder.mp4", test_media_info(), sink);
+        let policy = MediaAbrPolicy {
+            mode: MediaAbrMode::Constrained,
+            track_id: None,
+            max_bit_rate: None,
+            max_width: Some(1280),
+            max_height: Some(720),
+        };
+
+        let result = session
+            .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
+                policy: policy.clone(),
+            })
+            .expect("resolution-constrained abr should dispatch");
+
+        assert!(result.applied);
+        assert_eq!(
+            *commands.lock().expect("commands lock"),
+            vec![IosNativePlayerCommand::SetAbrPolicy {
+                policy: policy.clone(),
+            }]
+        );
+        assert_eq!(
+            result.snapshot.media_info.track_selection.abr_policy,
+            policy
+        );
+    }
+
+    #[test]
+    fn ios_managed_session_rejects_partial_resolution_abr_limit() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let sink = RecordingIosCommandSink::new(commands.clone());
+        let mut session = IosManagedNativeSession::new("placeholder.mp4", test_media_info(), sink);
+
+        let error = session
+            .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
+                policy: MediaAbrPolicy {
+                    mode: MediaAbrMode::Constrained,
+                    track_id: None,
+                    max_bit_rate: None,
+                    max_width: Some(1280),
+                    max_height: None,
+                },
+            })
+            .expect_err("partial resolution abr limit should be rejected");
+
+        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+        assert!(commands.lock().expect("commands lock").is_empty());
     }
 
     #[test]

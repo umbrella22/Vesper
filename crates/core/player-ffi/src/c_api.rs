@@ -200,17 +200,30 @@ pub enum PlayerFfiEventKind {
     RetryScheduled = 12,
 }
 
+/// Opaque initializer handle returned by `player_ffi_initializer_probe_uri`.
+///
+/// Handles are not thread-safe. The caller must serialize all `player_ffi_*`
+/// calls that share the same handle. Concurrent calls on the same handle from
+/// different threads are undefined behavior.
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiInitializerHandle {
     _private: u8,
 }
 
+/// Opaque player handle returned by `player_ffi_initializer_initialize`.
+///
+/// Handles are not thread-safe. The caller must serialize all `player_ffi_*`
+/// calls that share the same handle. Concurrent calls on the same handle from
+/// different threads are undefined behavior.
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiHandle {
     _private: u8,
 }
+
+const _: [(); 1] = [(); std::mem::size_of::<PlayerFfiInitializerHandle>()];
+const _: [(); 1] = [(); std::mem::size_of::<PlayerFfiHandle>()];
 
 #[repr(C)]
 #[derive(Debug, Default)]
@@ -1446,6 +1459,11 @@ pub extern "C" fn player_ffi_initializer_startup(
 }
 
 #[unsafe(no_mangle)]
+/// Consumes `handle` and initializes a player instance.
+///
+/// On both success and error, `handle` is consumed and must not be passed to
+/// `player_ffi_initializer_destroy` or any other `player_ffi_initializer_*`
+/// function afterwards.
 pub extern "C" fn player_ffi_initializer_initialize(
     handle: *mut PlayerFfiInitializerHandle,
     out_player: *mut *mut PlayerFfiHandle,
@@ -1527,7 +1545,7 @@ pub extern "C" fn player_ffi_player_snapshot(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_ref(handle) else {
+    let Some(snapshot) = with_player_ref(handle, |player| player.snapshot()) else {
         write_error(
             out_error,
             owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
@@ -1536,12 +1554,16 @@ pub extern "C" fn player_ffi_player_snapshot(
     };
 
     unsafe {
-        ptr::write(out_snapshot, player.snapshot().into());
+        ptr::write(out_snapshot, snapshot.into());
     }
     PlayerFfiCallStatus::Ok
 }
 
 #[unsafe(no_mangle)]
+/// Dispatches a player command and writes the resulting snapshot.
+///
+/// `out_frame` is optional. Pass `NULL` when the caller does not need an
+/// immediate frame payload for this dispatch.
 pub extern "C" fn player_ffi_player_dispatch(
     handle: *mut PlayerFfiHandle,
     command: PlayerFfiCommandKind,
@@ -1562,7 +1584,9 @@ pub extern "C" fn player_ffi_player_dispatch(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
+    let Some(result) = with_player_mut(handle, |player| {
+        player.dispatch(to_bridge_command(command, position_ms))
+    }) else {
         write_error(
             out_error,
             owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
@@ -1570,7 +1594,7 @@ pub extern "C" fn player_ffi_player_dispatch(
         return PlayerFfiCallStatus::Error;
     };
 
-    match player.dispatch(to_bridge_command(command, position_ms)) {
+    match result {
         Ok(result) => {
             unsafe {
                 ptr::write(out_applied, result.applied);
@@ -1611,7 +1635,8 @@ pub extern "C" fn player_ffi_player_set_playback_rate(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
+    let Some(result) = with_player_mut(handle, |player| player.set_playback_rate(playback_rate))
+    else {
         write_error(
             out_error,
             owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
@@ -1619,7 +1644,7 @@ pub extern "C" fn player_ffi_player_set_playback_rate(
         return PlayerFfiCallStatus::Error;
     };
 
-    match player.set_playback_rate(playback_rate) {
+    match result {
         Ok(result) => {
             unsafe {
                 ptr::write(out_applied, result.applied);
@@ -1653,14 +1678,6 @@ pub extern "C" fn player_ffi_player_set_video_track_selection(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
-        write_error(
-            out_error,
-            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
-        );
-        return PlayerFfiCallStatus::Error;
-    };
-
     let selection = match read_track_selection(selection) {
         Ok(selection) => selection,
         Err(error) => {
@@ -1669,7 +1686,17 @@ pub extern "C" fn player_ffi_player_set_video_track_selection(
         }
     };
 
-    match player.set_video_track_selection(selection) {
+    let Some(result) =
+        with_player_mut(handle, |player| player.set_video_track_selection(selection))
+    else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    match result {
         Ok(result) => {
             unsafe {
                 ptr::write(out_applied, result.applied);
@@ -1703,14 +1730,6 @@ pub extern "C" fn player_ffi_player_set_audio_track_selection(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
-        write_error(
-            out_error,
-            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
-        );
-        return PlayerFfiCallStatus::Error;
-    };
-
     let selection = match read_track_selection(selection) {
         Ok(selection) => selection,
         Err(error) => {
@@ -1719,7 +1738,17 @@ pub extern "C" fn player_ffi_player_set_audio_track_selection(
         }
     };
 
-    match player.set_audio_track_selection(selection) {
+    let Some(result) =
+        with_player_mut(handle, |player| player.set_audio_track_selection(selection))
+    else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    match result {
         Ok(result) => {
             unsafe {
                 ptr::write(out_applied, result.applied);
@@ -1753,14 +1782,6 @@ pub extern "C" fn player_ffi_player_set_subtitle_track_selection(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
-        write_error(
-            out_error,
-            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
-        );
-        return PlayerFfiCallStatus::Error;
-    };
-
     let selection = match read_track_selection(selection) {
         Ok(selection) => selection,
         Err(error) => {
@@ -1769,7 +1790,17 @@ pub extern "C" fn player_ffi_player_set_subtitle_track_selection(
         }
     };
 
-    match player.set_subtitle_track_selection(selection) {
+    let Some(result) = with_player_mut(handle, |player| {
+        player.set_subtitle_track_selection(selection)
+    }) else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    match result {
         Ok(result) => {
             unsafe {
                 ptr::write(out_applied, result.applied);
@@ -1803,14 +1834,6 @@ pub extern "C" fn player_ffi_player_set_abr_policy(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
-        write_error(
-            out_error,
-            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
-        );
-        return PlayerFfiCallStatus::Error;
-    };
-
     let policy = match read_abr_policy(policy) {
         Ok(policy) => policy,
         Err(error) => {
@@ -1819,7 +1842,15 @@ pub extern "C" fn player_ffi_player_set_abr_policy(
         }
     };
 
-    match player.set_abr_policy(policy) {
+    let Some(result) = with_player_mut(handle, |player| player.set_abr_policy(policy)) else {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    match result {
         Ok(result) => {
             unsafe {
                 ptr::write(out_applied, result.applied);
@@ -1848,7 +1879,13 @@ pub extern "C" fn player_ffi_player_drain_events(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
+    let Some(events) = with_player_mut(handle, |player| {
+        player
+            .drain_events()
+            .into_iter()
+            .map(PlayerFfiEvent::from)
+            .collect::<Vec<_>>()
+    }) else {
         write_error(
             out_error,
             owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
@@ -1856,11 +1893,6 @@ pub extern "C" fn player_ffi_player_drain_events(
         return PlayerFfiCallStatus::Error;
     };
 
-    let events = player
-        .drain_events()
-        .into_iter()
-        .map(PlayerFfiEvent::from)
-        .collect::<Vec<_>>();
     let (ptr, len) = into_owned_struct_array(events);
 
     unsafe {
@@ -1887,7 +1919,7 @@ pub extern "C" fn player_ffi_player_advance(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_mut(handle) else {
+    let Some(result) = with_player_mut(handle, |player| player.advance()) else {
         write_error(
             out_error,
             owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
@@ -1895,7 +1927,7 @@ pub extern "C" fn player_ffi_player_advance(
         return PlayerFfiCallStatus::Error;
     };
 
-    match player.advance() {
+    match result {
         Ok(frame) => {
             unsafe {
                 ptr::write(out_has_frame, frame.is_some());
@@ -1931,7 +1963,7 @@ pub extern "C" fn player_ffi_player_next_deadline_delay_ms(
         return PlayerFfiCallStatus::Error;
     }
 
-    let Some(player) = player_ref(handle) else {
+    let Some(deadline) = with_player_ref(handle, |player| player.next_deadline_delay_ms()) else {
         write_error(
             out_error,
             owned_api_error(PlayerFfiErrorCode::NullPointer, "player handle was null"),
@@ -1939,7 +1971,6 @@ pub extern "C" fn player_ffi_player_next_deadline_delay_ms(
         return PlayerFfiCallStatus::Error;
     };
 
-    let deadline = player.next_deadline_delay_ms();
     unsafe {
         ptr::write(out_has_deadline, deadline.is_some());
         ptr::write(out_delay_ms, deadline.unwrap_or_default());
@@ -2274,9 +2305,7 @@ fn api_error_category(code: PlayerFfiErrorCode) -> PlayerFfiErrorCategory {
 
 fn into_c_string_ptr(text: String) -> *mut c_char {
     let sanitized = text.replace('\0', " ");
-    CString::new(sanitized)
-        .expect("sanitized CString")
-        .into_raw()
+    CString::new(sanitized).unwrap_or_default().into_raw()
 }
 
 fn into_owned_bytes(bytes: Vec<u8>) -> (*mut u8, usize) {
@@ -2461,20 +2490,26 @@ fn take_initializer(handle: *mut PlayerFfiInitializerHandle) -> Option<FfiPlayer
     unsafe { Some(*Box::from_raw(handle as *mut FfiPlayerInitializer)) }
 }
 
-fn player_ref(handle: *const PlayerFfiHandle) -> Option<&'static FfiPlayer> {
+fn with_player_ref<R>(
+    handle: *const PlayerFfiHandle,
+    f: impl FnOnce(&FfiPlayer) -> R,
+) -> Option<R> {
     if handle.is_null() {
         return None;
     }
 
-    unsafe { Some(&*(handle as *const FfiPlayer)) }
+    unsafe { Some(f(&*(handle as *const FfiPlayer))) }
 }
 
-fn player_mut(handle: *mut PlayerFfiHandle) -> Option<&'static mut FfiPlayer> {
+fn with_player_mut<R>(
+    handle: *mut PlayerFfiHandle,
+    f: impl FnOnce(&mut FfiPlayer) -> R,
+) -> Option<R> {
     if handle.is_null() {
         return None;
     }
 
-    unsafe { Some(&mut *(handle as *mut FfiPlayer)) }
+    unsafe { Some(f(&mut *(handle as *mut FfiPlayer))) }
 }
 
 fn error_mut(error: *mut PlayerFfiError) -> Option<&'static mut PlayerFfiError> {

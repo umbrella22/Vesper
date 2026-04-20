@@ -1,4 +1,4 @@
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
@@ -15,12 +15,11 @@ use player_runtime::{
 
 use crate::{
     HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
-    method_sig, resolve_preload_budget_with_runtime,
+    lock_or_recover, method_sig, resolve_preload_budget_with_runtime, run_jni_entry,
+    u64_to_jlong_saturating, u128_to_jlong_saturating,
 };
 
-struct AndroidJniPreloadSession {
-    inner: AndroidPreloadBridgeSession,
-}
+type AndroidJniPreloadSession = Arc<Mutex<AndroidPreloadBridgeSession>>;
 
 static PRELOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniPreloadSession>>> =
     OnceLock::new();
@@ -36,33 +35,35 @@ fn invalid_preload_handle_error() -> &'static str {
 fn with_preload_session_mut<R>(
     env: &mut Env<'_>,
     handle: jlong,
-    f: impl FnOnce(&mut AndroidJniPreloadSession) -> R,
+    f: impl FnOnce(&mut AndroidPreloadBridgeSession) -> R,
 ) -> Option<R> {
-    let Ok(mut guard) = preload_sessions().lock() else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalStateException"),
-            jni_name("failed to lock preload session registry"),
-        );
-        return None;
+    let session = {
+        let guard = lock_or_recover(preload_sessions());
+        let Some(session) = guard.get(&handle).cloned() else {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalArgumentException"),
+                jni_name(invalid_preload_handle_error()),
+            );
+            return None;
+        };
+        session
     };
-    let Some(session) = guard.get_mut(&handle) else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalArgumentException"),
-            jni_name(invalid_preload_handle_error()),
-        );
-        return None;
-    };
-    Some(f(session))
+
+    // 持有 session 锁期间禁止回调 Java，避免同一预加载 session 发生重入阻塞。
+    let mut session = lock_or_recover(session.as_ref());
+    Some(f(&mut session))
 }
 
 fn new_preload_session(budget: PreloadBudget) -> Result<jlong, &'static str> {
-    let session = AndroidJniPreloadSession {
-        inner: AndroidPreloadBridgeSession::new(InMemoryPreloadBudgetProvider::new(budget)),
-    };
-    let Ok(mut guard) = preload_sessions().lock() else {
-        return Err("failed to lock preload session registry");
-    };
-    Ok(guard.insert(session))
+    let session = Arc::new(Mutex::new(AndroidPreloadBridgeSession::new(
+        InMemoryPreloadBudgetProvider::new(budget),
+    )));
+    let mut guard = lock_or_recover(preload_sessions());
+    let handle = guard.insert(session);
+    if handle == 0 {
+        return Err("android JNI preload session registry overflow");
+    }
+    Ok(handle)
 }
 
 fn optional_java_string<'local>(
@@ -162,9 +163,9 @@ fn resolved_preload_budget_object<'local>(
         method_sig("(IJJJ)V").method_signature(),
         &[
             JValue::Int(budget.max_concurrent_tasks.min(i32::MAX as u32) as jint),
-            JValue::Long(budget.max_memory_bytes.min(i64::MAX as u64) as i64),
-            JValue::Long(budget.max_disk_bytes.min(i64::MAX as u64) as i64),
-            JValue::Long(budget.warmup_window.as_millis().min(i64::MAX as u128) as i64),
+            JValue::Long(u64_to_jlong_saturating(budget.max_memory_bytes)),
+            JValue::Long(u64_to_jlong_saturating(budget.max_disk_bytes)),
+            JValue::Long(u128_to_jlong_saturating(budget.warmup_window.as_millis())),
         ],
     )
 }
@@ -256,7 +257,7 @@ fn preload_task_object<'local>(
         method_sig("(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;IIIJJJZJIILjava/lang/String;)V")
             .method_signature(),
         &[
-            JValue::Long(task.task_id.get().min(i64::MAX as u64) as i64),
+            JValue::Long(u64_to_jlong_saturating(task.task_id.get())),
             JValue::Object(&source_uri),
             JValue::Object(&source_identity),
             JValue::Object(&cache_key),
@@ -282,14 +283,14 @@ fn preload_task_object<'local>(
                 player_runtime::PreloadPriority::Low => 3,
                 player_runtime::PreloadPriority::Background => 4,
             }),
-            JValue::Long(task.expected_memory_bytes.min(i64::MAX as u64) as i64),
-            JValue::Long(task.expected_disk_bytes.min(i64::MAX as u64) as i64),
-            JValue::Long(task.warmup_window.as_millis().min(i64::MAX as u128) as i64),
+            JValue::Long(u64_to_jlong_saturating(task.expected_memory_bytes)),
+            JValue::Long(u64_to_jlong_saturating(task.expected_disk_bytes)),
+            JValue::Long(u128_to_jlong_saturating(task.warmup_window.as_millis())),
             JValue::Bool(task.expires_at.is_some()),
             JValue::Long(
                 task.expires_at
                     .and_then(|expires_at| expires_at.checked_duration_since(Instant::now()))
-                    .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+                    .map(|duration| u128_to_jlong_saturating(duration.as_millis()))
                     .unwrap_or_default(),
             ),
             JValue::Int(match task.status {
@@ -325,7 +326,7 @@ pub(crate) fn preload_command_object<'local>(
             env.new_object(
                 class,
                 method_sig("(J)V").method_signature(),
-                &[JValue::Long(task_id.get().min(i64::MAX as u64) as i64)],
+                &[JValue::Long(u64_to_jlong_saturating(task_id.get()))],
             )
         }
     }
@@ -337,21 +338,23 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     preload_budget: JObject<'_>,
 ) -> jlong {
-    unowned_env
-        .with_env(|env| -> JniResult<jlong> {
-            let budget = resolved_preload_budget_from_java(env, preload_budget)?;
-            match new_preload_session(budget) {
-                Ok(handle) => Ok(handle),
-                Err(message) => {
-                    env.throw_new(
-                        jni_name("java/lang/IllegalStateException"),
-                        jni_name(message),
-                    )?;
-                    Ok(0)
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jlong> {
+                let budget = resolved_preload_budget_from_java(env, preload_budget)?;
+                match new_preload_session(budget) {
+                    Ok(handle) => Ok(handle),
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(message),
+                        )?;
+                        Ok(0)
+                    }
                 }
-            }
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -360,15 +363,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     preload_budget: JObject<'_>,
 ) -> jobject {
-    unowned_env
-        .with_env(|env| -> JniResult<jobject> {
-            let resolved = resolve_preload_budget_with_runtime(sparse_preload_budget_from_java(
-                env,
-                preload_budget,
-            )?);
-            Ok(resolved_preload_budget_object(env, &resolved)?.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobject> {
+                let resolved = resolve_preload_budget_with_runtime(
+                    sparse_preload_budget_from_java(env, preload_budget)?,
+                );
+                Ok(resolved_preload_budget_object(env, &resolved)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -377,14 +381,15 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) {
-    unowned_env
-        .with_env(|_env| -> JniResult<()> {
-            if let Ok(mut guard) = preload_sessions().lock() {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|_env| -> JniResult<()> {
+                let mut guard = lock_or_recover(preload_sessions());
                 guard.remove(&session_handle);
-            }
-            Ok(())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>();
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -395,46 +400,49 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     candidates: jobjectArray,
     now_epoch_ms: jlong,
 ) -> jobjectArray {
-    unowned_env
-        .with_env(|env| -> JniResult<jobjectArray> {
-            let candidates_array =
-                unsafe { JObjectArray::<JObject<'_>>::from_raw(env, candidates as jobjectArray) };
-            let len = candidates_array.len(env)?;
-            let mut rust_candidates = Vec::with_capacity(len as usize);
-            for index in 0..len {
-                let candidate = candidates_array.get_element(env, index)?;
-                if !candidate.is_null() {
-                    rust_candidates.push(preload_candidate_from_java(env, candidate)?);
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobjectArray> {
+                let candidates_array = unsafe {
+                    JObjectArray::<JObject<'_>>::from_raw(env, candidates as jobjectArray)
+                };
+                let len = candidates_array.len(env)?;
+                let mut rust_candidates = Vec::with_capacity(len as usize);
+                for index in 0..len {
+                    let candidate = candidates_array.get_element(env, index)?;
+                    if !candidate.is_null() {
+                        rust_candidates.push(preload_candidate_from_java(env, candidate)?);
+                    }
                 }
-            }
 
-            let Some(task_ids) = with_preload_session_mut(env, session_handle, |session| {
-                session.inner.plan(rust_candidates, Instant::now())
-            }) else {
+                let Some(task_ids) = with_preload_session_mut(env, session_handle, |session| {
+                    session.plan(rust_candidates, Instant::now())
+                }) else {
+                    let long_class = env.find_class(jni_name("java/lang/Long"))?;
+                    let empty: JObjectArray<'_> =
+                        env.new_object_array(0, long_class, JObject::null())?;
+                    return Ok(empty.into_raw());
+                };
+
                 let long_class = env.find_class(jni_name("java/lang/Long"))?;
-                let empty: JObjectArray<'_> =
-                    env.new_object_array(0, long_class, JObject::null())?;
-                return Ok(empty.into_raw());
-            };
-
-            let long_class = env.find_class(jni_name("java/lang/Long"))?;
-            let array: JObjectArray<'_> =
-                env.new_object_array(task_ids.len() as i32, long_class, JObject::null())?;
-            for (index, task_id) in task_ids.iter().enumerate() {
-                let boxed = env
-                    .call_static_method(
-                        jni_name("java/lang/Long"),
-                        jni_name("valueOf"),
-                        method_sig("(J)Ljava/lang/Long;").method_signature(),
-                        &[JValue::Long(task_id.get().min(i64::MAX as u64) as i64)],
-                    )?
-                    .l()?;
-                array.set_element(env, index, boxed)?;
-            }
-            let _ = now_epoch_ms;
-            Ok(array.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                let array: JObjectArray<'_> =
+                    env.new_object_array(task_ids.len() as i32, long_class, JObject::null())?;
+                for (index, task_id) in task_ids.iter().enumerate() {
+                    let boxed = env
+                        .call_static_method(
+                            jni_name("java/lang/Long"),
+                            jni_name("valueOf"),
+                            method_sig("(J)Ljava/lang/Long;").method_signature(),
+                            &[JValue::Long(u64_to_jlong_saturating(task_id.get()))],
+                        )?
+                        .l()?;
+                    array.set_element(env, index, boxed)?;
+                }
+                let _ = now_epoch_ms;
+                Ok(array.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -443,28 +451,31 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
 ) -> jobjectArray {
-    unowned_env
-        .with_env(|env| -> JniResult<jobjectArray> {
-            let Some(commands) = with_preload_session_mut(env, session_handle, |session| {
-                session.inner.drain_commands()
-            }) else {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobjectArray> {
+                let Some(commands) = with_preload_session_mut(env, session_handle, |session| {
+                    session.drain_commands()
+                }) else {
+                    let command_class =
+                        env.find_class(jni_name(format!("{PKG}/NativePreloadCommand")))?;
+                    let array: JObjectArray<'_> =
+                        env.new_object_array(0, command_class, JObject::null())?;
+                    return Ok(array.into_raw());
+                };
+
                 let command_class =
                     env.find_class(jni_name(format!("{PKG}/NativePreloadCommand")))?;
                 let array: JObjectArray<'_> =
-                    env.new_object_array(0, command_class, JObject::null())?;
-                return Ok(array.into_raw());
-            };
-
-            let command_class = env.find_class(jni_name(format!("{PKG}/NativePreloadCommand")))?;
-            let array: JObjectArray<'_> =
-                env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
-            for (index, command) in commands.iter().enumerate() {
-                let object = preload_command_object(env, command)?;
-                array.set_element(env, index, object)?;
-            }
-            Ok(array.into_raw())
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+                    env.new_object_array(commands.len() as i32, command_class, JObject::null())?;
+                for (index, command) in commands.iter().enumerate() {
+                    let object = preload_command_object(env, command)?;
+                    array.set_element(env, index, object)?;
+                }
+                Ok(array.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -474,18 +485,18 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     session_handle: jlong,
     task_id: jlong,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let Some(result) = with_preload_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .complete(PreloadTaskId::from_raw(task_id.max(0) as u64))
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(result) = with_preload_session_mut(env, session_handle, |session| {
+                    session.complete(PreloadTaskId::from_raw(task_id.max(0) as u64))
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -499,23 +510,23 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     retriable: jboolean,
     message: JString<'_>,
 ) -> jboolean {
-    unowned_env
-        .with_env(|env| -> JniResult<jboolean> {
-            let message = message.try_to_string(env)?;
-            let error = PlayerRuntimeError::with_taxonomy(
-                error_code_from_ordinal(code_ordinal),
-                error_category_from_ordinal(category_ordinal),
-                (retriable as u8) != 0,
-                message,
-            );
-            let Some(result) = with_preload_session_mut(env, session_handle, |session| {
-                session
-                    .inner
-                    .fail(PreloadTaskId::from_raw(task_id.max(0) as u64), error)
-            }) else {
-                return Ok(false as jboolean);
-            };
-            Ok(result.is_ok() as jboolean)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let message = message.try_to_string(env)?;
+                let error = PlayerRuntimeError::with_taxonomy(
+                    error_code_from_ordinal(code_ordinal),
+                    error_category_from_ordinal(category_ordinal),
+                    (retriable as u8) != 0,
+                    message,
+                );
+                let Some(result) = with_preload_session_mut(env, session_handle, |session| {
+                    session.fail(PreloadTaskId::from_raw(task_id.max(0) as u64), error)
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
