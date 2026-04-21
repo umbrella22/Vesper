@@ -31,7 +31,7 @@ object PlayerBridgeFactory {
                         decoderBackend = decoderBackend,
                     ),
                 initialSource = initialSource,
-                resiliencePolicy = resiliencePolicy,
+                currentResiliencePolicy = resiliencePolicy,
                 trackPreferencePolicy = trackPreferencePolicy,
                 preloadBudgetPolicy = preloadBudgetPolicy,
                 decoderBackend = decoderBackend,

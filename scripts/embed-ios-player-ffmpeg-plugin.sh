@@ -52,17 +52,13 @@ case "${PLATFORM_NAME:-}" in
     ;;
   iphonesimulator)
     source_subdir="iphonesimulator"
+    # Apple 侧 iOS Simulator 分发固定为 arm64-only，不再跟随 x86_64。
     arch_tokens="${ARCHS:-${CURRENT_ARCH:-${NATIVE_ARCH_ACTUAL:-arm64}}}"
     for arch in $arch_tokens; do
       case "$arch" in
         arm64)
           if [[ ! " ${selected_slices[*]-} " =~ " ios-simulator-arm64 " ]]; then
             selected_slices+=("ios-simulator-arm64")
-          fi
-          ;;
-        x86_64)
-          if [[ ! " ${selected_slices[*]-} " =~ " ios-simulator-x86_64 " ]]; then
-            selected_slices+=("ios-simulator-x86_64")
           fi
           ;;
       esac

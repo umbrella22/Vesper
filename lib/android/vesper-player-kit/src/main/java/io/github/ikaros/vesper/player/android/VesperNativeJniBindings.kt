@@ -25,7 +25,9 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
@@ -46,11 +48,13 @@ class VesperNativeJniBindings(
     private var sessionHandle: Long? = null
     private var player: ExoPlayer? = null
     private var playerListener: Player.Listener? = null
+    private var analyticsListener: AnalyticsListener? = null
     private var attachedSurface: Surface? = null
     private var updateListener: (() -> Unit)? = null
     private var currentTrackCatalogState: VesperTrackCatalog = VesperTrackCatalog.Empty
     private var currentTrackSelectionState: VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
+    private var currentEffectiveVideoTrackIdState: String? = null
     private var currentVideoLayoutState: NativeVideoLayoutInfo? = null
     private val preloadCoordinator =
         VesperNativePreloadCoordinator(
@@ -97,7 +101,9 @@ class VesperNativeJniBindings(
                 .build()
         applyTrackPreferenceDefaults(exoPlayer, resolvedTrackPreferences)
         val listener = buildPlayerListener(resolvedTrackPreferences)
+        val analytics = buildAnalyticsListener()
         exoPlayer.addListener(listener)
+        exoPlayer.addAnalyticsListener(analytics)
         exoPlayer.setMediaItem(buildMediaItem(source))
         attachedSurface?.let { surface ->
             Log.i(TAG, "reusing attached surface for source=${source.uri}")
@@ -108,6 +114,7 @@ class VesperNativeJniBindings(
 
         player = exoPlayer
         playerListener = listener
+        analyticsListener = analytics
 
         pushSnapshotToRust()
         pushTrackStateToRust()
@@ -126,12 +133,17 @@ class VesperNativeJniBindings(
             player?.removeListener(listener)
         }
         playerListener = null
+        analyticsListener?.let { listener ->
+            player?.removeAnalyticsListener(listener)
+        }
+        analyticsListener = null
         player?.release()
         player = null
         sessionHandle?.let(VesperNativeJni::disposeSession)
         sessionHandle = null
         currentTrackCatalogState = VesperTrackCatalog.Empty
         currentTrackSelectionState = VesperTrackSelectionSnapshot()
+        currentEffectiveVideoTrackIdState = null
         currentVideoLayoutState = null
     }
 
@@ -142,6 +154,8 @@ class VesperNativeJniBindings(
     override fun currentTrackCatalog(): VesperTrackCatalog = currentTrackCatalogState
 
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot = currentTrackSelectionState
+
+    override fun currentEffectiveVideoTrackId(): String? = currentEffectiveVideoTrackIdState
 
     override fun currentVideoLayoutInfo(): NativeVideoLayoutInfo? = currentVideoLayoutState
 
@@ -404,6 +418,22 @@ class VesperNativeJniBindings(
             }
         }
 
+    private fun buildAnalyticsListener(): AnalyticsListener =
+        object : AnalyticsListener {
+            override fun onVideoInputFormatChanged(
+                eventTime: AnalyticsListener.EventTime,
+                format: Format,
+                decoderReuseEvaluation: DecoderReuseEvaluation?,
+            ) {
+                Log.d(
+                    TAG,
+                    "onVideoInputFormatChanged formatId=${format.id} bitrate=${format.bitrate} width=${format.width} height=${format.height}",
+                )
+                pushTrackStateToRust()
+                notifyNativeUpdate()
+            }
+        }
+
     private fun pushSnapshotToRust() {
         val handle = sessionHandle ?: return
         val exoPlayer = player ?: return
@@ -447,11 +477,17 @@ class VesperNativeJniBindings(
         val trackCatalog = collectTrackCatalog(exoPlayer.currentTracks)
         val trackSelection =
             collectTrackSelection(exoPlayer.currentTracks, exoPlayer.trackSelectionParameters)
-        currentTrackCatalogState = trackCatalog.toPublicTrackCatalog()
+        val publicTrackCatalog = trackCatalog.toPublicTrackCatalog()
+        val effectiveVideoTrackId = resolveEffectiveVideoTrackId(
+            publicTrackCatalog.videoTracks,
+            exoPlayer.videoFormat,
+        )
+        currentTrackCatalogState = publicTrackCatalog
         currentTrackSelectionState = trackSelection.toPublicTrackSelectionSnapshot()
+        currentEffectiveVideoTrackIdState = effectiveVideoTrackId
         Log.d(
             TAG,
-            "pushTrackStateToRust tracks=${trackCatalog.tracks.size} adaptiveVideo=${trackCatalog.adaptiveVideo} adaptiveAudio=${trackCatalog.adaptiveAudio} videoMode=${trackSelection.video.modeOrdinal} audioMode=${trackSelection.audio.modeOrdinal} subtitleMode=${trackSelection.subtitle.modeOrdinal} abrMode=${trackSelection.abrPolicy.modeOrdinal}",
+            "pushTrackStateToRust tracks=${trackCatalog.tracks.size} adaptiveVideo=${trackCatalog.adaptiveVideo} adaptiveAudio=${trackCatalog.adaptiveAudio} videoMode=${trackSelection.video.modeOrdinal} audioMode=${trackSelection.audio.modeOrdinal} subtitleMode=${trackSelection.subtitle.modeOrdinal} abrMode=${trackSelection.abrPolicy.modeOrdinal} effectiveVideoTrackId=$effectiveVideoTrackId",
         )
         VesperNativeJni.applyTrackState(handle, trackCatalog, trackSelection)
     }
@@ -1169,6 +1205,131 @@ private fun currentSelectedTrackId(trackType: Int, tracks: Tracks): String? {
         }
     }
     return null
+}
+
+fun resolveEffectiveVideoTrackId(
+    videoTracks: List<VesperMediaTrack>,
+    currentVideoFormat: Format?,
+): String? {
+    val format = currentVideoFormat ?: return null
+    if (videoTracks.isEmpty()) {
+        return null
+    }
+
+    val currentFormatId = format.id?.takeIf(String::isNotBlank)
+    val exactFormatIdMatches =
+        currentFormatId?.let { formatId ->
+            videoTracks.filter { trackFormatIdComponent(it.id) == formatId }
+        }.orEmpty()
+    selectBestEffectiveVideoTrackMatch(exactFormatIdMatches, format)?.let { track ->
+        return track.id
+    }
+
+    val width = format.width.takeIf { it != Format.NO_VALUE && it > 0 }
+    val height = format.height.takeIf { it != Format.NO_VALUE && it > 0 }
+    val bitRate = format.bitrate.takeIf { it != Format.NO_VALUE && it > 0 }?.toLong()
+    val codec = nativeTrackCodec(format)
+
+    if (width != null && height != null && bitRate != null) {
+        val exactSizeAndBitRateMatches =
+            videoTracks.filter { track ->
+                track.width == width &&
+                    track.height == height &&
+                    track.bitRate == bitRate
+            }
+        selectBestEffectiveVideoTrackMatch(exactSizeAndBitRateMatches, format)?.let { track ->
+            return track.id
+        }
+    }
+
+    if (width != null && height != null && codec != null) {
+        val exactSizeAndCodecMatches =
+            videoTracks.filter { track ->
+                track.width == width &&
+                    track.height == height &&
+                    track.codec == codec
+            }
+        selectBestEffectiveVideoTrackMatch(exactSizeAndCodecMatches, format)?.let { track ->
+            return track.id
+        }
+    }
+
+    if (bitRate != null && codec != null) {
+        val exactBitRateAndCodecMatches =
+            videoTracks.filter { track ->
+                track.bitRate == bitRate &&
+                    track.codec == codec
+            }
+        selectBestEffectiveVideoTrackMatch(exactBitRateAndCodecMatches, format)?.let { track ->
+            return track.id
+        }
+    }
+
+    return null
+}
+
+private fun selectBestEffectiveVideoTrackMatch(
+    candidates: List<VesperMediaTrack>,
+    currentVideoFormat: Format,
+): VesperMediaTrack? {
+    if (candidates.isEmpty()) {
+        return null
+    }
+    if (candidates.size == 1) {
+        return candidates.first()
+    }
+
+    return candidates.minWithOrNull(
+        compareBy<VesperMediaTrack> { track ->
+            effectiveVideoTrackDistance(track.width, currentVideoFormat.width)
+        }.thenBy { track ->
+            effectiveVideoTrackDistance(track.height, currentVideoFormat.height)
+        }.thenBy { track ->
+            effectiveVideoTrackDistance(track.bitRate, currentVideoFormat.bitrate)
+        }.thenBy { track ->
+            effectiveVideoFrameRateDistance(track.frameRate, currentVideoFormat.frameRate)
+        }.thenByDescending { track ->
+            if (track.codec == nativeTrackCodec(currentVideoFormat)) 1 else 0
+        }.thenBy { track ->
+            track.id
+        },
+    )
+}
+
+private fun effectiveVideoTrackDistance(trackValue: Int?, formatValue: Int): Long {
+    if (formatValue == Format.NO_VALUE || formatValue <= 0) {
+        return 0
+    }
+    val candidate = trackValue ?: return Long.MAX_VALUE / 4
+    return kotlin.math.abs(candidate.toLong() - formatValue.toLong())
+}
+
+private fun effectiveVideoTrackDistance(trackValue: Long?, formatValue: Int): Long {
+    if (formatValue == Format.NO_VALUE || formatValue <= 0) {
+        return 0
+    }
+    val candidate = trackValue ?: return Long.MAX_VALUE / 4
+    return kotlin.math.abs(candidate - formatValue.toLong())
+}
+
+private fun effectiveVideoFrameRateDistance(trackValue: Float?, formatValue: Float): Long {
+    if (formatValue == FORMAT_NO_VALUE_FLOAT || !formatValue.isFinite() || formatValue <= 0f) {
+        return 0
+    }
+    val candidate = trackValue ?: return Long.MAX_VALUE / 4
+    return kotlin.math.abs(((candidate - formatValue) * 100).toLong())
+}
+
+private fun trackFormatIdComponent(trackId: String): String? {
+    val lastSeparatorIndex = trackId.lastIndexOf(':')
+    if (lastSeparatorIndex <= 0) {
+        return null
+    }
+    val secondLastSeparatorIndex = trackId.lastIndexOf(':', lastSeparatorIndex - 1)
+    if (secondLastSeparatorIndex < 0 || secondLastSeparatorIndex + 1 >= lastSeparatorIndex) {
+        return null
+    }
+    return trackId.substring(secondLastSeparatorIndex + 1, lastSeparatorIndex)
 }
 
 private fun currentTracksContainGroup(tracks: Tracks, trackGroup: TrackGroup): Boolean =

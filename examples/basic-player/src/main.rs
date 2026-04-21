@@ -391,8 +391,12 @@ impl DesktopPlayerApp {
         self.active_playlist_index = self.playlist_entries.len().saturating_sub(1);
     }
 
-    fn stage_display_rect_for_size(&self, size: PhysicalSize<u32>) -> DisplayRect {
-        let stage_rect = playback_stage_rect(size.width, size.height);
+    fn stage_display_rect_for_size(
+        &self,
+        size: PhysicalSize<u32>,
+        window_scale_factor: f64,
+    ) -> DisplayRect {
+        let stage_rect = playback_stage_rect(size.width, size.height, window_scale_factor);
         DisplayRect {
             x: stage_rect.x,
             y: stage_rect.y,
@@ -402,15 +406,18 @@ impl DesktopPlayerApp {
     }
 
     fn sync_renderer_stage_viewport(&mut self) {
-        let size = self
+        let (size, window_scale_factor) = self
             .window
             .as_ref()
-            .map(|window| window.inner_size())
-            .unwrap_or(PhysicalSize::new(
-                self.render_config.width.max(1),
-                self.render_config.height.max(1),
+            .map(|window| (window.inner_size(), window.scale_factor()))
+            .unwrap_or((
+                PhysicalSize::new(
+                    self.render_config.width.max(1),
+                    self.render_config.height.max(1),
+                ),
+                1.0,
             ));
-        let stage_rect = self.stage_display_rect_for_size(size);
+        let stage_rect = self.stage_display_rect_for_size(size, window_scale_factor);
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_video_viewport(Some(stage_rect));
         }
@@ -753,11 +760,13 @@ impl DesktopPlayerApp {
         };
         let frame_texture = video_frame_texture(frame);
         let window_size = window.inner_size();
+        let window_scale_factor = window.scale_factor();
         let snapshot = self.runtime()?.snapshot();
         let overlay_view_model = self.overlay_view_model(&snapshot);
         let overlay = self.ui_presenter.as_ref().and_then(|presenter| {
             presenter.overlay_frame(
                 window_size,
+                window_scale_factor,
                 &snapshot,
                 self.seek_preview,
                 &overlay_view_model,
@@ -816,7 +825,13 @@ impl DesktopPlayerApp {
         let snapshot = self.host_snapshot();
         let overlay_view_model = self.overlay_view_model(&snapshot);
         let overlay = self.ui_presenter.as_ref().and_then(|presenter| {
-            presenter.overlay_frame(window_size, &snapshot, None, &overlay_view_model)
+            presenter.overlay_frame(
+                window_size,
+                window.scale_factor(),
+                &snapshot,
+                None,
+                &overlay_view_model,
+            )
         });
         let frame_texture = self.placeholder_frame_texture();
         let renderer = self
@@ -923,8 +938,10 @@ impl DesktopPlayerApp {
         let snapshot = self.runtime()?.snapshot();
         let overlay_view_model = self.overlay_view_model(&snapshot);
         let window_size = window.inner_size();
+        let window_scale_factor = window.scale_factor();
         let Some(preview) = presenter.seek_preview_at(
             window_size,
+            window_scale_factor,
             cursor_x,
             cursor_y,
             &snapshot,
@@ -959,9 +976,13 @@ impl DesktopPlayerApp {
         let snapshot = self.runtime()?.snapshot();
         let overlay_view_model = self.overlay_view_model(&snapshot);
         let window_size = window.inner_size();
-        if let Some(preview) =
-            presenter.seek_preview_for_drag(window_size, cursor_x, &snapshot, &overlay_view_model)
-        {
+        if let Some(preview) = presenter.seek_preview_for_drag(
+            window_size,
+            window.scale_factor(),
+            cursor_x,
+            &snapshot,
+            &overlay_view_model,
+        ) {
             self.seek_preview = Some(preview);
             self.refresh_overlay()?;
         }
@@ -1085,10 +1106,12 @@ impl DesktopPlayerApp {
         };
 
         let window_size = window.inner_size();
+        let window_scale_factor = window.scale_factor();
         let snapshot = self.runtime()?.snapshot();
         let overlay_view_model = self.overlay_view_model(&snapshot);
         if let Some(action) = presenter.control_action_at(
             window_size,
+            window_scale_factor,
             cursor_x,
             cursor_y,
             &snapshot,
@@ -1222,7 +1245,12 @@ impl DesktopPlayerApp {
         ) {
             let snapshot = runtime.snapshot();
             let overlay_view_model = self.overlay_view_model(&snapshot);
-            ui_presenter.sync(&snapshot, &overlay_view_model, window.inner_size());
+            ui_presenter.sync(
+                &snapshot,
+                &overlay_view_model,
+                window.inner_size(),
+                window.scale_factor(),
+            );
         }
     }
 
@@ -1390,6 +1418,18 @@ impl ApplicationHandler for DesktopPlayerApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 self.resize(size);
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                self.sync_renderer_stage_viewport();
+                self.sync_ui_presenter();
+                if let Err(error) = self.refresh_overlay() {
+                    error!(?error, "failed to refresh overlay after scale-factor change");
+                    event_loop.exit();
+                    return;
+                }
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }

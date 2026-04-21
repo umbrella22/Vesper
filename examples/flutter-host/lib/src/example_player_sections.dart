@@ -211,17 +211,22 @@ class ExampleResilienceSection extends StatelessWidget {
   const ExampleResilienceSection({
     super.key,
     required this.palette,
+    required this.activePolicy,
     required this.selectedProfile,
     required this.onApplyProfile,
   });
 
   final ExampleHostPalette palette;
+  final VesperPlaybackResiliencePolicy activePolicy;
   final ExampleResilienceProfile selectedProfile;
   final Future<void> Function(ExampleResilienceProfile profile) onApplyProfile;
 
   @override
   Widget build(BuildContext context) {
-    final policy = selectedProfile.policy;
+    final activeProfile =
+        ExampleResilienceProfileLabels.fromPolicy(activePolicy) ??
+        selectedProfile;
+    final policy = activePolicy;
     return ExampleSectionShell(
       palette: palette,
       title: '恢复策略',
@@ -237,8 +242,8 @@ class ExampleResilienceSection extends StatelessWidget {
                 .map((profile) {
                   return ChoiceChip(
                     label: Text(profile.title),
-                    selected: profile == selectedProfile,
-                    onSelected: profile == selectedProfile
+                    selected: profile == activeProfile,
+                    onSelected: profile == activeProfile
                         ? null
                         : (_) => onApplyProfile(profile),
                   );
@@ -247,7 +252,7 @@ class ExampleResilienceSection extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            selectedProfile.subtitle,
+            activeProfile.subtitle,
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: palette.body, height: 1.45),

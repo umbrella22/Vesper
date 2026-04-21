@@ -51,6 +51,22 @@ shared_library_name() {
   esac
 }
 
+normalize_runtime_path() {
+  local path="$1"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$path"
+      else
+        printf '%s\n' "$path"
+      fi
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
 resolve_target_dir() {
   if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
     if [[ "$CARGO_TARGET_DIR" = /* ]]; then
@@ -159,7 +175,7 @@ main() {
 
   build_plugin
   plugin_path="$(resolve_plugin_path "$library_name" "$target_dir")"
-  export VESPER_PLAYER_FFMPEG_PLUGIN_PATH="$plugin_path"
+  export VESPER_PLAYER_FFMPEG_PLUGIN_PATH="$(normalize_runtime_path "$plugin_path")"
 
   echo "Using player-ffmpeg plugin: $VESPER_PLAYER_FFMPEG_PLUGIN_PATH"
 

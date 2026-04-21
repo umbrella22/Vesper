@@ -9,6 +9,9 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedEffectiveVideoTrackId: String?
+    @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
+    @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
 
     let backend: PlayerBridgeBackend = .fakeDemo
@@ -25,6 +28,18 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedTrackSelection
     }
 
+    var effectiveVideoTrackId: String? {
+        publishedEffectiveVideoTrackId
+    }
+
+    var fixedTrackStatus: VesperFixedTrackStatus? {
+        publishedFixedTrackStatus
+    }
+
+    var resiliencePolicy: VesperPlaybackResiliencePolicy {
+        publishedResiliencePolicy
+    }
+
     var lastError: VesperPlayerError? {
         publishedLastError
     }
@@ -35,7 +50,6 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
     ) {
-        _ = resiliencePolicy
         _ = trackPreferencePolicy
         _ = preloadBudgetPolicy
         currentSource = initialSource
@@ -58,6 +72,9 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
+        publishedEffectiveVideoTrackId = nil
+        publishedFixedTrackStatus = nil
+        publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
     }
 
@@ -262,7 +279,9 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setAbrPolicy(_ policy: VesperAbrPolicy) {}
 
-    func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {}
+    func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
+        publishedResiliencePolicy = policy
+    }
 
     private func update(_ transform: (PlayerHostUiState) -> PlayerHostUiState) {
         publishedUiState = transform(publishedUiState)

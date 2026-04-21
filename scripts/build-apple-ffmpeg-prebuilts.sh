@@ -9,10 +9,10 @@ FFMPEG_SOURCE_ARCHIVE="${VESPER_APPLE_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/${FFMPEG_
 FFMPEG_OUTPUT_DIR="${VESPER_APPLE_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/apple}"
 IOS_DEPLOYMENT_TARGET="${VESPER_APPLE_IOS_DEPLOYMENT_TARGET:-17.0}"
 ENABLE_DASH="${VESPER_APPLE_FFMPEG_ENABLE_DASH:-1}"
+# Apple 侧预编译 FFmpeg slice 统一收敛为 arm64-only。
 DEFAULT_SLICES=(
   "ios-arm64"
   "ios-simulator-arm64"
-  "ios-simulator-x86_64"
 )
 
 resolve_selected_slices() {
@@ -32,11 +32,11 @@ resolve_selected_slices() {
 
   for token in "${resolved[@]}"; do
     case "$token" in
-      ios-arm64|ios-simulator-arm64|ios-simulator-x86_64)
+      ios-arm64|ios-simulator-arm64)
         ;;
       *)
         echo "Unsupported Apple FFmpeg slice: $token" >&2
-        echo "Supported slices: ios-arm64, ios-simulator-arm64, ios-simulator-x86_64" >&2
+        echo "Supported slices: ios-arm64, ios-simulator-arm64" >&2
         exit 1
         ;;
     esac
@@ -50,7 +50,7 @@ slice_sdk() {
     ios-arm64)
       echo "iphoneos"
       ;;
-    ios-simulator-arm64|ios-simulator-x86_64)
+    ios-simulator-arm64)
       echo "iphonesimulator"
       ;;
     *)
@@ -63,9 +63,6 @@ slice_arch() {
   case "$1" in
     ios-arm64|ios-simulator-arm64)
       echo "arm64"
-      ;;
-    ios-simulator-x86_64)
-      echo "x86_64"
       ;;
     *)
       return 1
@@ -81,9 +78,6 @@ slice_target_triple() {
     ios-simulator-arm64)
       echo "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}-simulator"
       ;;
-    ios-simulator-x86_64)
-      echo "x86_64-apple-ios${IOS_DEPLOYMENT_TARGET}-simulator"
-      ;;
     *)
       return 1
       ;;
@@ -95,7 +89,7 @@ slice_output_root() {
     ios-arm64)
       echo "$FFMPEG_OUTPUT_DIR/ios"
       ;;
-    ios-simulator-arm64|ios-simulator-x86_64)
+    ios-simulator-arm64)
       echo "$FFMPEG_OUTPUT_DIR/ios-simulator"
       ;;
     *)
@@ -108,9 +102,6 @@ slice_output_libdir() {
   case "$1" in
     ios-arm64|ios-simulator-arm64)
       echo "arm64"
-      ;;
-    ios-simulator-x86_64)
-      echo "amd64"
       ;;
     *)
       return 1

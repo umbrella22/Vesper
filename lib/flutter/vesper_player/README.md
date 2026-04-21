@@ -20,7 +20,7 @@ selection, resilience, download, and preload flows aligned across platforms.
 | Live streams | ✅ | ✅ | ⚠️ Experimental |
 | Live DVR | ✅ | ✅ | ⚠️ Experimental |
 | Track selection | ✅ | ✅ | ⚠️ Experimental |
-| Adaptive bitrate (ABR) | ✅ | ⚠️ Constrained mode only | ⚠️ Experimental |
+| Adaptive bitrate (ABR) | ✅ | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ⚠️ Experimental |
 | Buffering / retry policy | ✅ | ✅ | ⚠️ Experimental |
 | Download management | ✅ | ✅ | ❌ |
 | Preload | ✅ | ✅ | ❌ |
@@ -68,6 +68,7 @@ controller.snapshots.listen((snapshot) {
   print('Playback state: ${snapshot.playbackState}');
   print('Position: ${snapshot.timeline.positionMs}ms');
   print('Buffering: ${snapshot.isBuffering}');
+  print('Retry attempts: ${snapshot.resiliencePolicy.retry.maxAttempts}');
 });
 
 // Event stream: emits errors and lifecycle events.
@@ -80,6 +81,12 @@ controller.events.listen((event) {
 // You can also read the latest snapshot directly.
 final snapshot = controller.snapshot;
 ```
+
+`VesperPlayerSnapshot` is the authoritative runtime view of the active backend.
+It carries timeline state, capabilities, current track selection, the effective
+runtime video variant through `effectiveVideoTrackId`, explicit fixed-track
+settling state through `fixedTrackStatus`, the effective `resiliencePolicy`,
+and the latest surfaced playback error.
 
 ## Core API
 
@@ -162,6 +169,30 @@ await controller.setAbrPolicy(
 );
 ```
 
+On iOS, `VesperAbrPolicy.fixedTrack(...)` is implemented as best-effort HLS
+variant pinning on iOS 15+, not exact AVPlayer video-track switching. Single-
+axis constraints such as `VesperAbrPolicy.constrained(maxHeight: 720)` are also
+supported on iOS HLS, but they are restored only after the current variant
+catalog is ready so the missing dimension can be inferred safely. Check
+`supportsAbrFixedTrack` and `supportsVideoTrackSelection` before exposing that
+control in product UI.
+
+Android and iOS both surface the currently active adaptive variant through
+`controller.snapshot.effectiveVideoTrackId`. Flutter UI can combine that with
+`trackCatalog.videoTracks` to show the actual quality currently in use during
+`auto` or constrained ABR.
+
+On iOS, `controller.snapshot.fixedTrackStatus` provides an explicit runtime
+signal for best-effort `fixedTrack` convergence:
+
+- `pending`: the host is still waiting for enough runtime evidence to identify the active variant
+- `locked`: the currently observed variant matches the requested fixed-track target
+- `fallback`: the player is still rendering a different variant than the requested target
+
+When `fixedTrackStatus` is not available on a backend, Flutter UI can still
+fall back to comparing the requested `trackId` with `effectiveVideoTrackId`,
+but new platform implementations should prefer surfacing the explicit status.
+
 ## Live And DVR
 
 ```dart
@@ -202,6 +233,9 @@ final policy = VesperPlaybackResiliencePolicy(
 );
 
 await controller.setPlaybackResiliencePolicy(policy);
+
+final effectivePolicy = controller.snapshot.resiliencePolicy;
+print('Active buffering preset: ${effectivePolicy.buffering.preset}');
 ```
 
 Built-in presets:
@@ -339,6 +373,11 @@ if (caps.supportsDash) {
 
 if (caps.supportsTrackSelection) {
   // Track selection is supported.
+}
+
+if (caps.supportsAbrFixedTrack) {
+  // Fixed-track ABR pinning is available on this backend.
+  // On iOS this is best-effort variant pinning, not exact track switching.
 }
 
 if (caps.isExperimental) {

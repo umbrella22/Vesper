@@ -72,6 +72,64 @@ void main() {
   });
 
   test(
+      'legacy coarse capability maps stay conservative for fine-grained fields',
+      () {
+    final capabilities = VesperPlayerCapabilities.fromMap(<Object?, Object?>{
+      'supportsTrackSelection': true,
+      'supportsAbrPolicy': true,
+    });
+
+    expect(capabilities.supportsTrackSelection, isTrue);
+    expect(capabilities.supportsVideoTrackSelection, isFalse);
+    expect(capabilities.supportsAudioTrackSelection, isFalse);
+    expect(capabilities.supportsSubtitleTrackSelection, isFalse);
+    expect(capabilities.supportsAbrPolicy, isTrue);
+    expect(capabilities.supportsAbrConstrained, isFalse);
+    expect(capabilities.supportsAbrFixedTrack, isFalse);
+    expect(capabilities.supportsAbrMaxBitRate, isFalse);
+    expect(capabilities.supportsAbrMaxResolution, isFalse);
+    expect(
+      capabilities.supportsTrackSelectionFor(VesperMediaTrackKind.audio),
+      isFalse,
+    );
+    expect(capabilities.supportsAbrMode(VesperAbrMode.auto), isTrue);
+    expect(capabilities.supportsAbrMode(VesperAbrMode.fixedTrack), isFalse);
+  });
+
+  test('capabilities decode partial iOS ABR and track-selection support', () {
+    final capabilities = VesperPlayerCapabilities.fromMap(<Object?, Object?>{
+      'supportsTrackSelection': true,
+      'supportsVideoTrackSelection': false,
+      'supportsAudioTrackSelection': true,
+      'supportsSubtitleTrackSelection': true,
+      'supportsAbrPolicy': true,
+      'supportsAbrConstrained': true,
+      'supportsAbrFixedTrack': false,
+      'supportsAbrMaxBitRate': true,
+      'supportsAbrMaxResolution': true,
+    });
+
+    expect(capabilities.supportsTrackSelection, isTrue);
+    expect(capabilities.supportsVideoTrackSelection, isFalse);
+    expect(capabilities.supportsAudioTrackSelection, isTrue);
+    expect(capabilities.supportsSubtitleTrackSelection, isTrue);
+    expect(
+      capabilities.supportsTrackSelectionFor(VesperMediaTrackKind.video),
+      isFalse,
+    );
+    expect(
+      capabilities.supportsTrackSelectionFor(VesperMediaTrackKind.subtitle),
+      isTrue,
+    );
+    expect(capabilities.supportsAbrPolicy, isTrue);
+    expect(capabilities.supportsAbrConstrained, isTrue);
+    expect(capabilities.supportsAbrFixedTrack, isFalse);
+    expect(capabilities.supportsAbrMode(VesperAbrMode.constrained), isTrue);
+    expect(capabilities.supportsAbrMode(VesperAbrMode.fixedTrack), isFalse);
+    expect(capabilities.toMap()['supportsAbrFixedTrack'], isFalse);
+  });
+
+  test(
     'default retry policy keeps fallback getters but omits channel overrides',
     () {
       const policy = VesperRetryPolicy();
@@ -336,8 +394,7 @@ void main() {
       'hasVideoSurface': false,
       'timeline': const VesperTimeline.initial().toMap(),
       'lastError': <Object?, Object?>{
-        'message':
-            'setVideoTrackSelection is not implemented on iOS AVPlayer.',
+        'message': 'setVideoTrackSelection is not implemented on iOS AVPlayer.',
         'category': 'unsupported',
         'retriable': false,
       },
@@ -352,5 +409,68 @@ void main() {
       VesperPlayerErrorCategory.unsupported,
     );
     expect(snapshot.lastError?.retriable, isFalse);
+  });
+
+  test('player snapshot decodes resilience policy shared semantics', () {
+    final snapshot = VesperPlayerSnapshot.fromMap(<Object?, Object?>{
+      'title': 'Demo',
+      'subtitle': 'Resilience',
+      'sourceLabel': 'feed://demo',
+      'playbackState': 'ready',
+      'playbackRate': 1.0,
+      'isBuffering': false,
+      'isInterrupted': false,
+      'hasVideoSurface': false,
+      'timeline': const VesperTimeline.initial().toMap(),
+      'effectiveVideoTrackId': 'video:hls:cavc1:b1500000:w1280:h720:f3000',
+      'fixedTrackStatus': 'fallback',
+      'resiliencePolicy':
+          const VesperPlaybackResiliencePolicy.resilient().toMap(),
+    });
+
+    expect(
+      snapshot.effectiveVideoTrackId,
+      'video:hls:cavc1:b1500000:w1280:h720:f3000',
+    );
+    expect(snapshot.fixedTrackStatus, VesperFixedTrackStatus.fallback);
+    expect(snapshot.resiliencePolicy.buffering.preset,
+        VesperBufferingPreset.resilient);
+    expect(snapshot.resiliencePolicy.retry.maxAttempts, 6);
+    expect(snapshot.resiliencePolicy.cache.preset, VesperCachePreset.resilient);
+  });
+
+  test('player snapshot event decodes resilience policy shared semantics', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'type': 'snapshot',
+      'playerId': 'ios-player',
+      'snapshot': <Object?, Object?>{
+        'title': 'Demo',
+        'subtitle': 'Event resilience',
+        'sourceLabel': 'feed://demo',
+        'playbackState': 'playing',
+        'playbackRate': 1.0,
+        'isBuffering': false,
+        'isInterrupted': false,
+        'hasVideoSurface': true,
+        'timeline': const VesperTimeline.initial().toMap(),
+        'effectiveVideoTrackId': 'video:hls:cavc1:b2500000:w1920:h1080:f2997',
+        'fixedTrackStatus': 'locked',
+        'resiliencePolicy':
+            const VesperPlaybackResiliencePolicy.streaming().toMap(),
+      },
+    });
+
+    expect(event, isA<VesperPlayerSnapshotEvent>());
+    expect(event.playerId, 'ios-player');
+    final snapshot = (event as VesperPlayerSnapshotEvent).snapshot;
+    expect(snapshot.playbackState, VesperPlaybackState.playing);
+    expect(
+      snapshot.effectiveVideoTrackId,
+      'video:hls:cavc1:b2500000:w1920:h1080:f2997',
+    );
+    expect(snapshot.fixedTrackStatus, VesperFixedTrackStatus.locked);
+    expect(snapshot.resiliencePolicy.buffering.preset,
+        VesperBufferingPreset.streaming);
+    expect(snapshot.resiliencePolicy.cache.preset, VesperCachePreset.streaming);
   });
 }

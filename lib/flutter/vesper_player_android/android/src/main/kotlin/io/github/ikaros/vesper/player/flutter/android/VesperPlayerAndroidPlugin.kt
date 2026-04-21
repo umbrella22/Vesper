@@ -687,6 +687,8 @@ class VesperPlayerAndroidPlugin :
         val uiState = session.controller.uiState.value
         val trackCatalog = session.controller.trackCatalog.value
         val trackSelection = session.controller.trackSelection.value
+        val effectiveVideoTrackId = session.controller.effectiveVideoTrackId.value
+        val resiliencePolicy = session.controller.resiliencePolicy.value
 
         return mapOf(
             "title" to uiState.title,
@@ -704,6 +706,8 @@ class VesperPlayerAndroidPlugin :
             "capabilities" to buildCapabilitiesMap(),
             "trackCatalog" to trackCatalog.toMap(),
             "trackSelection" to trackSelection.toMap(),
+            "effectiveVideoTrackId" to effectiveVideoTrackId,
+            "resiliencePolicy" to resiliencePolicy.toMap(),
             "lastError" to session.lastError,
         )
     }
@@ -716,7 +720,14 @@ class VesperPlayerAndroidPlugin :
             "supportsDash" to true,
             "supportsTrackCatalog" to true,
             "supportsTrackSelection" to true,
+            "supportsVideoTrackSelection" to true,
+            "supportsAudioTrackSelection" to true,
+            "supportsSubtitleTrackSelection" to true,
             "supportsAbrPolicy" to true,
+            "supportsAbrConstrained" to true,
+            "supportsAbrFixedTrack" to true,
+            "supportsAbrMaxBitRate" to true,
+            "supportsAbrMaxResolution" to true,
             "supportsResiliencePolicy" to true,
             "supportsHolePunch" to false,
             "supportsPlaybackRate" to true,
@@ -1173,6 +1184,37 @@ private fun VesperAbrPolicy.toMap(): Map<String, Any?> =
         "maxHeight" to maxHeight,
     )
 
+private fun VesperPlaybackResiliencePolicy.toMap(): Map<String, Any?> =
+    mapOf(
+        "buffering" to buffering.toMap(),
+        "retry" to retry.toMap(),
+        "cache" to cache.toMap(),
+    )
+
+private fun VesperBufferingPolicy.toMap(): Map<String, Any?> =
+    mapOf(
+        "preset" to preset.toWireName(),
+        "minBufferMs" to minBufferMs,
+        "maxBufferMs" to maxBufferMs,
+        "bufferForPlaybackMs" to bufferForPlaybackMs,
+        "bufferForPlaybackAfterRebufferMs" to bufferForPlaybackAfterRebufferMs,
+    )
+
+private fun VesperRetryPolicy.toMap(): Map<String, Any?> =
+    mapOf(
+        "maxAttempts" to maxAttempts,
+        "baseDelayMs" to baseDelayMs,
+        "maxDelayMs" to maxDelayMs,
+        "backoff" to backoff.toWireName(),
+    )
+
+private fun VesperCachePolicy.toMap(): Map<String, Any?> =
+    mapOf(
+        "preset" to preset.toWireName(),
+        "maxMemoryBytes" to maxMemoryBytes,
+        "maxDiskBytes" to maxDiskBytes,
+    )
+
 private fun Throwable.toErrorMap(): Map<String, Any?> =
     mapOf(
         "message" to (message ?: toString()),
@@ -1223,6 +1265,30 @@ private fun VesperPlayerSourceProtocol.toWireName(): String =
         VesperPlayerSourceProtocol.Progressive -> "progressive"
         VesperPlayerSourceProtocol.Hls -> "hls"
         VesperPlayerSourceProtocol.Dash -> "dash"
+    }
+
+private fun VesperBufferingPreset.toWireName(): String =
+    when (this) {
+        VesperBufferingPreset.Default -> "defaultPreset"
+        VesperBufferingPreset.Balanced -> "balanced"
+        VesperBufferingPreset.Streaming -> "streaming"
+        VesperBufferingPreset.Resilient -> "resilient"
+        VesperBufferingPreset.LowLatency -> "lowLatency"
+    }
+
+private fun VesperRetryBackoff.toWireName(): String =
+    when (this) {
+        VesperRetryBackoff.Fixed -> "fixed"
+        VesperRetryBackoff.Linear -> "linear"
+        VesperRetryBackoff.Exponential -> "exponential"
+    }
+
+private fun VesperCachePreset.toWireName(): String =
+    when (this) {
+        VesperCachePreset.Default -> "defaultPreset"
+        VesperCachePreset.Disabled -> "disabled"
+        VesperCachePreset.Streaming -> "streaming"
+        VesperCachePreset.Resilient -> "resilient"
     }
 
 private fun VesperMediaTrackKind.toWireName(): String =

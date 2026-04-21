@@ -8,6 +8,8 @@ BUILD_DIR="$PROJECT_DIR/.build/xcframework"
 IOS_ARCHIVE="$BUILD_DIR/VesperPlayerKit-iOS.xcarchive"
 SIM_ARCHIVE="$BUILD_DIR/VesperPlayerKit-iOS-Simulator.xcarchive"
 OUTPUT_PATH="$BUILD_DIR/VesperPlayerKit.xcframework"
+# Apple 侧 iOS binary packaging 统一收敛为 arm64-only，不再开放 x86_64
+# simulator slice。
 SIMULATOR_ARCHS_ENV="${VESPER_IOS_SIMULATOR_ARCHS:-arm64}"
 SIMULATOR_ARCHS=()
 SIMULATOR_BUILD_ARCHIVES=()
@@ -31,11 +33,11 @@ resolve_simulator_archs() {
     fi
 
     case "$token" in
-      arm64|x86_64)
+      arm64)
         ;;
       *)
         echo "Unsupported iOS simulator architecture: $token" >&2
-        echo "Supported values: arm64, x86_64" >&2
+        echo "Supported values: arm64" >&2
         exit 1
         ;;
     esac

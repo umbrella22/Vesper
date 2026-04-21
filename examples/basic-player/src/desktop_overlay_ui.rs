@@ -8,6 +8,9 @@ use crate::desktop_ui::{
     is_scrubbable_timeline,
 };
 
+const MIN_OVERLAY_DESIGN_WIDTH: f64 = 960.0;
+const MIN_OVERLAY_DESIGN_HEIGHT: f64 = 540.0;
+
 #[derive(Debug, Clone, Copy)]
 struct OverlayButton {
     rect: DesktopUiRect,
@@ -42,40 +45,106 @@ struct SidebarLayout {
     buttons: Vec<OverlayButton>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DesktopOverlaySurface {
+    physical_width: u32,
+    physical_height: u32,
+    design_width: u32,
+    design_height: u32,
+    scale_x: f64,
+    scale_y: f64,
+}
+
+impl DesktopOverlaySurface {
+    fn new(physical_width: u32, physical_height: u32, window_scale_factor: f64) -> Option<Self> {
+        if physical_width == 0 || physical_height == 0 {
+            return None;
+        }
+
+        let max_scale_x = f64::from(physical_width) / MIN_OVERLAY_DESIGN_WIDTH;
+        let max_scale_y = f64::from(physical_height) / MIN_OVERLAY_DESIGN_HEIGHT;
+        let overlay_scale = window_scale_factor
+            .max(1.0)
+            .min(max_scale_x.min(max_scale_y).max(1.0));
+        let design_width = ((f64::from(physical_width) / overlay_scale).round() as u32).max(1);
+        let design_height = ((f64::from(physical_height) / overlay_scale).round() as u32).max(1);
+
+        Some(Self {
+            physical_width,
+            physical_height,
+            design_width,
+            design_height,
+            scale_x: f64::from(physical_width) / f64::from(design_width),
+            scale_y: f64::from(physical_height) / f64::from(design_height),
+        })
+    }
+
+    fn to_design_cursor(self, cursor_x: f64, cursor_y: f64) -> (f64, f64) {
+        (cursor_x / self.scale_x, cursor_y / self.scale_y)
+    }
+
+    fn to_design_overlay(self, overlay: &DesktopOverlayViewModel) -> DesktopOverlayViewModel {
+        let mut scaled = overlay.clone();
+        scaled.cursor_position = overlay.cursor_position.map(|(x, y)| {
+            (
+                clamp_cursor(f64::from(x) / self.scale_x, self.design_width),
+                clamp_cursor(f64::from(y) / self.scale_y, self.design_height),
+            )
+        });
+        scaled
+    }
+
+    fn to_physical_rect(self, rect: DesktopUiRect) -> DesktopUiRect {
+        let left = (f64::from(rect.x) * self.scale_x).round() as u32;
+        let top = (f64::from(rect.y) * self.scale_y).round() as u32;
+        let right =
+            (f64::from(rect.x.saturating_add(rect.width)) * self.scale_x).round() as u32;
+        let bottom =
+            (f64::from(rect.y.saturating_add(rect.height)) * self.scale_y).round() as u32;
+
+        DesktopUiRect {
+            x: left,
+            y: top,
+            width: right.saturating_sub(left).min(self.physical_width),
+            height: bottom.saturating_sub(top).min(self.physical_height),
+        }
+    }
+}
+
 pub fn render_desktop_overlay(
     frame_width: u32,
     frame_height: u32,
+    window_scale_factor: f64,
     snapshot: &PlayerSnapshot,
     seek_preview: Option<SeekPreview>,
     overlay: &DesktopOverlayViewModel,
 ) -> Option<RgbaOverlayFrame> {
-    if frame_width == 0 || frame_height == 0 {
-        return None;
-    }
-
-    let layout = overlay_layout(frame_width, frame_height, overlay)?;
+    let surface = DesktopOverlaySurface::new(frame_width, frame_height, window_scale_factor)?;
+    let scaled_overlay = surface.to_design_overlay(overlay);
+    let layout = overlay_layout(surface.design_width, surface.design_height, &scaled_overlay)?;
     let view_model = DesktopUiViewModel::from_snapshot(snapshot, true, seek_preview);
-    let mut overlay_bytes = vec![0; frame_width as usize * frame_height as usize * 4];
+    let mut overlay_bytes =
+        vec![0; surface.design_width as usize * surface.design_height as usize * 4];
 
     draw_stage_controls(
         &mut overlay_bytes,
-        frame_width,
-        frame_height,
+        surface.design_width,
+        surface.design_height,
         &view_model,
-        overlay,
+        &scaled_overlay,
         &layout,
     );
     draw_sidebar(
         &mut overlay_bytes,
-        frame_width,
-        frame_height,
-        overlay,
+        surface.design_width,
+        surface.design_height,
+        &scaled_overlay,
         &layout,
     );
 
     Some(RgbaOverlayFrame {
-        width: frame_width,
-        height: frame_height,
+        width: surface.design_width,
+        height: surface.design_height,
         bytes: overlay_bytes,
     })
 }
@@ -105,9 +174,12 @@ pub fn stage_and_sidebar_rects(
     ))
 }
 
-pub fn playback_stage_rect(frame_width: u32, frame_height: u32) -> DesktopUiRect {
-    stage_and_sidebar_rects(frame_width, frame_height)
-        .map(|(stage_rect, _)| stage_rect)
+pub fn playback_stage_rect(frame_width: u32, frame_height: u32, window_scale_factor: f64) -> DesktopUiRect {
+    DesktopOverlaySurface::new(frame_width, frame_height, window_scale_factor)
+        .and_then(|surface| {
+            stage_and_sidebar_rects(surface.design_width, surface.design_height)
+                .map(|(stage_rect, _)| surface.to_physical_rect(stage_rect))
+        })
         .unwrap_or(DesktopUiRect {
             x: 0,
             y: 0,
@@ -119,14 +191,17 @@ pub fn playback_stage_rect(frame_width: u32, frame_height: u32) -> DesktopUiRect
 pub fn overlay_action_at(
     frame_width: u32,
     frame_height: u32,
+    window_scale_factor: f64,
     cursor_x: f64,
     cursor_y: f64,
     snapshot: &PlayerSnapshot,
     overlay: &DesktopOverlayViewModel,
 ) -> Option<ControlAction> {
-    let layout = overlay_layout(frame_width, frame_height, overlay)?;
-    let x = clamp_cursor(cursor_x, frame_width);
-    let y = clamp_cursor(cursor_y, frame_height);
+    let surface = DesktopOverlaySurface::new(frame_width, frame_height, window_scale_factor)?;
+    let layout = overlay_layout(surface.design_width, surface.design_height, overlay)?;
+    let (design_cursor_x, design_cursor_y) = surface.to_design_cursor(cursor_x, cursor_y);
+    let x = clamp_cursor(design_cursor_x, surface.design_width);
+    let y = clamp_cursor(design_cursor_y, surface.design_height);
     let stage_controls_interactive = stage_controls_interactive(overlay);
 
     layout
@@ -138,11 +213,10 @@ pub fn overlay_action_at(
         })
         .map(|button| button.action)
         .or_else(|| {
-            seek_preview_at(
-                frame_width,
-                frame_height,
-                cursor_x,
-                cursor_y,
+            seek_preview_at_for_surface(
+                surface,
+                design_cursor_x,
+                design_cursor_y,
                 snapshot,
                 overlay,
             )
@@ -153,6 +227,7 @@ pub fn overlay_action_at(
 pub fn seek_preview_at(
     frame_width: u32,
     frame_height: u32,
+    window_scale_factor: f64,
     cursor_x: f64,
     cursor_y: f64,
     snapshot: &PlayerSnapshot,
@@ -161,21 +236,15 @@ pub fn seek_preview_at(
     if !stage_controls_interactive(overlay) {
         return None;
     }
-    let layout = overlay_layout(frame_width, frame_height, overlay)?;
-    let x = clamp_cursor(cursor_x, frame_width);
-    let y = clamp_cursor(cursor_y, frame_height);
-    if !layout.progress_hit_rect.contains(x, y) {
-        return None;
-    }
-    preview_for_progress_ratio(
-        snapshot,
-        ratio_for_progress_x(layout.progress_rect, cursor_x),
-    )
+    let surface = DesktopOverlaySurface::new(frame_width, frame_height, window_scale_factor)?;
+    let (design_cursor_x, design_cursor_y) = surface.to_design_cursor(cursor_x, cursor_y);
+    seek_preview_at_for_surface(surface, design_cursor_x, design_cursor_y, snapshot, overlay)
 }
 
 pub fn seek_preview_for_drag(
     frame_width: u32,
     frame_height: u32,
+    window_scale_factor: f64,
     cursor_x: f64,
     snapshot: &PlayerSnapshot,
     overlay: &DesktopOverlayViewModel,
@@ -183,11 +252,29 @@ pub fn seek_preview_for_drag(
     if !stage_controls_interactive(overlay) {
         return None;
     }
-    let layout = overlay_layout(frame_width, frame_height, overlay)?;
+    let surface = DesktopOverlaySurface::new(frame_width, frame_height, window_scale_factor)?;
+    let layout = overlay_layout(surface.design_width, surface.design_height, overlay)?;
+    let (design_cursor_x, _) = surface.to_design_cursor(cursor_x, 0.0);
     preview_for_progress_ratio(
         snapshot,
-        ratio_for_progress_x(layout.progress_rect, cursor_x),
+        ratio_for_progress_x(layout.progress_rect, design_cursor_x),
     )
+}
+
+fn seek_preview_at_for_surface(
+    surface: DesktopOverlaySurface,
+    cursor_x: f64,
+    cursor_y: f64,
+    snapshot: &PlayerSnapshot,
+    overlay: &DesktopOverlayViewModel,
+) -> Option<SeekPreview> {
+    let layout = overlay_layout(surface.design_width, surface.design_height, overlay)?;
+    let x = clamp_cursor(cursor_x, surface.design_width);
+    let y = clamp_cursor(cursor_y, surface.design_height);
+    if !layout.progress_hit_rect.contains(x, y) {
+        return None;
+    }
+    preview_for_progress_ratio(snapshot, ratio_for_progress_x(layout.progress_rect, cursor_x))
 }
 
 fn overlay_layout(

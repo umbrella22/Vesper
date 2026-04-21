@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use winit::dpi::PhysicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::window::{Window, WindowAttributes};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub struct RgbaOverlayFrame {
 pub fn default_window_attributes(config: RenderSurfaceConfig) -> WindowAttributes {
     Window::default_attributes()
         .with_title("Vesper basic player")
-        .with_inner_size(PhysicalSize::new(config.width, config.height))
+        .with_inner_size(LogicalSize::new(config.width, config.height))
 }
 
 pub fn preferred_backends() -> wgpu::Backends {
@@ -659,7 +659,7 @@ impl VideoRenderer {
                     0.0,
                     1.0,
                 );
-                if size.width == self.config.width && size.height == self.config.height {
+                if size.width > 0 && size.height > 0 {
                     render_pass.draw(0..3, 0..1);
                 }
             }

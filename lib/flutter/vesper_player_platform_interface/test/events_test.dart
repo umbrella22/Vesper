@@ -16,8 +16,10 @@ void main() {
         'isInterrupted': false,
         'hasVideoSurface': false,
         'timeline': const VesperTimeline.initial().toMap(),
+        'fixedTrackStatus': 'pending',
         'lastError': <Object?, Object?>{
-          'message': 'setAbrPolicy fixedTrack is not implemented on iOS AVPlayer',
+          'message':
+              'setAbrPolicy fixedTrack is not implemented on iOS AVPlayer',
           'category': 'unsupported',
           'retriable': false,
         },
@@ -34,6 +36,10 @@ void main() {
     expect(
       snapshotEvent.snapshot.lastError?.message,
       'setAbrPolicy fixedTrack is not implemented on iOS AVPlayer',
+    );
+    expect(
+      snapshotEvent.snapshot.fixedTrackStatus,
+      VesperFixedTrackStatus.pending,
     );
   });
 }

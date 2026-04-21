@@ -35,6 +35,22 @@ public enum VesperAbrMode: String, Equatable {
     case fixedTrack
 }
 
+/// Observes whether a best-effort `fixedTrack` request has settled onto the
+/// requested HLS variant.
+public enum VesperFixedTrackStatus: String, Equatable {
+    /// The host is still waiting for enough runtime evidence to identify the
+    /// active variant after applying a fixed-track request.
+    case pending
+
+    /// The currently observed variant matches the requested fixed-track target.
+    case locked
+
+    /// The player is still rendering a different variant than the requested
+    /// fixed-track target.
+    case fallback
+}
+
+/// Describes how the host should guide adaptive video selection.
 public struct VesperAbrPolicy: Equatable {
     public let mode: VesperAbrMode
     public let trackId: String?
@@ -60,6 +76,11 @@ public struct VesperAbrPolicy: Equatable {
         VesperAbrPolicy(mode: .auto)
     }
 
+    /// Limits adaptive playback by bitrate and/or resolution.
+    ///
+    /// On iOS, specifying only one video axis (`maxWidth` or `maxHeight`) is
+    /// supported for HLS, but the host must first load the current variant
+    /// catalog so it can infer the missing dimension from the active ladder.
     public static func constrained(
         maxBitRate: Int64? = nil,
         maxWidth: Int? = nil,
@@ -73,6 +94,10 @@ public struct VesperAbrPolicy: Equatable {
         )
     }
 
+    /// Requests a specific video variant when the backend supports it.
+    ///
+    /// On iOS, this is best-effort HLS variant pinning rather than exact
+    /// AVPlayer video-track switching.
     public static func fixedTrack(_ trackId: String) -> VesperAbrPolicy {
         VesperAbrPolicy(mode: .fixedTrack, trackId: trackId)
     }

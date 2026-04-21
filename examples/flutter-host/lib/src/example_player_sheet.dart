@@ -156,6 +156,8 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
             subtitle: qualityButtonLabel(
               snapshot.trackCatalog,
               snapshot.trackSelection,
+              snapshot.effectiveVideoTrackId,
+              snapshot.fixedTrackStatus,
             ),
             onTap: () => setState(() {
               _activeSheet = ExamplePlayerSheet.quality;
@@ -167,29 +169,65 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
           ..sort(
             (left, right) => (right.bitRate ?? 0).compareTo(left.bitRate ?? 0),
           );
+        final abrPolicy = snapshot.trackSelection.abrPolicy;
+        final supportsFixedTrackAbr = snapshot.capabilities.supportsAbrMode(
+          VesperAbrMode.fixedTrack,
+        );
+        final qualityNotice = qualityCapabilityNotice(snapshot.capabilities);
         return <Widget>[
           ExampleSelectionRow(
-            title: '自动',
+            title: qualityAutoRowTitle(abrPolicy),
+            badgeLabel: qualityAutoRowBadgeLabel(abrPolicy),
+            badgeTone: ExampleSelectionBadgeTone.accent,
             subtitle: snapshot.trackCatalog.adaptiveVideo
-                ? '让播放器自动调整画质。'
+                ? qualityAutoRowSubtitle(
+                    snapshot.trackCatalog,
+                    snapshot.trackSelection,
+                    snapshot.effectiveVideoTrackId,
+                    snapshot.fixedTrackStatus,
+                  )
                 : '当前路径没有暴露自适应视频切换能力。',
             selected:
-                snapshot.trackSelection.abrPolicy.mode == VesperAbrMode.auto,
+                abrPolicy.mode == VesperAbrMode.auto ||
+                abrPolicy.mode == VesperAbrMode.constrained,
             onTap: () => _applyAndClose(
               widget.controller.setAbrPolicy(const VesperAbrPolicy.auto()),
             ),
           ),
+          if (qualityNotice case final message?)
+            ExampleSheetNote(message: message),
           if (tracks.isEmpty)
             const ExampleEmptySheetState(message: '当前媒体没有暴露可选视频轨。')
+          else if (!supportsFixedTrackAbr)
+            const ExampleEmptySheetState(message: '当前平台只支持自动或受限 ABR，暂不支持固定视频轨。')
           else
             ...tracks.map((track) {
+              final badgeLabel = qualityOptionBadgeLabel(
+                track.id,
+                trackCatalog: snapshot.trackCatalog,
+                trackSelection: snapshot.trackSelection,
+                effectiveVideoTrackId: snapshot.effectiveVideoTrackId,
+                fixedTrackStatus: snapshot.fixedTrackStatus,
+              );
               return ExampleSelectionRow(
                 title: qualityLabel(track),
-                subtitle: qualitySubtitle(track),
+                badgeLabel: badgeLabel,
+                badgeTone:
+                    badgeLabel == '等待' ||
+                        badgeLabel == '锁定' ||
+                        badgeLabel == '锁定中'
+                    ? ExampleSelectionBadgeTone.warm
+                    : ExampleSelectionBadgeTone.accent,
+                subtitle: qualityOptionSubtitle(
+                  track,
+                  snapshot.trackSelection,
+                  snapshot.effectiveVideoTrackId,
+                  snapshot.fixedTrackStatus,
+                  trackCatalog: snapshot.trackCatalog,
+                ),
                 selected:
-                    snapshot.trackSelection.abrPolicy.mode ==
-                        VesperAbrMode.fixedTrack &&
-                    snapshot.trackSelection.abrPolicy.trackId == track.id,
+                    abrPolicy.mode == VesperAbrMode.fixedTrack &&
+                    abrPolicy.trackId == track.id,
                 onTap: () => _applyAndClose(
                   widget.controller.setAbrPolicy(
                     VesperAbrPolicy.fixedTrack(track.id),
@@ -306,22 +344,88 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
   }
 }
 
+class ExampleSheetNote extends StatelessWidget {
+  const ExampleSheetNote({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF8EC5FF).withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: const Color(0xFF8EC5FF).withValues(alpha: 0.16),
+          ),
+        ),
+        child: Text(
+          message,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: const Color(0xFFC7DCF7),
+            height: 1.45,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ExampleSelectionRow extends StatelessWidget {
   const ExampleSelectionRow({
     super.key,
     required this.title,
     required this.subtitle,
     required this.onTap,
+    this.badgeLabel,
+    this.badgeTone = ExampleSelectionBadgeTone.accent,
     this.selected = false,
+    this.enabled = true,
   });
 
   final String title;
   final String subtitle;
   final VoidCallback onTap;
+  final String? badgeLabel;
+  final ExampleSelectionBadgeTone badgeTone;
   final bool selected;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
+    final titleColor = enabled
+        ? Colors.white
+        : Colors.white.withValues(alpha: 0.45);
+    final subtitleColor = enabled
+        ? const Color(0xFF98A1B3)
+        : const Color(0xFF98A1B3).withValues(alpha: 0.55);
+    final badgeAccent = switch (badgeTone) {
+      ExampleSelectionBadgeTone.accent => const Color(0xFF8EC5FF),
+      ExampleSelectionBadgeTone.warm => const Color(0xFFFFC876),
+    };
+    final badgeForeground = enabled
+        ? switch (badgeTone) {
+            ExampleSelectionBadgeTone.accent => const Color(0xFFDCEEFF),
+            ExampleSelectionBadgeTone.warm => const Color(0xFFFFE8BF),
+          }
+        : switch (badgeTone) {
+            ExampleSelectionBadgeTone.accent => const Color(
+              0xFFDCEEFF,
+            ).withValues(alpha: 0.5),
+            ExampleSelectionBadgeTone.warm => const Color(
+              0xFFFFE8BF,
+            ).withValues(alpha: 0.5),
+          };
+    final badgeBackground = enabled
+        ? badgeAccent.withValues(alpha: selected ? 0.20 : 0.12)
+        : badgeAccent.withValues(alpha: 0.06);
+    final badgeBorder = enabled
+        ? badgeAccent.withValues(alpha: selected ? 0.34 : 0.18)
+        : badgeAccent.withValues(alpha: 0.10);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -332,26 +436,54 @@ class ExampleSelectionRow extends StatelessWidget {
               : Colors.transparent,
           borderRadius: BorderRadius.circular(18),
           child: InkWell(
-            onTap: onTap,
+            onTap: enabled ? onTap : null,
             borderRadius: BorderRadius.circular(18),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(
+                                color: titleColor,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ),
+                      if (badgeLabel case final label?)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: badgeBackground,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: badgeBorder),
+                          ),
+                          child: Text(
+                            label,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: badgeForeground,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.2,
+                                ),
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
                     subtitle,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: const Color(0xFF98A1B3),
-                    ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: subtitleColor),
                   ),
                 ],
               ),
@@ -363,6 +495,8 @@ class ExampleSelectionRow extends StatelessWidget {
     );
   }
 }
+
+enum ExampleSelectionBadgeTone { accent, warm }
 
 class ExampleEmptySheetState extends StatelessWidget {
   const ExampleEmptySheetState({super.key, required this.message});

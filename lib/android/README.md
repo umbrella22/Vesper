@@ -39,6 +39,15 @@ Current Android download package names:
 - `VesperPlayerKit-android-arm64-v8a.aar`
 - `VesperPlayerKitCompose-android-arm64-v8a.aar`
 
+## Android Architecture Policy
+
+Android packaging in this repository is intentionally `arm64-v8a`-only:
+
+- Android `AAR` release assets ship `arm64-v8a` only
+- generated JNI libraries and optional player-ffmpeg plugin artifacts ship `arm64-v8a` only
+- use an arm64 Android emulator if emulator-side validation is needed
+- do not reintroduce `x86` or `x86_64` Android ABIs in packaging scripts, CI inputs, or release assets
+
 Download guidance:
 
 - use `arm64-v8a` for physical Android devices

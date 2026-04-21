@@ -48,6 +48,51 @@ extension ExampleResilienceProfileLabels on ExampleResilienceProfile {
         const VesperPlaybackResiliencePolicy.lowLatency(),
     };
   }
+
+  static ExampleResilienceProfile? fromPolicy(
+    VesperPlaybackResiliencePolicy policy,
+  ) {
+    for (final profile in ExampleResilienceProfile.values) {
+      final candidate = profile.policy;
+      if (_matchesBufferingPolicy(candidate.buffering, policy.buffering) &&
+          _matchesRetryPolicy(candidate.retry, policy.retry) &&
+          _matchesCachePolicy(candidate.cache, policy.cache)) {
+        return profile;
+      }
+    }
+    return null;
+  }
+
+  static bool _matchesBufferingPolicy(
+    VesperBufferingPolicy lhs,
+    VesperBufferingPolicy rhs,
+  ) {
+    return lhs.preset == rhs.preset &&
+        lhs.minBufferMs == rhs.minBufferMs &&
+        lhs.maxBufferMs == rhs.maxBufferMs &&
+        lhs.bufferForPlaybackMs == rhs.bufferForPlaybackMs &&
+        lhs.bufferForPlaybackAfterRebufferMs ==
+            rhs.bufferForPlaybackAfterRebufferMs;
+  }
+
+  static bool _matchesRetryPolicy(
+    VesperRetryPolicy lhs,
+    VesperRetryPolicy rhs,
+  ) {
+    return lhs.maxAttempts == rhs.maxAttempts &&
+        lhs.baseDelayMs == rhs.baseDelayMs &&
+        lhs.maxDelayMs == rhs.maxDelayMs &&
+        lhs.backoff == rhs.backoff;
+  }
+
+  static bool _matchesCachePolicy(
+    VesperCachePolicy lhs,
+    VesperCachePolicy rhs,
+  ) {
+    return lhs.preset == rhs.preset &&
+        lhs.maxMemoryBytes == rhs.maxMemoryBytes &&
+        lhs.maxDiskBytes == rhs.maxDiskBytes;
+  }
 }
 
 final class ExampleHostPalette {

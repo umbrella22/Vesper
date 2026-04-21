@@ -148,7 +148,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -160,10 +160,10 @@ jobs:
         run: xcodebuild -version
 
       - name: Build Apple FFmpeg prebuilts
-        run: ./scripts/build-apple-ffmpeg-prebuilts.sh ios-arm64 ios-simulator-arm64 ios-simulator-x86_64
+        run: ./scripts/build-apple-ffmpeg-prebuilts.sh ios-arm64 ios-simulator-arm64
 
       - name: Build iOS player-ffmpeg plugin libraries
-        run: ./scripts/build-ios-player-ffmpeg-plugin.sh /tmp/vesper-ios-player-ffmpeg release ios-arm64 ios-simulator-arm64 ios-simulator-x86_64
+        run: ./scripts/build-ios-player-ffmpeg-plugin.sh /tmp/vesper-ios-player-ffmpeg release ios-arm64 ios-simulator-arm64
 
       - name: Check iOS Rust adapter crate
         run: cargo check -p player-platform-ios

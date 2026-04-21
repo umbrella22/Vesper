@@ -574,6 +574,9 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         let uiState = session.controller.uiState
         let trackCatalog = session.controller.trackCatalog
         let trackSelection = session.controller.trackSelection
+        let resiliencePolicy = session.controller.resiliencePolicy
+        let effectiveVideoTrackId = session.controller.effectiveVideoTrackId
+        let fixedTrackStatus = session.controller.fixedTrackStatus
         let lastError = resolvedPlayerErrorMap(for: session)
 
         return [
@@ -592,6 +595,9 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "capabilities": buildCapabilitiesMap(),
             "trackCatalog": trackCatalog.toMap(),
             "trackSelection": trackSelection.toMap(),
+            "effectiveVideoTrackId": flutterValue(effectiveVideoTrackId),
+            "fixedTrackStatus": flutterValue(fixedTrackStatus?.toWireName()),
+            "resiliencePolicy": resiliencePolicy.toMap(),
             "lastError": flutterValue(lastError),
         ]
     }
@@ -603,6 +609,12 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func buildCapabilitiesMap() -> [String: Any] {
+        let supportsBestEffortFixedTrackAbr: Bool
+        if #available(iOS 15.0, *) {
+            supportsBestEffortFixedTrackAbr = true
+        } else {
+            supportsBestEffortFixedTrackAbr = false
+        }
         [
             "supportsLocalFiles": true,
             "supportsRemoteUrls": true,
@@ -610,7 +622,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "supportsDash": false,
             "supportsTrackCatalog": true,
             "supportsTrackSelection": true,
+            "supportsVideoTrackSelection": false,
+            "supportsAudioTrackSelection": true,
+            "supportsSubtitleTrackSelection": true,
             "supportsAbrPolicy": true,
+            "supportsAbrConstrained": true,
+            "supportsAbrFixedTrack": supportsBestEffortFixedTrackAbr,
+            "supportsAbrMaxBitRate": true,
+            "supportsAbrMaxResolution": true,
             "supportsResiliencePolicy": true,
             "supportsHolePunch": false,
             "supportsPlaybackRate": true,
@@ -1292,6 +1311,49 @@ private extension VesperAbrPolicy {
     }
 }
 
+private extension VesperPlaybackResiliencePolicy {
+    func toMap() -> [String: Any] {
+        [
+            "buffering": buffering.toMap(),
+            "retry": retry.toMap(),
+            "cache": cache.toMap(),
+        ]
+    }
+}
+
+private extension VesperBufferingPolicy {
+    func toMap() -> [String: Any] {
+        [
+            "preset": preset.toWireName(),
+            "minBufferMs": flutterValue(minBufferMs),
+            "maxBufferMs": flutterValue(maxBufferMs),
+            "bufferForPlaybackMs": flutterValue(bufferForPlaybackMs),
+            "bufferForPlaybackAfterRebufferMs": flutterValue(bufferForPlaybackAfterRebufferMs),
+        ]
+    }
+}
+
+private extension VesperRetryPolicy {
+    func toMap() -> [String: Any] {
+        [
+            "maxAttempts": flutterValue(maxAttempts),
+            "baseDelayMs": baseDelayMs,
+            "maxDelayMs": maxDelayMs,
+            "backoff": backoff.toWireName(),
+        ]
+    }
+}
+
+private extension VesperCachePolicy {
+    func toMap() -> [String: Any] {
+        [
+            "preset": preset.toWireName(),
+            "maxMemoryBytes": flutterValue(maxMemoryBytes),
+            "maxDiskBytes": flutterValue(maxDiskBytes),
+        ]
+    }
+}
+
 private extension VesperPlayerSource {
     func toMap() -> [String: Any] {
         [
@@ -1549,6 +1611,64 @@ private extension VesperAbrMode {
             "constrained"
         case .fixedTrack:
             "fixedTrack"
+        }
+    }
+}
+
+private extension VesperFixedTrackStatus {
+    func toWireName() -> String {
+        switch self {
+        case .pending:
+            "pending"
+        case .locked:
+            "locked"
+        case .fallback:
+            "fallback"
+        }
+    }
+}
+
+private extension VesperBufferingPreset {
+    func toWireName() -> String {
+        switch self {
+        case .default:
+            "defaultPreset"
+        case .balanced:
+            "balanced"
+        case .streaming:
+            "streaming"
+        case .resilient:
+            "resilient"
+        case .lowLatency:
+            "lowLatency"
+        }
+    }
+}
+
+private extension VesperRetryBackoff {
+    func toWireName() -> String {
+        switch self {
+        case .fixed:
+            "fixed"
+        case .linear:
+            "linear"
+        case .exponential:
+            "exponential"
+        }
+    }
+}
+
+private extension VesperCachePreset {
+    func toWireName() -> String {
+        switch self {
+        case .default:
+            "defaultPreset"
+        case .disabled:
+            "disabled"
+        case .streaming:
+            "streaming"
+        case .resilient:
+            "resilient"
         }
     }
 }

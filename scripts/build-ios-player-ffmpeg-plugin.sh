@@ -22,6 +22,7 @@ DEFAULT_SLICES=(
   "ios-arm64"
   "ios-simulator-arm64"
 )
+# Apple 侧 player-ffmpeg plugin 分发统一收敛为 arm64-only。
 
 resolve_selected_slices() {
   local -a resolved=()
@@ -31,10 +32,6 @@ resolve_selected_slices() {
     resolved=("$@")
   else
     resolved=("${DEFAULT_SLICES[@]}")
-    installed_targets="$(rustup target list --installed)"
-    if [[ "$installed_targets" == *"x86_64-apple-ios"* ]]; then
-      resolved+=("ios-simulator-x86_64")
-    fi
   fi
 
   if [[ ${#resolved[@]} -eq 0 ]]; then
@@ -44,11 +41,11 @@ resolve_selected_slices() {
 
   for token in "${resolved[@]}"; do
     case "$token" in
-      ios-arm64|ios-simulator-arm64|ios-simulator-x86_64)
+      ios-arm64|ios-simulator-arm64)
         ;;
       *)
         echo "Unsupported iOS player-ffmpeg slice: $token" >&2
-        echo "Supported slices: ios-arm64, ios-simulator-arm64, ios-simulator-x86_64" >&2
+        echo "Supported slices: ios-arm64, ios-simulator-arm64" >&2
         exit 1
         ;;
     esac
@@ -65,9 +62,6 @@ slice_rust_target() {
     ios-simulator-arm64)
       echo "aarch64-apple-ios-sim"
       ;;
-    ios-simulator-x86_64)
-      echo "x86_64-apple-ios"
-      ;;
     *)
       return 1
       ;;
@@ -79,7 +73,7 @@ slice_prebuilt_root() {
     ios-arm64)
       echo "$FFMPEG_APPLE_DIR/ios"
       ;;
-    ios-simulator-arm64|ios-simulator-x86_64)
+    ios-simulator-arm64)
       echo "$FFMPEG_APPLE_DIR/ios-simulator"
       ;;
     *)
@@ -93,7 +87,7 @@ slice_output_path() {
     ios-arm64)
       echo "$OUTPUT_DIR/iphoneos/libplayer_ffmpeg.dylib"
       ;;
-    ios-simulator-arm64|ios-simulator-x86_64)
+    ios-simulator-arm64)
       echo "$OUTPUT_DIR/iphonesimulator/$(slice_rust_target "$1")/libplayer_ffmpeg.dylib"
       ;;
     *)
@@ -106,9 +100,6 @@ slice_prebuilt_libdir() {
   case "$1" in
     ios-arm64|ios-simulator-arm64)
       echo "arm64"
-      ;;
-    ios-simulator-x86_64)
-      echo "amd64"
       ;;
     *)
       return 1
@@ -134,9 +125,6 @@ slice_needs_prebuilt() {
       ;;
     ios-simulator-arm64)
       [[ ! -f "$FFMPEG_APPLE_DIR/ios-simulator/lib/arm64/libavcodec.a" ]]
-      ;;
-    ios-simulator-x86_64)
-      [[ ! -f "$FFMPEG_APPLE_DIR/ios-simulator/lib/amd64/libavcodec.a" ]]
       ;;
     *)
       return 1
@@ -251,7 +239,7 @@ done
 simulator_slices=()
 for slice in "${selected_slices[@]}"; do
   case "$slice" in
-    ios-simulator-arm64|ios-simulator-x86_64)
+    ios-simulator-arm64)
       simulator_slices+=("$slice")
       ;;
   esac
@@ -259,41 +247,18 @@ done
 
 if [[ ${#simulator_slices[@]} -gt 0 ]]; then
   mkdir -p "$OUTPUT_DIR/iphonesimulator"
-  if [[ ${#simulator_slices[@]} -eq 1 ]]; then
-    cp \
-      "$(slice_output_path "${simulator_slices[0]}")" \
-      "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
-    simulator_ffmpeg_dir="$(slice_prebuilt_root "${simulator_slices[0]}")"
-    simulator_ffmpeg_libdir="$(slice_prebuilt_libdir "${simulator_slices[0]}")"
-    if compgen -G "$simulator_ffmpeg_dir/lib/$simulator_ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
-      cp -RP \
-        "$simulator_ffmpeg_dir"/lib/"$simulator_ffmpeg_libdir"/lib*.dylib* \
-        "$OUTPUT_DIR/iphonesimulator/"
-    fi
-    prepare_runtime_directory "$OUTPUT_DIR/iphonesimulator"
-    prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
-  else
-    lipo -create \
-      "$(slice_output_path "ios-simulator-arm64")" \
-      "$(slice_output_path "ios-simulator-x86_64")" \
-      -output "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
-
-    arm64_dir="$(dirname "$(slice_output_path "ios-simulator-arm64")")"
-    x86_dir="$(dirname "$(slice_output_path "ios-simulator-x86_64")")"
-    while IFS= read -r arm64_file; do
-      file_name="$(basename "$arm64_file")"
-      x86_file="$x86_dir/$file_name"
-      output_file="$OUTPUT_DIR/iphonesimulator/$file_name"
-
-      if [[ -L "$arm64_file" ]]; then
-        ln -sf "$(readlink "$arm64_file")" "$output_file"
-      else
-        lipo -create "$arm64_file" "$x86_file" -output "$output_file"
-      fi
-    done < <(find "$arm64_dir" -maxdepth 1 -name 'lib*.dylib*' | sort)
-    prepare_runtime_directory "$OUTPUT_DIR/iphonesimulator"
-    prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
+  cp \
+    "$(slice_output_path "${simulator_slices[0]}")" \
+    "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
+  simulator_ffmpeg_dir="$(slice_prebuilt_root "${simulator_slices[0]}")"
+  simulator_ffmpeg_libdir="$(slice_prebuilt_libdir "${simulator_slices[0]}")"
+  if compgen -G "$simulator_ffmpeg_dir/lib/$simulator_ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
+    cp -RP \
+      "$simulator_ffmpeg_dir"/lib/"$simulator_ffmpeg_libdir"/lib*.dylib* \
+      "$OUTPUT_DIR/iphonesimulator/"
   fi
+  prepare_runtime_directory "$OUTPUT_DIR/iphonesimulator"
+  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
 fi
 
 echo

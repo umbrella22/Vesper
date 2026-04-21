@@ -116,20 +116,240 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
 String qualityButtonLabel(
   VesperTrackCatalog trackCatalog,
   VesperTrackSelectionSnapshot trackSelection,
+  String? effectiveVideoTrackId,
+  VesperFixedTrackStatus? fixedTrackStatus,
 ) {
-  final selectedTrack = trackCatalog.videoTracks.firstWhere(
-    (track) => track.id == trackSelection.abrPolicy.trackId,
-    orElse: () =>
-        const VesperMediaTrack(id: '', kind: VesperMediaTrackKind.video),
+  final requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection);
+  final effectiveTrack = effectiveVideoTrack(
+    trackCatalog,
+    effectiveVideoTrackId,
+  );
+  final resolvedFixedTrackStatus = currentFixedTrackStatus(
+    trackCatalog,
+    trackSelection,
+    effectiveVideoTrackId,
+    fixedTrackStatus,
   );
 
   return switch (trackSelection.abrPolicy.mode) {
-    VesperAbrMode.fixedTrack when selectedTrack.id.isNotEmpty => qualityLabel(
-      selectedTrack,
-    ),
+    VesperAbrMode.fixedTrack
+        when requestedTrack != null &&
+            resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
+      '锁定中 · ${qualityLabel(requestedTrack)}',
+    VesperAbrMode.fixedTrack
+        when requestedTrack != null &&
+            resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback =>
+      '锁定中 · ${qualityLabel(requestedTrack)}',
+    VesperAbrMode.fixedTrack when requestedTrack != null =>
+      '锁定 · ${qualityLabel(requestedTrack)}',
     VesperAbrMode.fixedTrack => '画质',
+    VesperAbrMode.constrained || VesperAbrMode.auto
+        when effectiveTrack != null =>
+      '自动 · ${qualityLabel(effectiveTrack)}',
     VesperAbrMode.constrained || VesperAbrMode.auto => '自动',
   };
+}
+
+VesperMediaTrack? effectiveVideoTrack(
+  VesperTrackCatalog trackCatalog,
+  String? effectiveVideoTrackId,
+) {
+  return firstWhereOrNull<VesperMediaTrack>(
+    trackCatalog.videoTracks,
+    (track) => track.id == effectiveVideoTrackId,
+  );
+}
+
+VesperMediaTrack? requestedFixedVideoTrack(
+  VesperTrackCatalog trackCatalog,
+  VesperTrackSelectionSnapshot trackSelection,
+) {
+  if (trackSelection.abrPolicy.mode != VesperAbrMode.fixedTrack) {
+    return null;
+  }
+  return firstWhereOrNull<VesperMediaTrack>(
+    trackCatalog.videoTracks,
+    (track) => track.id == trackSelection.abrPolicy.trackId,
+  );
+}
+
+VesperFixedTrackStatus? currentFixedTrackStatus(
+  VesperTrackCatalog trackCatalog,
+  VesperTrackSelectionSnapshot trackSelection,
+  String? effectiveVideoTrackId,
+  VesperFixedTrackStatus? fixedTrackStatus,
+) {
+  if (trackSelection.abrPolicy.mode != VesperAbrMode.fixedTrack) {
+    return null;
+  }
+  if (fixedTrackStatus != null) {
+    return fixedTrackStatus;
+  }
+  final requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection);
+  if (requestedTrack == null || effectiveVideoTrackId == null) {
+    return VesperFixedTrackStatus.pending;
+  }
+  if (effectiveVideoTrackId == requestedTrack.id) {
+    return VesperFixedTrackStatus.locked;
+  }
+  return VesperFixedTrackStatus.fallback;
+}
+
+String qualityAutoRowTitle(VesperAbrPolicy _) {
+  return '自动';
+}
+
+String? qualityAutoRowBadgeLabel(VesperAbrPolicy abrPolicy) {
+  return switch (abrPolicy.mode) {
+    VesperAbrMode.constrained => '受限',
+    _ => null,
+  };
+}
+
+String qualityAutoRowSubtitle(
+  VesperTrackCatalog trackCatalog,
+  VesperTrackSelectionSnapshot trackSelection,
+  String? effectiveVideoTrackId,
+  VesperFixedTrackStatus? fixedTrackStatus,
+) {
+  final abrPolicy = trackSelection.abrPolicy;
+  final effectiveTrack = effectiveVideoTrack(
+    trackCatalog,
+    effectiveVideoTrackId,
+  );
+  final requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection);
+  final resolvedFixedTrackStatus = currentFixedTrackStatus(
+    trackCatalog,
+    trackSelection,
+    effectiveVideoTrackId,
+    fixedTrackStatus,
+  );
+  final constraintSummary = abrConstraintSummary(abrPolicy);
+
+  final lead = switch (abrPolicy.mode) {
+    VesperAbrMode.auto => '让播放器自动调整画质。',
+    VesperAbrMode.constrained when constraintSummary != null =>
+      '当前在$constraintSummary约束内自动调整画质。点按恢复完全自动。',
+    VesperAbrMode.constrained => '当前在受限 ABR 策略内自动调整画质。点按恢复完全自动。',
+    VesperAbrMode.fixedTrack
+        when requestedTrack != null &&
+            resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback &&
+            effectiveTrack != null =>
+      '当前请求锁定到${qualityLabel(requestedTrack)}，播放器实际仍在${qualityLabel(effectiveTrack)}。点按切回自动。',
+    VesperAbrMode.fixedTrack
+        when requestedTrack != null &&
+            resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
+      '当前请求锁定到${qualityLabel(requestedTrack)}，正在等待播放器确认实际档位。点按切回自动。',
+    VesperAbrMode.fixedTrack
+        when requestedTrack != null && effectiveTrack != null =>
+      '当前已锁定到${qualityLabel(requestedTrack)}。点按切回自动。',
+    VesperAbrMode.fixedTrack when requestedTrack != null =>
+      '当前请求锁定到${qualityLabel(requestedTrack)}。点按切回自动。',
+    VesperAbrMode.fixedTrack => '切回让播放器自动调整画质。',
+  };
+  if (effectiveTrack == null || abrPolicy.mode == VesperAbrMode.fixedTrack) {
+    return lead;
+  }
+  return '$lead当前实际档位：${qualityLabel(effectiveTrack)}。';
+}
+
+String qualityOptionSubtitle(
+  VesperMediaTrack track,
+  VesperTrackSelectionSnapshot trackSelection,
+  String? effectiveVideoTrackId,
+  VesperFixedTrackStatus? fixedTrackStatus, {
+  required VesperTrackCatalog trackCatalog,
+}) {
+  final base = qualitySubtitle(track);
+  final isFixedTrack =
+      trackSelection.abrPolicy.mode == VesperAbrMode.fixedTrack;
+  final isRequestedTrack =
+      isFixedTrack && trackSelection.abrPolicy.trackId == track.id;
+  final isEffectiveTrack = effectiveVideoTrackId == track.id;
+  final resolvedFixedTrackStatus = currentFixedTrackStatus(
+    trackCatalog,
+    trackSelection,
+    effectiveVideoTrackId,
+    fixedTrackStatus,
+  );
+
+  final stateDescription = switch ((isRequestedTrack, isEffectiveTrack)) {
+    (true, true) => '当前已锁定到这个画质',
+    (true, false)
+        when resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
+      '正在等待播放器确认这个画质',
+    (true, false) => '已请求锁定到这个画质',
+    (false, true) when isFixedTrack => '播放器当前仍在这个档位',
+    _ => null,
+  };
+  if (stateDescription == null) {
+    return base;
+  }
+  return '$base · $stateDescription';
+}
+
+String? qualityOptionBadgeLabel(
+  String trackId, {
+  required VesperTrackCatalog trackCatalog,
+  required VesperTrackSelectionSnapshot trackSelection,
+  required String? effectiveVideoTrackId,
+  VesperFixedTrackStatus? fixedTrackStatus,
+}) {
+  final isFixedTrack =
+      trackSelection.abrPolicy.mode == VesperAbrMode.fixedTrack;
+  final requestedTrackId = trackSelection.abrPolicy.trackId;
+  final resolvedFixedTrackStatus = currentFixedTrackStatus(
+    trackCatalog,
+    trackSelection,
+    effectiveVideoTrackId,
+    fixedTrackStatus,
+  );
+
+  if (isFixedTrack && trackId == requestedTrackId) {
+    if (resolvedFixedTrackStatus == VesperFixedTrackStatus.locked) {
+      return '当前';
+    }
+    if (resolvedFixedTrackStatus == VesperFixedTrackStatus.pending) {
+      return '等待';
+    }
+    return '锁定中';
+  }
+
+  if (isFixedTrack &&
+      resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback &&
+      effectiveVideoTrackId == trackId) {
+    return '实际';
+  }
+
+  if (trackId == effectiveVideoTrackId) {
+    return '当前';
+  }
+  return null;
+}
+
+String? abrConstraintSummary(VesperAbrPolicy abrPolicy) {
+  final constraints = <String>[
+    if (abrPolicy.maxHeight case final height?) '最高 ${height}p',
+    if (abrPolicy.maxWidth case final width?) '最大宽度 $width',
+    if (abrPolicy.maxBitRate case final bitRate?)
+      '最高 ${formatBitRate(bitRate)}',
+  ];
+  if (constraints.isEmpty) {
+    return null;
+  }
+  return constraints.join('，');
+}
+
+String? qualityCapabilityNotice(VesperPlayerCapabilities capabilities) {
+  final supportsFixedTrackAbr = capabilities.supportsAbrMode(
+    VesperAbrMode.fixedTrack,
+  );
+  final supportsExactVideoTrackSelection = capabilities
+      .supportsTrackSelectionFor(VesperMediaTrackKind.video);
+  if (supportsFixedTrackAbr && !supportsExactVideoTrackSelection) {
+    return '当前平台按 HLS variant 做 best-effort 固定画质，不保证精确切到单一视频轨。';
+  }
+  return null;
 }
 
 String audioButtonLabel(

@@ -1787,7 +1787,9 @@ mod tests {
         HandleRegistry, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
         MediaTrackSelection, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
         PlayerCachePreset, PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy,
-        resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime,
+        next_generation, resolve_resilience_policy_with_runtime,
+        resolve_track_preferences_with_runtime, u128_to_jlong_saturating,
+        u64_to_jlong_saturating,
     };
     use std::time::Duration;
 
@@ -1819,6 +1821,27 @@ mod tests {
         assert_eq!(registry.remove(first), Some(11));
         assert!(registry.slots.is_empty());
         assert!(registry.free_slots.is_empty());
+    }
+
+    #[test]
+    fn handle_registry_rejects_zero_handle() {
+        let registry = HandleRegistry::<u32>::default();
+
+        assert!(registry.get(0_i64).is_none());
+    }
+
+    #[test]
+    fn handle_registry_generation_wrap_skips_zero() {
+        assert_eq!(next_generation(u32::MAX), 1);
+        assert_eq!(next_generation(41), 42);
+    }
+
+    #[test]
+    fn jlong_saturating_helpers_clamp_large_unsigned_values() {
+        assert_eq!(u64_to_jlong_saturating(123), 123);
+        assert_eq!(u64_to_jlong_saturating(u64::MAX), i64::MAX);
+        assert_eq!(u128_to_jlong_saturating(456), 456);
+        assert_eq!(u128_to_jlong_saturating(u128::MAX), i64::MAX);
     }
 
     #[test]

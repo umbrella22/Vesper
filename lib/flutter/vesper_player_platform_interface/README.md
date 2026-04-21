@@ -18,8 +18,8 @@ authors. Application code should usually depend on `vesper_player` directly.
 | Type | Description |
 |---|---|
 | `VesperPlayerSource` | Media source definition for local files, remote URLs, HLS, or DASH |
-| `VesperPlayerSnapshot` | Full player state snapshot |
-| `VesperPlayerCapabilities` | Capability set reported by the active backend |
+| `VesperPlayerSnapshot` | Full player state snapshot, including runtime capabilities, current track selection, the effective video variant, fixed-track settling state, resilience policy, and last error |
+| `VesperPlayerCapabilities` | Capability set reported by the active backend, including fine-grained track-selection and ABR support |
 | `VesperTimeline` | Playback timeline for VOD, live, and live DVR |
 | `VesperSeekableRange` | Seekable range, mainly for DVR windows |
 | `VesperTrackCatalog` | Available video, audio, and subtitle tracks |
@@ -77,6 +77,7 @@ VesperPlayerBackendFamily
 VesperMediaTrackKind
 VesperTrackSelectionMode
 VesperAbrMode
+VesperFixedTrackStatus
 VesperBufferingPreset
 VesperRetryBackoff
 VesperCachePreset
@@ -110,6 +111,18 @@ Methods that remain unimplemented should report
 `VesperPlayerError.unsupported()`. That keeps capability checks explicit and
 lets apps branch on `VesperPlayerCapabilities` instead of depending on
 exceptions.
+
+Snapshot payloads should also round-trip the backend's current
+`VesperPlaybackResiliencePolicy`, `VesperTrackSelectionSnapshot`, and
+best-effort `effectiveVideoTrackId`, plus `fixedTrackStatus` when the backend
+can observe fixed-track convergence directly, so Flutter UI can render the
+effective runtime state instead of only optimistic local intent.
+
+Coarse capability fields such as `supportsTrackSelection` or
+`supportsAbrPolicy` should not be treated as implicit support for every
+fine-grained mode. Platform plugins should populate fields like
+`supportsVideoTrackSelection`, `supportsAbrFixedTrack`, and
+`supportsAbrMaxResolution` explicitly.
 
 ## Related Packages
 

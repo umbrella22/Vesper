@@ -23,6 +23,7 @@ fi
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
 ANDROID_NDK_VERSION="29.0.14206865"
 ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
+# Android 侧 player-ffmpeg plugin 分发统一收敛为 arm64-only。
 DEFAULT_ABIS=(
   "arm64-v8a"
 )

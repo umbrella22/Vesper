@@ -19,6 +19,12 @@ class VesperPlayerController internal constructor(
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
         get() = bridge.trackSelection
 
+    val effectiveVideoTrackId: StateFlow<String?>
+        get() = bridge.effectiveVideoTrackId
+
+    val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
+        get() = bridge.resiliencePolicy
+
     fun initialize() = bridge.initialize()
 
     fun dispose() = bridge.dispose()

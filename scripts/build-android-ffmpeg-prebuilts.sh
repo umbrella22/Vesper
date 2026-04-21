@@ -25,6 +25,7 @@ TLS_BACKEND="${VESPER_ANDROID_FFMPEG_TLS_BACKEND:-openssl}"
 ENABLE_DASH="${VESPER_ANDROID_FFMPEG_ENABLE_DASH:-1}"
 OPENSSL_ANDROID_DIR="${VESPER_ANDROID_OPENSSL_OUTPUT_DIR:-$ROOT_DIR/third_party/openssl/android}"
 LIBXML2_ANDROID_DIR="${VESPER_ANDROID_LIBXML2_OUTPUT_DIR:-$ROOT_DIR/third_party/libxml2/android}"
+# Android 侧预编译 FFmpeg / OpenSSL / libxml2 slice 统一收敛为 arm64-only。
 DEFAULT_ABIS=(
   "arm64-v8a"
 )

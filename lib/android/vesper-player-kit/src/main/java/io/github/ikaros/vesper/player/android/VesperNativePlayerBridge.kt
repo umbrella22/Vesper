@@ -12,7 +12,7 @@ import kotlin.math.absoluteValue
 class VesperNativePlayerBridge(
     private val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
     private val initialSource: VesperPlayerSource? = null,
-    private var resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
+    private var currentResiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     private var trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
     private val preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
@@ -45,6 +45,8 @@ class VesperNativePlayerBridge(
     )
     private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
+    private val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
+    private val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
     private val surfaceHost = VesperNativeSurfaceHost(bindings, surfaceKind)
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.VesperNativeStub
@@ -52,6 +54,10 @@ class VesperNativePlayerBridge(
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
         _trackSelection.asStateFlow()
+    override val effectiveVideoTrackId: StateFlow<String?> =
+        _effectiveVideoTrackId.asStateFlow()
+    override val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy> =
+        _resiliencePolicy.asStateFlow()
 
     init {
         bindings.setOnNativeUpdateListener(::refreshFromNative)
@@ -59,6 +65,7 @@ class VesperNativePlayerBridge(
 
     override fun initialize() {
         val source = currentSource ?: run {
+            _effectiveVideoTrackId.value = null
             updateState {
                 copy(
                     subtitle = i18n.selectSourcePrompt(),
@@ -70,7 +77,7 @@ class VesperNativePlayerBridge(
             return
         }
 
-        runCatching { bindings.initialize(source, resiliencePolicy, trackPreferencePolicy) }
+        runCatching { bindings.initialize(source, currentResiliencePolicy, trackPreferencePolicy) }
             .onSuccess {
                 hasInitializedSource = true
                 Log.i(
@@ -95,6 +102,7 @@ class VesperNativePlayerBridge(
             .onFailure {
                 hasInitializedSource = false
                 pendingAutoPlay = false
+                _effectiveVideoTrackId.value = null
                 Log.e(TAG, "failed to initialize source=${source.uri}", it)
                 val message = it.message?.takeUnless(String::isBlank) ?: i18n.nativeBindingsUnavailable()
                 updateState {
@@ -108,6 +116,7 @@ class VesperNativePlayerBridge(
 
     override fun dispose() {
         hasInitializedSource = false
+        _effectiveVideoTrackId.value = null
         surfaceHost.detach()
         bindings.setOnNativeUpdateListener(null)
         bindings.dispose()
@@ -121,6 +130,7 @@ class VesperNativePlayerBridge(
     override fun selectSource(source: VesperPlayerSource) {
         currentSource = source
         pendingAutoPlay = true
+        _effectiveVideoTrackId.value = null
         Log.i(
             TAG,
             "selecting source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",
@@ -232,11 +242,12 @@ class VesperNativePlayerBridge(
     }
 
     override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) {
-        if (resiliencePolicy == policy) {
+        if (currentResiliencePolicy == policy) {
             return
         }
 
-        resiliencePolicy = policy
+        currentResiliencePolicy = policy
+        _resiliencePolicy.value = policy
         val source = currentSource ?: return
         if (!hasInitializedSource) {
             return
@@ -310,6 +321,7 @@ class VesperNativePlayerBridge(
         surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
         _trackCatalog.value = bindings.currentTrackCatalog()
         _trackSelection.value = bindings.currentTrackSelection()
+        _effectiveVideoTrackId.value = bindings.currentEffectiveVideoTrackId()
 
         bindings.pollSnapshot()?.let { snapshot ->
             updateState {
@@ -416,6 +428,7 @@ interface VesperNativeBindings {
     fun refreshSnapshot()
     fun currentTrackCatalog(): VesperTrackCatalog
     fun currentTrackSelection(): VesperTrackSelectionSnapshot
+    fun currentEffectiveVideoTrackId(): String?
     fun currentVideoLayoutInfo(): NativeVideoLayoutInfo?
     fun setOnNativeUpdateListener(listener: (() -> Unit)?)
     fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind)
@@ -447,6 +460,7 @@ private class MissingVesperNativeBindings : VesperNativeBindings {
     override fun currentTrackCatalog(): VesperTrackCatalog = VesperTrackCatalog.Empty
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
+    override fun currentEffectiveVideoTrackId(): String? = null
     override fun currentVideoLayoutInfo(): NativeVideoLayoutInfo? = null
     override fun setOnNativeUpdateListener(listener: (() -> Unit)?) = Unit
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) = Unit

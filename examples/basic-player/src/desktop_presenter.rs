@@ -22,8 +22,9 @@ impl DesktopUiPresenter {
         snapshot: &PlayerSnapshot,
         overlay: &DesktopOverlayViewModel,
         window_size: PhysicalSize<u32>,
+        window_scale_factor: f64,
     ) {
-        let _ = (self, snapshot, overlay, window_size);
+        let _ = (self, snapshot, overlay, window_size, window_scale_factor);
     }
 
     pub fn drain_actions(&self) -> Vec<ControlAction> {
@@ -33,6 +34,7 @@ impl DesktopUiPresenter {
     pub fn overlay_frame(
         &self,
         window_size: PhysicalSize<u32>,
+        window_scale_factor: f64,
         snapshot: &PlayerSnapshot,
         seek_preview: Option<SeekPreview>,
         overlay: &DesktopOverlayViewModel,
@@ -40,6 +42,7 @@ impl DesktopUiPresenter {
         render_desktop_overlay(
             window_size.width,
             window_size.height,
+            window_scale_factor,
             snapshot,
             seek_preview,
             overlay,
@@ -49,6 +52,7 @@ impl DesktopUiPresenter {
     pub fn control_action_at(
         &self,
         window_size: PhysicalSize<u32>,
+        window_scale_factor: f64,
         cursor_x: f64,
         cursor_y: f64,
         snapshot: &PlayerSnapshot,
@@ -57,6 +61,7 @@ impl DesktopUiPresenter {
         overlay_action_at(
             window_size.width,
             window_size.height,
+            window_scale_factor,
             cursor_x,
             cursor_y,
             snapshot,
@@ -67,6 +72,7 @@ impl DesktopUiPresenter {
     pub fn seek_preview_at(
         &self,
         window_size: PhysicalSize<u32>,
+        window_scale_factor: f64,
         cursor_x: f64,
         cursor_y: f64,
         snapshot: &PlayerSnapshot,
@@ -75,6 +81,7 @@ impl DesktopUiPresenter {
         seek_preview_at(
             window_size.width,
             window_size.height,
+            window_scale_factor,
             cursor_x,
             cursor_y,
             snapshot,
@@ -85,6 +92,7 @@ impl DesktopUiPresenter {
     pub fn seek_preview_for_drag(
         &self,
         window_size: PhysicalSize<u32>,
+        window_scale_factor: f64,
         cursor_x: f64,
         snapshot: &PlayerSnapshot,
         overlay: &DesktopOverlayViewModel,
@@ -92,6 +100,7 @@ impl DesktopUiPresenter {
         seek_preview_for_drag(
             window_size.width,
             window_size.height,
+            window_scale_factor,
             cursor_x,
             snapshot,
             overlay,

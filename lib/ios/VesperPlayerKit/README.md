@@ -24,12 +24,26 @@ first:
 
 - `scripts/build-ios-player-ffi-xcframework.sh`
 
+The native unit-test baseline is now expected to run through Xcode as well:
+
+- `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -destination 'platform=macOS,variant=Mac Catalyst,name=My Mac' ARCHS=arm64 ONLY_ACTIVE_ARCH=YES test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
+
 That script:
 
 - builds the Rust `player-ffi-resolver` Apple bundle consumed by the Swift package / shim
 - regenerates the framework project with `xcodegen`
 - archives iOS + iOS Simulator frameworks
 - creates `VesperPlayerKit.xcframework`
+
+### Apple Architecture Policy
+
+Apple packaging in this repository is intentionally `arm64`-only:
+
+- iOS device artifacts ship `arm64`
+- iOS Simulator artifacts ship `arm64` only
+- Mac Catalyst artifacts, when enabled, ship `arm64` only
+- local `xcodebuild` verification should also stay on `ARCHS=arm64` for Simulator / Mac Catalyst
+- do not reintroduce `x86_64` simulator or Catalyst slices in packaging scripts, CI inputs, or release assets
 
 GitHub Releases now publish VesperPlayerKit for iOS downloads through:
 
@@ -113,6 +127,30 @@ The iOS host API also exposes a lightweight hardware decode probe:
 
 It currently normalizes the common `H264 / AVC / AVC1` and `HEVC / H265 / HVC1 / HEV1` aliases and
 checks VideoToolbox support for the requested codec. Unknown codec names return `false`.
+
+## ABR Notes
+
+`VesperPlayerKit` now exposes two iOS ABR routes on top of `AVPlayer`:
+
+- `VesperAbrPolicy.constrained(...)`
+- `VesperAbrPolicy.fixedTrack(...)`
+
+Important iOS-specific semantics:
+
+- `fixedTrack` is best-effort HLS variant pinning on iOS 15+, not exact AVPlayer video-track
+  switching
+- single-axis constrained limits such as `VesperAbrPolicy.constrained(maxHeight: 720)` are
+  supported for HLS, but the host waits for the current variant catalog before inferring the
+  missing width/height
+- `effectiveVideoTrackId` is also best-effort: it is derived from the current HLS variant ladder,
+  access-log bitrate, and presentation size once the runtime has enough evidence
+- `fixedTrackStatus` gives the latest runtime convergence signal for a best-effort fixed-track
+  request: `.pending`, `.locked`, or `.fallback`
+- resilience reload / restore now defer both `fixedTrack` and single-axis constrained ABR until
+  the current HLS variant catalog is loaded, so those policies do not fail early during reload
+- if a restored fixed-track `trackId` no longer exists verbatim after the HLS ladder drifts, the
+  host now tries to remap it onto the closest semantically equivalent variant before surfacing
+  unsupported
 
 ## Download Flow Notes
 

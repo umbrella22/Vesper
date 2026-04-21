@@ -108,11 +108,20 @@ jobs:
           & "$VcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
           & "$VcpkgRoot\vcpkg.exe" install "ffmpeg:$Triplet"
           $FfmpegRoot = Join-Path $VcpkgRoot "installed\$Triplet"
+          $FfmpegBinDir = Join-Path $FfmpegRoot "bin"
+          $FfmpegDebugBinDir = Join-Path $FfmpegRoot "debug\bin"
+          $FfmpegToolsDir = Join-Path $FfmpegRoot "tools\ffmpeg"
           "VCPKG_ROOT=$VcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKG_DEFAULT_TRIPLET=$Triplet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKGRS_TRIPLET=$Triplet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "FFMPEG_DIR=$FfmpegRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFMPEG_BIN_DIR=$FfmpegBinDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFMPEG_DEBUG_BIN_DIR=$FfmpegDebugBinDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFMPEG_TOOLS_DIR=$FfmpegToolsDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $FfmpegBinDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $FfmpegDebugBinDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $FfmpegToolsDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify Windows FFmpeg layout
         if: runner.os == 'Windows'
@@ -124,7 +133,26 @@ jobs:
           if (-not (Test-Path "$env:FFMPEG_DIR\lib")) {
             throw "FFMPEG_DIR is missing lib/: $env:FFMPEG_DIR"
           }
+          if (-not (Test-Path "$env:FFMPEG_BIN_DIR")) {
+            throw "FFMPEG_BIN_DIR is missing: $env:FFMPEG_BIN_DIR"
+          }
+          if (-not (Test-Path "$env:FFMPEG_DEBUG_BIN_DIR")) {
+            throw "FFMPEG_DEBUG_BIN_DIR is missing: $env:FFMPEG_DEBUG_BIN_DIR"
+          }
+          if (-not (Test-Path "$env:FFMPEG_TOOLS_DIR\ffmpeg.exe")) {
+            throw "ffmpeg.exe is missing under: $env:FFMPEG_TOOLS_DIR"
+          }
+          if (-not (Test-Path "$env:FFMPEG_TOOLS_DIR\ffprobe.exe")) {
+            throw "ffprobe.exe is missing under: $env:FFMPEG_TOOLS_DIR"
+          }
           Get-ChildItem "$env:FFMPEG_DIR\lib" | Select-Object -First 5
+
+      - name: Verify Windows FFmpeg tools on PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ffmpeg -version | Select-Object -First 1
+          ffprobe -version | Select-Object -First 1
 
       - name: Verify bundled desktop fixture
         shell: bash
@@ -153,7 +181,7 @@ jobs:
         run: cargo check -p basic-player -p player-ffi
 
       - name: Verify desktop player-ffmpeg remux path
-        if: runner.os == 'macOS'
+        shell: bash
         run: ./scripts/verify-desktop-player-ffmpeg-remux.sh
 
       - name: Build Vesper desktop demo

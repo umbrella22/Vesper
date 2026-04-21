@@ -16,8 +16,9 @@ does not need to depend on it directly.
 | DASH | ❌ Not supported by the AVPlayer backend |
 | Live streams | ✅ |
 | Live DVR | ✅ |
-| Track selection (video / audio / subtitles) | ✅ |
-| Adaptive bitrate (ABR) | ⚠️ `constrained` is supported today; `fixedTrack` remains limited |
+| Track selection (audio / subtitles) | ✅ |
+| Track selection (video) | ⚠️ Not exposed on the current AVPlayer route |
+| Adaptive bitrate (ABR) | ⚠️ `constrained` is supported; `fixedTrack` is available as best-effort variant pinning on iOS 15+ |
 | Buffering / retry / cache policy | ✅ |
 | Download management | ✅ |
 | Preload | ✅ |
@@ -25,6 +26,18 @@ does not need to depend on it directly.
 > The DASH DTOs already exist, but the AVPlayer backend reports DASH as
 > unsupported. Do not use `VesperPlayerSource.dash()` on iOS. Check
 > `controller.snapshot.capabilities.supportsDash` if you need a runtime guard.
+> For advanced playback controls, also prefer the fine-grained capability flags
+> such as `supportsVideoTrackSelection` and `supportsAbrFixedTrack`.
+> On iOS, `supportsAbrFixedTrack` means best-effort HLS variant pinning rather
+> than exact AVPlayer video-track switching. The host keeps variant track IDs
+> stable across reloads, restores both fixed-track pinning and single-axis
+> constrained ABR only after the current HLS variant catalog is ready, will
+> best-effort remap a restored fixed-track request onto a semantically
+> equivalent variant when the HLS ladder drifts slightly, and best-effort
+> surfaces the currently active HLS variant through
+> `controller.snapshot.effectiveVideoTrackId`. For best-effort fixed-track
+> convergence, the Flutter snapshot also exposes
+> `controller.snapshot.fixedTrackStatus` with `pending / locked / fallback`.
 
 ## Recommended Download Planning Flow
 

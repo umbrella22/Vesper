@@ -39,12 +39,18 @@ class FakePlayerBridge(
     )
     private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
+    private val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
+    private val _resiliencePolicy = MutableStateFlow(resiliencePolicy)
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.FakeDemo
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
         _trackSelection.asStateFlow()
+    override val effectiveVideoTrackId: StateFlow<String?> =
+        _effectiveVideoTrackId.asStateFlow()
+    override val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy> =
+        _resiliencePolicy.asStateFlow()
 
     override fun initialize() = Unit
 
@@ -54,6 +60,7 @@ class FakePlayerBridge(
 
     override fun selectSource(source: VesperPlayerSource) {
         currentSource = source
+        _effectiveVideoTrackId.value = null
         updateState {
             copy(
                 subtitle = previewSourceSubtitle(source),
@@ -146,7 +153,9 @@ class FakePlayerBridge(
 
     override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
 
-    override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) = Unit
+    override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) {
+        _resiliencePolicy.value = policy
+    }
 
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()

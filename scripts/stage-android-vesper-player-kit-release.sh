@@ -8,6 +8,7 @@ COMPOSE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose"
 OUTPUT_DIR="${1:-$ROOT_DIR/dist/release/android}"
 shift || true
 
+# Android 侧二进制分发固定为 arm64-only；不要重新引入 x86 / x86_64 ABI。
 DEFAULT_ABIS=(
   "arm64-v8a"
 )

@@ -29,6 +29,7 @@ directly.
 - Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
 - View embedding: `AndroidView` with view type `io.github.ikaros.vesper_player/platform_view`
 - Render path: selected automatically by scenario, preferring `SurfaceView` for fullscreen or fixed-stage playback and `TextureView` for scrolling or complex composition
+- Runtime snapshot: exposes the currently active adaptive video variant through `controller.snapshot.effectiveVideoTrackId`
 - Rust runtime: bridged through JNI so defaults, timeline, resilience, and playlist semantics stay aligned with the rest of the SDK
 
 ## Optional `player-ffmpeg` Remux Plugin

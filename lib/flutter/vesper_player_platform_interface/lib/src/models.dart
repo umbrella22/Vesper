@@ -30,6 +30,8 @@ enum VesperTrackSelectionMode { auto, disabled, track }
 
 enum VesperAbrMode { auto, constrained, fixedTrack }
 
+enum VesperFixedTrackStatus { pending, locked, fallback }
+
 enum VesperBufferingPreset {
   defaultPreset,
   balanced,
@@ -73,6 +75,11 @@ bool _decodeBool(
 }) {
   final raw = map[key];
   return raw is bool ? raw : fallback;
+}
+
+bool? _decodeOptionalBool(Map<Object?, Object?> map, String key) {
+  final raw = map[key];
+  return raw is bool ? raw : null;
 }
 
 int? _decodeInt(Map<Object?, Object?> map, String key) {
@@ -222,7 +229,14 @@ final class VesperPlayerCapabilities {
     this.supportsDash = false,
     this.supportsTrackCatalog = false,
     this.supportsTrackSelection = false,
+    this.supportsVideoTrackSelection = false,
+    this.supportsAudioTrackSelection = false,
+    this.supportsSubtitleTrackSelection = false,
     this.supportsAbrPolicy = false,
+    this.supportsAbrConstrained = false,
+    this.supportsAbrFixedTrack = false,
+    this.supportsAbrMaxBitRate = false,
+    this.supportsAbrMaxResolution = false,
     this.supportsResiliencePolicy = false,
     this.supportsHolePunch = false,
     this.supportsPlaybackRate = false,
@@ -238,7 +252,14 @@ final class VesperPlayerCapabilities {
         supportsDash = false,
         supportsTrackCatalog = false,
         supportsTrackSelection = false,
+        supportsVideoTrackSelection = false,
+        supportsAudioTrackSelection = false,
+        supportsSubtitleTrackSelection = false,
         supportsAbrPolicy = false,
+        supportsAbrConstrained = false,
+        supportsAbrFixedTrack = false,
+        supportsAbrMaxBitRate = false,
+        supportsAbrMaxResolution = false,
         supportsResiliencePolicy = false,
         supportsHolePunch = false,
         supportsPlaybackRate = false,
@@ -248,14 +269,49 @@ final class VesperPlayerCapabilities {
 
   factory VesperPlayerCapabilities.fromMap(Map<Object?, Object?> map) {
     final rawRates = map['supportedPlaybackRates'];
+    final rawSupportsTrackSelection = _decodeOptionalBool(
+      map,
+      'supportsTrackSelection',
+    );
+    final supportsVideoTrackSelection =
+        _decodeOptionalBool(map, 'supportsVideoTrackSelection') ?? false;
+    final supportsAudioTrackSelection =
+        _decodeOptionalBool(map, 'supportsAudioTrackSelection') ?? false;
+    final supportsSubtitleTrackSelection =
+        _decodeOptionalBool(map, 'supportsSubtitleTrackSelection') ?? false;
+    final supportsTrackSelection = rawSupportsTrackSelection == true ||
+        supportsVideoTrackSelection ||
+        supportsAudioTrackSelection ||
+        supportsSubtitleTrackSelection;
+
+    final rawSupportsAbrPolicy = _decodeOptionalBool(map, 'supportsAbrPolicy');
+    final supportsAbrConstrained =
+        _decodeOptionalBool(map, 'supportsAbrConstrained') ?? false;
+    final supportsAbrFixedTrack =
+        _decodeOptionalBool(map, 'supportsAbrFixedTrack') ?? false;
+    final supportsAbrPolicy = rawSupportsAbrPolicy == true ||
+        supportsAbrConstrained ||
+        supportsAbrFixedTrack;
+    final supportsAbrMaxBitRate =
+        _decodeOptionalBool(map, 'supportsAbrMaxBitRate') ?? false;
+    final supportsAbrMaxResolution =
+        _decodeOptionalBool(map, 'supportsAbrMaxResolution') ?? false;
+
     return VesperPlayerCapabilities(
       supportsLocalFiles: _decodeBool(map, 'supportsLocalFiles'),
       supportsRemoteUrls: _decodeBool(map, 'supportsRemoteUrls'),
       supportsHls: _decodeBool(map, 'supportsHls'),
       supportsDash: _decodeBool(map, 'supportsDash'),
       supportsTrackCatalog: _decodeBool(map, 'supportsTrackCatalog'),
-      supportsTrackSelection: _decodeBool(map, 'supportsTrackSelection'),
-      supportsAbrPolicy: _decodeBool(map, 'supportsAbrPolicy'),
+      supportsTrackSelection: supportsTrackSelection,
+      supportsVideoTrackSelection: supportsVideoTrackSelection,
+      supportsAudioTrackSelection: supportsAudioTrackSelection,
+      supportsSubtitleTrackSelection: supportsSubtitleTrackSelection,
+      supportsAbrPolicy: supportsAbrPolicy,
+      supportsAbrConstrained: supportsAbrConstrained,
+      supportsAbrFixedTrack: supportsAbrFixedTrack,
+      supportsAbrMaxBitRate: supportsAbrMaxBitRate,
+      supportsAbrMaxResolution: supportsAbrMaxResolution,
       supportsResiliencePolicy: _decodeBool(map, 'supportsResiliencePolicy'),
       supportsHolePunch: _decodeBool(map, 'supportsHolePunch'),
       supportsPlaybackRate: _decodeBool(map, 'supportsPlaybackRate'),
@@ -276,13 +332,36 @@ final class VesperPlayerCapabilities {
   final bool supportsDash;
   final bool supportsTrackCatalog;
   final bool supportsTrackSelection;
+  final bool supportsVideoTrackSelection;
+  final bool supportsAudioTrackSelection;
+  final bool supportsSubtitleTrackSelection;
   final bool supportsAbrPolicy;
+  final bool supportsAbrConstrained;
+  final bool supportsAbrFixedTrack;
+  final bool supportsAbrMaxBitRate;
+  final bool supportsAbrMaxResolution;
   final bool supportsResiliencePolicy;
   final bool supportsHolePunch;
   final bool supportsPlaybackRate;
   final bool supportsLiveEdgeSeeking;
   final bool isExperimental;
   final List<double> supportedPlaybackRates;
+
+  bool supportsTrackSelectionFor(VesperMediaTrackKind kind) {
+    return switch (kind) {
+      VesperMediaTrackKind.video => supportsVideoTrackSelection,
+      VesperMediaTrackKind.audio => supportsAudioTrackSelection,
+      VesperMediaTrackKind.subtitle => supportsSubtitleTrackSelection,
+    };
+  }
+
+  bool supportsAbrMode(VesperAbrMode mode) {
+    return switch (mode) {
+      VesperAbrMode.auto => supportsAbrPolicy,
+      VesperAbrMode.constrained => supportsAbrConstrained,
+      VesperAbrMode.fixedTrack => supportsAbrFixedTrack,
+    };
+  }
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -292,7 +371,14 @@ final class VesperPlayerCapabilities {
       'supportsDash': supportsDash,
       'supportsTrackCatalog': supportsTrackCatalog,
       'supportsTrackSelection': supportsTrackSelection,
+      'supportsVideoTrackSelection': supportsVideoTrackSelection,
+      'supportsAudioTrackSelection': supportsAudioTrackSelection,
+      'supportsSubtitleTrackSelection': supportsSubtitleTrackSelection,
       'supportsAbrPolicy': supportsAbrPolicy,
+      'supportsAbrConstrained': supportsAbrConstrained,
+      'supportsAbrFixedTrack': supportsAbrFixedTrack,
+      'supportsAbrMaxBitRate': supportsAbrMaxBitRate,
+      'supportsAbrMaxResolution': supportsAbrMaxResolution,
       'supportsResiliencePolicy': supportsResiliencePolicy,
       'supportsHolePunch': supportsHolePunch,
       'supportsPlaybackRate': supportsPlaybackRate,
@@ -1214,6 +1300,9 @@ final class VesperPlayerSnapshot {
     this.capabilities = const VesperPlayerCapabilities.unsupported(),
     this.trackCatalog = const VesperTrackCatalog(),
     this.trackSelection = const VesperTrackSelectionSnapshot(),
+    this.effectiveVideoTrackId,
+    this.fixedTrackStatus,
+    this.resiliencePolicy = const VesperPlaybackResiliencePolicy(),
     this.lastError,
   });
 
@@ -1233,6 +1322,9 @@ final class VesperPlayerSnapshot {
         capabilities = const VesperPlayerCapabilities.unsupported(),
         trackCatalog = const VesperTrackCatalog(),
         trackSelection = const VesperTrackSelectionSnapshot(),
+        effectiveVideoTrackId = null,
+        fixedTrackStatus = null,
+        resiliencePolicy = const VesperPlaybackResiliencePolicy(),
         lastError = null;
 
   factory VesperPlayerSnapshot.fromMap(Map<Object?, Object?> map) {
@@ -1240,6 +1332,9 @@ final class VesperPlayerSnapshot {
     final rawCapabilities = map['capabilities'];
     final rawTrackCatalog = map['trackCatalog'];
     final rawTrackSelection = map['trackSelection'];
+    final rawEffectiveVideoTrackId = map['effectiveVideoTrackId'];
+    final rawFixedTrackStatus = map['fixedTrackStatus'];
+    final rawResiliencePolicy = map['resiliencePolicy'];
     final rawViewport = map['viewport'];
     final rawViewportHint = map['viewportHint'];
     final rawLastError = map['lastError'];
@@ -1279,6 +1374,19 @@ final class VesperPlayerSnapshot {
       trackSelection: _rawMap(rawTrackSelection) != null
           ? VesperTrackSelectionSnapshot.fromMap(_rawMap(rawTrackSelection)!)
           : const VesperTrackSelectionSnapshot(),
+      effectiveVideoTrackId: rawEffectiveVideoTrackId as String?,
+      fixedTrackStatus: rawFixedTrackStatus is String
+          ? _decodeEnum(
+              VesperFixedTrackStatus.values,
+              rawFixedTrackStatus,
+              VesperFixedTrackStatus.pending,
+            )
+          : null,
+      resiliencePolicy: _rawMap(rawResiliencePolicy) != null
+          ? VesperPlaybackResiliencePolicy.fromMap(
+              _rawMap(rawResiliencePolicy)!,
+            )
+          : const VesperPlaybackResiliencePolicy(),
       lastError: _rawMap(rawLastError) != null
           ? VesperPlayerError.fromMap(_rawMap(rawLastError)!)
           : null,
@@ -1300,6 +1408,9 @@ final class VesperPlayerSnapshot {
   final VesperPlayerCapabilities capabilities;
   final VesperTrackCatalog trackCatalog;
   final VesperTrackSelectionSnapshot trackSelection;
+  final String? effectiveVideoTrackId;
+  final VesperFixedTrackStatus? fixedTrackStatus;
+  final VesperPlaybackResiliencePolicy resiliencePolicy;
   final VesperPlayerError? lastError;
 
   VesperPlayerSnapshot copyWith({
@@ -1318,6 +1429,11 @@ final class VesperPlayerSnapshot {
     VesperPlayerCapabilities? capabilities,
     VesperTrackCatalog? trackCatalog,
     VesperTrackSelectionSnapshot? trackSelection,
+    String? effectiveVideoTrackId,
+    bool clearEffectiveVideoTrackId = false,
+    VesperFixedTrackStatus? fixedTrackStatus,
+    bool clearFixedTrackStatus = false,
+    VesperPlaybackResiliencePolicy? resiliencePolicy,
     VesperPlayerError? lastError,
     bool clearLastError = false,
   }) {
@@ -1337,6 +1453,13 @@ final class VesperPlayerSnapshot {
       capabilities: capabilities ?? this.capabilities,
       trackCatalog: trackCatalog ?? this.trackCatalog,
       trackSelection: trackSelection ?? this.trackSelection,
+      effectiveVideoTrackId: clearEffectiveVideoTrackId
+          ? null
+          : (effectiveVideoTrackId ?? this.effectiveVideoTrackId),
+      fixedTrackStatus: clearFixedTrackStatus
+          ? null
+          : (fixedTrackStatus ?? this.fixedTrackStatus),
+      resiliencePolicy: resiliencePolicy ?? this.resiliencePolicy,
       lastError: clearLastError ? null : (lastError ?? this.lastError),
     );
   }
@@ -1358,6 +1481,9 @@ final class VesperPlayerSnapshot {
       'capabilities': capabilities.toMap(),
       'trackCatalog': trackCatalog.toMap(),
       'trackSelection': trackSelection.toMap(),
+      'effectiveVideoTrackId': effectiveVideoTrackId,
+      'fixedTrackStatus': fixedTrackStatus?.name,
+      'resiliencePolicy': resiliencePolicy.toMap(),
       'lastError': lastError?.toMap(),
     };
   }

@@ -183,6 +183,9 @@ protocol PlayerBridge: AnyObject {
     var uiState: PlayerHostUiState { get }
     var trackCatalog: VesperTrackCatalog { get }
     var trackSelection: VesperTrackSelectionSnapshot { get }
+    var effectiveVideoTrackId: String? { get }
+    var fixedTrackStatus: VesperFixedTrackStatus? { get }
+    var resiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var lastError: VesperPlayerError? { get }
 
     func initialize()
@@ -212,6 +215,9 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
     var publishedUiState: PlayerHostUiState { get }
     var publishedTrackCatalog: VesperTrackCatalog { get }
     var publishedTrackSelection: VesperTrackSelectionSnapshot { get }
+    var publishedEffectiveVideoTrackId: String? { get }
+    var publishedFixedTrackStatus: VesperFixedTrackStatus? { get }
+    var publishedResiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var publishedLastError: VesperPlayerError? { get }
 }
 

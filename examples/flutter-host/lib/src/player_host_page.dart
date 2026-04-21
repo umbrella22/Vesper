@@ -821,6 +821,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
           const SizedBox(height: 18),
           ExampleResilienceSection(
             palette: palette,
+            activePolicy: snapshot.resiliencePolicy,
             selectedProfile: _selectedResilienceProfile,
             onApplyProfile: _applyResilienceProfile,
           ),

@@ -9,18 +9,46 @@ public final class VesperPlayerController: ObservableObject {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedEffectiveVideoTrackId: String?
+    @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
+    @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
 
     public var uiState: PlayerHostUiState {
         publishedUiState
     }
 
+    /// The latest media track catalog reported by the active source.
     public var trackCatalog: VesperTrackCatalog {
         publishedTrackCatalog
     }
 
+    /// The currently applied track-selection intent for the active source.
     public var trackSelection: VesperTrackSelectionSnapshot {
         publishedTrackSelection
+    }
+
+    /// The best-effort video variant currently rendered by the backend.
+    ///
+    /// On iOS this is inferred from the current HLS variant ladder, playback
+    /// access logs, and presentation size. It may be `nil` until the player has
+    /// enough runtime information to identify a matching variant.
+    public var effectiveVideoTrackId: String? {
+        publishedEffectiveVideoTrackId
+    }
+
+    /// The latest best-effort status for the active `fixedTrack` ABR request.
+    ///
+    /// This value is `nil` when no fixed-track request is active. On iOS the
+    /// status is derived from the current HLS variant ladder plus playback
+    /// runtime evidence, so `.pending` means the host is still waiting for
+    /// enough evidence to identify the active variant.
+    public var fixedTrackStatus: VesperFixedTrackStatus? {
+        publishedFixedTrackStatus
+    }
+
+    public var resiliencePolicy: VesperPlaybackResiliencePolicy {
+        publishedResiliencePolicy
     }
 
     public var lastError: VesperPlayerError? {
@@ -52,6 +80,9 @@ public final class VesperPlayerController: ObservableObject {
         publishedUiState = bridge.publishedUiState
         publishedTrackCatalog = bridge.publishedTrackCatalog
         publishedTrackSelection = bridge.publishedTrackSelection
+        publishedEffectiveVideoTrackId = bridge.publishedEffectiveVideoTrackId
+        publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
+        publishedResiliencePolicy = bridge.publishedResiliencePolicy
         publishedLastError = bridge.publishedLastError
         initializeImpl = bridge.initialize
         disposeImpl = bridge.dispose
@@ -83,6 +114,9 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedUiState = bridge.publishedUiState
                 self.publishedTrackCatalog = bridge.publishedTrackCatalog
                 self.publishedTrackSelection = bridge.publishedTrackSelection
+                self.publishedEffectiveVideoTrackId = bridge.publishedEffectiveVideoTrackId
+                self.publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
+                self.publishedResiliencePolicy = bridge.publishedResiliencePolicy
                 self.publishedLastError = bridge.publishedLastError
             }
         }
@@ -152,6 +186,11 @@ public final class VesperPlayerController: ObservableObject {
         setSubtitleTrackSelectionImpl(selection)
     }
 
+    /// Applies adaptive bitrate behavior for the active source.
+    ///
+    /// On iOS, `fixedTrack` maps to best-effort HLS variant pinning. Single-axis
+    /// constrained resolution requests also wait for the current HLS variant
+    /// catalog before the missing dimension can be inferred.
     public func setAbrPolicy(_ policy: VesperAbrPolicy) {
         setAbrPolicyImpl(policy)
     }
@@ -160,5 +199,6 @@ public final class VesperPlayerController: ObservableObject {
         setResiliencePolicyImpl(policy)
     }
 
+    /// Playback rates exposed by the current iOS host surface.
     public static let supportedPlaybackRates: [Float] = [0.5, 1.0, 1.5, 2.0, 3.0]
 }

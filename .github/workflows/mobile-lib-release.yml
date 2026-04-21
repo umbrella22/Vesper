@@ -78,6 +78,25 @@ jobs:
       - name: Build VesperPlayerKit Android release asset
         run: bash ./scripts/stage-android-vesper-player-kit-release.sh release-assets/android ${{ matrix.abi }}
 
+      - name: Verify VesperPlayerKit Android assets are arm64-only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if find release-assets/android -type f \( -name '*x86*' -o -name '*i386*' \) | grep -q .; then
+            echo "Unexpected x86/i386 Android asset was staged." >&2
+            find release-assets/android -type f \( -name '*x86*' -o -name '*i386*' \)
+            exit 1
+          fi
+
+          while IFS= read -r -d '' aar; do
+            if unzip -Z1 "$aar" | grep -E '(^|/)jni/(x86|x86_64)/' >/dev/null; then
+              echo "Found unexpected x86 JNI payload in $aar" >&2
+              unzip -Z1 "$aar" | grep -E '(^|/)jni/(x86|x86_64)/' >&2
+              exit 1
+            fi
+          done < <(find release-assets/android -type f -name '*.aar' -print0)
+
       - name: Upload VesperPlayerKit Android release asset
         uses: actions/upload-artifact@v4
         with:
@@ -100,7 +119,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2

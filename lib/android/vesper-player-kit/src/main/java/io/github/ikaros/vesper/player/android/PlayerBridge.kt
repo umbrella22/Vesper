@@ -104,6 +104,8 @@ interface PlayerBridge {
     val uiState: StateFlow<PlayerHostUiState>
     val trackCatalog: StateFlow<VesperTrackCatalog>
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
+    val effectiveVideoTrackId: StateFlow<String?>
+    val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
 
     fun initialize()
     fun dispose()

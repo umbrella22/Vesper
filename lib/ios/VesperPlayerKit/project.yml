@@ -31,6 +31,10 @@ targets:
       base:
         DEFINES_MODULE: true
         MODULEMAP_FILE: $(BUILT_PRODUCTS_DIR)/include/$(PRODUCT_NAME)/module.modulemap
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+        "ARCHS[sdk=macosx*]": arm64
+        "EXCLUDED_ARCHS[sdk=macosx*]": x86_64
   VesperPlayerKit:
     type: framework
     platform: iOS
@@ -41,10 +45,10 @@ targets:
     preBuildScripts:
       - name: Build Rust iOS Resolver
         script: |
+          export VESPER_BUILD_IOS_PLAYER_FFI_MODE=platform
           "${SRCROOT}/../../../scripts/build-ios-player-ffi-xcframework.sh"
         outputFiles:
-          - $(SRCROOT)/.build/rust-player-ffi/iphoneos/libplayer_ffi_resolver.a
-          - $(SRCROOT)/.build/rust-player-ffi/iphonesimulator/libplayer_ffi_resolver.a
+          - $(SRCROOT)/.build/rust-player-ffi/$(PLATFORM_NAME)/libplayer_ffi_resolver.a
     sources:
       - Sources/VesperPlayerKit
     settings:
@@ -54,6 +58,10 @@ targets:
         SKIP_INSTALL: false
         BUILD_LIBRARY_FOR_DISTRIBUTION: true
         SWIFT_ENABLE_EXPLICIT_MODULES: false
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+        "ARCHS[sdk=macosx*]": arm64
+        "EXCLUDED_ARCHS[sdk=macosx*]": x86_64
         LIBRARY_SEARCH_PATHS:
           - $(inherited)
           - $(SRCROOT)/.build/rust-player-ffi/$(PLATFORM_NAME)
@@ -71,6 +79,9 @@ targets:
         CFBundlePackageType: FMWK
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+    scheme:
+      testTargets:
+        - VesperPlayerKitTests
   VesperPlayerKitTests:
     type: bundle.unit-test
     platform: iOS
@@ -82,3 +93,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+        "ARCHS[sdk=macosx*]": arm64
+        "EXCLUDED_ARCHS[sdk=macosx*]": x86_64

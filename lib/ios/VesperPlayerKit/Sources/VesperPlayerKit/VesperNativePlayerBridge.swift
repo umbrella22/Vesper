@@ -10,6 +10,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedEffectiveVideoTrackId: String?
+    @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
+    @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
 
     private var currentSource: VesperPlayerSource?
@@ -28,9 +31,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var pendingPlaybackStart = false
     private var audioGroup: AVMediaSelectionGroup?
     private var subtitleGroup: AVMediaSelectionGroup?
+    private var videoVariantPinsByTrackId: [String: LoadedVideoVariantPin] = [:]
     private var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
-    private var resiliencePolicy: VesperPlaybackResiliencePolicy
+    private var currentResiliencePolicy: VesperPlaybackResiliencePolicy
     private let trackPreferencePolicy: VesperTrackPreferencePolicy
     private var resolvedTrackPreferencePolicy: VesperTrackPreferencePolicy
     private var hasAppliedDefaultTrackPreferences = false
@@ -52,6 +56,18 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedTrackSelection
     }
 
+    var effectiveVideoTrackId: String? {
+        publishedEffectiveVideoTrackId
+    }
+
+    var fixedTrackStatus: VesperFixedTrackStatus? {
+        publishedFixedTrackStatus
+    }
+
+    var resiliencePolicy: VesperPlaybackResiliencePolicy {
+        publishedResiliencePolicy
+    }
+
     var lastError: VesperPlayerError? {
         publishedLastError
     }
@@ -63,7 +79,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
     ) {
         currentSource = initialSource
-        self.resiliencePolicy = resiliencePolicy
+        currentResiliencePolicy = resiliencePolicy
         self.trackPreferencePolicy = trackPreferencePolicy
         resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
         preloadCoordinator = VesperNativePreloadCoordinator(
@@ -88,6 +104,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
+        publishedEffectiveVideoTrackId = nil
+        publishedFixedTrackStatus = nil
+        publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
     }
 
@@ -421,6 +440,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             "setAbrPolicy mode=\(policy.mode.rawValue) trackId=\(trackIdText) maxBitRate=\(maxBitRateText) maxWidth=\(maxWidthText) maxHeight=\(maxHeightText)"
         )
         let hasResolutionLimit = policy.maxWidth != nil || policy.maxHeight != nil
+        let resolvedVideoVariantPin: LoadedVideoVariantPin?
+        var resolvedFixedTrackId: String?
         switch policy.mode {
         case .constrained:
             guard policy.maxBitRate != nil || hasResolutionLimit else {
@@ -431,21 +452,53 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 )
                 return
             }
-            if hasResolutionLimit && (policy.maxWidth == nil || policy.maxHeight == nil) {
+            if
+                hasResolutionLimit,
+                let resolvedPin = resolvedConstrainedVideoVariantPin(for: policy)
+            {
+                resolvedVideoVariantPin = resolvedPin
+            } else if hasResolutionLimit {
                 reportCommandError(
                     category: .unsupported,
                     message:
-                        "setAbrPolicy constrained mode requires both maxWidth and maxHeight for AVPlayer resolution limits"
+                        "setAbrPolicy constrained mode requires a loaded HLS variant catalog to infer a single-axis maxWidth/maxHeight limit on iOS"
+                )
+                return
+            } else {
+                resolvedVideoVariantPin = LoadedVideoVariantPin(
+                    peakBitRate: policy.maxBitRate.map(Double.init),
+                    maxWidth: nil,
+                    maxHeight: nil
+                )
+            }
+        case .fixedTrack:
+            guard let trackId = policy.trackId, !trackId.isEmpty else {
+                reportCommandError(
+                    category: .input,
+                    message: "setAbrPolicy fixedTrack requires a non-empty trackId on iOS"
                 )
                 return
             }
-        case .fixedTrack:
-            reportCommandError(
-                category: .unsupported,
-                message: "setAbrPolicy fixedTrack is not implemented on iOS AVPlayer"
-            )
-            return
+            guard let resolvedFixedTrack = resolvedFixedVideoVariantTrack(for: trackId) else {
+                reportCommandError(
+                    category: .unsupported,
+                    message:
+                        "setAbrPolicy fixedTrack requires a video variant from the current iOS track catalog (trackId=\(trackId))"
+                )
+                return
+            }
+            guard resolvedFixedTrack.pin.hasAnyLimit else {
+                reportCommandError(
+                    category: .unsupported,
+                    message:
+                        "setAbrPolicy fixedTrack could not derive bitrate or resolution limits for trackId=\(resolvedFixedTrack.track.id) on iOS"
+                )
+                return
+            }
+            resolvedFixedTrackId = resolvedFixedTrack.track.id
+            resolvedVideoVariantPin = resolvedFixedTrack.pin
         case .auto:
+            resolvedVideoVariantPin = nil
             break
         }
 
@@ -456,29 +509,20 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         switch policy.mode {
         case .auto:
-            item.preferredPeakBitRate = 0
-            item.preferredMaximumResolution = .zero
+            applyVideoVariantPin(nil, to: item)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
-                    video: current.video,
+                    video: .auto(),
                     audio: current.audio,
                     subtitle: current.subtitle,
                     abrPolicy: .auto()
                 )
             }
         case .constrained:
-            item.preferredPeakBitRate = policy.maxBitRate.map(Double.init) ?? 0
-            if let maxWidth = policy.maxWidth, let maxHeight = policy.maxHeight {
-                item.preferredMaximumResolution = CGSize(
-                    width: CGFloat(maxWidth),
-                    height: CGFloat(maxHeight)
-                )
-            } else {
-                item.preferredMaximumResolution = .zero
-            }
+            applyVideoVariantPin(resolvedVideoVariantPin, to: item)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
-                    video: current.video,
+                    video: .auto(),
                     audio: current.audio,
                     subtitle: current.subtitle,
                     abrPolicy: .constrained(
@@ -489,17 +533,30 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 )
             }
         case .fixedTrack:
-            return
+            guard let resolvedFixedTrackId, let resolvedVideoVariantPin else {
+                return
+            }
+            applyVideoVariantPin(resolvedVideoVariantPin, to: item)
+            updateTrackSelection { current in
+                VesperTrackSelectionSnapshot(
+                    // iOS fixedTrack 这里只是按 variant 做 best-effort 约束，不等于精确视频轨选择。
+                    video: .auto(),
+                    audio: current.audio,
+                    subtitle: current.subtitle,
+                    abrPolicy: .fixedTrack(resolvedFixedTrackId)
+                )
+            }
         }
     }
 
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
         clearLastError()
-        if resiliencePolicy == policy {
+        if currentResiliencePolicy == policy {
             return
         }
 
-        resiliencePolicy = policy
+        currentResiliencePolicy = policy
+        publishedResiliencePolicy = policy
         guard let currentSource else {
             return
         }
@@ -555,7 +612,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         let url = try resolvedUrl(for: currentSource)
         iosHostLog("loadCurrentSource url=\(url.absoluteString)")
-        let resolvedResiliencePolicy = resiliencePolicy.resolvedForRuntimeSource(currentSource)
+        let resolvedResiliencePolicy = currentResiliencePolicy.resolvedForRuntimeSource(currentSource)
         resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
         let cachePolicy = resolvedCachePolicy(resolvedResiliencePolicy.cache)
         VesperSharedUrlCacheCoordinator.shared.apply(
@@ -745,6 +802,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 timeline: currentTimelineState(positionMs: positionMs)
             )
         }
+        refreshEffectiveVideoTrackObservation(for: player.currentItem)
     }
 
     private func updateTimelinePosition(_ positionMs: Int64) {
@@ -866,17 +924,72 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private func resetTrackState() {
         audioGroup = nil
         subtitleGroup = nil
+        videoVariantPinsByTrackId = [:]
         audioOptionsByTrackId = [:]
         subtitleOptionsByTrackId = [:]
         hasAppliedDefaultTrackPreferences = false
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
+        publishedEffectiveVideoTrackId = nil
+        publishedFixedTrackStatus = nil
     }
 
     private func updateTrackSelection(
         _ transform: (VesperTrackSelectionSnapshot) -> VesperTrackSelectionSnapshot
     ) {
         publishedTrackSelection = transform(publishedTrackSelection)
+        refreshEffectiveVideoTrackObservation(for: player?.currentItem)
+    }
+
+    private func resolvedConstrainedVideoVariantPin(
+        for policy: VesperAbrPolicy
+    ) -> LoadedVideoVariantPin? {
+        let resolvedResolution = resolveConstrainedMaximumVideoResolution(
+            maxWidth: policy.maxWidth,
+            maxHeight: policy.maxHeight,
+            tracks: publishedTrackCatalog.videoTracks
+        )
+        if (policy.maxWidth != nil || policy.maxHeight != nil) && resolvedResolution == nil {
+            return nil
+        }
+
+        return LoadedVideoVariantPin(
+            peakBitRate: policy.maxBitRate.map(Double.init),
+            maxWidth: resolvedResolution?.width,
+            maxHeight: resolvedResolution?.height
+        )
+    }
+
+    private func resolvedFixedVideoVariantTrack(
+        for requestedTrackId: String
+    ) -> (track: VesperMediaTrack, pin: LoadedVideoVariantPin)? {
+        let videoTracks = publishedTrackCatalog.videoTracks
+        guard !videoTracks.isEmpty else {
+            return nil
+        }
+
+        if
+            let exactTrack = videoTracks.first(where: { $0.id == requestedTrackId }),
+            let exactPin = videoVariantPinsByTrackId[requestedTrackId]
+        {
+            return (track: exactTrack, pin: exactPin)
+        }
+
+        guard
+            let resolvedTrackId = resolveRequestedVideoVariantTrackId(
+                requestedTrackId,
+                tracks: videoTracks
+            ),
+            let resolvedTrack = videoTracks.first(where: { $0.id == resolvedTrackId }),
+            let resolvedPin = videoVariantPinsByTrackId[resolvedTrackId]
+        else {
+            return nil
+        }
+
+        iosHostLog(
+            "remapped fixedTrack request trackId=\(requestedTrackId) resolvedTrackId=\(resolvedTrackId)"
+        )
+        return (track: resolvedTrack, pin: resolvedPin)
     }
 
     private func applyTrackSelection(
@@ -1083,6 +1196,163 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         return normalized
     }
 
+    private func refreshEffectiveVideoTrackObservation(for item: AVPlayerItem?) {
+        let resolvedTrackId = resolvedEffectiveVideoTrackId(for: item)
+        if publishedEffectiveVideoTrackId != resolvedTrackId {
+            publishedEffectiveVideoTrackId = resolvedTrackId
+        }
+        let resolvedStatus = resolveFixedTrackStatus(
+            abrPolicy: publishedTrackSelection.abrPolicy,
+            effectiveVideoTrackId: resolvedTrackId,
+            tracks: publishedTrackCatalog.videoTracks
+        )
+        if publishedFixedTrackStatus != resolvedStatus {
+            publishedFixedTrackStatus = resolvedStatus
+        }
+    }
+
+    private func resolvedEffectiveVideoTrackId(for item: AVPlayerItem?) -> String? {
+        guard let item else {
+            return nil
+        }
+
+        let videoTracks = publishedTrackCatalog.videoTracks
+        guard !videoTracks.isEmpty else {
+            return nil
+        }
+
+        let effectiveBitRate = resolvedEffectiveVideoBitRate(for: item)
+        let effectivePresentationSize = resolvedEffectivePresentationSize(for: item)
+        guard effectiveBitRate != nil || effectivePresentationSize != nil else {
+            return nil
+        }
+
+        let requestedTrackId =
+            publishedTrackSelection.abrPolicy.mode == .fixedTrack
+            ? publishedTrackSelection.abrPolicy.trackId
+            : nil
+
+        return videoTracks.min { lhs, rhs in
+            let lhsScore = effectiveVideoTrackScore(
+                lhs,
+                bitRate: effectiveBitRate,
+                presentationSize: effectivePresentationSize,
+                requestedTrackId: requestedTrackId
+            )
+            let rhsScore = effectiveVideoTrackScore(
+                rhs,
+                bitRate: effectiveBitRate,
+                presentationSize: effectivePresentationSize,
+                requestedTrackId: requestedTrackId
+            )
+            if lhsScore != rhsScore {
+                return lhsScore < rhsScore
+            }
+            return comparePreferredEffectiveVideoTrack(lhs, over: rhs)
+        }?.id
+    }
+
+    private func resolvedEffectiveVideoBitRate(for item: AVPlayerItem) -> Double? {
+        guard let event = item.accessLog()?.events.last else {
+            return nil
+        }
+
+        if event.indicatedBitrate.isFinite, event.indicatedBitrate > 0 {
+            return event.indicatedBitrate
+        }
+        if event.observedBitrate.isFinite, event.observedBitrate > 0 {
+            return event.observedBitrate
+        }
+        return nil
+    }
+
+    private func resolvedEffectivePresentationSize(for item: AVPlayerItem) -> CGSize? {
+        let size = item.presentationSize
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else {
+            return nil
+        }
+        return size
+    }
+
+    private func effectiveVideoTrackScore(
+        _ track: VesperMediaTrack,
+        bitRate: Double?,
+        presentationSize: CGSize?,
+        requestedTrackId: String?
+    ) -> (Int, Int64, Int) {
+        let sizeDistance = effectiveVideoTrackSizeDistance(track, presentationSize: presentationSize)
+        let bitRateDistance = effectiveVideoTrackBitRateDistance(track, bitRate: bitRate)
+        let requestedTrackPenalty: Int
+        if let requestedTrackId {
+            requestedTrackPenalty = requestedTrackId == track.id ? 0 : 1
+        } else {
+            requestedTrackPenalty = 0
+        }
+        return (sizeDistance, bitRateDistance, requestedTrackPenalty)
+    }
+
+    private func effectiveVideoTrackSizeDistance(
+        _ track: VesperMediaTrack,
+        presentationSize: CGSize?
+    ) -> Int {
+        guard let presentationSize else {
+            return 0
+        }
+        guard let width = track.width, let height = track.height else {
+            return Int.max / 4
+        }
+
+        let currentMaxEdge = Int(max(presentationSize.width, presentationSize.height).rounded())
+        let currentMinEdge = Int(min(presentationSize.width, presentationSize.height).rounded())
+        let trackMaxEdge = max(width, height)
+        let trackMinEdge = min(width, height)
+        return abs(trackMaxEdge - currentMaxEdge) + abs(trackMinEdge - currentMinEdge)
+    }
+
+    private func effectiveVideoTrackBitRateDistance(
+        _ track: VesperMediaTrack,
+        bitRate: Double?
+    ) -> Int64 {
+        guard let bitRate else {
+            return 0
+        }
+        guard let trackBitRate = track.bitRate else {
+            return Int64.max / 4
+        }
+        return Int64(abs(Double(trackBitRate) - bitRate).rounded())
+    }
+
+    private func comparePreferredEffectiveVideoTrack(
+        _ lhs: VesperMediaTrack,
+        over rhs: VesperMediaTrack
+    ) -> Bool {
+        let lhsBitRate = lhs.bitRate ?? -1
+        let rhsBitRate = rhs.bitRate ?? -1
+        if lhsBitRate != rhsBitRate {
+            return lhsBitRate > rhsBitRate
+        }
+
+        let lhsMaxEdge = max(lhs.width ?? 0, lhs.height ?? 0)
+        let rhsMaxEdge = max(rhs.width ?? 0, rhs.height ?? 0)
+        if lhsMaxEdge != rhsMaxEdge {
+            return lhsMaxEdge > rhsMaxEdge
+        }
+
+        let lhsMinEdge = min(lhs.width ?? 0, lhs.height ?? 0)
+        let rhsMinEdge = min(rhs.width ?? 0, rhs.height ?? 0)
+        if lhsMinEdge != rhsMinEdge {
+            return lhsMinEdge > rhsMinEdge
+        }
+
+        let lhsFrameRate = Int((lhs.frameRate ?? 0).rounded())
+        let rhsFrameRate = Int((rhs.frameRate ?? 0).rounded())
+        if lhsFrameRate != rhsFrameRate {
+            return lhsFrameRate > rhsFrameRate
+        }
+
+        return (lhs.label ?? lhs.id) <= (rhs.label ?? rhs.id)
+    }
+
     private func refreshTrackCatalogAndSelection(for item: AVPlayerItem) {
         Task { [weak self, weak item] in
             guard let self, let item else { return }
@@ -1090,11 +1360,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             guard self.player?.currentItem === item else { return }
             self.audioGroup = trackState.audioGroup
             self.subtitleGroup = trackState.subtitleGroup
+            self.videoVariantPinsByTrackId = trackState.videoVariantPinsByTrackId
             self.audioOptionsByTrackId = trackState.audioOptionsByTrackId
             self.subtitleOptionsByTrackId = trackState.subtitleOptionsByTrackId
             self.publishedTrackCatalog = trackState.catalog
             self.applyDefaultTrackPreferencesIfNeeded(for: item)
             self.applyPendingResilienceRestore(ifNeededFor: item, phase: .trackSelection)
+            self.refreshEffectiveVideoTrackObservation(for: item)
         }
     }
 
@@ -1102,8 +1374,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let asset = item.asset
         let audibleGroup = await loadMediaSelectionGroup(for: .audible, asset: asset)
         let legibleGroup = await loadMediaSelectionGroup(for: .legible, asset: asset)
+        let videoVariantState = await loadVideoVariantState(for: asset)
 
-        var tracks: [VesperMediaTrack] = []
+        var tracks = videoVariantState.tracks
         var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
         var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
 
@@ -1163,8 +1436,82 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             ),
             audioGroup: audibleGroup,
             subtitleGroup: legibleGroup,
+            videoVariantPinsByTrackId: videoVariantState.pinsByTrackId,
             audioOptionsByTrackId: audioOptionsByTrackId,
             subtitleOptionsByTrackId: subtitleOptionsByTrackId
+        )
+    }
+
+    private func loadVideoVariantState(for asset: AVAsset) async -> LoadedVideoVariantState {
+        guard currentSource?.kind == .remote, currentSource?.protocol == .hls else {
+            return .empty
+        }
+        guard #available(iOS 15.0, *) else {
+            return .empty
+        }
+        guard let urlAsset = asset as? AVURLAsset else {
+            return .empty
+        }
+
+        let variants = (try? await urlAsset.load(.variants)) ?? []
+        guard !variants.isEmpty else {
+            return .empty
+        }
+
+        let groupedVariants = Dictionary(
+            grouping: variants.compactMap(LoadedVideoVariantDescriptor.init)
+        ) { descriptor in
+            descriptor.deduplicationKey
+        }
+        let deduplicatedVariants = groupedVariants.values.compactMap { descriptors in
+            descriptors.max(by: { left, right in
+                LoadedVideoVariantDescriptor.preferredOrdering(
+                    left,
+                    over: right
+                ) == right
+            })
+        }
+        .sorted { left, right in
+            if left == right {
+                return false
+            }
+            return LoadedVideoVariantDescriptor.preferredOrdering(left, over: right) == left
+        }
+
+        var tracks: [VesperMediaTrack] = []
+        var pinsByTrackId: [String: LoadedVideoVariantPin] = [:]
+        tracks.reserveCapacity(deduplicatedVariants.count)
+        pinsByTrackId.reserveCapacity(deduplicatedVariants.count)
+
+        for (index, descriptor) in deduplicatedVariants.enumerated() {
+            let trackId = descriptor.stableTrackId
+            tracks.append(
+                VesperMediaTrack(
+                    id: trackId,
+                    kind: .video,
+                    label: descriptor.trackLabel,
+                    language: nil,
+                    codec: descriptor.codec,
+                    bitRate: descriptor.peakBitRate,
+                    width: descriptor.width,
+                    height: descriptor.height,
+                    frameRate: descriptor.frameRate,
+                    channels: nil,
+                    sampleRate: nil,
+                    isDefault: index == 0,
+                    isForced: false
+                )
+            )
+            pinsByTrackId[trackId] = LoadedVideoVariantPin(
+                peakBitRate: descriptor.peakBitRate.map(Double.init),
+                maxWidth: descriptor.width,
+                maxHeight: descriptor.height
+            )
+        }
+
+        return LoadedVideoVariantState(
+            tracks: tracks,
+            pinsByTrackId: pinsByTrackId
         )
     }
 
@@ -1177,6 +1524,18 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     private func applyDefaultPlaybackRate(_ rate: Float, to player: AVPlayer) {
         player.defaultRate = rate
+    }
+
+    private func applyVideoVariantPin(_ pin: LoadedVideoVariantPin?, to item: AVPlayerItem) {
+        item.preferredPeakBitRate = pin?.peakBitRate ?? 0
+        if let maxWidth = pin?.maxWidth, let maxHeight = pin?.maxHeight {
+            item.preferredMaximumResolution = CGSize(
+                width: CGFloat(maxWidth),
+                height: CGFloat(maxHeight)
+            )
+        } else {
+            item.preferredMaximumResolution = .zero
+        }
     }
 
     private func resolvedUrl(for source: VesperPlayerSource) throws -> URL {
@@ -1254,7 +1613,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             return false
         }
 
-        let retryPolicy = resiliencePolicy.resolvedForRuntimeSource(currentSource).retry
+        let retryPolicy = currentResiliencePolicy.resolvedForRuntimeSource(currentSource).retry
         let nextAttempt = retryAttemptCount + 1
         if let maxAttempts = retryPolicy.maxAttempts, nextAttempt > maxAttempts {
             return false
@@ -1499,7 +1858,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             setPlaybackRate(state.playbackRate)
         }
 
-        setAbrPolicy(state.abrPolicy)
+        if !abrPolicyRequiresLoadedVideoVariantCatalog(state.abrPolicy) {
+            setAbrPolicy(state.abrPolicy)
+        }
 
         if state.shouldResumePlayback {
             play()
@@ -1534,6 +1895,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                     item: item
                 )
             }
+        }
+
+        if abrPolicyRequiresLoadedVideoVariantCatalog(state.abrPolicy) {
+            setAbrPolicy(state.abrPolicy)
         }
 
         return false
@@ -1603,8 +1968,616 @@ private struct LoadedTrackCatalogState {
     let catalog: VesperTrackCatalog
     let audioGroup: AVMediaSelectionGroup?
     let subtitleGroup: AVMediaSelectionGroup?
+    let videoVariantPinsByTrackId: [String: LoadedVideoVariantPin]
     let audioOptionsByTrackId: [String: AVMediaSelectionOption]
     let subtitleOptionsByTrackId: [String: AVMediaSelectionOption]
+}
+
+private struct LoadedVideoVariantState {
+    let tracks: [VesperMediaTrack]
+    let pinsByTrackId: [String: LoadedVideoVariantPin]
+
+    static let empty = LoadedVideoVariantState(
+        tracks: [],
+        pinsByTrackId: [:]
+    )
+}
+
+struct ResolvedMaximumVideoResolution: Equatable {
+    let width: Int
+    let height: Int
+}
+
+func resolveConstrainedMaximumVideoResolution(
+    maxWidth: Int?,
+    maxHeight: Int?,
+    tracks: [VesperMediaTrack]
+) -> ResolvedMaximumVideoResolution? {
+    switch (maxWidth, maxHeight) {
+    case let (width?, height?):
+        guard width > 0, height > 0 else {
+            return nil
+        }
+        return ResolvedMaximumVideoResolution(width: width, height: height)
+    case let (width?, nil):
+        guard width > 0 else {
+            return nil
+        }
+        guard
+            let reference = resolvedMaximumVideoResolutionReference(
+                requestedWidth: width,
+                requestedHeight: nil,
+                tracks: tracks
+            )
+        else {
+            return nil
+        }
+        let height = max(
+            Int((Double(reference.height) / Double(reference.width) * Double(width)).rounded()),
+            1
+        )
+        return ResolvedMaximumVideoResolution(width: width, height: height)
+    case let (nil, height?):
+        guard height > 0 else {
+            return nil
+        }
+        guard
+            let reference = resolvedMaximumVideoResolutionReference(
+                requestedWidth: nil,
+                requestedHeight: height,
+                tracks: tracks
+            )
+        else {
+            return nil
+        }
+        let width = max(
+            Int((Double(reference.width) / Double(reference.height) * Double(height)).rounded()),
+            1
+        )
+        return ResolvedMaximumVideoResolution(width: width, height: height)
+    case (nil, nil):
+        return nil
+    }
+}
+
+private func resolvedMaximumVideoResolutionReference(
+    requestedWidth: Int?,
+    requestedHeight: Int?,
+    tracks: [VesperMediaTrack]
+) -> ResolvedMaximumVideoResolution? {
+    let candidates = tracks.compactMap { track -> ResolvedMaximumVideoResolution? in
+        guard
+            let width = track.width,
+            let height = track.height,
+            width > 0,
+            height > 0
+        else {
+            return nil
+        }
+        return ResolvedMaximumVideoResolution(width: width, height: height)
+    }
+    guard !candidates.isEmpty else {
+        return nil
+    }
+
+    return candidates.min { lhs, rhs in
+        let lhsScore = resolvedMaximumVideoResolutionReferenceScore(
+            lhs,
+            requestedWidth: requestedWidth,
+            requestedHeight: requestedHeight
+        )
+        let rhsScore = resolvedMaximumVideoResolutionReferenceScore(
+            rhs,
+            requestedWidth: requestedWidth,
+            requestedHeight: requestedHeight
+        )
+        if lhsScore != rhsScore {
+            return lhsScore < rhsScore
+        }
+        return lhs.width > rhs.width
+    }
+}
+
+private func resolvedMaximumVideoResolutionReferenceScore(
+    _ candidate: ResolvedMaximumVideoResolution,
+    requestedWidth: Int?,
+    requestedHeight: Int?
+) -> (Int, Int, Int, Int, Int) {
+    let primaryDistance: Int
+    let secondaryDistance: Int
+    if let requestedHeight {
+        primaryDistance = abs(candidate.height - requestedHeight)
+        secondaryDistance = requestedWidth.map { abs(candidate.width - $0) } ?? 0
+    } else if let requestedWidth {
+        primaryDistance = abs(candidate.width - requestedWidth)
+        secondaryDistance = requestedHeight.map { abs(candidate.height - $0) } ?? 0
+    } else {
+        primaryDistance = 0
+        secondaryDistance = 0
+    }
+
+    let exceedPenalty =
+        (requestedWidth.map { candidate.width > $0 ? 1 : 0 } ?? 0) +
+        (requestedHeight.map { candidate.height > $0 ? 1 : 0 } ?? 0)
+
+    return (
+        primaryDistance,
+        secondaryDistance,
+        exceedPenalty,
+        Int.max - candidate.width,
+        Int.max - candidate.height
+    )
+}
+
+private struct LoadedVideoVariantPin {
+    let peakBitRate: Double?
+    let maxWidth: Int?
+    let maxHeight: Int?
+
+    var hasAnyLimit: Bool {
+        peakBitRate != nil || (maxWidth != nil && maxHeight != nil)
+    }
+}
+
+@available(iOS 15.0, *)
+private struct LoadedVideoVariantDescriptor: Equatable {
+    let codec: String?
+    let peakBitRate: Int64?
+    let width: Int?
+    let height: Int?
+    let frameRate: Double?
+
+    init?(_ variant: AVAssetVariant) {
+        guard let videoAttributes = variant.videoAttributes else {
+            return nil
+        }
+
+        let presentationSize = videoAttributes.presentationSize
+        let width = LoadedVideoVariantDescriptor.intOrNil(presentationSize.width)
+        let height = LoadedVideoVariantDescriptor.intOrNil(presentationSize.height)
+        let peakBitRate = variant.peakBitRate.flatMap(
+            LoadedVideoVariantDescriptor.bitRateOrNil
+        )
+        let frameRate = videoAttributes.nominalFrameRate.flatMap(
+            LoadedVideoVariantDescriptor.doubleOrNil
+        )
+        let codec = videoAttributes.codecTypes.first.map { value in
+            fourCharCodeString(value)
+        }
+
+        guard peakBitRate != nil || (width != nil && height != nil) else {
+            return nil
+        }
+
+        self.codec = codec
+        self.peakBitRate = peakBitRate
+        self.width = width
+        self.height = height
+        self.frameRate = frameRate
+    }
+
+    var deduplicationKey: LoadedVideoVariantDeduplicationKey {
+        LoadedVideoVariantDeduplicationKey(
+            codec: codec,
+            peakBitRate: peakBitRate,
+            width: width,
+            height: height,
+            frameRate: frameRate.map { Int(($0 * 100).rounded()) }
+        )
+    }
+
+    var stableTrackId: String {
+        stableVideoVariantTrackId(
+            codec: codec,
+            peakBitRate: peakBitRate,
+            width: width,
+            height: height,
+            frameRate: frameRate
+        )
+    }
+
+    var trackLabel: String {
+        if let height {
+            return "\(height)p"
+        }
+        if let width, let height {
+            return "\(width)x\(height)"
+        }
+        if let peakBitRate {
+            return "\(peakBitRate)"
+        }
+        return "Video"
+    }
+
+    private static func intOrNil(_ value: CGFloat) -> Int? {
+        guard value.isFinite, value > 0 else {
+            return nil
+        }
+        return Int(value.rounded())
+    }
+
+    private static func bitRateOrNil(_ value: Double) -> Int64? {
+        guard value.isFinite, value > 0 else {
+            return nil
+        }
+        return Int64(value.rounded())
+    }
+
+    private static func doubleOrNil(_ value: Double) -> Double? {
+        guard value.isFinite, value > 0 else {
+            return nil
+        }
+        return value
+    }
+
+    static func preferredOrdering(
+        _ lhs: LoadedVideoVariantDescriptor,
+        over rhs: LoadedVideoVariantDescriptor
+    ) -> LoadedVideoVariantDescriptor {
+        let lhsBitRate = lhs.peakBitRate ?? -1
+        let rhsBitRate = rhs.peakBitRate ?? -1
+        if lhsBitRate != rhsBitRate {
+            return lhsBitRate > rhsBitRate ? lhs : rhs
+        }
+
+        let lhsMaxEdge = max(lhs.width ?? 0, lhs.height ?? 0)
+        let rhsMaxEdge = max(rhs.width ?? 0, rhs.height ?? 0)
+        if lhsMaxEdge != rhsMaxEdge {
+            return lhsMaxEdge > rhsMaxEdge ? lhs : rhs
+        }
+
+        let lhsMinEdge = min(lhs.width ?? 0, lhs.height ?? 0)
+        let rhsMinEdge = min(rhs.width ?? 0, rhs.height ?? 0)
+        if lhsMinEdge != rhsMinEdge {
+            return lhsMinEdge > rhsMinEdge ? lhs : rhs
+        }
+
+        let lhsFrameRate = Int((lhs.frameRate ?? 0).rounded())
+        let rhsFrameRate = Int((rhs.frameRate ?? 0).rounded())
+        if lhsFrameRate != rhsFrameRate {
+            return lhsFrameRate > rhsFrameRate ? lhs : rhs
+        }
+
+        return lhs.trackLabel <= rhs.trackLabel ? lhs : rhs
+    }
+}
+
+private struct LoadedVideoVariantDeduplicationKey: Hashable {
+    let codec: String?
+    let peakBitRate: Int64?
+    let width: Int?
+    let height: Int?
+    let frameRate: Int?
+}
+
+func abrPolicyRequiresLoadedVideoVariantCatalog(_ policy: VesperAbrPolicy) -> Bool {
+    switch policy.mode {
+    case .fixedTrack:
+        return true
+    case .constrained:
+        let hasWidthLimit = policy.maxWidth != nil
+        let hasHeightLimit = policy.maxHeight != nil
+        return hasWidthLimit != hasHeightLimit
+    case .auto:
+        return false
+    }
+}
+
+func resolveFixedTrackStatus(
+    abrPolicy: VesperAbrPolicy,
+    effectiveVideoTrackId: String?,
+    tracks: [VesperMediaTrack]
+) -> VesperFixedTrackStatus? {
+    guard
+        abrPolicy.mode == .fixedTrack,
+        let requestedTrackId = abrPolicy.trackId,
+        !requestedTrackId.isEmpty
+    else {
+        return nil
+    }
+
+    guard tracks.contains(where: { $0.id == requestedTrackId }) else {
+        return .pending
+    }
+
+    guard let effectiveVideoTrackId else {
+        return .pending
+    }
+
+    if effectiveVideoTrackId == requestedTrackId {
+        return .locked
+    }
+
+    return .fallback
+}
+
+func stableVideoVariantTrackId(
+    codec: String?,
+    peakBitRate: Int64?,
+    width: Int?,
+    height: Int?,
+    frameRate: Double?
+) -> String {
+    let frameRateBucket = frameRate.flatMap { value -> Int? in
+        guard value.isFinite, value > 0 else {
+            return nil
+        }
+        return Int((value * 100).rounded())
+    }
+
+    let components = [
+        "c\(sanitizedStableVideoVariantTrackIdComponent(codec))",
+        "b\(peakBitRate.map(String.init) ?? "na")",
+        "w\(width.map(String.init) ?? "na")",
+        "h\(height.map(String.init) ?? "na")",
+        "f\(frameRateBucket.map(String.init) ?? "na")",
+    ]
+    return "video:hls:" + components.joined(separator: ":")
+}
+
+func resolveRequestedVideoVariantTrackId(
+    _ requestedTrackId: String,
+    tracks: [VesperMediaTrack]
+) -> String? {
+    guard !requestedTrackId.isEmpty else {
+        return nil
+    }
+
+    if tracks.contains(where: { $0.id == requestedTrackId }) {
+        return requestedTrackId
+    }
+
+    guard
+        let requestedFingerprint = StableVideoVariantFingerprint(trackId: requestedTrackId),
+        requestedFingerprint.hasComparableFields
+    else {
+        return nil
+    }
+
+    return tracks
+        .filter { $0.kind == .video }
+        .min { lhs, rhs in
+            let lhsScore = requestedVideoVariantTrackScore(lhs, requested: requestedFingerprint)
+            let rhsScore = requestedVideoVariantTrackScore(rhs, requested: requestedFingerprint)
+            if lhsScore != rhsScore {
+                return lhsScore < rhsScore
+            }
+            return preferredVideoVariantTrack(lhs, over: rhs).id == lhs.id
+        }?
+        .id
+}
+
+private func sanitizedStableVideoVariantTrackIdComponent(_ value: String?) -> String {
+    let rawValue = value?.lowercased() ?? "na"
+    let sanitizedScalars = rawValue.unicodeScalars.map { scalar -> UnicodeScalar in
+        if CharacterSet.alphanumerics.contains(scalar) {
+            return scalar
+        }
+        return "_"
+    }
+    let sanitized = String(String.UnicodeScalarView(sanitizedScalars))
+        .replacingOccurrences(of: "_+", with: "_", options: .regularExpression)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+    return sanitized.isEmpty ? "na" : sanitized
+}
+
+private struct StableVideoVariantFingerprint {
+    let codecComponent: String?
+    let peakBitRate: Int64?
+    let width: Int?
+    let height: Int?
+    let frameRateBucket: Int?
+
+    init?(trackId: String) {
+        let components = trackId.split(separator: ":")
+        guard components.count >= 7, components[0] == "video", components[1] == "hls" else {
+            return nil
+        }
+
+        var codecComponent: String?
+        var peakBitRate: Int64?
+        var width: Int?
+        var height: Int?
+        var frameRateBucket: Int?
+
+        for component in components.dropFirst(2) {
+            guard let prefix = component.first else {
+                continue
+            }
+            let rawValue = String(component.dropFirst())
+            switch prefix {
+            case "c":
+                codecComponent = rawValue == "na" ? nil : rawValue
+            case "b":
+                peakBitRate = rawValue == "na" ? nil : Int64(rawValue)
+            case "w":
+                width = rawValue == "na" ? nil : Int(rawValue)
+            case "h":
+                height = rawValue == "na" ? nil : Int(rawValue)
+            case "f":
+                frameRateBucket = rawValue == "na" ? nil : Int(rawValue)
+            default:
+                continue
+            }
+        }
+
+        self.codecComponent = codecComponent
+        self.peakBitRate = peakBitRate
+        self.width = width
+        self.height = height
+        self.frameRateBucket = frameRateBucket
+    }
+
+    init(track: VesperMediaTrack) {
+        codecComponent = track.codec.map(sanitizedStableVideoVariantTrackIdComponent)
+        peakBitRate = track.bitRate
+        width = track.width
+        height = track.height
+        frameRateBucket = track.frameRate.flatMap { value in
+            guard value.isFinite, value > 0 else {
+                return nil
+            }
+            return Int((Double(value) * 100).rounded())
+        }
+    }
+
+    var hasComparableFields: Bool {
+        codecComponent != nil ||
+            peakBitRate != nil ||
+            width != nil ||
+            height != nil ||
+            frameRateBucket != nil
+    }
+}
+
+private struct RequestedVideoVariantTrackScore: Comparable {
+    let codecPenalty: Int
+    let sizeMissingPenalty: Int
+    let sizeDistance: Int
+    let bitRateMissingPenalty: Int
+    let bitRateDistance: Int64
+    let frameRateMissingPenalty: Int
+    let frameRateDistance: Int64
+    let inverseWidth: Int
+    let inverseHeight: Int
+    let inverseBitRate: Int
+    let trackId: String
+
+    static func < (
+        lhs: RequestedVideoVariantTrackScore,
+        rhs: RequestedVideoVariantTrackScore
+    ) -> Bool {
+        if lhs.codecPenalty != rhs.codecPenalty {
+            return lhs.codecPenalty < rhs.codecPenalty
+        }
+        if lhs.sizeMissingPenalty != rhs.sizeMissingPenalty {
+            return lhs.sizeMissingPenalty < rhs.sizeMissingPenalty
+        }
+        if lhs.sizeDistance != rhs.sizeDistance {
+            return lhs.sizeDistance < rhs.sizeDistance
+        }
+        if lhs.bitRateMissingPenalty != rhs.bitRateMissingPenalty {
+            return lhs.bitRateMissingPenalty < rhs.bitRateMissingPenalty
+        }
+        if lhs.bitRateDistance != rhs.bitRateDistance {
+            return lhs.bitRateDistance < rhs.bitRateDistance
+        }
+        if lhs.frameRateMissingPenalty != rhs.frameRateMissingPenalty {
+            return lhs.frameRateMissingPenalty < rhs.frameRateMissingPenalty
+        }
+        if lhs.frameRateDistance != rhs.frameRateDistance {
+            return lhs.frameRateDistance < rhs.frameRateDistance
+        }
+        if lhs.inverseWidth != rhs.inverseWidth {
+            return lhs.inverseWidth < rhs.inverseWidth
+        }
+        if lhs.inverseHeight != rhs.inverseHeight {
+            return lhs.inverseHeight < rhs.inverseHeight
+        }
+        if lhs.inverseBitRate != rhs.inverseBitRate {
+            return lhs.inverseBitRate < rhs.inverseBitRate
+        }
+        return lhs.trackId < rhs.trackId
+    }
+}
+
+private func requestedVideoVariantTrackScore(
+    _ track: VesperMediaTrack,
+    requested: StableVideoVariantFingerprint
+) -> RequestedVideoVariantTrackScore {
+    let candidate = StableVideoVariantFingerprint(track: track)
+    let codecPenalty = requestedCodecPenalty(
+        requested.codecComponent,
+        candidate.codecComponent
+    )
+    let widthDistance = requestedVariantDistance(requested.width, candidate.width)
+    let heightDistance = requestedVariantDistance(requested.height, candidate.height)
+    let bitRateDistance = requestedVariantDistance(requested.peakBitRate, candidate.peakBitRate)
+    let frameRateDistance = requestedVariantDistance(
+        requested.frameRateBucket,
+        candidate.frameRateBucket
+    )
+
+    return RequestedVideoVariantTrackScore(
+        codecPenalty: codecPenalty,
+        sizeMissingPenalty: widthDistance.missingPenalty + heightDistance.missingPenalty,
+        sizeDistance: widthDistance.distance + heightDistance.distance,
+        bitRateMissingPenalty: bitRateDistance.missingPenalty,
+        bitRateDistance: bitRateDistance.distance,
+        frameRateMissingPenalty: frameRateDistance.missingPenalty,
+        frameRateDistance: Int64(frameRateDistance.distance),
+        inverseWidth: Int.max - (track.width ?? 0),
+        inverseHeight: Int.max - (track.height ?? 0),
+        inverseBitRate: Int.max - Int(clamping: track.bitRate ?? 0),
+        trackId: track.id
+    )
+}
+
+private func requestedCodecPenalty(_ requested: String?, _ candidate: String?) -> Int {
+    guard let requested else {
+        return 0
+    }
+    guard let candidate else {
+        return 1
+    }
+    return requested == candidate ? 0 : 3
+}
+
+private func requestedVariantDistance(
+    _ requested: Int?,
+    _ candidate: Int?
+) -> (missingPenalty: Int, distance: Int) {
+    guard let requested else {
+        return (0, 0)
+    }
+    guard let candidate else {
+        return (1, Int.max / 4)
+    }
+    return (0, abs(candidate - requested))
+}
+
+private func requestedVariantDistance(
+    _ requested: Int64?,
+    _ candidate: Int64?
+) -> (missingPenalty: Int, distance: Int64) {
+    guard let requested else {
+        return (0, 0)
+    }
+    guard let candidate else {
+        return (1, Int64.max / 4)
+    }
+    return (0, abs(candidate - requested))
+}
+
+private func preferredVideoVariantTrack(
+    _ lhs: VesperMediaTrack,
+    over rhs: VesperMediaTrack
+) -> VesperMediaTrack {
+    let lhsBitRate = lhs.bitRate ?? -1
+    let rhsBitRate = rhs.bitRate ?? -1
+    if lhsBitRate != rhsBitRate {
+        return lhsBitRate > rhsBitRate ? lhs : rhs
+    }
+
+    let lhsMaxEdge = max(lhs.width ?? 0, lhs.height ?? 0)
+    let rhsMaxEdge = max(rhs.width ?? 0, rhs.height ?? 0)
+    if lhsMaxEdge != rhsMaxEdge {
+        return lhsMaxEdge > rhsMaxEdge ? lhs : rhs
+    }
+
+    let lhsMinEdge = min(lhs.width ?? 0, lhs.height ?? 0)
+    let rhsMinEdge = min(rhs.width ?? 0, rhs.height ?? 0)
+    if lhsMinEdge != rhsMinEdge {
+        return lhsMinEdge > rhsMinEdge ? lhs : rhs
+    }
+
+    let lhsFrameRate = Int((lhs.frameRate ?? 0).rounded())
+    let rhsFrameRate = Int((rhs.frameRate ?? 0).rounded())
+    if lhsFrameRate != rhsFrameRate {
+        return lhsFrameRate > rhsFrameRate ? lhs : rhs
+    }
+
+    return (lhs.label ?? lhs.id) <= (rhs.label ?? rhs.id) ? lhs : rhs
 }
 
 private enum PendingResilienceRestorePhase {
@@ -1969,4 +2942,18 @@ private extension CMTime {
         }
         return max(Int64(seconds * 1000.0), 0)
     }
+}
+
+private func fourCharCodeString(_ value: UInt32) -> String {
+    let scalarValues = [
+        UInt8((value >> 24) & 0xFF),
+        UInt8((value >> 16) & 0xFF),
+        UInt8((value >> 8) & 0xFF),
+        UInt8(value & 0xFF),
+    ]
+    let printable = scalarValues.allSatisfy { (0x20 ... 0x7E).contains($0) }
+    guard printable else {
+        return String(format: "0x%08X", value)
+    }
+    return String(bytes: scalarValues, encoding: .ascii) ?? String(format: "0x%08X", value)
 }
