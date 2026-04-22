@@ -1580,6 +1580,7 @@ dependencies = [
  "anyhow",
  "ffmpeg-next",
  "player-core",
+ "tracing",
 ]
 
 [[package]]

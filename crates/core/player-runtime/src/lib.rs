@@ -1073,24 +1073,34 @@ impl PlayerRuntimeInitializer {
 
     pub fn initialize(self) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
         let Self { adapter_id, inner } = self;
+        Ok(PlayerRuntime::from_adapter_bootstrap(
+            adapter_id,
+            inner.initialize()?,
+        ))
+    }
+}
+
+impl PlayerRuntime {
+    pub fn from_adapter_bootstrap(
+        adapter_id: &'static str,
+        bootstrap: PlayerRuntimeAdapterBootstrap,
+    ) -> PlayerRuntimeBootstrap {
         let PlayerRuntimeAdapterBootstrap {
             runtime,
             initial_frame,
             startup,
-        } = inner.initialize()?;
+        } = bootstrap;
 
-        Ok(PlayerRuntimeBootstrap {
+        PlayerRuntimeBootstrap {
             runtime: PlayerRuntime {
                 adapter_id,
                 inner: runtime,
             },
             initial_frame,
             startup,
-        })
+        }
     }
-}
 
-impl PlayerRuntime {
     pub fn open_uri(uri: impl Into<String>) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
         Self::open_source(MediaSource::new(uri))
     }

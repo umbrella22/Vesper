@@ -16,14 +16,14 @@ pub struct PlayerRuntimeAdapterBootstrap {
     pub startup: PlayerRuntimeStartup,
 }
 
-pub trait PlayerRuntimeAdapterInitializer {
+pub trait PlayerRuntimeAdapterInitializer: Send {
     fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities;
     fn media_info(&self) -> PlayerMediaInfo;
     fn startup(&self) -> PlayerRuntimeStartup;
     fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap>;
 }
 
-pub trait PlayerRuntimeAdapterFactory: Sync {
+pub trait PlayerRuntimeAdapterFactory: Sync + Send {
     fn adapter_id(&self) -> &'static str;
     fn probe_source_with_options(
         &self,
@@ -32,7 +32,7 @@ pub trait PlayerRuntimeAdapterFactory: Sync {
     ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>>;
 }
 
-pub trait PlayerRuntimeAdapter {
+pub trait PlayerRuntimeAdapter: Send {
     fn source_uri(&self) -> &str;
     fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities;
     fn media_info(&self) -> &PlayerMediaInfo;

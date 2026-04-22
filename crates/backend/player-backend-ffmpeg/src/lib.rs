@@ -1,10 +1,14 @@
 mod buffered;
 
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::mem::size_of;
 use std::ops::Range;
+use std::ptr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ffmpeg::codec;
@@ -14,11 +18,15 @@ use ffmpeg::format::sample::{Sample, Type as SampleType};
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 use ffmpeg::util::frame::audio::Audio;
 use ffmpeg::util::frame::video::Video;
+use ffmpeg::util::interrupt;
 use ffmpeg_next as ffmpeg;
-use player_core::{MediaSource, MediaSourceProtocol};
+use player_core::{MediaSource, MediaSourceKind, MediaSourceProtocol};
+use tracing::{info, warn};
 
 pub use buffered::{BufferedFramePoll, BufferedVideoSource, BufferedVideoSourceBootstrap};
 pub use player_core::{DecodedVideoFrame, VideoPixelFormat};
+
+const MAX_RESOLVED_HLS_SOURCE_CACHE_ENTRIES: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
 pub struct FfmpegBackend {
@@ -95,6 +103,38 @@ enum VideoFrameOutput {
     Rgba(ScalingContext),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputOpenPurpose {
+    Probe,
+    VideoDecode,
+    AudioDecode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputOpenProfile {
+    Default,
+    RemoteHls,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HlsAudioRendition {
+    group_id: String,
+    uri: String,
+    is_default: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HlsVariantInfo {
+    audio_group_id: Option<String>,
+    uri: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ResolvedRemoteHlsSources {
+    audio_rendition_uri: Option<String>,
+    video_variant_uri: Option<String>,
+}
+
 impl DecodedAudioTrack {
     pub fn duration(&self) -> Duration {
         let sample_frames = self.samples.len() / usize::from(self.channels.max(1));
@@ -164,49 +204,60 @@ impl FfmpegBackend {
     }
 
     pub fn probe(&self, source: MediaSource) -> Result<MediaProbe> {
-        let input = ffmpeg::format::input(&source.uri())
+        self.probe_with_interrupt(source, None)
+    }
+
+    pub fn probe_with_interrupt(
+        &self,
+        source: MediaSource,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<MediaProbe> {
+        let input = open_media_input(&source, InputOpenPurpose::Probe, interrupt_flag)
             .with_context(|| format!("failed to open media source: {}", source.uri()))?;
-        let duration = duration_from_micros(input.duration());
-        let bit_rate = u64::try_from(input.bit_rate())
-            .ok()
-            .filter(|bit_rate| *bit_rate > 0);
+        media_probe_from_input(&input, &source)
+    }
 
-        let mut audio_streams = 0usize;
-        let mut video_streams = 0usize;
+    pub fn probe_audio_decode_source_with_interrupt(
+        &self,
+        source: MediaSource,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<MediaProbe> {
+        let audio_source = resolve_audio_decode_source(&source, interrupt_flag.clone())
+            .unwrap_or_else(|error| {
+                warn!(
+                    source = source.uri(),
+                    error = %error,
+                    "failed to resolve remote HLS audio rendition playlist for probing; falling back to the original source"
+                );
+                source.clone()
+            });
+        let probe = self
+            .probe_with_interrupt(audio_source, interrupt_flag)
+            .with_context(|| format!("failed to probe media source: {}", source.uri()))?;
 
-        for stream in input.streams() {
-            match stream.parameters().medium() {
-                ffmpeg::media::Type::Audio => audio_streams += 1,
-                ffmpeg::media::Type::Video => video_streams += 1,
-                _ => {}
-            }
-        }
-
-        let best_video = input
-            .streams()
-            .best(ffmpeg::media::Type::Video)
-            .map(video_stream_probe)
-            .transpose()?;
-        let best_audio = input
-            .streams()
-            .best(ffmpeg::media::Type::Audio)
-            .map(audio_stream_probe)
-            .transpose()?;
-
-        Ok(MediaProbe {
-            source,
-            duration,
-            bit_rate,
-            audio_streams,
-            video_streams,
-            best_video,
-            best_audio,
-        })
+        Ok(MediaProbe { source, ..probe })
     }
 
     pub fn open_video_source(&self, source: MediaSource) -> Result<VideoFrameSource> {
-        let input = ffmpeg::format::input(&source.uri())
-            .with_context(|| format!("failed to open media source: {}", source.uri()))?;
+        self.open_video_source_with_interrupt(source, None)
+    }
+
+    pub fn open_video_source_with_interrupt(
+        &self,
+        source: MediaSource,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<VideoFrameSource> {
+        let video_source = resolve_video_decode_source(&source, interrupt_flag.clone())
+            .unwrap_or_else(|error| {
+                warn!(
+                    source = source.uri(),
+                    error = %error,
+                    "failed to resolve remote HLS video variant playlist; falling back to the original source"
+                );
+                source.clone()
+            });
+        let input = open_media_input(&video_source, InputOpenPurpose::VideoDecode, interrupt_flag)
+            .with_context(|| format!("failed to open media source: {}", video_source.uri()))?;
         let stream = input
             .streams()
             .best(ffmpeg::media::Type::Video)
@@ -218,7 +269,7 @@ impl FfmpegBackend {
         let (decoder, decode_info) = open_video_decoder(&parameters).with_context(|| {
             format!(
                 "failed to open video decoder for media source {}",
-                source.uri()
+                video_source.uri()
             )
         })?;
         let output =
@@ -244,7 +295,23 @@ impl FfmpegBackend {
         output_rate: u32,
         output_channels: u16,
     ) -> Result<DecodedAudioTrack> {
-        self.decode_audio_track_with_playback_rate(source, output_rate, output_channels, 1.0)
+        self.decode_audio_track_with_interrupt(source, output_rate, output_channels, None)
+    }
+
+    pub fn decode_audio_track_with_interrupt(
+        &self,
+        source: MediaSource,
+        output_rate: u32,
+        output_channels: u16,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<DecodedAudioTrack> {
+        self.decode_audio_track_with_playback_rate_and_interrupt(
+            source,
+            output_rate,
+            output_channels,
+            1.0,
+            interrupt_flag,
+        )
     }
 
     pub fn decode_audio_track_with_playback_rate(
@@ -253,6 +320,23 @@ impl FfmpegBackend {
         output_rate: u32,
         output_channels: u16,
         playback_rate: f32,
+    ) -> Result<DecodedAudioTrack> {
+        self.decode_audio_track_with_playback_rate_and_interrupt(
+            source,
+            output_rate,
+            output_channels,
+            playback_rate,
+            None,
+        )
+    }
+
+    pub fn decode_audio_track_with_playback_rate_and_interrupt(
+        &self,
+        source: MediaSource,
+        output_rate: u32,
+        output_channels: u16,
+        playback_rate: f32,
+        interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> Result<DecodedAudioTrack> {
         if output_rate == 0 {
             anyhow::bail!("audio output sample rate must be greater than zero");
@@ -266,8 +350,18 @@ impl FfmpegBackend {
             anyhow::bail!("audio playback rate must be a finite value greater than zero");
         }
 
-        let mut input = ffmpeg::format::input(&source.uri())
-            .with_context(|| format!("failed to open media source: {}", source.uri()))?;
+        let audio_source = resolve_audio_decode_source(&source, interrupt_flag.clone())
+            .unwrap_or_else(|error| {
+                warn!(
+                    source = source.uri(),
+                    error = %error,
+                    "failed to resolve remote HLS audio rendition playlist; falling back to the original source"
+                );
+                source.clone()
+            });
+        let mut input =
+            open_media_input(&audio_source, InputOpenPurpose::AudioDecode, interrupt_flag)
+                .with_context(|| format!("failed to open media source: {}", audio_source.uri()))?;
         let stream = input
             .streams()
             .best(ffmpeg::media::Type::Audio)
@@ -330,6 +424,105 @@ impl FfmpegBackend {
             playback_rate,
             samples: Arc::from(samples),
         })
+    }
+
+    pub fn stream_audio_source_with_playback_rate_and_interrupt<P, F>(
+        &self,
+        source: MediaSource,
+        output_rate: u32,
+        output_channels: u16,
+        playback_rate: f32,
+        start_position: Duration,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+        mut on_probe: P,
+        mut on_chunk: F,
+    ) -> Result<()>
+    where
+        P: FnMut(MediaProbe) -> Result<()>,
+        F: FnMut(Vec<f32>) -> Result<bool>,
+    {
+        if output_rate == 0 {
+            anyhow::bail!("audio output sample rate must be greater than zero");
+        }
+
+        if output_channels == 0 {
+            anyhow::bail!("audio output channel count must be greater than zero");
+        }
+
+        if !playback_rate.is_finite() || playback_rate <= 0.0 {
+            anyhow::bail!("audio playback rate must be a finite value greater than zero");
+        }
+
+        let audio_source = resolve_audio_decode_source(&source, interrupt_flag.clone())
+            .unwrap_or_else(|error| {
+                warn!(
+                    source = source.uri(),
+                    error = %error,
+                    "failed to resolve remote HLS audio rendition playlist; falling back to the original source"
+                );
+                source.clone()
+            });
+        let mut input =
+            open_media_input(&audio_source, InputOpenPurpose::AudioDecode, interrupt_flag)
+                .with_context(|| format!("failed to open media source: {}", audio_source.uri()))?;
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .context("no audio stream found in media source")?;
+        let stream_index = stream.index();
+        let time_base = stream.time_base();
+        let stream_parameters = stream.parameters();
+        on_probe(media_probe_from_input(&input, &source)?)?;
+
+        if !start_position.is_zero() {
+            let timestamp = duration_to_av_timestamp(start_position);
+            input.seek(timestamp, ..timestamp).with_context(|| {
+                format!(
+                    "failed to seek audio source {} to {:.3}s",
+                    audio_source.uri(),
+                    start_position.as_secs_f64()
+                )
+            })?;
+        }
+
+        let context_decoder = ffmpeg::codec::context::Context::from_parameters(stream_parameters)
+            .context("failed to create decoder context for audio stream")?;
+        let mut decoder = context_decoder
+            .decoder()
+            .audio()
+            .context("failed to open audio decoder")?;
+
+        let output_layout = ffmpeg::ChannelLayout::default(i32::from(output_channels));
+        let mut filter_graph = build_audio_filter_graph(
+            &decoder,
+            time_base,
+            output_rate,
+            output_layout,
+            playback_rate,
+        )?;
+
+        for (stream, packet) in input.packets() {
+            if stream.index() != stream_index {
+                continue;
+            }
+
+            decoder
+                .send_packet(&packet)
+                .context("failed to send audio packet to decoder")?;
+            if !drain_audio_frames_with_emitter(&mut decoder, &mut filter_graph, &mut on_chunk)? {
+                return Ok(());
+            }
+        }
+
+        decoder
+            .send_eof()
+            .context("failed to flush audio decoder")?;
+        if !drain_audio_frames_with_emitter(&mut decoder, &mut filter_graph, &mut on_chunk)? {
+            return Ok(());
+        }
+        flush_audio_filter_with_emitter(&mut filter_graph, &mut on_chunk)?;
+
+        Ok(())
     }
 
     pub fn retime_audio_track(
@@ -468,9 +661,595 @@ fn supports_input_format(name: &str) -> bool {
     unsafe { !ffmpeg::ffi::av_find_input_format(name.as_ptr()).is_null() }
 }
 
+fn resolve_audio_decode_source(
+    source: &MediaSource,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<MediaSource> {
+    if source.kind() != MediaSourceKind::Remote || source.protocol() != MediaSourceProtocol::Hls {
+        return Ok(source.clone());
+    }
+
+    let Some(audio_rendition_uri) =
+        resolve_remote_hls_audio_rendition_uri(source.uri(), interrupt_flag)?
+    else {
+        return Ok(source.clone());
+    };
+
+    if audio_rendition_uri != source.uri() {
+        info!(
+            source = source.uri(),
+            audio_rendition_uri, "resolved remote HLS audio rendition playlist"
+        );
+        return Ok(MediaSource::new(audio_rendition_uri));
+    }
+
+    Ok(source.clone())
+}
+
+fn resolve_video_decode_source(
+    source: &MediaSource,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<MediaSource> {
+    if source.kind() != MediaSourceKind::Remote || source.protocol() != MediaSourceProtocol::Hls {
+        return Ok(source.clone());
+    }
+
+    let Some(video_variant_uri) =
+        resolve_remote_hls_video_variant_uri(source.uri(), interrupt_flag)?
+    else {
+        return Ok(source.clone());
+    };
+
+    if video_variant_uri != source.uri() {
+        info!(
+            source = source.uri(),
+            video_variant_uri, "resolved remote HLS video variant playlist"
+        );
+        return Ok(MediaSource::new(video_variant_uri));
+    }
+
+    Ok(source.clone())
+}
+
+fn resolve_remote_hls_audio_rendition_uri(
+    manifest_uri: &str,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<Option<String>> {
+    Ok(resolve_remote_hls_sources(manifest_uri, interrupt_flag)?.audio_rendition_uri)
+}
+
+fn resolve_remote_hls_video_variant_uri(
+    manifest_uri: &str,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<Option<String>> {
+    Ok(resolve_remote_hls_sources(manifest_uri, interrupt_flag)?.video_variant_uri)
+}
+
+fn resolve_remote_hls_sources(
+    manifest_uri: &str,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<ResolvedRemoteHlsSources> {
+    if let Some(cached) = resolved_hls_source_cache()
+        .lock()
+        .expect("resolved HLS source cache lock poisoned")
+        .get(manifest_uri)
+        .cloned()
+    {
+        return Ok(cached);
+    }
+
+    let manifest_text = fetch_text_resource_via_ffmpeg(manifest_uri, interrupt_flag)
+        .with_context(|| format!("failed to fetch remote HLS manifest: {manifest_uri}"))?;
+    let resolved = resolve_hls_master_manifest_sources(manifest_uri, &manifest_text);
+
+    let mut cache = resolved_hls_source_cache()
+        .lock()
+        .expect("resolved HLS source cache lock poisoned");
+    if !cache.contains_key(manifest_uri) && cache.len() >= MAX_RESOLVED_HLS_SOURCE_CACHE_ENTRIES {
+        cache.clear();
+    }
+    cache.insert(manifest_uri.to_owned(), resolved.clone());
+
+    Ok(resolved)
+}
+
+fn resolved_hls_source_cache() -> &'static Mutex<HashMap<String, ResolvedRemoteHlsSources>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, ResolvedRemoteHlsSources>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn resolve_hls_master_manifest_sources(
+    manifest_uri: &str,
+    manifest_text: &str,
+) -> ResolvedRemoteHlsSources {
+    ResolvedRemoteHlsSources {
+        audio_rendition_uri: select_hls_audio_rendition_uri(manifest_uri, manifest_text),
+        video_variant_uri: select_hls_video_variant_uri(manifest_uri, manifest_text),
+    }
+}
+
+fn fetch_text_resource_via_ffmpeg(
+    uri: &str,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<String> {
+    let uri_cstr = CString::new(uri).context("resource URI contained an interior NUL byte")?;
+    let interrupt =
+        interrupt_flag.map(|flag| interrupt::new(Box::new(move || flag.load(Ordering::SeqCst))));
+    let interrupt_ptr = interrupt
+        .as_ref()
+        .map(|callback| &callback.interrupt as *const _)
+        .unwrap_or(ptr::null());
+    let mut io_context = ptr::null_mut();
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("rw_timeout", "15000000");
+    let mut raw_options = unsafe { options.disown() };
+
+    unsafe {
+        let open_result = ffmpeg::ffi::avio_open2(
+            &mut io_context,
+            uri_cstr.as_ptr(),
+            ffmpeg::ffi::AVIO_FLAG_READ,
+            interrupt_ptr,
+            &mut raw_options,
+        );
+        ffmpeg::Dictionary::own(raw_options);
+
+        if open_result < 0 {
+            return Err(anyhow::Error::new(ffmpeg::Error::from(open_result))
+                .context(format!("failed to open FFmpeg IO for {uri}")));
+        }
+
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 8 * 1024];
+
+        loop {
+            let read_result =
+                ffmpeg::ffi::avio_read(io_context, buffer.as_mut_ptr().cast(), buffer.len() as i32);
+
+            if read_result == 0 || read_result == ffmpeg::ffi::AVERROR_EOF {
+                break;
+            }
+
+            if read_result < 0 {
+                ffmpeg::ffi::avio_closep(&mut io_context);
+                return Err(anyhow::Error::new(ffmpeg::Error::from(read_result))
+                    .context(format!("failed to read FFmpeg IO resource {uri}")));
+            }
+
+            bytes.extend_from_slice(&buffer[..read_result as usize]);
+        }
+
+        ffmpeg::ffi::avio_closep(&mut io_context);
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+fn select_hls_audio_rendition_uri(manifest_uri: &str, manifest_text: &str) -> Option<String> {
+    let (audio_renditions, variants) = parse_hls_master_manifest(manifest_text);
+    if audio_renditions.is_empty() {
+        return None;
+    }
+
+    let preferred_group = variants
+        .first()
+        .and_then(|variant| variant.audio_group_id.as_deref());
+    let selected = preferred_group
+        .and_then(|group_id| choose_hls_audio_rendition(&audio_renditions, Some(group_id)))
+        .or_else(|| choose_hls_audio_rendition(&audio_renditions, None))?;
+
+    resolve_uri_relative_to(manifest_uri, &selected.uri)
+}
+
+fn select_hls_video_variant_uri(manifest_uri: &str, manifest_text: &str) -> Option<String> {
+    let (_, variants) = parse_hls_master_manifest(manifest_text);
+    let selected = variants.first()?;
+    resolve_uri_relative_to(manifest_uri, &selected.uri)
+}
+
+fn parse_hls_master_manifest(manifest_text: &str) -> (Vec<HlsAudioRendition>, Vec<HlsVariantInfo>) {
+    let mut audio_renditions = Vec::new();
+    let mut variants = Vec::new();
+    let mut pending_variant = None;
+
+    for raw_line in manifest_text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(attributes) = line.strip_prefix("#EXT-X-MEDIA:") {
+            let attributes = parse_hls_attribute_list(attributes);
+            let media_type = attributes
+                .get("TYPE")
+                .map(|value| value.eq_ignore_ascii_case("AUDIO"))
+                .unwrap_or(false);
+            let Some(group_id) = attributes.get("GROUP-ID") else {
+                continue;
+            };
+            let Some(uri) = attributes.get("URI") else {
+                continue;
+            };
+            if !media_type {
+                continue;
+            }
+
+            let is_default = attributes
+                .get("DEFAULT")
+                .map(|value| value.eq_ignore_ascii_case("YES"))
+                .unwrap_or(false);
+            audio_renditions.push(HlsAudioRendition {
+                group_id: group_id.clone(),
+                uri: uri.clone(),
+                is_default,
+            });
+            continue;
+        }
+
+        if let Some(attributes) = line.strip_prefix("#EXT-X-STREAM-INF:") {
+            let attributes = parse_hls_attribute_list(attributes);
+            pending_variant = Some(HlsVariantInfo {
+                audio_group_id: attributes.get("AUDIO").cloned(),
+                uri: String::new(),
+            });
+            continue;
+        }
+
+        if let Some(mut variant) = pending_variant.take() {
+            if line.starts_with('#') {
+                pending_variant = Some(variant);
+                continue;
+            }
+            variant.uri = line.to_owned();
+            variants.push(variant);
+        }
+    }
+
+    (audio_renditions, variants)
+}
+
+fn choose_hls_audio_rendition<'a>(
+    renditions: &'a [HlsAudioRendition],
+    group_id: Option<&str>,
+) -> Option<&'a HlsAudioRendition> {
+    let candidates = renditions
+        .iter()
+        .filter(|rendition| group_id.is_none_or(|group| rendition.group_id == group));
+
+    candidates
+        .clone()
+        .find(|rendition| rendition.is_default)
+        .or_else(|| candidates.into_iter().next())
+}
+
+fn parse_hls_attribute_list(attributes: &str) -> HashMap<String, String> {
+    let mut values = HashMap::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in attributes.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            ',' if !in_quotes => {
+                parse_hls_attribute_entry(&current, &mut values);
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    parse_hls_attribute_entry(&current, &mut values);
+    values
+}
+
+fn parse_hls_attribute_entry(entry: &str, values: &mut HashMap<String, String>) {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let Some((key, value)) = trimmed.split_once('=') else {
+        return;
+    };
+    let value = value.trim().trim_matches('"');
+    values.insert(key.trim().to_owned(), value.to_owned());
+}
+
+fn resolve_uri_relative_to(base_uri: &str, reference: &str) -> Option<String> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return None;
+    }
+
+    if reference.contains("://") {
+        return Some(reference.to_owned());
+    }
+
+    if reference.starts_with("//") {
+        let (scheme, _) = base_uri.split_once("://")?;
+        return Some(format!("{scheme}:{reference}"));
+    }
+
+    let base_uri = base_uri
+        .split_once('#')
+        .map(|(value, _)| value)
+        .unwrap_or(base_uri);
+    let base_uri = base_uri
+        .split_once('?')
+        .map(|(value, _)| value)
+        .unwrap_or(base_uri);
+    let (scheme, rest) = base_uri.split_once("://")?;
+    let (authority, raw_path) = rest.split_once('/').unwrap_or((rest, ""));
+    let base_path = format!("/{}", raw_path);
+    let joined_path = if reference.starts_with('/') {
+        reference.to_owned()
+    } else {
+        let base_dir = base_path
+            .rsplit_once('/')
+            .map(|(dir, _)| dir)
+            .filter(|dir| !dir.is_empty())
+            .unwrap_or("/");
+        if base_dir.ends_with('/') {
+            format!("{base_dir}{reference}")
+        } else {
+            format!("{base_dir}/{reference}")
+        }
+    };
+    let normalized_path = normalize_url_path(&joined_path);
+
+    Some(format!("{scheme}://{authority}{normalized_path}"))
+}
+
+fn normalize_url_path(path: &str) -> String {
+    let mut segments = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            _ => segments.push(segment),
+        }
+    }
+
+    if segments.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{}", segments.join("/"))
+    }
+}
+
+fn open_media_input(
+    source: &MediaSource,
+    purpose: InputOpenPurpose,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<ffmpeg::format::context::Input> {
+    let profile = input_open_profile_for_source(source);
+    if profile == InputOpenProfile::Default && interrupt_flag.is_none() {
+        return ffmpeg::format::input(&source.uri())
+            .with_context(|| format!("failed to open media source: {}", source.uri()));
+    }
+
+    open_media_input_with_profile(source, purpose, profile, interrupt_flag)
+}
+
+fn open_media_input_with_profile(
+    source: &MediaSource,
+    purpose: InputOpenPurpose,
+    profile: InputOpenProfile,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+) -> Result<ffmpeg::format::context::Input> {
+    let source_uri = source.uri();
+    let source_uri_cstr =
+        CString::new(source_uri).context("media source URI contained an interior NUL byte")?;
+    let interrupt_state = interrupt_flag.clone();
+    let options = input_open_dictionary(profile, purpose);
+
+    unsafe {
+        let mut format_context = if interrupt_flag.is_some() {
+            ffmpeg::ffi::avformat_alloc_context()
+        } else {
+            ptr::null_mut()
+        };
+
+        if interrupt_flag.is_some() && format_context.is_null() {
+            anyhow::bail!("failed to allocate FFmpeg format context");
+        }
+
+        if let Some(interrupt_flag) = interrupt_flag {
+            (*format_context).interrupt_callback =
+                interrupt::new(Box::new(move || interrupt_flag.load(Ordering::SeqCst))).interrupt;
+        }
+
+        let mut raw_options = options.disown();
+        let open_started_at = Instant::now();
+        let open_result = ffmpeg::ffi::avformat_open_input(
+            &mut format_context,
+            source_uri_cstr.as_ptr(),
+            ptr::null_mut(),
+            &mut raw_options,
+        );
+        let open_duration = open_started_at.elapsed();
+        ffmpeg::Dictionary::own(raw_options);
+
+        if open_result < 0 {
+            if !format_context.is_null() {
+                ffmpeg::ffi::avformat_close_input(&mut format_context);
+            }
+            log_input_open_failure(
+                source,
+                purpose,
+                profile,
+                open_duration,
+                Duration::ZERO,
+                interrupt_state.as_deref(),
+                "avformat_open_input",
+                open_result,
+            );
+            return Err(anyhow::Error::new(ffmpeg::Error::from(open_result))
+                .context(format!("failed to open media source: {source_uri}")));
+        }
+
+        let stream_info_started_at = Instant::now();
+        let stream_info_result =
+            ffmpeg::ffi::avformat_find_stream_info(format_context, ptr::null_mut());
+        let stream_info_duration = stream_info_started_at.elapsed();
+
+        if stream_info_result < 0 {
+            ffmpeg::ffi::avformat_close_input(&mut format_context);
+            log_input_open_failure(
+                source,
+                purpose,
+                profile,
+                open_duration,
+                stream_info_duration,
+                interrupt_state.as_deref(),
+                "avformat_find_stream_info",
+                stream_info_result,
+            );
+            return Err(anyhow::Error::new(ffmpeg::Error::from(stream_info_result))
+                .context(format!("failed to inspect media streams: {source_uri}")));
+        }
+
+        log_input_open_success(
+            source,
+            purpose,
+            profile,
+            open_duration,
+            stream_info_duration,
+            interrupt_state.as_deref(),
+        );
+        Ok(ffmpeg::format::context::Input::wrap(format_context))
+    }
+}
+
+fn input_open_profile_for_source(source: &MediaSource) -> InputOpenProfile {
+    if source.kind() == MediaSourceKind::Remote && source.protocol() == MediaSourceProtocol::Hls {
+        InputOpenProfile::RemoteHls
+    } else {
+        InputOpenProfile::Default
+    }
+}
+
+fn input_open_dictionary(
+    profile: InputOpenProfile,
+    purpose: InputOpenPurpose,
+) -> ffmpeg::Dictionary<'static> {
+    let mut options = ffmpeg::Dictionary::new();
+
+    if profile == InputOpenProfile::RemoteHls {
+        // 控制 HLS 变体探测与 stream info 扫描成本，优先让首帧更快落地。
+        options.set("http_multiple", "0");
+        options.set("probesize", "524288");
+        options.set("formatprobesize", "524288");
+        options.set("analyzeduration", "2000000");
+        options.set("fpsprobesize", "4");
+        options.set("rw_timeout", "15000000");
+        if purpose == InputOpenPurpose::AudioDecode {
+            // 后台音频整轨预解不需要把视频变体也扫一遍，避免和视频播放抢网络。
+            options.set("allowed_media_types", "audio");
+        }
+    }
+
+    options
+}
+
+fn log_input_open_success(
+    source: &MediaSource,
+    purpose: InputOpenPurpose,
+    profile: InputOpenProfile,
+    open_duration: Duration,
+    stream_info_duration: Duration,
+    interrupt_flag: Option<&AtomicBool>,
+) {
+    if profile == InputOpenProfile::Default {
+        return;
+    }
+
+    info!(
+        source = source.uri(),
+        purpose = purpose.label(),
+        profile = profile.label(),
+        tuning = input_open_tuning_summary(profile, purpose),
+        interrupted = interrupt_flag.is_some_and(|flag| flag.load(Ordering::SeqCst)),
+        open_input_ms = open_duration.as_millis(),
+        find_stream_info_ms = stream_info_duration.as_millis(),
+        total_ms = open_duration.as_millis() + stream_info_duration.as_millis(),
+        "opened FFmpeg media input"
+    );
+}
+
+fn log_input_open_failure(
+    source: &MediaSource,
+    purpose: InputOpenPurpose,
+    profile: InputOpenProfile,
+    open_duration: Duration,
+    stream_info_duration: Duration,
+    interrupt_flag: Option<&AtomicBool>,
+    phase: &'static str,
+    error_code: i32,
+) {
+    if profile == InputOpenProfile::Default
+        && !interrupt_flag.is_some_and(|flag| flag.load(Ordering::SeqCst))
+    {
+        return;
+    }
+
+    warn!(
+        source = source.uri(),
+        purpose = purpose.label(),
+        profile = profile.label(),
+        tuning = input_open_tuning_summary(profile, purpose),
+        phase,
+        interrupted = interrupt_flag.is_some_and(|flag| flag.load(Ordering::SeqCst)),
+        open_input_ms = open_duration.as_millis(),
+        find_stream_info_ms = stream_info_duration.as_millis(),
+        error_code,
+        error = %ffmpeg::Error::from(error_code),
+        "failed to open FFmpeg media input"
+    );
+}
+
+impl InputOpenPurpose {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Probe => "probe",
+            Self::VideoDecode => "video_decode",
+            Self::AudioDecode => "audio_decode",
+        }
+    }
+}
+
+impl InputOpenProfile {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::RemoteHls => "remote_hls",
+        }
+    }
+}
+
+fn input_open_tuning_summary(profile: InputOpenProfile, purpose: InputOpenPurpose) -> &'static str {
+    match (profile, purpose) {
+        (InputOpenProfile::Default, _) => "default",
+        (InputOpenProfile::RemoteHls, InputOpenPurpose::AudioDecode) => {
+            "http_multiple=0,probesize=524288,formatprobesize=524288,analyzeduration=2000000,fpsprobesize=4,rw_timeout=15000000,allowed_media_types=audio"
+        }
+        (InputOpenProfile::RemoteHls, _) => {
+            "http_multiple=0,probesize=524288,formatprobesize=524288,analyzeduration=2000000,fpsprobesize=4,rw_timeout=15000000"
+        }
+    }
+}
+
 impl VideoFrameSource {
     pub fn decode_info(&self) -> &VideoDecodeInfo {
         &self.decode_info
+    }
+
+    pub fn media_probe(&self, source: &MediaSource) -> Result<MediaProbe> {
+        media_probe_from_input(&self.input, source)
     }
 
     pub fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
@@ -712,6 +1491,47 @@ fn audio_stream_probe(stream: ffmpeg::Stream<'_>) -> Result<AudioStreamProbe> {
     })
 }
 
+fn media_probe_from_input(
+    input: &ffmpeg::format::context::Input,
+    source: &MediaSource,
+) -> Result<MediaProbe> {
+    let duration = duration_from_micros(input.duration());
+    let bit_rate = u64::try_from(input.bit_rate())
+        .ok()
+        .filter(|bit_rate| *bit_rate > 0);
+
+    let mut audio_streams = 0usize;
+    let mut video_streams = 0usize;
+    for stream in input.streams() {
+        match stream.parameters().medium() {
+            ffmpeg::media::Type::Audio => audio_streams += 1,
+            ffmpeg::media::Type::Video => video_streams += 1,
+            _ => {}
+        }
+    }
+
+    let best_video = input
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .map(video_stream_probe)
+        .transpose()?;
+    let best_audio = input
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .map(audio_stream_probe)
+        .transpose()?;
+
+    Ok(MediaProbe {
+        source: source.clone(),
+        duration,
+        bit_rate,
+        audio_streams,
+        video_streams,
+        best_video,
+        best_audio,
+    })
+}
+
 fn rational_to_f64(value: ffmpeg::Rational) -> Option<f64> {
     if value.numerator() <= 0 || value.denominator() <= 0 {
         return None;
@@ -825,6 +1645,34 @@ fn drain_audio_frames(
             .add(&decoded)
             .context("failed to push decoded audio frame into the filter graph")?;
         collect_filtered_audio_frames(filter_graph, samples)?;
+    }
+}
+
+fn drain_audio_frames_with_emitter<F>(
+    decoder: &mut ffmpeg::decoder::Audio,
+    filter_graph: &mut filter::Graph,
+    emit: &mut F,
+) -> Result<bool>
+where
+    F: FnMut(Vec<f32>) -> Result<bool>,
+{
+    loop {
+        let mut decoded = Audio::empty();
+        if decoder.receive_frame(&mut decoded).is_err() {
+            return Ok(true);
+        }
+
+        let presentation_timestamp = decoded.timestamp().or(decoded.pts());
+        decoded.set_pts(presentation_timestamp);
+        filter_graph
+            .get("in")
+            .context("audio filter graph did not expose an input node")?
+            .source()
+            .add(&decoded)
+            .context("failed to push decoded audio frame into the filter graph")?;
+        if !emit_filtered_audio_frames(filter_graph, emit)? {
+            return Ok(false);
+        }
     }
 }
 
@@ -1064,7 +1912,13 @@ fn playback_rate_filter_chain(playback_rate: f32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DecodedAudioTrack, playback_rate_filter_chain, supports_input_format};
+    use super::{
+        DecodedAudioTrack, InputOpenProfile, InputOpenPurpose, input_open_profile_for_source,
+        input_open_tuning_summary, parse_hls_master_manifest, playback_rate_filter_chain,
+        resolve_hls_master_manifest_sources, resolve_uri_relative_to,
+        select_hls_audio_rendition_uri, select_hls_video_variant_uri, supports_input_format,
+    };
+    use player_core::MediaSource;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1098,5 +1952,126 @@ mod tests {
     fn supports_input_format_reports_known_and_unknown_demuxers() {
         assert!(supports_input_format("mov"));
         assert!(!supports_input_format("vesper-not-a-real-demuxer"));
+    }
+
+    #[test]
+    fn remote_hls_sources_use_tuned_input_profile() {
+        assert_eq!(
+            input_open_profile_for_source(&MediaSource::new(
+                "https://example.com/live/master.m3u8"
+            )),
+            InputOpenProfile::RemoteHls
+        );
+        assert_eq!(
+            input_open_profile_for_source(&MediaSource::new("https://example.com/video.mp4")),
+            InputOpenProfile::Default
+        );
+        assert_eq!(
+            input_open_profile_for_source(&MediaSource::new("/tmp/video.mp4")),
+            InputOpenProfile::Default
+        );
+    }
+
+    #[test]
+    fn remote_hls_audio_decode_tuning_is_audio_only() {
+        assert!(
+            input_open_tuning_summary(InputOpenProfile::RemoteHls, InputOpenPurpose::AudioDecode)
+                .contains("allowed_media_types=audio")
+        );
+        assert!(
+            !input_open_tuning_summary(InputOpenProfile::RemoteHls, InputOpenPurpose::VideoDecode,)
+                .contains("allowed_media_types=audio")
+        );
+    }
+
+    #[test]
+    fn hls_master_parser_extracts_audio_renditions_and_variant_groups() {
+        let manifest = r#"
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud-main",NAME="English",DEFAULT=YES,URI="a1/prog_index.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud-main",NAME="Dolby",URI="a2/prog_index.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=2400000,AUDIO="aud-main"
+v1/prog_index.m3u8
+"#;
+
+        let (audio_renditions, variants) = parse_hls_master_manifest(manifest);
+        assert_eq!(audio_renditions.len(), 2);
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].audio_group_id.as_deref(), Some("aud-main"));
+        assert_eq!(variants[0].uri, "v1/prog_index.m3u8");
+        assert!(audio_renditions[0].is_default);
+        assert_eq!(audio_renditions[0].uri, "a1/prog_index.m3u8");
+    }
+
+    #[test]
+    fn hls_audio_rendition_selection_resolves_relative_uri_against_master_manifest() {
+        let manifest = r#"
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud-main",NAME="English",DEFAULT=YES,URI="a1/prog_index.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud-main",NAME="Dolby",URI="a2/prog_index.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=2400000,AUDIO="aud-main"
+v1/prog_index.m3u8
+"#;
+
+        let selected =
+            select_hls_audio_rendition_uri("https://example.com/live/master.m3u8", manifest);
+
+        assert_eq!(
+            selected.as_deref(),
+            Some("https://example.com/live/a1/prog_index.m3u8")
+        );
+    }
+
+    #[test]
+    fn hls_video_variant_selection_resolves_relative_uri_against_master_manifest() {
+        let manifest = r#"
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud-main",NAME="English",DEFAULT=YES,URI="a1/prog_index.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=2400000,AUDIO="aud-main"
+v1/prog_index.m3u8
+"#;
+
+        let selected =
+            select_hls_video_variant_uri("https://example.com/live/master.m3u8", manifest);
+
+        assert_eq!(
+            selected.as_deref(),
+            Some("https://example.com/live/v1/prog_index.m3u8")
+        );
+    }
+
+    #[test]
+    fn hls_master_resolution_computes_audio_and_video_sources_once() {
+        let manifest = r#"
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud-main",NAME="English",DEFAULT=YES,URI="a1/prog_index.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=2400000,AUDIO="aud-main"
+v1/prog_index.m3u8
+"#;
+
+        let resolved =
+            resolve_hls_master_manifest_sources("https://example.com/live/master.m3u8", manifest);
+
+        assert_eq!(
+            resolved.audio_rendition_uri.as_deref(),
+            Some("https://example.com/live/a1/prog_index.m3u8")
+        );
+        assert_eq!(
+            resolved.video_variant_uri.as_deref(),
+            Some("https://example.com/live/v1/prog_index.m3u8")
+        );
+    }
+
+    #[test]
+    fn relative_uri_resolver_normalizes_parent_segments() {
+        let resolved = resolve_uri_relative_to(
+            "https://example.com/live/master/master.m3u8",
+            "../audio/a1/prog_index.m3u8",
+        );
+
+        assert_eq!(
+            resolved.as_deref(),
+            Some("https://example.com/live/audio/a1/prog_index.m3u8")
+        );
     }
 }

@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -8,16 +10,19 @@ use player_audio_cpal::{
 };
 use player_backend_ffmpeg::{
     AudioStreamProbe, BufferedFramePoll, BufferedVideoSource, BufferedVideoSourceBootstrap,
-    DecodedAudioTrack, FfmpegBackend, VideoDecodeInfo as BackendVideoDecodeInfo,
+    DecodedAudioTrack, FfmpegBackend, MediaProbe, VideoDecodeInfo as BackendVideoDecodeInfo,
     VideoDecoderMode as BackendVideoDecoderMode, VideoStreamProbe,
 };
-use player_core::{MediaSource, PlaybackClock, PlaybackSessionModel};
+use player_core::{
+    MediaSource, MediaSourceKind, MediaSourceProtocol, PlaybackClock, PlaybackSessionModel,
+};
 
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady,
     MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress,
-    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerMediaInfo, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy, PlayerCachePolicy,
+    PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerRetryBackoff, PlayerRetryPolicy,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
     PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
@@ -26,7 +31,16 @@ use player_runtime::{
 
 pub const SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "software_desktop";
 const AUDIO_STREAM_CHUNK_FRAMES: usize = 2_048;
-const AUDIO_STREAM_TARGET_BUFFER_DURATION: Duration = Duration::from_secs(2);
+const DEFAULT_AUDIO_STREAM_TARGET_BUFFER_DURATION: Duration = Duration::from_secs(2);
+const DEFAULT_AUDIO_PLAYBACK_START_BUFFER_DURATION: Duration = Duration::from_millis(500);
+const DEFAULT_AUDIO_REBUFFER_DURATION: Duration = Duration::from_millis(250);
+const DEFAULT_AUDIO_BUFFER_HEADROOM_DURATION: Duration = Duration::from_millis(500);
+const MAX_DESKTOP_AUDIO_BUFFER_DURATION: Duration = Duration::from_secs(4);
+const DEFAULT_VIDEO_FRAME_RATE_ESTIMATE: f64 = 30.0;
+const DEFAULT_VIDEO_FRAME_MEMORY_ESTIMATE_BYTES: usize = 1_382_400;
+const DESKTOP_ACTIVE_VIDEO_PREFETCH_MEMORY_SCALE: u64 = 4;
+const MAX_DESKTOP_VIDEO_PREFETCH_CAPACITY: usize = 96;
+const DEFAULT_VIDEO_BUFFER_HEADROOM_DURATION: Duration = Duration::from_millis(500);
 const AUDIO_STREAM_BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const AUDIO_OUTPUT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const AUDIO_CLOCK_STALL_TOLERANCE: Duration = Duration::from_millis(250);
@@ -54,6 +68,33 @@ pub fn probe_platform_desktop_source_with_options(
     }))
 }
 
+pub fn open_platform_desktop_source_with_options_and_interrupt(
+    adapter_id: &'static str,
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    let initializer = SoftwarePlayerRuntimeInitializer::probe_source_with_options_and_interrupt(
+        source,
+        options,
+        Some(interrupt_flag),
+    )?;
+    let PlayerRuntimeAdapterBootstrap {
+        runtime,
+        initial_frame,
+        startup,
+    } = Box::new(initializer).initialize()?;
+
+    Ok(PlayerRuntimeAdapterBootstrap {
+        runtime: Box::new(PlatformDesktopRuntimeAdapter {
+            adapter_id,
+            inner: runtime,
+        }),
+        initial_frame,
+        startup,
+    })
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SoftwarePlayerRuntimeAdapterFactory;
 
@@ -61,19 +102,24 @@ pub struct SoftwarePlayerRuntimeAdapterFactory;
 pub struct SoftwarePlayerRuntimeInitializer {
     backend: FfmpegBackend,
     source: MediaSource,
-    probe: player_backend_ffmpeg::MediaProbe,
+    probe: Option<player_backend_ffmpeg::MediaProbe>,
     audio_output: AudioOutputDescriptor,
     options: PlayerRuntimeOptions,
+    interrupt_flag: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug)]
 struct SoftwareRuntimeConfig {
     backend: FfmpegBackend,
     source: MediaSource,
-    probe: player_backend_ffmpeg::MediaProbe,
+    probe: Option<player_backend_ffmpeg::MediaProbe>,
+    buffering_policy: PlayerBufferingPolicy,
+    retry_policy: PlayerRetryPolicy,
+    cache_policy: PlayerCachePolicy,
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
     source_audio_track: Option<DecodedAudioTrack>,
+    interrupt_flag: Option<Arc<AtomicBool>>,
     video_prefetch_capacity: usize,
     video_present_early_tolerance: Duration,
     video_idle_poll_interval: Duration,
@@ -85,6 +131,8 @@ pub struct SoftwarePlayerRuntime {
     media_info: PlayerMediaInfo,
     session: PlaybackSessionModel,
     playback_rate: f32,
+    initial_media_position: Duration,
+    initial_video_position: Duration,
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
     source_audio_track: Option<DecodedAudioTrack>,
@@ -94,18 +142,73 @@ pub struct SoftwarePlayerRuntime {
     audio_sink: Option<AudioSink>,
     audio_sink_controller: Option<AudioSinkController>,
     playback_clock: Option<PlaybackClock>,
+    video_playback_start_buffer_frames: usize,
+    video_rebuffer_frames: usize,
+    video_buffering_window: VideoBufferingWindow,
+    audio_playback_start_buffer_duration: Duration,
+    audio_stream_target_buffer_duration: Duration,
+    audio_rebuffer_duration: Duration,
+    audio_buffering_window: AudioBufferingWindow,
     video_present_early_tolerance: Duration,
     video_idle_poll_interval: Duration,
+    pending_audio_metadata_worker: Option<PendingAudioMetadataWorker>,
+    pending_audio_decode_worker: Option<PendingAudioDecodeWorker>,
     pending_audio_stream_worker: Option<PendingAudioStreamWorker>,
+    pending_audio_metadata_retry: Option<ScheduledRetry>,
+    pending_audio_stream_retry: Option<ScheduledAudioStreamRetry>,
     is_buffering: bool,
     buffering_candidate_since: Option<Instant>,
     last_audio_output_poll: Instant,
+    retry_policy: PlayerRetryPolicy,
+    resilience_metrics: PlayerResilienceMetricsTracker,
     events: VecDeque<PlayerRuntimeEvent>,
 }
 
 struct PendingAudioStreamWorker {
     generation: u64,
-    receiver: Receiver<Result<(), String>>,
+    retry_attempt: u32,
+    receiver: Receiver<Result<AudioStreamWorkerEvent, String>>,
+    interrupt_flag: Option<Arc<AtomicBool>>,
+}
+
+enum AudioStreamWorkerEvent {
+    Metadata(MediaProbe),
+    Finished,
+}
+
+struct PendingAudioDecodeWorker {
+    receiver: Receiver<Result<DecodedAudioTrack, String>>,
+}
+
+struct PendingAudioMetadataWorker {
+    retry_attempt: u32,
+    receiver: Receiver<Result<MediaProbe, String>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScheduledRetry {
+    attempt: u32,
+    due_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScheduledAudioStreamRetry {
+    attempt: u32,
+    due_at: Instant,
+    position: Duration,
+    playback_rate: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioBufferingWindow {
+    Startup,
+    Rebuffer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoBufferingWindow {
+    Startup,
+    Rebuffer,
 }
 
 struct PlatformDesktopRuntimeAdapterInitializer {
@@ -190,7 +293,10 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
     }
 
     fn media_info(&self) -> PlayerMediaInfo {
-        player_media_info(&self.probe)
+        self.probe
+            .as_ref()
+            .map(player_media_info)
+            .unwrap_or_else(|| unresolved_player_media_info(&self.source))
     }
 
     fn startup(&self) -> PlayerRuntimeStartup {
@@ -209,24 +315,36 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             probe,
             audio_output,
             options,
+            interrupt_flag,
         } = *self;
 
         let decoded_audio = match audio_output.default_output_config.clone() {
-            Some(output_config) if probe.best_audio.is_some() => Some(
-                backend
-                    .decode_audio_track(
-                        source.clone(),
-                        output_config.sample_rate,
-                        output_config.channels,
+            Some(output_config)
+                if probe
+                    .as_ref()
+                    .is_some_and(|probe| probe.best_audio.is_some()) =>
+            {
+                if should_defer_audio_decode_for_source(&source) {
+                    None
+                } else {
+                    Some(
+                        backend
+                            .decode_audio_track_with_interrupt(
+                                source.clone(),
+                                output_config.sample_rate,
+                                output_config.channels,
+                                interrupt_flag.clone(),
+                            )
+                            .map_err(|error| {
+                                runtime_error(
+                                    PlayerRuntimeErrorCode::DecodeFailure,
+                                    "failed to decode audio track during initialization",
+                                    error,
+                                )
+                            })?,
                     )
-                    .map_err(|error| {
-                        runtime_error(
-                            PlayerRuntimeErrorCode::DecodeFailure,
-                            "failed to decode audio track during initialization",
-                            error,
-                        )
-                    })?,
-            ),
+                }
+            }
             _ => None,
         };
         let startup = PlayerRuntimeStartup {
@@ -235,14 +353,24 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             decoded_audio: decoded_audio.as_ref().map(decoded_audio_summary),
             video_decode: None,
         };
+        let resolved_resilience_policy =
+            options.resolved_resilience_policy(source.kind(), source.protocol());
+        let resolved_buffering_policy = resolved_resilience_policy.buffering_policy;
         let config = SoftwareRuntimeConfig {
             backend,
             source,
             probe,
+            buffering_policy: resolved_buffering_policy.clone(),
+            retry_policy: resolved_resilience_policy.retry_policy,
+            cache_policy: resolved_resilience_policy.cache_policy,
             audio_output_descriptor: audio_output.clone(),
             audio_output_config: audio_output.default_output_config,
             source_audio_track: decoded_audio.clone(),
-            video_prefetch_capacity: options.video_prefetch_capacity,
+            interrupt_flag,
+            video_prefetch_capacity: resolved_video_prefetch_capacity(
+                options.video_prefetch_capacity,
+                &resolved_buffering_policy,
+            ),
             video_present_early_tolerance: options.video_present_early_tolerance,
             video_idle_poll_interval: options.video_idle_poll_interval,
         };
@@ -255,6 +383,14 @@ impl SoftwarePlayerRuntimeInitializer {
     pub fn probe_source_with_options(
         source: MediaSource,
         options: PlayerRuntimeOptions,
+    ) -> PlayerRuntimeResult<Self> {
+        Self::probe_source_with_options_and_interrupt(source, options, None)
+    }
+
+    pub fn probe_source_with_options_and_interrupt(
+        source: MediaSource,
+        options: PlayerRuntimeOptions,
+        interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> PlayerRuntimeResult<Self> {
         let backend = FfmpegBackend::new().map_err(|error| {
             runtime_error(
@@ -277,13 +413,21 @@ impl SoftwarePlayerRuntimeInitializer {
                 default_output_config: None,
             }
         };
-        let probe = backend.probe(source.clone()).map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::InvalidSource,
-                "failed to probe media source",
-                error,
+        let probe = if should_defer_media_probe_for_source(&source) {
+            None
+        } else {
+            Some(
+                backend
+                    .probe_with_interrupt(source.clone(), interrupt_flag.clone())
+                    .map_err(|error| {
+                        runtime_error(
+                            PlayerRuntimeErrorCode::InvalidSource,
+                            "failed to probe media source",
+                            error,
+                        )
+                    })?,
             )
-        })?;
+        };
 
         Ok(Self {
             backend,
@@ -291,6 +435,7 @@ impl SoftwarePlayerRuntimeInitializer {
             probe,
             audio_output,
             options,
+            interrupt_flag,
         })
     }
 }
@@ -325,8 +470,31 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
         self.session.progress(position)
     }
 
+    fn snapshot(&self) -> player_runtime::PlayerSnapshot {
+        player_runtime::PlayerSnapshot {
+            source_uri: self.source_uri().to_owned(),
+            state: self.presentation_state(),
+            has_video_surface: false,
+            is_interrupted: false,
+            is_buffering: self.is_buffering(),
+            playback_rate: self.playback_rate(),
+            progress: self.progress(),
+            timeline: player_runtime::PlayerTimelineSnapshot::from_media_info(
+                self.progress(),
+                self.capabilities().supports_seek,
+                self.media_info(),
+            ),
+            media_info: self.media_info().clone(),
+            resilience_metrics: self.resilience_metrics.snapshot(),
+        }
+    }
+
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+        self.poll_scheduled_retries();
         self.poll_audio_output_device();
+        self.poll_audio_metadata_worker();
+        self.poll_audio_decode_worker();
+        self.poll_audio_stream_worker();
         self.events.drain(..).collect()
     }
 
@@ -352,8 +520,9 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
     }
 
     fn next_deadline(&self) -> Option<Instant> {
+        let retry_deadline = self.next_retry_deadline();
         if !self.session.is_started() || self.session.is_paused() || self.session.is_finished() {
-            return None;
+            return retry_deadline;
         }
 
         if let Some(next_frame) = self.next_frame.as_ref() {
@@ -362,14 +531,23 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
                 .presentation_time
                 .saturating_sub(self.video_present_early_tolerance);
             if playback_position >= scheduled_time {
-                return Some(Instant::now());
+                return Some(
+                    retry_deadline
+                        .map_or_else(Instant::now, |deadline| deadline.min(Instant::now())),
+                );
             }
 
-            return Some(Instant::now() + scheduled_time.saturating_sub(playback_position));
+            let frame_deadline = Instant::now() + scheduled_time.saturating_sub(playback_position);
+            return Some(
+                retry_deadline.map_or(frame_deadline, |deadline| deadline.min(frame_deadline)),
+            );
         }
 
         if !self.video_end_of_stream {
-            return Some(Instant::now() + self.video_idle_poll_interval);
+            let idle_deadline = Instant::now() + self.video_idle_poll_interval;
+            return Some(
+                retry_deadline.map_or(idle_deadline, |deadline| deadline.min(idle_deadline)),
+            );
         }
 
         if self
@@ -378,10 +556,13 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
             .map(|sink| !sink.is_finished())
             .unwrap_or(false)
         {
-            return Some(Instant::now() + self.video_idle_poll_interval);
+            let idle_deadline = Instant::now() + self.video_idle_poll_interval;
+            return Some(
+                retry_deadline.map_or(idle_deadline, |deadline| deadline.min(idle_deadline)),
+            );
         }
 
-        None
+        retry_deadline
     }
 }
 
@@ -414,6 +595,10 @@ impl PlayerRuntimeAdapter for PlatformDesktopRuntimeAdapter {
         self.inner.progress()
     }
 
+    fn snapshot(&self) -> player_runtime::PlayerSnapshot {
+        self.inner.snapshot()
+    }
+
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
         self.inner.drain_events()
     }
@@ -442,14 +627,20 @@ impl SoftwarePlayerRuntime {
         let BufferedVideoSourceBootstrap {
             source: mut video_source,
             decode_info,
-        } = BufferedVideoSource::new(config.source.clone(), config.video_prefetch_capacity)
-            .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::BackendFailure,
-                    "failed to create buffered video source",
-                    error,
-                )
-            })?;
+            probe: opened_probe,
+        } = BufferedVideoSource::new_with_interrupt(
+            config.source.clone(),
+            config.video_prefetch_capacity,
+            config.interrupt_flag.clone(),
+        )
+        .map_err(|error| {
+            runtime_error(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "failed to create buffered video source",
+                error,
+            )
+        })?;
+        let probe = config.probe.unwrap_or(opened_probe);
         let initial_frame = video_source
             .recv_frame()
             .map_err(|error| {
@@ -467,14 +658,31 @@ impl SoftwarePlayerRuntime {
             })?;
         startup.video_decode = Some(player_video_decode_info(&decode_info));
         let session = PlaybackSessionModel::new(
-            config.probe.duration,
-            config
-                .probe
-                .best_video
-                .as_ref()
-                .and_then(|video| video.frame_rate),
+            probe.duration,
+            probe.best_video.as_ref().and_then(|video| video.frame_rate),
         );
-        let media_info = player_media_info(&config.probe);
+        let media_info = player_media_info(&probe);
+        let video_prefetch_limit = resolved_video_prefetch_limit(
+            &media_info,
+            config.video_prefetch_capacity,
+            &config.cache_policy,
+        );
+        video_source.set_prefetch_limit(video_prefetch_limit);
+        let video_playback_start_buffer_frames = resolved_video_playback_start_buffer_frames(
+            &media_info,
+            video_prefetch_limit,
+            &config.buffering_policy,
+        );
+        let video_rebuffer_frames = resolved_video_rebuffer_frames(
+            &media_info,
+            video_prefetch_limit,
+            &config.buffering_policy,
+        );
+        let audio_playback_start_buffer_duration =
+            resolved_audio_playback_start_buffer_duration(&config.buffering_policy);
+        let audio_stream_target_buffer_duration =
+            resolved_audio_stream_target_buffer_duration(&config.buffering_policy);
+        let audio_rebuffer_duration = resolved_audio_rebuffer_duration(&config.buffering_policy);
 
         let mut runtime = Self {
             backend: config.backend,
@@ -482,6 +690,8 @@ impl SoftwarePlayerRuntime {
             media_info,
             session,
             playback_rate: DEFAULT_PLAYBACK_RATE,
+            initial_media_position: Duration::ZERO,
+            initial_video_position: Duration::ZERO,
             audio_output_descriptor: config.audio_output_descriptor,
             audio_output_config: config.audio_output_config,
             source_audio_track: config.source_audio_track,
@@ -491,22 +701,38 @@ impl SoftwarePlayerRuntime {
             audio_sink: None,
             audio_sink_controller: None,
             playback_clock: None,
+            video_playback_start_buffer_frames,
+            video_rebuffer_frames,
+            video_buffering_window: VideoBufferingWindow::Startup,
+            audio_playback_start_buffer_duration,
+            audio_stream_target_buffer_duration,
+            audio_rebuffer_duration,
+            audio_buffering_window: AudioBufferingWindow::Startup,
             video_present_early_tolerance: config.video_present_early_tolerance,
             video_idle_poll_interval: config.video_idle_poll_interval,
+            pending_audio_metadata_worker: None,
+            pending_audio_decode_worker: None,
             pending_audio_stream_worker: None,
+            pending_audio_metadata_retry: None,
+            pending_audio_stream_retry: None,
             is_buffering: false,
             buffering_candidate_since: None,
             last_audio_output_poll: Instant::now(),
+            retry_policy: config.retry_policy,
+            resilience_metrics: PlayerResilienceMetricsTracker::default(),
             events: VecDeque::new(),
         };
 
-        let initial_position = runtime
-            .source_audio_track
-            .as_ref()
-            .map(|track| track.presentation_time.min(initial_frame.presentation_time))
-            .unwrap_or(initial_frame.presentation_time);
+        let (initial_media_position, initial_video_position) = initial_restart_positions(
+            runtime.source_audio_track.as_ref(),
+            initial_frame.presentation_time,
+        );
+        runtime.initial_media_position = initial_media_position;
+        runtime.initial_video_position = initial_video_position;
         runtime.set_playback_clock(initial_frame.presentation_time);
-        runtime.ensure_audio_output(initial_position, runtime.playback_rate)?;
+        runtime.maybe_start_audio_metadata_probe_worker()?;
+        runtime.maybe_start_audio_decode_worker()?;
+        runtime.ensure_audio_output(initial_media_position, runtime.playback_rate)?;
         runtime.fill_next_frame()?;
         runtime.refresh_playback_finished();
         runtime.emit_event(PlayerRuntimeEvent::Initialized(startup.clone()));
@@ -533,7 +759,10 @@ impl SoftwarePlayerRuntime {
         &mut self,
         command: PlayerRuntimeCommand,
     ) -> PlayerRuntimeResult<(bool, Option<DecodedVideoFrame>)> {
+        self.poll_scheduled_retries();
         self.poll_audio_output_device();
+        self.poll_audio_metadata_worker();
+        self.poll_audio_decode_worker();
         self.poll_audio_stream_worker();
 
         match command {
@@ -614,7 +843,10 @@ impl SoftwarePlayerRuntime {
     }
 
     fn try_advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+        self.poll_scheduled_retries();
         self.poll_audio_output_device();
+        self.poll_audio_metadata_worker();
+        self.poll_audio_decode_worker();
         self.poll_audio_stream_worker();
 
         if !self.session.is_started() || self.session.is_paused() || self.session.is_finished() {
@@ -693,6 +925,8 @@ impl SoftwarePlayerRuntime {
 
         self.video_end_of_stream = false;
         self.next_frame = None;
+        self.video_buffering_window = VideoBufferingWindow::Startup;
+        self.audio_buffering_window = AudioBufferingWindow::Startup;
         self.fill_next_frame()?;
         self.restore_seek_state(previous_state);
         self.ensure_audio_output(target_position, self.playback_rate)?;
@@ -732,19 +966,24 @@ impl SoftwarePlayerRuntime {
         let Some(output_config) = self.audio_output_config.clone() else {
             self.audio_sink = None;
             self.audio_sink_controller = None;
-            self.pending_audio_stream_worker = None;
+            self.cancel_pending_audio_stream_worker();
             return Ok(());
         };
-        let Some(source_audio_track) = self.source_audio_track.as_ref() else {
+        let source_audio_track = self.source_audio_track.as_ref();
+        if source_audio_track.is_none() && !should_stream_audio_source_directly(&self.source) {
             self.audio_sink = None;
             self.audio_sink_controller = None;
-            self.pending_audio_stream_worker = None;
+            self.cancel_pending_audio_stream_worker();
             return Ok(());
-        };
+        }
 
         if self.audio_sink.is_none() {
-            let sample_offset = source_audio_track.sample_offset_for_position(position);
-            let media_start = source_audio_track.media_time_for_sample_offset(sample_offset);
+            let media_start = source_audio_track
+                .map(|track| {
+                    let sample_offset = track.sample_offset_for_position(position);
+                    track.media_time_for_sample_offset(sample_offset)
+                })
+                .unwrap_or(position);
             let sink = AudioSink::new_default(
                 output_config,
                 media_start,
@@ -762,8 +1001,97 @@ impl SoftwarePlayerRuntime {
             self.audio_sink = Some(sink);
         }
 
-        self.start_audio_stream(position, playback_rate)?;
+        if source_audio_track.is_some() {
+            self.start_audio_stream(position, playback_rate)?;
+        } else if should_stream_audio_source_directly(&self.source) {
+            self.start_remote_audio_stream(position, playback_rate)?;
+        }
         self.sync_audio_output_state();
+        Ok(())
+    }
+
+    fn maybe_start_audio_decode_worker(&mut self) -> PlayerRuntimeResult<()> {
+        if should_stream_audio_source_directly(&self.source) {
+            return Ok(());
+        }
+
+        if self.source_audio_track.is_some()
+            || self.pending_audio_decode_worker.is_some()
+            || self.audio_output_config.is_none()
+            || self.media_info.best_audio.is_none()
+        {
+            return Ok(());
+        }
+
+        let Some(output_config) = self.audio_output_config.clone() else {
+            return Ok(());
+        };
+        let backend = self.backend;
+        let source = self.source.clone();
+        let (sender, receiver) = mpsc::channel();
+
+        thread::Builder::new()
+            .name("player-audio-decode".to_owned())
+            .spawn(move || {
+                let result = backend
+                    .decode_audio_track(source, output_config.sample_rate, output_config.channels)
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(result);
+            })
+            .map_err(|error| {
+                runtime_error(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    "failed to spawn deferred audio decode worker",
+                    error,
+                )
+            })?;
+
+        self.pending_audio_decode_worker = Some(PendingAudioDecodeWorker { receiver });
+        Ok(())
+    }
+
+    fn maybe_start_audio_metadata_probe_worker(&mut self) -> PlayerRuntimeResult<()> {
+        if !should_defer_media_probe_for_source(&self.source)
+            || should_stream_audio_source_directly(&self.source)
+            || self.pending_audio_metadata_worker.is_some()
+            || self.media_info.best_audio.is_some()
+        {
+            return Ok(());
+        }
+
+        self.start_audio_metadata_probe_worker(0)
+    }
+
+    fn start_audio_metadata_probe_worker(&mut self, retry_attempt: u32) -> PlayerRuntimeResult<()> {
+        if self.pending_audio_metadata_worker.is_some() {
+            return Ok(());
+        }
+
+        let backend = self.backend;
+        let source = self.source.clone();
+        let (sender, receiver) = mpsc::channel();
+
+        thread::Builder::new()
+            .name("player-audio-metadata-probe".to_owned())
+            .spawn(move || {
+                let result = backend
+                    .probe_audio_decode_source_with_interrupt(source, None)
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(result);
+            })
+            .map_err(|error| {
+                runtime_error(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    "failed to spawn deferred audio metadata probe worker",
+                    error,
+                )
+            })?;
+
+        self.pending_audio_metadata_retry = None;
+        self.pending_audio_metadata_worker = Some(PendingAudioMetadataWorker {
+            retry_attempt,
+            receiver,
+        });
         Ok(())
     }
 
@@ -833,6 +1161,7 @@ impl SoftwarePlayerRuntime {
     }
 
     fn emit_event(&mut self, event: PlayerRuntimeEvent) {
+        self.observe_resilience_event(&event);
         self.events.push_back(event);
     }
 
@@ -849,13 +1178,16 @@ impl SoftwarePlayerRuntime {
     ) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
         self.session.reset_to_ready();
 
-        let Some(first_frame) = self.video_source.seek_to(Duration::ZERO).map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::SeekFailure,
-                "failed to seek media source to the beginning",
-                error,
-            )
-        })?
+        let Some(first_frame) = self
+            .video_source
+            .seek_to(self.initial_video_position)
+            .map_err(|error| {
+                runtime_error(
+                    PlayerRuntimeErrorCode::SeekFailure,
+                    "failed to seek media source to the beginning",
+                    error,
+                )
+            })?
         else {
             return Err(PlayerRuntimeError::new(
                 PlayerRuntimeErrorCode::DecodeFailure,
@@ -865,7 +1197,9 @@ impl SoftwarePlayerRuntime {
 
         self.video_end_of_stream = false;
         self.next_frame = None;
-        self.ensure_audio_output(Duration::ZERO, self.playback_rate)?;
+        self.video_buffering_window = VideoBufferingWindow::Startup;
+        self.audio_buffering_window = AudioBufferingWindow::Startup;
+        self.ensure_audio_output(self.initial_media_position, self.playback_rate)?;
         self.set_playback_clock(first_frame.presentation_time);
         self.fill_next_frame()?;
         self.refresh_playback_finished();
@@ -932,16 +1266,31 @@ impl SoftwarePlayerRuntime {
             .unwrap_or(false);
 
         match worker.receiver.try_recv() {
-            Ok(Ok(())) => {}
+            Ok(Ok(AudioStreamWorkerEvent::Metadata(probe))) => {
+                if merge_audio_probe_into_media_info(&mut self.media_info, &probe) {
+                    self.emit_event(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
+                }
+                self.pending_audio_stream_worker = Some(worker);
+            }
+            Ok(Ok(AudioStreamWorkerEvent::Finished)) => {}
             Ok(Err(error)) => {
                 if is_active_generation {
                     if let Some(controller) = self.audio_sink_controller.as_ref() {
                         controller.finish_generation(worker.generation);
                     }
-                    self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::DecodeFailure,
-                        format!("failed to stream retimed audio for playback: {error}"),
-                    )));
+                    let retry_position = self
+                        .playback_position()
+                        .unwrap_or_else(|| self.progress().position());
+                    if !self.schedule_remote_audio_stream_retry(
+                        worker.retry_attempt.saturating_add(1),
+                        retry_position,
+                        self.playback_rate,
+                    ) {
+                        self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
+                            PlayerRuntimeErrorCode::DecodeFailure,
+                            format!("failed to stream retimed audio for playback: {error}"),
+                        )));
+                    }
                     self.refresh_playback_finished();
                 }
             }
@@ -953,12 +1302,92 @@ impl SoftwarePlayerRuntime {
                     if let Some(controller) = self.audio_sink_controller.as_ref() {
                         controller.finish_generation(worker.generation);
                     }
-                    self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
-                        "audio stream worker disconnected before completing playback",
-                    )));
+                    let retry_position = self
+                        .playback_position()
+                        .unwrap_or_else(|| self.progress().position());
+                    if !self.schedule_remote_audio_stream_retry(
+                        worker.retry_attempt.saturating_add(1),
+                        retry_position,
+                        self.playback_rate,
+                    ) {
+                        self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
+                            PlayerRuntimeErrorCode::BackendFailure,
+                            "audio stream worker disconnected before completing playback",
+                        )));
+                    }
                     self.refresh_playback_finished();
                 }
+            }
+        }
+
+        self.update_buffering_state();
+    }
+
+    fn poll_audio_metadata_worker(&mut self) {
+        let Some(worker) = self.pending_audio_metadata_worker.take() else {
+            return;
+        };
+
+        match worker.receiver.try_recv() {
+            Ok(Ok(probe)) => {
+                if merge_audio_probe_into_media_info(&mut self.media_info, &probe) {
+                    self.emit_event(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
+                }
+            }
+            Ok(Err(error)) => {
+                if !self.schedule_audio_metadata_retry(worker.retry_attempt.saturating_add(1)) {
+                    self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::BackendFailure,
+                        format!("failed to probe remote audio metadata for playback: {error}"),
+                    )));
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.pending_audio_metadata_worker = Some(worker);
+            }
+            Err(TryRecvError::Disconnected) => {
+                if !self.schedule_audio_metadata_retry(worker.retry_attempt.saturating_add(1)) {
+                    self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::BackendFailure,
+                        "audio metadata probe worker disconnected before producing playback metadata",
+                    )));
+                }
+            }
+        }
+    }
+
+    fn poll_audio_decode_worker(&mut self) {
+        let Some(worker) = self.pending_audio_decode_worker.take() else {
+            return;
+        };
+
+        match worker.receiver.try_recv() {
+            Ok(Ok(track)) => {
+                self.source_audio_track = Some(track);
+                let current_position = self
+                    .playback_position()
+                    .unwrap_or_else(|| self.progress().position());
+                if let Err(error) = self.ensure_audio_output(current_position, self.playback_rate) {
+                    self.emit_event(PlayerRuntimeEvent::Error(error));
+                }
+                self.refresh_playback_finished();
+            }
+            Ok(Err(error)) => {
+                self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::DecodeFailure,
+                    format!("failed to decode audio track for playback: {error}"),
+                )));
+                self.refresh_playback_finished();
+            }
+            Err(TryRecvError::Empty) => {
+                self.pending_audio_decode_worker = Some(worker);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    "audio decode worker disconnected before producing playback data",
+                )));
+                self.refresh_playback_finished();
             }
         }
 
@@ -970,12 +1399,12 @@ impl SoftwarePlayerRuntime {
         position: Duration,
         playback_rate: f32,
     ) -> PlayerRuntimeResult<()> {
+        self.cancel_pending_audio_stream_worker();
+
         let Some(source_track) = self.source_audio_track.clone() else {
-            self.pending_audio_stream_worker = None;
             return Ok(());
         };
         let Some(controller) = self.audio_sink_controller.clone() else {
-            self.pending_audio_stream_worker = None;
             return Ok(());
         };
 
@@ -987,7 +1416,7 @@ impl SoftwarePlayerRuntime {
         let target_buffer_samples = buffered_sample_target(
             source_track.sample_rate,
             source_track.channels,
-            AUDIO_STREAM_TARGET_BUFFER_DURATION,
+            self.audio_stream_target_buffer_duration,
         );
 
         thread::Builder::new()
@@ -1002,7 +1431,7 @@ impl SoftwarePlayerRuntime {
 
                     controller.append_samples(generation, chunk)
                 };
-                let result: Result<(), String> =
+                let result: Result<AudioStreamWorkerEvent, String> =
                     if (playback_rate - DEFAULT_PLAYBACK_RATE).abs() < 0.000_001 {
                         stream_direct_audio_track_range(&source_track, range, emit_chunk)
                     } else {
@@ -1019,6 +1448,7 @@ impl SoftwarePlayerRuntime {
                         }
                         Ok(())
                     })
+                    .map(|_| AudioStreamWorkerEvent::Finished)
                     .map_err(|error| error.to_string());
                 let _ = sender.send(result);
             })
@@ -1032,10 +1462,114 @@ impl SoftwarePlayerRuntime {
 
         self.pending_audio_stream_worker = Some(PendingAudioStreamWorker {
             generation,
+            retry_attempt: 0,
             receiver,
+            interrupt_flag: None,
         });
+        self.pending_audio_stream_retry = None;
+        self.audio_buffering_window = AudioBufferingWindow::Startup;
         self.update_buffering_state();
         Ok(())
+    }
+
+    fn start_remote_audio_stream(
+        &mut self,
+        position: Duration,
+        playback_rate: f32,
+    ) -> PlayerRuntimeResult<()> {
+        self.start_remote_audio_stream_with_retry_attempt(position, playback_rate, 0)
+    }
+
+    fn start_remote_audio_stream_with_retry_attempt(
+        &mut self,
+        position: Duration,
+        playback_rate: f32,
+        retry_attempt: u32,
+    ) -> PlayerRuntimeResult<()> {
+        self.cancel_pending_audio_stream_worker();
+
+        let Some(controller) = self.audio_sink_controller.clone() else {
+            return Ok(());
+        };
+        let Some(output_config) = self.audio_output_config.clone() else {
+            return Ok(());
+        };
+
+        let generation = controller.begin_generation(position, playback_rate);
+        let backend = self.backend;
+        let source = self.source.clone();
+        let (sender, receiver) = mpsc::channel();
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        let worker_interrupt_flag = interrupt_flag.clone();
+        let target_buffer_samples = buffered_sample_target(
+            output_config.sample_rate,
+            output_config.channels,
+            self.audio_stream_target_buffer_duration,
+        );
+
+        thread::Builder::new()
+            .name("player-remote-audio-stream".to_owned())
+            .spawn(move || {
+                let emit_metadata = |probe: MediaProbe| -> anyhow::Result<()> {
+                    let _ = sender.send(Ok(AudioStreamWorkerEvent::Metadata(probe)));
+                    Ok(())
+                };
+                let emit_chunk = |chunk: Vec<f32>| -> anyhow::Result<bool> {
+                    if !wait_for_audio_buffer_window(&controller, generation, target_buffer_samples)
+                    {
+                        return Ok(false);
+                    }
+
+                    controller.append_samples(generation, chunk)
+                };
+                let result = backend
+                    .stream_audio_source_with_playback_rate_and_interrupt(
+                        source,
+                        output_config.sample_rate,
+                        output_config.channels,
+                        playback_rate,
+                        position,
+                        Some(worker_interrupt_flag),
+                        emit_metadata,
+                        emit_chunk,
+                    )
+                    .and_then(|_| {
+                        if controller.is_generation_active(generation) {
+                            controller.finish_generation(generation);
+                        }
+                        Ok(())
+                    })
+                    .map(|_| AudioStreamWorkerEvent::Finished)
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(result);
+            })
+            .map_err(|error| {
+                runtime_error(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    "failed to spawn remote audio stream worker",
+                    error,
+                )
+            })?;
+
+        self.pending_audio_stream_worker = Some(PendingAudioStreamWorker {
+            generation,
+            retry_attempt,
+            receiver,
+            interrupt_flag: Some(interrupt_flag),
+        });
+        self.pending_audio_stream_retry = None;
+        self.audio_buffering_window = AudioBufferingWindow::Startup;
+        self.update_buffering_state();
+        Ok(())
+    }
+
+    fn cancel_pending_audio_stream_worker(&mut self) {
+        if let Some(worker) = self.pending_audio_stream_worker.take() {
+            if let Some(interrupt_flag) = worker.interrupt_flag {
+                interrupt_flag.store(true, Ordering::SeqCst);
+            }
+        }
+        self.pending_audio_stream_retry = None;
     }
 
     fn sync_audio_output_state(&mut self) {
@@ -1056,7 +1590,7 @@ impl SoftwarePlayerRuntime {
         }
         self.last_audio_output_poll = Instant::now();
 
-        if self.source_audio_track.is_none() {
+        if self.source_audio_track.is_none() && !should_stream_audio_source_directly(&self.source) {
             return;
         }
 
@@ -1078,8 +1612,14 @@ impl SoftwarePlayerRuntime {
         self.audio_output_config = descriptor.default_output_config.clone();
         self.audio_sink = None;
         self.audio_sink_controller = None;
-        self.pending_audio_stream_worker = None;
+        self.cancel_pending_audio_stream_worker();
         self.set_playback_clock(current_position);
+
+        if self.audio_output_config.is_some() {
+            if let Err(error) = self.maybe_start_audio_decode_worker() {
+                self.emit_event(PlayerRuntimeEvent::Error(error));
+            }
+        }
 
         match self.ensure_audio_output(current_position, current_rate) {
             Ok(()) => {
@@ -1093,7 +1633,7 @@ impl SoftwarePlayerRuntime {
                 self.audio_output_config = None;
                 self.audio_sink = None;
                 self.audio_sink_controller = None;
-                self.pending_audio_stream_worker = None;
+                self.cancel_pending_audio_stream_worker();
                 self.emit_event(PlayerRuntimeEvent::AudioOutputChanged(None));
                 self.emit_event(PlayerRuntimeEvent::Error(error));
                 self.refresh_playback_finished();
@@ -1107,24 +1647,53 @@ impl SoftwarePlayerRuntime {
             return false;
         }
 
-        let waiting_for_video = !self.video_end_of_stream && self.next_frame.is_none();
+        let waiting_for_video = !self.video_end_of_stream
+            && match self.video_buffering_window {
+                VideoBufferingWindow::Startup => {
+                    self.buffered_video_frame_count()
+                        < self.video_playback_start_buffer_frames.max(1)
+                }
+                VideoBufferingWindow::Rebuffer => {
+                    self.buffered_video_frame_count() < self.video_rebuffer_frames.max(1)
+                }
+            };
         let waiting_for_audio = self
             .pending_audio_stream_worker
             .as_ref()
             .and_then(|worker| {
-                self.audio_sink_controller
-                    .as_ref()
-                    .and_then(|controller| controller.buffered_samples(worker.generation))
+                self.audio_sink_controller.as_ref().and_then(|controller| {
+                    let required_samples = self
+                        .audio_output_config
+                        .as_ref()
+                        .map(|output_config| {
+                            buffered_sample_target(
+                                output_config.sample_rate,
+                                output_config.channels,
+                                self.current_audio_buffer_requirement(),
+                            )
+                        })
+                        .unwrap_or(0);
+                    controller
+                        .buffered_samples(worker.generation)
+                        .map(|buffered_samples| buffered_samples < required_samples.max(1))
+                })
             })
-            .map(|buffered_samples| buffered_samples == 0)
             .unwrap_or(false);
+        let waiting_for_audio_retry = should_stream_audio_source_directly(&self.source)
+            && self.pending_audio_stream_retry.is_some();
 
-        waiting_for_video || waiting_for_audio
+        waiting_for_video || waiting_for_audio || waiting_for_audio_retry
     }
 
     fn update_buffering_state(&mut self) {
         let raw_is_buffering = self.raw_is_buffering();
         if !raw_is_buffering {
+            if self.video_buffering_window == VideoBufferingWindow::Startup {
+                self.video_buffering_window = VideoBufferingWindow::Rebuffer;
+            }
+            if self.audio_buffering_window == AudioBufferingWindow::Startup {
+                self.audio_buffering_window = AudioBufferingWindow::Rebuffer;
+            }
             self.buffering_candidate_since = None;
             if self.is_buffering {
                 self.is_buffering = false;
@@ -1144,11 +1713,268 @@ impl SoftwarePlayerRuntime {
             self.emit_event(PlayerRuntimeEvent::BufferingChanged { buffering: true });
         }
     }
+
+    fn current_audio_buffer_requirement(&self) -> Duration {
+        match self.audio_buffering_window {
+            AudioBufferingWindow::Startup => self.audio_playback_start_buffer_duration,
+            AudioBufferingWindow::Rebuffer => self.audio_rebuffer_duration,
+        }
+    }
+
+    fn buffered_video_frame_count(&self) -> usize {
+        self.video_source.buffered_frame_count() + usize::from(self.next_frame.is_some())
+    }
+
+    fn next_retry_deadline(&self) -> Option<Instant> {
+        match (
+            self.pending_audio_metadata_retry,
+            self.pending_audio_stream_retry,
+        ) {
+            (Some(metadata), Some(stream)) => Some(metadata.due_at.min(stream.due_at)),
+            (Some(metadata), None) => Some(metadata.due_at),
+            (None, Some(stream)) => Some(stream.due_at),
+            (None, None) => None,
+        }
+    }
+
+    fn poll_scheduled_retries(&mut self) {
+        let now = Instant::now();
+
+        if let Some(retry) = self.pending_audio_metadata_retry {
+            if now >= retry.due_at
+                && self.pending_audio_metadata_worker.is_none()
+                && self.media_info.best_audio.is_none()
+            {
+                self.pending_audio_metadata_retry = None;
+                if let Err(error) = self.start_audio_metadata_probe_worker(retry.attempt) {
+                    self.emit_event(PlayerRuntimeEvent::Error(error));
+                }
+            }
+        }
+
+        if let Some(retry) = self.pending_audio_stream_retry {
+            if now >= retry.due_at
+                && self.pending_audio_stream_worker.is_none()
+                && should_stream_audio_source_directly(&self.source)
+                && self.audio_output_config.is_some()
+                && self.audio_sink_controller.is_some()
+            {
+                self.pending_audio_stream_retry = None;
+                if let Err(error) = self.start_remote_audio_stream_with_retry_attempt(
+                    retry.position,
+                    retry.playback_rate,
+                    retry.attempt,
+                ) {
+                    self.emit_event(PlayerRuntimeEvent::Error(error));
+                }
+            }
+        }
+    }
+
+    fn schedule_audio_metadata_retry(&mut self, attempt: u32) -> bool {
+        if !should_defer_media_probe_for_source(&self.source) {
+            return false;
+        }
+        let Some(delay) = retry_delay_for_attempt(&self.retry_policy, attempt) else {
+            return false;
+        };
+        self.pending_audio_metadata_retry = Some(ScheduledRetry {
+            attempt,
+            due_at: Instant::now() + delay,
+        });
+        self.emit_event(PlayerRuntimeEvent::RetryScheduled { attempt, delay });
+        true
+    }
+
+    fn schedule_remote_audio_stream_retry(
+        &mut self,
+        attempt: u32,
+        position: Duration,
+        playback_rate: f32,
+    ) -> bool {
+        if !should_stream_audio_source_directly(&self.source) {
+            return false;
+        }
+        let Some(delay) = retry_delay_for_attempt(&self.retry_policy, attempt) else {
+            return false;
+        };
+        self.pending_audio_stream_retry = Some(ScheduledAudioStreamRetry {
+            attempt,
+            due_at: Instant::now() + delay,
+            position,
+            playback_rate,
+        });
+        self.emit_event(PlayerRuntimeEvent::RetryScheduled { attempt, delay });
+        true
+    }
+
+    fn observe_resilience_event(&mut self, event: &PlayerRuntimeEvent) {
+        observe_resilience_metrics_for_event(&mut self.resilience_metrics, event);
+    }
 }
 
 fn buffered_sample_target(sample_rate: u32, channels: u16, duration: Duration) -> usize {
     let frames = (duration.as_secs_f64() * f64::from(sample_rate.max(1))).ceil() as usize;
     frames.saturating_mul(usize::from(channels.max(1)))
+}
+
+fn resolved_video_prefetch_capacity(base_capacity: usize, policy: &PlayerBufferingPolicy) -> usize {
+    let Some(target_duration) = policy
+        .buffer_for_rebuffer
+        .or(policy.buffer_for_playback)
+        .map(|duration| duration.saturating_add(DEFAULT_VIDEO_BUFFER_HEADROOM_DURATION))
+    else {
+        return base_capacity.max(1);
+    };
+
+    let estimated_frames =
+        (target_duration.as_secs_f64() * DEFAULT_VIDEO_FRAME_RATE_ESTIMATE).ceil() as usize;
+    estimated_frames
+        .max(base_capacity.max(1))
+        .min(MAX_DESKTOP_VIDEO_PREFETCH_CAPACITY)
+}
+
+fn resolved_video_prefetch_limit(
+    media_info: &PlayerMediaInfo,
+    buffering_capacity: usize,
+    cache_policy: &PlayerCachePolicy,
+) -> usize {
+    if media_info.source_kind != MediaSourceKind::Remote {
+        return buffering_capacity.max(1);
+    }
+
+    let Some(max_memory_bytes) = cache_policy.max_memory_bytes else {
+        return buffering_capacity.max(1);
+    };
+
+    if max_memory_bytes == 0 {
+        return 1;
+    }
+
+    let estimated_frame_bytes = estimated_video_frame_memory_bytes(media_info).max(1) as u64;
+    let effective_memory_budget = max_memory_bytes
+        .saturating_mul(DESKTOP_ACTIVE_VIDEO_PREFETCH_MEMORY_SCALE)
+        .max(estimated_frame_bytes);
+    let frames_by_budget = (effective_memory_budget / estimated_frame_bytes).max(1);
+    let frames_by_budget = usize::try_from(frames_by_budget).unwrap_or(usize::MAX);
+
+    frames_by_budget.clamp(1, buffering_capacity.max(1))
+}
+
+fn resolved_video_playback_start_buffer_frames(
+    media_info: &PlayerMediaInfo,
+    video_prefetch_capacity: usize,
+    policy: &PlayerBufferingPolicy,
+) -> usize {
+    let Some(target_duration) = policy.buffer_for_playback.or(policy.buffer_for_rebuffer) else {
+        return 1;
+    };
+
+    let frame_rate = media_info
+        .best_video
+        .as_ref()
+        .and_then(|video| video.frame_rate)
+        .filter(|rate| rate.is_finite() && *rate > 0.0)
+        .unwrap_or(DEFAULT_VIDEO_FRAME_RATE_ESTIMATE);
+    let required_frames = (target_duration.as_secs_f64() * frame_rate).ceil() as usize;
+
+    required_frames.clamp(1, video_prefetch_capacity.max(1))
+}
+
+fn resolved_video_rebuffer_frames(
+    media_info: &PlayerMediaInfo,
+    video_prefetch_capacity: usize,
+    policy: &PlayerBufferingPolicy,
+) -> usize {
+    let Some(target_duration) = policy.buffer_for_rebuffer.or(policy.buffer_for_playback) else {
+        return 1;
+    };
+
+    let frame_rate = media_info
+        .best_video
+        .as_ref()
+        .and_then(|video| video.frame_rate)
+        .filter(|rate| rate.is_finite() && *rate > 0.0)
+        .unwrap_or(DEFAULT_VIDEO_FRAME_RATE_ESTIMATE);
+    let required_frames = (target_duration.as_secs_f64() * frame_rate).ceil() as usize;
+
+    required_frames.clamp(1, video_prefetch_capacity.max(1))
+}
+
+fn estimated_video_frame_memory_bytes(media_info: &PlayerMediaInfo) -> usize {
+    media_info
+        .best_video
+        .as_ref()
+        .and_then(|video| {
+            let width = usize::try_from(video.width).ok()?;
+            let height = usize::try_from(video.height).ok()?;
+            let pixels = width.checked_mul(height)?;
+            pixels.checked_mul(3)?.checked_div(2)
+        })
+        .filter(|bytes| *bytes > 0)
+        .unwrap_or(DEFAULT_VIDEO_FRAME_MEMORY_ESTIMATE_BYTES)
+}
+
+fn retry_delay_for_attempt(policy: &PlayerRetryPolicy, attempt: u32) -> Option<Duration> {
+    if attempt == 0 {
+        return None;
+    }
+
+    if policy
+        .max_attempts
+        .is_some_and(|max_attempts| attempt > max_attempts)
+    {
+        return None;
+    }
+
+    let multiplier = match policy.backoff {
+        PlayerRetryBackoff::Fixed => 1,
+        PlayerRetryBackoff::Linear => attempt,
+        PlayerRetryBackoff::Exponential => 1u32
+            .checked_shl(attempt.saturating_sub(1))
+            .unwrap_or(u32::MAX),
+    };
+
+    Some(
+        policy
+            .base_delay
+            .saturating_mul(multiplier)
+            .min(policy.max_delay),
+    )
+}
+
+fn resolved_audio_playback_start_buffer_duration(policy: &PlayerBufferingPolicy) -> Duration {
+    clamp_audio_buffer_duration(
+        policy
+            .buffer_for_playback
+            .or(policy.buffer_for_rebuffer)
+            .unwrap_or(DEFAULT_AUDIO_PLAYBACK_START_BUFFER_DURATION),
+    )
+}
+
+fn resolved_audio_stream_target_buffer_duration(policy: &PlayerBufferingPolicy) -> Duration {
+    clamp_audio_buffer_duration(
+        policy
+            .buffer_for_rebuffer
+            .or(policy.buffer_for_playback)
+            .map(|duration| duration.saturating_add(DEFAULT_AUDIO_BUFFER_HEADROOM_DURATION))
+            .unwrap_or(DEFAULT_AUDIO_STREAM_TARGET_BUFFER_DURATION),
+    )
+}
+
+fn resolved_audio_rebuffer_duration(policy: &PlayerBufferingPolicy) -> Duration {
+    clamp_audio_buffer_duration(
+        policy
+            .buffer_for_rebuffer
+            .unwrap_or(DEFAULT_AUDIO_REBUFFER_DURATION),
+    )
+}
+
+fn clamp_audio_buffer_duration(duration: Duration) -> Duration {
+    duration.clamp(
+        DEFAULT_AUDIO_REBUFFER_DURATION,
+        MAX_DESKTOP_AUDIO_BUFFER_DURATION,
+    )
 }
 
 fn wait_for_audio_buffer_window(
@@ -1276,6 +2102,28 @@ fn audio_output_info(descriptor: &AudioOutputDescriptor) -> Option<PlayerAudioOu
     })
 }
 
+fn should_defer_audio_decode_for_source(source: &MediaSource) -> bool {
+    matches!(source.kind(), MediaSourceKind::Remote)
+}
+
+fn should_defer_media_probe_for_source(source: &MediaSource) -> bool {
+    source.kind() == MediaSourceKind::Remote && source.protocol() == MediaSourceProtocol::Hls
+}
+
+fn should_stream_audio_source_directly(source: &MediaSource) -> bool {
+    source.kind() == MediaSourceKind::Remote && source.protocol() == MediaSourceProtocol::Hls
+}
+
+fn initial_restart_positions(
+    source_audio_track: Option<&DecodedAudioTrack>,
+    initial_video_position: Duration,
+) -> (Duration, Duration) {
+    let initial_media_position = source_audio_track
+        .map(|track| track.presentation_time.min(initial_video_position))
+        .unwrap_or(initial_video_position);
+    (initial_media_position, initial_video_position)
+}
+
 fn decoded_audio_summary(track: &DecodedAudioTrack) -> DecodedAudioSummary {
     DecodedAudioSummary {
         channels: track.channels,
@@ -1326,6 +2174,66 @@ fn player_media_info(probe: &player_backend_ffmpeg::MediaProbe) -> PlayerMediaIn
         video_streams: probe.video_streams,
         best_video: probe.best_video.as_ref().map(player_video_info),
         best_audio: probe.best_audio.as_ref().map(player_audio_info),
+        track_catalog: Default::default(),
+        track_selection: Default::default(),
+    }
+}
+
+fn merge_audio_probe_into_media_info(media_info: &mut PlayerMediaInfo, probe: &MediaProbe) -> bool {
+    let mut changed = false;
+    let audio_streams = probe.audio_streams.max(media_info.audio_streams);
+    if media_info.audio_streams != audio_streams {
+        media_info.audio_streams = audio_streams;
+        changed = true;
+    }
+
+    if let Some(best_audio) = probe.best_audio.as_ref().map(player_audio_info)
+        && !player_audio_info_matches(media_info.best_audio.as_ref(), &best_audio)
+    {
+        media_info.best_audio = Some(best_audio);
+        changed = true;
+    }
+
+    changed
+}
+
+fn observe_resilience_metrics_for_event(
+    tracker: &mut PlayerResilienceMetricsTracker,
+    event: &PlayerRuntimeEvent,
+) {
+    match event {
+        PlayerRuntimeEvent::PlaybackStateChanged(state) => {
+            tracker.observe_playback_state(*state);
+        }
+        PlayerRuntimeEvent::BufferingChanged { buffering } => {
+            tracker.observe_buffering(*buffering);
+        }
+        PlayerRuntimeEvent::RetryScheduled { attempt, delay } => {
+            tracker.observe_retry_scheduled(*attempt, *delay);
+        }
+        _ => {}
+    }
+}
+
+fn player_audio_info_matches(current: Option<&PlayerAudioInfo>, next: &PlayerAudioInfo) -> bool {
+    current.is_some_and(|current| {
+        current.codec == next.codec
+            && current.sample_rate == next.sample_rate
+            && current.channels == next.channels
+    })
+}
+
+fn unresolved_player_media_info(source: &MediaSource) -> PlayerMediaInfo {
+    PlayerMediaInfo {
+        source_uri: source.uri().to_owned(),
+        source_kind: source.kind(),
+        source_protocol: source.protocol(),
+        duration: None,
+        bit_rate: None,
+        audio_streams: 0,
+        video_streams: 0,
+        best_video: None,
+        best_audio: None,
         track_catalog: Default::default(),
         track_selection: Default::default(),
     }
@@ -1452,5 +2360,300 @@ mod tests {
         );
 
         assert_eq!(selected, Some(Duration::from_millis(480)));
+    }
+
+    #[test]
+    fn remote_sources_defer_audio_decode_to_protect_first_frame() {
+        assert!(should_defer_audio_decode_for_source(&MediaSource::new(
+            "https://example.com/video.m3u8"
+        )));
+        assert!(should_defer_audio_decode_for_source(&MediaSource::new(
+            "https://example.com/video.mp4"
+        )));
+        assert!(!should_defer_audio_decode_for_source(&MediaSource::new(
+            "/tmp/video.mp4"
+        )));
+    }
+
+    #[test]
+    fn buffering_policy_shapes_desktop_audio_buffer_windows() {
+        let resilient_playback_start =
+            resolved_audio_playback_start_buffer_duration(&PlayerBufferingPolicy::resilient());
+        let resilient_target =
+            resolved_audio_stream_target_buffer_duration(&PlayerBufferingPolicy::resilient());
+        let resilient_rebuffer =
+            resolved_audio_rebuffer_duration(&PlayerBufferingPolicy::resilient());
+        let low_latency_playback_start =
+            resolved_audio_playback_start_buffer_duration(&PlayerBufferingPolicy::low_latency());
+        let low_latency_target =
+            resolved_audio_stream_target_buffer_duration(&PlayerBufferingPolicy::low_latency());
+        let low_latency_rebuffer =
+            resolved_audio_rebuffer_duration(&PlayerBufferingPolicy::low_latency());
+
+        assert!(resilient_playback_start > low_latency_playback_start);
+        assert!(resilient_target > low_latency_target);
+        assert!(resilient_rebuffer > low_latency_rebuffer);
+        assert_eq!(low_latency_playback_start, Duration::from_millis(500));
+        assert_eq!(resilient_playback_start, Duration::from_millis(1_500));
+        assert_eq!(low_latency_target, Duration::from_millis(1_500));
+        assert_eq!(resilient_target, Duration::from_millis(3_500));
+        assert!(low_latency_target > low_latency_rebuffer);
+        assert!(resilient_target > resilient_rebuffer);
+    }
+
+    #[test]
+    fn buffering_policy_expands_video_prefetch_capacity_for_resilient_streams() {
+        let low_latency_capacity =
+            resolved_video_prefetch_capacity(8, &PlayerBufferingPolicy::low_latency());
+        let resilient_capacity =
+            resolved_video_prefetch_capacity(8, &PlayerBufferingPolicy::resilient());
+
+        assert!(low_latency_capacity > 8);
+        assert!(resilient_capacity >= low_latency_capacity);
+        assert_eq!(resilient_capacity, MAX_DESKTOP_VIDEO_PREFETCH_CAPACITY);
+    }
+
+    #[test]
+    fn buffering_policy_derives_video_startup_requirement_from_frame_rate() {
+        let media_info = PlayerMediaInfo {
+            source_uri: "https://example.com/live/master.m3u8".to_owned(),
+            source_kind: MediaSourceKind::Remote,
+            source_protocol: MediaSourceProtocol::Hls,
+            duration: Some(Duration::from_secs(600)),
+            bit_rate: Some(4_000_000),
+            audio_streams: 0,
+            video_streams: 1,
+            best_video: Some(PlayerVideoInfo {
+                codec: "H264".to_owned(),
+                width: 960,
+                height: 540,
+                frame_rate: Some(60.0),
+            }),
+            best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
+        };
+
+        let startup_frames = resolved_video_playback_start_buffer_frames(
+            &media_info,
+            48,
+            &PlayerBufferingPolicy::resilient(),
+        );
+
+        assert_eq!(startup_frames, 48);
+    }
+
+    #[test]
+    fn buffering_policy_derives_video_rebuffer_requirement_from_frame_rate() {
+        let media_info = PlayerMediaInfo {
+            source_uri: "https://example.com/live/master.m3u8".to_owned(),
+            source_kind: MediaSourceKind::Remote,
+            source_protocol: MediaSourceProtocol::Hls,
+            duration: Some(Duration::from_secs(600)),
+            bit_rate: Some(4_000_000),
+            audio_streams: 0,
+            video_streams: 1,
+            best_video: Some(PlayerVideoInfo {
+                codec: "H264".to_owned(),
+                width: 960,
+                height: 540,
+                frame_rate: Some(60.0),
+            }),
+            best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
+        };
+
+        let rebuffer_frames =
+            resolved_video_rebuffer_frames(&media_info, 48, &PlayerBufferingPolicy::resilient());
+
+        assert_eq!(rebuffer_frames, 48);
+    }
+
+    #[test]
+    fn cache_policy_caps_remote_video_prefetch_capacity_by_memory_budget() {
+        let media_info = PlayerMediaInfo {
+            source_uri: "https://example.com/live/master.m3u8".to_owned(),
+            source_kind: MediaSourceKind::Remote,
+            source_protocol: MediaSourceProtocol::Hls,
+            duration: Some(Duration::from_secs(600)),
+            bit_rate: Some(4_000_000),
+            audio_streams: 0,
+            video_streams: 1,
+            best_video: Some(PlayerVideoInfo {
+                codec: "H264".to_owned(),
+                width: 960,
+                height: 540,
+                frame_rate: Some(60.0),
+            }),
+            best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
+        };
+
+        let limited = resolved_video_prefetch_limit(
+            &media_info,
+            96,
+            &PlayerCachePolicy {
+                preset: player_runtime::PlayerCachePreset::Resilient,
+                max_memory_bytes: Some(8 * 1024 * 1024),
+                max_disk_bytes: Some(128 * 1024 * 1024),
+            },
+        );
+
+        assert!(limited < 96);
+        assert_eq!(limited, 43);
+    }
+
+    #[test]
+    fn desktop_resilience_metrics_track_runtime_events() {
+        let mut tracker = PlayerResilienceMetricsTracker::default();
+        observe_resilience_metrics_for_event(
+            &mut tracker,
+            &PlayerRuntimeEvent::PlaybackStateChanged(PresentationState::Playing),
+        );
+        observe_resilience_metrics_for_event(
+            &mut tracker,
+            &PlayerRuntimeEvent::BufferingChanged { buffering: true },
+        );
+        observe_resilience_metrics_for_event(
+            &mut tracker,
+            &PlayerRuntimeEvent::BufferingChanged { buffering: false },
+        );
+        observe_resilience_metrics_for_event(
+            &mut tracker,
+            &PlayerRuntimeEvent::RetryScheduled {
+                attempt: 2,
+                delay: Duration::from_millis(1_500),
+            },
+        );
+
+        let snapshot = tracker.snapshot();
+        assert_eq!(snapshot.buffering_event_count, 1);
+        assert_eq!(snapshot.rebuffer_count, 1);
+        assert_eq!(snapshot.retry_count, 2);
+        assert_eq!(
+            snapshot.last_retry_delay,
+            Some(Duration::from_millis(1_500))
+        );
+    }
+
+    #[test]
+    fn retry_policy_delay_respects_backoff_and_max_attempts() {
+        let linear = PlayerRetryPolicy::default();
+        assert_eq!(
+            retry_delay_for_attempt(&linear, 1),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            retry_delay_for_attempt(&linear, 3),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(retry_delay_for_attempt(&linear, 4), None);
+
+        let exponential = PlayerRetryPolicy {
+            max_attempts: Some(6),
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(2),
+            backoff: PlayerRetryBackoff::Exponential,
+        };
+        assert_eq!(
+            retry_delay_for_attempt(&exponential, 1),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            retry_delay_for_attempt(&exponential, 3),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            retry_delay_for_attempt(&exponential, 6),
+            Some(Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn deferred_audio_probe_merges_missing_audio_metadata() {
+        let mut media_info =
+            unresolved_player_media_info(&MediaSource::new("https://example.com/live/master.m3u8"));
+        media_info.video_streams = 1;
+        media_info.best_video = Some(PlayerVideoInfo {
+            codec: "H264".to_owned(),
+            width: 960,
+            height: 540,
+            frame_rate: Some(60.0),
+        });
+
+        let changed = merge_audio_probe_into_media_info(
+            &mut media_info,
+            &MediaProbe {
+                source: MediaSource::new("https://example.com/live/master.m3u8"),
+                duration: Some(Duration::from_secs(600)),
+                bit_rate: Some(128_000),
+                audio_streams: 1,
+                video_streams: 0,
+                best_video: None,
+                best_audio: Some(AudioStreamProbe {
+                    index: 0,
+                    codec: "AAC".to_owned(),
+                    sample_rate: 48_000,
+                    channels: 2,
+                }),
+            },
+        );
+
+        assert!(changed);
+        assert_eq!(media_info.audio_streams, 1);
+        let best_audio = media_info
+            .best_audio
+            .expect("best audio should be restored");
+        assert_eq!(best_audio.codec, "AAC");
+        assert_eq!(best_audio.sample_rate, 48_000);
+        assert_eq!(best_audio.channels, 2);
+    }
+
+    #[test]
+    fn only_remote_hls_sources_defer_metadata_probe() {
+        assert!(should_defer_media_probe_for_source(&MediaSource::new(
+            "https://example.com/video.m3u8"
+        )));
+        assert!(!should_defer_media_probe_for_source(&MediaSource::new(
+            "https://example.com/video.mp4"
+        )));
+        assert!(!should_defer_media_probe_for_source(&MediaSource::new(
+            "/tmp/video.m3u8"
+        )));
+    }
+
+    #[test]
+    fn only_remote_hls_sources_stream_audio_directly() {
+        assert!(should_stream_audio_source_directly(&MediaSource::new(
+            "https://example.com/video.m3u8"
+        )));
+        assert!(!should_stream_audio_source_directly(&MediaSource::new(
+            "https://example.com/video.mp4"
+        )));
+        assert!(!should_stream_audio_source_directly(&MediaSource::new(
+            "/tmp/video.m3u8"
+        )));
+    }
+
+    #[test]
+    fn initial_restart_positions_preserve_non_zero_video_start() {
+        let audio_track = DecodedAudioTrack {
+            presentation_time: Duration::from_secs(10),
+            sample_rate: 48_000,
+            channels: 2,
+            playback_rate: 1.0,
+            samples: Arc::from(Vec::<f32>::new()),
+        };
+
+        assert_eq!(
+            initial_restart_positions(Some(&audio_track), Duration::from_millis(10_016)),
+            (Duration::from_secs(10), Duration::from_millis(10_016))
+        );
+        assert_eq!(
+            initial_restart_positions(None, Duration::from_millis(10_016)),
+            (Duration::from_millis(10_016), Duration::from_millis(10_016))
+        );
     }
 }

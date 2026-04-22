@@ -2,11 +2,15 @@ mod native;
 mod system;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use player_core::MediaSource;
 use player_platform_apple::{VIDEOTOOLBOX_BACKEND_NAME, probe_videotoolbox_hardware_decode};
-use player_platform_desktop::probe_platform_desktop_source_with_options;
+use player_platform_desktop::{
+    open_platform_desktop_source_with_options_and_interrupt,
+    probe_platform_desktop_source_with_options,
+};
 use player_runtime::{
     DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntime, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
@@ -75,6 +79,18 @@ pub fn open_macos_host_runtime_uri_with_options(
     options: PlayerRuntimeOptions,
 ) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
     open_macos_host_runtime_source_with_options(MediaSource::new(uri), options)
+}
+
+pub fn open_macos_software_runtime_uri_with_options_and_interrupt(
+    uri: impl Into<String>,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    open_macos_software_runtime_source_with_options_and_interrupt(
+        MediaSource::new(uri),
+        options,
+        interrupt_flag,
+    )
 }
 
 pub fn probe_macos_host_runtime_uri_with_options(
@@ -184,6 +200,36 @@ pub fn open_macos_host_runtime_source_with_options(
             )),
         ),
     }
+}
+
+pub fn open_macos_software_runtime_source_with_options_and_interrupt(
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    let PlayerRuntimeAdapterBootstrap {
+        runtime,
+        initial_frame,
+        startup,
+    } = open_platform_desktop_source_with_options_and_interrupt(
+        MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        source,
+        options,
+        interrupt_flag,
+    )?;
+    let video_decode = macos_video_decode_info(runtime.media_info());
+
+    Ok(PlayerRuntime::from_adapter_bootstrap(
+        MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        PlayerRuntimeAdapterBootstrap {
+            runtime: Box::new(MacosRuntimeAdapter {
+                inner: runtime,
+                video_decode: video_decode.clone(),
+            }),
+            initial_frame,
+            startup: apply_video_decode_diagnostics(startup, &video_decode),
+        },
+    ))
 }
 
 #[derive(Debug, Default, Clone, Copy)]
