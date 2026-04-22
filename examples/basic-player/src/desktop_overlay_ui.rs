@@ -461,9 +461,8 @@ fn overlay_layout(
         width: column_width,
         height: 56,
     };
-    let source_actions_y = header_rect.y.saturating_add(header_rect.height + 18);
+    let source_actions_y = header_rect.y.saturating_add(header_rect.height + 32);
     let tab_bar_y = source_actions_y.saturating_add(44);
-    let content_y = tab_bar_y.saturating_add(44);
 
     let source_button_gap = 10;
     let source_button_width = (column_width.saturating_sub(source_button_gap * 2)) / 3;
@@ -506,6 +505,8 @@ fn overlay_layout(
             style: ButtonStyle::SidebarTab,
         });
     }
+
+    let content_y = tab_bar_y.saturating_add(58);
 
     match overlay.sidebar_tab {
         DesktopSidebarTab::Playlist => {
@@ -947,14 +948,21 @@ fn draw_sidebar(
         width: active_chip_width,
         height: 20,
     };
+    let title_max_width = active_chip
+        .x
+        .saturating_sub(header_text_x)
+        .saturating_sub(10)
+        .max(48);
+    let (header_title, header_title_scale) =
+        fit_text_to_width("MEDIA PANEL", 2, 1, title_max_width);
     draw_text(
         frame,
         frame_width,
         frame_height,
         header_text_x,
         layout.header_rect.y + 12,
-        "MEDIA PANEL",
-        2,
+        &header_title,
+        header_title_scale,
         [255, 255, 255, 255],
     );
     let meta_width = active_chip
@@ -1253,6 +1261,18 @@ fn draw_playlist_section(
         };
         let hovered = hovered_action == Some(ControlAction::FocusPlaylistItem(index));
         let accent = action_accent(ControlAction::FocusPlaylistItem(index));
+        let status_badge_rect = DesktopUiRect {
+            x: rect.x + rect.width.saturating_sub(82),
+            y: rect.y + 10,
+            width: 70,
+            height: 18,
+        };
+        let title_max_width = status_badge_rect
+            .x
+            .saturating_sub(rect.x + 46)
+            .saturating_sub(12)
+            .max(48);
+        let (title_label, title_scale) = fit_text_to_width(&item.label, 1, 1, title_max_width);
         fill_rounded_rect(
             frame,
             frame_width,
@@ -1338,20 +1358,15 @@ fn draw_playlist_section(
             frame_height,
             rect.x + 46,
             rect.y + 11,
-            &normalize_text(&item.label, 24),
-            1,
+            &title_label,
+            title_scale,
             [255, 255, 255, 255],
         );
         draw_badge(
             frame,
             frame_width,
             frame_height,
-            DesktopUiRect {
-                x: rect.x + rect.width.saturating_sub(82),
-                y: rect.y + 10,
-                width: 70,
-                height: 18,
-            },
+            status_badge_rect,
             &item.status,
             if item.is_active {
                 tint(accent, 28)
@@ -1615,7 +1630,7 @@ fn draw_downloads_section(
                 frame_height,
                 left + 36,
                 y + 8,
-                &normalize_text(&pending.label, 24),
+                &fit_text_to_width(&pending.label, 1, 1, width.saturating_sub(48).max(48)).0,
                 1,
                 [235, 240, 246, 255],
             );
@@ -1695,7 +1710,28 @@ fn draw_downloads_section(
         let text_x = rect.x + 46;
         let status_badge_width = measure_text(&normalize_text(&task.status, 18), 1)
             .saturating_add(34)
-            .max(88);
+            .max(88)
+            .min(rect.width.saturating_div(2).max(88));
+        let status_badge_rect = DesktopUiRect {
+            x: rect
+                .x
+                .saturating_add(rect.width.saturating_sub(status_badge_width + 12)),
+            y: rect.y + 10,
+            width: status_badge_width,
+            height: 18,
+        };
+        let title_max_width = status_badge_rect
+            .x
+            .saturating_sub(text_x)
+            .saturating_sub(10)
+            .max(48);
+        let summary_max_width = rect
+            .width
+            .saturating_sub(text_x.saturating_sub(rect.x) + 16)
+            .max(48);
+        let (task_label, task_label_scale) = fit_text_to_width(&task.label, 1, 1, title_max_width);
+        let (task_summary, task_summary_scale) =
+            fit_text_to_width(&task.progress_summary, 1, 1, summary_max_width);
         fill_rounded_rect(
             frame,
             frame_width,
@@ -1767,22 +1803,15 @@ fn draw_downloads_section(
             frame_height,
             text_x,
             rect.y + 12,
-            &normalize_text(&task.label, 24),
-            1,
+            &task_label,
+            task_label_scale,
             [255, 255, 255, 255],
         );
         draw_badge_with_symbol(
             frame,
             frame_width,
             frame_height,
-            DesktopUiRect {
-                x: rect
-                    .x
-                    .saturating_add(rect.width.saturating_sub(status_badge_width + 12)),
-                y: rect.y + 10,
-                width: status_badge_width,
-                height: 18,
-            },
+            status_badge_rect,
             symbol,
             &task.status,
             tint(accent, 18),
@@ -1795,8 +1824,8 @@ fn draw_downloads_section(
             frame_height,
             text_x,
             rect.y + 34,
-            &normalize_text(&task.progress_summary, 34),
-            1,
+            &task_summary,
+            task_summary_scale,
             [170, 182, 195, 255],
         );
         if let Some(ratio) = task.export_progress.or(task.progress_ratio) {
@@ -1837,13 +1866,16 @@ fn draw_downloads_section(
                 frame_height,
                 text_x,
                 rect.y + 64,
-                &normalize_text(
+                &fit_text_to_width(
                     &format!(
                         "EXPORT {:.0}",
                         task.export_progress.unwrap_or(0.0).clamp(0.0, 1.0) * 100.0
                     ),
-                    22,
-                ),
+                    1,
+                    1,
+                    summary_max_width,
+                )
+                .0,
                 1,
                 accent,
             );
@@ -2337,6 +2369,7 @@ fn draw_badge(
     fill: [u8; 4],
     text: [u8; 4],
 ) {
+    let (label, scale) = fit_text_to_width(label, 1, 1, rect.width.saturating_sub(12).max(18));
     fill_rounded_rect(
         frame,
         frame_width,
@@ -2345,15 +2378,7 @@ fn draw_badge(
         rect.height / 2,
         fill,
     );
-    draw_centered_text(
-        frame,
-        frame_width,
-        frame_height,
-        rect,
-        &normalize_text(label, 18),
-        1,
-        text,
-    );
+    draw_centered_text(frame, frame_width, frame_height, rect, &label, scale, text);
 }
 
 fn draw_badge_with_symbol(
@@ -3093,7 +3118,8 @@ mod tests {
         stage_and_sidebar_rects,
     };
     use crate::desktop_ui::{
-        ControlAction, DesktopOverlayViewModel, DesktopPlaylistItemViewData, DesktopUiRect,
+        ControlAction, DesktopDownloadTaskViewData, DesktopOverlayViewModel,
+        DesktopPlaylistItemViewData, DesktopSidebarTab, DesktopUiRect,
     };
     use player_core::{MediaSourceKind, MediaSourceProtocol};
     use player_runtime::{
@@ -3265,6 +3291,217 @@ mod tests {
         let (label, scale) = fit_text_to_width("HLS DEMO", 2, 1, 88 - 12);
         assert_eq!(scale, 1);
         assert!(super::measure_text(&label, scale) <= 76);
+    }
+
+    #[test]
+    fn media_panel_title_scales_down_to_avoid_header_badge_overlap() {
+        let overlay = test_overlay_view_model();
+        let layout = overlay_layout(960, 540, &overlay).expect("overlay layout");
+        let hero_icon_rect = DesktopUiRect {
+            x: layout.header_rect.x + 16,
+            y: layout.header_rect.y + 12,
+            width: 34,
+            height: 34,
+        };
+        let header_text_x = hero_icon_rect.x + hero_icon_rect.width + 12;
+        let active_chip_width = super::measure_text("QUEUE", 1).saturating_add(34).max(76);
+        let title_max_width = layout
+            .header_rect
+            .x
+            .saturating_add(layout.header_rect.width)
+            .saturating_sub(active_chip_width + 16)
+            .saturating_sub(header_text_x)
+            .saturating_sub(10)
+            .max(48);
+
+        let (label, scale) = fit_text_to_width("MEDIA PANEL", 2, 1, title_max_width);
+
+        assert_eq!(scale, 1);
+        assert!(super::measure_text(&label, scale) <= title_max_width);
+    }
+
+    #[test]
+    fn compact_playlist_row_text_fits_before_status_badge() {
+        let mut overlay = test_overlay_view_model();
+        overlay.playlist_items[0].label =
+            "An unusually long playlist source title for the compact sidebar".to_owned();
+        overlay.playlist_items[0].status = "CURRENT SOURCE".to_owned();
+
+        let layout = overlay_layout(960, 540, &overlay).expect("overlay layout");
+        let row_rect = layout
+            .buttons
+            .iter()
+            .find(|button| matches!(button.action, ControlAction::FocusPlaylistItem(0)))
+            .expect("playlist row")
+            .rect;
+        let status_badge_rect = DesktopUiRect {
+            x: row_rect.x + row_rect.width.saturating_sub(82),
+            y: row_rect.y + 10,
+            width: 70,
+            height: 18,
+        };
+        let title_max_width = status_badge_rect
+            .x
+            .saturating_sub(row_rect.x + 46)
+            .saturating_sub(12)
+            .max(48);
+        let (title_label, title_scale) =
+            fit_text_to_width(&overlay.playlist_items[0].label, 1, 1, title_max_width);
+        let (status_label, status_scale) = fit_text_to_width(
+            &overlay.playlist_items[0].status,
+            1,
+            1,
+            status_badge_rect.width.saturating_sub(12).max(18),
+        );
+
+        assert!(super::measure_text(&title_label, title_scale) <= title_max_width);
+        assert!(
+            super::measure_text(&status_label, status_scale)
+                <= status_badge_rect.width.saturating_sub(12).max(18)
+        );
+    }
+
+    #[test]
+    fn compact_download_card_text_and_badge_fit_same_row() {
+        let mut overlay = test_overlay_view_model();
+        overlay.sidebar_tab = DesktopSidebarTab::Downloads;
+        overlay.download_tasks.push(DesktopDownloadTaskViewData {
+            task_id: 7,
+            label: "An extremely long download task title that used to collide with the status badge"
+                .to_owned(),
+            status: "EXPORTING TO PHOTO LIBRARY".to_owned(),
+            progress_summary:
+                "Muxing audio and video into a transport stream with additional metadata".to_owned(),
+            progress_ratio: Some(0.42),
+            completed_path: None,
+            error_message: None,
+            primary_action_label: Some("OPEN".to_owned()),
+            export_action_label: Some("EXPORT".to_owned()),
+            is_export_enabled: true,
+            is_remove_enabled: true,
+            is_exporting: false,
+            export_progress: None,
+        });
+
+        let layout = overlay_layout(960, 540, &overlay).expect("overlay layout");
+        let rect = DesktopUiRect {
+            x: layout.sidebar_rect.x + layout.sidebar_padding,
+            y: layout.content_y.saturating_add(24 + 56),
+            width: layout.column_width,
+            height: 132,
+        };
+        let text_x = rect.x + 46;
+        let status_badge_width = super::measure_text(
+            &super::normalize_text(&overlay.download_tasks[0].status, 18),
+            1,
+        )
+        .saturating_add(34)
+        .max(88)
+        .min(rect.width.saturating_div(2).max(88));
+        let status_badge_rect = DesktopUiRect {
+            x: rect
+                .x
+                .saturating_add(rect.width.saturating_sub(status_badge_width + 12)),
+            y: rect.y + 10,
+            width: status_badge_width,
+            height: 18,
+        };
+        let title_max_width = status_badge_rect
+            .x
+            .saturating_sub(text_x)
+            .saturating_sub(10)
+            .max(48);
+        let summary_max_width = rect
+            .width
+            .saturating_sub(text_x.saturating_sub(rect.x) + 16)
+            .max(48);
+        let (task_label, task_label_scale) =
+            fit_text_to_width(&overlay.download_tasks[0].label, 1, 1, title_max_width);
+        let (task_summary, task_summary_scale) = fit_text_to_width(
+            &overlay.download_tasks[0].progress_summary,
+            1,
+            1,
+            summary_max_width,
+        );
+
+        assert!(super::measure_text(&task_label, task_label_scale) <= title_max_width);
+        assert!(super::measure_text(&task_summary, task_summary_scale) <= summary_max_width);
+        assert!(status_badge_rect.x > text_x);
+    }
+
+    #[test]
+    fn quick_sources_row_stays_below_media_panel_header() {
+        let overlay = test_overlay_view_model();
+        let layout = overlay_layout(960, 540, &overlay).expect("overlay layout");
+        let source_row_top = layout
+            .buttons
+            .iter()
+            .filter(|button| matches!(button.style, ButtonStyle::SourceAction))
+            .map(|button| button.rect.y)
+            .min()
+            .expect("source buttons");
+        let source_header_y = source_row_top.saturating_sub(18);
+        let header_bottom = layout
+            .header_rect
+            .y
+            .saturating_add(layout.header_rect.height);
+        let protocol_chip_top = source_header_y.saturating_sub(5);
+
+        assert!(
+            source_header_y >= header_bottom.saturating_add(8),
+            "quick sources label should sit below the media panel header: source_header_y={}, header_bottom={}",
+            source_header_y,
+            header_bottom
+        );
+        assert!(
+            protocol_chip_top >= header_bottom.saturating_add(4),
+            "protocol badge should not intrude into the media panel header: protocol_chip_top={}, header_bottom={}",
+            protocol_chip_top,
+            header_bottom
+        );
+    }
+
+    #[test]
+    fn playlist_section_panel_stays_below_sidebar_tabs() {
+        let overlay = test_overlay_view_model();
+        let layout = overlay_layout(960, 540, &overlay).expect("overlay layout");
+        let tabs_bottom = layout
+            .buttons
+            .iter()
+            .filter(|button| matches!(button.style, ButtonStyle::SidebarTab))
+            .map(|button| button.rect.y.saturating_add(button.rect.height))
+            .max()
+            .expect("sidebar tabs");
+        let section_top = layout.content_y.saturating_sub(18);
+
+        assert!(
+            section_top >= tabs_bottom.saturating_add(8),
+            "playlist section should stay below the sidebar tabs: section_top={}, tabs_bottom={}",
+            section_top,
+            tabs_bottom
+        );
+    }
+
+    #[test]
+    fn downloads_section_panel_stays_below_sidebar_tabs() {
+        let mut overlay = test_overlay_view_model();
+        overlay.sidebar_tab = DesktopSidebarTab::Downloads;
+        let layout = overlay_layout(960, 540, &overlay).expect("overlay layout");
+        let tabs_bottom = layout
+            .buttons
+            .iter()
+            .filter(|button| matches!(button.style, ButtonStyle::SidebarTab))
+            .map(|button| button.rect.y.saturating_add(button.rect.height))
+            .max()
+            .expect("sidebar tabs");
+        let section_top = layout.content_y.saturating_sub(18);
+
+        assert!(
+            section_top >= tabs_bottom.saturating_add(8),
+            "downloads section should stay below the sidebar tabs: section_top={}, tabs_bottom={}",
+            section_top,
+            tabs_bottom
+        );
     }
 
     #[test]

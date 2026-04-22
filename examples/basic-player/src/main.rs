@@ -70,6 +70,8 @@ const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
+const MIN_WINDOW_INNER_WIDTH: u32 = 1280;
+const MIN_WINDOW_INNER_HEIGHT: u32 = 540;
 
 #[derive(Debug, Clone)]
 struct DesktopPlaylistEntry {
@@ -795,9 +797,16 @@ impl DesktopPlayerApp {
             return Ok(());
         }
 
-        let window = Arc::new(event_loop.create_window(
-            default_window_attributes(self.render_config).with_title(self.window_title()),
-        )?);
+        let window = Arc::new(
+            event_loop.create_window(
+                default_window_attributes(self.render_config)
+                    .with_title(self.window_title())
+                    .with_min_inner_size(PhysicalSize::new(
+                        MIN_WINDOW_INNER_WIDTH,
+                        MIN_WINDOW_INNER_HEIGHT,
+                    )),
+            )?,
+        );
         match DesktopUiPresenter::attach(window.as_ref()) {
             Ok(presenter) => {
                 self.ui_presenter = Some(presenter);
