@@ -32,8 +32,10 @@ use player_core::MediaSource;
 use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window;
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
-    normalize_desktop_host_source_uri, probe_desktop_host_launch_plan_uri,
+    normalize_desktop_host_source_uri, render_config_from_media_info,
 };
+#[cfg(not(target_os = "macos"))]
+use player_host_desktop::probe_desktop_host_launch_plan_uri;
 #[cfg(target_os = "macos")]
 use player_platform_macos::macos_runtime_adapter_factory;
 use player_render_wgpu::{
@@ -44,8 +46,8 @@ use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
     PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntime,
     PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo,
-    PlayerVideoDecodeMode, PresentationState, VideoPixelFormat,
+    PlayerRuntimeInitializer, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
+    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState, VideoPixelFormat,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -72,6 +74,12 @@ struct DesktopPlaylistEntry {
     label: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceLaunchStatus {
+    Loading,
+    Failed,
+}
+
 #[derive(Debug)]
 enum PlannerEvent {
     Prepared {
@@ -90,11 +98,13 @@ enum LaunchEvent {
         request_id: u64,
         source: String,
         label: String,
+        prepare_duration: Duration,
         launch_plan: RuntimeLaunchPlan,
     },
     Failed {
         request_id: u64,
         label: String,
+        prepare_duration: Duration,
         error: String,
     },
 }
@@ -158,6 +168,7 @@ struct DesktopPlayerApp {
     file_dialog_rx: Receiver<FileDialogEvent>,
     next_launch_request_id: u64,
     active_launch_request_id: Option<u64>,
+    launch_status: Option<SourceLaunchStatus>,
     open_file_dialog_pending: bool,
     host_message: Option<String>,
     download_message: Option<String>,
@@ -203,6 +214,7 @@ impl DesktopPlayerApp {
             file_dialog_rx,
             next_launch_request_id: 1,
             active_launch_request_id: None,
+            launch_status: None,
             open_file_dialog_pending: false,
             host_message: None,
             download_message: None,
@@ -213,20 +225,7 @@ impl DesktopPlayerApp {
         &self,
         snapshot: &player_runtime::PlayerSnapshot,
     ) -> DesktopOverlayViewModel {
-        let playlist_items = self
-            .playlist_entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| DesktopPlaylistItemViewData {
-                label: entry.label.clone(),
-                status: if index == self.active_playlist_index {
-                    "CURRENT".to_owned()
-                } else {
-                    "READY".to_owned()
-                },
-                is_active: index == self.active_playlist_index,
-            })
-            .collect::<Vec<_>>();
+        let playlist_items = self.playlist_item_view_data();
         let pending_downloads = self
             .pending_downloads
             .iter()
@@ -371,6 +370,39 @@ impl DesktopPlayerApp {
             .unwrap_or_else(|| source_display_label(&self.source))
     }
 
+    fn active_playlist_status_label(&self) -> &'static str {
+        if self.active_launch_request_id.is_some() {
+            return "LOADING";
+        }
+        if self.launch_status == Some(SourceLaunchStatus::Failed) {
+            return "FAILED";
+        }
+        "CURRENT"
+    }
+
+    fn playlist_item_view_data(&self) -> Vec<DesktopPlaylistItemViewData> {
+        self.playlist_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| DesktopPlaylistItemViewData {
+                label: entry.label.clone(),
+                status: if index == self.active_playlist_index {
+                    self.active_playlist_status_label().to_owned()
+                } else {
+                    "READY".to_owned()
+                },
+                is_active: index == self.active_playlist_index,
+            })
+            .collect()
+    }
+
+    fn reset_active_playback_for_launch(&mut self) {
+        self.runtime = None;
+        self.last_frame = None;
+        self.uses_external_video_surface = false;
+        self.seek_preview = None;
+    }
+
     fn register_playlist_source(&mut self, source_uri: &str, label: Option<String>) {
         if let Some(index) = self
             .playlist_entries
@@ -427,26 +459,33 @@ impl DesktopPlayerApp {
         let label = label.unwrap_or_else(|| source_display_label(&source));
         let request_id = self.next_launch_request_id;
         self.next_launch_request_id = self.next_launch_request_id.saturating_add(1);
+        self.source = source.clone();
+        self.register_playlist_source(&source, Some(label.clone()));
         self.active_launch_request_id = Some(request_id);
+        self.launch_status = Some(SourceLaunchStatus::Loading);
+        self.reset_active_playback_for_launch();
         self.host_message = Some(format!("LOADING {label}"));
-        self.seek_preview = None;
         self.show_controls();
         self.title_cache = None;
         self.update_window_title();
+        self.sync_ui_presenter();
         self.refresh_overlay()?;
 
         let launch_tx = self.launch_tx.clone();
         thread::spawn(move || {
+            let prepare_started_at = Instant::now();
             let event = match build_launch_plan(source.clone()) {
                 Ok(launch_plan) => LaunchEvent::Prepared {
                     request_id,
                     source,
                     label,
+                    prepare_duration: prepare_started_at.elapsed(),
                     launch_plan,
                 },
                 Err(error) => LaunchEvent::Failed {
                     request_id,
                     label,
+                    prepare_duration: prepare_started_at.elapsed(),
                     error: error.to_string(),
                 },
             };
@@ -522,26 +561,34 @@ impl DesktopPlayerApp {
                     request_id,
                     source,
                     label,
+                    prepare_duration,
                     launch_plan,
                 }) => {
                     if self.active_launch_request_id != Some(request_id) {
                         continue;
                     }
-                    self.active_launch_request_id = None;
-                    self.host_message = None;
                     let window = self
                         .window
                         .as_ref()
                         .cloned()
                         .context("window missing while activating launch plan")?;
+                    info!(
+                        source = source.as_str(),
+                        prepare_ms = prepare_duration.as_millis(),
+                        "desktop launch plan prepared"
+                    );
                     match self.activate_launch_plan(launch_plan, window.clone()) {
                         Ok(()) => {
+                            self.active_launch_request_id = None;
+                            self.launch_status = None;
                             self.register_playlist_source(&source, Some(label));
                             self.sync_ui_presenter();
                             self.refresh_overlay()?;
                             window.request_redraw();
                         }
                         Err(error) => {
+                            self.active_launch_request_id = None;
+                            self.launch_status = Some(SourceLaunchStatus::Failed);
                             warn!(
                                 ?error,
                                 source = source.as_str(),
@@ -556,15 +603,18 @@ impl DesktopPlayerApp {
                 Ok(LaunchEvent::Failed {
                     request_id,
                     label,
+                    prepare_duration,
                     error,
                 }) => {
                     if self.active_launch_request_id != Some(request_id) {
                         continue;
                     }
                     self.active_launch_request_id = None;
+                    self.launch_status = Some(SourceLaunchStatus::Failed);
                     self.host_message = Some(format!("FAILED TO LOAD {label}"));
                     warn!(
                         label = label.as_str(),
+                        prepare_ms = prepare_duration.as_millis(),
                         error = error.as_str(),
                         "failed to prepare media launch plan"
                     );
@@ -642,6 +692,8 @@ impl DesktopPlayerApp {
         launch_plan: RuntimeLaunchPlan,
         window: Arc<Window>,
     ) -> Result<()> {
+        let activation_started_at = Instant::now();
+        let runtime_open_started_at = Instant::now();
         let (
             PlayerRuntimeBootstrap {
                 runtime,
@@ -650,6 +702,8 @@ impl DesktopPlayerApp {
             },
             capabilities,
         ) = open_basic_player_runtime_for_window(&launch_plan.source, window.as_ref())?;
+        let runtime_open_duration = runtime_open_started_at.elapsed();
+        let mut renderer_init_duration = None;
 
         info!(
             adapter_id = runtime.adapter_id(),
@@ -659,6 +713,7 @@ impl DesktopPlayerApp {
             initial_pixel_format = initial_frame.as_ref().map(video_pixel_format_label),
             supports_frame_output = capabilities.supports_frame_output,
             supports_external_video_surface = capabilities.supports_external_video_surface,
+            runtime_open_ms = runtime_open_duration.as_millis(),
             "initialized desktop player"
         );
 
@@ -673,10 +728,12 @@ impl DesktopPlayerApp {
             let initial_frame =
                 initial_frame.context("desktop runtime did not provide an initial frame")?;
             if self.renderer.is_none() {
+                let renderer_started_at = Instant::now();
                 let mut renderer = pollster::block_on(VideoRenderer::new(
                     window.clone(),
                     (initial_frame.width, initial_frame.height),
                 ))?;
+                renderer_init_duration = Some(renderer_started_at.elapsed());
                 renderer.set_render_mode(RenderMode::Fit);
                 self.renderer = Some(renderer);
             } else if let Some(renderer) = self.renderer.as_mut() {
@@ -695,6 +752,14 @@ impl DesktopPlayerApp {
         self.update_window_title();
         self.sync_ui_presenter();
         self.dispatch_command(PlayerRuntimeCommand::Play)?;
+
+        info!(
+            source = self.source.as_str(),
+            runtime_open_ms = runtime_open_duration.as_millis(),
+            renderer_init_ms = renderer_init_duration.map(|duration| duration.as_millis() as u64),
+            activation_ms = activation_started_at.elapsed().as_millis(),
+            "desktop launch plan activated"
+        );
 
         Ok(())
     }
@@ -864,7 +929,12 @@ impl DesktopPlayerApp {
             .and_then(|name| name.to_str())
             .unwrap_or("media");
         let Some(runtime) = self.runtime.as_ref() else {
-            return format!("Vesper basic player - Opening - {source_name}");
+            let launch_state = match self.launch_status {
+                Some(SourceLaunchStatus::Loading) => "Opening",
+                Some(SourceLaunchStatus::Failed) => "Failed",
+                None => "Opening",
+            };
+            return format!("Vesper basic player - {launch_state} - {source_name}");
         };
         let snapshot = runtime.snapshot();
         let state = match snapshot.state {
@@ -1426,7 +1496,10 @@ impl ApplicationHandler for DesktopPlayerApp {
                 self.sync_renderer_stage_viewport();
                 self.sync_ui_presenter();
                 if let Err(error) = self.refresh_overlay() {
-                    error!(?error, "failed to refresh overlay after scale-factor change");
+                    error!(
+                        ?error,
+                        "failed to refresh overlay after scale-factor change"
+                    );
                     event_loop.exit();
                     return;
                 }
@@ -1780,6 +1853,38 @@ impl ApplicationHandler for DesktopPlayerApp {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn build_launch_plan(source: String) -> Result<RuntimeLaunchPlan> {
+    let source = normalize_desktop_host_source_uri(source)?;
+    let probe = PlayerRuntimeInitializer::probe_uri_with_options_and_factory(
+        source.clone(),
+        PlayerRuntimeOptions::default(),
+        macos_runtime_adapter_factory(),
+    )?;
+    let media_info = probe.media_info();
+    let startup = probe.startup();
+    let capabilities = probe.capabilities();
+
+    info!(
+        source = source.as_str(),
+        adapter_id = probe.adapter_id(),
+        ffmpeg_initialized = startup.ffmpeg_initialized,
+        audio_output = ?startup.audio_output,
+        video_decode = startup.video_decode.as_ref().map(video_decode_summary),
+        preferred_backends = ?preferred_backends(),
+        media_info = ?media_info,
+        supports_frame_output = capabilities.supports_frame_output,
+        supports_external_video_surface = capabilities.supports_external_video_surface,
+        "probed basic-player media runtime"
+    );
+
+    Ok(RuntimeLaunchPlan {
+        source,
+        render_config: render_config_from_media_info(&media_info),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
 fn build_launch_plan(source: String) -> Result<RuntimeLaunchPlan> {
     let launch_probe = probe_desktop_host_launch_plan_uri(source)?;
     let probe = &launch_probe.runtime_probe;
@@ -1910,8 +2015,8 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL, HLS_DEMO_CLI_FLAG,
-        resolve_media_source_argument,
+        DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL, DesktopPlayerApp,
+        HLS_DEMO_CLI_FLAG, SourceLaunchStatus, resolve_media_source_argument,
     };
 
     #[test]
@@ -1924,6 +2029,24 @@ mod tests {
             resolve_media_source_argument(DASH_DEMO_CLI_FLAG.to_owned()).expect("dash demo"),
             DESKTOP_DASH_DEMO_URL
         );
+    }
+
+    #[test]
+    fn playlist_row_reflects_loading_and_failed_launch_states() {
+        let mut app = DesktopPlayerApp::new("file:///tmp/local.mp4".to_owned());
+        app.register_playlist_source(DESKTOP_HLS_DEMO_URL, Some("HLS DEMO".to_owned()));
+
+        app.active_launch_request_id = Some(7);
+        app.launch_status = Some(SourceLaunchStatus::Loading);
+        let loading_items = app.playlist_item_view_data();
+        assert_eq!(loading_items[app.active_playlist_index].status, "LOADING");
+        assert!(loading_items[app.active_playlist_index].is_active);
+
+        app.active_launch_request_id = None;
+        app.launch_status = Some(SourceLaunchStatus::Failed);
+        let failed_items = app.playlist_item_view_data();
+        assert_eq!(failed_items[app.active_playlist_index].status, "FAILED");
+        assert!(failed_items[app.active_playlist_index].is_active);
     }
 }
 

@@ -1,0 +1,2 @@
+[env]
+PKG_CONFIG = { value = "scripts/pkg-config-wrapper.sh", relative = true }

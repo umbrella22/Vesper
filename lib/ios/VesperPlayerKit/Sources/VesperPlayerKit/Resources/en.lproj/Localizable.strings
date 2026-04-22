@@ -13,3 +13,6 @@
 "vesper.bridge.retry_scheduled" = "Retrying in %@ after %@";
 "vesper.bridge.retry_delay_seconds_int" = "%ds";
 "vesper.bridge.retry_delay_seconds_decimal" = "%.1fs";
+"vesper.bridge.fixed_track_mismatch" = "Best-effort iOS fixed track %@ is still rendering %@.";
+"vesper.bridge.fixed_track_restore_fallback_constrained" = "Restored iOS fixed track %@ could not converge; continuing with constrained ABR at or below %@ while the player renders %@.";
+"vesper.bridge.fixed_track_restore_fallback_auto" = "Restored iOS fixed track %@ could not converge; continuing with automatic ABR while the player renders %@.";

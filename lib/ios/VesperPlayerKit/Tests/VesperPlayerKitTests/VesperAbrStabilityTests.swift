@@ -1,3 +1,5 @@
+import CoreGraphics
+import Foundation
 import XCTest
 @testable import VesperPlayerKit
 
@@ -138,6 +140,112 @@ final class VesperAbrStabilityTests: XCTestCase {
                 tracks: sampleVideoTracks
             ),
             .fallback
+        )
+    }
+
+    func testResolveVideoVariantObservationUsesBitRateAndPresentationSize() {
+        let observation = resolveVideoVariantObservation(
+            bitRate: 1_500_000,
+            presentationSize: CGSize(width: 1280, height: 720)
+        )
+
+        XCTAssertEqual(
+            observation,
+            VesperVideoVariantObservation(
+                bitRate: 1_500_000,
+                width: 1280,
+                height: 720
+            )
+        )
+    }
+
+    func testResolveVideoVariantObservationReturnsNilWithoutRuntimeEvidence() {
+        XCTAssertNil(
+            resolveVideoVariantObservation(
+                bitRate: nil,
+                presentationSize: nil
+            )
+        )
+    }
+
+    func testResolveFixedTrackRecoveryPolicyUsesRequestedTrackLimits() {
+        let policy = resolveFixedTrackRecoveryPolicy(
+            requestedTrackId: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+            tracks: sampleVideoTracks
+        )
+
+        XCTAssertEqual(
+            policy,
+            .constrained(
+                maxBitRate: 1_500_000,
+                maxWidth: 1280,
+                maxHeight: 720
+            )
+        )
+    }
+
+    func testResolveFixedTrackRecoveryPolicyFallsBackToAutoWithoutMatchingTrack() {
+        XCTAssertEqual(
+            resolveFixedTrackRecoveryPolicy(
+                requestedTrackId: "video:hls:missing",
+                tracks: sampleVideoTracks
+            ),
+            .auto()
+        )
+    }
+
+    func testShouldEscalatePersistentFixedTrackFallbackRequiresStablePlaybackEvidence() {
+        XCTAssertFalse(
+            shouldEscalatePersistentFixedTrackFallback(
+                status: .fallback,
+                observation: VesperVideoVariantObservation(
+                    bitRate: 854_000,
+                    width: 854,
+                    height: 480
+                ),
+                playbackState: .ready,
+                isBuffering: false,
+                elapsed: 3.0
+            )
+        )
+        XCTAssertFalse(
+            shouldEscalatePersistentFixedTrackFallback(
+                status: .fallback,
+                observation: VesperVideoVariantObservation(
+                    bitRate: 854_000,
+                    width: 854,
+                    height: 480
+                ),
+                playbackState: .playing,
+                isBuffering: true,
+                elapsed: 3.0
+            )
+        )
+        XCTAssertFalse(
+            shouldEscalatePersistentFixedTrackFallback(
+                status: .fallback,
+                observation: VesperVideoVariantObservation(
+                    bitRate: 854_000,
+                    width: 854,
+                    height: 480
+                ),
+                playbackState: .playing,
+                isBuffering: false,
+                elapsed: 1.0
+            )
+        )
+        XCTAssertTrue(
+            shouldEscalatePersistentFixedTrackFallback(
+                status: .fallback,
+                observation: VesperVideoVariantObservation(
+                    bitRate: 854_000,
+                    width: 854,
+                    height: 480
+                ),
+                playbackState: .playing,
+                isBuffering: false,
+                elapsed: 2.5
+            )
         )
     }
 

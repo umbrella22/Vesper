@@ -211,6 +211,7 @@ String qualityAutoRowSubtitle(
   VesperTrackSelectionSnapshot trackSelection,
   String? effectiveVideoTrackId,
   VesperFixedTrackStatus? fixedTrackStatus,
+  VesperVideoVariantObservation? videoVariantObservation,
 ) {
   final abrPolicy = trackSelection.abrPolicy;
   final effectiveTrack = effectiveVideoTrack(
@@ -225,6 +226,9 @@ String qualityAutoRowSubtitle(
     fixedTrackStatus,
   );
   final constraintSummary = abrConstraintSummary(abrPolicy);
+  final observationSummary = videoVariantObservationSummary(
+    videoVariantObservation,
+  );
 
   final lead = switch (abrPolicy.mode) {
     VesperAbrMode.auto => '让播放器自动调整画质。',
@@ -247,10 +251,22 @@ String qualityAutoRowSubtitle(
       '当前请求锁定到${qualityLabel(requestedTrack)}。点按切回自动。',
     VesperAbrMode.fixedTrack => '切回让播放器自动调整画质。',
   };
-  if (effectiveTrack == null || abrPolicy.mode == VesperAbrMode.fixedTrack) {
-    return lead;
+  if (abrPolicy.mode == VesperAbrMode.fixedTrack) {
+    if (observationSummary == null) {
+      return lead;
+    }
+    return '$lead当前观测：$observationSummary。';
   }
-  return '$lead当前实际档位：${qualityLabel(effectiveTrack)}。';
+  if (effectiveTrack == null) {
+    if (observationSummary == null) {
+      return lead;
+    }
+    return '$lead当前观测：$observationSummary。';
+  }
+  if (observationSummary == null) {
+    return '$lead当前实际档位：${qualityLabel(effectiveTrack)}。';
+  }
+  return '$lead当前实际档位：${qualityLabel(effectiveTrack)}。当前观测：$observationSummary。';
 }
 
 String qualityOptionSubtitle(
@@ -340,6 +356,23 @@ String? abrConstraintSummary(VesperAbrPolicy abrPolicy) {
   return constraints.join('，');
 }
 
+String? videoVariantObservationSummary(
+  VesperVideoVariantObservation? observation,
+) {
+  if (observation == null || !observation.hasSignal) {
+    return null;
+  }
+  final parts = <String>[
+    if (observation.width case final width?)
+      if (observation.height case final height?) '$width×$height',
+    if (observation.bitRate case final bitRate?) formatBitRate(bitRate),
+  ];
+  if (parts.isEmpty) {
+    return null;
+  }
+  return parts.join(' · ');
+}
+
 String? qualityCapabilityNotice(VesperPlayerCapabilities capabilities) {
   final supportsFixedTrackAbr = capabilities.supportsAbrMode(
     VesperAbrMode.fixedTrack,
@@ -350,6 +383,32 @@ String? qualityCapabilityNotice(VesperPlayerCapabilities capabilities) {
     return '当前平台按 HLS variant 做 best-effort 固定画质，不保证精确切到单一视频轨。';
   }
   return null;
+}
+
+ExampleSheetNoticeModel? qualityRuntimeNotice(VesperPlayerSnapshot snapshot) {
+  final lastError = snapshot.lastError;
+  if (lastError == null ||
+      lastError.category != VesperPlayerErrorCategory.playback) {
+    return null;
+  }
+  if (!lastError.message.contains('fixedTrack')) {
+    return null;
+  }
+
+  final title = switch (snapshot.trackSelection.abrPolicy.mode) {
+    VesperAbrMode.constrained => '已回退为受限自动',
+    VesperAbrMode.auto => '已回退为自动画质',
+    VesperAbrMode.fixedTrack
+        when snapshot.fixedTrackStatus == VesperFixedTrackStatus.fallback =>
+      '锁定画质仍未收敛',
+    VesperAbrMode.fixedTrack => '画质锁定提示',
+  };
+
+  return ExampleSheetNoticeModel(
+    title: title,
+    message: lastError.message,
+    tone: ExampleSheetNoteTone.warm,
+  );
 }
 
 String audioButtonLabel(

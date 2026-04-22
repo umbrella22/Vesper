@@ -11,6 +11,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
     @Published private(set) var publishedEffectiveVideoTrackId: String?
+    @Published private(set) var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
@@ -21,6 +22,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
     private var pendingAutoPlay = false
+    private var playbackEpoch: UInt64 = 0
     private var timeControlObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
     private var itemBufferEmptyObservation: NSKeyValueObservation?
@@ -43,6 +45,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var retryAttemptCount = 0
     private let cachePolicyToken = UUID()
     private let preloadCoordinator: VesperNativePreloadCoordinator
+    private var fixedTrackConvergenceState: FixedTrackConvergenceState?
+    private var fixedTrackIssueActive = false
 
     var uiState: PlayerHostUiState {
         publishedUiState
@@ -58,6 +62,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     var effectiveVideoTrackId: String? {
         publishedEffectiveVideoTrackId
+    }
+
+    var videoVariantObservation: VesperVideoVariantObservation? {
+        publishedVideoVariantObservation
     }
 
     var fixedTrackStatus: VesperFixedTrackStatus? {
@@ -105,6 +113,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
         publishedEffectiveVideoTrackId = nil
+        publishedVideoVariantObservation = nil
         publishedFixedTrackStatus = nil
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
@@ -158,18 +167,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         clearLastError()
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
-        preloadCoordinator.cancelAll()
-        VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
         pendingResilienceRestore = nil
+        currentSource = nil
         hasAppliedDefaultTrackPreferences = false
         pendingAutoPlay = false
-        pendingPlayAfterStopSeek = false
-        isSeekingToStartAfterStop = false
-        removeObservers()
-        player?.pause()
-        surfaceHost?.attach(player: nil)
-        player = nil
-        resetTrackState()
+        tearDownActivePlayback()
     }
 
     func selectSource(_ source: VesperPlayerSource) {
@@ -181,6 +183,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         cancelPendingRetry(resetAttempts: true)
         pendingResilienceRestore = nil
         pendingAutoPlay = true
+        tearDownActivePlayback()
         updateState {
             PlayerHostUiState(
                 title: $0.title,
@@ -201,6 +204,20 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
         }
         initialize()
+    }
+
+    private func tearDownActivePlayback() {
+        _ = advancePlaybackEpoch()
+        preloadCoordinator.cancelAll()
+        VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
+        pendingPlaybackStart = false
+        pendingPlayAfterStopSeek = false
+        isSeekingToStartAfterStop = false
+        removeObservers()
+        player?.pause()
+        surfaceHost?.attach(player: nil)
+        player = nil
+        resetTrackState()
     }
 
     func attachSurfaceHost(_ host: UIView) {
@@ -290,19 +307,12 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         iosHostLog("stop")
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = true
+        let playbackEpoch = currentPlaybackEpoch()
         player?.pause()
         player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
-                iosHostLog("stop seek completed")
-                self.isSeekingToStartAfterStop = false
-                self.updateTimelinePosition(0)
-                if self.pendingPlayAfterStopSeek {
-                    self.pendingPlayAfterStopSeek = false
-                    iosHostLog("resuming deferred play after stop seek")
-                    self.startPlayback()
-                }
-                self.refreshPlaybackState()
+                self.handleStopSeekCompletion(playbackEpoch: playbackEpoch)
             }
         }
         updateState {
@@ -431,7 +441,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func setAbrPolicy(_ policy: VesperAbrPolicy) {
-        clearLastError()
+        applyAbrPolicy(
+            policy,
+            origin: .manual,
+            clearLastReportedError: true
+        )
+    }
+
+    private func applyAbrPolicy(
+        _ policy: VesperAbrPolicy,
+        origin: AbrPolicyOrigin,
+        clearLastReportedError: Bool
+    ) {
+        if clearLastReportedError {
+            clearLastError()
+        }
         let trackIdText = policy.trackId ?? "nil"
         let maxBitRateText = policy.maxBitRate.map(String.init) ?? "nil"
         let maxWidthText = policy.maxWidth.map(String.init) ?? "nil"
@@ -509,6 +533,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         switch policy.mode {
         case .auto:
+            fixedTrackConvergenceState = nil
             applyVideoVariantPin(nil, to: item)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
@@ -519,6 +544,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 )
             }
         case .constrained:
+            fixedTrackConvergenceState = nil
             applyVideoVariantPin(resolvedVideoVariantPin, to: item)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
@@ -536,6 +562,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             guard let resolvedFixedTrackId, let resolvedVideoVariantPin else {
                 return
             }
+            fixedTrackConvergenceState = FixedTrackConvergenceState(
+                requestedTrackId: resolvedFixedTrackId,
+                origin: origin
+            )
             applyVideoVariantPin(resolvedVideoVariantPin, to: item)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
@@ -629,13 +659,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             bufferingPolicy.automaticallyWaitsToMinimizeStalling
         applyDefaultPlaybackRate(desiredPlaybackRate, to: player)
 
+        let playbackEpoch = advancePlaybackEpoch()
         removeObservers()
         pendingPlaybackStart = false
         hasAppliedDefaultTrackPreferences = false
         resetTrackState()
         self.player = player
         surfaceHost?.attach(player: player)
-        installObservers(for: player, item: item)
+        installObservers(for: player, item: item, playbackEpoch: playbackEpoch)
 
         updateState {
             PlayerHostUiState(
@@ -659,23 +690,27 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func seekToPosition(_ positionMs: Int64) {
+        let playbackEpoch = currentPlaybackEpoch()
         let time = CMTime(milliseconds: positionMs)
         player?.seek(to: time) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
-                self.updateTimelinePosition(positionMs)
-                self.refreshPlaybackState()
+                self.handleSeekCompletion(positionMs: positionMs, playbackEpoch: playbackEpoch)
             }
         }
     }
 
-    private func installObservers(for player: AVPlayer, item: AVPlayerItem) {
+    private func installObservers(for player: AVPlayer, item: AVPlayerItem, playbackEpoch: UInt64) {
         timeObserverToken = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
+                guard self.isPlaybackEpochCurrent(playbackEpoch) else {
+                    iosHostLog("ignored stale time observer playbackEpoch=\(playbackEpoch)")
+                    return
+                }
                 self.refreshPlaybackState()
             }
         }
@@ -692,6 +727,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             iosHostLog("itemStatus=\(itemStatusName(item.status)) error=\(errorMessage)")
             guard let self else { return }
             Task { @MainActor in
+                guard self.isPlaybackEpochCurrent(playbackEpoch) else {
+                    iosHostLog("ignored stale item status playbackEpoch=\(playbackEpoch)")
+                    return
+                }
                 switch item.status {
                 case .readyToPlay:
                     self.cancelPendingRetry(resetAttempts: true)
@@ -724,6 +763,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             guard let self else { return }
             if item.isPlaybackLikelyToKeepUp {
                 Task { @MainActor in
+                    guard self.isPlaybackEpochCurrent(playbackEpoch) else {
+                        iosHostLog("ignored stale likelyToKeepUp playbackEpoch=\(playbackEpoch)")
+                        return
+                    }
                     self.attemptPendingPlaybackStart(reason: "itemLikelyToKeepUp")
                 }
             }
@@ -736,6 +779,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
+                guard self.isPlaybackEpochCurrent(playbackEpoch) else {
+                    iosHostLog("ignored stale ended observer playbackEpoch=\(playbackEpoch)")
+                    return
+                }
                 self.handlePlaybackEnded()
             }
         }
@@ -757,6 +804,59 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+    }
+
+    private func advancePlaybackEpoch() -> UInt64 {
+        playbackEpoch &+= 1
+        return playbackEpoch
+    }
+
+    private func currentPlaybackEpoch() -> UInt64 {
+        playbackEpoch
+    }
+
+    func playbackEpochSnapshot() -> UInt64 {
+        playbackEpoch
+    }
+
+    func stopSeekStateSnapshot() -> StopSeekStateSnapshot {
+        StopSeekStateSnapshot(
+            isSeekingToStartAfterStop: isSeekingToStartAfterStop,
+            pendingPlayAfterStopSeek: pendingPlayAfterStopSeek
+        )
+    }
+
+    private func isPlaybackEpochCurrent(_ capturedPlaybackEpoch: UInt64) -> Bool {
+        capturedPlaybackEpoch == playbackEpoch
+    }
+
+    func handleSeekCompletion(positionMs: Int64, playbackEpoch: UInt64) {
+        guard isPlaybackEpochCurrent(playbackEpoch) else {
+            iosHostLog(
+                "ignored stale seek completion playbackEpoch=\(playbackEpoch) current=\(self.playbackEpoch) positionMs=\(positionMs)"
+            )
+            return
+        }
+        updateTimelinePosition(positionMs)
+        refreshPlaybackState()
+    }
+
+    func handleStopSeekCompletion(playbackEpoch: UInt64) {
+        guard isPlaybackEpochCurrent(playbackEpoch) else {
+            iosHostLog(
+                "ignored stale stop seek completion playbackEpoch=\(playbackEpoch) current=\(self.playbackEpoch)"
+            )
+            return
+        }
+        iosHostLog("stop seek completed")
+        isSeekingToStartAfterStop = false
+        updateTimelinePosition(0)
+        if pendingPlayAfterStopSeek {
+            pendingPlayAfterStopSeek = false
+            iosHostLog("resuming deferred play after stop seek")
+            startPlayback()
+        }
+        refreshPlaybackState()
     }
 
     private func handlePlaybackEnded() {
@@ -928,9 +1028,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         audioOptionsByTrackId = [:]
         subtitleOptionsByTrackId = [:]
         hasAppliedDefaultTrackPreferences = false
+        fixedTrackConvergenceState = nil
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
         publishedEffectiveVideoTrackId = nil
+        publishedVideoVariantObservation = nil
         publishedFixedTrackStatus = nil
     }
 
@@ -1052,7 +1154,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         hasAppliedDefaultTrackPreferences = true
         applyDefaultAudioTrackPreferenceIfPossible(item: item)
         applyDefaultSubtitleTrackPreferenceIfPossible(item: item)
-        setAbrPolicy(resolvedTrackPreferencePolicy.abrPolicy)
+        applyAbrPolicy(
+            resolvedTrackPreferencePolicy.abrPolicy,
+            origin: .defaultPolicy,
+            clearLastReportedError: false
+        )
     }
 
     private func applyDefaultAudioTrackPreferenceIfPossible(item: AVPlayerItem) {
@@ -1197,7 +1303,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func refreshEffectiveVideoTrackObservation(for item: AVPlayerItem?) {
-        let resolvedTrackId = resolvedEffectiveVideoTrackId(for: item)
+        let videoVariantObservation = resolvedVideoVariantObservation(for: item)
+        if publishedVideoVariantObservation != videoVariantObservation {
+            publishedVideoVariantObservation = videoVariantObservation
+        }
+        let resolvedTrackId = resolvedEffectiveVideoTrackId(
+            for: item,
+            observation: videoVariantObservation
+        )
         if publishedEffectiveVideoTrackId != resolvedTrackId {
             publishedEffectiveVideoTrackId = resolvedTrackId
         }
@@ -1209,10 +1322,18 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         if publishedFixedTrackStatus != resolvedStatus {
             publishedFixedTrackStatus = resolvedStatus
         }
+        handleFixedTrackConvergenceUpdate(
+            status: resolvedStatus,
+            effectiveVideoTrackId: resolvedTrackId,
+            observation: videoVariantObservation
+        )
     }
 
-    private func resolvedEffectiveVideoTrackId(for item: AVPlayerItem?) -> String? {
-        guard let item else {
+    private func resolvedEffectiveVideoTrackId(
+        for item: AVPlayerItem?,
+        observation: VesperVideoVariantObservation?
+    ) -> String? {
+        guard item != nil else {
             return nil
         }
 
@@ -1221,8 +1342,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             return nil
         }
 
-        let effectiveBitRate = resolvedEffectiveVideoBitRate(for: item)
-        let effectivePresentationSize = resolvedEffectivePresentationSize(for: item)
+        let effectiveBitRate = observation?.bitRate.map(Double.init)
+        let effectivePresentationSize = resolvedPresentationSize(for: observation)
         guard effectiveBitRate != nil || effectivePresentationSize != nil else {
             return nil
         }
@@ -1252,6 +1373,18 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }?.id
     }
 
+    private func resolvedVideoVariantObservation(
+        for item: AVPlayerItem?
+    ) -> VesperVideoVariantObservation? {
+        guard let item else {
+            return nil
+        }
+        return resolveVideoVariantObservation(
+            bitRate: resolvedEffectiveVideoBitRate(for: item),
+            presentationSize: resolvedEffectivePresentationSize(for: item)
+        )
+    }
+
     private func resolvedEffectiveVideoBitRate(for item: AVPlayerItem) -> Double? {
         guard let event = item.accessLog()?.events.last else {
             return nil
@@ -1272,6 +1405,20 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             return nil
         }
         return size
+    }
+
+    private func resolvedPresentationSize(
+        for observation: VesperVideoVariantObservation?
+    ) -> CGSize? {
+        guard
+            let width = observation?.width,
+            let height = observation?.height,
+            width > 0,
+            height > 0
+        else {
+            return nil
+        }
+        return CGSize(width: width, height: height)
     }
 
     private func effectiveVideoTrackScore(
@@ -1568,10 +1715,12 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     private func clearLastError() {
         publishedLastError = nil
+        fixedTrackIssueActive = false
     }
 
     private func reportCommandError(category: VesperPlayerErrorCategory, message: String) {
         iosHostLog("commandError category=\(category.rawValue) message=\(message)")
+        fixedTrackIssueActive = false
         publishedLastError = VesperPlayerError(
             message: message,
             category: category,
@@ -1584,6 +1733,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         iosHostLog(
             "playbackFailure category=\(resolvedError.category.rawValue) retriable=\(resolvedError.retriable) message=\(resolvedError.message)"
         )
+        fixedTrackIssueActive = false
         publishedLastError = resolvedError.toPlayerError()
 
         if scheduleRetryIfPossible(for: resolvedError) {
@@ -1639,21 +1789,42 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
 
         let expectedUri = currentSource.uri
+        let expectedPlaybackEpoch = currentPlaybackEpoch()
         retryTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard
-                    let self,
-                    self.currentSource?.uri == expectedUri
-                else {
-                    return
-                }
-                iosHostLog("retrying playback attempt=\(nextAttempt) delayMs=\(delayMs)")
-                self.initialize()
+                self?.handleScheduledRetryFire(
+                    expectedUri: expectedUri,
+                    playbackEpoch: expectedPlaybackEpoch,
+                    attempt: nextAttempt,
+                    delayMs: delayMs
+                )
             }
         }
         return true
+    }
+
+    func handleScheduledRetryFire(
+        expectedUri: String,
+        playbackEpoch: UInt64,
+        attempt: Int,
+        delayMs: UInt64
+    ) {
+        guard currentSource?.uri == expectedUri else {
+            iosHostLog(
+                "ignored stale retry task sourceUri=\(expectedUri) currentSource=\(currentSource?.uri ?? "nil") attempt=\(attempt)"
+            )
+            return
+        }
+        guard isPlaybackEpochCurrent(playbackEpoch) else {
+            iosHostLog(
+                "ignored stale retry task playbackEpoch=\(playbackEpoch) current=\(self.playbackEpoch) attempt=\(attempt)"
+            )
+            return
+        }
+        iosHostLog("retrying playback attempt=\(attempt) delayMs=\(delayMs)")
+        initialize()
     }
 
     private func retryDelayMs(forAttempt attempt: Int, retryPolicy: VesperRetryPolicy) -> UInt64 {
@@ -1859,7 +2030,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
 
         if !abrPolicyRequiresLoadedVideoVariantCatalog(state.abrPolicy) {
-            setAbrPolicy(state.abrPolicy)
+            applyAbrPolicy(
+                state.abrPolicy,
+                origin: .resilienceRestore,
+                clearLastReportedError: false
+            )
         }
 
         if state.shouldResumePlayback {
@@ -1898,7 +2073,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
 
         if abrPolicyRequiresLoadedVideoVariantCatalog(state.abrPolicy) {
-            setAbrPolicy(state.abrPolicy)
+            applyAbrPolicy(
+                state.abrPolicy,
+                origin: .resilienceRestore,
+                clearLastReportedError: false
+            )
         }
 
         return false
@@ -1930,6 +2109,300 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
         iosHostLog("resuming deferred playback reason=\(reason)")
         startPlayback()
+    }
+
+    private func handleFixedTrackConvergenceUpdate(
+        status: VesperFixedTrackStatus?,
+        effectiveVideoTrackId: String?,
+        observation: VesperVideoVariantObservation?
+    ) {
+        let abrPolicy = publishedTrackSelection.abrPolicy
+        guard
+            abrPolicy.mode == .fixedTrack,
+            let requestedTrackId = abrPolicy.trackId,
+            !requestedTrackId.isEmpty
+        else {
+            fixedTrackConvergenceState = nil
+            if fixedTrackIssueActive {
+                clearLastError()
+            }
+            return
+        }
+
+        var convergenceState = fixedTrackConvergenceState
+        if convergenceState?.requestedTrackId != requestedTrackId {
+            convergenceState = FixedTrackConvergenceState(
+                requestedTrackId: requestedTrackId,
+                origin: convergenceState?.origin ?? .manual
+            )
+        }
+
+        switch status {
+        case .locked:
+            if var convergenceState {
+                convergenceState.resetMismatch()
+                fixedTrackConvergenceState = convergenceState
+            } else {
+                fixedTrackConvergenceState = nil
+            }
+            if fixedTrackIssueActive {
+                clearLastError()
+            }
+        case .pending:
+            if var convergenceState {
+                convergenceState.resetMismatch()
+                fixedTrackConvergenceState = convergenceState
+            } else {
+                fixedTrackConvergenceState = nil
+            }
+        case .fallback:
+            guard var convergenceState else {
+                return
+            }
+            let mismatchSignature = FixedTrackMismatchSignature(
+                effectiveVideoTrackId: effectiveVideoTrackId,
+                observation: observation
+            )
+            let now = Date()
+            if convergenceState.mismatchSignature != mismatchSignature {
+                convergenceState.mismatchSignature = mismatchSignature
+                convergenceState.mismatchStartedAt = now
+                convergenceState.hasHandledPersistentMismatch = false
+                fixedTrackConvergenceState = convergenceState
+                return
+            }
+            guard let mismatchStartedAt = convergenceState.mismatchStartedAt else {
+                convergenceState.mismatchStartedAt = now
+                fixedTrackConvergenceState = convergenceState
+                return
+            }
+            let mismatchDuration = now.timeIntervalSince(mismatchStartedAt)
+            guard
+                !convergenceState.hasHandledPersistentMismatch,
+                shouldEscalatePersistentFixedTrackFallback(
+                    status: status,
+                    observation: observation,
+                    playbackState: publishedUiState.playbackState,
+                    isBuffering: publishedUiState.isBuffering,
+                    elapsed: mismatchDuration
+                )
+            else {
+                fixedTrackConvergenceState = convergenceState
+                return
+            }
+
+            convergenceState.hasHandledPersistentMismatch = true
+            fixedTrackConvergenceState = convergenceState
+            reportPersistentFixedTrackMismatch(
+                requestedTrackId: requestedTrackId,
+                effectiveVideoTrackId: effectiveVideoTrackId,
+                observation: observation,
+                origin: convergenceState.origin
+            )
+        case nil:
+            if var convergenceState {
+                convergenceState.resetMismatch()
+                fixedTrackConvergenceState = convergenceState
+            } else {
+                fixedTrackConvergenceState = nil
+            }
+        }
+    }
+
+    private func reportPersistentFixedTrackMismatch(
+        requestedTrackId: String,
+        effectiveVideoTrackId: String?,
+        observation: VesperVideoVariantObservation?,
+        origin: AbrPolicyOrigin
+    ) {
+        let requestedTrack = publishedTrackCatalog.videoTracks.first { track in
+            track.id == requestedTrackId
+        }
+        let observedTrack = effectiveVideoTrackId.flatMap { effectiveVideoTrackId in
+            publishedTrackCatalog.videoTracks.first { track in
+                track.id == effectiveVideoTrackId
+            }
+        }
+        let observedDescription = observedVariantDescription(
+            observedTrack: observedTrack,
+            observation: observation
+        )
+        let requestedDescription = requestedTrackDescription(
+            requestedTrack: requestedTrack,
+            fallbackTrackId: requestedTrackId
+        )
+
+        let message: String
+        switch origin {
+        case .resilienceRestore:
+            let recoveryPolicy = resolveFixedTrackRecoveryPolicy(
+                requestedTrackId: requestedTrackId,
+                tracks: publishedTrackCatalog.videoTracks
+            )
+            applyAbrPolicy(
+                recoveryPolicy,
+                origin: .recoveredFallback,
+                clearLastReportedError: false
+            )
+            switch recoveryPolicy.mode {
+            case .constrained:
+                message = VesperPlayerI18n.fixedTrackRestoreFallbackConstrained(
+                    requested: requestedDescription,
+                    fallback: abrPolicyDescription(recoveryPolicy),
+                    observed: observedDescription
+                )
+            case .auto, .fixedTrack:
+                message = VesperPlayerI18n.fixedTrackRestoreFallbackAuto(
+                    requested: requestedDescription,
+                    observed: observedDescription
+                )
+            }
+        case .manual, .defaultPolicy, .recoveredFallback:
+            message = VesperPlayerI18n.fixedTrackMismatch(
+                requested: requestedDescription,
+                observed: observedDescription
+            )
+        }
+
+        iosHostLog(
+            "fixedTrackMismatch requested=\(requestedTrackId) effective=\(effectiveVideoTrackId ?? "nil") origin=\(origin.rawValue) message=\(message)"
+        )
+        fixedTrackIssueActive = true
+        publishedLastError = VesperPlayerError(
+            message: message,
+            category: .playback,
+            retriable: false
+        )
+    }
+
+    private func requestedTrackDescription(
+        requestedTrack: VesperMediaTrack?,
+        fallbackTrackId: String
+    ) -> String {
+        if let label = requestedTrack?.label, !label.isEmpty {
+            return label
+        }
+        if let requestedTrack {
+            return trackObservationDescription(requestedTrack)
+        }
+        return fallbackTrackId
+    }
+
+    private func observedVariantDescription(
+        observedTrack: VesperMediaTrack?,
+        observation: VesperVideoVariantObservation?
+    ) -> String {
+        if let observedTrack {
+            if let observationDescription = observationDescription(observation) {
+                return "\(trackObservationDescription(observedTrack)) (\(observationDescription))"
+            }
+            return trackObservationDescription(observedTrack)
+        }
+        return observationDescription(observation) ?? "an unknown adaptive variant"
+    }
+
+    private func trackObservationDescription(_ track: VesperMediaTrack) -> String {
+        if let label = track.label, !label.isEmpty {
+            return label
+        }
+
+        var components: [String] = []
+        if let width = track.width, let height = track.height {
+            components.append("\(width)x\(height)")
+        }
+        if let bitRate = track.bitRate {
+            components.append(formattedBitRate(bitRate))
+        }
+        if !components.isEmpty {
+            return components.joined(separator: " · ")
+        }
+        return track.id
+    }
+
+    private func observationDescription(_ observation: VesperVideoVariantObservation?) -> String? {
+        guard let observation else {
+            return nil
+        }
+
+        var components: [String] = []
+        if let width = observation.width, let height = observation.height {
+            components.append("\(width)x\(height)")
+        }
+        if let bitRate = observation.bitRate {
+            components.append(formattedBitRate(bitRate))
+        }
+        return components.isEmpty ? nil : components.joined(separator: " · ")
+    }
+
+    private func formattedBitRate(_ bitRate: Int64) -> String {
+        let bitRateDouble = Double(bitRate)
+        if bitRateDouble >= 1_000_000 {
+            let value = (bitRateDouble / 100_000).rounded() / 10
+            return String(format: "%.1f Mbps", locale: Locale.current, value)
+        }
+        if bitRateDouble >= 1_000 {
+            let value = (bitRateDouble / 100).rounded() / 10
+            return String(format: "%.1f Kbps", locale: Locale.current, value)
+        }
+        return "\(bitRate) bps"
+    }
+
+    private func abrPolicyDescription(_ policy: VesperAbrPolicy) -> String {
+        switch policy.mode {
+        case .constrained:
+            var components: [String] = []
+            if let maxHeight = policy.maxHeight {
+                components.append("\(maxHeight)p")
+            } else if let maxWidth = policy.maxWidth {
+                components.append("\(maxWidth)w")
+            }
+            if let maxBitRate = policy.maxBitRate {
+                components.append(formattedBitRate(maxBitRate))
+            }
+            return components.isEmpty ? "automatic ABR" : components.joined(separator: " · ")
+        case .auto:
+            return "automatic ABR"
+        case .fixedTrack:
+            return policy.trackId ?? "fixed track"
+        }
+    }
+}
+
+private enum AbrPolicyOrigin: String {
+    case manual
+    case defaultPolicy
+    case resilienceRestore
+    case recoveredFallback
+}
+
+private struct FixedTrackConvergenceState {
+    let requestedTrackId: String
+    let origin: AbrPolicyOrigin
+    var mismatchSignature: FixedTrackMismatchSignature?
+    var mismatchStartedAt: Date?
+    var hasHandledPersistentMismatch = false
+
+    mutating func resetMismatch() {
+        mismatchSignature = nil
+        mismatchStartedAt = nil
+        hasHandledPersistentMismatch = false
+    }
+}
+
+private struct FixedTrackMismatchSignature: Equatable {
+    let effectiveVideoTrackId: String?
+    let bitRate: Int64?
+    let width: Int?
+    let height: Int?
+
+    init(
+        effectiveVideoTrackId: String?,
+        observation: VesperVideoVariantObservation?
+    ) {
+        self.effectiveVideoTrackId = effectiveVideoTrackId
+        bitRate = observation?.bitRate
+        width = observation?.width
+        height = observation?.height
     }
 }
 
@@ -2291,6 +2764,84 @@ func resolveFixedTrackStatus(
     return .fallback
 }
 
+func resolveFixedTrackRecoveryPolicy(
+    requestedTrackId: String,
+    tracks: [VesperMediaTrack]
+) -> VesperAbrPolicy {
+    guard let requestedTrack = tracks.first(where: { $0.id == requestedTrackId }) else {
+        return .auto()
+    }
+
+    let hasResolutionLimit = requestedTrack.width != nil && requestedTrack.height != nil
+    let hasBitRateLimit = requestedTrack.bitRate != nil
+    guard hasResolutionLimit || hasBitRateLimit else {
+        return .auto()
+    }
+
+    return .constrained(
+        maxBitRate: requestedTrack.bitRate,
+        maxWidth: hasResolutionLimit ? requestedTrack.width : nil,
+        maxHeight: hasResolutionLimit ? requestedTrack.height : nil
+    )
+}
+
+func shouldEscalatePersistentFixedTrackFallback(
+    status: VesperFixedTrackStatus?,
+    observation: VesperVideoVariantObservation?,
+    playbackState: PlaybackStateUi,
+    isBuffering: Bool,
+    elapsed: TimeInterval
+) -> Bool {
+    guard status == .fallback else {
+        return false
+    }
+    guard observation != nil else {
+        return false
+    }
+    guard playbackState == .playing, !isBuffering else {
+        return false
+    }
+    return elapsed >= 2.0
+}
+
+func resolveVideoVariantObservation(
+    bitRate: Double?,
+    presentationSize: CGSize?
+) -> VesperVideoVariantObservation? {
+    let normalizedBitRate: Int64?
+    if let bitRate, bitRate.isFinite, bitRate > 0 {
+        normalizedBitRate = Int64(bitRate.rounded())
+    } else {
+        normalizedBitRate = nil
+    }
+
+    let normalizedWidth: Int?
+    let normalizedHeight: Int?
+    if
+        let presentationSize,
+        presentationSize.width.isFinite,
+        presentationSize.height.isFinite,
+        presentationSize.width > 0,
+        presentationSize.height > 0
+    {
+        normalizedWidth = Int(presentationSize.width.rounded())
+        normalizedHeight = Int(presentationSize.height.rounded())
+    } else {
+        normalizedWidth = nil
+        normalizedHeight = nil
+    }
+
+    guard normalizedBitRate != nil || (normalizedWidth != nil && normalizedHeight != nil) else {
+        return nil
+    }
+
+    return VesperVideoVariantObservation(
+        bitRate: normalizedBitRate,
+        width: normalizedWidth,
+        height: normalizedHeight
+    )
+}
+
 func stableVideoVariantTrackId(
     codec: String?,
     peakBitRate: Int64?,
@@ -2590,6 +3141,11 @@ private struct PendingResilienceRestore {
     let state: PreservedPlaybackState
     var needsCoreStateRestore = true
     var needsTrackSelectionRestore = true
+}
+
+struct StopSeekStateSnapshot: Equatable {
+    let isSeekingToStartAfterStop: Bool
+    let pendingPlayAfterStopSeek: Bool
 }
 
 private struct PreservedPlaybackState {

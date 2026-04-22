@@ -576,6 +576,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         let trackSelection = session.controller.trackSelection
         let resiliencePolicy = session.controller.resiliencePolicy
         let effectiveVideoTrackId = session.controller.effectiveVideoTrackId
+        let videoVariantObservation = session.controller.videoVariantObservation
         let fixedTrackStatus = session.controller.fixedTrackStatus
         let lastError = resolvedPlayerErrorMap(for: session)
 
@@ -596,6 +597,15 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "trackCatalog": trackCatalog.toMap(),
             "trackSelection": trackSelection.toMap(),
             "effectiveVideoTrackId": flutterValue(effectiveVideoTrackId),
+            "videoVariantObservation": flutterValue(
+                videoVariantObservation.map { observation in
+                    [
+                        "bitRate": observation.bitRate as Any,
+                        "width": observation.width as Any,
+                        "height": observation.height as Any,
+                    ]
+                }
+            ),
             "fixedTrackStatus": flutterValue(fixedTrackStatus?.toWireName()),
             "resiliencePolicy": resiliencePolicy.toMap(),
             "lastError": flutterValue(lastError),

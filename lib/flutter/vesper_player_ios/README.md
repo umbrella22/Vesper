@@ -35,9 +35,15 @@ does not need to depend on it directly.
 > best-effort remap a restored fixed-track request onto a semantically
 > equivalent variant when the HLS ladder drifts slightly, and best-effort
 > surfaces the currently active HLS variant through
-> `controller.snapshot.effectiveVideoTrackId`. For best-effort fixed-track
-> convergence, the Flutter snapshot also exposes
+> `controller.snapshot.effectiveVideoTrackId`. The snapshot also carries raw
+> runtime evidence through `controller.snapshot.videoVariantObservation`,
+> populated from AVPlayer access-log bitrate and the current presentation size.
+> For best-effort fixed-track convergence, the Flutter snapshot also exposes
 > `controller.snapshot.fixedTrackStatus` with `pending / locked / fallback`.
+> If a restored fixed-track request remains on a different observed variant for
+> long enough, the iOS host now reports that through `controller.snapshot.lastError`
+> and automatically degrades the restored request into constrained ABR with the
+> requested variant limits when possible, otherwise back to automatic ABR.
 
 ## Recommended Download Planning Flow
 

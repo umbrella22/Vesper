@@ -10,6 +10,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
     @Published private(set) var publishedEffectiveVideoTrackId: String?
+    @Published private(set) var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
@@ -30,6 +31,10 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     var effectiveVideoTrackId: String? {
         publishedEffectiveVideoTrackId
+    }
+
+    var videoVariantObservation: VesperVideoVariantObservation? {
+        publishedVideoVariantObservation
     }
 
     var fixedTrackStatus: VesperFixedTrackStatus? {
@@ -73,6 +78,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
         publishedEffectiveVideoTrackId = nil
+        publishedVideoVariantObservation = nil
         publishedFixedTrackStatus = nil
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
@@ -84,6 +90,9 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func selectSource(_ source: VesperPlayerSource) {
         currentSource = source
+        publishedEffectiveVideoTrackId = nil
+        publishedVideoVariantObservation = nil
+        publishedFixedTrackStatus = nil
         update { current in
             PlayerHostUiState(
                 title: current.title,

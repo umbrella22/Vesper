@@ -18,7 +18,7 @@ authors. Application code should usually depend on `vesper_player` directly.
 | Type | Description |
 |---|---|
 | `VesperPlayerSource` | Media source definition for local files, remote URLs, HLS, or DASH |
-| `VesperPlayerSnapshot` | Full player state snapshot, including runtime capabilities, current track selection, the effective video variant, fixed-track settling state, resilience policy, and last error |
+| `VesperPlayerSnapshot` | Full player state snapshot, including runtime capabilities, current track selection, the effective video variant, raw video-variant observation, fixed-track settling state, resilience policy, and last error |
 | `VesperPlayerCapabilities` | Capability set reported by the active backend, including fine-grained track-selection and ABR support |
 | `VesperTimeline` | Playback timeline for VOD, live, and live DVR |
 | `VesperSeekableRange` | Seekable range, mainly for DVR windows |
@@ -114,9 +114,11 @@ exceptions.
 
 Snapshot payloads should also round-trip the backend's current
 `VesperPlaybackResiliencePolicy`, `VesperTrackSelectionSnapshot`, and
-best-effort `effectiveVideoTrackId`, plus `fixedTrackStatus` when the backend
-can observe fixed-track convergence directly, so Flutter UI can render the
-effective runtime state instead of only optimistic local intent.
+best-effort `effectiveVideoTrackId`, plus raw `videoVariantObservation`
+evidence when the backend can expose bitrate and rendered size directly.
+Backends should also provide `fixedTrackStatus` when they can observe
+fixed-track convergence directly, so Flutter UI can render the effective
+runtime state instead of only optimistic local intent.
 
 Coarse capability fields such as `supportsTrackSelection` or
 `supportsAbrPolicy` should not be treated as implicit support for every

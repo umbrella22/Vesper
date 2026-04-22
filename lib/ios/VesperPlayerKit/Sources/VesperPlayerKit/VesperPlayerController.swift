@@ -10,6 +10,7 @@ public final class VesperPlayerController: ObservableObject {
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
     @Published private(set) var publishedEffectiveVideoTrackId: String?
+    @Published private(set) var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
@@ -35,6 +36,14 @@ public final class VesperPlayerController: ObservableObject {
     /// enough runtime information to identify a matching variant.
     public var effectiveVideoTrackId: String? {
         publishedEffectiveVideoTrackId
+    }
+
+    /// The raw runtime video-variant evidence currently observed by the host.
+    ///
+    /// On iOS this is derived from AVPlayer access logs plus presentation size.
+    /// The value may be `nil` until playback produces enough runtime evidence.
+    public var videoVariantObservation: VesperVideoVariantObservation? {
+        publishedVideoVariantObservation
     }
 
     /// The latest best-effort status for the active `fixedTrack` ABR request.
@@ -81,6 +90,7 @@ public final class VesperPlayerController: ObservableObject {
         publishedTrackCatalog = bridge.publishedTrackCatalog
         publishedTrackSelection = bridge.publishedTrackSelection
         publishedEffectiveVideoTrackId = bridge.publishedEffectiveVideoTrackId
+        publishedVideoVariantObservation = bridge.publishedVideoVariantObservation
         publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
         publishedResiliencePolicy = bridge.publishedResiliencePolicy
         publishedLastError = bridge.publishedLastError
@@ -115,6 +125,7 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedTrackCatalog = bridge.publishedTrackCatalog
                 self.publishedTrackSelection = bridge.publishedTrackSelection
                 self.publishedEffectiveVideoTrackId = bridge.publishedEffectiveVideoTrackId
+                self.publishedVideoVariantObservation = bridge.publishedVideoVariantObservation
                 self.publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
                 self.publishedResiliencePolicy = bridge.publishedResiliencePolicy
                 self.publishedLastError = bridge.publishedLastError

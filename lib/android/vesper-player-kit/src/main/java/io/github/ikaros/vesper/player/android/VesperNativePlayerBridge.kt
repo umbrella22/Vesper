@@ -21,6 +21,8 @@ class VesperNativePlayerBridge(
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private var hasInitializedSource = false
+    private var isDisposed = false
+    private var nativeUpdateEpoch = 0L
     private var pendingAutoPlay = false
     private val i18n = VesperPlayerI18n.fromContext(appContext)
 
@@ -46,6 +48,7 @@ class VesperNativePlayerBridge(
     private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
     private val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
+    private val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     private val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
     private val surfaceHost = VesperNativeSurfaceHost(bindings, surfaceKind)
 
@@ -56,16 +59,21 @@ class VesperNativePlayerBridge(
         _trackSelection.asStateFlow()
     override val effectiveVideoTrackId: StateFlow<String?> =
         _effectiveVideoTrackId.asStateFlow()
+    override val videoVariantObservation: StateFlow<VesperVideoVariantObservation?> =
+        _videoVariantObservation.asStateFlow()
     override val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy> =
         _resiliencePolicy.asStateFlow()
 
     init {
-        bindings.setOnNativeUpdateListener(::refreshFromNative)
+        installNativeUpdateListener()
     }
 
     override fun initialize() {
+        if (isDisposed) {
+            return
+        }
         val source = currentSource ?: run {
-            _effectiveVideoTrackId.value = null
+            clearTrackState()
             updateState {
                 copy(
                     subtitle = i18n.selectSourcePrompt(),
@@ -77,6 +85,7 @@ class VesperNativePlayerBridge(
             return
         }
 
+        advanceNativeUpdateEpoch()
         runCatching { bindings.initialize(source, currentResiliencePolicy, trackPreferencePolicy) }
             .onSuccess {
                 hasInitializedSource = true
@@ -102,7 +111,7 @@ class VesperNativePlayerBridge(
             .onFailure {
                 hasInitializedSource = false
                 pendingAutoPlay = false
-                _effectiveVideoTrackId.value = null
+                clearTrackState()
                 Log.e(TAG, "failed to initialize source=${source.uri}", it)
                 val message = it.message?.takeUnless(String::isBlank) ?: i18n.nativeBindingsUnavailable()
                 updateState {
@@ -115,22 +124,32 @@ class VesperNativePlayerBridge(
     }
 
     override fun dispose() {
+        if (isDisposed) {
+            return
+        }
+        isDisposed = true
+        advanceNativeUpdateEpoch(clearListener = true)
         hasInitializedSource = false
-        _effectiveVideoTrackId.value = null
+        clearTrackState()
         surfaceHost.detach()
-        bindings.setOnNativeUpdateListener(null)
         bindings.dispose()
     }
 
     override fun refresh() {
+        if (isDisposed) {
+            return
+        }
         bindings.refreshSnapshot()
         refreshFromNative()
     }
 
     override fun selectSource(source: VesperPlayerSource) {
+        if (isDisposed) {
+            return
+        }
         currentSource = source
         pendingAutoPlay = true
-        _effectiveVideoTrackId.value = null
+        clearTrackState()
         Log.i(
             TAG,
             "selecting source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",
@@ -318,10 +337,14 @@ class VesperNativePlayerBridge(
     }
 
     private fun refreshFromNative() {
+        if (isDisposed) {
+            return
+        }
         surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
         _trackCatalog.value = bindings.currentTrackCatalog()
         _trackSelection.value = bindings.currentTrackSelection()
         _effectiveVideoTrackId.value = bindings.currentEffectiveVideoTrackId()
+        _videoVariantObservation.value = bindings.currentVideoVariantObservation()
 
         bindings.pollSnapshot()?.let { snapshot ->
             updateState {
@@ -377,6 +400,32 @@ class VesperNativePlayerBridge(
 
     }
 
+    private fun installNativeUpdateListener() {
+        val epoch = nativeUpdateEpoch
+        bindings.setOnNativeUpdateListener {
+            if (isDisposed || epoch != nativeUpdateEpoch) {
+                return@setOnNativeUpdateListener
+            }
+            refreshFromNative()
+        }
+    }
+
+    private fun advanceNativeUpdateEpoch(clearListener: Boolean = false) {
+        nativeUpdateEpoch += 1
+        if (clearListener) {
+            bindings.setOnNativeUpdateListener(null)
+        } else {
+            installNativeUpdateListener()
+        }
+    }
+
+    private fun clearTrackState() {
+        _trackCatalog.value = VesperTrackCatalog.Empty
+        _trackSelection.value = VesperTrackSelectionSnapshot()
+        _effectiveVideoTrackId.value = null
+        _videoVariantObservation.value = null
+    }
+
     private fun sourceSubtitle(source: VesperPlayerSource): String = i18n.sourceSubtitle(source)
 }
 
@@ -429,6 +478,7 @@ interface VesperNativeBindings {
     fun currentTrackCatalog(): VesperTrackCatalog
     fun currentTrackSelection(): VesperTrackSelectionSnapshot
     fun currentEffectiveVideoTrackId(): String?
+    fun currentVideoVariantObservation(): VesperVideoVariantObservation?
     fun currentVideoLayoutInfo(): NativeVideoLayoutInfo?
     fun setOnNativeUpdateListener(listener: (() -> Unit)?)
     fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind)
@@ -461,6 +511,7 @@ private class MissingVesperNativeBindings : VesperNativeBindings {
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
     override fun currentEffectiveVideoTrackId(): String? = null
+    override fun currentVideoVariantObservation(): VesperVideoVariantObservation? = null
     override fun currentVideoLayoutInfo(): NativeVideoLayoutInfo? = null
     override fun setOnNativeUpdateListener(listener: (() -> Unit)?) = Unit
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) = Unit

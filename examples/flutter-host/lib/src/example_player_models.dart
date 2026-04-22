@@ -17,6 +17,20 @@ extension ExampleThemeModeLabels on ExampleThemeMode {
 
 enum ExampleResilienceProfile { balanced, streaming, resilient, lowLatency }
 
+enum ExampleSheetNoteTone { info, warm }
+
+final class ExampleSheetNoticeModel {
+  const ExampleSheetNoticeModel({
+    this.title,
+    required this.message,
+    this.tone = ExampleSheetNoteTone.info,
+  });
+
+  final String? title;
+  final String message;
+  final ExampleSheetNoteTone tone;
+}
+
 extension ExampleResilienceProfileLabels on ExampleResilienceProfile {
   String get title {
     return switch (this) {

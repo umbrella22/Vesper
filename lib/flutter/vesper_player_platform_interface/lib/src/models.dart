@@ -32,6 +32,36 @@ enum VesperAbrMode { auto, constrained, fixedTrack }
 
 enum VesperFixedTrackStatus { pending, locked, fallback }
 
+final class VesperVideoVariantObservation {
+  const VesperVideoVariantObservation({
+    this.bitRate,
+    this.width,
+    this.height,
+  });
+
+  factory VesperVideoVariantObservation.fromMap(Map<Object?, Object?> map) {
+    return VesperVideoVariantObservation(
+      bitRate: _decodeInt(map, 'bitRate'),
+      width: _decodeInt(map, 'width'),
+      height: _decodeInt(map, 'height'),
+    );
+  }
+
+  final int? bitRate;
+  final int? width;
+  final int? height;
+
+  bool get hasSignal => bitRate != null || (width != null && height != null);
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'bitRate': bitRate,
+      'width': width,
+      'height': height,
+    };
+  }
+}
+
 enum VesperBufferingPreset {
   defaultPreset,
   balanced,
@@ -1301,6 +1331,7 @@ final class VesperPlayerSnapshot {
     this.trackCatalog = const VesperTrackCatalog(),
     this.trackSelection = const VesperTrackSelectionSnapshot(),
     this.effectiveVideoTrackId,
+    this.videoVariantObservation,
     this.fixedTrackStatus,
     this.resiliencePolicy = const VesperPlaybackResiliencePolicy(),
     this.lastError,
@@ -1323,6 +1354,7 @@ final class VesperPlayerSnapshot {
         trackCatalog = const VesperTrackCatalog(),
         trackSelection = const VesperTrackSelectionSnapshot(),
         effectiveVideoTrackId = null,
+        videoVariantObservation = null,
         fixedTrackStatus = null,
         resiliencePolicy = const VesperPlaybackResiliencePolicy(),
         lastError = null;
@@ -1333,6 +1365,7 @@ final class VesperPlayerSnapshot {
     final rawTrackCatalog = map['trackCatalog'];
     final rawTrackSelection = map['trackSelection'];
     final rawEffectiveVideoTrackId = map['effectiveVideoTrackId'];
+    final rawVideoVariantObservation = map['videoVariantObservation'];
     final rawFixedTrackStatus = map['fixedTrackStatus'];
     final rawResiliencePolicy = map['resiliencePolicy'];
     final rawViewport = map['viewport'];
@@ -1375,6 +1408,11 @@ final class VesperPlayerSnapshot {
           ? VesperTrackSelectionSnapshot.fromMap(_rawMap(rawTrackSelection)!)
           : const VesperTrackSelectionSnapshot(),
       effectiveVideoTrackId: rawEffectiveVideoTrackId as String?,
+      videoVariantObservation: _rawMap(rawVideoVariantObservation) != null
+          ? VesperVideoVariantObservation.fromMap(
+              _rawMap(rawVideoVariantObservation)!,
+            )
+          : null,
       fixedTrackStatus: rawFixedTrackStatus is String
           ? _decodeEnum(
               VesperFixedTrackStatus.values,
@@ -1409,6 +1447,7 @@ final class VesperPlayerSnapshot {
   final VesperTrackCatalog trackCatalog;
   final VesperTrackSelectionSnapshot trackSelection;
   final String? effectiveVideoTrackId;
+  final VesperVideoVariantObservation? videoVariantObservation;
   final VesperFixedTrackStatus? fixedTrackStatus;
   final VesperPlaybackResiliencePolicy resiliencePolicy;
   final VesperPlayerError? lastError;
@@ -1431,6 +1470,8 @@ final class VesperPlayerSnapshot {
     VesperTrackSelectionSnapshot? trackSelection,
     String? effectiveVideoTrackId,
     bool clearEffectiveVideoTrackId = false,
+    VesperVideoVariantObservation? videoVariantObservation,
+    bool clearVideoVariantObservation = false,
     VesperFixedTrackStatus? fixedTrackStatus,
     bool clearFixedTrackStatus = false,
     VesperPlaybackResiliencePolicy? resiliencePolicy,
@@ -1456,6 +1497,9 @@ final class VesperPlayerSnapshot {
       effectiveVideoTrackId: clearEffectiveVideoTrackId
           ? null
           : (effectiveVideoTrackId ?? this.effectiveVideoTrackId),
+      videoVariantObservation: clearVideoVariantObservation
+          ? null
+          : (videoVariantObservation ?? this.videoVariantObservation),
       fixedTrackStatus: clearFixedTrackStatus
           ? null
           : (fixedTrackStatus ?? this.fixedTrackStatus),
@@ -1482,6 +1526,7 @@ final class VesperPlayerSnapshot {
       'trackCatalog': trackCatalog.toMap(),
       'trackSelection': trackSelection.toMap(),
       'effectiveVideoTrackId': effectiveVideoTrackId,
+      'videoVariantObservation': videoVariantObservation?.toMap(),
       'fixedTrackStatus': fixedTrackStatus?.name,
       'resiliencePolicy': resiliencePolicy.toMap(),
       'lastError': lastError?.toMap(),

@@ -60,4 +60,32 @@ enum VesperPlayerI18n {
     static func retryDelaySecondsDecimal(_ value: Double) -> String {
         string("vesper.bridge.retry_delay_seconds_decimal", value)
     }
+
+    static func fixedTrackMismatch(requested: String, observed: String) -> String {
+        string("vesper.bridge.fixed_track_mismatch", requested, observed)
+    }
+
+    static func fixedTrackRestoreFallbackConstrained(
+        requested: String,
+        fallback: String,
+        observed: String
+    ) -> String {
+        string(
+            "vesper.bridge.fixed_track_restore_fallback_constrained",
+            requested,
+            fallback,
+            observed
+        )
+    }
+
+    static func fixedTrackRestoreFallbackAuto(
+        requested: String,
+        observed: String
+    ) -> String {
+        string(
+            "vesper.bridge.fixed_track_restore_fallback_auto",
+            requested,
+            observed
+        )
+    }
 }

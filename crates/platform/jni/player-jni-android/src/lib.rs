@@ -1788,8 +1788,7 @@ mod tests {
         MediaTrackSelection, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
         PlayerCachePreset, PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy,
         next_generation, resolve_resilience_policy_with_runtime,
-        resolve_track_preferences_with_runtime, u128_to_jlong_saturating,
-        u64_to_jlong_saturating,
+        resolve_track_preferences_with_runtime, u64_to_jlong_saturating, u128_to_jlong_saturating,
     };
     use std::time::Duration;
 
@@ -1821,6 +1820,26 @@ mod tests {
         assert_eq!(registry.remove(first), Some(11));
         assert!(registry.slots.is_empty());
         assert!(registry.free_slots.is_empty());
+    }
+
+    #[test]
+    fn handle_registry_preserves_interior_free_slot_after_tail_compaction() {
+        let mut registry = HandleRegistry::default();
+        let first = registry.insert(11_u32);
+        let second = registry.insert(22_u32);
+        let third = registry.insert(33_u32);
+
+        assert_eq!(registry.remove(first), Some(11));
+        assert_eq!(registry.remove(third), Some(33));
+        assert_eq!(registry.slots.len(), 2);
+        assert_eq!(registry.get(first), None);
+        assert_eq!(registry.get(second), Some(&22));
+
+        let fourth = registry.insert(44_u32);
+        assert_eq!(registry.slots.len(), 2);
+        assert_ne!(fourth, first);
+        assert_eq!(registry.get(fourth), Some(&44));
+        assert_eq!(registry.get(second), Some(&22));
     }
 
     #[test]

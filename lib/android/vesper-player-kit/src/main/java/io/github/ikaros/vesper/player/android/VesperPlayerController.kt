@@ -22,6 +22,9 @@ class VesperPlayerController internal constructor(
     val effectiveVideoTrackId: StateFlow<String?>
         get() = bridge.effectiveVideoTrackId
 
+    val videoVariantObservation: StateFlow<VesperVideoVariantObservation?>
+        get() = bridge.videoVariantObservation
+
     val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
         get() = bridge.resiliencePolicy
 

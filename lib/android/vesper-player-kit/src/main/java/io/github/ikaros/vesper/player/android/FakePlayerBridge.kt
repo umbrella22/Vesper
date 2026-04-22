@@ -40,6 +40,7 @@ class FakePlayerBridge(
     private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
     private val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
+    private val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     private val _resiliencePolicy = MutableStateFlow(resiliencePolicy)
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.FakeDemo
@@ -49,6 +50,8 @@ class FakePlayerBridge(
         _trackSelection.asStateFlow()
     override val effectiveVideoTrackId: StateFlow<String?> =
         _effectiveVideoTrackId.asStateFlow()
+    override val videoVariantObservation: StateFlow<VesperVideoVariantObservation?> =
+        _videoVariantObservation.asStateFlow()
     override val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy> =
         _resiliencePolicy.asStateFlow()
 
@@ -61,6 +64,7 @@ class FakePlayerBridge(
     override fun selectSource(source: VesperPlayerSource) {
         currentSource = source
         _effectiveVideoTrackId.value = null
+        _videoVariantObservation.value = null
         updateState {
             copy(
                 subtitle = previewSourceSubtitle(source),

@@ -55,6 +55,7 @@ class VesperNativeJniBindings(
     private var currentTrackSelectionState: VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
     private var currentEffectiveVideoTrackIdState: String? = null
+    private var currentVideoVariantObservationState: VesperVideoVariantObservation? = null
     private var currentVideoLayoutState: NativeVideoLayoutInfo? = null
     private val preloadCoordinator =
         VesperNativePreloadCoordinator(
@@ -144,6 +145,7 @@ class VesperNativeJniBindings(
         currentTrackCatalogState = VesperTrackCatalog.Empty
         currentTrackSelectionState = VesperTrackSelectionSnapshot()
         currentEffectiveVideoTrackIdState = null
+        currentVideoVariantObservationState = null
         currentVideoLayoutState = null
     }
 
@@ -156,6 +158,9 @@ class VesperNativeJniBindings(
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot = currentTrackSelectionState
 
     override fun currentEffectiveVideoTrackId(): String? = currentEffectiveVideoTrackIdState
+
+    override fun currentVideoVariantObservation(): VesperVideoVariantObservation? =
+        currentVideoVariantObservationState
 
     override fun currentVideoLayoutInfo(): NativeVideoLayoutInfo? = currentVideoLayoutState
 
@@ -478,6 +483,7 @@ class VesperNativeJniBindings(
         val trackSelection =
             collectTrackSelection(exoPlayer.currentTracks, exoPlayer.trackSelectionParameters)
         val publicTrackCatalog = trackCatalog.toPublicTrackCatalog()
+        val videoVariantObservation = resolveVideoVariantObservation(exoPlayer.videoFormat)
         val effectiveVideoTrackId = resolveEffectiveVideoTrackId(
             publicTrackCatalog.videoTracks,
             exoPlayer.videoFormat,
@@ -485,9 +491,10 @@ class VesperNativeJniBindings(
         currentTrackCatalogState = publicTrackCatalog
         currentTrackSelectionState = trackSelection.toPublicTrackSelectionSnapshot()
         currentEffectiveVideoTrackIdState = effectiveVideoTrackId
+        currentVideoVariantObservationState = videoVariantObservation
         Log.d(
             TAG,
-            "pushTrackStateToRust tracks=${trackCatalog.tracks.size} adaptiveVideo=${trackCatalog.adaptiveVideo} adaptiveAudio=${trackCatalog.adaptiveAudio} videoMode=${trackSelection.video.modeOrdinal} audioMode=${trackSelection.audio.modeOrdinal} subtitleMode=${trackSelection.subtitle.modeOrdinal} abrMode=${trackSelection.abrPolicy.modeOrdinal} effectiveVideoTrackId=$effectiveVideoTrackId",
+            "pushTrackStateToRust tracks=${trackCatalog.tracks.size} adaptiveVideo=${trackCatalog.adaptiveVideo} adaptiveAudio=${trackCatalog.adaptiveAudio} videoMode=${trackSelection.video.modeOrdinal} audioMode=${trackSelection.audio.modeOrdinal} subtitleMode=${trackSelection.subtitle.modeOrdinal} abrMode=${trackSelection.abrPolicy.modeOrdinal} effectiveVideoTrackId=$effectiveVideoTrackId observation=$videoVariantObservation",
         )
         VesperNativeJni.applyTrackState(handle, trackCatalog, trackSelection)
     }
@@ -1205,6 +1212,23 @@ private fun currentSelectedTrackId(trackType: Int, tracks: Tracks): String? {
         }
     }
     return null
+}
+
+fun resolveVideoVariantObservation(
+    currentVideoFormat: Format?,
+): VesperVideoVariantObservation? {
+    val format = currentVideoFormat ?: return null
+    val width = format.width.takeIf { it != Format.NO_VALUE && it > 0 }
+    val height = format.height.takeIf { it != Format.NO_VALUE && it > 0 }
+    val bitRate = format.bitrate.takeIf { it != Format.NO_VALUE && it > 0 }?.toLong()
+    if (width == null && height == null && bitRate == null) {
+        return null
+    }
+    return VesperVideoVariantObservation(
+        bitRate = bitRate,
+        width = width,
+        height = height,
+    )
 }
 
 fun resolveEffectiveVideoTrackId(

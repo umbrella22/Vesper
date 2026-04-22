@@ -177,6 +177,24 @@ public struct VesperPlayerError: Equatable {
     }
 }
 
+/// Describes the raw runtime evidence currently observed for the active video
+/// variant.
+public struct VesperVideoVariantObservation: Equatable {
+    public let bitRate: Int64?
+    public let width: Int?
+    public let height: Int?
+
+    public init(
+        bitRate: Int64? = nil,
+        width: Int? = nil,
+        height: Int? = nil
+    ) {
+        self.bitRate = bitRate
+        self.width = width
+        self.height = height
+    }
+}
+
 @MainActor
 protocol PlayerBridge: AnyObject {
     var backend: PlayerBridgeBackend { get }
@@ -184,6 +202,7 @@ protocol PlayerBridge: AnyObject {
     var trackCatalog: VesperTrackCatalog { get }
     var trackSelection: VesperTrackSelectionSnapshot { get }
     var effectiveVideoTrackId: String? { get }
+    var videoVariantObservation: VesperVideoVariantObservation? { get }
     var fixedTrackStatus: VesperFixedTrackStatus? { get }
     var resiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var lastError: VesperPlayerError? { get }
@@ -216,6 +235,7 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
     var publishedTrackCatalog: VesperTrackCatalog { get }
     var publishedTrackSelection: VesperTrackSelectionSnapshot { get }
     var publishedEffectiveVideoTrackId: String? { get }
+    var publishedVideoVariantObservation: VesperVideoVariantObservation? { get }
     var publishedFixedTrackStatus: VesperFixedTrackStatus? { get }
     var publishedResiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var publishedLastError: VesperPlayerError? { get }

@@ -99,12 +99,26 @@ data class PlayerHostUiState(
     val timeline: TimelineUiState,
 )
 
+data class VesperVideoVariantObservation(
+    val bitRate: Long? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+) {
+    fun toMap(): Map<String, Any?> =
+        mapOf(
+            "bitRate" to bitRate,
+            "width" to width,
+            "height" to height,
+        )
+}
+
 interface PlayerBridge {
     val backend: PlayerBridgeBackend
     val uiState: StateFlow<PlayerHostUiState>
     val trackCatalog: StateFlow<VesperTrackCatalog>
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
     val effectiveVideoTrackId: StateFlow<String?>
+    val videoVariantObservation: StateFlow<VesperVideoVariantObservation?>
     val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
 
     fun initialize()

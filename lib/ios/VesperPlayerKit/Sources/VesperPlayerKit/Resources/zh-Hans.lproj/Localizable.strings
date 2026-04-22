@@ -13,3 +13,6 @@
 "vesper.bridge.retry_scheduled" = "%2$@ 后将在 %1$@ 后重试";
 "vesper.bridge.retry_delay_seconds_int" = "%d秒";
 "vesper.bridge.retry_delay_seconds_decimal" = "%.1f秒";
+"vesper.bridge.fixed_track_mismatch" = "iOS best-effort fixedTrack 目标 %@ 仍在渲染 %@。";
+"vesper.bridge.fixed_track_restore_fallback_constrained" = "恢复的 iOS fixedTrack 目标 %@ 长时间未收敛；当前已回退为不高于 %@ 的 constrained ABR，播放器实际仍在渲染 %@。";
+"vesper.bridge.fixed_track_restore_fallback_auto" = "恢复的 iOS fixedTrack 目标 %@ 长时间未收敛；当前已回退为自动 ABR，播放器实际仍在渲染 %@。";

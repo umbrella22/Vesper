@@ -1604,6 +1604,7 @@ name = "player-ffi"
 version = "0.1.0"
 dependencies = [
  "player-backend-ffmpeg",
+ "player-core",
  "player-platform-linux",
  "player-platform-macos",
  "player-platform-windows",

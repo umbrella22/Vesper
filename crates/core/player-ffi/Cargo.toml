@@ -21,3 +21,6 @@ player-platform-windows = { path = "../../platform/desktop/player-platform-windo
 
 [target.'cfg(target_os = "linux")'.dependencies]
 player-platform-linux = { path = "../../platform/desktop/player-platform-linux" }
+
+[dev-dependencies]
+player-core = { path = "../player-core" }

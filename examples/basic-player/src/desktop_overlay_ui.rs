@@ -97,10 +97,8 @@ impl DesktopOverlaySurface {
     fn to_physical_rect(self, rect: DesktopUiRect) -> DesktopUiRect {
         let left = (f64::from(rect.x) * self.scale_x).round() as u32;
         let top = (f64::from(rect.y) * self.scale_y).round() as u32;
-        let right =
-            (f64::from(rect.x.saturating_add(rect.width)) * self.scale_x).round() as u32;
-        let bottom =
-            (f64::from(rect.y.saturating_add(rect.height)) * self.scale_y).round() as u32;
+        let right = (f64::from(rect.x.saturating_add(rect.width)) * self.scale_x).round() as u32;
+        let bottom = (f64::from(rect.y.saturating_add(rect.height)) * self.scale_y).round() as u32;
 
         DesktopUiRect {
             x: left,
@@ -174,7 +172,11 @@ pub fn stage_and_sidebar_rects(
     ))
 }
 
-pub fn playback_stage_rect(frame_width: u32, frame_height: u32, window_scale_factor: f64) -> DesktopUiRect {
+pub fn playback_stage_rect(
+    frame_width: u32,
+    frame_height: u32,
+    window_scale_factor: f64,
+) -> DesktopUiRect {
     DesktopOverlaySurface::new(frame_width, frame_height, window_scale_factor)
         .and_then(|surface| {
             stage_and_sidebar_rects(surface.design_width, surface.design_height)
@@ -274,7 +276,10 @@ fn seek_preview_at_for_surface(
     if !layout.progress_hit_rect.contains(x, y) {
         return None;
     }
-    preview_for_progress_ratio(snapshot, ratio_for_progress_x(layout.progress_rect, cursor_x))
+    preview_for_progress_ratio(
+        snapshot,
+        ratio_for_progress_x(layout.progress_rect, cursor_x),
+    )
 }
 
 fn overlay_layout(
@@ -3275,7 +3280,7 @@ mod tests {
         let center_x = f64::from(hls_button.rect.x + hls_button.rect.width / 2);
         let center_y = f64::from(hls_button.rect.y + hls_button.rect.height / 2);
 
-        let action = overlay_action_at(1365, 967, center_x, center_y, &snapshot, &overlay);
+        let action = overlay_action_at(1365, 967, 1.0, center_x, center_y, &snapshot, &overlay);
         assert_eq!(action, Some(ControlAction::OpenHlsDemo));
     }
 
@@ -3346,7 +3351,7 @@ mod tests {
     #[test]
     fn stage_rect_falls_back_to_full_width_on_compact_surface() {
         assert!(stage_and_sidebar_rects(720, 480).is_none());
-        let stage_rect = playback_stage_rect(720, 480);
+        let stage_rect = playback_stage_rect(720, 480, 1.0);
         assert_eq!(stage_rect.width, 720);
         assert_eq!(stage_rect.height, 480);
     }

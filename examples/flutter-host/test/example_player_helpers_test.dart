@@ -97,6 +97,66 @@ void main() {
     },
   );
 
+  test('quality runtime notice highlights fixed-track fallback recovery', () {
+    final notice = qualityRuntimeNotice(
+      const VesperPlayerSnapshot.initial().copyWith(
+        trackSelection: const VesperTrackSelectionSnapshot(
+          abrPolicy: VesperAbrPolicy.constrained(maxHeight: 720),
+        ),
+        lastError: const VesperPlayerError(
+          message:
+              '恢复的 iOS fixedTrack 目标 720p 长时间未收敛；当前已回退为不高于 720p 的 constrained ABR，播放器实际仍在渲染 480p。',
+          category: VesperPlayerErrorCategory.playback,
+          retriable: false,
+        ),
+      ),
+    );
+
+    expect(notice, isNotNull);
+    expect(notice?.title, '已回退为受限自动');
+    expect(notice?.tone, ExampleSheetNoteTone.warm);
+  });
+
+  test('quality runtime notice highlights active fixed-track mismatch', () {
+    final notice = qualityRuntimeNotice(
+      const VesperPlayerSnapshot.initial().copyWith(
+        trackSelection: const VesperTrackSelectionSnapshot(
+          abrPolicy: VesperAbrPolicy.fixedTrack(
+            'video:hls:cavc1:b1500000:w1280:h720:f3000',
+          ),
+        ),
+        fixedTrackStatus: VesperFixedTrackStatus.fallback,
+        lastError: const VesperPlayerError(
+          message: 'Best-effort iOS fixedTrack 720p is still rendering 480p.',
+          category: VesperPlayerErrorCategory.playback,
+          retriable: false,
+        ),
+      ),
+    );
+
+    expect(notice, isNotNull);
+    expect(notice?.title, '锁定画质仍未收敛');
+    expect(notice?.tone, ExampleSheetNoteTone.warm);
+  });
+
+  test('quality runtime notice hides unrelated playback errors', () {
+    expect(
+      qualityRuntimeNotice(
+        const VesperPlayerSnapshot.initial().copyWith(
+          trackSelection: const VesperTrackSelectionSnapshot(
+            abrPolicy: VesperAbrPolicy.auto(),
+          ),
+          lastError: const VesperPlayerError(
+            message: 'Network timed out.',
+            category: VesperPlayerErrorCategory.playback,
+            retriable: true,
+          ),
+        ),
+      ),
+      isNull,
+    );
+  });
+
   test('quality button label shows effective variant during auto abr', () {
     const trackCatalog = VesperTrackCatalog(
       tracks: <VesperMediaTrack>[
@@ -185,6 +245,7 @@ void main() {
           trackSelection,
           'video:hls:cavc1:b1500000:w1280:h720:f3000',
           null,
+          null,
         ),
         '当前在最高 720p约束内自动调整画质。点按恢复完全自动。当前实际档位：720p。',
       );
@@ -223,6 +284,7 @@ void main() {
           trackSelection,
           null,
           VesperFixedTrackStatus.pending,
+          null,
         ),
         '当前请求锁定到720p，正在等待播放器确认实际档位。点按切回自动。',
       );
@@ -259,10 +321,49 @@ void main() {
         trackSelection,
         'video:hls:cavc1:b854000:w854:h480:f3000',
         VesperFixedTrackStatus.fallback,
+        null,
       ),
       '当前请求锁定到720p，播放器实际仍在480p。点按切回自动。',
     );
   });
+
+  test(
+    'quality auto row subtitle surfaces raw observation when track is unresolved',
+    () {
+      const trackCatalog = VesperTrackCatalog(
+        tracks: <VesperMediaTrack>[
+          VesperMediaTrack(
+            id: 'video:hls:cavc1:b1500000:w1280:h720:f3000',
+            kind: VesperMediaTrackKind.video,
+            height: 720,
+            width: 1280,
+            bitRate: 1500000,
+          ),
+        ],
+        adaptiveVideo: true,
+      );
+      const trackSelection = VesperTrackSelectionSnapshot(
+        abrPolicy: VesperAbrPolicy.fixedTrack(
+          'video:hls:cavc1:b1500000:w1280:h720:f3000',
+        ),
+      );
+
+      expect(
+        qualityAutoRowSubtitle(
+          trackCatalog,
+          trackSelection,
+          null,
+          VesperFixedTrackStatus.pending,
+          const VesperVideoVariantObservation(
+            bitRate: 1420000,
+            width: 1280,
+            height: 720,
+          ),
+        ),
+        '当前请求锁定到720p，正在等待播放器确认实际档位。点按切回自动。当前观测：1280×720 · 1.4 Mbps。',
+      );
+    },
+  );
 
   test(
     'quality option badges separate requested and effective fixed tracks',

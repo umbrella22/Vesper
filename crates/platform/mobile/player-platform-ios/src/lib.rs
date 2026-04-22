@@ -1288,7 +1288,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         match policy.mode {
             MediaAbrMode::Auto => Ok(MediaAbrPolicy::default()),
             MediaAbrMode::Constrained => {
-                let has_resolution_limit = policy.max_width.is_some() || policy.max_height.is_some();
+                let has_resolution_limit =
+                    policy.max_width.is_some() || policy.max_height.is_some();
                 if policy.max_bit_rate.is_none() && !has_resolution_limit {
                     return Err(PlayerRuntimeError::new(
                         PlayerRuntimeErrorCode::InvalidArgument,
@@ -1296,7 +1297,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     ));
                 }
 
-                if has_resolution_limit && (policy.max_width.is_none() || policy.max_height.is_none())
+                if has_resolution_limit
+                    && (policy.max_width.is_none() || policy.max_height.is_none())
                 {
                     return Err(PlayerRuntimeError::new(
                         PlayerRuntimeErrorCode::InvalidArgument,

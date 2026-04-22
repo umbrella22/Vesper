@@ -144,6 +144,8 @@ Important iOS-specific semantics:
   missing width/height
 - `effectiveVideoTrackId` is also best-effort: it is derived from the current HLS variant ladder,
   access-log bitrate, and presentation size once the runtime has enough evidence
+- `videoVariantObservation` exposes the raw runtime evidence the host is using for that inference:
+  access-log bitrate plus the latest rendered presentation size
 - `fixedTrackStatus` gives the latest runtime convergence signal for a best-effort fixed-track
   request: `.pending`, `.locked`, or `.fallback`
 - resilience reload / restore now defer both `fixedTrack` and single-axis constrained ABR until
@@ -151,6 +153,10 @@ Important iOS-specific semantics:
 - if a restored fixed-track `trackId` no longer exists verbatim after the HLS ladder drifts, the
   host now tries to remap it onto the closest semantically equivalent variant before surfacing
   unsupported
+- if a restored fixed-track request keeps rendering a different observed variant after sustained
+  runtime evidence, the host now surfaces a non-fatal `lastError` and degrades that restored
+  request into constrained ABR using the requested variant limits when possible, otherwise back to
+  automatic ABR
 
 ## Download Flow Notes
 

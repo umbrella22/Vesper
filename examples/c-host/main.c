@@ -18,8 +18,8 @@ static void print_error(const char* context, PlayerFfiError* error) {
 
 int main(int argc, char** argv) {
   const char* source = argc > 1 ? argv[1] : "test-video.mp4";
-  PlayerFfiInitializerHandle* initializer = NULL;
-  PlayerFfiHandle* player = NULL;
+  PlayerFfiInitializerHandle initializer = {0};
+  PlayerFfiHandle player = {0};
   PlayerFfiError error = {0};
   PlayerFfiMediaInfo media_info = {0};
   PlayerFfiStartup startup = {0};
@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
   if (player_ffi_initializer_media_info(initializer, &media_info, &error) !=
       PLAYER_FFI_CALL_STATUS_OK) {
     print_error("media_info", &error);
-    player_ffi_initializer_destroy(initializer);
+    player_ffi_initializer_destroy(initializer, &error);
     return 1;
   }
 
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
           player, 2.0f, &applied, &snapshot, &error) !=
       PLAYER_FFI_CALL_STATUS_OK) {
     print_error("set_playback_rate(2.0)", &error);
-    player_ffi_player_destroy(player);
+    player_ffi_player_destroy(player, &error);
     return 1;
   }
 
@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
                                  &snapshot,
                                  &error) != PLAYER_FFI_CALL_STATUS_OK) {
     print_error("dispatch(play)", &error);
-    player_ffi_player_destroy(player);
+    player_ffi_player_destroy(player, &error);
     return 1;
   }
 
@@ -111,12 +111,12 @@ int main(int argc, char** argv) {
   if (player_ffi_player_drain_events(player, &events, &error) !=
       PLAYER_FFI_CALL_STATUS_OK) {
     print_error("drain_events", &error);
-    player_ffi_player_destroy(player);
+    player_ffi_player_destroy(player, &error);
     return 1;
   }
 
   printf("events: %zu\n", events.len);
   player_ffi_event_list_free(&events);
-  player_ffi_player_destroy(player);
+  player_ffi_player_destroy(player, &error);
   return 0;
 }

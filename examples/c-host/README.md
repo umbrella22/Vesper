@@ -40,4 +40,8 @@ scripts/run-c-host-smoke.sh --build-only
 - Run `scripts/generate-player-ffi-header.sh` to regenerate it.
 - Run `scripts/verify-player-ffi-header.sh` to confirm it is up to date.
 - The Rust library is currently built from `crates/core/player-ffi`.
+- `PlayerFfiInitializerHandle` / `PlayerFfiHandle` are generation-checked value handles now, not
+  ownership-carrying raw pointers.
+- Zero-initialize handles for empty storage. Stale, consumed, or double-destroyed handles return
+  `PLAYER_FFI_ERROR_CODE_INVALID_STATE`.
 - This example is a smoke test, not a production host shell.

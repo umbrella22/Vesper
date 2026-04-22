@@ -688,6 +688,7 @@ class VesperPlayerAndroidPlugin :
         val trackCatalog = session.controller.trackCatalog.value
         val trackSelection = session.controller.trackSelection.value
         val effectiveVideoTrackId = session.controller.effectiveVideoTrackId.value
+        val videoVariantObservation = session.controller.videoVariantObservation.value
         val resiliencePolicy = session.controller.resiliencePolicy.value
 
         return mapOf(
@@ -707,6 +708,7 @@ class VesperPlayerAndroidPlugin :
             "trackCatalog" to trackCatalog.toMap(),
             "trackSelection" to trackSelection.toMap(),
             "effectiveVideoTrackId" to effectiveVideoTrackId,
+            "videoVariantObservation" to videoVariantObservation?.toMap(),
             "resiliencePolicy" to resiliencePolicy.toMap(),
             "lastError" to session.lastError,
         )

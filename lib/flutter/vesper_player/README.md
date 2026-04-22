@@ -85,8 +85,9 @@ final snapshot = controller.snapshot;
 `VesperPlayerSnapshot` is the authoritative runtime view of the active backend.
 It carries timeline state, capabilities, current track selection, the effective
 runtime video variant through `effectiveVideoTrackId`, explicit fixed-track
-settling state through `fixedTrackStatus`, the effective `resiliencePolicy`,
-and the latest surfaced playback error.
+settling state through `fixedTrackStatus`, raw runtime bitrate and size
+evidence through `videoVariantObservation`, the effective
+`resiliencePolicy`, and the latest surfaced playback error.
 
 ## Core API
 
@@ -182,6 +183,13 @@ Android and iOS both surface the currently active adaptive variant through
 `trackCatalog.videoTracks` to show the actual quality currently in use during
 `auto` or constrained ABR.
 
+Both mobile backends also surface `controller.snapshot.videoVariantObservation`
+when they have direct runtime evidence for the currently rendered adaptive
+variant. On Android that is derived from ExoPlayer's active `videoFormat`; on
+iOS it is derived from AVPlayer access-log bitrate plus presentation size.
+Flutter UI can use this signal to explain what the player is currently
+rendering even when a stable `effectiveVideoTrackId` is not available yet.
+
 On iOS, `controller.snapshot.fixedTrackStatus` provides an explicit runtime
 signal for best-effort `fixedTrack` convergence:
 
@@ -192,6 +200,12 @@ signal for best-effort `fixedTrack` convergence:
 When `fixedTrackStatus` is not available on a backend, Flutter UI can still
 fall back to comparing the requested `trackId` with `effectiveVideoTrackId`,
 but new platform implementations should prefer surfacing the explicit status.
+
+On iOS, a restored `fixedTrack` request that keeps rendering a different
+variant after sustained runtime observation is now treated as a non-fatal
+convergence failure. The host surfaces that through `controller.snapshot.lastError`
+and, for restore flows, automatically falls back to constrained ABR using the
+requested variant limits when possible, otherwise back to automatic ABR.
 
 ## Live And DVR
 

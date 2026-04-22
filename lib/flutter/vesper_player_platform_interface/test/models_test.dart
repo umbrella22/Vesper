@@ -423,6 +423,11 @@ void main() {
       'hasVideoSurface': false,
       'timeline': const VesperTimeline.initial().toMap(),
       'effectiveVideoTrackId': 'video:hls:cavc1:b1500000:w1280:h720:f3000',
+      'videoVariantObservation': <Object?, Object?>{
+        'bitRate': 1420000,
+        'width': 1280,
+        'height': 720,
+      },
       'fixedTrackStatus': 'fallback',
       'resiliencePolicy':
           const VesperPlaybackResiliencePolicy.resilient().toMap(),
@@ -432,6 +437,9 @@ void main() {
       snapshot.effectiveVideoTrackId,
       'video:hls:cavc1:b1500000:w1280:h720:f3000',
     );
+    expect(snapshot.videoVariantObservation?.bitRate, 1420000);
+    expect(snapshot.videoVariantObservation?.width, 1280);
+    expect(snapshot.videoVariantObservation?.height, 720);
     expect(snapshot.fixedTrackStatus, VesperFixedTrackStatus.fallback);
     expect(snapshot.resiliencePolicy.buffering.preset,
         VesperBufferingPreset.resilient);
@@ -454,6 +462,11 @@ void main() {
         'hasVideoSurface': true,
         'timeline': const VesperTimeline.initial().toMap(),
         'effectiveVideoTrackId': 'video:hls:cavc1:b2500000:w1920:h1080:f2997',
+        'videoVariantObservation': <Object?, Object?>{
+          'bitRate': 2480000,
+          'width': 1920,
+          'height': 1080,
+        },
         'fixedTrackStatus': 'locked',
         'resiliencePolicy':
             const VesperPlaybackResiliencePolicy.streaming().toMap(),
@@ -468,6 +481,9 @@ void main() {
       snapshot.effectiveVideoTrackId,
       'video:hls:cavc1:b2500000:w1920:h1080:f2997',
     );
+    expect(snapshot.videoVariantObservation?.bitRate, 2480000);
+    expect(snapshot.videoVariantObservation?.width, 1920);
+    expect(snapshot.videoVariantObservation?.height, 1080);
     expect(snapshot.fixedTrackStatus, VesperFixedTrackStatus.locked);
     expect(snapshot.resiliencePolicy.buffering.preset,
         VesperBufferingPreset.streaming);

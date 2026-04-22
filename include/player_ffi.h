@@ -142,6 +142,13 @@ typedef enum PlayerFfiCachePreset {
   PLAYER_FFI_CACHE_PRESET_RESILIENT = 3,
 } PlayerFfiCachePreset;
 
+/**
+ * Error payload written by status-returning `player_ffi_*` calls.
+ *
+ * When a call returns `PlayerFfiCallStatus::Error`, the caller owns the
+ * `message` buffer and must release it with `player_ffi_error_free` before
+ * reusing the same storage for another error result.
+ */
 typedef struct PlayerFfiError {
   enum PlayerFfiErrorCode code;
   enum PlayerFfiErrorCategory category;
@@ -295,25 +302,34 @@ typedef struct PlayerFfiEventList {
 } PlayerFfiEventList;
 
 /**
- * Opaque initializer handle returned by `player_ffi_initializer_probe_uri`.
+ * Generation-checked initializer handle returned by `player_ffi_initializer_probe_uri`.
  *
  * Handles are not thread-safe. The caller must serialize all `player_ffi_*`
  * calls that share the same handle. Concurrent calls on the same handle from
  * different threads are undefined behavior.
+ *
+ * `raw == 0` is always invalid and may be used for zero-initialized storage.
+ * Reusing a stale handle after `player_ffi_initializer_initialize` or
+ * `player_ffi_initializer_destroy` returns `PlayerFfiCallStatus::Error` with
+ * `PlayerFfiErrorCode::InvalidState`.
  */
 typedef struct PlayerFfiInitializerHandle {
-  uint8_t _private;
+  uint64_t raw;
 } PlayerFfiInitializerHandle;
 
 /**
- * Opaque player handle returned by `player_ffi_initializer_initialize`.
+ * Generation-checked player handle returned by `player_ffi_initializer_initialize`.
  *
  * Handles are not thread-safe. The caller must serialize all `player_ffi_*`
  * calls that share the same handle. Concurrent calls on the same handle from
  * different threads are undefined behavior.
+ *
+ * `raw == 0` is always invalid and may be used for zero-initialized storage.
+ * Reusing a stale handle after `player_ffi_player_destroy` returns
+ * `PlayerFfiCallStatus::Error` with `PlayerFfiErrorCode::InvalidState`.
  */
 typedef struct PlayerFfiHandle {
-  uint8_t _private;
+  uint64_t raw;
 } PlayerFfiHandle;
 
 typedef struct PlayerFfiVideoFrame {
@@ -439,42 +455,57 @@ void player_ffi_error_free(struct PlayerFfiError *error);
 
 void player_ffi_event_list_free(struct PlayerFfiEventList *events);
 
-void player_ffi_initializer_destroy(struct PlayerFfiInitializerHandle *handle);
+/**
+ * Destroys an initializer handle.
+ *
+ * Passing a zero-initialized handle is a no-op. Passing a stale or already
+ * consumed handle returns `PlayerFfiErrorCode::InvalidState`.
+ */
+enum PlayerFfiCallStatus player_ffi_initializer_destroy(struct PlayerFfiInitializerHandle handle,
+                                                        struct PlayerFfiError *out_error);
 
 /**
  * Consumes `handle` and initializes a player instance.
  *
  * On both success and error, `handle` is consumed and must not be passed to
  * `player_ffi_initializer_destroy` or any other `player_ffi_initializer_*`
- * function afterwards.
+ * function afterwards. Reusing the consumed handle returns
+ * `PlayerFfiErrorCode::InvalidState`.
  */
-enum PlayerFfiCallStatus player_ffi_initializer_initialize(struct PlayerFfiInitializerHandle *handle,
-                                                           struct PlayerFfiHandle **out_player,
+enum PlayerFfiCallStatus player_ffi_initializer_initialize(struct PlayerFfiInitializerHandle handle,
+                                                           struct PlayerFfiHandle *out_player,
                                                            bool *out_has_initial_frame,
                                                            struct PlayerFfiVideoFrame *out_initial_frame,
                                                            struct PlayerFfiStartup *out_startup,
                                                            struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_initializer_media_info(const struct PlayerFfiInitializerHandle *handle,
+enum PlayerFfiCallStatus player_ffi_initializer_media_info(struct PlayerFfiInitializerHandle handle,
                                                            struct PlayerFfiMediaInfo *out_media_info,
                                                            struct PlayerFfiError *out_error);
 
 enum PlayerFfiCallStatus player_ffi_initializer_probe_uri(const char *uri,
-                                                          struct PlayerFfiInitializerHandle **out_initializer,
+                                                          struct PlayerFfiInitializerHandle *out_initializer,
                                                           struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_initializer_startup(const struct PlayerFfiInitializerHandle *handle,
+enum PlayerFfiCallStatus player_ffi_initializer_startup(struct PlayerFfiInitializerHandle handle,
                                                         struct PlayerFfiStartup *out_startup,
                                                         struct PlayerFfiError *out_error);
 
 void player_ffi_media_info_free(struct PlayerFfiMediaInfo *media_info);
 
-enum PlayerFfiCallStatus player_ffi_player_advance(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_advance(struct PlayerFfiHandle handle,
                                                    struct PlayerFfiVideoFrame *out_frame,
                                                    bool *out_has_frame,
                                                    struct PlayerFfiError *out_error);
 
-void player_ffi_player_destroy(struct PlayerFfiHandle *handle);
+/**
+ * Destroys a player handle.
+ *
+ * Passing a zero-initialized handle is a no-op. Passing a stale or already
+ * destroyed handle returns `PlayerFfiErrorCode::InvalidState`.
+ */
+enum PlayerFfiCallStatus player_ffi_player_destroy(struct PlayerFfiHandle handle,
+                                                   struct PlayerFfiError *out_error);
 
 /**
  * Dispatches a player command and writes the resulting snapshot.
@@ -482,7 +513,7 @@ void player_ffi_player_destroy(struct PlayerFfiHandle *handle);
  * `out_frame` is optional. Pass `NULL` when the caller does not need an
  * immediate frame payload for this dispatch.
  */
-enum PlayerFfiCallStatus player_ffi_player_dispatch(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_dispatch(struct PlayerFfiHandle handle,
                                                     enum PlayerFfiCommandKind command,
                                                     uint64_t position_ms,
                                                     bool *out_applied,
@@ -490,46 +521,46 @@ enum PlayerFfiCallStatus player_ffi_player_dispatch(struct PlayerFfiHandle *hand
                                                     struct PlayerFfiSnapshot *out_snapshot,
                                                     struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_drain_events(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_drain_events(struct PlayerFfiHandle handle,
                                                         struct PlayerFfiEventList *out_events,
                                                         struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_next_deadline_delay_ms(const struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_next_deadline_delay_ms(struct PlayerFfiHandle handle,
                                                                   bool *out_has_deadline,
                                                                   uint64_t *out_delay_ms,
                                                                   struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_set_abr_policy(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_set_abr_policy(struct PlayerFfiHandle handle,
                                                           const struct PlayerFfiAbrPolicy *policy,
                                                           bool *out_applied,
                                                           struct PlayerFfiSnapshot *out_snapshot,
                                                           struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_set_audio_track_selection(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_set_audio_track_selection(struct PlayerFfiHandle handle,
                                                                      const struct PlayerFfiTrackSelection *selection,
                                                                      bool *out_applied,
                                                                      struct PlayerFfiSnapshot *out_snapshot,
                                                                      struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_set_playback_rate(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_set_playback_rate(struct PlayerFfiHandle handle,
                                                              float playback_rate,
                                                              bool *out_applied,
                                                              struct PlayerFfiSnapshot *out_snapshot,
                                                              struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_set_subtitle_track_selection(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_set_subtitle_track_selection(struct PlayerFfiHandle handle,
                                                                         const struct PlayerFfiTrackSelection *selection,
                                                                         bool *out_applied,
                                                                         struct PlayerFfiSnapshot *out_snapshot,
                                                                         struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_set_video_track_selection(struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_set_video_track_selection(struct PlayerFfiHandle handle,
                                                                      const struct PlayerFfiTrackSelection *selection,
                                                                      bool *out_applied,
                                                                      struct PlayerFfiSnapshot *out_snapshot,
                                                                      struct PlayerFfiError *out_error);
 
-enum PlayerFfiCallStatus player_ffi_player_snapshot(const struct PlayerFfiHandle *handle,
+enum PlayerFfiCallStatus player_ffi_player_snapshot(struct PlayerFfiHandle handle,
                                                     struct PlayerFfiSnapshot *out_snapshot,
                                                     struct PlayerFfiError *out_error);
 
