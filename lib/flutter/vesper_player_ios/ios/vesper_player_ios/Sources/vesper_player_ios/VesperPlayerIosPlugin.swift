@@ -625,7 +625,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         } else {
             supportsBestEffortFixedTrackAbr = false
         }
-        [
+        return [
             "supportsLocalFiles": true,
             "supportsRemoteUrls": true,
             "supportsHls": true,

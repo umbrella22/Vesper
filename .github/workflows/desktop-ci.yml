@@ -105,7 +105,33 @@ jobs:
         run: |
           $VcpkgRoot = Join-Path $env:RUNNER_TEMP "vcpkg"
           $Triplet = "x64-windows"
-          git clone https://github.com/microsoft/vcpkg $VcpkgRoot
+          $CloneUrl = "https://github.com/microsoft/vcpkg"
+          if (Test-Path $VcpkgRoot) {
+            Remove-Item -Recurse -Force $VcpkgRoot
+          }
+
+          $Cloned = $false
+          foreach ($Attempt in 1..3) {
+            Write-Host "Cloning vcpkg (attempt $Attempt/3)..."
+            git clone $CloneUrl $VcpkgRoot
+            if ($LASTEXITCODE -eq 0 -and (Test-Path "$VcpkgRoot\bootstrap-vcpkg.bat")) {
+              $Cloned = $true
+              break
+            }
+
+            if (Test-Path $VcpkgRoot) {
+              Remove-Item -Recurse -Force $VcpkgRoot
+            }
+
+            if ($Attempt -lt 3) {
+              Start-Sleep -Seconds (5 * $Attempt)
+            }
+          }
+
+          if (-not $Cloned) {
+            throw "Failed to clone vcpkg after 3 attempts from $CloneUrl"
+          }
+
           & "$VcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
           & "$VcpkgRoot\vcpkg.exe" install "ffmpeg:$Triplet"
           $FfmpegRoot = Join-Path $VcpkgRoot "installed\$Triplet"

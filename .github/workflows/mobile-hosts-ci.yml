@@ -178,6 +178,9 @@ jobs:
         working-directory: examples/ios-swift-host
         run: xcodegen generate
 
+      - name: Refresh Rust iOS resolver bundle for Swift package resolution
+        run: ./scripts/build-ios-player-ffi-xcframework.sh release
+
       - name: Run Vesper iOS host regression tests
         run: |
           xcodebuild \

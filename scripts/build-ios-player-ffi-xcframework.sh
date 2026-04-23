@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$ROOT_DIR/lib/ios/VesperPlayerKit"
-OUTPUT_DIR="$PROJECT_DIR/.build/rust-player-ffi"
+OUTPUT_DIR="$PROJECT_DIR/Artifacts/rust-player-ffi"
 XCFRAMEWORK_PATH="$OUTPUT_DIR/VesperPlayerFFI.xcframework"
 HEADERS_DIR="$PROJECT_DIR/Sources/VesperPlayerFFIResolver/include"
 PROFILE="${1:-release}"

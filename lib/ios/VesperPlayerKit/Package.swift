@@ -2,7 +2,7 @@
 import PackageDescription
 import Foundation
 
-private let rustResolverRelativePath = ".build/rust-player-ffi/VesperPlayerFFI.xcframework"
+private let rustResolverRelativePath = "Artifacts/rust-player-ffi/VesperPlayerFFI.xcframework"
 private let rustResolverPath = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .appendingPathComponent(rustResolverRelativePath)
