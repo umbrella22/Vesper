@@ -28,6 +28,7 @@ use player_runtime::{
     PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
     PlayerVideoInfo, PresentationState, register_default_runtime_adapter_factory,
 };
+use tracing::info;
 
 pub const SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "software_desktop";
 const AUDIO_STREAM_CHUNK_FRAMES: usize = 2_048;
@@ -118,6 +119,7 @@ struct SoftwareRuntimeConfig {
     cache_policy: PlayerCachePolicy,
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
+    audio_output_enabled: bool,
     source_audio_track: Option<DecodedAudioTrack>,
     interrupt_flag: Option<Arc<AtomicBool>>,
     video_prefetch_capacity: usize,
@@ -135,6 +137,7 @@ pub struct SoftwarePlayerRuntime {
     initial_video_position: Duration,
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
+    audio_output_enabled: bool,
     source_audio_track: Option<DecodedAudioTrack>,
     video_source: BufferedVideoSource,
     video_end_of_stream: bool,
@@ -353,6 +356,8 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             decoded_audio: decoded_audio.as_ref().map(decoded_audio_summary),
             video_decode: None,
         };
+        let audio_output_enabled =
+            options.enable_audio_output && audio_output.default_output_config.is_some();
         let resolved_resilience_policy =
             options.resolved_resilience_policy(source.kind(), source.protocol());
         let resolved_buffering_policy = resolved_resilience_policy.buffering_policy;
@@ -365,6 +370,7 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             cache_policy: resolved_resilience_policy.cache_policy,
             audio_output_descriptor: audio_output.clone(),
             audio_output_config: audio_output.default_output_config,
+            audio_output_enabled,
             source_audio_track: decoded_audio.clone(),
             interrupt_flag,
             video_prefetch_capacity: resolved_video_prefetch_capacity(
@@ -694,6 +700,7 @@ impl SoftwarePlayerRuntime {
             initial_video_position: Duration::ZERO,
             audio_output_descriptor: config.audio_output_descriptor,
             audio_output_config: config.audio_output_config,
+            audio_output_enabled: config.audio_output_enabled,
             source_audio_track: config.source_audio_track,
             video_source,
             video_end_of_stream: false,
@@ -963,17 +970,18 @@ impl SoftwarePlayerRuntime {
         position: Duration,
         playback_rate: f32,
     ) -> PlayerRuntimeResult<()> {
+        if !self.audio_output_enabled {
+            self.disable_audio_output_path();
+            return Ok(());
+        }
+
         let Some(output_config) = self.audio_output_config.clone() else {
-            self.audio_sink = None;
-            self.audio_sink_controller = None;
-            self.cancel_pending_audio_stream_worker();
+            self.disable_audio_output_path();
             return Ok(());
         };
         let source_audio_track = self.source_audio_track.as_ref();
         if source_audio_track.is_none() && !should_stream_audio_source_directly(&self.source) {
-            self.audio_sink = None;
-            self.audio_sink_controller = None;
-            self.cancel_pending_audio_stream_worker();
+            self.disable_audio_output_path();
             return Ok(());
         }
 
@@ -1011,6 +1019,10 @@ impl SoftwarePlayerRuntime {
     }
 
     fn maybe_start_audio_decode_worker(&mut self) -> PlayerRuntimeResult<()> {
+        if !self.audio_output_enabled {
+            return Ok(());
+        }
+
         if should_stream_audio_source_directly(&self.source) {
             return Ok(());
         }
@@ -1585,6 +1597,10 @@ impl SoftwarePlayerRuntime {
     }
 
     fn poll_audio_output_device(&mut self) {
+        if !self.audio_output_enabled {
+            return;
+        }
+
         if self.last_audio_output_poll.elapsed() < AUDIO_OUTPUT_POLL_INTERVAL {
             return;
         }
@@ -1610,6 +1626,7 @@ impl SoftwarePlayerRuntime {
 
         self.audio_output_descriptor = descriptor.clone();
         self.audio_output_config = descriptor.default_output_config.clone();
+        self.audio_output_enabled = self.audio_output_config.is_some();
         self.audio_sink = None;
         self.audio_sink_controller = None;
         self.cancel_pending_audio_stream_worker();
@@ -1630,16 +1647,25 @@ impl SoftwarePlayerRuntime {
                 self.update_buffering_state();
             }
             Err(error) => {
-                self.audio_output_config = None;
-                self.audio_sink = None;
-                self.audio_sink_controller = None;
-                self.cancel_pending_audio_stream_worker();
+                self.disable_audio_output_path();
                 self.emit_event(PlayerRuntimeEvent::AudioOutputChanged(None));
                 self.emit_event(PlayerRuntimeEvent::Error(error));
                 self.refresh_playback_finished();
                 self.update_buffering_state();
             }
         }
+    }
+
+    fn disable_audio_output_path(&mut self) {
+        self.audio_output_enabled = false;
+        self.audio_output_descriptor = AudioOutputDescriptor {
+            default_output_device: None,
+            default_output_config: None,
+        };
+        self.audio_output_config = None;
+        self.audio_sink = None;
+        self.audio_sink_controller = None;
+        self.cancel_pending_audio_stream_worker();
     }
 
     fn raw_is_buffering(&self) -> bool {
@@ -1697,6 +1723,7 @@ impl SoftwarePlayerRuntime {
             self.buffering_candidate_since = None;
             if self.is_buffering {
                 self.is_buffering = false;
+                self.log_buffering_diagnostics(false);
                 self.emit_event(PlayerRuntimeEvent::BufferingChanged { buffering: false });
             }
             return;
@@ -1710,8 +1737,52 @@ impl SoftwarePlayerRuntime {
         let candidate_since = self.buffering_candidate_since.get_or_insert(now);
         if now.saturating_duration_since(*candidate_since) >= SOFTWARE_BUFFERING_GRACE_PERIOD {
             self.is_buffering = true;
+            self.log_buffering_diagnostics(true);
             self.emit_event(PlayerRuntimeEvent::BufferingChanged { buffering: true });
         }
+    }
+
+    fn log_buffering_diagnostics(&self, buffering: bool) {
+        let playback_position = self.playback_position().unwrap_or_else(|| self.progress().position());
+        let next_frame_pts = self.next_frame.as_ref().map(|frame| frame.presentation_time);
+        let audio_generation = self.pending_audio_stream_worker.as_ref().map(|worker| worker.generation);
+        let buffered_audio_samples = self.pending_audio_stream_worker.as_ref().and_then(|worker| {
+            self.audio_sink_controller
+                .as_ref()
+                .and_then(|controller| controller.buffered_samples(worker.generation))
+        });
+
+        info!(
+            buffering,
+            source = self.source.uri(),
+            state = ?self.presentation_state(),
+            position_secs = playback_position.as_secs_f64(),
+            next_frame_pts_secs = next_frame_pts.map(|pts| pts.as_secs_f64()),
+            video_buffered_frames = self.buffered_video_frame_count(),
+            video_buffering_window = ?self.video_buffering_window,
+            video_start_threshold_frames = self.video_playback_start_buffer_frames,
+            video_rebuffer_threshold_frames = self.video_rebuffer_frames,
+            video_end_of_stream = self.video_end_of_stream,
+            audio_enabled = self.audio_output_enabled,
+            audio_output_available = self.audio_output_config.is_some(),
+            audio_sink_attached = self.audio_sink.is_some(),
+            audio_generation,
+            audio_buffered_samples = buffered_audio_samples,
+            audio_buffer_requirement_samples = self
+                .audio_output_config
+                .as_ref()
+                .map(|output_config| buffered_sample_target(
+                    output_config.sample_rate,
+                    output_config.channels,
+                    self.current_audio_buffer_requirement(),
+                )),
+            audio_buffering_window = ?self.audio_buffering_window,
+            pending_audio_decode = self.pending_audio_decode_worker.is_some(),
+            pending_audio_metadata = self.pending_audio_metadata_worker.is_some(),
+            pending_audio_stream = self.pending_audio_stream_worker.is_some(),
+            pending_audio_retry = self.pending_audio_stream_retry.is_some(),
+            "desktop playback buffering diagnostics"
+        );
     }
 
     fn current_audio_buffer_requirement(&self) -> Duration {

@@ -11,3 +11,4 @@ player-audio-cpal = { path = "../../../audio/player-audio-cpal" }
 player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
 player-core = { path = "../../../core/player-core" }
 player-runtime = { path = "../../../core/player-runtime" }
+tracing.workspace = true

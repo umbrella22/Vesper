@@ -149,15 +149,18 @@ impl DesktopUiLayoutMetrics {
         })
     }
 
+    #[allow(dead_code)]
     pub fn overlay_origin_y(self, frame_height: u32) -> u32 {
         frame_height.saturating_sub(self.bar_height)
     }
 
+    #[allow(dead_code)]
     pub fn button_origin_y(self, frame_height: u32) -> u32 {
         self.overlay_origin_y(frame_height)
             .saturating_add(self.padding)
     }
 
+    #[allow(dead_code)]
     pub fn progress_rect(self, frame_width: u32, frame_height: u32) -> DesktopUiRect {
         DesktopUiRect {
             x: 0,
@@ -167,6 +170,7 @@ impl DesktopUiLayoutMetrics {
         }
     }
 
+    #[allow(dead_code)]
     pub fn progress_hit_rect(self, frame_width: u32, frame_height: u32) -> DesktopUiRect {
         let progress_rect = self.progress_rect(frame_width, frame_height);
         let y = progress_rect.y.saturating_sub(self.progress_hit_slop_top);
@@ -184,6 +188,7 @@ impl DesktopUiLayoutMetrics {
         }
     }
 
+    #[allow(dead_code)]
     pub fn time_label_offset_y(self) -> u32 {
         self.bar_height.saturating_sub(self.time_label_height) / 2
     }

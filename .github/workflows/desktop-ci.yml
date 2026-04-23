@@ -68,6 +68,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            ffmpeg \
             pkg-config \
             clang \
             libclang-dev \
@@ -110,7 +111,6 @@ jobs:
           $FfmpegRoot = Join-Path $VcpkgRoot "installed\$Triplet"
           $FfmpegBinDir = Join-Path $FfmpegRoot "bin"
           $FfmpegDebugBinDir = Join-Path $FfmpegRoot "debug\bin"
-          $FfmpegToolsDir = Join-Path $FfmpegRoot "tools\ffmpeg"
           "VCPKG_ROOT=$VcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKG_DEFAULT_TRIPLET=$Triplet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKGRS_TRIPLET=$Triplet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -118,10 +118,14 @@ jobs:
           "FFMPEG_DIR=$FfmpegRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "FFMPEG_BIN_DIR=$FfmpegBinDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "FFMPEG_DEBUG_BIN_DIR=$FfmpegDebugBinDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "FFMPEG_TOOLS_DIR=$FfmpegToolsDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $FfmpegBinDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           $FfmpegDebugBinDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $FfmpegToolsDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Windows FFmpeg CLI tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
 
       - name: Verify Windows FFmpeg layout
         if: runner.os == 'Windows'
@@ -138,12 +142,6 @@ jobs:
           }
           if (-not (Test-Path "$env:FFMPEG_DEBUG_BIN_DIR")) {
             throw "FFMPEG_DEBUG_BIN_DIR is missing: $env:FFMPEG_DEBUG_BIN_DIR"
-          }
-          if (-not (Test-Path "$env:FFMPEG_TOOLS_DIR\ffmpeg.exe")) {
-            throw "ffmpeg.exe is missing under: $env:FFMPEG_TOOLS_DIR"
-          }
-          if (-not (Test-Path "$env:FFMPEG_TOOLS_DIR\ffprobe.exe")) {
-            throw "ffprobe.exe is missing under: $env:FFMPEG_TOOLS_DIR"
           }
           Get-ChildItem "$env:FFMPEG_DIR\lib" | Select-Object -First 5
 

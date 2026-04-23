@@ -12,7 +12,6 @@ mod desktop_overlay_ui;
 mod desktop_presenter;
 mod desktop_symbols;
 mod desktop_ui;
-mod host_ui;
 #[cfg(target_os = "macos")]
 mod macos_host_overlay;
 use desktop_download::{
@@ -35,8 +34,10 @@ use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window;
 use player_host_desktop::probe_desktop_host_launch_plan_uri;
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
-    normalize_desktop_host_source_uri, render_config_from_media_info,
+    normalize_desktop_host_source_uri,
 };
+#[cfg(target_os = "macos")]
+use player_host_desktop::render_config_from_media_info;
 #[cfg(target_os = "macos")]
 use player_platform_macos::open_macos_software_runtime_uri_with_options_and_interrupt;
 #[cfg(not(target_os = "macos"))]
@@ -48,10 +49,12 @@ use player_render_wgpu::{
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
     PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntime,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent,
     PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo,
     PlayerVideoDecodeMode, PresentationState, VideoPixelFormat,
 };
+#[cfg(target_os = "macos")]
+use player_runtime::PlayerRuntimeOptions;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;

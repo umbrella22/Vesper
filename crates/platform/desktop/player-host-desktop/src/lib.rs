@@ -6,10 +6,11 @@ use anyhow::{Context, Result};
 use player_core::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use player_render_wgpu::RenderSurfaceConfig;
 use player_runtime::{
-    DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, PlayerMediaInfo,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeBootstrap, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PreloadCandidate, PreloadEvent, PreloadExecutor,
-    PreloadPlanner, PreloadSnapshot, PreloadTaskId, PreloadTaskSnapshot,
+    DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, PlayerBufferingPolicy,
+    PlayerBufferingPreset, PlayerMediaInfo, PlayerRuntimeAdapterCapabilities,
+    PlayerRuntimeBootstrap, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
+    PreloadCandidate, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadSnapshot,
+    PreloadTaskId, PreloadTaskSnapshot,
 };
 use winit::window::Window;
 
@@ -39,6 +40,7 @@ pub struct DesktopHostLaunchPlan {
 
 const DESKTOP_REMOTE_VIDEO_PREFETCH_CAPACITY: usize = 48;
 const DESKTOP_STREAMING_VIDEO_PREFETCH_CAPACITY: usize = 96;
+const DESKTOP_LOCAL_VIDEO_PREFETCH_CAPACITY: usize = 48;
 
 #[derive(Debug, Clone)]
 pub struct DesktopHostRuntimeProbe {
@@ -326,21 +328,30 @@ fn desktop_runtime_options_for_source(
     source: &str,
     mut options: PlayerRuntimeOptions,
 ) -> PlayerRuntimeOptions {
-    if options.video_prefetch_capacity != DEFAULT_VIDEO_PREFETCH_CAPACITY {
-        return options;
+    let source = MediaSource::new(source.to_owned());
+    if options.video_prefetch_capacity == DEFAULT_VIDEO_PREFETCH_CAPACITY {
+        options.video_prefetch_capacity = match (source.kind(), source.protocol()) {
+            (MediaSourceKind::Local, _) => DESKTOP_LOCAL_VIDEO_PREFETCH_CAPACITY,
+            (MediaSourceKind::Remote, MediaSourceProtocol::Hls)
+            | (MediaSourceKind::Remote, MediaSourceProtocol::Dash) => {
+                DESKTOP_STREAMING_VIDEO_PREFETCH_CAPACITY
+            }
+            (MediaSourceKind::Remote, MediaSourceProtocol::Progressive) => {
+                DESKTOP_REMOTE_VIDEO_PREFETCH_CAPACITY
+            }
+            _ => options.video_prefetch_capacity,
+        };
     }
 
-    let source = MediaSource::new(source.to_owned());
-    options.video_prefetch_capacity = match (source.kind(), source.protocol()) {
-        (MediaSourceKind::Remote, MediaSourceProtocol::Hls)
-        | (MediaSourceKind::Remote, MediaSourceProtocol::Dash) => {
-            DESKTOP_STREAMING_VIDEO_PREFETCH_CAPACITY
-        }
-        (MediaSourceKind::Remote, MediaSourceProtocol::Progressive) => {
-            DESKTOP_REMOTE_VIDEO_PREFETCH_CAPACITY
-        }
-        _ => options.video_prefetch_capacity,
-    };
+    if options.buffering_policy.preset == PlayerBufferingPreset::Default
+        && options.buffering_policy.min_buffer.is_none()
+        && options.buffering_policy.max_buffer.is_none()
+        && options.buffering_policy.buffer_for_playback.is_none()
+        && options.buffering_policy.buffer_for_rebuffer.is_none()
+        && source.kind() == MediaSourceKind::Local
+    {
+        options.buffering_policy = PlayerBufferingPolicy::balanced();
+    }
 
     options
 }
