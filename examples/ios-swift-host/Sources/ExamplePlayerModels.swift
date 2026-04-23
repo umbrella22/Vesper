@@ -22,33 +22,33 @@ enum ExampleThemeMode: String, CaseIterable, Identifiable {
     var preferredColorScheme: ColorScheme? {
         switch self {
         case .system:
-            nil
+            return nil
         case .light:
-            .light
+            return .light
         case .dark:
-            .dark
+            return .dark
         }
     }
 
     var title: String {
         switch self {
         case .system:
-            ExampleI18n.themeSystem
+            return ExampleI18n.themeSystem
         case .light:
-            ExampleI18n.themeLight
+            return ExampleI18n.themeLight
         case .dark:
-            ExampleI18n.themeDark
+            return ExampleI18n.themeDark
         }
     }
 
     var systemImage: String {
         switch self {
         case .system:
-            "circle.lefthalf.filled"
+            return "circle.lefthalf.filled"
         case .light:
-            "sun.max.fill"
+            return "sun.max.fill"
         case .dark:
-            "moon.fill"
+            return "moon.fill"
         }
     }
 }
@@ -69,39 +69,39 @@ enum ExampleResilienceProfile: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .balanced:
-            ExampleI18n.resilienceBalanced
+            return ExampleI18n.resilienceBalanced
         case .streaming:
-            ExampleI18n.resilienceStreaming
+            return ExampleI18n.resilienceStreaming
         case .resilient:
-            ExampleI18n.resilienceResilient
+            return ExampleI18n.resilienceResilient
         case .lowLatency:
-            ExampleI18n.resilienceLowLatency
+            return ExampleI18n.resilienceLowLatency
         }
     }
 
     var subtitle: String {
         switch self {
         case .balanced:
-            ExampleI18n.resilienceBalancedSubtitle
+            return ExampleI18n.resilienceBalancedSubtitle
         case .streaming:
-            ExampleI18n.resilienceStreamingSubtitle
+            return ExampleI18n.resilienceStreamingSubtitle
         case .resilient:
-            ExampleI18n.resilienceResilientSubtitle
+            return ExampleI18n.resilienceResilientSubtitle
         case .lowLatency:
-            ExampleI18n.resilienceLowLatencySubtitle
+            return ExampleI18n.resilienceLowLatencySubtitle
         }
     }
 
     var policy: VesperPlaybackResiliencePolicy {
         switch self {
         case .balanced:
-            .balanced()
+            return .balanced()
         case .streaming:
-            .streaming()
+            return .streaming()
         case .resilient:
-            .resilient()
+            return .resilient()
         case .lowLatency:
-            .lowLatency()
+            return .lowLatency()
         }
     }
 }
@@ -120,7 +120,7 @@ struct ExampleHostPalette {
 
 func exampleHostPalette(useDarkTheme: Bool) -> ExampleHostPalette {
     if useDarkTheme {
-        ExampleHostPalette(
+        return ExampleHostPalette(
             pageTop: Color(red: 0.047, green: 0.063, blue: 0.098),
             pageBottom: Color(red: 0.023, green: 0.027, blue: 0.043),
             sectionBackground: .white.opacity(0.04),
@@ -132,7 +132,7 @@ func exampleHostPalette(useDarkTheme: Bool) -> ExampleHostPalette {
             primaryAction: Color(red: 0.165, green: 0.545, blue: 1.0)
         )
     } else {
-        ExampleHostPalette(
+        return ExampleHostPalette(
             pageTop: Color(red: 0.972, green: 0.949, blue: 0.918),
             pageBottom: Color(red: 0.949, green: 0.957, blue: 0.976),
             sectionBackground: .white.opacity(0.88),
@@ -163,14 +163,14 @@ let IOS_REMOTE_PLAYLIST_ITEM_ID = "custom-remote"
 let IOS_LOCAL_PLAYLIST_ITEM_ID = "local-file"
 
 func iosHlsDemoSource() -> VesperPlayerSource {
-    VesperPlayerSource.hls(
+    return VesperPlayerSource.hls(
         url: URL(string: IOS_HLS_DEMO_URL)!,
         label: ExampleI18n.hlsDemoLabel
     )
 }
 
 func iosDashDemoSource() -> VesperPlayerSource {
-    VesperPlayerSource.dash(
+    return VesperPlayerSource.dash(
         url: URL(string: IOS_DASH_DEMO_URL)!,
         label: ExampleI18n.dashDemoLabel
     )
@@ -237,7 +237,7 @@ func enqueuePlaylistItem(
     _ playlistItemIds: [String],
     itemId: String
 ) -> [String] {
-    playlistItemIds.filter { existingItemId in
+    return playlistItemIds.filter { existingItemId in
         existingItemId != itemId
     } + [itemId]
 }
@@ -289,7 +289,7 @@ func examplePlaylistViewportHints(
 }
 
 func examplePlaylistSwitchPolicy() -> VesperPlaylistSwitchPolicy {
-    VesperPlaylistSwitchPolicy(
+    return VesperPlaylistSwitchPolicy(
         autoAdvance: true,
         repeatMode: .off,
         failureStrategy: .skipToNext

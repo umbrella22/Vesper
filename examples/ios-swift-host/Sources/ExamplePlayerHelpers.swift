@@ -54,22 +54,22 @@ func timelineSummaryState(_ timeline: TimelineUiState, pendingSeekRatio: Double?
 func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {
     switch policy.mode {
     case .auto:
-        ExampleI18n.auto
+        return ExampleI18n.auto
     case .constrained:
         if let maxWidth = policy.maxWidth, let maxHeight = policy.maxHeight {
             let resolutionLabel = "\(maxWidth)x\(maxHeight)"
             if let maxBitRate = policy.maxBitRate {
-                "\(resolutionLabel) / \(formatBitRate(maxBitRate))"
+                return "\(resolutionLabel) / \(formatBitRate(maxBitRate))"
             } else {
-                resolutionLabel
+                return resolutionLabel
             }
         } else if let maxBitRate = policy.maxBitRate {
-            formatBitRate(maxBitRate)
+            return formatBitRate(maxBitRate)
         } else {
-            ExampleI18n.qualityButtonCapped
+            return ExampleI18n.qualityButtonCapped
         }
     case .fixedTrack:
-        ExampleI18n.qualityButtonPinned
+        return ExampleI18n.qualityButtonPinned
     }
 }
 
@@ -87,67 +87,67 @@ func subtitleButtonLabel(
 ) -> String {
     switch trackSelection.subtitle.mode {
     case .disabled:
-        ExampleI18n.captionsOff
+        return ExampleI18n.captionsOff
     case .auto:
-        ExampleI18n.captionsAuto
+        return ExampleI18n.captionsAuto
     case .track:
-        trackCatalog.subtitleTracks.first { $0.id == trackSelection.subtitle.trackId }.map(subtitleLabel) ?? ExampleI18n.subtitles
+        return trackCatalog.subtitleTracks.first { $0.id == trackSelection.subtitle.trackId }.map(subtitleLabel) ?? ExampleI18n.subtitles
     }
 }
 
 func stageBadgeText(_ timeline: TimelineUiState) -> String {
     switch timeline.kind {
     case .vod:
-        ExampleI18n.stageVideoOnDemand
+        return ExampleI18n.stageVideoOnDemand
     case .live:
-        ExampleI18n.stageLiveStream
+        return ExampleI18n.stageLiveStream
     case .liveDvr:
-        ExampleI18n.stageLiveWithDvrWindow
+        return ExampleI18n.stageLiveWithDvrWindow
     }
 }
 
 func playlistHintLabel(_ kind: VesperPlaylistViewportHintKind) -> String {
     switch kind {
     case .visible:
-        ExampleI18n.playlistStatusVisible
+        return ExampleI18n.playlistStatusVisible
     case .nearVisible:
-        ExampleI18n.playlistStatusNearVisible
+        return ExampleI18n.playlistStatusNearVisible
     case .prefetchOnly:
-        ExampleI18n.playlistStatusPrefetch
+        return ExampleI18n.playlistStatusPrefetch
     case .hidden:
-        ExampleI18n.playlistStatusHidden
+        return ExampleI18n.playlistStatusHidden
     }
 }
 
 func downloadStateLabel(_ state: VesperDownloadState) -> String {
     switch state {
     case .queued:
-        ExampleI18n.downloadStateQueued
+        return ExampleI18n.downloadStateQueued
     case .preparing:
-        ExampleI18n.downloadStatePreparing
+        return ExampleI18n.downloadStatePreparing
     case .downloading:
-        ExampleI18n.downloadStateDownloading
+        return ExampleI18n.downloadStateDownloading
     case .paused:
-        ExampleI18n.downloadStatePaused
+        return ExampleI18n.downloadStatePaused
     case .completed:
-        ExampleI18n.downloadStateCompleted
+        return ExampleI18n.downloadStateCompleted
     case .failed:
-        ExampleI18n.downloadStateFailed
+        return ExampleI18n.downloadStateFailed
     case .removed:
-        ExampleI18n.downloadStateRemoved
+        return ExampleI18n.downloadStateRemoved
     }
 }
 
 func downloadPrimaryActionLabel(_ state: VesperDownloadState) -> String? {
     switch state {
     case .queued, .failed:
-        ExampleI18n.downloadActionStart
+        return ExampleI18n.downloadActionStart
     case .preparing, .downloading:
-        ExampleI18n.downloadActionPause
+        return ExampleI18n.downloadActionPause
     case .paused:
-        ExampleI18n.downloadActionResume
+        return ExampleI18n.downloadActionResume
     case .completed, .removed:
-        nil
+        return nil
     }
 }
 
@@ -185,11 +185,11 @@ func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> 
 }
 
 func speedBadge(_ value: Float) -> String {
-    ExampleI18n.playbackRate(Double(value))
+    return ExampleI18n.playbackRate(Double(value))
 }
 
 func resilienceBufferingValue(_ policy: VesperBufferingPolicy) -> String {
-    "\(bufferingPresetLabel(policy.preset)) · \(bufferWindowLabel(policy))"
+    return "\(bufferingPresetLabel(policy.preset)) · \(bufferWindowLabel(policy))"
 }
 
 func resilienceRetryValue(_ policy: VesperRetryPolicy) -> String {
@@ -198,7 +198,7 @@ func resilienceRetryValue(_ policy: VesperRetryPolicy) -> String {
 }
 
 func resilienceCacheValue(_ policy: VesperCachePolicy) -> String {
-    ExampleI18n.resilienceCacheValue(
+    return ExampleI18n.resilienceCacheValue(
         cachePresetLabel(policy.preset),
         formatStorageBytes(policy.maxMemoryBytes),
         formatStorageBytes(policy.maxDiskBytes)
@@ -208,39 +208,39 @@ func resilienceCacheValue(_ policy: VesperCachePolicy) -> String {
 func bufferingPresetLabel(_ preset: VesperBufferingPreset) -> String {
     switch preset {
     case .default:
-        ExampleI18n.resiliencePresetDefault
+        return ExampleI18n.resiliencePresetDefault
     case .balanced:
-        ExampleI18n.resiliencePresetBalanced
+        return ExampleI18n.resiliencePresetBalanced
     case .streaming:
-        ExampleI18n.resiliencePresetStreaming
+        return ExampleI18n.resiliencePresetStreaming
     case .resilient:
-        ExampleI18n.resiliencePresetResilient
+        return ExampleI18n.resiliencePresetResilient
     case .lowLatency:
-        ExampleI18n.resiliencePresetLowLatency
+        return ExampleI18n.resiliencePresetLowLatency
     }
 }
 
 func cachePresetLabel(_ preset: VesperCachePreset) -> String {
     switch preset {
     case .default:
-        ExampleI18n.resiliencePresetDefault
+        return ExampleI18n.resiliencePresetDefault
     case .disabled:
-        ExampleI18n.resiliencePresetDisabled
+        return ExampleI18n.resiliencePresetDisabled
     case .streaming:
-        ExampleI18n.resiliencePresetStreaming
+        return ExampleI18n.resiliencePresetStreaming
     case .resilient:
-        ExampleI18n.resiliencePresetResilient
+        return ExampleI18n.resiliencePresetResilient
     }
 }
 
 func retryBackoffLabel(_ backoff: VesperRetryBackoff) -> String {
     switch backoff {
     case .fixed:
-        ExampleI18n.resilienceBackoffFixed
+        return ExampleI18n.resilienceBackoffFixed
     case .linear:
-        ExampleI18n.resilienceBackoffLinear
+        return ExampleI18n.resilienceBackoffLinear
     case .exponential:
-        ExampleI18n.resilienceBackoffExponential
+        return ExampleI18n.resilienceBackoffExponential
     }
 }
 
@@ -715,25 +715,25 @@ func abrPresets() -> [AbrPreset] {
 }
 
 func sheetTitle(_ sheet: ExamplePlayerSheet) -> String {
-    ExampleI18n.sheetTitle(sheet)
+    return ExampleI18n.sheetTitle(sheet)
 }
 
 func sheetSubtitle(_ sheet: ExamplePlayerSheet) -> String {
-    ExampleI18n.sheetSubtitle(sheet)
+    return ExampleI18n.sheetSubtitle(sheet)
 }
 
 func sheetHeight(for sheet: ExamplePlayerSheet) -> CGFloat {
     switch sheet {
     case .menu:
-        360
+        return 360
     case .quality:
-        420
+        return 420
     case .audio:
-        440
+        return 440
     case .subtitle:
-        470
+        return 470
     case .speed:
-        360
+        return 360
     }
 }
 

@@ -210,30 +210,30 @@ enum ExampleI18n {
     static func sheetTitle(_ sheet: ExamplePlayerSheet) -> String {
         switch sheet {
         case .menu:
-            playbackTools
+            return playbackTools
         case .quality:
-            quality
+            return quality
         case .audio:
-            audio
+            return audio
         case .subtitle:
-            subtitles
+            return subtitles
         case .speed:
-            playbackSpeed
+            return playbackSpeed
         }
     }
 
     static func sheetSubtitle(_ sheet: ExamplePlayerSheet) -> String {
         switch sheet {
         case .menu:
-            string("example.sheet.menu.subtitle")
+            return string("example.sheet.menu.subtitle")
         case .quality:
-            string("example.sheet.quality.subtitle")
+            return string("example.sheet.quality.subtitle")
         case .audio:
-            string("example.sheet.audio.subtitle")
+            return string("example.sheet.audio.subtitle")
         case .subtitle:
-            string("example.sheet.subtitle.subtitle")
+            return string("example.sheet.subtitle.subtitle")
         case .speed:
-            string("example.sheet.speed.subtitle")
+            return string("example.sheet.speed.subtitle")
         }
     }
 
