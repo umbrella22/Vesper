@@ -73,6 +73,7 @@ lib/ios/**/*.swiftpm/*
 lib/ios/**/.build/*
 lib/ios/**/build/*
 lib/ios/**/*.xcframework/
+lib/ios/**/Artifacts/*
 
 # Flutter plugin generated artifacts (lib/flutter/)
 lib/flutter/**/.dart_tool/
