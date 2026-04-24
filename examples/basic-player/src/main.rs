@@ -69,6 +69,7 @@ const NATIVE_SURFACE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONTROL_HIDE_DELAY: Duration = Duration::from_secs(2);
 const CONTROL_FADE_DURATION: Duration = Duration::from_millis(220);
 const CONTROL_FADE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const PLAYBACK_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(125);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
@@ -197,6 +198,7 @@ struct DesktopPlayerApp {
     host_message: Option<String>,
     download_message: Option<String>,
     overlay_dirty: bool,
+    last_overlay_refresh_at: Option<Instant>,
 }
 
 impl DesktopPlayerApp {
@@ -252,6 +254,7 @@ impl DesktopPlayerApp {
             host_message: None,
             download_message: None,
             overlay_dirty: false,
+            last_overlay_refresh_at: None,
         }
     }
 
@@ -439,6 +442,7 @@ impl DesktopPlayerApp {
     fn reset_active_playback_for_launch(&mut self) {
         self.runtime = None;
         self.last_frame = None;
+        self.last_overlay_refresh_at = None;
         self.uses_external_video_surface = false;
         self.seek_preview = None;
     }
@@ -978,18 +982,27 @@ impl DesktopPlayerApp {
 
     fn apply_frame(&mut self, frame: DecodedVideoFrame) -> Result<()> {
         self.last_frame = Some(frame);
-        self.refresh_overlay()
+        self.refresh_playback_frame()
+    }
+
+    fn refresh_playback_frame(&mut self) -> Result<()> {
+        let upload_overlay = self.overlay_dirty || self.playback_overlay_tick_due();
+        self.refresh_overlay_with_video_frame(true, upload_overlay)
     }
 
     fn refresh_overlay(&mut self) -> Result<()> {
-        self.refresh_overlay_with_video_frame(true)
+        self.refresh_overlay_with_video_frame(true, true)
     }
 
     fn refresh_overlay_ui_only(&mut self) -> Result<()> {
-        self.refresh_overlay_with_video_frame(false)
+        self.refresh_overlay_with_video_frame(false, true)
     }
 
-    fn refresh_overlay_with_video_frame(&mut self, upload_video_frame: bool) -> Result<()> {
+    fn refresh_overlay_with_video_frame(
+        &mut self,
+        upload_video_frame: bool,
+        upload_overlay: bool,
+    ) -> Result<()> {
         if self.runtime.is_none() {
             return self.refresh_host_overlay();
         }
@@ -1010,17 +1023,21 @@ impl DesktopPlayerApp {
         };
         let window_size = window.inner_size();
         let window_scale_factor = window.scale_factor();
-        let snapshot = self.runtime()?.snapshot();
-        let overlay_view_model = self.overlay_view_model(&snapshot);
-        let overlay = self.ui_presenter.as_ref().and_then(|presenter| {
-            presenter.overlay_frame(
-                window_size,
-                window_scale_factor,
-                &snapshot,
-                self.seek_preview,
-                &overlay_view_model,
-            )
-        });
+        let overlay = if upload_overlay {
+            let snapshot = self.runtime()?.snapshot();
+            let overlay_view_model = self.overlay_view_model(&snapshot);
+            self.ui_presenter.as_ref().and_then(|presenter| {
+                presenter.overlay_frame(
+                    window_size,
+                    window_scale_factor,
+                    &snapshot,
+                    self.seek_preview,
+                    &overlay_view_model,
+                )
+            })
+        } else {
+            None
+        };
         let frame_texture = upload_video_frame.then(|| video_frame_texture(frame));
         let Some(renderer) = self.renderer.as_mut() else {
             self.overlay_dirty = false;
@@ -1035,13 +1052,16 @@ impl DesktopPlayerApp {
         if let Some(frame_texture) = frame_texture.as_ref() {
             renderer.upload_frame(frame_texture);
         }
-        if let Some(overlay) = overlay {
-            renderer.upload_overlay(&overlay);
-        } else {
-            renderer.clear_overlay();
+        if upload_overlay {
+            if let Some(overlay) = overlay {
+                renderer.upload_overlay(&overlay);
+            } else {
+                renderer.clear_overlay();
+            }
+            self.overlay_dirty = false;
+            self.last_overlay_refresh_at = Some(Instant::now());
         }
 
-        self.overlay_dirty = false;
         window.request_redraw();
 
         Ok(())
@@ -1061,6 +1081,7 @@ impl DesktopPlayerApp {
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_overlay();
                 self.overlay_dirty = false;
+                self.last_overlay_refresh_at = Some(Instant::now());
                 window.request_redraw();
             }
             return Ok(());
@@ -1091,8 +1112,26 @@ impl DesktopPlayerApp {
             renderer.clear_overlay();
         }
         self.overlay_dirty = false;
+        self.last_overlay_refresh_at = Some(Instant::now());
         window.request_redraw();
         Ok(())
+    }
+
+    fn playback_overlay_tick_due(&self) -> bool {
+        if self.last_overlay_refresh_at.is_none() {
+            return true;
+        }
+        if self.controls_opacity <= 0.01 || self.seek_preview.is_some() {
+            return false;
+        }
+        let Some(runtime) = self.runtime.as_ref() else {
+            return false;
+        };
+        if runtime.snapshot().state != PresentationState::Playing {
+            return false;
+        }
+        self.last_overlay_refresh_at
+            .is_some_and(|last_refresh| last_refresh.elapsed() >= PLAYBACK_OVERLAY_REFRESH_INTERVAL)
     }
 
     fn update_window_title(&mut self) {
@@ -1176,6 +1215,7 @@ impl DesktopPlayerApp {
         self.update_window_title();
         self.sync_ui_presenter();
         if let Some(frame) = frame {
+            self.overlay_dirty = true;
             self.apply_frame(frame)?;
         } else {
             self.refresh_overlay_ui_only()?;
@@ -1339,6 +1379,7 @@ impl DesktopPlayerApp {
         self.update_window_title();
         self.sync_ui_presenter();
         if let Some(frame) = frame {
+            self.overlay_dirty = true;
             self.apply_frame(frame)?;
         } else {
             self.refresh_overlay_ui_only()?;
