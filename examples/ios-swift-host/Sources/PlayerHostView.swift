@@ -309,6 +309,18 @@ struct PlayerHostView: View {
                         controlsVisible = true
                     },
                     onUseDashDemo: {},
+                    onUseLiveDvrAcceptance: {
+                        hostMessage = nil
+                        let nextPlaylistItemIds = enqueuePlaylistItem(
+                            playlistItemIds,
+                            itemId: IOS_LIVE_DVR_PLAYLIST_ITEM_ID
+                        )
+                        applyPlaylistQueue(
+                            focusItemId: IOS_LIVE_DVR_PLAYLIST_ITEM_ID,
+                            playlistItemIds: nextPlaylistItemIds
+                        )
+                        controlsVisible = true
+                    },
                     onOpenRemote: {
                         openRemoteSource()
                     }

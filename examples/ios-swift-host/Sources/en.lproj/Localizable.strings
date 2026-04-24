@@ -17,6 +17,7 @@
 "example.sources.pick_video" = "Pick Video";
 "example.sources.pick_from_photos" = "Pick from Photos";
 "example.sources.use_hls_demo" = "Use HLS Demo";
+"example.sources.use_live_dvr_acceptance" = "Live DVR Check";
 "example.sources.use_dash_demo" = "DASH Demo";
 "example.sources.dash_demo_unavailable_note" = "DASH demo is shown for parity, but the current iOS AVPlayer backend does not support DASH playback.";
 "example.sources.theme_title" = "Theme";
@@ -114,6 +115,7 @@
 
 "example.source.hls_demo_label" = "HLS Demo (BipBop)";
 "example.source.dash_demo_label" = "DASH Demo (Envivio)";
+"example.source.live_dvr_acceptance_label" = "Live DVR Acceptance (Unified SCTE-35)";
 "example.source.custom_remote_url_label" = "Custom Remote URL";
 
 "example.quality.button_capped" = "Capped";

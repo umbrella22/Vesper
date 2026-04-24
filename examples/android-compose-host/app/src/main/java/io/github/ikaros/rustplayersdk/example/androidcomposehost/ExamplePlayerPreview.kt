@@ -218,6 +218,7 @@ private fun PreviewExampleSourceSectionLight() {
                 onPickVideo = {},
                 onUseHlsDemo = {},
                 onUseDashDemo = {},
+                onUseLiveDvrAcceptance = {},
                 onOpenRemote = {},
             )
         }

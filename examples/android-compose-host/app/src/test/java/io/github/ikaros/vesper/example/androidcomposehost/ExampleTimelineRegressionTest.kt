@@ -3,10 +3,19 @@ package io.github.ikaros.vesper.example.androidcomposehost
 import io.github.ikaros.vesper.player.android.SeekableRangeUi
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.TimelineUiState
+import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ExampleTimelineRegressionTest {
+    @Test
+    fun `live dvr acceptance source is hls and queueable`() {
+        val source = androidLiveDvrAcceptanceSource(context = null)
+
+        assertEquals(ANDROID_LIVE_DVR_ACCEPTANCE_URL, source.uri)
+        assertEquals(VesperPlayerSourceProtocol.Hls, source.protocol)
+    }
+
     @Test
     fun `go live falls back to seekable end for live dvr`() {
         val timeline =
@@ -21,7 +30,7 @@ class ExampleTimelineRegressionTest {
 
         assertEquals(ExampleLiveButtonState.LiveBehind(5_000L), liveButtonState(timeline))
         assertEquals(
-            ExampleTimelineSummaryState.Window(positionMs = 55_000L, endMs = 60_000L),
+            ExampleTimelineSummaryState.Window(positionMs = 45_000L, endMs = 50_000L),
             timelineSummaryState(timeline, pendingSeekRatio = null),
         )
     }
@@ -59,7 +68,7 @@ class ExampleTimelineRegressionTest {
 
         assertEquals(90_000L, displayedTimelinePositionMs(timeline, pendingSeekRatio = 1.4f))
         assertEquals(
-            ExampleTimelineSummaryState.Window(positionMs = 90_000L, endMs = 90_000L),
+            ExampleTimelineSummaryState.Window(positionMs = 60_000L, endMs = 60_000L),
             timelineSummaryState(timeline, pendingSeekRatio = 1.4f),
         )
     }
@@ -79,7 +88,7 @@ class ExampleTimelineRegressionTest {
         assertEquals(70_000L, displayedTimelinePositionMs(timeline, pendingSeekRatio = null))
         assertEquals(ExampleLiveButtonState.Live, liveButtonState(timeline))
         assertEquals(
-            ExampleTimelineSummaryState.Window(positionMs = 70_000L, endMs = 70_000L),
+            ExampleTimelineSummaryState.Window(positionMs = 30_000L, endMs = 30_000L),
             timelineSummaryState(timeline, pendingSeekRatio = null),
         )
     }

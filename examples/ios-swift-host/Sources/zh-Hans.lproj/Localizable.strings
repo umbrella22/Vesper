@@ -17,6 +17,7 @@
 "example.sources.pick_video" = "选择视频";
 "example.sources.pick_from_photos" = "从相册选择";
 "example.sources.use_hls_demo" = "使用 HLS 演示";
+"example.sources.use_live_dvr_acceptance" = "Live DVR 验收";
 "example.sources.use_dash_demo" = "DASH 演示";
 "example.sources.dash_demo_unavailable_note" = "这里保留 DASH 演示入口用于结构对齐，但当前 iOS AVPlayer 后端暂不支持 DASH 播放。";
 "example.sources.theme_title" = "主题";
@@ -114,6 +115,7 @@
 
 "example.source.hls_demo_label" = "HLS 演示（BipBop）";
 "example.source.dash_demo_label" = "DASH 演示（Envivio）";
+"example.source.live_dvr_acceptance_label" = "Live DVR 验收（Unified SCTE-35）";
 "example.source.custom_remote_url_label" = "自定义远程 URL";
 
 "example.quality.button_capped" = "限码率";

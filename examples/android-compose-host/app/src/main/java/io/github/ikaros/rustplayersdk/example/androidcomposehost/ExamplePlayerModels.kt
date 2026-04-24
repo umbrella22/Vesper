@@ -107,8 +107,12 @@ internal const val ANDROID_HLS_DEMO_URL: String =
 internal const val ANDROID_DASH_DEMO_URL: String =
     "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd"
 
+internal const val ANDROID_LIVE_DVR_ACCEPTANCE_URL: String =
+    "https://demo.unified-streaming.com/k8s/live/scte35.isml/.m3u8"
+
 internal const val ANDROID_HLS_PLAYLIST_ITEM_ID: String = "hls-demo"
 internal const val ANDROID_DASH_PLAYLIST_ITEM_ID: String = "dash-demo"
+internal const val ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID: String = "live-dvr-acceptance"
 internal const val ANDROID_REMOTE_PLAYLIST_ITEM_ID: String = "custom-remote"
 internal const val ANDROID_LOCAL_PLAYLIST_ITEM_ID: String = "local-file"
 
@@ -122,6 +126,13 @@ internal fun androidDashDemoSource(context: Context? = null): VesperPlayerSource
     VesperPlayerSource.dash(
         uri = ANDROID_DASH_DEMO_URL,
         label = context?.getString(R.string.example_source_dash_demo_label) ?: "DASH Demo (Envivio)",
+    )
+
+internal fun androidLiveDvrAcceptanceSource(context: Context? = null): VesperPlayerSource =
+    VesperPlayerSource.hls(
+        uri = ANDROID_LIVE_DVR_ACCEPTANCE_URL,
+        label = context?.getString(R.string.example_source_live_dvr_acceptance_label)
+            ?: "Live DVR Acceptance (Unified SCTE-35)",
     )
 
 internal fun examplePlaylistQueue(
@@ -157,6 +168,20 @@ internal fun examplePlaylistQueue(
                                     expectedMemoryBytes = 256 * 1024L,
                                     expectedDiskBytes = 512 * 1024L,
                                     warmupWindowMs = 30_000L,
+                                ),
+                        ),
+                    )
+
+                ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID ->
+                    add(
+                        VesperPlaylistQueueItem(
+                            itemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
+                            source = androidLiveDvrAcceptanceSource(context),
+                            preloadProfile =
+                                VesperPlaylistItemPreloadProfile(
+                                    expectedMemoryBytes = 256 * 1024L,
+                                    expectedDiskBytes = 512 * 1024L,
+                                    warmupWindowMs = 15_000L,
                                 ),
                         ),
                     )

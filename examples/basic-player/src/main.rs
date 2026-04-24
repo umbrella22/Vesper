@@ -29,9 +29,9 @@ use desktop_ui::{
 };
 use player_core::MediaSource;
 #[cfg(not(target_os = "macos"))]
-use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window;
+use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window_with_options;
 #[cfg(not(target_os = "macos"))]
-use player_host_desktop::probe_desktop_host_launch_plan_uri;
+use player_host_desktop::probe_desktop_host_launch_plan_uri_with_options;
 #[cfg(target_os = "macos")]
 use player_host_desktop::render_config_from_media_info;
 use player_host_desktop::{
@@ -46,14 +46,13 @@ use player_render_wgpu::{
     DisplayRect, RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
     Yuv420pVideoFrame, default_window_attributes,
 };
-#[cfg(target_os = "macos")]
-use player_runtime::PlayerRuntimeOptions;
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
-    PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntime,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerSnapshot,
-    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-    PresentationState, VideoPixelFormat,
+    PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
+    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot, PlayerTimelineKind,
+    PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState,
+    VideoPixelFormat,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -72,6 +71,7 @@ const CONTROL_FADE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const PLAYBACK_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(125);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
+const DECODER_PLUGIN_PATHS_ENV: &str = "VESPER_DECODER_PLUGIN_PATHS";
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
 const MIN_WINDOW_INNER_WIDTH: u32 = 1280;
@@ -197,6 +197,7 @@ struct DesktopPlayerApp {
     open_file_dialog_pending: bool,
     host_message: Option<String>,
     download_message: Option<String>,
+    last_plugin_diagnostics_summary: Option<String>,
     overlay_dirty: bool,
     last_overlay_refresh_at: Option<Instant>,
 }
@@ -253,6 +254,7 @@ impl DesktopPlayerApp {
             open_file_dialog_pending: false,
             host_message: None,
             download_message: None,
+            last_plugin_diagnostics_summary: None,
             overlay_dirty: false,
             last_overlay_refresh_at: None,
         }
@@ -328,7 +330,12 @@ impl DesktopPlayerApp {
             .get(self.active_playlist_index)
             .map(|entry| entry.label.clone())
             .unwrap_or_else(|| self.current_source_label());
-        let subtitle = active_source_subtitle(snapshot);
+        let subtitle = match self.last_plugin_diagnostics_summary.as_deref() {
+            Some(summary) if !summary.is_empty() => {
+                format!("{} · {summary}", active_source_subtitle(snapshot))
+            }
+            _ => active_source_subtitle(snapshot),
+        };
 
         DesktopOverlayViewModel {
             source_label,
@@ -888,6 +895,7 @@ impl DesktopPlayerApp {
             source = launch_plan.source.as_str(),
             decoded_audio = startup.decoded_audio.as_ref().map(audio_summary),
             video_decode = startup.video_decode.as_ref().map(video_decode_summary),
+            plugin_diagnostics = plugin_diagnostics_summary(&startup.plugin_diagnostics).as_deref(),
             initial_pixel_format = initial_frame.as_ref().map(video_pixel_format_label),
             supports_frame_output = capabilities.supports_frame_output,
             supports_external_video_surface = capabilities.supports_external_video_surface,
@@ -902,6 +910,8 @@ impl DesktopPlayerApp {
         self.runtime = Some(runtime);
         self.seek_preview = None;
         self.host_message = None;
+        self.last_plugin_diagnostics_summary =
+            plugin_diagnostics_summary(&startup.plugin_diagnostics);
 
         if capabilities.supports_frame_output {
             let initial_frame =
@@ -1589,7 +1599,13 @@ impl DesktopPlayerApp {
         let Some(runtime) = self.runtime.as_mut() else {
             return;
         };
-        for event in runtime.drain_events() {
+        let events = runtime.drain_events();
+        for event in events {
+            if let PlayerRuntimeEvent::Initialized(startup) = &event {
+                self.last_plugin_diagnostics_summary =
+                    plugin_diagnostics_summary(&startup.plugin_diagnostics);
+                self.overlay_dirty = true;
+            }
             log_runtime_event(event);
         }
     }
@@ -1717,7 +1733,7 @@ fn open_basic_player_runtime_for_source(
     // 导致 overlay 失效、旧 frame 残留，并让切源看起来像“没有生效”。
     let bootstrap = open_macos_software_runtime_uri_with_options_and_interrupt(
         source.to_owned(),
-        PlayerRuntimeOptions::default(),
+        basic_player_runtime_options(),
         interrupt_flag,
     )?;
     let capabilities = bootstrap.runtime.capabilities();
@@ -1727,12 +1743,27 @@ fn open_basic_player_runtime_for_source(
 #[cfg(not(target_os = "macos"))]
 fn open_basic_player_runtime_for_window(
     source: &str,
-    _window: &Window,
+    window: &Window,
 ) -> Result<(
     PlayerRuntimeBootstrap,
     player_runtime::PlayerRuntimeAdapterCapabilities,
 )> {
-    open_desktop_host_runtime_uri_for_winit_window(source.to_owned(), _window)
+    open_desktop_host_runtime_uri_for_winit_window_with_options(
+        source.to_owned(),
+        window,
+        basic_player_runtime_options(),
+    )
+}
+
+fn basic_player_runtime_options() -> PlayerRuntimeOptions {
+    PlayerRuntimeOptions::default()
+        .with_decoder_plugin_library_paths(decoder_plugin_library_paths_from_env())
+}
+
+fn decoder_plugin_library_paths_from_env() -> Vec<PathBuf> {
+    std::env::var_os(DECODER_PLUGIN_PATHS_ENV)
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default()
 }
 
 fn video_frame_texture(frame: &DecodedVideoFrame) -> VideoFrameTexture {
@@ -2151,7 +2182,8 @@ impl ApplicationHandler for DesktopPlayerApp {
 
 #[cfg(not(target_os = "macos"))]
 fn build_launch_plan(source: String) -> Result<RuntimeLaunchPlan> {
-    let launch_probe = probe_desktop_host_launch_plan_uri(source)?;
+    let launch_probe =
+        probe_desktop_host_launch_plan_uri_with_options(source, basic_player_runtime_options())?;
     let probe = &launch_probe.runtime_probe;
 
     info!(
@@ -2160,6 +2192,7 @@ fn build_launch_plan(source: String) -> Result<RuntimeLaunchPlan> {
         ffmpeg_initialized = probe.startup.ffmpeg_initialized,
         audio_output = ?probe.startup.audio_output,
         video_decode = probe.startup.video_decode.as_ref().map(video_decode_summary),
+        plugin_diagnostics = plugin_diagnostics_summary(&probe.startup.plugin_diagnostics).as_deref(),
         preferred_backends = ?preferred_backends(),
         media_info = ?probe.media_info,
         supports_frame_output = probe.capabilities.supports_frame_output,
@@ -2217,6 +2250,43 @@ fn video_decode_summary(info: &PlayerVideoDecodeInfo) -> String {
     )
 }
 
+fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<String> {
+    if records.is_empty() {
+        return None;
+    }
+
+    let supported_decoders = records
+        .iter()
+        .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderSupported)
+        .filter_map(|record| record.plugin_name.as_deref())
+        .collect::<Vec<_>>();
+    if !supported_decoders.is_empty() {
+        return Some(format!(
+            "decoder plugins: {}",
+            supported_decoders.join(", ")
+        ));
+    }
+
+    let failed_count = records
+        .iter()
+        .filter(|record| record.status == PlayerPluginDiagnosticStatus::LoadFailed)
+        .count();
+    if failed_count > 0 {
+        return Some(format!(
+            "decoder plugins: {failed_count}/{} failed",
+            records.len()
+        ));
+    }
+
+    records.first().map(|record| {
+        record
+            .message
+            .clone()
+            .or_else(|| record.plugin_name.clone())
+            .unwrap_or_else(|| record.path.clone())
+    })
+}
+
 fn log_runtime_event(event: PlayerRuntimeEvent) {
     match event {
         PlayerRuntimeEvent::Initialized(startup) => {
@@ -2225,6 +2295,7 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
                 audio_output = ?startup.audio_output,
                 decoded_audio = startup.decoded_audio.as_ref().map(audio_summary),
                 video_decode = startup.video_decode.as_ref().map(video_decode_summary),
+                plugin_diagnostics = plugin_diagnostics_summary(&startup.plugin_diagnostics).as_deref(),
                 "player initialized"
             );
         }

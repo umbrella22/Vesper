@@ -216,6 +216,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     return switch (itemId) {
       flutterHlsPlaylistItemId => flutterHlsDemoSource(),
       flutterDashPlaylistItemId => flutterDashDemoSource(),
+      flutterLiveDvrPlaylistItemId => flutterLiveDvrAcceptanceSource(),
       flutterLocalPlaylistItemId => _queuedLocalSource,
       flutterRemotePlaylistItemId => _queuedRemoteSource,
       _ => null,
@@ -807,6 +808,13 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
                 controller,
                 itemId: flutterDashPlaylistItemId,
                 source: flutterDashDemoSource(),
+              ),
+            ),
+            onUseLiveDvrAcceptance: () => unawaited(
+              _activatePlaylistSource(
+                controller,
+                itemId: flutterLiveDvrPlaylistItemId,
+                source: flutterLiveDvrAcceptanceSource(),
               ),
             ),
             onOpenRemote: () => unawaited(_playCustomUrl(controller)),

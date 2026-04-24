@@ -36,6 +36,7 @@ struct ExampleSourceSection: View {
     let onPickVideo: () -> Void
     let onUseHlsDemo: () -> Void
     let onUseDashDemo: () -> Void
+    let onUseLiveDvrAcceptance: () -> Void
     let onOpenRemote: () -> Void
 
     var body: some View {
@@ -58,6 +59,7 @@ struct ExampleSourceSection: View {
                 HStack(spacing: 10) {
                     sourceActionButton(ExampleI18n.pickVideo, action: onPickVideo)
                     sourceActionButton(ExampleI18n.useHlsDemo, action: onUseHlsDemo)
+                    sourceActionButton(ExampleI18n.useLiveDvrAcceptance, action: onUseLiveDvrAcceptance)
                     sourceActionButton(
                         ExampleI18n.useDashDemo,
                         enabled: dashDemoEnabled,

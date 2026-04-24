@@ -107,7 +107,12 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
       return '直播 • 实时点 ${formatMillis(liveEdge)}';
     case VesperTimelineKind.liveDvr:
       final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
-      return '${formatMillis(displayedPosition)} / ${formatMillis(liveEdge)}';
+      final rangeStart = timeline.seekableRange?.startMs ?? 0;
+      final windowPosition = (displayedPosition - rangeStart)
+          .clamp(0, liveEdge)
+          .toInt();
+      final windowEnd = (liveEdge - rangeStart).clamp(0, liveEdge).toInt();
+      return '${formatMillis(windowPosition)} / ${formatMillis(windowEnd)}';
     case VesperTimelineKind.vod:
       return '${formatMillis(displayedPosition)} / ${formatMillis(timeline.durationMs ?? 0)}';
   }

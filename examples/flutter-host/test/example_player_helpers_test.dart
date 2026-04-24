@@ -4,6 +4,21 @@ import 'package:flutter_host/src/example_player_models.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 void main() {
+  test('live dvr acceptance source is hls and exposed in examples', () {
+    final source = flutterLiveDvrAcceptanceSource();
+
+    expect(source.uri, flutterLiveDvrAcceptanceUrl);
+    expect(source.protocol, VesperPlayerSourceProtocol.hls);
+    expect(
+      exampleSources.any(
+        (candidate) =>
+            candidate.uri == flutterLiveDvrAcceptanceUrl &&
+            candidate.protocol == VesperPlayerSourceProtocol.hls,
+      ),
+      isTrue,
+    );
+  });
+
   test('go live falls back to seekable end for live dvr', () {
     const timeline = VesperTimeline(
       kind: VesperTimelineKind.liveDvr,
@@ -15,7 +30,7 @@ void main() {
     );
 
     expect(liveButtonLabel(timeline), '直播 -00:05');
-    expect(timelineSummary(timeline, null), '00:55 / 01:00');
+    expect(timelineSummary(timeline, null), '00:45 / 00:50');
   });
 
   test('live edge tolerance keeps live badge active', () {
@@ -41,7 +56,7 @@ void main() {
       durationMs: 90000,
     );
 
-    expect(timelineSummary(timeline, 1.4), '01:30 / 01:30');
+    expect(timelineSummary(timeline, 1.4), '01:00 / 01:00');
   });
 
   test('window shrink clamps stale position before rendering', () {
@@ -55,7 +70,7 @@ void main() {
     );
 
     expect(liveButtonLabel(timeline), '直播');
-    expect(timelineSummary(timeline, null), '01:10 / 01:10');
+    expect(timelineSummary(timeline, null), '00:30 / 00:30');
   });
 
   test(

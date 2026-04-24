@@ -39,16 +39,25 @@ func timelineSummaryState(_ timeline: TimelineUiState, pendingSeekRatio: Double?
         }
         return .live
     case .liveDvr:
-        return .window(
-            positionMs: displayedPosition,
-            endMs: timeline.goLivePositionMs ?? timeline.durationMs ?? 0
-        )
+        return liveDvrWindowSummary(timeline, displayedPosition: displayedPosition)
     case .vod:
         return .window(
             positionMs: displayedPosition,
             endMs: timeline.durationMs ?? 0
         )
     }
+}
+
+private func liveDvrWindowSummary(
+    _ timeline: TimelineUiState,
+    displayedPosition: Int64
+) -> ExampleTimelineSummaryState {
+    let rangeStart = timeline.seekableRange?.startMs ?? 0
+    let windowEnd = timeline.goLivePositionMs ?? timeline.durationMs ?? 0
+    return .window(
+        positionMs: max(displayedPosition - rangeStart, 0),
+        endMs: max(windowEnd - rangeStart, 0)
+    )
 }
 
 func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {

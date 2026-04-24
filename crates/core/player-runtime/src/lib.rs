@@ -318,12 +318,33 @@ pub struct PlayerVideoDecodeInfo {
     pub fallback_reason: Option<String>,
 }
 
+/// Plugin diagnostic status reported during runtime startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerPluginDiagnosticStatus {
+    Loaded,
+    LoadFailed,
+    UnsupportedKind,
+    DecoderSupported,
+    DecoderUnsupported,
+}
+
+/// Rust-side plugin diagnostic record emitted by desktop runtime probes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerPluginDiagnostic {
+    pub path: String,
+    pub plugin_name: Option<String>,
+    pub plugin_kind: Option<String>,
+    pub status: PlayerPluginDiagnosticStatus,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PlayerRuntimeStartup {
     pub ffmpeg_initialized: bool,
     pub audio_output: Option<PlayerAudioOutputInfo>,
     pub decoded_audio: Option<DecodedAudioSummary>,
     pub video_decode: Option<PlayerVideoDecodeInfo>,
+    pub plugin_diagnostics: Vec<PlayerPluginDiagnostic>,
 }
 
 #[derive(Debug, Clone)]

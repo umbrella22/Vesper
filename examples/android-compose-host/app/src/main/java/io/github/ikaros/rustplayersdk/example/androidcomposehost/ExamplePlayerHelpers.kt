@@ -72,10 +72,7 @@ internal fun timelineSummaryState(
                 ?: ExampleTimelineSummaryState.Live
 
         TimelineKind.LiveDvr ->
-            ExampleTimelineSummaryState.Window(
-                positionMs = displayedPosition,
-                endMs = timeline.goLivePositionMs ?: timeline.durationMs ?: 0L,
-            )
+            liveDvrWindowSummary(timeline, displayedPosition)
 
         TimelineKind.Vod ->
             ExampleTimelineSummaryState.Window(
@@ -83,6 +80,18 @@ internal fun timelineSummaryState(
                 endMs = timeline.durationMs ?: 0L,
             )
     }
+}
+
+private fun liveDvrWindowSummary(
+    timeline: TimelineUiState,
+    displayedPosition: Long,
+): ExampleTimelineSummaryState.Window {
+    val rangeStart = timeline.seekableRange?.startMs ?: 0L
+    val windowEnd = timeline.goLivePositionMs ?: timeline.durationMs ?: 0L
+    return ExampleTimelineSummaryState.Window(
+        positionMs = (displayedPosition - rangeStart).coerceAtLeast(0L),
+        endMs = (windowEnd - rangeStart).coerceAtLeast(0L),
+    )
 }
 
 @Composable

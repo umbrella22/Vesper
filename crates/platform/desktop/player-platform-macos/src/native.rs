@@ -1143,6 +1143,7 @@ fn placeholder_startup() -> PlayerRuntimeStartup {
         audio_output: None,
         decoded_audio: None,
         video_decode: None,
+        plugin_diagnostics: Vec::new(),
     }
 }
 
@@ -1400,6 +1401,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         });
 
         let initial_events = session.drain_events();
@@ -1480,6 +1482,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         });
         let _ = session.drain_events();
 
@@ -1518,6 +1521,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         });
         let _ = session.drain_events();
 
@@ -1562,6 +1566,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         });
         let _ = session.drain_events();
 
@@ -1656,6 +1661,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         });
         let _ = session.drain_events();
 
@@ -1716,6 +1722,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         });
         let _ = session.drain_events();
         let _ = session
@@ -1772,6 +1779,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         });
         let _ = session.drain_events();
         let _ = session
@@ -1848,6 +1856,7 @@ mod tests {
                     audio_output: None,
                     decoded_audio: None,
                     video_decode: None,
+                    plugin_diagnostics: Vec::new(),
                 },
             })
         }
@@ -1941,6 +1950,7 @@ mod tests {
                     audio_output: None,
                     decoded_audio: None,
                     video_decode: None,
+                    plugin_diagnostics: Vec::new(),
                 },
             })
         }

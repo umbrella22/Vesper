@@ -3,6 +3,16 @@ import XCTest
 import VesperPlayerKit
 
 final class ExampleTimelineRegressionTests: XCTestCase {
+    func testLiveDvrAcceptanceSourceIsHlsAndQueueable() {
+        let source = iosLiveDvrAcceptanceSource()
+        XCTAssertEqual(source.uri, IOS_LIVE_DVR_ACCEPTANCE_URL)
+        XCTAssertEqual(source.protocol, .hls)
+
+        let queue = examplePlaylistQueue(playlistItemIds: [IOS_LIVE_DVR_PLAYLIST_ITEM_ID])
+        XCTAssertEqual(queue.map { $0.itemId }, [IOS_LIVE_DVR_PLAYLIST_ITEM_ID])
+        XCTAssertEqual(queue.first?.source.uri, IOS_LIVE_DVR_ACCEPTANCE_URL)
+    }
+
     func testGoLiveFallsBackToSeekableEndForLiveDvr() {
         let timeline = TimelineUiState(
             kind: .liveDvr,
@@ -16,7 +26,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertEqual(liveButtonState(timeline), .liveBehind(5_000))
         XCTAssertEqual(
             timelineSummaryState(timeline, pendingSeekRatio: nil),
-            .window(positionMs: 55_000, endMs: 60_000)
+            .window(positionMs: 45_000, endMs: 50_000)
         )
     }
 
@@ -50,7 +60,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertEqual(displayedTimelinePositionMs(timeline, pendingSeekRatio: 1.4), 90_000)
         XCTAssertEqual(
             timelineSummaryState(timeline, pendingSeekRatio: 1.4),
-            .window(positionMs: 90_000, endMs: 90_000)
+            .window(positionMs: 60_000, endMs: 60_000)
         )
     }
 
@@ -68,7 +78,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertEqual(liveButtonState(timeline), .live)
         XCTAssertEqual(
             timelineSummaryState(timeline, pendingSeekRatio: nil),
-            .window(positionMs: 70_000, endMs: 70_000)
+            .window(positionMs: 30_000, endMs: 30_000)
         )
     }
 

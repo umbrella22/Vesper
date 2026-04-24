@@ -311,6 +311,7 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             audio_output: audio_output_info(&self.audio_output),
             decoded_audio: None,
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         }
     }
 
@@ -358,6 +359,7 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             audio_output: audio_output_info(&audio_output),
             decoded_audio: decoded_audio.as_ref().map(decoded_audio_summary),
             video_decode: None,
+            plugin_diagnostics: Vec::new(),
         };
         let audio_output_enabled =
             options.enable_audio_output && audio_output.default_output_config.is_some();

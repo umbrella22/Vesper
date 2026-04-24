@@ -11,10 +11,13 @@ use player_platform_desktop::{
     open_platform_desktop_source_with_options_and_interrupt,
     probe_platform_desktop_source_with_options,
 };
-use player_plugin::DecoderMediaKind;
-use player_plugin_loader::LoadedDynamicPlugin;
+use player_plugin::VesperPluginKind;
+use player_plugin_loader::{
+    DecoderPluginMatchRequest, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+};
 use player_runtime::{
-    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntime, PlayerRuntimeAdapter,
+    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerRuntime, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
     PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
@@ -565,21 +568,40 @@ fn apply_decoder_plugin_diagnostics(
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
 ) -> PlayerRuntimeStartup {
-    let Some(video_decode) = startup.video_decode.take() else {
+    let Some(registry) = decoder_plugin_registry(media_info, options) else {
         return startup;
     };
-    startup.video_decode = Some(apply_decoder_plugin_diagnostics_to_video_decode(
-        video_decode,
-        media_info,
-        options,
-    ));
+    startup.plugin_diagnostics.extend(
+        registry
+            .records()
+            .iter()
+            .map(player_plugin_diagnostic_from_record),
+    );
+    if let Some(video_decode) = startup.video_decode.take() {
+        startup.video_decode = Some(apply_decoder_plugin_registry_to_video_decode(
+            video_decode,
+            media_info,
+            &registry,
+        ));
+    }
     startup
 }
 
 fn apply_decoder_plugin_diagnostics_to_video_decode(
-    mut video_decode: PlayerVideoDecodeInfo,
+    video_decode: PlayerVideoDecodeInfo,
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
+) -> PlayerVideoDecodeInfo {
+    let Some(registry) = decoder_plugin_registry(media_info, options) else {
+        return video_decode;
+    };
+    apply_decoder_plugin_registry_to_video_decode(video_decode, media_info, &registry)
+}
+
+fn apply_decoder_plugin_registry_to_video_decode(
+    mut video_decode: PlayerVideoDecodeInfo,
+    media_info: &PlayerMediaInfo,
+    registry: &PluginRegistry,
 ) -> PlayerVideoDecodeInfo {
     if video_decode
         .fallback_reason
@@ -589,7 +611,7 @@ fn apply_decoder_plugin_diagnostics_to_video_decode(
         return video_decode;
     }
 
-    if let Some(diagnostic) = decoder_plugin_diagnostic(media_info, options) {
+    if let Some(diagnostic) = decoder_plugin_diagnostic(media_info, registry) {
         video_decode.fallback_reason = Some(match video_decode.fallback_reason.take() {
             Some(existing) if !existing.is_empty() => format!("{existing}; {diagnostic}"),
             _ => diagnostic,
@@ -599,43 +621,26 @@ fn apply_decoder_plugin_diagnostics_to_video_decode(
     video_decode
 }
 
-fn decoder_plugin_diagnostic(
+fn decoder_plugin_registry(
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
-) -> Option<String> {
+) -> Option<PluginRegistry> {
     let best_video = media_info.best_video.as_ref()?;
     if options.decoder_plugin_library_paths.is_empty() {
         return None;
     }
+    Some(PluginRegistry::inspect_decoder_support(
+        &options.decoder_plugin_library_paths,
+        DecoderPluginMatchRequest::video(best_video.codec.clone()),
+    ))
+}
 
-    let mut supported_plugins = Vec::new();
-    let mut load_notes = Vec::new();
-    for path in &options.decoder_plugin_library_paths {
-        match LoadedDynamicPlugin::load(path) {
-            Ok(plugin) => match plugin.decoder_plugin_factory() {
-                Some(factory)
-                    if factory
-                        .capabilities()
-                        .supports_codec(&best_video.codec, DecoderMediaKind::Video) =>
-                {
-                    supported_plugins.push(factory.name().to_owned());
-                }
-                Some(factory) => {
-                    load_notes.push(format!(
-                        "{} does not advertise {} video support",
-                        factory.name(),
-                        best_video.codec
-                    ));
-                }
-                None => {
-                    load_notes.push(format!("{} is not a decoder plugin", plugin.plugin_name()));
-                }
-            },
-            Err(error) => {
-                load_notes.push(format!("{}: {error}", path.display()));
-            }
-        }
-    }
+fn decoder_plugin_diagnostic(
+    media_info: &PlayerMediaInfo,
+    registry: &PluginRegistry,
+) -> Option<String> {
+    let best_video = media_info.best_video.as_ref()?;
+    let supported_plugins = registry.decoder_supported_plugin_names();
 
     if !supported_plugins.is_empty() {
         return Some(format!(
@@ -645,6 +650,7 @@ fn decoder_plugin_diagnostic(
         ));
     }
 
+    let load_notes = registry.diagnostic_notes();
     Some(format!(
         "decoder plugin paths were configured, but no decoder plugin advertised {} video support{}",
         best_video.codec,
@@ -654,6 +660,36 @@ fn decoder_plugin_diagnostic(
             format!(" ({})", load_notes.join("; "))
         }
     ))
+}
+
+fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> PlayerPluginDiagnostic {
+    PlayerPluginDiagnostic {
+        path: record.path.display().to_string(),
+        plugin_name: record.plugin_name.clone(),
+        plugin_kind: record.plugin_kind.map(plugin_kind_label).map(str::to_owned),
+        status: match record.status {
+            PluginDiagnosticStatus::Loaded => PlayerPluginDiagnosticStatus::Loaded,
+            PluginDiagnosticStatus::LoadFailed => PlayerPluginDiagnosticStatus::LoadFailed,
+            PluginDiagnosticStatus::UnsupportedKind => {
+                PlayerPluginDiagnosticStatus::UnsupportedKind
+            }
+            PluginDiagnosticStatus::DecoderSupported => {
+                PlayerPluginDiagnosticStatus::DecoderSupported
+            }
+            PluginDiagnosticStatus::DecoderUnsupported => {
+                PlayerPluginDiagnosticStatus::DecoderUnsupported
+            }
+        },
+        message: record.message.clone(),
+    }
+}
+
+fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
+    match kind {
+        VesperPluginKind::PostDownloadProcessor => "post_download_processor",
+        VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
+        VesperPluginKind::Decoder => "decoder",
+    }
 }
 
 fn should_prefer_native_host_runtime(
@@ -810,16 +846,17 @@ mod tests {
     use super::{
         MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
-        MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics_to_video_decode,
-        macos_video_decode_info, open_macos_host_runtime_source_with_options,
+        MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics,
+        apply_decoder_plugin_diagnostics_to_video_decode, macos_video_decode_info,
+        open_macos_host_runtime_source_with_options,
         probe_macos_host_runtime_initializer_with_factories,
         probe_macos_host_runtime_source_with_options,
     };
     use player_core::MediaSource;
     use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
     use player_runtime::{
-        DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntimeAdapter,
-        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+        DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnosticStatus,
+        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
         PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
         PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
         PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
@@ -1111,6 +1148,31 @@ mod tests {
     }
 
     #[test]
+    fn macos_startup_records_decoder_plugin_registry_diagnostics() {
+        let media_info = media_info_with_codec("fixture-video");
+        let startup = apply_decoder_plugin_diagnostics(
+            startup_with_video_decode(macos_video_decode_info(&media_info)),
+            &media_info,
+            &PlayerRuntimeOptions::default()
+                .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")]),
+        );
+
+        assert_eq!(startup.plugin_diagnostics.len(), 1);
+        assert_eq!(
+            startup.plugin_diagnostics[0].status,
+            PlayerPluginDiagnosticStatus::LoadFailed
+        );
+        assert!(
+            startup
+                .video_decode
+                .as_ref()
+                .and_then(|info| info.fallback_reason.as_deref())
+                .unwrap_or_default()
+                .contains("decoder plugin paths were configured")
+        );
+    }
+
+    #[test]
     fn macos_host_runtime_without_surface_falls_back_to_software() {
         if !cfg!(target_os = "macos") {
             return;
@@ -1226,6 +1288,7 @@ mod tests {
             audio_output: None,
             decoded_audio: None,
             video_decode: Some(video_decode),
+            plugin_diagnostics: Vec::new(),
         }
     }
 

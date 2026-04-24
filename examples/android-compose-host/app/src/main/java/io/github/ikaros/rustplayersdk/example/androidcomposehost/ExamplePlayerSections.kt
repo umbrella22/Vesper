@@ -87,6 +87,7 @@ internal fun ExampleSourceSection(
     onPickVideo: () -> Unit,
     onUseHlsDemo: () -> Unit,
     onUseDashDemo: () -> Unit,
+    onUseLiveDvrAcceptance: () -> Unit,
     onOpenRemote: () -> Unit,
 ) {
     Column(
@@ -118,6 +119,9 @@ internal fun ExampleSourceSection(
             }
             OutlinedButton(onClick = onUseHlsDemo) {
                 Text(stringResource(R.string.example_sources_hls_demo))
+            }
+            OutlinedButton(onClick = onUseLiveDvrAcceptance) {
+                Text(stringResource(R.string.example_sources_live_dvr_acceptance))
             }
             OutlinedButton(onClick = onUseDashDemo) {
                 Text(stringResource(R.string.example_sources_dash_demo))

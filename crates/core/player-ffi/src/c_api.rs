@@ -3357,6 +3357,7 @@ mod tests {
                     hardware_backend: Some("stub-hw".to_owned()),
                     fallback_reason: None,
                 }),
+                plugin_diagnostics: Vec::new(),
             };
 
             Self {

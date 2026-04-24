@@ -31,6 +31,7 @@ enum ExampleI18n {
     static var pickFromPhotos: String { string("example.sources.pick_from_photos") }
     static var useHlsDemo: String { string("example.sources.use_hls_demo") }
     static var useDashDemo: String { string("example.sources.use_dash_demo") }
+    static var useLiveDvrAcceptance: String { string("example.sources.use_live_dvr_acceptance") }
     static var dashDemoUnavailableNote: String { string("example.sources.dash_demo_unavailable_note") }
     static var themeTitle: String { string("example.sources.theme_title") }
     static var remoteUrlPlaceholder: String { string("example.sources.remote_url_placeholder") }
@@ -153,6 +154,7 @@ enum ExampleI18n {
 
     static var hlsDemoLabel: String { string("example.source.hls_demo_label") }
     static var dashDemoLabel: String { string("example.source.dash_demo_label") }
+    static var liveDvrAcceptanceLabel: String { string("example.source.live_dvr_acceptance_label") }
     static var customRemoteUrlLabel: String { string("example.source.custom_remote_url_label") }
 
     static var qualityButtonCapped: String { string("example.quality.button_capped") }

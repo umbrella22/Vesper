@@ -80,6 +80,7 @@ import VesperPlayerKit
             onPickVideo: {},
             onUseHlsDemo: {},
             onUseDashDemo: {},
+            onUseLiveDvrAcceptance: {},
             onOpenRemote: {}
         )
         .padding(20)

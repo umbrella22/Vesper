@@ -1589,6 +1589,7 @@ fn placeholder_startup() -> PlayerRuntimeStartup {
         audio_output: None,
         decoded_audio: None,
         video_decode: None,
+        plugin_diagnostics: Vec::new(),
     }
 }
 
@@ -2276,6 +2277,7 @@ mod tests {
                 audio_output: None,
                 decoded_audio: None,
                 video_decode: None,
+                plugin_diagnostics: Vec::new(),
             },
         ));
         assert!(initialized.is_none());
@@ -2429,6 +2431,7 @@ mod tests {
                     audio_output: None,
                     decoded_audio: None,
                     video_decode: None,
+                    plugin_diagnostics: Vec::new(),
                 },
             })
         }
@@ -2569,6 +2572,7 @@ mod tests {
                     audio_output: None,
                     decoded_audio: None,
                     video_decode: None,
+                    plugin_diagnostics: Vec::new(),
                 },
             })
         }

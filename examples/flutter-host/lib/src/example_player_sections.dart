@@ -67,6 +67,7 @@ class ExampleSourceSection extends StatelessWidget {
     required this.onPickVideo,
     required this.onUseHlsDemo,
     required this.onUseDashDemo,
+    required this.onUseLiveDvrAcceptance,
     required this.onOpenRemote,
     this.dashUnavailableMessage,
   });
@@ -80,6 +81,7 @@ class ExampleSourceSection extends StatelessWidget {
   final VoidCallback onPickVideo;
   final VoidCallback onUseHlsDemo;
   final VoidCallback onUseDashDemo;
+  final VoidCallback onUseLiveDvrAcceptance;
   final VoidCallback onOpenRemote;
   final String? dashUnavailableMessage;
 
@@ -123,6 +125,11 @@ class ExampleSourceSection extends StatelessWidget {
                 OutlinedButton(
                   onPressed: onUseHlsDemo,
                   child: const Text('HLS 演示'),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton(
+                  onPressed: onUseLiveDvrAcceptance,
+                  child: const Text('Live DVR 验收'),
                 ),
                 const SizedBox(width: 10),
                 OutlinedButton(

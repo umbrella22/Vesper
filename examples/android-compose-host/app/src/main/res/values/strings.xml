@@ -29,6 +29,7 @@
     <string name="example_sources_subtitle">Use these demo actions to switch among local files, HLS, DASH, and custom remote URLs.</string>
     <string name="example_sources_pick_video">Pick Video</string>
     <string name="example_sources_hls_demo">HLS Demo</string>
+    <string name="example_sources_live_dvr_acceptance">Live DVR Check</string>
     <string name="example_sources_dash_demo">DASH Demo</string>
     <string name="example_sources_remote_stream_url">Remote stream URL</string>
     <string name="example_sources_theme">Theme</string>
@@ -142,6 +143,7 @@
     <string name="example_source_custom_remote_label">Custom Remote Stream</string>
     <string name="example_source_hls_demo_label">HLS Demo (BipBop)</string>
     <string name="example_source_dash_demo_label">DASH Demo (Envivio)</string>
+    <string name="example_source_live_dvr_acceptance_label">Live DVR Acceptance (Unified SCTE-35)</string>
 
     <string name="example_unit_audio_channels">%1$d ch</string>
     <string name="example_unit_audio_sample_rate_khz">%1$d kHz</string>

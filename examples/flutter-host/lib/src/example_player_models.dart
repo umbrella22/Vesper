@@ -166,8 +166,11 @@ const String flutterHlsDemoUrl =
 
 const String flutterDashDemoUrl =
     'https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd';
+const String flutterLiveDvrAcceptanceUrl =
+    'https://demo.unified-streaming.com/k8s/live/scte35.isml/.m3u8';
 const String flutterHlsPlaylistItemId = 'hls-demo';
 const String flutterDashPlaylistItemId = 'dash-demo';
+const String flutterLiveDvrPlaylistItemId = 'live-dvr-acceptance';
 const String flutterRemotePlaylistItemId = 'custom-remote';
 const String flutterLocalPlaylistItemId = 'local-file';
 
@@ -183,6 +186,12 @@ const List<ExampleSource> exampleSources = <ExampleSource>[
     subtitle: 'Envivio，多清晰度清单',
     uri: flutterDashDemoUrl,
     protocol: VesperPlayerSourceProtocol.dash,
+  ),
+  ExampleSource(
+    title: 'Live DVR 验收',
+    subtitle: 'Unified SCTE-35 公开 HLS，手测 Go Live 与 DVR slider',
+    uri: flutterLiveDvrAcceptanceUrl,
+    protocol: VesperPlayerSourceProtocol.hls,
   ),
 ];
 
@@ -240,5 +249,12 @@ VesperPlayerSource flutterDashDemoSource() {
   return VesperPlayerSource.dash(
     uri: flutterDashDemoUrl,
     label: 'DASH 演示（Envivio）',
+  );
+}
+
+VesperPlayerSource flutterLiveDvrAcceptanceSource() {
+  return VesperPlayerSource.hls(
+    uri: flutterLiveDvrAcceptanceUrl,
+    label: 'Live DVR 验收（Unified SCTE-35）',
   );
 }

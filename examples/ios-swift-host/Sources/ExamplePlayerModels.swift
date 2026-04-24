@@ -157,8 +157,11 @@ let IOS_HLS_DEMO_URL =
     "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
 let IOS_DASH_DEMO_URL =
     "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd"
+let IOS_LIVE_DVR_ACCEPTANCE_URL =
+    "https://demo.unified-streaming.com/k8s/live/scte35.isml/.m3u8"
 let IOS_HLS_PLAYLIST_ITEM_ID = "hls-demo"
 let IOS_DASH_PLAYLIST_ITEM_ID = "dash-demo"
+let IOS_LIVE_DVR_PLAYLIST_ITEM_ID = "live-dvr-acceptance"
 let IOS_REMOTE_PLAYLIST_ITEM_ID = "custom-remote"
 let IOS_LOCAL_PLAYLIST_ITEM_ID = "local-file"
 
@@ -173,6 +176,13 @@ func iosDashDemoSource() -> VesperPlayerSource {
     return VesperPlayerSource.dash(
         url: URL(string: IOS_DASH_DEMO_URL)!,
         label: ExampleI18n.dashDemoLabel
+    )
+}
+
+func iosLiveDvrAcceptanceSource() -> VesperPlayerSource {
+    return VesperPlayerSource.hls(
+        url: URL(string: IOS_LIVE_DVR_ACCEPTANCE_URL)!,
+        label: ExampleI18n.liveDvrAcceptanceLabel
     )
 }
 
@@ -202,6 +212,17 @@ func examplePlaylistQueue(
                     expectedMemoryBytes: 256 * 1024,
                     expectedDiskBytes: 512 * 1024,
                     warmupWindowMs: 30_000
+                )
+            )
+
+        case IOS_LIVE_DVR_PLAYLIST_ITEM_ID:
+            return VesperPlaylistQueueItem(
+                itemId: IOS_LIVE_DVR_PLAYLIST_ITEM_ID,
+                source: iosLiveDvrAcceptanceSource(),
+                preloadProfile: VesperPlaylistItemPreloadProfile(
+                    expectedMemoryBytes: 256 * 1024,
+                    expectedDiskBytes: 512 * 1024,
+                    warmupWindowMs: 15_000
                 )
             )
 

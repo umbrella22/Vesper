@@ -536,6 +536,18 @@ fun PlayerHostApp(
                                         )
                                         controlsVisible = true
                                     },
+                                    onUseLiveDvrAcceptance = {
+                                        val nextPlaylistItems =
+                                            enqueuePlaylistItem(
+                                                playlistItemIds = playlistItemIds,
+                                                itemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
+                                            )
+                                        applyPlaylistQueue(
+                                            focusItemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
+                                            playlistItems = nextPlaylistItems,
+                                        )
+                                        controlsVisible = true
+                                    },
                                     onOpenRemote = {
                                         val url = remoteStreamUrl.trim()
                                         if (url.isNotEmpty()) {

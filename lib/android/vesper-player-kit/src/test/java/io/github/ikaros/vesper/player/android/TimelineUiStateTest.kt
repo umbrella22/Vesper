@@ -74,4 +74,14 @@ class TimelineUiStateTest {
         assertEquals(1f, timeline.displayedRatio ?: 0f, 0.0001f)
         assertTrue(timeline.isAtLiveEdge())
     }
+
+    @Test
+    fun liveDvrTimelineCoordinatesMapToExoPlayerWindowCoordinates() {
+        val window = LiveTimelineWindowCoordinates(startMs = 240_000, durationMs = 120_000)
+
+        assertEquals(300_000L, timelinePositionFromWindowPosition(window.startMs, 60_000L))
+        assertEquals(0L, windowPositionFromTimelinePosition(120_000L, window))
+        assertEquals(60_000L, windowPositionFromTimelinePosition(300_000L, window))
+        assertEquals(120_000L, windowPositionFromTimelinePosition(420_000L, window))
+    }
 }

@@ -29,6 +29,7 @@
     <string name="example_sources_subtitle">使用这些演示操作在本地文件、HLS、DASH 和自定义远程 URL 之间切换。</string>
     <string name="example_sources_pick_video">选择视频</string>
     <string name="example_sources_hls_demo">HLS 演示</string>
+    <string name="example_sources_live_dvr_acceptance">Live DVR 验收</string>
     <string name="example_sources_dash_demo">DASH 演示</string>
     <string name="example_sources_remote_stream_url">远程流 URL</string>
     <string name="example_sources_theme">主题</string>
@@ -142,6 +143,7 @@
     <string name="example_source_custom_remote_label">自定义远程流</string>
     <string name="example_source_hls_demo_label">HLS 演示（BipBop）</string>
     <string name="example_source_dash_demo_label">DASH 演示（Envivio）</string>
+    <string name="example_source_live_dvr_acceptance_label">Live DVR 验收（Unified SCTE-35）</string>
 
     <string name="example_unit_audio_channels">%1$d 声道</string>
     <string name="example_unit_audio_sample_rate_khz">%1$d kHz</string>

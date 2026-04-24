@@ -357,6 +357,7 @@ pub fn probe_source_with_avfoundation(
                 audio_output: None,
                 decoded_audio: None,
                 video_decode,
+                plugin_diagnostics: Vec::new(),
             },
         })
     }
