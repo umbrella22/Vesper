@@ -2255,6 +2255,7 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
         return None;
     }
 
+    let total = records.len();
     let supported_decoders = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderSupported)
@@ -2262,7 +2263,9 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
         .collect::<Vec<_>>();
     if !supported_decoders.is_empty() {
         return Some(format!(
-            "decoder plugins: {}",
+            "decoder plugins: {}/{} supported ({}); diagnostic-only, playback still uses native-first/FFmpeg fallback",
+            supported_decoders.len(),
+            total,
             supported_decoders.join(", ")
         ));
     }
@@ -2271,20 +2274,19 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::LoadFailed)
         .count();
-    if failed_count > 0 {
-        return Some(format!(
-            "decoder plugins: {failed_count}/{} failed",
-            records.len()
-        ));
-    }
+    let loaded_count = total.saturating_sub(failed_count);
+    let unsupported_codec_count = records
+        .iter()
+        .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderUnsupported)
+        .count();
+    let unsupported_kind_count = records
+        .iter()
+        .filter(|record| record.status == PlayerPluginDiagnosticStatus::UnsupportedKind)
+        .count();
 
-    records.first().map(|record| {
-        record
-            .message
-            .clone()
-            .or_else(|| record.plugin_name.clone())
-            .unwrap_or_else(|| record.path.clone())
-    })
+    Some(format!(
+        "decoder plugins: 0/{total} supported, {loaded_count} loaded, {failed_count} failed, {unsupported_codec_count} unsupported codec, {unsupported_kind_count} non-decoder"
+    ))
 }
 
 fn log_runtime_event(event: PlayerRuntimeEvent) {

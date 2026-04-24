@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use libloading::Library;
 use player_plugin::{
-    CompletedDownloadInfo, DecoderCapabilities, DecoderError, DecoderMediaKind,
-    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderPluginFactory,
-    DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput, DecoderReceiveFrameStatus,
-    DecoderSession, DecoderSessionConfig, DecoderSessionInfo, PipelineEvent, PipelineEventHook,
-    PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,
-    ProcessorProgress, VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL,
+    CompletedDownloadInfo, DecoderCapabilities, DecoderCodecCapability, DecoderError,
+    DecoderMediaKind, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
+    DecoderPluginFactory, DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput,
+    DecoderReceiveFrameStatus, DecoderSession, DecoderSessionConfig, DecoderSessionInfo,
+    PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
+    ProcessorOutput, ProcessorProgress, VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApi, VesperDecoderReceiveFrameResult,
     VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
@@ -222,9 +222,26 @@ impl DecoderPluginMatchRequest {
     }
 }
 
+/// Structured codec entry reported by one decoder plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecoderPluginCodecSummary {
+    pub codec: String,
+    pub media_kind: DecoderMediaKind,
+}
+
+impl From<&DecoderCodecCapability> for DecoderPluginCodecSummary {
+    fn from(capability: &DecoderCodecCapability) -> Self {
+        Self {
+            codec: capability.codec.clone(),
+            media_kind: capability.media_kind,
+        }
+    }
+}
+
 /// Compact capability summary for one decoder plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecoderPluginCapabilitySummary {
+    pub typed_codecs: Vec<DecoderPluginCodecSummary>,
     pub codecs: Vec<String>,
     pub supports_hardware_decode: bool,
     pub supports_cpu_video_frames: bool,
@@ -237,12 +254,18 @@ pub struct DecoderPluginCapabilitySummary {
 
 impl From<&DecoderCapabilities> for DecoderPluginCapabilitySummary {
     fn from(capabilities: &DecoderCapabilities) -> Self {
+        let typed_codecs = capabilities
+            .codecs
+            .iter()
+            .map(DecoderPluginCodecSummary::from)
+            .collect::<Vec<_>>();
         let codecs = capabilities
             .codecs
             .iter()
             .map(|codec| format!("{:?}:{}", codec.media_kind, codec.codec))
             .collect();
         Self {
+            typed_codecs,
             codecs,
             supports_hardware_decode: capabilities.supports_hardware_decode,
             supports_cpu_video_frames: capabilities.supports_cpu_video_frames,
@@ -351,18 +374,24 @@ impl PluginDiagnosticRecord {
     }
 
     pub fn summary(&self) -> String {
-        match self.plugin_name.as_deref() {
-            Some(name) => self
-                .message
-                .as_deref()
-                .map(|message| format!("{name}: {message}"))
-                .unwrap_or_else(|| name.to_owned()),
-            None => self
-                .message
-                .clone()
-                .unwrap_or_else(|| self.path.display().to_string()),
-        }
+        self.message
+            .clone()
+            .or_else(|| self.plugin_name.clone())
+            .unwrap_or_else(|| self.path.display().to_string())
     }
+}
+
+/// Aggregated loader-side report for inspected dynamic plugin paths.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PluginRegistryReport {
+    pub total: usize,
+    pub loaded: usize,
+    pub failed: usize,
+    pub decoder_supported: usize,
+    pub decoder_unsupported: usize,
+    pub unsupported_kind: usize,
+    pub best_supported_decoder_name: Option<String>,
+    pub diagnostic_notes: Vec<String>,
 }
 
 /// Structured report for dynamic plugins loaded from host-provided paths.
@@ -391,8 +420,34 @@ impl PluginRegistry {
         Self { records }
     }
 
+    pub fn from_records(records: Vec<PluginDiagnosticRecord>) -> Self {
+        Self { records }
+    }
+
     pub fn records(&self) -> &[PluginDiagnosticRecord] {
         &self.records
+    }
+
+    pub fn best_decoder_for(
+        &self,
+        request: &DecoderPluginMatchRequest,
+    ) -> Option<&PluginDiagnosticRecord> {
+        self.records.iter().find(|record| {
+            record.status == PluginDiagnosticStatus::DecoderSupported
+                && record
+                    .decoder_capabilities
+                    .as_ref()
+                    .is_some_and(|capabilities| {
+                        capabilities.typed_codecs.iter().any(|codec| {
+                            codec.media_kind == request.media_kind
+                                && codec.codec.eq_ignore_ascii_case(&request.codec)
+                        })
+                    })
+        })
+    }
+
+    pub fn supports_decoder(&self, request: &DecoderPluginMatchRequest) -> bool {
+        self.best_decoder_for(request).is_some()
     }
 
     pub fn decoder_supported_plugin_names(&self) -> Vec<&str> {
@@ -409,6 +464,45 @@ impl PluginRegistry {
             .filter(|record| record.status != PluginDiagnosticStatus::DecoderSupported)
             .map(PluginDiagnosticRecord::summary)
             .collect()
+    }
+
+    pub fn report(&self) -> PluginRegistryReport {
+        let mut report = PluginRegistryReport {
+            total: self.records.len(),
+            ..PluginRegistryReport::default()
+        };
+
+        for record in &self.records {
+            match record.status {
+                PluginDiagnosticStatus::Loaded => {
+                    report.loaded += 1;
+                    report.diagnostic_notes.push(record.summary());
+                }
+                PluginDiagnosticStatus::LoadFailed => {
+                    report.failed += 1;
+                    report.diagnostic_notes.push(record.summary());
+                }
+                PluginDiagnosticStatus::UnsupportedKind => {
+                    report.loaded += 1;
+                    report.unsupported_kind += 1;
+                    report.diagnostic_notes.push(record.summary());
+                }
+                PluginDiagnosticStatus::DecoderSupported => {
+                    report.loaded += 1;
+                    report.decoder_supported += 1;
+                    if report.best_supported_decoder_name.is_none() {
+                        report.best_supported_decoder_name = record.plugin_name.clone();
+                    }
+                }
+                PluginDiagnosticStatus::DecoderUnsupported => {
+                    report.loaded += 1;
+                    report.decoder_unsupported += 1;
+                    report.diagnostic_notes.push(record.summary());
+                }
+            }
+        }
+
+        report
     }
 }
 
@@ -1274,8 +1368,8 @@ fn decode_plugin_bytes<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::{
-        DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginDiagnosticRecord,
-        PluginDiagnosticStatus, PluginRegistry,
+        DecoderPluginCodecSummary, DecoderPluginMatchRequest, LoadedDynamicPlugin,
+        PluginDiagnosticRecord, PluginDiagnosticStatus, PluginLoadError, PluginRegistry,
     };
     use player_plugin::{
         CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DecoderCapabilities,
@@ -1580,6 +1674,17 @@ mod tests {
                 .iter()
                 .any(|codec| codec == "Video:fixture-video")
         );
+        assert!(
+            record
+                .decoder_capabilities
+                .as_ref()
+                .expect("capabilities")
+                .typed_codecs
+                .contains(&DecoderPluginCodecSummary {
+                    codec: "fixture-video".to_owned(),
+                    media_kind: DecoderMediaKind::Video,
+                })
+        );
     }
 
     #[test]
@@ -1606,6 +1711,76 @@ mod tests {
                 .as_deref()
                 .unwrap_or_default()
                 .contains("does not advertise")
+        );
+    }
+
+    #[test]
+    fn plugin_registry_report_counts_and_best_decoder_are_stable() {
+        let api = fixture_decoder_api();
+        let decoder_descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperDecoderPluginApi).cast(),
+        };
+        let decoder =
+            LoadedDynamicPlugin::from_descriptor(None, &decoder_descriptor).expect("load decoder");
+        let processor_api = fixture_processor_api();
+        let processor_descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::PostDownloadProcessor,
+            plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&processor_api as *const VesperPostDownloadProcessorApi).cast(),
+        };
+        let processor = LoadedDynamicPlugin::from_descriptor(None, &processor_descriptor)
+            .expect("load processor");
+
+        let request = DecoderPluginMatchRequest::video("fixture-video");
+        let registry = PluginRegistry::from_records(vec![
+            PluginDiagnosticRecord::from_loaded_plugin(
+                PathBuf::from("fixture-decoder-supported"),
+                &decoder,
+                Some(&request),
+            ),
+            PluginDiagnosticRecord::from_loaded_plugin(
+                PathBuf::from("fixture-decoder-unsupported"),
+                &decoder,
+                Some(&DecoderPluginMatchRequest::video("missing-video")),
+            ),
+            PluginDiagnosticRecord::from_loaded_plugin(
+                PathBuf::from("fixture-processor"),
+                &processor,
+                Some(&request),
+            ),
+            PluginDiagnosticRecord::load_failed(
+                PathBuf::from("missing-plugin"),
+                PluginLoadError::NullDescriptor,
+            ),
+        ]);
+        let report = registry.report();
+
+        assert!(registry.supports_decoder(&request));
+        assert_eq!(
+            registry
+                .best_decoder_for(&request)
+                .and_then(|record| record.plugin_name.as_deref()),
+            Some("fixture-decoder")
+        );
+        assert_eq!(report.total, 4);
+        assert_eq!(report.loaded, 3);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.decoder_supported, 1);
+        assert_eq!(report.decoder_unsupported, 1);
+        assert_eq!(report.unsupported_kind, 1);
+        assert_eq!(
+            report.best_supported_decoder_name.as_deref(),
+            Some("fixture-decoder")
+        );
+        assert_eq!(report.diagnostic_notes.len(), 3);
+        assert!(
+            report.diagnostic_notes.iter().any(
+                |note| note == "fixture-decoder does not advertise Video missing-video support"
+            )
         );
     }
 

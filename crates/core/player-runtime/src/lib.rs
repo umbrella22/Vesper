@@ -328,6 +328,27 @@ pub enum PlayerPluginDiagnosticStatus {
     DecoderUnsupported,
 }
 
+/// Rust-side codec capability summary emitted by decoder plugin diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerPluginCodecCapability {
+    pub media_kind: String,
+    pub codec: String,
+}
+
+/// Rust-side decoder capability summary emitted by desktop runtime probes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerPluginDecoderCapabilitySummary {
+    pub codecs: Vec<PlayerPluginCodecCapability>,
+    pub legacy_codecs: Vec<String>,
+    pub supports_hardware_decode: bool,
+    pub supports_cpu_video_frames: bool,
+    pub supports_audio_frames: bool,
+    pub supports_gpu_handles: bool,
+    pub supports_flush: bool,
+    pub supports_drain: bool,
+    pub max_sessions: Option<u32>,
+}
+
 /// Rust-side plugin diagnostic record emitted by desktop runtime probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginDiagnostic {
@@ -336,6 +357,7 @@ pub struct PlayerPluginDiagnostic {
     pub plugin_kind: Option<String>,
     pub status: PlayerPluginDiagnosticStatus,
     pub message: Option<String>,
+    pub decoder_capabilities: Option<PlayerPluginDecoderCapabilitySummary>,
 }
 
 #[derive(Debug, Clone)]

@@ -11,19 +11,20 @@ use player_platform_desktop::{
     open_platform_desktop_source_with_options_and_interrupt,
     probe_platform_desktop_source_with_options,
 };
-use player_plugin::VesperPluginKind;
+use player_plugin::{DecoderMediaKind, VesperPluginKind};
 use player_plugin_loader::{
-    DecoderPluginMatchRequest, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+    DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
+    PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
 };
 use player_runtime::{
-    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerRuntime, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
-    PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState,
-    register_default_runtime_adapter_factory,
+    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerPluginCodecCapability,
+    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
+    PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
+    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+    PresentationState, register_default_runtime_adapter_factory,
 };
 
 pub const MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_software_desktop";
@@ -640,24 +641,32 @@ fn decoder_plugin_diagnostic(
     registry: &PluginRegistry,
 ) -> Option<String> {
     let best_video = media_info.best_video.as_ref()?;
+    let request = DecoderPluginMatchRequest::video(best_video.codec.clone());
+    let report = registry.report();
     let supported_plugins = registry.decoder_supported_plugin_names();
 
-    if !supported_plugins.is_empty() {
+    if registry.supports_decoder(&request) {
         return Some(format!(
-            "decoder plugin ABI v1 discovered candidate(s) for {} video: {}; macOS host diagnostics record them but playback still uses the native-first/FFmpeg fallback strategy",
+            "decoder plugin ABI v1 found {}/{} candidate(s) for {} video: {}; diagnostic-only, playback still uses native-first/FFmpeg fallback",
+            report.decoder_supported,
+            report.total,
             best_video.codec,
             supported_plugins.join(", ")
         ));
     }
 
-    let load_notes = registry.diagnostic_notes();
     Some(format!(
-        "decoder plugin paths were configured, but no decoder plugin advertised {} video support{}",
+        "decoder plugin paths configured for {} video: {}/{} supported, {} unsupported codec, {} load failed, {} non-decoder{}",
         best_video.codec,
-        if load_notes.is_empty() {
+        report.decoder_supported,
+        report.total,
+        report.decoder_unsupported,
+        report.failed,
+        report.unsupported_kind,
+        if report.diagnostic_notes.is_empty() {
             String::new()
         } else {
-            format!(" ({})", load_notes.join("; "))
+            format!(" ({})", report.diagnostic_notes.join("; "))
         }
     ))
 }
@@ -681,6 +690,43 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
             }
         },
         message: record.message.clone(),
+        decoder_capabilities: record
+            .decoder_capabilities
+            .as_ref()
+            .map(player_decoder_capability_summary_from_loader),
+    }
+}
+
+fn player_decoder_capability_summary_from_loader(
+    summary: &DecoderPluginCapabilitySummary,
+) -> PlayerPluginDecoderCapabilitySummary {
+    PlayerPluginDecoderCapabilitySummary {
+        codecs: summary
+            .typed_codecs
+            .iter()
+            .map(player_decoder_codec_summary_from_loader)
+            .collect(),
+        legacy_codecs: summary.codecs.clone(),
+        supports_hardware_decode: summary.supports_hardware_decode,
+        supports_cpu_video_frames: summary.supports_cpu_video_frames,
+        supports_audio_frames: summary.supports_audio_frames,
+        supports_gpu_handles: summary.supports_gpu_handles,
+        supports_flush: summary.supports_flush,
+        supports_drain: summary.supports_drain,
+        max_sessions: summary.max_sessions,
+    }
+}
+
+fn player_decoder_codec_summary_from_loader(
+    summary: &DecoderPluginCodecSummary,
+) -> PlayerPluginCodecCapability {
+    PlayerPluginCodecCapability {
+        media_kind: match summary.media_kind {
+            DecoderMediaKind::Video => "video",
+            DecoderMediaKind::Audio => "audio",
+        }
+        .to_owned(),
+        codec: summary.codec.clone(),
     }
 }
 
@@ -847,13 +893,19 @@ mod tests {
         MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
         MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics,
-        apply_decoder_plugin_diagnostics_to_video_decode, macos_video_decode_info,
+        apply_decoder_plugin_diagnostics_to_video_decode,
+        apply_decoder_plugin_registry_to_video_decode, macos_video_decode_info,
         open_macos_host_runtime_source_with_options,
         probe_macos_host_runtime_initializer_with_factories,
         probe_macos_host_runtime_source_with_options,
     };
     use player_core::MediaSource;
     use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
+    use player_plugin::{DecoderMediaKind, VesperPluginKind};
+    use player_plugin_loader::{
+        DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, PluginDiagnosticRecord,
+        PluginDiagnosticStatus, PluginRegistry,
+    };
     use player_runtime::{
         DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnosticStatus,
         PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
@@ -1130,6 +1182,24 @@ mod tests {
     }
 
     #[test]
+    fn macos_video_decode_info_without_plugin_paths_keeps_fallback_clean() {
+        let media_info = media_info_with_codec("fixture-video");
+        let info = apply_decoder_plugin_diagnostics_to_video_decode(
+            macos_video_decode_info(&media_info),
+            &media_info,
+            &PlayerRuntimeOptions::default(),
+        );
+
+        assert!(
+            !info
+                .fallback_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("decoder plugin")
+        );
+    }
+
+    #[test]
     fn macos_video_decode_info_records_configured_decoder_plugin_paths() {
         let media_info = media_info_with_codec("fixture-video");
         let info = apply_decoder_plugin_diagnostics_to_video_decode(
@@ -1143,7 +1213,7 @@ mod tests {
             info.fallback_reason
                 .as_deref()
                 .unwrap_or_default()
-                .contains("decoder plugin paths were configured")
+                .contains("decoder plugin paths configured")
         );
     }
 
@@ -1168,8 +1238,78 @@ mod tests {
                 .as_ref()
                 .and_then(|info| info.fallback_reason.as_deref())
                 .unwrap_or_default()
-                .contains("decoder plugin paths were configured")
+                .contains("decoder plugin paths configured")
         );
+    }
+
+    #[test]
+    fn macos_decoder_plugin_registry_reports_supported_candidate_as_diagnostic_only() {
+        let media_info = media_info_with_codec("fixture-video");
+        let registry = PluginRegistry::from_records(vec![decoder_plugin_record(
+            PluginDiagnosticStatus::DecoderSupported,
+            "fixture-video",
+            "fixture-decoder advertises Video fixture-video support",
+        )]);
+        let info = apply_decoder_plugin_registry_to_video_decode(
+            macos_video_decode_info(&media_info),
+            &media_info,
+            &registry,
+        );
+
+        assert_eq!(info.selected_mode, PlayerVideoDecodeMode::Software);
+        assert!(
+            info.fallback_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("diagnostic-only")
+        );
+        assert!(
+            info.fallback_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("fixture-decoder")
+        );
+    }
+
+    #[test]
+    fn macos_decoder_plugin_registry_mismatch_does_not_change_decode_mode() {
+        let media_info = media_info_with_codec("fixture-video");
+        let original = macos_video_decode_info(&media_info);
+        let registry = PluginRegistry::from_records(vec![decoder_plugin_record(
+            PluginDiagnosticStatus::DecoderUnsupported,
+            "other-video",
+            "fixture-decoder does not advertise Video fixture-video support",
+        )]);
+        let info =
+            apply_decoder_plugin_registry_to_video_decode(original.clone(), &media_info, &registry);
+
+        assert_eq!(info.selected_mode, original.selected_mode);
+        assert!(
+            info.fallback_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("0/1 supported")
+        );
+    }
+
+    #[test]
+    fn macos_decoder_plugin_paths_do_not_match_when_source_has_no_video_stream() {
+        let media_info = media_info_without_video();
+        let startup = apply_decoder_plugin_diagnostics(
+            startup_with_video_decode(macos_video_decode_info(&media_info)),
+            &media_info,
+            &PlayerRuntimeOptions::default()
+                .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")]),
+        );
+
+        assert!(startup.plugin_diagnostics.is_empty());
+        let fallback = startup
+            .video_decode
+            .as_ref()
+            .and_then(|info| info.fallback_reason.as_deref())
+            .unwrap_or_default();
+        assert!(fallback.contains("source does not expose a decodable video stream"));
+        assert!(!fallback.contains("decoder plugin"));
     }
 
     #[test]
@@ -1282,6 +1422,14 @@ mod tests {
         }
     }
 
+    fn media_info_without_video() -> PlayerMediaInfo {
+        PlayerMediaInfo {
+            video_streams: 0,
+            best_video: None,
+            ..media_info_with_codec("fixture-video")
+        }
+    }
+
     fn startup_with_video_decode(video_decode: PlayerVideoDecodeInfo) -> PlayerRuntimeStartup {
         PlayerRuntimeStartup {
             ffmpeg_initialized: false,
@@ -1289,6 +1437,34 @@ mod tests {
             decoded_audio: None,
             video_decode: Some(video_decode),
             plugin_diagnostics: Vec::new(),
+        }
+    }
+
+    fn decoder_plugin_record(
+        status: PluginDiagnosticStatus,
+        codec: &str,
+        message: &str,
+    ) -> PluginDiagnosticRecord {
+        PluginDiagnosticRecord {
+            path: PathBuf::from("fixture-decoder"),
+            status,
+            plugin_name: Some("fixture-decoder".to_owned()),
+            plugin_kind: Some(VesperPluginKind::Decoder),
+            decoder_capabilities: Some(DecoderPluginCapabilitySummary {
+                typed_codecs: vec![DecoderPluginCodecSummary {
+                    codec: codec.to_owned(),
+                    media_kind: DecoderMediaKind::Video,
+                }],
+                codecs: vec![format!("Video:{codec}")],
+                supports_hardware_decode: false,
+                supports_cpu_video_frames: true,
+                supports_audio_frames: false,
+                supports_gpu_handles: false,
+                supports_flush: true,
+                supports_drain: true,
+                max_sessions: Some(1),
+            }),
+            message: Some(message.to_owned()),
         }
     }
 
