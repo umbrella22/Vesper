@@ -164,18 +164,25 @@ build_catalyst_archive() {
   strip_static_archive_if_needed "$OUTPUT_DIR/macosx/libplayer_ffi_resolver.a"
 }
 
-rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR"
-
 if [[ "$BUILD_MODE" == "platform" ]]; then
+  mkdir -p "$OUTPUT_DIR"
   case "$PLATFORM_FILTER" in
     iphoneos)
+      rm -rf "$OUTPUT_DIR/iphoneos"
       build_device_archive
       ;;
     iphonesimulator)
+      rm -rf "$OUTPUT_DIR/iphonesimulator"
+      for target in "${SIMULATOR_TARGETS[@]}"; do
+        rm -rf "$OUTPUT_DIR/$target"
+      done
       build_simulator_archive
       ;;
     macosx)
+      rm -rf "$OUTPUT_DIR/macosx"
+      for target in "${CATALYST_TARGETS[@]}"; do
+        rm -rf "$OUTPUT_DIR/$target"
+      done
       build_catalyst_archive
       ;;
     *)
@@ -190,6 +197,9 @@ if [[ "$BUILD_MODE" == "platform" ]]; then
   echo "  $OUTPUT_DIR"
   exit 0
 fi
+
+rm -rf "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR"
 
 build_device_archive
 

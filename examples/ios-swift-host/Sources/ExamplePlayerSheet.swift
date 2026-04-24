@@ -6,6 +6,10 @@ struct ExampleSelectionSheetContent: View {
     let uiState: PlayerHostUiState
     let trackCatalog: VesperTrackCatalog
     let trackSelection: VesperTrackSelectionSnapshot
+    let effectiveVideoTrackId: String?
+    let videoVariantObservation: VesperVideoVariantObservation?
+    let fixedTrackStatus: VesperFixedTrackStatus?
+    let lastError: VesperPlayerError?
     let onOpenSheet: (ExamplePlayerSheet) -> Void
     let onSelectQuality: (VesperAbrPolicy) -> Void
     let onSelectAudio: (VesperTrackSelection) -> Void
@@ -57,7 +61,12 @@ struct ExampleSelectionSheetContent: View {
 
                         selectionRow(
                             title: ExampleI18n.quality,
-                            subtitle: qualityButtonLabel(trackSelection.abrPolicy),
+                            subtitle: qualityButtonLabel(
+                                trackCatalog,
+                                trackSelection,
+                                effectiveVideoTrackId: effectiveVideoTrackId,
+                                fixedTrackStatus: fixedTrackStatus
+                            ),
                             selected: false
                         ) {
                             onOpenSheet(.quality)
@@ -66,10 +75,55 @@ struct ExampleSelectionSheetContent: View {
                     case .quality:
                         selectionRow(
                             title: ExampleI18n.auto,
-                            subtitle: ExampleI18n.qualityAutoSubtitle,
-                            selected: trackSelection.abrPolicy.mode == .auto
+                            subtitle: qualityAutoRowSubtitle(
+                                trackCatalog,
+                                trackSelection,
+                                effectiveVideoTrackId: effectiveVideoTrackId,
+                                fixedTrackStatus: fixedTrackStatus,
+                                videoVariantObservation: videoVariantObservation
+                            ),
+                            selected: trackSelection.abrPolicy.mode == .auto ||
+                                trackSelection.abrPolicy.mode == .constrained
                         ) {
                             onSelectQuality(.auto())
+                        }
+
+                        if let notice = qualityRuntimeNotice(lastError) {
+                            noticeView(
+                                title: ExampleI18n.qualityRuntimeNoticeTitle,
+                                message: notice
+                            )
+                        }
+
+                        let videoTracks = trackCatalog.videoTracks.sorted { left, right in
+                            (left.bitRate ?? 0) > (right.bitRate ?? 0)
+                        }
+                        if videoTracks.isEmpty {
+                            emptyState(ExampleI18n.qualityNoVideoTracks)
+                        } else {
+                            ForEach(videoTracks) { track in
+                                selectionRow(
+                                    title: qualityLabel(track),
+                                    subtitle: qualityOptionSubtitle(
+                                        track,
+                                        trackCatalog: trackCatalog,
+                                        trackSelection: trackSelection,
+                                        effectiveVideoTrackId: effectiveVideoTrackId,
+                                        fixedTrackStatus: fixedTrackStatus
+                                    ),
+                                    badge: qualityOptionBadgeLabel(
+                                        trackId: track.id,
+                                        trackCatalog: trackCatalog,
+                                        trackSelection: trackSelection,
+                                        effectiveVideoTrackId: effectiveVideoTrackId,
+                                        fixedTrackStatus: fixedTrackStatus
+                                    ),
+                                    selected: trackSelection.abrPolicy.mode == .fixedTrack &&
+                                        trackSelection.abrPolicy.trackId == track.id
+                                ) {
+                                    onSelectQuality(.fixedTrack(track.id))
+                                }
+                            }
                         }
 
                         ForEach(abrPresets()) { preset in
@@ -152,14 +206,25 @@ struct ExampleSelectionSheetContent: View {
     private func selectionRow(
         title: String,
         subtitle: String,
+        badge: String? = nil,
         selected: Bool,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    if let badge {
+                        Text(badge)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.14), in: Capsule())
+                    }
+                }
 
                 Text(subtitle)
                     .font(.caption)
@@ -177,5 +242,29 @@ struct ExampleSelectionSheetContent: View {
 
         Divider()
             .overlay(Color.white.opacity(0.04))
+    }
+
+    private func emptyState(_ message: String) -> some View {
+        Text(message)
+            .font(.footnote)
+            .foregroundStyle(Color.white.opacity(0.62))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+    }
+
+    private func noticeView(title: String, message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(Color.white.opacity(0.72))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

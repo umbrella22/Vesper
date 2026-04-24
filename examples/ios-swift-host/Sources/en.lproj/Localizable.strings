@@ -118,6 +118,20 @@
 
 "example.quality.button_capped" = "Capped";
 "example.quality.button_pinned" = "Pinned";
+"example.quality.button_locking" = "Locking";
+"example.quality.status_pending" = "Waiting";
+"example.quality.status_locked" = "Locked";
+"example.quality.status_fallback" = "Fallback";
+"example.quality.status_requested" = "Requested";
+"example.quality.no_video_tracks" = "The current media has not exposed selectable video variants yet.";
+"example.quality.fixed_track_unavailable" = "This backend can guide ABR, but fixed HLS variant pinning is not available for the current source.";
+"example.quality.runtime_notice_title" = "Quality lock notice";
+"example.quality.auto_subtitle_effective" = "Let AVPlayer choose variants. Current observed variant: %@.";
+"example.quality.auto_subtitle_observation" = "Let AVPlayer choose variants. Current observation: %@.";
+"example.quality.fixed_subtitle_pending" = "Requested %@. Waiting for AVPlayer to report the actual rendered variant.";
+"example.quality.fixed_subtitle_locked" = "Current best-effort lock is settled on %@.";
+"example.quality.fixed_subtitle_fallback" = "Requested %@, but AVPlayer is still rendering %@.";
+"example.quality.fixed_subtitle_observation" = "Current observation: %@.";
 
 "example.subtitle.cc_off" = "CC Off";
 "example.subtitle.cc_auto" = "CC Auto";

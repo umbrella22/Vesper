@@ -1303,6 +1303,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func refreshEffectiveVideoTrackObservation(for item: AVPlayerItem?) {
+        let now = Date()
         let videoVariantObservation = resolvedVideoVariantObservation(for: item)
         if publishedVideoVariantObservation != videoVariantObservation {
             publishedVideoVariantObservation = videoVariantObservation
@@ -1314,19 +1315,31 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         if publishedEffectiveVideoTrackId != resolvedTrackId {
             publishedEffectiveVideoTrackId = resolvedTrackId
         }
-        let resolvedStatus = resolveFixedTrackStatus(
+        let rawFixedTrackStatus = resolveFixedTrackStatus(
             abrPolicy: publishedTrackSelection.abrPolicy,
             effectiveVideoTrackId: resolvedTrackId,
             tracks: publishedTrackCatalog.videoTracks
         )
-        if publishedFixedTrackStatus != resolvedStatus {
-            publishedFixedTrackStatus = resolvedStatus
-        }
         handleFixedTrackConvergenceUpdate(
-            status: resolvedStatus,
+            status: rawFixedTrackStatus,
             effectiveVideoTrackId: resolvedTrackId,
-            observation: videoVariantObservation
+            observation: videoVariantObservation,
+            now: now
         )
+        let resolvedPublishedStatus =
+            publishedTrackSelection.abrPolicy.mode == .fixedTrack
+            ? resolvePublishableFixedTrackStatus(
+                rawStatus: rawFixedTrackStatus,
+                lockedElapsed: fixedTrackConvergenceState?.lockedStartedAt.map {
+                    now.timeIntervalSince($0)
+                },
+                hasPersistentMismatch: fixedTrackConvergenceState?
+                    .hasHandledPersistentMismatch == true
+            )
+            : nil
+        if publishedFixedTrackStatus != resolvedPublishedStatus {
+            publishedFixedTrackStatus = resolvedPublishedStatus
+        }
     }
 
     private func resolvedEffectiveVideoTrackId(
@@ -2114,7 +2127,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private func handleFixedTrackConvergenceUpdate(
         status: VesperFixedTrackStatus?,
         effectiveVideoTrackId: String?,
-        observation: VesperVideoVariantObservation?
+        observation: VesperVideoVariantObservation?,
+        now: Date
     ) {
         let abrPolicy = publishedTrackSelection.abrPolicy
         guard
@@ -2141,6 +2155,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         case .locked:
             if var convergenceState {
                 convergenceState.resetMismatch()
+                if convergenceState.lockedStartedAt == nil {
+                    convergenceState.lockedStartedAt = now
+                }
                 fixedTrackConvergenceState = convergenceState
             } else {
                 fixedTrackConvergenceState = nil
@@ -2150,6 +2167,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             }
         case .pending:
             if var convergenceState {
+                convergenceState.resetLocked()
                 convergenceState.resetMismatch()
                 fixedTrackConvergenceState = convergenceState
             } else {
@@ -2159,11 +2177,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             guard var convergenceState else {
                 return
             }
+            convergenceState.resetLocked()
             let mismatchSignature = FixedTrackMismatchSignature(
                 effectiveVideoTrackId: effectiveVideoTrackId,
                 observation: observation
             )
-            let now = Date()
             if convergenceState.mismatchSignature != mismatchSignature {
                 convergenceState.mismatchSignature = mismatchSignature
                 convergenceState.mismatchStartedAt = now
@@ -2201,6 +2219,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
         case nil:
             if var convergenceState {
+                convergenceState.resetLocked()
                 convergenceState.resetMismatch()
                 fixedTrackConvergenceState = convergenceState
             } else {
@@ -2378,9 +2397,14 @@ private enum AbrPolicyOrigin: String {
 private struct FixedTrackConvergenceState {
     let requestedTrackId: String
     let origin: AbrPolicyOrigin
+    var lockedStartedAt: Date?
     var mismatchSignature: FixedTrackMismatchSignature?
     var mismatchStartedAt: Date?
     var hasHandledPersistentMismatch = false
+
+    mutating func resetLocked() {
+        lockedStartedAt = nil
+    }
 
     mutating func resetMismatch() {
         mismatchSignature = nil
@@ -2762,6 +2786,26 @@ func resolveFixedTrackStatus(
     }
 
     return .fallback
+}
+
+func resolvePublishableFixedTrackStatus(
+    rawStatus: VesperFixedTrackStatus?,
+    lockedElapsed: TimeInterval?,
+    hasPersistentMismatch: Bool
+) -> VesperFixedTrackStatus? {
+    switch rawStatus {
+    case .locked:
+        guard let lockedElapsed else {
+            return .pending
+        }
+        return lockedElapsed >= 0.75 ? .locked : .pending
+    case .fallback:
+        return hasPersistentMismatch ? .fallback : .pending
+    case .pending:
+        return .pending
+    case nil:
+        return nil
+    }
 }
 
 func resolveFixedTrackRecoveryPolicy(

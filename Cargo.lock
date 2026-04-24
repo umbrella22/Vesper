@@ -1593,6 +1593,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-decoder-fixture"
+version = "0.1.0"
+dependencies = [
+ "player-plugin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "player-download"
 version = "0.1.0"
 dependencies = [
@@ -1713,6 +1722,8 @@ dependencies = [
  "player-core",
  "player-platform-apple",
  "player-platform-desktop",
+ "player-plugin",
+ "player-plugin-loader",
  "player-runtime",
 ]
 

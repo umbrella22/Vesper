@@ -157,6 +157,32 @@ enum ExampleI18n {
 
     static var qualityButtonCapped: String { string("example.quality.button_capped") }
     static var qualityButtonPinned: String { string("example.quality.button_pinned") }
+    static var qualityButtonLocking: String { string("example.quality.button_locking") }
+    static var qualityStatusPending: String { string("example.quality.status_pending") }
+    static var qualityStatusLocked: String { string("example.quality.status_locked") }
+    static var qualityStatusFallback: String { string("example.quality.status_fallback") }
+    static var qualityStatusRequested: String { string("example.quality.status_requested") }
+    static var qualityNoVideoTracks: String { string("example.quality.no_video_tracks") }
+    static var qualityFixedTrackUnavailable: String { string("example.quality.fixed_track_unavailable") }
+    static var qualityRuntimeNoticeTitle: String { string("example.quality.runtime_notice_title") }
+    static func qualityAutoSubtitleWithEffective(_ effective: String) -> String {
+        string("example.quality.auto_subtitle_effective", effective)
+    }
+    static func qualityAutoSubtitleWithObservation(_ observation: String) -> String {
+        string("example.quality.auto_subtitle_observation", observation)
+    }
+    static func qualityFixedSubtitlePending(_ requested: String) -> String {
+        string("example.quality.fixed_subtitle_pending", requested)
+    }
+    static func qualityFixedSubtitleLocked(_ requested: String) -> String {
+        string("example.quality.fixed_subtitle_locked", requested)
+    }
+    static func qualityFixedSubtitleFallback(_ requested: String, _ effective: String) -> String {
+        string("example.quality.fixed_subtitle_fallback", requested, effective)
+    }
+    static func qualityFixedSubtitleObservation(_ observation: String) -> String {
+        string("example.quality.fixed_subtitle_observation", observation)
+    }
 
     static var captionsOff: String { string("example.subtitle.cc_off") }
     static var captionsAuto: String { string("example.subtitle.cc_auto") }

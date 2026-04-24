@@ -1,5 +1,6 @@
 mod adapter;
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -97,6 +98,7 @@ static DEFAULT_RUNTIME_ADAPTER_FACTORY: OnceLock<&'static dyn PlayerRuntimeAdapt
 pub struct PlayerRuntimeOptions {
     pub enable_audio_output: bool,
     pub video_surface: Option<PlayerVideoSurfaceTarget>,
+    pub decoder_plugin_library_paths: Vec<PathBuf>,
     pub video_prefetch_capacity: usize,
     pub video_present_early_tolerance: Duration,
     pub video_idle_poll_interval: Duration,
@@ -433,6 +435,7 @@ impl Default for PlayerRuntimeOptions {
         Self {
             enable_audio_output: true,
             video_surface: None,
+            decoder_plugin_library_paths: Vec::new(),
             video_prefetch_capacity: DEFAULT_VIDEO_PREFETCH_CAPACITY,
             video_present_early_tolerance: DEFAULT_VIDEO_PRESENT_EARLY_TOLERANCE,
             video_idle_poll_interval: DEFAULT_VIDEO_IDLE_POLL_INTERVAL,
@@ -448,6 +451,14 @@ impl Default for PlayerRuntimeOptions {
 impl PlayerRuntimeOptions {
     pub fn with_video_surface(mut self, video_surface: PlayerVideoSurfaceTarget) -> Self {
         self.video_surface = Some(video_surface);
+        self
+    }
+
+    pub fn with_decoder_plugin_library_paths(
+        mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
+        self.decoder_plugin_library_paths = paths.into_iter().collect();
         self
     }
 

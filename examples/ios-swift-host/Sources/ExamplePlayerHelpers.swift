@@ -73,6 +73,223 @@ func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {
     }
 }
 
+func qualityButtonLabel(
+    _ trackCatalog: VesperTrackCatalog,
+    _ trackSelection: VesperTrackSelectionSnapshot,
+    effectiveVideoTrackId: String?,
+    fixedTrackStatus: VesperFixedTrackStatus?
+) -> String {
+    let requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection)
+    let effectiveTrack = effectiveVideoTrack(trackCatalog, effectiveVideoTrackId)
+    let resolvedStatus = currentFixedTrackStatus(
+        trackCatalog,
+        trackSelection,
+        effectiveVideoTrackId: effectiveVideoTrackId,
+        fixedTrackStatus: fixedTrackStatus
+    )
+
+    switch trackSelection.abrPolicy.mode {
+    case .fixedTrack:
+        guard let requestedTrack else {
+            return ExampleI18n.quality
+        }
+        switch resolvedStatus {
+        case .pending, .fallback:
+            return "\(ExampleI18n.qualityButtonLocking) · \(qualityLabel(requestedTrack))"
+        case .locked, nil:
+            return "\(ExampleI18n.qualityButtonPinned) · \(qualityLabel(requestedTrack))"
+        }
+    case .constrained, .auto:
+        if let effectiveTrack {
+            return "\(ExampleI18n.auto) · \(qualityLabel(effectiveTrack))"
+        }
+        return qualityButtonLabel(trackSelection.abrPolicy)
+    }
+}
+
+func effectiveVideoTrack(
+    _ trackCatalog: VesperTrackCatalog,
+    _ effectiveVideoTrackId: String?
+) -> VesperMediaTrack? {
+    guard let effectiveVideoTrackId else { return nil }
+    return trackCatalog.videoTracks.first { $0.id == effectiveVideoTrackId }
+}
+
+func requestedFixedVideoTrack(
+    _ trackCatalog: VesperTrackCatalog,
+    _ trackSelection: VesperTrackSelectionSnapshot
+) -> VesperMediaTrack? {
+    guard
+        trackSelection.abrPolicy.mode == .fixedTrack,
+        let trackId = trackSelection.abrPolicy.trackId
+    else {
+        return nil
+    }
+    return trackCatalog.videoTracks.first { $0.id == trackId }
+}
+
+func currentFixedTrackStatus(
+    _ trackCatalog: VesperTrackCatalog,
+    _ trackSelection: VesperTrackSelectionSnapshot,
+    effectiveVideoTrackId: String?,
+    fixedTrackStatus: VesperFixedTrackStatus?
+) -> VesperFixedTrackStatus? {
+    guard trackSelection.abrPolicy.mode == .fixedTrack else { return nil }
+    if let fixedTrackStatus {
+        return fixedTrackStatus
+    }
+    guard let requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection) else {
+        return .pending
+    }
+    guard let effectiveVideoTrackId else {
+        return .pending
+    }
+    return effectiveVideoTrackId == requestedTrack.id ? .locked : .fallback
+}
+
+func qualityAutoRowSubtitle(
+    _ trackCatalog: VesperTrackCatalog,
+    _ trackSelection: VesperTrackSelectionSnapshot,
+    effectiveVideoTrackId: String?,
+    fixedTrackStatus: VesperFixedTrackStatus?,
+    videoVariantObservation: VesperVideoVariantObservation?
+) -> String {
+    let effectiveTrack = effectiveVideoTrack(trackCatalog, effectiveVideoTrackId)
+    let requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection)
+    let resolvedStatus = currentFixedTrackStatus(
+        trackCatalog,
+        trackSelection,
+        effectiveVideoTrackId: effectiveVideoTrackId,
+        fixedTrackStatus: fixedTrackStatus
+    )
+    let observation = videoVariantObservationSummary(videoVariantObservation)
+
+    switch trackSelection.abrPolicy.mode {
+    case .auto:
+        if let effectiveTrack {
+            return ExampleI18n.qualityAutoSubtitleWithEffective(qualityLabel(effectiveTrack))
+        }
+        if let observation {
+            return ExampleI18n.qualityAutoSubtitleWithObservation(observation)
+        }
+        return ExampleI18n.qualityAutoSubtitle
+    case .constrained:
+        if let effectiveTrack {
+            return ExampleI18n.qualityAutoSubtitleWithEffective(qualityLabel(effectiveTrack))
+        }
+        if let observation {
+            return ExampleI18n.qualityAutoSubtitleWithObservation(observation)
+        }
+        return ExampleI18n.qualityAutoSubtitle
+    case .fixedTrack:
+        if
+            let requestedTrack,
+            resolvedStatus == .fallback,
+            let effectiveTrack
+        {
+            return ExampleI18n.qualityFixedSubtitleFallback(
+                qualityLabel(requestedTrack),
+                qualityLabel(effectiveTrack)
+            )
+        }
+        if let requestedTrack, resolvedStatus == .pending {
+            return ExampleI18n.qualityFixedSubtitlePending(qualityLabel(requestedTrack))
+        }
+        if let requestedTrack {
+            return ExampleI18n.qualityFixedSubtitleLocked(qualityLabel(requestedTrack))
+        }
+        if let observation {
+            return ExampleI18n.qualityFixedSubtitleObservation(observation)
+        }
+        return ExampleI18n.qualityAutoSubtitle
+    }
+}
+
+func qualityOptionBadgeLabel(
+    trackId: String,
+    trackCatalog: VesperTrackCatalog,
+    trackSelection: VesperTrackSelectionSnapshot,
+    effectiveVideoTrackId: String?,
+    fixedTrackStatus: VesperFixedTrackStatus?
+) -> String? {
+    let isRequested =
+        trackSelection.abrPolicy.mode == .fixedTrack &&
+        trackSelection.abrPolicy.trackId == trackId
+    let isEffective = effectiveVideoTrackId == trackId
+
+    guard isRequested || isEffective else { return nil }
+    let status = currentFixedTrackStatus(
+        trackCatalog,
+        trackSelection,
+        effectiveVideoTrackId: effectiveVideoTrackId,
+        fixedTrackStatus: fixedTrackStatus
+    )
+    if isRequested {
+        switch status {
+        case .pending:
+            return ExampleI18n.qualityStatusPending
+        case .locked:
+            return ExampleI18n.qualityStatusLocked
+        case .fallback:
+            return ExampleI18n.qualityStatusFallback
+        case nil:
+            return ExampleI18n.qualityStatusRequested
+        }
+    }
+    return ExampleI18n.qualityStatusLocked
+}
+
+func qualityOptionSubtitle(
+    _ track: VesperMediaTrack,
+    trackCatalog: VesperTrackCatalog,
+    trackSelection: VesperTrackSelectionSnapshot,
+    effectiveVideoTrackId: String?,
+    fixedTrackStatus: VesperFixedTrackStatus?
+) -> String {
+    let base = qualitySubtitle(track)
+    guard
+        trackSelection.abrPolicy.mode == .fixedTrack,
+        trackSelection.abrPolicy.trackId == track.id
+    else {
+        return base
+    }
+    let status = currentFixedTrackStatus(
+        trackCatalog,
+        trackSelection,
+        effectiveVideoTrackId: effectiveVideoTrackId,
+        fixedTrackStatus: fixedTrackStatus
+    )
+    switch status {
+    case .pending:
+        return "\(base) · \(ExampleI18n.qualityStatusPending)"
+    case .locked:
+        return "\(base) · \(ExampleI18n.qualityStatusLocked)"
+    case .fallback:
+        return "\(base) · \(ExampleI18n.qualityStatusFallback)"
+    case nil:
+        return base
+    }
+}
+
+func qualityRuntimeNotice(_ error: VesperPlayerError?) -> String? {
+    guard let error, error.message.contains("fixedTrack") else {
+        return nil
+    }
+    return error.message
+}
+
+func videoVariantObservationSummary(_ observation: VesperVideoVariantObservation?) -> String? {
+    guard let observation else { return nil }
+    var parts: [String] = []
+    if let width = observation.width, let height = observation.height {
+        parts.append("\(width)x\(height)")
+    }
+    if let bitRate = observation.bitRate {
+        parts.append(formatBitRate(bitRate))
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+}
+
 func audioButtonLabel(
     _ trackCatalog: VesperTrackCatalog,
     _ trackSelection: VesperTrackSelectionSnapshot
@@ -668,6 +885,34 @@ func subtitleSubtitle(_ track: VesperMediaTrack) -> String {
     return parts.isEmpty ? ExampleI18n.subtitleOption : parts.joined(separator: " • ")
 }
 
+func qualityLabel(_ track: VesperMediaTrack) -> String {
+    if let height = track.height {
+        return "\(height)p"
+    }
+    if let width = track.width {
+        return "\(width)w"
+    }
+    if let label = track.label, !label.isEmpty {
+        return label
+    }
+    if let bitRate = track.bitRate {
+        return formatBitRate(bitRate)
+    }
+    return track.id
+}
+
+func qualitySubtitle(_ track: VesperMediaTrack) -> String {
+    let parts = [
+        track.width.flatMap { width in
+            track.height.map { "\(width)x\($0)" }
+        },
+        track.bitRate.map(formatBitRate),
+        track.frameRate.map { String(format: "%.0f fps", $0) },
+        track.codec,
+    ].compactMap { $0 }
+    return parts.isEmpty ? track.id : parts.joined(separator: " • ")
+}
+
 func formatBitRate(_ value: Int64) -> String {
     if value >= 1_000_000 {
         return ExampleI18n.bitRateMbps(Double(value) / 1_000_000.0)
@@ -727,7 +972,7 @@ func sheetHeight(for sheet: ExamplePlayerSheet) -> CGFloat {
     case .menu:
         return 360
     case .quality:
-        return 420
+        return 620
     case .audio:
         return 440
     case .subtitle:

@@ -121,6 +121,17 @@ final class VesperAbrStabilityTests: XCTestCase {
         )
     }
 
+    func testResolveFixedTrackStatusWaitsForRequestedVariantCatalog() {
+        XCTAssertEqual(
+            resolveFixedTrackStatus(
+                abrPolicy: .fixedTrack("video:hls:cavc1:b1500000:w1280:h720:f3000"),
+                effectiveVideoTrackId: "video:hls:cavc1:b854000:w854:h480:f3000",
+                tracks: []
+            ),
+            .pending
+        )
+    }
+
     func testResolveFixedTrackStatusReturnsLockedWhenObservedVariantMatches() {
         XCTAssertEqual(
             resolveFixedTrackStatus(
@@ -138,6 +149,62 @@ final class VesperAbrStabilityTests: XCTestCase {
                 abrPolicy: .fixedTrack("video:hls:cavc1:b1500000:w1280:h720:f3000"),
                 effectiveVideoTrackId: "video:hls:cavc1:b854000:w854:h480:f3000",
                 tracks: sampleVideoTracks
+            ),
+            .fallback
+        )
+    }
+
+    func testResolveFixedTrackStatusReturnsNilForNonFixedPolicy() {
+        XCTAssertNil(
+            resolveFixedTrackStatus(
+                abrPolicy: .constrained(maxBitRate: 1_500_000),
+                effectiveVideoTrackId: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+                tracks: sampleVideoTracks
+            )
+        )
+    }
+
+    func testPublishableFixedTrackStatusKeepsLockPendingUntilStable() {
+        XCTAssertEqual(
+            resolvePublishableFixedTrackStatus(
+                rawStatus: .locked,
+                lockedElapsed: nil,
+                hasPersistentMismatch: false
+            ),
+            .pending
+        )
+        XCTAssertEqual(
+            resolvePublishableFixedTrackStatus(
+                rawStatus: .locked,
+                lockedElapsed: 0.5,
+                hasPersistentMismatch: false
+            ),
+            .pending
+        )
+        XCTAssertEqual(
+            resolvePublishableFixedTrackStatus(
+                rawStatus: .locked,
+                lockedElapsed: 0.75,
+                hasPersistentMismatch: false
+            ),
+            .locked
+        )
+    }
+
+    func testPublishableFixedTrackStatusRequiresPersistentMismatchBeforeFallback() {
+        XCTAssertEqual(
+            resolvePublishableFixedTrackStatus(
+                rawStatus: .fallback,
+                lockedElapsed: nil,
+                hasPersistentMismatch: false
+            ),
+            .pending
+        )
+        XCTAssertEqual(
+            resolvePublishableFixedTrackStatus(
+                rawStatus: .fallback,
+                lockedElapsed: nil,
+                hasPersistentMismatch: true
             ),
             .fallback
         )

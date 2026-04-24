@@ -5,6 +5,7 @@ use std::ffi::{c_char, c_void};
 pub enum VesperPluginKind {
     PostDownloadProcessor = 1,
     PipelineEventHook = 2,
+    Decoder = 3,
 }
 
 #[repr(u32)]
@@ -175,6 +176,113 @@ unsafe impl Send for VesperPipelineEventHookApi {}
 // SAFETY: same reasoning as above; the plugin context is required to be safe for
 // concurrent shared access when exposed as a pipeline event hook.
 unsafe impl Sync for VesperPipelineEventHookApi {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperDecoderPluginApi::open_session_json`.
+///
+/// When `status` is `Success`, `session` must be a plugin-owned opaque session
+/// pointer and `payload` may encode a `DecoderSessionInfo` JSON document. When
+/// `status` is `Failure`, `session` must be null and `payload` must encode a
+/// `DecoderError` JSON document.
+pub struct VesperDecoderOpenSessionResult {
+    pub status: VesperPluginResultStatus,
+    pub session: *mut c_void,
+    pub payload: VesperPluginBytes,
+}
+
+impl Default for VesperDecoderOpenSessionResult {
+    fn default() -> Self {
+        Self {
+            status: VesperPluginResultStatus::Success,
+            session: std::ptr::null_mut(),
+            payload: VesperPluginBytes::null(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperDecoderPluginApi::receive_frame`.
+///
+/// On success, `metadata` must encode a `DecoderReceiveFrameMetadata` JSON
+/// document. When that metadata reports a frame, `data` contains the CPU frame
+/// bytes referenced by its plane offsets. On failure, `metadata` must encode a
+/// `DecoderError` JSON document and `data` should be empty.
+pub struct VesperDecoderReceiveFrameResult {
+    pub status: VesperPluginResultStatus,
+    pub metadata: VesperPluginBytes,
+    pub data: VesperPluginBytes,
+}
+
+impl Default for VesperDecoderReceiveFrameResult {
+    fn default() -> Self {
+        Self {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::null(),
+            data: VesperPluginBytes::null(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// C ABI exposed by a decoder plugin.
+///
+/// The v1 decoder ABI transfers compressed packet bytes from host to plugin as
+/// borrowed pointers and decoded CPU-frame bytes from plugin to host as
+/// `VesperPluginBytes`. GPU/native handles are intentionally capability-only in
+/// this ABI version.
+pub struct VesperDecoderPluginApi {
+    pub context: *mut c_void,
+    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
+    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
+    pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub open_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            config_json: *const u8,
+            config_json_len: usize,
+        ) -> VesperDecoderOpenSessionResult,
+    >,
+    pub send_packet: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            packet_json: *const u8,
+            packet_json_len: usize,
+            packet_data: *const u8,
+            packet_data_len: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub receive_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperDecoderReceiveFrameResult,
+    >,
+    pub flush_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub close_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
+}
+
+// SAFETY: host-side wrappers only expose this API behind `DecoderPluginFactory`,
+// and plugin authors must uphold the declared `Send + Sync` contract for the
+// underlying context pointer and callbacks.
+unsafe impl Send for VesperDecoderPluginApi {}
+// SAFETY: same reasoning as above; the plugin context is required to be safe for
+// concurrent shared access when exposed as a decoder plugin.
+unsafe impl Sync for VesperDecoderPluginApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

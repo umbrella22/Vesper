@@ -39,14 +39,15 @@ public enum VesperAbrMode: String, Equatable {
 /// requested HLS variant.
 public enum VesperFixedTrackStatus: String, Equatable {
     /// The host is still waiting for enough runtime evidence to identify the
-    /// active variant after applying a fixed-track request.
+    /// active variant after applying a fixed-track request, or the latest
+    /// evidence has not remained stable long enough to publish a final state.
     case pending
 
-    /// The currently observed variant matches the requested fixed-track target.
+    /// The observed variant has remained on the requested fixed-track target.
     case locked
 
-    /// The player is still rendering a different variant than the requested
-    /// fixed-track target.
+    /// Sustained runtime evidence shows the player is still rendering a
+    /// different variant than the requested fixed-track target.
     case fallback
 }
 

@@ -24,9 +24,12 @@ first:
 
 - `scripts/build-ios-player-ffi-xcframework.sh`
 
-The native unit-test baseline is now expected to run through Xcode as well:
+The native unit-test baseline is now expected to run through Xcode as well. Do not use plain
+`swift test` for iOS validation because SwiftPM will compile for the host macOS target and UIKit
+will be unavailable.
 
-- `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -destination 'platform=macOS,variant=Mac Catalyst,name=My Mac' ARCHS=arm64 ONLY_ACTIVE_ARCH=YES test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
+- iOS Simulator: first choose an installed simulator with `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -showdestinations`, then run `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -destination id=<SIMULATOR_ID> ARCHS=arm64 ONLY_ACTIVE_ARCH=YES test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
+- Mac Catalyst: `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -destination 'platform=macOS,variant=Mac Catalyst,name=My Mac' ARCHS=arm64 ONLY_ACTIVE_ARCH=YES test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
 
 That script:
 
@@ -139,6 +142,8 @@ Important iOS-specific semantics:
 
 - `fixedTrack` is best-effort HLS variant pinning on iOS 15+, not exact AVPlayer video-track
   switching
+- capability reporting must preserve that distinction: iOS reports exact video-track selection as
+  unsupported while `fixedTrack` only means best-effort HLS variant pinning
 - single-axis constrained limits such as `VesperAbrPolicy.constrained(maxHeight: 720)` are
   supported for HLS, but the host waits for the current variant catalog before inferring the
   missing width/height
@@ -147,7 +152,9 @@ Important iOS-specific semantics:
 - `videoVariantObservation` exposes the raw runtime evidence the host is using for that inference:
   access-log bitrate plus the latest rendered presentation size
 - `fixedTrackStatus` gives the latest runtime convergence signal for a best-effort fixed-track
-  request: `.pending`, `.locked`, or `.fallback`
+  request: `.pending` while runtime evidence is missing or still settling, `.locked` only after the
+  observed variant has remained on the requested track long enough to be treated as stable, or
+  `.fallback` when sustained evidence shows a different variant
 - resilience reload / restore now defer both `fixedTrack` and single-axis constrained ABR until
   the current HLS variant catalog is loaded, so those policies do not fail early during reload
 - if a restored fixed-track `trackId` no longer exists verbatim after the HLS ladder drifts, the

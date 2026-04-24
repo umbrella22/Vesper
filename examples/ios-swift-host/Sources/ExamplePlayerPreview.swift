@@ -131,6 +131,14 @@ import VesperPlayerKit
         uiState: previewPlayerUiState(),
         trackCatalog: previewTrackCatalog(),
         trackSelection: previewTrackSelection(),
+        effectiveVideoTrackId: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+        videoVariantObservation: VesperVideoVariantObservation(
+            bitRate: 1_500_000,
+            width: 1280,
+            height: 720
+        ),
+        fixedTrackStatus: nil,
+        lastError: nil,
         onOpenSheet: { _ in },
         onSelectQuality: { _ in },
         onSelectAudio: { _ in },
@@ -145,6 +153,14 @@ import VesperPlayerKit
         uiState: previewPlayerUiState(),
         trackCatalog: previewTrackCatalog(),
         trackSelection: previewTrackSelection(),
+        effectiveVideoTrackId: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+        videoVariantObservation: VesperVideoVariantObservation(
+            bitRate: 1_500_000,
+            width: 1280,
+            height: 720
+        ),
+        fixedTrackStatus: nil,
+        lastError: nil,
         onOpenSheet: { _ in },
         onSelectQuality: { _ in },
         onSelectAudio: { _ in },
@@ -176,6 +192,27 @@ private func previewPlayerUiState() -> PlayerHostUiState {
 private func previewTrackCatalog() -> VesperTrackCatalog {
     VesperTrackCatalog(
         tracks: [
+            VesperMediaTrack(
+                id: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+                kind: .video,
+                label: "720p",
+                codec: "avc1",
+                bitRate: 1_500_000,
+                width: 1280,
+                height: 720,
+                frameRate: 30,
+                isDefault: true
+            ),
+            VesperMediaTrack(
+                id: "video:hls:cavc1:b2500000:w1920:h1080:f3000",
+                kind: .video,
+                label: "1080p",
+                codec: "avc1",
+                bitRate: 2_500_000,
+                width: 1920,
+                height: 1080,
+                frameRate: 30
+            ),
             VesperMediaTrack(
                 id: "audio-ja",
                 kind: .audio,

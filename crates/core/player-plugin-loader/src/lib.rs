@@ -6,9 +6,13 @@ use std::sync::Arc;
 
 use libloading::Library;
 use player_plugin::{
-    CompletedDownloadInfo, PipelineEvent, PipelineEventHook, PostDownloadProcessor,
+    CompletedDownloadInfo, DecoderCapabilities, DecoderError, DecoderOperationStatus,
+    DecoderPacket, DecoderPacketResult, DecoderPluginFactory, DecoderReceiveFrameMetadata,
+    DecoderReceiveFrameOutput, DecoderReceiveFrameStatus, DecoderSession, DecoderSessionConfig,
+    DecoderSessionInfo, PipelineEvent, PipelineEventHook, PostDownloadProcessor,
     ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
-    VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL, VesperPipelineEventHookApi,
+    VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL, VesperDecoderOpenSessionResult,
+    VesperDecoderPluginApi, VesperDecoderReceiveFrameResult, VesperPipelineEventHookApi,
     VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind,
     VesperPluginProcessResult, VesperPluginProgressCallbacks, VesperPluginResultStatus,
     VesperPostDownloadProcessorApi,
@@ -57,6 +61,7 @@ pub struct LoadedDynamicPlugin {
     name: String,
     post_download_processor: Option<Arc<DynamicPostDownloadProcessor>>,
     pipeline_event_hook: Option<Arc<DynamicPipelineEventHook>>,
+    decoder_plugin_factory: Option<Arc<DynamicDecoderPluginFactory>>,
 }
 
 impl LoadedDynamicPlugin {
@@ -107,6 +112,12 @@ impl LoadedDynamicPlugin {
             .map(|hook| hook as Arc<dyn PipelineEventHook>)
     }
 
+    pub fn decoder_plugin_factory(&self) -> Option<Arc<dyn DecoderPluginFactory>> {
+        self.decoder_plugin_factory
+            .clone()
+            .map(|factory| factory as Arc<dyn DecoderPluginFactory>)
+    }
+
     fn from_descriptor(
         library: Option<Arc<LibraryHolder>>,
         descriptor: &VesperPluginDescriptor,
@@ -138,6 +149,7 @@ impl LoadedDynamicPlugin {
                     name: descriptor_name,
                     post_download_processor: Some(Arc::new(processor)),
                     pipeline_event_hook: None,
+                    decoder_plugin_factory: None,
                 })
             }
             VesperPluginKind::PipelineEventHook => {
@@ -158,6 +170,28 @@ impl LoadedDynamicPlugin {
                     name: descriptor_name,
                     post_download_processor: None,
                     pipeline_event_hook: Some(Arc::new(hook)),
+                    decoder_plugin_factory: None,
+                })
+            }
+            VesperPluginKind::Decoder => {
+                let api_ptr = descriptor.api.cast::<VesperDecoderPluginApi>();
+                let api =
+                    // SAFETY: `descriptor.api` must point at the ABI table that
+                    // matches `plugin_kind` when the plugin exports a valid
+                    // descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "decoder_plugin_api",
+                    })?;
+                let factory = DynamicDecoderPluginFactory::new(
+                    library,
+                    descriptor_name.clone(),
+                    CheckedDecoderPluginApi::try_from(*api)?,
+                )?;
+                Ok(Self {
+                    name: descriptor_name,
+                    post_download_processor: None,
+                    pipeline_event_hook: None,
+                    decoder_plugin_factory: Some(Arc::new(factory)),
                 })
             }
         }
@@ -186,6 +220,25 @@ type OnEventJsonFn = unsafe extern "C" fn(
     event_json: *const u8,
     event_json_len: usize,
 ) -> bool;
+type DecoderOpenSessionJsonFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    config_json: *const u8,
+    config_json_len: usize,
+) -> VesperDecoderOpenSessionResult;
+type DecoderSendPacketFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+    packet_json: *const u8,
+    packet_json_len: usize,
+    packet_data: *const u8,
+    packet_data_len: usize,
+) -> VesperPluginProcessResult;
+type DecoderReceiveFrameFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+) -> VesperDecoderReceiveFrameResult;
+type DecoderSessionOperationFn =
+    unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
 
 #[derive(Debug, Clone, Copy)]
 struct CheckedPostDownloadProcessorApi {
@@ -254,6 +307,62 @@ impl TryFrom<VesperPipelineEventHookApi> for CheckedPipelineEventHookApi {
             name: api.name,
             on_event_json: api.on_event_json.ok_or(PluginLoadError::MissingField {
                 field: "pipeline_event_hook_api.on_event_json",
+            })?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CheckedDecoderPluginApi {
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
+    name: Option<NameFn>,
+    capabilities_json: CapabilitiesJsonFn,
+    free_bytes: FreeBytesFn,
+    open_session_json: DecoderOpenSessionJsonFn,
+    send_packet: DecoderSendPacketFn,
+    receive_frame: DecoderReceiveFrameFn,
+    flush_session: DecoderSessionOperationFn,
+    close_session: DecoderSessionOperationFn,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through
+// `DecoderPluginFactory`.
+unsafe impl Send for CheckedDecoderPluginApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedDecoderPluginApi {}
+
+impl TryFrom<VesperDecoderPluginApi> for CheckedDecoderPluginApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperDecoderPluginApi) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            capabilities_json: api.capabilities_json.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api.capabilities_json",
+            })?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api.free_bytes",
+            })?,
+            open_session_json: api.open_session_json.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api.open_session_json",
+            })?,
+            send_packet: api.send_packet.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api.send_packet",
+            })?,
+            receive_frame: api.receive_frame.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api.receive_frame",
+            })?,
+            flush_session: api.flush_session.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api.flush_session",
+            })?,
+            close_session: api.close_session.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api.close_session",
             })?,
         })
     }
@@ -463,6 +572,331 @@ impl PipelineEventHook for DynamicPipelineEventHook {
     }
 }
 
+#[derive(Debug)]
+struct DynamicDecoderPluginFactoryInner {
+    #[allow(dead_code)]
+    library: Option<Arc<LibraryHolder>>,
+    name: String,
+    api: CheckedDecoderPluginApi,
+    capabilities: DecoderCapabilities,
+}
+
+impl Drop for DynamicDecoderPluginFactoryInner {
+    fn drop(&mut self) {
+        if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
+            unsafe { destroy(self.api.context) };
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DynamicDecoderPluginFactory {
+    inner: Arc<DynamicDecoderPluginFactoryInner>,
+}
+
+impl DynamicDecoderPluginFactory {
+    fn new(
+        library: Option<Arc<LibraryHolder>>,
+        fallback_name: String,
+        api: CheckedDecoderPluginApi,
+    ) -> Result<Self, PluginLoadError> {
+        let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
+            let name_ptr = unsafe { name_fn(api.context) };
+            if name_ptr.is_null() {
+                fallback_name
+            } else {
+                c_string_field(name_ptr, "decoder_name")?
+            }
+        } else {
+            fallback_name
+        };
+        let capabilities = decode_plugin_bytes::<DecoderCapabilities>(
+            // SAFETY: the validated API guarantees `capabilities_json` and
+            // `free_bytes` are present and use the shared `VesperPluginBytes`
+            // ownership contract documented in `player-plugin`.
+            unsafe { (api.capabilities_json)(api.context) },
+            api.free_bytes,
+            api.context,
+        )
+        .map_err(map_capabilities_payload_error)?;
+
+        Ok(Self {
+            inner: Arc::new(DynamicDecoderPluginFactoryInner {
+                library,
+                name,
+                api,
+                capabilities,
+            }),
+        })
+    }
+}
+
+impl DecoderPluginFactory for DynamicDecoderPluginFactory {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn capabilities(&self) -> DecoderCapabilities {
+        self.inner.capabilities.clone()
+    }
+
+    fn open_session(
+        &self,
+        config: &DecoderSessionConfig,
+    ) -> Result<Box<dyn DecoderSession>, DecoderError> {
+        let config_json = serde_json::to_vec(config).map_err(|error| {
+            DecoderError::payload_codec(format!(
+                "serialize decoder config for `{}` failed: {error}",
+                self.inner.name
+            ))
+        })?;
+
+        // SAFETY: the validated plugin API guarantees `open_session_json` is
+        // present, and `config_json` remains alive for the duration of this
+        // synchronous callback.
+        let result = unsafe {
+            (self.inner.api.open_session_json)(
+                self.inner.api.context,
+                config_json.as_ptr(),
+                config_json.len(),
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                if result.session.is_null() {
+                    reclaim_decoder_payload(
+                        result.payload,
+                        self.inner.api.free_bytes,
+                        self.inner.api.context,
+                    );
+                    return Err(DecoderError::abi_violation(format!(
+                        "decoder plugin `{}` returned a null session pointer",
+                        self.inner.name
+                    )));
+                }
+                let session_info = decode_plugin_bytes_or_default::<DecoderSessionInfo>(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                )
+                .map_err(|error| map_decoder_payload_error(&self.inner.name, "open", error))?;
+                Ok(Box::new(DynamicDecoderSession {
+                    factory: self.inner.clone(),
+                    session: result.session,
+                    session_info,
+                    closed: false,
+                }))
+            }
+            VesperPluginResultStatus::Failure => {
+                let error = decode_decoder_error_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                    &self.inner.name,
+                    "open",
+                );
+                Err(error)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DynamicDecoderSession {
+    factory: Arc<DynamicDecoderPluginFactoryInner>,
+    session: *mut c_void,
+    session_info: DecoderSessionInfo,
+    closed: bool,
+}
+
+// SAFETY: the dynamic decoder session is only exposed through `DecoderSession:
+// Send`; the plugin ABI requires the opaque session pointer to be safe to move
+// across threads when exported through this API.
+unsafe impl Send for DynamicDecoderSession {}
+
+impl DynamicDecoderSession {
+    fn ensure_open(&self) -> Result<(), DecoderError> {
+        if self.closed || self.session.is_null() {
+            Err(DecoderError::NotConfigured)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn decode_operation_result(
+        &self,
+        result: VesperPluginProcessResult,
+        operation: &'static str,
+    ) -> Result<(), DecoderError> {
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let _ = decode_plugin_bytes_or_default::<DecoderOperationStatus>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| map_decoder_payload_error(&self.factory.name, operation, error))?;
+                Ok(())
+            }
+            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                operation,
+            )),
+        }
+    }
+}
+
+impl DecoderSession for DynamicDecoderSession {
+    fn session_info(&self) -> DecoderSessionInfo {
+        self.session_info.clone()
+    }
+
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, DecoderError> {
+        self.ensure_open()?;
+        let packet_json = serde_json::to_vec(packet).map_err(|error| {
+            DecoderError::payload_codec(format!(
+                "serialize decoder packet for `{}` failed: {error}",
+                self.factory.name
+            ))
+        })?;
+        let data_ptr = if data.is_empty() {
+            std::ptr::null()
+        } else {
+            data.as_ptr()
+        };
+
+        // SAFETY: the validated plugin API guarantees `send_packet` is present.
+        // The JSON and packet data buffers remain alive for this synchronous call.
+        let result = unsafe {
+            (self.factory.api.send_packet)(
+                self.factory.api.context,
+                self.session,
+                packet_json.as_ptr(),
+                packet_json.len(),
+                data_ptr,
+                data.len(),
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => decode_plugin_bytes_or_default::<
+                DecoderPacketResult,
+            >(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+            )
+            .map_err(|error| map_decoder_payload_error(&self.factory.name, "send_packet", error)),
+            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                "send_packet",
+            )),
+        }
+    }
+
+    fn receive_frame(&mut self) -> Result<DecoderReceiveFrameOutput, DecoderError> {
+        self.ensure_open()?;
+        // SAFETY: the validated plugin API guarantees `receive_frame` is present
+        // and returns plugin-owned byte buffers reclaimed below.
+        let result =
+            unsafe { (self.factory.api.receive_frame)(self.factory.api.context, self.session) };
+        let data_result = copy_plugin_bytes(
+            result.data,
+            self.factory.api.free_bytes,
+            self.factory.api.context,
+        );
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let metadata = decode_plugin_bytes::<DecoderReceiveFrameMetadata>(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_decoder_payload_error(&self.factory.name, "receive_frame", error)
+                })?;
+                let data = data_result.map_err(|error| {
+                    map_decoder_payload_error(&self.factory.name, "receive_frame_data", error)
+                })?;
+                match metadata.status {
+                    DecoderReceiveFrameStatus::Frame => {
+                        let frame = metadata.frame.ok_or_else(|| {
+                            DecoderError::abi_violation(format!(
+                                "decoder plugin `{}` returned frame status without frame metadata",
+                                self.factory.name
+                            ))
+                        })?;
+                        Ok(DecoderReceiveFrameOutput::Frame(
+                            player_plugin::DecoderFrame {
+                                metadata: frame,
+                                data,
+                            },
+                        ))
+                    }
+                    DecoderReceiveFrameStatus::NeedMoreInput => {
+                        Ok(DecoderReceiveFrameOutput::NeedMoreInput)
+                    }
+                    DecoderReceiveFrameStatus::Eof => Ok(DecoderReceiveFrameOutput::Eof),
+                }
+            }
+            VesperPluginResultStatus::Failure => {
+                let _ = data_result;
+                Err(decode_decoder_error_payload(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                    &self.factory.name,
+                    "receive_frame",
+                ))
+            }
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), DecoderError> {
+        self.ensure_open()?;
+        // SAFETY: the validated plugin API guarantees `flush_session` is present.
+        let result =
+            unsafe { (self.factory.api.flush_session)(self.factory.api.context, self.session) };
+        self.decode_operation_result(result, "flush")
+    }
+
+    fn close(&mut self) -> Result<(), DecoderError> {
+        if self.closed || self.session.is_null() {
+            return Ok(());
+        }
+        // SAFETY: the validated plugin API guarantees `close_session` is present
+        // and consumes or releases the opaque session pointer exactly once.
+        let result =
+            unsafe { (self.factory.api.close_session)(self.factory.api.context, self.session) };
+        self.closed = true;
+        self.session = std::ptr::null_mut();
+        self.decode_operation_result(result, "close")
+    }
+}
+
+impl Drop for DynamicDecoderSession {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
 struct ProgressAdapter<'a> {
     progress: &'a dyn ProcessorProgress,
 }
@@ -521,6 +955,82 @@ fn map_capabilities_payload_error(error: PluginPayloadError) -> PluginLoadError 
     }
 }
 
+fn map_decoder_payload_error(
+    plugin_name: &str,
+    payload_kind: &str,
+    error: PluginPayloadError,
+) -> DecoderError {
+    match error {
+        PluginPayloadError::NullPayloadWithLength { len } => DecoderError::abi_violation(format!(
+            "decoder plugin `{plugin_name}` returned {payload_kind} payload with null data pointer and len {len}"
+        )),
+        PluginPayloadError::Json(error) => DecoderError::payload_codec(format!(
+            "decode decoder plugin `{plugin_name}` {payload_kind} payload failed: {error}"
+        )),
+    }
+}
+
+fn decode_decoder_error_payload(
+    payload: VesperPluginBytes,
+    free_bytes: FreeBytesFn,
+    context: *mut c_void,
+    plugin_name: &str,
+    payload_kind: &str,
+) -> DecoderError {
+    decode_plugin_bytes::<DecoderError>(payload, free_bytes, context)
+        .unwrap_or_else(|error| map_decoder_payload_error(plugin_name, payload_kind, error))
+}
+
+fn decode_plugin_bytes_or_default<T: Default + DeserializeOwned>(
+    payload: VesperPluginBytes,
+    free_bytes: FreeBytesFn,
+    context: *mut c_void,
+) -> Result<T, PluginPayloadError> {
+    if payload.data.is_null() && payload.len == 0 {
+        // SAFETY: this is a no-op for the null/empty payload and keeps the
+        // ownership rule symmetric for all plugin-returned buffers.
+        unsafe { free_bytes(context, payload) };
+        return Ok(T::default());
+    }
+    decode_plugin_bytes(payload, free_bytes, context)
+}
+
+fn copy_plugin_bytes(
+    payload: VesperPluginBytes,
+    free_bytes: FreeBytesFn,
+    context: *mut c_void,
+) -> Result<Vec<u8>, PluginPayloadError> {
+    let payload_has_null_data = payload.data.is_null();
+    let bytes = if payload_has_null_data || payload.len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: the plugin ABI requires non-null payloads to point to
+        // `payload.len` initialized bytes until `free_bytes` is called.
+        let slice = unsafe { std::slice::from_raw_parts(payload.data, payload.len) };
+        slice.to_vec()
+    };
+
+    // SAFETY: `free_bytes` is the validated deallocator paired with this
+    // payload, and the payload is not used again after this call.
+    unsafe { free_bytes(context, payload) };
+
+    if payload_has_null_data && payload.len > 0 {
+        return Err(PluginPayloadError::NullPayloadWithLength { len: payload.len });
+    }
+
+    Ok(bytes)
+}
+
+fn reclaim_decoder_payload(
+    payload: VesperPluginBytes,
+    free_bytes: FreeBytesFn,
+    context: *mut c_void,
+) {
+    // SAFETY: `free_bytes` is the validated deallocator paired with this
+    // payload, and the payload is intentionally discarded.
+    unsafe { free_bytes(context, payload) };
+}
+
 fn decode_plugin_bytes<T: DeserializeOwned>(
     payload: VesperPluginBytes,
     free_bytes: FreeBytesFn,
@@ -551,10 +1061,15 @@ fn decode_plugin_bytes<T: DeserializeOwned>(
 mod tests {
     use super::LoadedDynamicPlugin;
     use player_plugin::{
-        CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DownloadMetadata,
-        OutputFormat, PipelineEvent, ProcessorCapabilities, ProcessorError, ProcessorOutput,
-        ProcessorProgress, VESPER_PLUGIN_ABI_VERSION, VesperPipelineEventHookApi,
-        VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
+        CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DecoderCapabilities,
+        DecoderCodecCapability, DecoderError, DecoderFrameFormat, DecoderFrameMetadata,
+        DecoderFramePlane, DecoderMediaKind, DecoderOperationStatus, DecoderPacket,
+        DecoderPacketResult, DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput,
+        DecoderSessionConfig, DecoderSessionInfo, DownloadMetadata, OutputFormat, PipelineEvent,
+        ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
+        VESPER_PLUGIN_ABI_VERSION, VesperDecoderOpenSessionResult, VesperDecoderPluginApi,
+        VesperDecoderReceiveFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
+        VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
         VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     };
     use std::env;
@@ -564,6 +1079,7 @@ mod tests {
 
     static PROCESSOR_NAME: &[u8] = b"fixture-processor\0";
     static HOOK_NAME: &[u8] = b"fixture-hook\0";
+    static DECODER_NAME: &[u8] = b"fixture-decoder\0";
     static EVENTS: LazyLock<Mutex<Vec<PipelineEvent>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
     #[derive(Default)]
@@ -669,6 +1185,108 @@ mod tests {
                 task_id: "42".to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn dynamic_decoder_plugin_adapter_round_trips_cpu_frame() {
+        let api = fixture_decoder_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperDecoderPluginApi).cast(),
+        };
+
+        let plugin =
+            LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load decoder plugin");
+        assert!(plugin.post_download_processor().is_none());
+        assert!(plugin.pipeline_event_hook().is_none());
+
+        let factory = plugin
+            .decoder_plugin_factory()
+            .expect("decoder factory should be available");
+        assert_eq!(factory.name(), "fixture-decoder");
+        assert!(
+            factory
+                .capabilities()
+                .supports_codec("fixture-video", DecoderMediaKind::Video)
+        );
+
+        let mut session = factory
+            .open_session(&DecoderSessionConfig {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                require_cpu_output: true,
+                ..DecoderSessionConfig::default()
+            })
+            .expect("open decoder session");
+        assert_eq!(
+            session.session_info().decoder_name.as_deref(),
+            Some("fixture-decoder")
+        );
+
+        let send = session
+            .send_packet(
+                &DecoderPacket {
+                    pts_us: Some(1_000),
+                    key_frame: true,
+                    ..DecoderPacket::default()
+                },
+                &[1, 2, 3, 4],
+            )
+            .expect("send packet");
+        assert!(send.accepted);
+
+        let frame = session.receive_frame().expect("receive frame");
+        match frame {
+            DecoderReceiveFrameOutput::Frame(frame) => {
+                assert_eq!(frame.metadata.pts_us, Some(1_000));
+                assert_eq!(frame.metadata.width, Some(2));
+                assert_eq!(frame.metadata.height, Some(2));
+                assert_eq!(frame.data, vec![1, 2, 3, 4]);
+            }
+            other => panic!("expected decoded frame, got {other:?}"),
+        }
+
+        assert_eq!(
+            session.receive_frame().expect("need more input"),
+            DecoderReceiveFrameOutput::NeedMoreInput
+        );
+        session.flush().expect("flush decoder");
+        assert_eq!(
+            session
+                .receive_frame()
+                .expect("need more input after flush"),
+            DecoderReceiveFrameOutput::NeedMoreInput
+        );
+        session.close().expect("close decoder");
+    }
+
+    #[test]
+    fn dynamic_decoder_plugin_surfaces_error_payloads() {
+        let api = fixture_decoder_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperDecoderPluginApi).cast(),
+        };
+        let plugin =
+            LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load decoder plugin");
+        let factory = plugin
+            .decoder_plugin_factory()
+            .expect("decoder factory should be available");
+
+        let error = match factory.open_session(&DecoderSessionConfig {
+            codec: "missing-codec".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            ..DecoderSessionConfig::default()
+        }) {
+            Ok(_) => panic!("unsupported codec should fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, DecoderError::UnsupportedCodec { .. }));
     }
 
     #[test]
@@ -795,6 +1413,25 @@ mod tests {
         assert!(progress.ratios().is_empty());
     }
 
+    #[test]
+    #[ignore = "requires a built player-decoder-fixture shared library artifact"]
+    fn dynamic_loader_opens_real_decoder_fixture_shared_library() {
+        let plugin_path = resolve_plugin_path("player_decoder_fixture")
+            .unwrap_or_else(|error| panic!("failed to resolve fixture decoder path: {error}"));
+
+        let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to load decoder fixture shared library `{}`: {error}",
+                plugin_path.display()
+            )
+        });
+
+        assert_eq!(plugin.plugin_name(), "player-decoder-fixture");
+        assert!(plugin.post_download_processor().is_none());
+        assert!(plugin.pipeline_event_hook().is_none());
+        assert!(plugin.decoder_plugin_factory().is_some());
+    }
+
     fn fixture_processor_api() -> VesperPostDownloadProcessorApi {
         VesperPostDownloadProcessorApi {
             context: std::ptr::null_mut(),
@@ -815,12 +1452,31 @@ mod tests {
         }
     }
 
+    fn fixture_decoder_api() -> VesperDecoderPluginApi {
+        VesperDecoderPluginApi {
+            context: std::ptr::null_mut(),
+            destroy: None,
+            name: Some(fixture_decoder_name),
+            capabilities_json: Some(fixture_decoder_capabilities_json),
+            free_bytes: Some(fixture_free_bytes),
+            open_session_json: Some(fixture_decoder_open_session_json),
+            send_packet: Some(fixture_decoder_send_packet),
+            receive_frame: Some(fixture_decoder_receive_frame),
+            flush_session: Some(fixture_decoder_flush_session),
+            close_session: Some(fixture_decoder_close_session),
+        }
+    }
+
     unsafe extern "C" fn fixture_processor_name(_context: *mut c_void) -> *const c_char {
         PROCESSOR_NAME.as_ptr().cast::<c_char>()
     }
 
     unsafe extern "C" fn fixture_hook_name(_context: *mut c_void) -> *const c_char {
         HOOK_NAME.as_ptr().cast::<c_char>()
+    }
+
+    unsafe extern "C" fn fixture_decoder_name(_context: *mut c_void) -> *const c_char {
+        DECODER_NAME.as_ptr().cast::<c_char>()
     }
 
     unsafe extern "C" fn fixture_processor_capabilities_json(
@@ -872,6 +1528,149 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn fixture_decoder_capabilities_json(
+        _context: *mut c_void,
+    ) -> VesperPluginBytes {
+        let capabilities = DecoderCapabilities {
+            codecs: vec![DecoderCodecCapability {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                profiles: vec!["baseline".to_owned()],
+                output_formats: vec![DecoderFrameFormat::Rgba8888],
+            }],
+            supports_hardware_decode: false,
+            supports_cpu_video_frames: true,
+            supports_audio_frames: false,
+            supports_gpu_handles: false,
+            supports_flush: true,
+            supports_drain: true,
+            max_sessions: Some(1),
+        };
+        VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
+    }
+
+    #[derive(Debug, Default)]
+    struct FixtureDecoderSession {
+        last_pts_us: Option<i64>,
+        pending_frame: Option<Vec<u8>>,
+    }
+
+    unsafe extern "C" fn fixture_decoder_open_session_json(
+        _context: *mut c_void,
+        config_json: *const u8,
+        config_json_len: usize,
+    ) -> VesperDecoderOpenSessionResult {
+        let config = decode_fixture_json::<DecoderSessionConfig>(config_json, config_json_len);
+        let config = match config {
+            Ok(config) => config,
+            Err(error) => {
+                return decoder_open_error(error);
+            }
+        };
+        if config.codec != "fixture-video" || config.media_kind != DecoderMediaKind::Video {
+            return decoder_open_error(DecoderError::UnsupportedCodec {
+                codec: config.codec,
+            });
+        }
+
+        let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
+        let info = DecoderSessionInfo {
+            decoder_name: Some("fixture-decoder".to_owned()),
+            selected_hardware_backend: None,
+            output_format: Some(DecoderFrameFormat::Rgba8888),
+        };
+        VesperDecoderOpenSessionResult {
+            status: VesperPluginResultStatus::Success,
+            session: session.cast::<c_void>(),
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&info).expect("serialize info"),
+            ),
+        }
+    }
+
+    unsafe extern "C" fn fixture_decoder_send_packet(
+        _context: *mut c_void,
+        session: *mut c_void,
+        packet_json: *const u8,
+        packet_json_len: usize,
+        packet_data: *const u8,
+        packet_data_len: usize,
+    ) -> VesperPluginProcessResult {
+        let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+            return decoder_process_error(DecoderError::NotConfigured);
+        };
+        let packet = match decode_fixture_json::<DecoderPacket>(packet_json, packet_json_len) {
+            Ok(packet) => packet,
+            Err(error) => return decoder_process_error(error),
+        };
+        let data = if packet_data.is_null() || packet_data_len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: the host-side fixture passes a valid packet buffer for the
+            // duration of this synchronous callback.
+            unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }.to_vec()
+        };
+        session.last_pts_us = packet.pts_us;
+        session.pending_frame = Some(data);
+        let result = DecoderPacketResult { accepted: true };
+        decoder_process_success(&result)
+    }
+
+    unsafe extern "C" fn fixture_decoder_receive_frame(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperDecoderReceiveFrameResult {
+        let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+            return decoder_frame_error(DecoderError::NotConfigured);
+        };
+        let Some(data) = session.pending_frame.take() else {
+            return decoder_frame_success(
+                &DecoderReceiveFrameMetadata::need_more_input(),
+                Vec::new(),
+            );
+        };
+        let metadata = DecoderFrameMetadata {
+            media_kind: DecoderMediaKind::Video,
+            format: DecoderFrameFormat::Rgba8888,
+            pts_us: session.last_pts_us,
+            duration_us: Some(33_333),
+            width: Some(2),
+            height: Some(2),
+            sample_rate: None,
+            channels: None,
+            planes: vec![DecoderFramePlane {
+                offset: 0,
+                len: data.len(),
+                stride: Some(8),
+            }],
+        };
+        decoder_frame_success(&DecoderReceiveFrameMetadata::frame(metadata), data)
+    }
+
+    unsafe extern "C" fn fixture_decoder_flush_session(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+            return decoder_process_error(DecoderError::NotConfigured);
+        };
+        session.pending_frame = None;
+        decoder_process_success(&DecoderOperationStatus { completed: true })
+    }
+
+    unsafe extern "C" fn fixture_decoder_close_session(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        if session.is_null() {
+            return decoder_process_error(DecoderError::NotConfigured);
+        }
+        // SAFETY: the session pointer was allocated with `Box::into_raw` by
+        // `fixture_decoder_open_session_json` and close is called once.
+        let _ = unsafe { Box::from_raw(session.cast::<FixtureDecoderSession>()) };
+        decoder_process_success(&DecoderOperationStatus { completed: true })
+    }
+
     unsafe extern "C" fn fixture_payload_codec_process_json(
         _context: *mut c_void,
         _input_json: *const u8,
@@ -916,6 +1715,77 @@ mod tests {
         true
     }
 
+    fn decode_fixture_json<T: serde::de::DeserializeOwned>(
+        data: *const u8,
+        len: usize,
+    ) -> Result<T, DecoderError> {
+        if data.is_null() && len > 0 {
+            return Err(DecoderError::abi_violation(
+                "fixture JSON pointer was null with non-zero len",
+            ));
+        }
+        let payload = if data.is_null() || len == 0 {
+            &[]
+        } else {
+            // SAFETY: fixture callers pass a valid JSON buffer for the duration
+            // of this synchronous callback.
+            unsafe { std::slice::from_raw_parts(data, len) }
+        };
+        serde_json::from_slice(payload)
+            .map_err(|error| DecoderError::payload_codec(error.to_string()))
+    }
+
+    fn decoder_open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
+        VesperDecoderOpenSessionResult {
+            status: VesperPluginResultStatus::Failure,
+            session: std::ptr::null_mut(),
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize error"),
+            ),
+        }
+    }
+
+    fn decoder_process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Success,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(value).expect("serialize value"),
+            ),
+        }
+    }
+
+    fn decoder_process_error(error: DecoderError) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Failure,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize error"),
+            ),
+        }
+    }
+
+    fn decoder_frame_success(
+        metadata: &DecoderReceiveFrameMetadata,
+        data: Vec<u8>,
+    ) -> VesperDecoderReceiveFrameResult {
+        VesperDecoderReceiveFrameResult {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(metadata).expect("serialize frame metadata"),
+            ),
+            data: VesperPluginBytes::from_vec(data),
+        }
+    }
+
+    fn decoder_frame_error(error: DecoderError) -> VesperDecoderReceiveFrameResult {
+        VesperDecoderReceiveFrameResult {
+            status: VesperPluginResultStatus::Failure,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize error"),
+            ),
+            data: VesperPluginBytes::null(),
+        }
+    }
+
     unsafe extern "C" fn fixture_free_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
         // SAFETY: the fixture only reclaims buffers it allocated with
         // `VesperPluginBytes::from_vec`.
@@ -934,6 +1804,10 @@ mod tests {
             ));
         }
 
+        resolve_plugin_path("player_ffmpeg")
+    }
+
+    fn resolve_plugin_path(stem: &str) -> Result<PathBuf, String> {
         let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(3)
@@ -950,7 +1824,7 @@ mod tests {
             })
             .unwrap_or_else(|| workspace_root.join("target"));
         let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned());
-        let library_name = shared_library_name("player_ffmpeg");
+        let library_name = shared_library_name(stem);
         let candidates = [
             target_dir.join(&profile).join(&library_name),
             target_dir.join(&profile).join("deps").join(&library_name),
@@ -965,7 +1839,7 @@ mod tests {
             .find(|path| path.is_file())
             .ok_or_else(|| {
                 format!(
-                    "could not find `{library_name}` under `{}`; build it first with `cargo build -p player-ffmpeg` or set VESPER_PLAYER_FFMPEG_PLUGIN_PATH",
+                    "could not find `{library_name}` under `{}`; build the plugin crate first or set the matching plugin path environment variable",
                     target_dir.display()
                 )
             })

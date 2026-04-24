@@ -39,7 +39,9 @@ does not need to depend on it directly.
 > runtime evidence through `controller.snapshot.videoVariantObservation`,
 > populated from AVPlayer access-log bitrate and the current presentation size.
 > For best-effort fixed-track convergence, the Flutter snapshot also exposes
-> `controller.snapshot.fixedTrackStatus` with `pending / locked / fallback`.
+> `controller.snapshot.fixedTrackStatus` with `pending / locked / fallback`; iOS keeps the status
+> `pending` while evidence is still settling, only publishes `locked` after a stable match, and only
+> publishes `fallback` after sustained mismatch evidence.
 > If a restored fixed-track request remains on a different observed variant for
 > long enough, the iOS host now reports that through `controller.snapshot.lastError`
 > and automatically degrades the restored request into constrained ABR with the

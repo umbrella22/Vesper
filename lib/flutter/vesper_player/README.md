@@ -194,8 +194,10 @@ On iOS, `controller.snapshot.fixedTrackStatus` provides an explicit runtime
 signal for best-effort `fixedTrack` convergence:
 
 - `pending`: the host is still waiting for enough runtime evidence to identify the active variant
-- `locked`: the currently observed variant matches the requested fixed-track target
-- `fallback`: the player is still rendering a different variant than the requested target
+- `locked`: the observed variant has remained on the requested fixed-track target long enough to
+  be treated as stable
+- `fallback`: sustained runtime evidence shows that the player is still rendering a different
+  variant than the requested target
 
 When `fixedTrackStatus` is not available on a backend, Flutter UI can still
 fall back to comparing the requested `trackId` with `effectiveVideoTrackId`,

@@ -11,6 +11,8 @@ use player_platform_desktop::{
     open_platform_desktop_source_with_options_and_interrupt,
     probe_platform_desktop_source_with_options,
 };
+use player_plugin::DecoderMediaKind;
+use player_plugin_loader::LoadedDynamicPlugin;
 use player_runtime::{
     DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerRuntime, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
@@ -121,13 +123,17 @@ pub fn probe_macos_host_runtime_source_with_options(
             adapter_id: native_factory.adapter_id(),
             capabilities: initializer.capabilities(),
             media_info: initializer.media_info(),
-            startup: initializer.startup(),
+            startup: apply_decoder_plugin_diagnostics(
+                initializer.startup(),
+                &initializer.media_info(),
+                &options,
+            ),
         }),
         Err(native_error) => {
             let software_factory = macos_runtime_adapter_factory();
             let initializer = PlayerRuntimeInitializer::probe_source_with_factory(
                 source,
-                options,
+                options.clone(),
                 software_factory,
             )?;
             let mut startup = initializer.startup();
@@ -137,6 +143,8 @@ pub fn probe_macos_host_runtime_source_with_options(
                     native_error.message()
                 ));
             }
+            startup =
+                apply_decoder_plugin_diagnostics(startup, &initializer.media_info(), &options);
 
             Ok(MacosHostRuntimeProbe {
                 adapter_id: software_factory.adapter_id(),
@@ -169,8 +177,13 @@ pub fn open_macos_host_runtime_source_with_options(
 
     match native_initializer {
         Ok(initializer) if should_prefer_native_host_runtime(&initializer.media_info(), &options) => {
+            let media_info = initializer.media_info();
             match initializer.initialize() {
-                Ok(bootstrap) => Ok(bootstrap),
+                Ok(mut bootstrap) => {
+                    bootstrap.startup =
+                        apply_decoder_plugin_diagnostics(bootstrap.startup, &media_info, &options);
+                    Ok(bootstrap)
+                }
                 Err(native_error) => open_software_fallback_runtime(
                     source,
                     options,
@@ -214,10 +227,15 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
     } = open_platform_desktop_source_with_options_and_interrupt(
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         source,
-        options,
+        options.clone(),
         interrupt_flag,
     )?;
     let video_decode = macos_video_decode_info(runtime.media_info());
+    let video_decode = apply_decoder_plugin_diagnostics_to_video_decode(
+        video_decode,
+        runtime.media_info(),
+        &options,
+    );
 
     Ok(PlayerRuntime::from_adapter_bootstrap(
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
@@ -324,10 +342,14 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
         let inner = probe_platform_desktop_source_with_options(
             MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
             source,
-            options,
+            options.clone(),
         )?;
         let media_info = inner.media_info();
-        let video_decode = macos_video_decode_info(&media_info);
+        let video_decode = apply_decoder_plugin_diagnostics_to_video_decode(
+            macos_video_decode_info(&media_info),
+            &media_info,
+            &options,
+        );
 
         Ok(Box::new(MacosRuntimeAdapterInitializer {
             inner,
@@ -361,7 +383,10 @@ impl PlayerRuntimeAdapterInitializer for MacosHostRuntimeAdapterInitializer {
                 options,
                 software_fallback_factory,
             } => match initializer.initialize() {
-                Ok(bootstrap) => Ok(bootstrap),
+                Ok(mut bootstrap) => {
+                    bootstrap.startup = startup;
+                    Ok(bootstrap)
+                }
                 Err(native_error) => open_software_fallback_adapter_with_factory(
                     source,
                     options,
@@ -535,6 +560,102 @@ fn macos_video_decode_info(media_info: &PlayerMediaInfo) -> PlayerVideoDecodeInf
     }
 }
 
+fn apply_decoder_plugin_diagnostics(
+    mut startup: PlayerRuntimeStartup,
+    media_info: &PlayerMediaInfo,
+    options: &PlayerRuntimeOptions,
+) -> PlayerRuntimeStartup {
+    let Some(video_decode) = startup.video_decode.take() else {
+        return startup;
+    };
+    startup.video_decode = Some(apply_decoder_plugin_diagnostics_to_video_decode(
+        video_decode,
+        media_info,
+        options,
+    ));
+    startup
+}
+
+fn apply_decoder_plugin_diagnostics_to_video_decode(
+    mut video_decode: PlayerVideoDecodeInfo,
+    media_info: &PlayerMediaInfo,
+    options: &PlayerRuntimeOptions,
+) -> PlayerVideoDecodeInfo {
+    if video_decode
+        .fallback_reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("decoder plugin"))
+    {
+        return video_decode;
+    }
+
+    if let Some(diagnostic) = decoder_plugin_diagnostic(media_info, options) {
+        video_decode.fallback_reason = Some(match video_decode.fallback_reason.take() {
+            Some(existing) if !existing.is_empty() => format!("{existing}; {diagnostic}"),
+            _ => diagnostic,
+        });
+    }
+
+    video_decode
+}
+
+fn decoder_plugin_diagnostic(
+    media_info: &PlayerMediaInfo,
+    options: &PlayerRuntimeOptions,
+) -> Option<String> {
+    let best_video = media_info.best_video.as_ref()?;
+    if options.decoder_plugin_library_paths.is_empty() {
+        return None;
+    }
+
+    let mut supported_plugins = Vec::new();
+    let mut load_notes = Vec::new();
+    for path in &options.decoder_plugin_library_paths {
+        match LoadedDynamicPlugin::load(path) {
+            Ok(plugin) => match plugin.decoder_plugin_factory() {
+                Some(factory)
+                    if factory
+                        .capabilities()
+                        .supports_codec(&best_video.codec, DecoderMediaKind::Video) =>
+                {
+                    supported_plugins.push(factory.name().to_owned());
+                }
+                Some(factory) => {
+                    load_notes.push(format!(
+                        "{} does not advertise {} video support",
+                        factory.name(),
+                        best_video.codec
+                    ));
+                }
+                None => {
+                    load_notes.push(format!("{} is not a decoder plugin", plugin.plugin_name()));
+                }
+            },
+            Err(error) => {
+                load_notes.push(format!("{}: {error}", path.display()));
+            }
+        }
+    }
+
+    if !supported_plugins.is_empty() {
+        return Some(format!(
+            "decoder plugin ABI v1 discovered candidate(s) for {} video: {}; macOS host diagnostics record them but playback still uses the native-first/FFmpeg fallback strategy",
+            best_video.codec,
+            supported_plugins.join(", ")
+        ));
+    }
+
+    Some(format!(
+        "decoder plugin paths were configured, but no decoder plugin advertised {} video support{}",
+        best_video.codec,
+        if load_notes.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", load_notes.join("; "))
+        }
+    ))
+}
+
 fn should_prefer_native_host_runtime(
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
@@ -552,7 +673,8 @@ fn probe_macos_host_runtime_initializer_with_factories(
         Ok(initializer) => {
             let capabilities = initializer.capabilities();
             let media_info = initializer.media_info();
-            let startup = initializer.startup();
+            let startup =
+                apply_decoder_plugin_diagnostics(initializer.startup(), &media_info, &options);
 
             if should_prefer_native_host_runtime(&media_info, &options) {
                 Ok(Box::new(MacosHostRuntimeAdapterInitializer {
@@ -599,11 +721,12 @@ fn probe_software_fallback_initializer(
     software_factory: &dyn MacosHostFallbackFactory,
     fallback_reason: Option<String>,
 ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
-    let initializer = software_factory.probe_source_with_options(source, options)?;
+    let initializer = software_factory.probe_source_with_options(source, options.clone())?;
     let capabilities = initializer.capabilities();
     let media_info = initializer.media_info();
     let mut startup = initializer.startup();
     apply_video_decode_fallback_reason(&mut startup, fallback_reason);
+    startup = apply_decoder_plugin_diagnostics(startup, &media_info, &options);
 
     Ok(Box::new(MacosHostRuntimeAdapterInitializer {
         selection: MacosHostRuntimeSelection::SoftwarePreferred { initializer },
@@ -620,7 +743,10 @@ fn apply_video_decode_fallback_reason(
     if let (Some(video_decode), Some(fallback_reason)) =
         (startup.video_decode.as_mut(), fallback_reason)
     {
-        video_decode.fallback_reason = Some(fallback_reason);
+        video_decode.fallback_reason = Some(match video_decode.fallback_reason.take() {
+            Some(existing) if !existing.is_empty() => format!("{fallback_reason}; {existing}"),
+            _ => fallback_reason,
+        });
     }
 }
 
@@ -634,7 +760,13 @@ fn open_software_fallback_runtime(
         Ok(mut bootstrap) => {
             if let Some(fallback_reason) = fallback_reason {
                 if let Some(video_decode) = bootstrap.startup.video_decode.as_mut() {
-                    video_decode.fallback_reason = Some(fallback_reason);
+                    video_decode.fallback_reason =
+                        Some(match video_decode.fallback_reason.take() {
+                            Some(existing) if !existing.is_empty() => {
+                                format!("{fallback_reason}; {existing}")
+                            }
+                            _ => fallback_reason,
+                        });
                 }
             }
             Ok(bootstrap)
@@ -671,15 +803,15 @@ fn open_software_fallback_adapter_with_factory(
 mod tests {
     use std::collections::VecDeque;
     use std::os::raw::c_void;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use super::{
         MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
-        MacosSoftwarePlayerRuntimeAdapterFactory, macos_video_decode_info,
-        open_macos_host_runtime_source_with_options,
+        MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics_to_video_decode,
+        macos_video_decode_info, open_macos_host_runtime_source_with_options,
         probe_macos_host_runtime_initializer_with_factories,
         probe_macos_host_runtime_source_with_options,
     };
@@ -957,6 +1089,24 @@ mod tests {
                 .as_deref()
                 .unwrap_or_default()
                 .contains("VP8")
+        );
+    }
+
+    #[test]
+    fn macos_video_decode_info_records_configured_decoder_plugin_paths() {
+        let media_info = media_info_with_codec("fixture-video");
+        let info = apply_decoder_plugin_diagnostics_to_video_decode(
+            macos_video_decode_info(&media_info),
+            &media_info,
+            &PlayerRuntimeOptions::default()
+                .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")]),
+        );
+
+        assert!(
+            info.fallback_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("decoder plugin paths were configured")
         );
     }
 

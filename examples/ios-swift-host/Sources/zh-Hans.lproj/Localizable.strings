@@ -118,6 +118,20 @@
 
 "example.quality.button_capped" = "限码率";
 "example.quality.button_pinned" = "固定";
+"example.quality.button_locking" = "锁定中";
+"example.quality.status_pending" = "等待";
+"example.quality.status_locked" = "已锁定";
+"example.quality.status_fallback" = "回退";
+"example.quality.status_requested" = "已请求";
+"example.quality.no_video_tracks" = "当前媒体还没有暴露可选视频档位。";
+"example.quality.fixed_track_unavailable" = "当前后端可以引导 ABR，但这个源暂时不能固定 HLS 视频档位。";
+"example.quality.runtime_notice_title" = "画质锁定提示";
+"example.quality.auto_subtitle_effective" = "让 AVPlayer 自动选择档位。当前观测到的实际档位：%@。";
+"example.quality.auto_subtitle_observation" = "让 AVPlayer 自动选择档位。当前观测：%@。";
+"example.quality.fixed_subtitle_pending" = "已请求 %@，正在等待 AVPlayer 回报实际渲染档位。";
+"example.quality.fixed_subtitle_locked" = "当前 best-effort 锁定已收敛到 %@。";
+"example.quality.fixed_subtitle_fallback" = "已请求 %@，但 AVPlayer 仍在渲染 %@。";
+"example.quality.fixed_subtitle_observation" = "当前观测：%@。";
 
 "example.subtitle.cc_off" = "字幕关";
 "example.subtitle.cc_auto" = "字幕自动";

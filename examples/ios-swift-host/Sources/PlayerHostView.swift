@@ -224,6 +224,10 @@ struct PlayerHostView: View {
                 uiState: uiState,
                 trackCatalog: trackCatalog,
                 trackSelection: trackSelection,
+                effectiveVideoTrackId: controller.effectiveVideoTrackId,
+                videoVariantObservation: controller.videoVariantObservation,
+                fixedTrackStatus: controller.fixedTrackStatus,
+                lastError: controller.lastError,
                 onOpenSheet: { activeSheet = $0 },
                 onSelectQuality: {
                     controller.setAbrPolicy($0)

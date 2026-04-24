@@ -71,4 +71,122 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             .window(positionMs: 70_000, endMs: 70_000)
         )
     }
+
+    func testQualityHelpersExposeFixedTrackStateAndObservation() {
+        let trackCatalog = VesperTrackCatalog(
+            tracks: [
+                VesperMediaTrack(
+                    id: "video:hls:cavc1:b854000:w854:h480:f3000",
+                    kind: .video,
+                    bitRate: 854_000,
+                    width: 854,
+                    height: 480,
+                    frameRate: 30
+                ),
+                VesperMediaTrack(
+                    id: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+                    kind: .video,
+                    bitRate: 1_500_000,
+                    width: 1280,
+                    height: 720,
+                    frameRate: 30
+                ),
+            ],
+            adaptiveVideo: true,
+            adaptiveAudio: false
+        )
+        let trackSelection = VesperTrackSelectionSnapshot(
+            abrPolicy: .fixedTrack("video:hls:cavc1:b1500000:w1280:h720:f3000")
+        )
+
+        XCTAssertEqual(
+            currentFixedTrackStatus(
+                trackCatalog,
+                trackSelection,
+                effectiveVideoTrackId: "video:hls:cavc1:b854000:w854:h480:f3000",
+                fixedTrackStatus: .fallback
+            ),
+            .fallback
+        )
+        XCTAssertEqual(
+            qualityOptionBadgeLabel(
+                trackId: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+                trackCatalog: trackCatalog,
+                trackSelection: trackSelection,
+                effectiveVideoTrackId: "video:hls:cavc1:b854000:w854:h480:f3000",
+                fixedTrackStatus: .fallback
+            ),
+            ExampleI18n.qualityStatusFallback
+        )
+        XCTAssertEqual(
+            videoVariantObservationSummary(
+                VesperVideoVariantObservation(
+                    bitRate: 854_000,
+                    width: 854,
+                    height: 480
+                )
+            ),
+            "854x480 · 854 kbps"
+        )
+    }
+
+    func testQualityHelpersKeepFixedTrackPendingWhileRuntimeEvidenceSettles() {
+        let requestedTrackId = "video:hls:cavc1:b1500000:w1280:h720:f3000"
+        let observedTrackId = "video:hls:cavc1:b854000:w854:h480:f3000"
+        let trackCatalog = VesperTrackCatalog(
+            tracks: [
+                VesperMediaTrack(
+                    id: observedTrackId,
+                    kind: .video,
+                    bitRate: 854_000,
+                    width: 854,
+                    height: 480,
+                    frameRate: 30
+                ),
+                VesperMediaTrack(
+                    id: requestedTrackId,
+                    kind: .video,
+                    bitRate: 1_500_000,
+                    width: 1280,
+                    height: 720,
+                    frameRate: 30
+                ),
+            ],
+            adaptiveVideo: true,
+            adaptiveAudio: false
+        )
+        let trackSelection = VesperTrackSelectionSnapshot(
+            abrPolicy: .fixedTrack(requestedTrackId)
+        )
+
+        XCTAssertEqual(
+            currentFixedTrackStatus(
+                trackCatalog,
+                trackSelection,
+                effectiveVideoTrackId: observedTrackId,
+                fixedTrackStatus: .pending
+            ),
+            .pending
+        )
+        XCTAssertEqual(
+            qualityOptionBadgeLabel(
+                trackId: requestedTrackId,
+                trackCatalog: trackCatalog,
+                trackSelection: trackSelection,
+                effectiveVideoTrackId: observedTrackId,
+                fixedTrackStatus: .pending
+            ),
+            ExampleI18n.qualityStatusPending
+        )
+        XCTAssertEqual(
+            qualityAutoRowSubtitle(
+                trackCatalog,
+                trackSelection,
+                effectiveVideoTrackId: observedTrackId,
+                fixedTrackStatus: .pending,
+                videoVariantObservation: nil
+            ),
+            ExampleI18n.qualityFixedSubtitlePending("720p")
+        )
+    }
 }

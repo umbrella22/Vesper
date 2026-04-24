@@ -107,7 +107,8 @@ The executable host regression path for this example is now:
 2. generate the host project:
    - `cd examples/ios-swift-host && xcodegen generate`
 3. run the example-level LiveDvr regression tests:
-   - `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -configuration Debug -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" test`
+   - choose an installed simulator with `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -showdestinations`
+   - `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -configuration Debug -destination id=<SIMULATOR_ID> ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test`
 4. optionally build the release app:
    - `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -configuration Release -sdk iphoneos -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build`
 

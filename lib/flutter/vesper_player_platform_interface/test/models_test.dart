@@ -130,6 +130,35 @@ void main() {
   });
 
   test(
+      'capabilities keep iOS best-effort fixed-track separate from exact video track selection',
+      () {
+    final capabilities = VesperPlayerCapabilities.fromMap(<Object?, Object?>{
+      'supportsTrackCatalog': true,
+      'supportsTrackSelection': true,
+      'supportsVideoTrackSelection': false,
+      'supportsAudioTrackSelection': true,
+      'supportsSubtitleTrackSelection': true,
+      'supportsAbrPolicy': true,
+      'supportsAbrConstrained': true,
+      'supportsAbrFixedTrack': true,
+      'supportsAbrMaxBitRate': true,
+      'supportsAbrMaxResolution': true,
+    });
+
+    expect(capabilities.supportsTrackCatalog, isTrue);
+    expect(capabilities.supportsTrackSelection, isTrue);
+    expect(capabilities.supportsVideoTrackSelection, isFalse);
+    expect(capabilities.supportsTrackSelectionFor(VesperMediaTrackKind.video),
+        isFalse);
+    expect(capabilities.supportsAbrPolicy, isTrue);
+    expect(capabilities.supportsAbrConstrained, isTrue);
+    expect(capabilities.supportsAbrFixedTrack, isTrue);
+    expect(capabilities.supportsAbrMode(VesperAbrMode.fixedTrack), isTrue);
+    expect(capabilities.supportsAbrMaxBitRate, isTrue);
+    expect(capabilities.supportsAbrMaxResolution, isTrue);
+  });
+
+  test(
     'default retry policy keeps fallback getters but omits channel overrides',
     () {
       const policy = VesperRetryPolicy();
