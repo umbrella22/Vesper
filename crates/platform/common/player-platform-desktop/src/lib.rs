@@ -154,6 +154,9 @@ pub struct SoftwarePlayerRuntime {
     audio_buffering_window: AudioBufferingWindow,
     video_present_early_tolerance: Duration,
     video_idle_poll_interval: Duration,
+    buffering_policy: PlayerBufferingPolicy,
+    cache_policy: PlayerCachePolicy,
+    base_video_prefetch_capacity: usize,
     pending_audio_metadata_worker: Option<PendingAudioMetadataWorker>,
     pending_audio_decode_worker: Option<PendingAudioDecodeWorker>,
     pending_audio_stream_worker: Option<PendingAudioStreamWorker>,
@@ -672,17 +675,20 @@ impl SoftwarePlayerRuntime {
             &media_info,
             config.video_prefetch_capacity,
             &config.cache_policy,
+            DEFAULT_PLAYBACK_RATE,
         );
         video_source.set_prefetch_limit(video_prefetch_limit);
         let video_playback_start_buffer_frames = resolved_video_playback_start_buffer_frames(
             &media_info,
             video_prefetch_limit,
             &config.buffering_policy,
+            DEFAULT_PLAYBACK_RATE,
         );
         let video_rebuffer_frames = resolved_video_rebuffer_frames(
             &media_info,
             video_prefetch_limit,
             &config.buffering_policy,
+            DEFAULT_PLAYBACK_RATE,
         );
         let audio_playback_start_buffer_duration =
             resolved_audio_playback_start_buffer_duration(&config.buffering_policy);
@@ -717,6 +723,9 @@ impl SoftwarePlayerRuntime {
             audio_buffering_window: AudioBufferingWindow::Startup,
             video_present_early_tolerance: config.video_present_early_tolerance,
             video_idle_poll_interval: config.video_idle_poll_interval,
+            buffering_policy: config.buffering_policy,
+            cache_policy: config.cache_policy,
+            base_video_prefetch_capacity: config.video_prefetch_capacity,
             pending_audio_metadata_worker: None,
             pending_audio_decode_worker: None,
             pending_audio_stream_worker: None,
@@ -1256,14 +1265,45 @@ impl SoftwarePlayerRuntime {
         let current_position = self
             .playback_position()
             .unwrap_or_else(|| self.progress().position());
-        self.ensure_audio_output(current_position, rate)?;
+        let previous_rate = self.playback_rate;
         self.playback_rate = rate;
+        self.refresh_rate_sensitive_buffering();
+        if let Err(error) = self.ensure_audio_output(current_position, rate) {
+            self.playback_rate = previous_rate;
+            self.refresh_rate_sensitive_buffering();
+            return Err(error);
+        }
         self.set_playback_clock(current_position);
         self.refresh_playback_finished();
         self.emit_event(PlayerRuntimeEvent::PlaybackRateChanged { rate });
         self.update_buffering_state();
 
         Ok(true)
+    }
+
+    fn refresh_rate_sensitive_buffering(&mut self) {
+        let rate_scaled_capacity = self
+            .base_video_prefetch_capacity
+            .saturating_mul(playback_rate_buffer_scale(self.playback_rate));
+        let video_prefetch_limit = resolved_video_prefetch_limit(
+            &self.media_info,
+            rate_scaled_capacity,
+            &self.cache_policy,
+            self.playback_rate,
+        );
+        self.video_source.set_prefetch_limit(video_prefetch_limit);
+        self.video_playback_start_buffer_frames = resolved_video_playback_start_buffer_frames(
+            &self.media_info,
+            video_prefetch_limit,
+            &self.buffering_policy,
+            self.playback_rate,
+        );
+        self.video_rebuffer_frames = resolved_video_rebuffer_frames(
+            &self.media_info,
+            video_prefetch_limit,
+            &self.buffering_policy,
+            self.playback_rate,
+        );
     }
 
     fn poll_audio_stream_worker(&mut self) {
@@ -1743,14 +1783,25 @@ impl SoftwarePlayerRuntime {
     }
 
     fn log_buffering_diagnostics(&self, buffering: bool) {
-        let playback_position = self.playback_position().unwrap_or_else(|| self.progress().position());
-        let next_frame_pts = self.next_frame.as_ref().map(|frame| frame.presentation_time);
-        let audio_generation = self.pending_audio_stream_worker.as_ref().map(|worker| worker.generation);
-        let buffered_audio_samples = self.pending_audio_stream_worker.as_ref().and_then(|worker| {
-            self.audio_sink_controller
-                .as_ref()
-                .and_then(|controller| controller.buffered_samples(worker.generation))
-        });
+        let playback_position = self
+            .playback_position()
+            .unwrap_or_else(|| self.progress().position());
+        let next_frame_pts = self
+            .next_frame
+            .as_ref()
+            .map(|frame| frame.presentation_time);
+        let audio_generation = self
+            .pending_audio_stream_worker
+            .as_ref()
+            .map(|worker| worker.generation);
+        let buffered_audio_samples = self
+            .pending_audio_stream_worker
+            .as_ref()
+            .and_then(|worker| {
+                self.audio_sink_controller
+                    .as_ref()
+                    .and_then(|controller| controller.buffered_samples(worker.generation))
+            });
 
         info!(
             buffering,
@@ -1909,6 +1960,7 @@ fn resolved_video_prefetch_limit(
     media_info: &PlayerMediaInfo,
     buffering_capacity: usize,
     cache_policy: &PlayerCachePolicy,
+    playback_rate: f32,
 ) -> usize {
     if media_info.source_kind != MediaSourceKind::Remote {
         return buffering_capacity.max(1);
@@ -1923,8 +1975,10 @@ fn resolved_video_prefetch_limit(
     }
 
     let estimated_frame_bytes = estimated_video_frame_memory_bytes(media_info).max(1) as u64;
+    let rate_scale = u64::try_from(playback_rate_buffer_scale(playback_rate)).unwrap_or(u64::MAX);
     let effective_memory_budget = max_memory_bytes
         .saturating_mul(DESKTOP_ACTIVE_VIDEO_PREFETCH_MEMORY_SCALE)
+        .saturating_mul(rate_scale)
         .max(estimated_frame_bytes);
     let frames_by_budget = (effective_memory_budget / estimated_frame_bytes).max(1);
     let frames_by_budget = usize::try_from(frames_by_budget).unwrap_or(usize::MAX);
@@ -1936,6 +1990,7 @@ fn resolved_video_playback_start_buffer_frames(
     media_info: &PlayerMediaInfo,
     video_prefetch_capacity: usize,
     policy: &PlayerBufferingPolicy,
+    playback_rate: f32,
 ) -> usize {
     let Some(target_duration) = policy.buffer_for_playback.or(policy.buffer_for_rebuffer) else {
         return 1;
@@ -1947,7 +2002,9 @@ fn resolved_video_playback_start_buffer_frames(
         .and_then(|video| video.frame_rate)
         .filter(|rate| rate.is_finite() && *rate > 0.0)
         .unwrap_or(DEFAULT_VIDEO_FRAME_RATE_ESTIMATE);
-    let required_frames = (target_duration.as_secs_f64() * frame_rate).ceil() as usize;
+    let required_frames =
+        (target_duration.as_secs_f64() * frame_rate * f64::from(playback_rate.max(1.0))).ceil()
+            as usize;
 
     required_frames.clamp(1, video_prefetch_capacity.max(1))
 }
@@ -1956,6 +2013,7 @@ fn resolved_video_rebuffer_frames(
     media_info: &PlayerMediaInfo,
     video_prefetch_capacity: usize,
     policy: &PlayerBufferingPolicy,
+    playback_rate: f32,
 ) -> usize {
     let Some(target_duration) = policy.buffer_for_rebuffer.or(policy.buffer_for_playback) else {
         return 1;
@@ -1967,9 +2025,19 @@ fn resolved_video_rebuffer_frames(
         .and_then(|video| video.frame_rate)
         .filter(|rate| rate.is_finite() && *rate > 0.0)
         .unwrap_or(DEFAULT_VIDEO_FRAME_RATE_ESTIMATE);
-    let required_frames = (target_duration.as_secs_f64() * frame_rate).ceil() as usize;
+    let required_frames =
+        (target_duration.as_secs_f64() * frame_rate * f64::from(playback_rate.max(1.0))).ceil()
+            as usize;
 
     required_frames.clamp(1, video_prefetch_capacity.max(1))
+}
+
+fn playback_rate_buffer_scale(playback_rate: f32) -> usize {
+    if !playback_rate.is_finite() {
+        return 1;
+    }
+
+    playback_rate.max(1.0).ceil() as usize
 }
 
 fn estimated_video_frame_memory_bytes(media_info: &PlayerMediaInfo) -> usize {
@@ -2509,6 +2577,7 @@ mod tests {
             &media_info,
             48,
             &PlayerBufferingPolicy::resilient(),
+            DEFAULT_PLAYBACK_RATE,
         );
 
         assert_eq!(startup_frames, 48);
@@ -2535,8 +2604,12 @@ mod tests {
             track_selection: Default::default(),
         };
 
-        let rebuffer_frames =
-            resolved_video_rebuffer_frames(&media_info, 48, &PlayerBufferingPolicy::resilient());
+        let rebuffer_frames = resolved_video_rebuffer_frames(
+            &media_info,
+            48,
+            &PlayerBufferingPolicy::resilient(),
+            DEFAULT_PLAYBACK_RATE,
+        );
 
         assert_eq!(rebuffer_frames, 48);
     }
@@ -2570,10 +2643,44 @@ mod tests {
                 max_memory_bytes: Some(8 * 1024 * 1024),
                 max_disk_bytes: Some(128 * 1024 * 1024),
             },
+            DEFAULT_PLAYBACK_RATE,
         );
 
         assert!(limited < 96);
         assert_eq!(limited, 43);
+    }
+
+    #[test]
+    fn playback_rate_expands_remote_video_prefetch_budget() {
+        let media_info = PlayerMediaInfo {
+            source_uri: "https://example.com/live/master.m3u8".to_owned(),
+            source_kind: MediaSourceKind::Remote,
+            source_protocol: MediaSourceProtocol::Hls,
+            duration: Some(Duration::from_secs(600)),
+            bit_rate: Some(4_000_000),
+            audio_streams: 0,
+            video_streams: 1,
+            best_video: Some(PlayerVideoInfo {
+                codec: "H264".to_owned(),
+                width: 960,
+                height: 540,
+                frame_rate: Some(60.0),
+            }),
+            best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
+        };
+        let cache_policy = PlayerCachePolicy {
+            preset: player_runtime::PlayerCachePreset::Resilient,
+            max_memory_bytes: Some(8 * 1024 * 1024),
+            max_disk_bytes: Some(128 * 1024 * 1024),
+        };
+
+        let normal = resolved_video_prefetch_limit(&media_info, 96, &cache_policy, 1.0);
+        let fast = resolved_video_prefetch_limit(&media_info, 288, &cache_policy, 3.0);
+
+        assert!(fast > normal);
+        assert_eq!(fast, 129);
     }
 
     #[test]

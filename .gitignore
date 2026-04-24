@@ -3,6 +3,7 @@
 .gradle/*
 flutter_aliplayer-7.12.0/*
 flutter_tencent/*
+third_party/*
 
 # Development notes (local only, not committed)
 devnotes/

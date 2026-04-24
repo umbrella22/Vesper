@@ -32,12 +32,12 @@ use player_core::MediaSource;
 use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window;
 #[cfg(not(target_os = "macos"))]
 use player_host_desktop::probe_desktop_host_launch_plan_uri;
+#[cfg(target_os = "macos")]
+use player_host_desktop::render_config_from_media_info;
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
     normalize_desktop_host_source_uri,
 };
-#[cfg(target_os = "macos")]
-use player_host_desktop::render_config_from_media_info;
 #[cfg(target_os = "macos")]
 use player_platform_macos::open_macos_software_runtime_uri_with_options_and_interrupt;
 #[cfg(not(target_os = "macos"))]
@@ -46,15 +46,15 @@ use player_render_wgpu::{
     DisplayRect, RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
     Yuv420pVideoFrame, default_window_attributes,
 };
+#[cfg(target_os = "macos")]
+use player_runtime::PlayerRuntimeOptions;
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
     PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntime,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent,
-    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo,
-    PlayerVideoDecodeMode, PresentationState, VideoPixelFormat,
+    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+    PresentationState, VideoPixelFormat,
 };
-#[cfg(target_os = "macos")]
-use player_runtime::PlayerRuntimeOptions;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;
@@ -142,7 +142,7 @@ fn main() -> Result<()> {
         .compact()
         .init();
 
-    let source = resolve_media_source_uri()?;
+    let source = resolve_initial_media_source_uri()?;
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -158,7 +158,7 @@ fn main() -> Result<()> {
 }
 
 struct DesktopPlayerApp {
-    source: String,
+    source: Option<String>,
     runtime: Option<PlayerRuntime>,
     last_frame: Option<DecodedVideoFrame>,
     render_config: RenderSurfaceConfig,
@@ -196,17 +196,24 @@ struct DesktopPlayerApp {
     open_file_dialog_pending: bool,
     host_message: Option<String>,
     download_message: Option<String>,
+    overlay_dirty: bool,
 }
 
 impl DesktopPlayerApp {
-    fn new(source: String) -> Self {
-        let initial_source = source;
-        let initial_label = source_display_label(&initial_source);
+    fn new(source: Option<String>) -> Self {
+        let playlist_entries = source
+            .as_ref()
+            .map(|initial_source| DesktopPlaylistEntry {
+                source_uri: initial_source.clone(),
+                label: source_display_label(initial_source),
+            })
+            .into_iter()
+            .collect();
         let (planner_tx, planner_rx) = mpsc::channel();
         let (launch_tx, launch_rx) = mpsc::channel();
         let (file_dialog_tx, file_dialog_rx) = mpsc::channel();
         Self {
-            source: initial_source.clone(),
+            source,
             runtime: None,
             last_frame: None,
             render_config: RenderSurfaceConfig::default(),
@@ -222,10 +229,7 @@ impl DesktopPlayerApp {
             controls_animation_tick: Instant::now(),
             seek_preview: None,
             ui_presenter: None,
-            playlist_entries: vec![DesktopPlaylistEntry {
-                source_uri: initial_source,
-                label: initial_label,
-            }],
+            playlist_entries,
             active_playlist_index: 0,
             sidebar_tab: DesktopSidebarTab::Playlist,
             download_controller: DesktopDownloadController::new(),
@@ -247,6 +251,7 @@ impl DesktopPlayerApp {
             open_file_dialog_pending: false,
             host_message: None,
             download_message: None,
+            overlay_dirty: false,
         }
     }
 
@@ -319,7 +324,7 @@ impl DesktopPlayerApp {
             .playlist_entries
             .get(self.active_playlist_index)
             .map(|entry| entry.label.clone())
-            .unwrap_or_else(|| source_display_label(&self.source));
+            .unwrap_or_else(|| self.current_source_label());
         let subtitle = active_source_subtitle(snapshot);
 
         DesktopOverlayViewModel {
@@ -344,9 +349,10 @@ impl DesktopPlayerApp {
     }
 
     fn host_snapshot(&self) -> PlayerSnapshot {
-        let source = MediaSource::new(self.source.clone());
+        let source_uri = self.source.clone().unwrap_or_default();
+        let source = MediaSource::new(source_uri.clone());
         PlayerSnapshot {
-            source_uri: self.source.clone(),
+            source_uri: source_uri.clone(),
             state: PresentationState::Ready,
             has_video_surface: true,
             is_interrupted: false,
@@ -362,7 +368,7 @@ impl DesktopPlayerApp {
                 duration: None,
             },
             media_info: PlayerMediaInfo {
-                source_uri: self.source.clone(),
+                source_uri,
                 source_kind: source.kind(),
                 source_protocol: source.protocol(),
                 duration: None,
@@ -396,7 +402,12 @@ impl DesktopPlayerApp {
         self.playlist_entries
             .get(self.active_playlist_index)
             .map(|entry| entry.label.clone())
-            .unwrap_or_else(|| source_display_label(&self.source))
+            .or_else(|| {
+                self.source
+                    .as_ref()
+                    .map(|source| source_display_label(source))
+            })
+            .unwrap_or_else(|| "Drop a video to start".to_owned())
     }
 
     fn active_playlist_status_label(&self) -> &'static str {
@@ -498,7 +509,7 @@ impl DesktopPlayerApp {
         let label = label.unwrap_or_else(|| source_display_label(&source));
         let request_id = self.next_launch_request_id;
         self.next_launch_request_id = self.next_launch_request_id.saturating_add(1);
-        self.source = source.clone();
+        self.source = Some(source.clone());
         self.register_playlist_source(&source, Some(label.clone()));
         self.active_launch_request_id = Some(request_id);
         self.pending_launch_activation = None;
@@ -740,7 +751,7 @@ impl DesktopPlayerApp {
                 self.launch_status = None;
                 self.register_playlist_source(&pending.source, Some(pending.label));
                 self.sync_ui_presenter();
-                self.refresh_overlay()?;
+                self.refresh_overlay_ui_only()?;
                 window.request_redraw();
             }
             Err(error) => {
@@ -823,7 +834,15 @@ impl DesktopPlayerApp {
         }
         self.window = Some(window.clone());
         self.ensure_renderer_ready(window.clone())?;
-        self.request_source_launch(self.source.clone(), Some(self.current_source_label()))?;
+        if let Some(source) = self.source.clone() {
+            self.request_source_launch(source, Some(self.current_source_label()))?;
+        } else {
+            self.host_message = Some("DROP A MEDIA FILE OR OPEN ONE".to_owned());
+            self.update_window_title();
+            self.sync_ui_presenter();
+            self.refresh_overlay_ui_only()?;
+            window.request_redraw();
+        }
 
         Ok(())
     }
@@ -872,7 +891,8 @@ impl DesktopPlayerApp {
             "initialized desktop player"
         );
 
-        self.source = launch_plan.source;
+        let activated_source = launch_plan.source.clone();
+        self.source = Some(launch_plan.source);
         self.render_config = launch_plan.render_config;
         self.uses_external_video_surface = capabilities.supports_external_video_surface;
         self.runtime = Some(runtime);
@@ -910,7 +930,7 @@ impl DesktopPlayerApp {
         }
 
         info!(
-            source = self.source.as_str(),
+            source = activated_source.as_str(),
             runtime_open_ms = runtime_open_duration.as_millis(),
             renderer_ready_ms = renderer_ready_duration.map(|duration| duration.as_millis() as u64),
             activation_ms = activation_started_at.elapsed().as_millis(),
@@ -962,6 +982,14 @@ impl DesktopPlayerApp {
     }
 
     fn refresh_overlay(&mut self) -> Result<()> {
+        self.refresh_overlay_with_video_frame(true)
+    }
+
+    fn refresh_overlay_ui_only(&mut self) -> Result<()> {
+        self.refresh_overlay_with_video_frame(false)
+    }
+
+    fn refresh_overlay_with_video_frame(&mut self, upload_video_frame: bool) -> Result<()> {
         if self.runtime.is_none() {
             return self.refresh_host_overlay();
         }
@@ -977,9 +1005,9 @@ impl DesktopPlayerApp {
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_overlay();
             }
+            self.overlay_dirty = false;
             return Ok(());
         };
-        let frame_texture = video_frame_texture(frame);
         let window_size = window.inner_size();
         let window_scale_factor = window.scale_factor();
         let snapshot = self.runtime()?.snapshot();
@@ -993,21 +1021,27 @@ impl DesktopPlayerApp {
                 &overlay_view_model,
             )
         });
+        let frame_texture = upload_video_frame.then(|| video_frame_texture(frame));
         let Some(renderer) = self.renderer.as_mut() else {
+            self.overlay_dirty = false;
             return Ok(());
         };
         if window_size.width == 0 || window_size.height == 0 {
             renderer.clear_overlay();
+            self.overlay_dirty = false;
             return Ok(());
         }
 
-        renderer.upload_frame(&frame_texture);
+        if let Some(frame_texture) = frame_texture.as_ref() {
+            renderer.upload_frame(frame_texture);
+        }
         if let Some(overlay) = overlay {
             renderer.upload_overlay(&overlay);
         } else {
             renderer.clear_overlay();
         }
 
+        self.overlay_dirty = false;
         window.request_redraw();
 
         Ok(())
@@ -1026,6 +1060,7 @@ impl DesktopPlayerApp {
         if self.host_message.is_none() {
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_overlay();
+                self.overlay_dirty = false;
                 window.request_redraw();
             }
             return Ok(());
@@ -1055,6 +1090,7 @@ impl DesktopPlayerApp {
         } else {
             renderer.clear_overlay();
         }
+        self.overlay_dirty = false;
         window.request_redraw();
         Ok(())
     }
@@ -1093,7 +1129,10 @@ impl DesktopPlayerApp {
     }
 
     fn window_title(&self) -> String {
-        let source_name = Path::new(&self.source)
+        let Some(source) = self.source.as_ref() else {
+            return "Vesper basic player - Drop media to start".to_owned();
+        };
+        let source_name = Path::new(source)
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("media");
@@ -1131,18 +1170,21 @@ impl DesktopPlayerApp {
             let runtime = self.runtime_mut()?;
             runtime.dispatch(command)?
         };
-        if let Some(frame) = result.frame {
-            self.apply_frame(frame)?;
-        }
+        let frame = result.frame;
+        let snapshot = result.snapshot;
         self.log_runtime_events();
         self.update_window_title();
         self.sync_ui_presenter();
-        self.refresh_overlay()?;
+        if let Some(frame) = frame {
+            self.apply_frame(frame)?;
+        } else {
+            self.refresh_overlay_ui_only()?;
+        }
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }
 
-        let _ = result.snapshot;
+        let _ = snapshot;
         Ok(())
     }
 
@@ -1191,7 +1233,7 @@ impl DesktopPlayerApp {
 
         self.seek_preview = Some(preview);
         self.show_controls();
-        self.refresh_overlay()?;
+        self.refresh_overlay_ui_only()?;
         Ok(true)
     }
 
@@ -1223,7 +1265,7 @@ impl DesktopPlayerApp {
             &overlay_view_model,
         ) {
             self.seek_preview = Some(preview);
-            self.refresh_overlay()?;
+            self.overlay_dirty = true;
         }
 
         Ok(())
@@ -1241,17 +1283,6 @@ impl DesktopPlayerApp {
         );
         self.seek_to(preview.position)?;
         Ok(true)
-    }
-
-    fn toggle_pause(&mut self) {
-        if let Err(error) = self.dispatch_command(PlayerRuntimeCommand::TogglePause) {
-            error!(?error, "failed to toggle pause state");
-        }
-    }
-
-    fn open_media_source(&mut self, source: String) -> Result<()> {
-        let label = source_display_label(&source);
-        self.open_media_source_with_label(source, Some(label))
     }
 
     fn open_media_source_with_label(
@@ -1280,7 +1311,7 @@ impl DesktopPlayerApp {
 
         self.open_file_dialog_pending = true;
         self.show_controls();
-        self.refresh_overlay()?;
+        self.refresh_overlay_ui_only()?;
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }
@@ -1303,13 +1334,15 @@ impl DesktopPlayerApp {
             let runtime = self.runtime_mut()?;
             runtime.set_playback_rate(rate)?
         };
-        if let Some(frame) = result.frame {
-            self.apply_frame(frame)?;
-        }
+        let frame = result.frame;
         self.log_runtime_events();
         self.update_window_title();
         self.sync_ui_presenter();
-        self.refresh_overlay()?;
+        if let Some(frame) = frame {
+            self.apply_frame(frame)?;
+        } else {
+            self.refresh_overlay_ui_only()?;
+        }
 
         Ok(())
     }
@@ -1369,20 +1402,20 @@ impl DesktopPlayerApp {
             return true;
         }
 
-        matches!(
-            action,
+        match action {
             ControlAction::OpenLocalFile
-                | ControlAction::OpenHlsDemo
-                | ControlAction::OpenDashDemo
-                | ControlAction::SelectSidebarTab(_)
-                | ControlAction::FocusPlaylistItem(_)
-                | ControlAction::CreateDownloadHlsDemo
-                | ControlAction::CreateDownloadDashDemo
-                | ControlAction::CreateDownloadCurrentSource
-                | ControlAction::DownloadPrimaryAction(_)
-                | ControlAction::DownloadExport(_)
-                | ControlAction::DownloadRemove(_)
-        )
+            | ControlAction::OpenHlsDemo
+            | ControlAction::OpenDashDemo
+            | ControlAction::SelectSidebarTab(_)
+            | ControlAction::FocusPlaylistItem(_)
+            | ControlAction::CreateDownloadHlsDemo
+            | ControlAction::CreateDownloadDashDemo
+            | ControlAction::DownloadPrimaryAction(_)
+            | ControlAction::DownloadExport(_)
+            | ControlAction::DownloadRemove(_) => true,
+            ControlAction::CreateDownloadCurrentSource => self.source.is_some(),
+            _ => false,
+        }
     }
 
     fn perform_control_action_logged(
@@ -1392,6 +1425,22 @@ impl DesktopPlayerApp {
     ) -> Result<()> {
         log_control_action(origin, action);
         self.perform_control_action(action)
+    }
+
+    fn perform_keyboard_control_action(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        log_label: &'static str,
+        action: ControlAction,
+    ) {
+        log_keyboard_action(log_label);
+        if !self.is_control_action_available(action) {
+            return;
+        }
+        if let Err(error) = self.perform_control_action(action) {
+            error!(?error, "failed to handle keyboard control action");
+            event_loop.exit();
+        }
     }
 
     fn perform_control_action(&mut self, action: ControlAction) -> Result<()> {
@@ -1449,7 +1498,12 @@ impl DesktopPlayerApp {
                 Ok(())
             }
             ControlAction::CreateDownloadCurrentSource => {
-                self.queue_download_planner(self.source.clone(), self.current_source_label());
+                let Some(source) = self.source.clone() else {
+                    self.download_message = Some("No current source to download".to_owned());
+                    self.sidebar_tab = DesktopSidebarTab::Downloads;
+                    return Ok(());
+                };
+                self.queue_download_planner(source, self.current_source_label());
                 Ok(())
             }
             ControlAction::DownloadPrimaryAction(task_id) => {
@@ -1472,7 +1526,7 @@ impl DesktopPlayerApp {
         };
 
         self.sync_ui_presenter();
-        self.refresh_overlay()?;
+        self.refresh_overlay_ui_only()?;
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }
@@ -1484,7 +1538,7 @@ impl DesktopPlayerApp {
             renderer.resize(size);
         }
         self.sync_renderer_stage_viewport();
-        if let Err(error) = self.refresh_overlay() {
+        if let Err(error) = self.refresh_overlay_ui_only() {
             error!(?error, "failed to refresh overlay during resize");
         }
         self.sync_ui_presenter();
@@ -1705,7 +1759,7 @@ impl ApplicationHandler for DesktopPlayerApp {
             WindowEvent::ScaleFactorChanged { .. } => {
                 self.sync_renderer_stage_viewport();
                 self.sync_ui_presenter();
-                if let Err(error) = self.refresh_overlay() {
+                if let Err(error) = self.refresh_overlay_ui_only() {
                     error!(
                         ?error,
                         "failed to refresh overlay after scale-factor change"
@@ -1727,10 +1781,7 @@ impl ApplicationHandler for DesktopPlayerApp {
                     return;
                 }
                 self.sync_ui_presenter();
-                if let Err(error) = self.refresh_overlay() {
-                    error!(?error, "failed to refresh overlay after cursor movement");
-                    event_loop.exit();
-                }
+                self.overlay_dirty = true;
             }
             WindowEvent::CursorLeft { .. } => {
                 if self.seek_preview.is_some() {
@@ -1738,6 +1789,7 @@ impl ApplicationHandler for DesktopPlayerApp {
                 }
                 self.pointer_inside_window = false;
                 self.schedule_controls_hide();
+                self.overlay_dirty = true;
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -1779,122 +1831,90 @@ impl ApplicationHandler for DesktopPlayerApp {
                 ..
             } => match logical_key.as_ref() {
                 Key::Named(NamedKey::Escape) => event_loop.exit(),
-                Key::Named(NamedKey::Space) => {
-                    log_keyboard_action("toggle_pause");
-                    self.toggle_pause();
+                Key::Named(NamedKey::Space) => self.perform_keyboard_control_action(
+                    event_loop,
+                    "toggle_pause",
+                    ControlAction::TogglePause,
+                ),
+                Key::Named(NamedKey::ArrowLeft) => self.perform_keyboard_control_action(
+                    event_loop,
+                    "seek_back",
+                    ControlAction::SeekBack,
+                ),
+                Key::Named(NamedKey::ArrowRight) => self.perform_keyboard_control_action(
+                    event_loop,
+                    "seek_forward",
+                    ControlAction::SeekForward,
+                ),
+                Key::Named(NamedKey::Home) => self.perform_keyboard_control_action(
+                    event_loop,
+                    "seek_start",
+                    ControlAction::SeekStart,
+                ),
+                Key::Named(NamedKey::End) => self.perform_keyboard_control_action(
+                    event_loop,
+                    "seek_end",
+                    ControlAction::SeekEnd,
+                ),
+                Key::Character(text) if text.eq_ignore_ascii_case("s") => {
+                    self.perform_keyboard_control_action(event_loop, "stop", ControlAction::Stop)
                 }
-                Key::Named(NamedKey::ArrowLeft) => {
-                    log_keyboard_action("seek_back");
-                    if let Err(error) = self.seek_by(SEEK_STEP, false) {
-                        error!(?error, "failed to seek backward");
-                        event_loop.exit();
-                    }
-                }
-                Key::Named(NamedKey::ArrowRight) => {
-                    log_keyboard_action("seek_forward");
-                    if let Err(error) = self.seek_by(SEEK_STEP, true) {
-                        error!(?error, "failed to seek forward");
-                        event_loop.exit();
-                    }
-                }
-                Key::Named(NamedKey::Home) => {
-                    log_keyboard_action("seek_start");
-                    if let Err(error) = self.seek_to(Duration::ZERO) {
-                        error!(?error, "failed to seek to start");
-                        event_loop.exit();
-                    }
-                }
-                Key::Named(NamedKey::End) => match self.runtime() {
-                    Ok(runtime) => {
-                        log_keyboard_action("seek_end");
-                        let target = runtime
-                            .snapshot()
-                            .media_info
-                            .duration
-                            .unwrap_or(Duration::ZERO);
-                        if let Err(error) = self.seek_to(target) {
-                            error!(?error, "failed to seek to end");
+                Key::Character(text) if text == "[" => {
+                    if self.runtime.is_some() {
+                        log_keyboard_action("rate_down");
+                        if let Err(error) = self.step_playback_rate(-1) {
+                            error!(?error, "failed to step playback rate backward");
                             event_loop.exit();
                         }
                     }
-                    Err(error) => {
-                        error!(
-                            ?error,
-                            "failed to access player runtime while seeking to end"
-                        );
-                        event_loop.exit();
-                    }
-                },
-                Key::Character(text) if text.eq_ignore_ascii_case("s") => {
-                    log_keyboard_action("stop");
-                    if let Err(error) = self.dispatch_command(PlayerRuntimeCommand::Stop) {
-                        error!(?error, "failed to stop playback");
-                        event_loop.exit();
-                    }
-                }
-                Key::Character(text) if text == "[" => {
-                    log_keyboard_action("rate_down");
-                    if let Err(error) = self.step_playback_rate(-1) {
-                        error!(?error, "failed to step playback rate backward");
-                        event_loop.exit();
-                    }
                 }
                 Key::Character(text) if text == "]" => {
-                    log_keyboard_action("rate_up");
-                    if let Err(error) = self.step_playback_rate(1) {
-                        error!(?error, "failed to step playback rate forward");
-                        event_loop.exit();
+                    if self.runtime.is_some() {
+                        log_keyboard_action("rate_up");
+                        if let Err(error) = self.step_playback_rate(1) {
+                            error!(?error, "failed to step playback rate forward");
+                            event_loop.exit();
+                        }
                     }
                 }
-                Key::Character(text) if text == "0" => {
-                    log_keyboard_action("set_rate_0_5x");
-                    if let Err(error) = self.set_playback_rate(0.5) {
-                        error!(?error, "failed to set playback rate");
-                        event_loop.exit();
-                    }
-                }
-                Key::Character(text) if text == "1" => {
-                    log_keyboard_action("set_rate_1x");
-                    if let Err(error) = self.set_playback_rate(1.0) {
-                        error!(?error, "failed to set playback rate");
-                        event_loop.exit();
-                    }
-                }
-                Key::Character(text) if text == "2" => {
-                    log_keyboard_action("set_rate_2x");
-                    if let Err(error) = self.set_playback_rate(2.0) {
-                        error!(?error, "failed to set playback rate");
-                        event_loop.exit();
-                    }
-                }
-                Key::Character(text) if text == "3" => {
-                    log_keyboard_action("set_rate_3x");
-                    if let Err(error) = self.set_playback_rate(3.0) {
-                        error!(?error, "failed to set playback rate");
-                        event_loop.exit();
-                    }
-                }
-                Key::Character(text) if text.eq_ignore_ascii_case("h") => {
-                    log_keyboard_action("open_hls_demo");
-                    if let Err(error) = self.open_media_source(DESKTOP_HLS_DEMO_URL.to_owned()) {
-                        error!(?error, "failed to open desktop HLS demo source");
-                        event_loop.exit();
-                    }
-                }
-                Key::Character(text) if text.eq_ignore_ascii_case("o") => {
-                    log_keyboard_action("open_local_file");
-                    if let Err(error) = self.perform_control_action(ControlAction::OpenLocalFile) {
-                        error!(?error, "failed to open local media file");
-                        event_loop.exit();
-                    }
-                }
-                Key::Character(text) if text.eq_ignore_ascii_case("d") => {
-                    log_keyboard_action("open_dash_demo");
-                    if let Err(error) = self.open_media_source(DESKTOP_DASH_DEMO_URL.to_owned()) {
-                        error!(?error, "failed to open desktop DASH demo source");
-                        event_loop.exit();
-                    }
-                }
+                Key::Character(text) if text == "0" => self.perform_keyboard_control_action(
+                    event_loop,
+                    "set_rate_0_5x",
+                    ControlAction::SetRate(0.5),
+                ),
+                Key::Character(text) if text == "1" => self.perform_keyboard_control_action(
+                    event_loop,
+                    "set_rate_1x",
+                    ControlAction::SetRate(1.0),
+                ),
+                Key::Character(text) if text == "2" => self.perform_keyboard_control_action(
+                    event_loop,
+                    "set_rate_2x",
+                    ControlAction::SetRate(2.0),
+                ),
+                Key::Character(text) if text == "3" => self.perform_keyboard_control_action(
+                    event_loop,
+                    "set_rate_3x",
+                    ControlAction::SetRate(3.0),
+                ),
+                Key::Character(text) if text.eq_ignore_ascii_case("h") => self
+                    .perform_keyboard_control_action(
+                        event_loop,
+                        "open_hls_demo",
+                        ControlAction::OpenHlsDemo,
+                    ),
+                Key::Character(text) if text.eq_ignore_ascii_case("o") => self
+                    .perform_keyboard_control_action(
+                        event_loop,
+                        "open_local_file",
+                        ControlAction::OpenLocalFile,
+                    ),
+                Key::Character(text) if text.eq_ignore_ascii_case("d") => self
+                    .perform_keyboard_control_action(
+                        event_loop,
+                        "open_dash_demo",
+                        ControlAction::OpenDashDemo,
+                    ),
                 _ => {}
             },
             WindowEvent::RedrawRequested => {
@@ -1917,14 +1937,7 @@ impl ApplicationHandler for DesktopPlayerApp {
             Ok(changed) => {
                 if changed {
                     self.sync_ui_presenter();
-                    if let Err(error) = self.refresh_overlay() {
-                        error!(
-                            ?error,
-                            "failed to refresh overlay after control visibility update"
-                        );
-                        event_loop.exit();
-                        return;
-                    }
+                    self.overlay_dirty = true;
                 }
             }
             Err(error) => {
@@ -1990,11 +2003,7 @@ impl ApplicationHandler for DesktopPlayerApp {
             Ok(changed) => {
                 if changed {
                     self.sync_ui_presenter();
-                    if let Err(error) = self.refresh_overlay() {
-                        error!(?error, "failed to refresh overlay after planning downloads");
-                        event_loop.exit();
-                        return;
-                    }
+                    self.overlay_dirty = true;
                 }
             }
             Err(error) => {
@@ -2008,14 +2017,7 @@ impl ApplicationHandler for DesktopPlayerApp {
             Ok(changed) => {
                 if changed {
                     self.sync_ui_presenter();
-                    if let Err(error) = self.refresh_overlay() {
-                        error!(
-                            ?error,
-                            "failed to refresh overlay after desktop download update"
-                        );
-                        event_loop.exit();
-                        return;
-                    }
+                    self.overlay_dirty = true;
                 }
             }
             Err(error) => {
@@ -2031,17 +2033,32 @@ impl ApplicationHandler for DesktopPlayerApp {
             return;
         }
 
-        if let Err(error) = self.advance_playback() {
-            error!(?error, "failed to advance playback");
-            event_loop.exit();
-            return;
+        let frame_advanced = match self.advance_playback() {
+            Ok(frame_advanced) => frame_advanced,
+            Err(error) => {
+                error!(?error, "failed to advance playback");
+                event_loop.exit();
+                return;
+            }
+        };
+
+        if !frame_advanced && self.overlay_dirty {
+            self.sync_ui_presenter();
+            if let Err(error) = self.refresh_overlay_ui_only() {
+                error!(?error, "failed to refresh dirty overlay");
+                event_loop.exit();
+                return;
+            }
         }
 
         self.log_runtime_events();
         self.update_window_title();
         self.sync_ui_presenter();
         let controls_animation_deadline = self.controls_animation_deadline();
-        if self.pending_launch_activation.is_some() || self.pending_post_launch_play {
+        if self.pending_launch_activation.is_some()
+            || self.pending_post_launch_play
+            || self.overlay_dirty
+        {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(runtime) = self.runtime.as_ref() {
             if let Some(deadline) = runtime.next_deadline() {
@@ -2112,13 +2129,12 @@ fn build_launch_plan(source: String) -> Result<RuntimeLaunchPlan> {
     Ok(launch_probe.launch_plan)
 }
 
-fn resolve_media_source_uri() -> Result<String> {
+fn resolve_initial_media_source_uri() -> Result<Option<String>> {
     if let Some(source) = std::env::args().nth(1) {
-        return resolve_media_source_argument(source);
+        return resolve_media_source_argument(source).map(Some);
     }
 
-    let default_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-video.mp4");
-    canonical_desktop_host_local_path(&default_path)
+    Ok(None)
 }
 
 fn resolve_media_source_argument(source: String) -> Result<String> {
@@ -2240,7 +2256,7 @@ mod tests {
 
     #[test]
     fn playlist_row_reflects_loading_and_failed_launch_states() {
-        let mut app = DesktopPlayerApp::new("file:///tmp/local.mp4".to_owned());
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
         app.register_playlist_source(DESKTOP_HLS_DEMO_URL, Some("HLS DEMO".to_owned()));
 
         app.active_launch_request_id = Some(7);
@@ -2258,7 +2274,7 @@ mod tests {
 
     #[test]
     fn host_overlay_only_exposes_runtime_free_actions_while_loading() {
-        let app = DesktopPlayerApp::new("file:///tmp/local.mp4".to_owned());
+        let app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
 
         assert!(app.is_control_action_available(ControlAction::OpenLocalFile));
         assert!(app.is_control_action_available(ControlAction::OpenHlsDemo));
@@ -2269,8 +2285,21 @@ mod tests {
     }
 
     #[test]
+    fn empty_start_has_no_default_media_or_playlist_entry() {
+        let app = DesktopPlayerApp::new(None);
+
+        assert!(app.source.is_none());
+        assert!(app.playlist_item_view_data().is_empty());
+        assert_eq!(app.current_source_label(), "Drop a video to start");
+        assert!(app.is_control_action_available(ControlAction::OpenLocalFile));
+        assert!(app.is_control_action_available(ControlAction::OpenHlsDemo));
+        assert!(!app.is_control_action_available(ControlAction::CreateDownloadCurrentSource));
+        assert!(!app.is_control_action_available(ControlAction::TogglePause));
+    }
+
+    #[test]
     fn replacing_launch_cancel_flag_interrupts_previous_prepare() {
-        let mut app = DesktopPlayerApp::new("file:///tmp/local.mp4".to_owned());
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
 
         let first = app.replace_active_launch_cancel_flag();
         assert!(!first.load(std::sync::atomic::Ordering::SeqCst));

@@ -2832,38 +2832,32 @@ fn fill_rounded_rect(
         fill_rect(frame, frame_width, frame_height, rect, color);
         return;
     }
-    let x_end = rect.x.saturating_add(rect.width).min(frame_width);
-    let y_end = rect.y.saturating_add(rect.height).min(frame_height);
-    let radius_i32 = radius as i32;
-    let radius_squared = radius_i32 * radius_i32;
-    let right = rect.x.saturating_add(rect.width).saturating_sub(1);
-    let bottom = rect.y.saturating_add(rect.height).saturating_sub(1);
 
-    for y in rect.y.min(frame_height)..y_end {
-        for x in rect.x.min(frame_width)..x_end {
-            let within_horizontal =
-                x >= rect.x.saturating_add(radius) && x <= right.saturating_sub(radius);
-            let within_vertical =
-                y >= rect.y.saturating_add(radius) && y <= bottom.saturating_sub(radius);
-            let inside = if within_horizontal || within_vertical {
-                true
-            } else {
-                let corner_center_x = if x < rect.x.saturating_add(radius) {
-                    rect.x.saturating_add(radius)
-                } else {
-                    right.saturating_sub(radius)
-                } as i32;
-                let corner_center_y = if y < rect.y.saturating_add(radius) {
-                    rect.y.saturating_add(radius)
-                } else {
-                    bottom.saturating_sub(radius)
-                } as i32;
-                let dx = x as i32 - corner_center_x;
-                let dy = y as i32 - corner_center_y;
-                dx * dx + dy * dy <= radius_squared
-            };
-            if inside {
-                blend_pixel(frame, frame_width, frame_height, x, y, color);
+    let x_start = rect.x.saturating_sub(1).min(frame_width);
+    let y_start = rect.y.saturating_sub(1).min(frame_height);
+    let x_end = rect
+        .x
+        .saturating_add(rect.width)
+        .saturating_add(1)
+        .min(frame_width);
+    let y_end = rect
+        .y
+        .saturating_add(rect.height)
+        .saturating_add(1)
+        .min(frame_height);
+
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let coverage = rounded_rect_fill_coverage(rect, radius, x, y);
+            if coverage > 0.0 {
+                blend_pixel(
+                    frame,
+                    frame_width,
+                    frame_height,
+                    x,
+                    y,
+                    apply_coverage(color, coverage),
+                );
             }
         }
     }
@@ -2878,19 +2872,25 @@ fn fill_circle(
     radius: u32,
     color: [u8; 4],
 ) {
-    let radius_i32 = radius as i32;
+    let radius_i32 = radius as i32 + 1;
     let center_x_i32 = center_x as i32;
     let center_y_i32 = center_y as i32;
-    let radius_squared = radius_i32 * radius_i32;
+    let center_x = center_x as f32 + 0.5;
+    let center_y = center_y as f32 + 0.5;
+    let radius = radius as f32;
 
     for y in -radius_i32..=radius_i32 {
         for x in -radius_i32..=radius_i32 {
-            if x * x + y * y > radius_squared {
-                continue;
-            }
             let pixel_x = center_x_i32 + x;
             let pixel_y = center_y_i32 + y;
             if pixel_x < 0 || pixel_y < 0 {
+                continue;
+            }
+            let dx = pixel_x as f32 + 0.5 - center_x;
+            let dy = pixel_y as f32 + 0.5 - center_y;
+            let distance = dx.hypot(dy) - radius;
+            let coverage = fill_coverage_for_distance(distance);
+            if coverage <= 0.0 {
                 continue;
             }
             blend_pixel(
@@ -2899,7 +2899,7 @@ fn fill_circle(
                 frame_height,
                 pixel_x as u32,
                 pixel_y as u32,
-                color,
+                apply_coverage(color, coverage),
             );
         }
     }
@@ -3024,7 +3024,7 @@ fn stroke_rounded_rect(
     color: [u8; 4],
     thickness: u32,
 ) {
-    if rect.width == 0 || rect.height == 0 {
+    if rect.width == 0 || rect.height == 0 || thickness == 0 {
         return;
     }
     let inner = DesktopUiRect {
@@ -3033,16 +3033,36 @@ fn stroke_rounded_rect(
         width: rect.width.saturating_sub(thickness.saturating_mul(2)),
         height: rect.height.saturating_sub(thickness.saturating_mul(2)),
     };
-    let x_end = rect.x.saturating_add(rect.width).min(frame_width);
-    let y_end = rect.y.saturating_add(rect.height).min(frame_height);
-    for y in rect.y.min(frame_height)..y_end {
-        for x in rect.x.min(frame_width)..x_end {
-            let outer = rounded_rect_contains(rect, radius, x, y);
-            let inner_contains = inner.width > 0
-                && inner.height > 0
-                && rounded_rect_contains(inner, radius.saturating_sub(thickness), x, y);
-            if outer && !inner_contains {
-                blend_pixel(frame, frame_width, frame_height, x, y, color);
+    let x_start = rect.x.saturating_sub(1).min(frame_width);
+    let y_start = rect.y.saturating_sub(1).min(frame_height);
+    let x_end = rect
+        .x
+        .saturating_add(rect.width)
+        .saturating_add(1)
+        .min(frame_width);
+    let y_end = rect
+        .y
+        .saturating_add(rect.height)
+        .saturating_add(1)
+        .min(frame_height);
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let outer = rounded_rect_fill_coverage(rect, radius, x, y);
+            let inner = if inner.width > 0 && inner.height > 0 {
+                rounded_rect_fill_coverage(inner, radius.saturating_sub(thickness), x, y)
+            } else {
+                0.0
+            };
+            let coverage = (outer - inner).clamp(0.0, 1.0);
+            if coverage > 0.0 {
+                blend_pixel(
+                    frame,
+                    frame_width,
+                    frame_height,
+                    x,
+                    y,
+                    apply_coverage(color, coverage),
+                );
             }
         }
     }
@@ -3054,34 +3074,56 @@ fn lerp_channel(start: u8, end: u8, ratio: f32) -> u8 {
         .clamp(0.0, 255.0) as u8
 }
 
-fn rounded_rect_contains(rect: DesktopUiRect, radius: u32, x: u32, y: u32) -> bool {
+fn rounded_rect_fill_coverage(rect: DesktopUiRect, radius: u32, x: u32, y: u32) -> f32 {
+    fill_coverage_for_distance(rounded_rect_signed_distance(rect, radius, x, y))
+}
+
+fn rounded_rect_signed_distance(rect: DesktopUiRect, radius: u32, x: u32, y: u32) -> f32 {
     if rect.width == 0 || rect.height == 0 {
-        return false;
+        return 1.0;
     }
     let radius = radius.min(rect.width / 2).min(rect.height / 2);
     if radius == 0 {
-        return rect.contains(x, y);
+        let left = rect.x as f32;
+        let top = rect.y as f32;
+        let right = rect.x.saturating_add(rect.width) as f32;
+        let bottom = rect.y.saturating_add(rect.height) as f32;
+        let px = x as f32 + 0.5;
+        let py = y as f32 + 0.5;
+        let dx = (left - px).max(px - right).max(0.0);
+        let dy = (top - py).max(py - bottom).max(0.0);
+        let outside = dx.hypot(dy);
+        let inside = (left - px).max(px - right).max(top - py).max(py - bottom);
+        return if inside <= 0.0 { inside } else { outside };
     }
-    let right = rect.x.saturating_add(rect.width).saturating_sub(1);
-    let bottom = rect.y.saturating_add(rect.height).saturating_sub(1);
-    let within_horizontal = x >= rect.x.saturating_add(radius) && x <= right.saturating_sub(radius);
-    let within_vertical = y >= rect.y.saturating_add(radius) && y <= bottom.saturating_sub(radius);
-    if within_horizontal || within_vertical {
-        return rect.contains(x, y);
-    }
-    let corner_x = if x < rect.x.saturating_add(radius) {
-        rect.x.saturating_add(radius)
-    } else {
-        right.saturating_sub(radius)
-    } as i32;
-    let corner_y = if y < rect.y.saturating_add(radius) {
-        rect.y.saturating_add(radius)
-    } else {
-        bottom.saturating_sub(radius)
-    } as i32;
-    let dx = x as i32 - corner_x;
-    let dy = y as i32 - corner_y;
-    dx * dx + dy * dy <= (radius as i32 * radius as i32)
+    let radius = radius as f32;
+    let half_width = rect.width as f32 * 0.5;
+    let half_height = rect.height as f32 * 0.5;
+    let center_x = rect.x as f32 + half_width;
+    let center_y = rect.y as f32 + half_height;
+    let px = x as f32 + 0.5;
+    let py = y as f32 + 0.5;
+    let qx = (px - center_x).abs() - (half_width - radius);
+    let qy = (py - center_y).abs() - (half_height - radius);
+    let outside = qx.max(0.0).hypot(qy.max(0.0));
+    let inside = qx.max(qy).min(0.0);
+
+    outside + inside - radius
+}
+
+fn fill_coverage_for_distance(distance: f32) -> f32 {
+    (0.5 - distance).clamp(0.0, 1.0)
+}
+
+fn apply_coverage(color: [u8; 4], coverage: f32) -> [u8; 4] {
+    [
+        color[0],
+        color[1],
+        color[2],
+        (f32::from(color[3]) * coverage.clamp(0.0, 1.0))
+            .round()
+            .clamp(0.0, 255.0) as u8,
+    ]
 }
 
 fn blend_pixel(
@@ -3097,18 +3139,31 @@ fn blend_pixel(
     }
 
     let index = ((y * frame_width + x) * 4) as usize;
-    let alpha = f32::from(color[3]) / 255.0;
-    let inverse = 1.0 - alpha;
-    frame[index] = (f32::from(color[0]) * alpha + f32::from(frame[index]) * inverse)
+    let source_alpha = f32::from(color[3]) / 255.0;
+    if source_alpha <= 0.0 {
+        return;
+    }
+
+    let target_alpha = f32::from(frame[index + 3]) / 255.0;
+    let output_alpha = source_alpha + target_alpha * (1.0 - source_alpha);
+    if output_alpha <= 0.0 {
+        return;
+    }
+
+    let source_weight = source_alpha / output_alpha;
+    let target_weight = target_alpha * (1.0 - source_alpha) / output_alpha;
+    frame[index] = (f32::from(color[0]) * source_weight + f32::from(frame[index]) * target_weight)
         .round()
         .clamp(0.0, 255.0) as u8;
-    frame[index + 1] = (f32::from(color[1]) * alpha + f32::from(frame[index + 1]) * inverse)
+    frame[index + 1] = (f32::from(color[1]) * source_weight
+        + f32::from(frame[index + 1]) * target_weight)
         .round()
         .clamp(0.0, 255.0) as u8;
-    frame[index + 2] = (f32::from(color[2]) * alpha + f32::from(frame[index + 2]) * inverse)
+    frame[index + 2] = (f32::from(color[2]) * source_weight
+        + f32::from(frame[index + 2]) * target_weight)
         .round()
         .clamp(0.0, 255.0) as u8;
-    frame[index + 3] = 255;
+    frame[index + 3] = (output_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
 }
 
 #[cfg(test)]
@@ -3284,6 +3339,39 @@ mod tests {
             strip_center,
             panel_center
         );
+    }
+
+    #[test]
+    fn rounded_rect_edges_preserve_partial_alpha() {
+        let mut frame = vec![0; 20 * 20 * 4];
+        super::fill_rounded_rect(
+            &mut frame,
+            20,
+            20,
+            DesktopUiRect {
+                x: 4,
+                y: 4,
+                width: 12,
+                height: 12,
+            },
+            6,
+            [255, 255, 255, 255],
+        );
+
+        assert!(
+            frame
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 0 && pixel[3] < 255),
+            "rounded UI edges should keep fractional alpha for antialiasing"
+        );
+    }
+
+    #[test]
+    fn overlay_blending_preserves_source_alpha() {
+        let mut frame = vec![0; 4];
+        super::blend_pixel(&mut frame, 1, 1, 0, 0, [255, 255, 255, 64]);
+
+        assert_eq!(frame, vec![255, 255, 255, 64]);
     }
 
     #[test]
