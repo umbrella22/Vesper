@@ -2,7 +2,9 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import <dispatch/dispatch.h>
 #include <stdbool.h>
@@ -250,6 +252,13 @@ typedef struct {
 } PlayerMacosVideoSurfaceTarget;
 
 typedef struct {
+    double x;
+    double y;
+    double width;
+    double height;
+} PlayerMacosLayerFrame;
+
+typedef struct {
     uint32_t item_status;
     uint32_t time_control_status;
     float playback_rate;
@@ -315,6 +324,20 @@ static void player_run_sync_on_main(dispatch_block_t block) {
 static BOOL player_surface_requires_main_thread(uint32_t surface_kind) {
     return surface_kind == PlayerMacosVideoSurfaceKindNsView ||
            surface_kind == PlayerMacosVideoSurfaceKindMetalLayer;
+}
+
+static CGFloat player_nonnegative_layer_value(double value) {
+    return isfinite(value) && value > 0.0 ? (CGFloat)value : 0.0;
+}
+
+static NSRect player_subview_frame_from_top_left(NSView *host_view, PlayerMacosLayerFrame frame) {
+    NSRect bounds = host_view.bounds;
+    CGFloat width = player_nonnegative_layer_value(frame.width);
+    CGFloat height = player_nonnegative_layer_value(frame.height);
+    CGFloat x = NSMinX(bounds) + player_nonnegative_layer_value(frame.x);
+    CGFloat top = player_nonnegative_layer_value(frame.y);
+    CGFloat y = host_view.isFlipped ? NSMinY(bounds) + top : NSMaxY(bounds) - top - height;
+    return NSMakeRect(x, y, width, height);
 }
 
 static uint64_t player_time_to_millis(CMTime time) {
@@ -1112,9 +1135,585 @@ bool player_macos_avfoundation_session_detach_surface(void *session_handle,
         });
 }
 
+@interface PlayerMacosPassthroughVideoView : NSView
+@end
+
+@implementation PlayerMacosPassthroughVideoView
+
+- (BOOL)isOpaque {
+    return YES;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+
+@end
+
+@interface PlayerMacosVideoLayerSurface : NSObject
+
+@property(nonatomic, weak) NSView *hostView;
+@property(nonatomic, strong) PlayerMacosPassthroughVideoView *videoView;
+
+- (instancetype)initWithSurface:(PlayerMacosVideoSurfaceTarget)surface
+                          frame:(PlayerMacosLayerFrame)frame
+                          error:(NSString **)error;
+- (BOOL)updateFrame:(PlayerMacosLayerFrame)frame error:(NSString **)error;
+- (PlayerMacosVideoSurfaceTarget)target;
+
+@end
+
+@implementation PlayerMacosVideoLayerSurface
+
+- (instancetype)initWithSurface:(PlayerMacosVideoSurfaceTarget)surface
+                          frame:(PlayerMacosLayerFrame)frame
+                          error:(NSString **)error {
+    self = [super init];
+    if (self == nil) {
+        return nil;
+    }
+
+    if (surface.kind != PlayerMacosVideoSurfaceKindNsView || surface.handle == 0) {
+        if (error != NULL) {
+            *error = @"macOS video layer surface currently requires an NSView host surface";
+        }
+        return nil;
+    }
+
+    NSView *host_view = (__bridge NSView *)((void *)surface.handle);
+    if (host_view == nil) {
+        if (error != NULL) {
+            *error = @"received a null NSView handle for macOS video layer surface";
+        }
+        return nil;
+    }
+
+    [host_view setWantsLayer:YES];
+    PlayerMacosPassthroughVideoView *video_view =
+        [[PlayerMacosPassthroughVideoView alloc] initWithFrame:NSZeroRect];
+    video_view.wantsLayer = YES;
+    video_view.layer.backgroundColor = NSColor.blackColor.CGColor;
+    video_view.layer.masksToBounds = YES;
+    video_view.autoresizingMask = NSViewNotSizable;
+    [host_view addSubview:video_view positioned:NSWindowBelow relativeTo:nil];
+
+    self.hostView = host_view;
+    self.videoView = video_view;
+    return [self updateFrame:frame error:error] ? self : nil;
+}
+
+- (void)dealloc {
+    [self.videoView removeFromSuperview];
+}
+
+- (BOOL)updateFrame:(PlayerMacosLayerFrame)frame error:(NSString **)error {
+    if (self.hostView == nil || self.videoView == nil) {
+        if (error != NULL) {
+            *error = @"macOS video layer surface is detached";
+        }
+        return NO;
+    }
+
+    self.videoView.frame = player_subview_frame_from_top_left(self.hostView, frame);
+    self.videoView.layer.contentsScale =
+        self.hostView.window.backingScaleFactor ?: NSScreen.mainScreen.backingScaleFactor;
+    [self.videoView setNeedsLayout:YES];
+    return YES;
+}
+
+- (PlayerMacosVideoSurfaceTarget)target {
+    PlayerMacosVideoSurfaceTarget target;
+    target.kind = PlayerMacosVideoSurfaceKindNsView;
+    target.handle = (uintptr_t)((__bridge void *)self.videoView);
+    return target;
+}
+
+@end
+
+void *player_macos_video_layer_surface_create(PlayerMacosVideoSurfaceTarget host_surface,
+                                              PlayerMacosLayerFrame frame,
+                                              char *error_message,
+                                              size_t error_message_size) {
+    @autoreleasepool {
+        __block PlayerMacosVideoLayerSurface *surface = nil;
+        __block NSString *create_error = nil;
+        player_run_sync_on_main(^{
+          surface = [[PlayerMacosVideoLayerSurface alloc] initWithSurface:host_surface
+                                                                    frame:frame
+                                                                    error:&create_error];
+        });
+        if (surface == nil) {
+            player_write_error_message(create_error ?: @"failed to create macOS video layer surface",
+                                       error_message,
+                                       error_message_size);
+            return NULL;
+        }
+
+        player_copy_utf8(NULL, error_message, error_message_size);
+        return (__bridge_retained void *)surface;
+    }
+}
+
+bool player_macos_video_layer_surface_update_frame(void *surface_handle,
+                                                   PlayerMacosLayerFrame frame,
+                                                   char *error_message,
+                                                   size_t error_message_size) {
+    if (surface_handle == NULL) {
+        player_copy_utf8("macOS video layer surface handle must not be null",
+                         error_message,
+                         error_message_size);
+        return false;
+    }
+
+    @autoreleasepool {
+        __block BOOL succeeded = NO;
+        __block NSString *update_error = nil;
+        player_run_sync_on_main(^{
+          PlayerMacosVideoLayerSurface *surface =
+              (__bridge PlayerMacosVideoLayerSurface *)surface_handle;
+          succeeded = [surface updateFrame:frame error:&update_error];
+        });
+        player_write_error_message(update_error, error_message, error_message_size);
+        return succeeded;
+    }
+}
+
+PlayerMacosVideoSurfaceTarget player_macos_video_layer_surface_target(void *surface_handle) {
+    PlayerMacosVideoSurfaceTarget target;
+    memset(&target, 0, sizeof(target));
+    if (surface_handle == NULL) {
+        return target;
+    }
+
+    @autoreleasepool {
+        __block PlayerMacosVideoSurfaceTarget captured_target;
+        memset(&captured_target, 0, sizeof(captured_target));
+        player_run_sync_on_main(^{
+          PlayerMacosVideoLayerSurface *surface =
+              (__bridge PlayerMacosVideoLayerSurface *)surface_handle;
+          captured_target = [surface target];
+        });
+        return captured_target;
+    }
+}
+
+void player_macos_video_layer_surface_destroy(void *surface_handle) {
+    if (surface_handle == NULL) {
+        return;
+    }
+
+    @autoreleasepool {
+        player_run_sync_on_main(^{
+          PlayerMacosVideoLayerSurface *surface =
+              (__bridge_transfer PlayerMacosVideoLayerSurface *)surface_handle;
+          (void)surface;
+        });
+    }
+}
+
+static NSString *const PlayerMacosMetalPresenterShaderSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "struct VertexOut { float4 position [[position]]; float2 texCoord; };\n"
+     "vertex VertexOut vertex_main(uint vertexID [[vertex_id]]) {\n"
+     "  float2 positions[4] = { float2(-1.0, -1.0), float2(1.0, -1.0), "
+     "float2(-1.0, 1.0), float2(1.0, 1.0) };\n"
+     "  float2 texCoords[4] = { float2(0.0, 1.0), float2(1.0, 1.0), "
+     "float2(0.0, 0.0), float2(1.0, 0.0) };\n"
+     "  VertexOut out;\n"
+     "  out.position = float4(positions[vertexID], 0.0, 1.0);\n"
+     "  out.texCoord = texCoords[vertexID];\n"
+     "  return out;\n"
+     "}\n"
+     "fragment float4 fragment_main(VertexOut in [[stage_in]], "
+     "texture2d<float> yTexture [[texture(0)]], "
+     "texture2d<float> uvTexture [[texture(1)]]) {\n"
+     "  constexpr sampler textureSampler(address::clamp_to_edge, filter::linear);\n"
+     "  float y = yTexture.sample(textureSampler, in.texCoord).r;\n"
+     "  float2 uv = uvTexture.sample(textureSampler, in.texCoord).rg - float2(0.5, 0.5);\n"
+     "  float r = y + 1.402 * uv.y;\n"
+     "  float g = y - 0.344136 * uv.x - 0.714136 * uv.y;\n"
+     "  float b = y + 1.772 * uv.x;\n"
+     "  return float4(r, g, b, 1.0);\n"
+     "}\n";
+
+@interface PlayerMacosMetalPresenter : NSObject
+
+@property(nonatomic, strong) id<MTLDevice> device;
+@property(nonatomic, strong) id<MTLCommandQueue> commandQueue;
+@property(nonatomic, strong) id<MTLRenderPipelineState> pipelineState;
+@property(nonatomic, strong) CAMetalLayer *metalLayer;
+@property(nonatomic, strong) CALayer *layerHost;
+@property(nonatomic, assign) CVMetalTextureCacheRef textureCache;
+@property(nonatomic, assign) BOOL ownsMetalLayer;
+@property(nonatomic, assign) BOOL requiresMainThread;
+
+- (instancetype)initWithSurface:(PlayerMacosVideoSurfaceTarget)surface error:(NSString **)error;
+- (BOOL)presentPixelBuffer:(CVPixelBufferRef)pixelBuffer error:(NSString **)error;
+- (void)detachSurface;
+
+@end
+
+@implementation PlayerMacosMetalPresenter
+
+- (instancetype)initWithSurface:(PlayerMacosVideoSurfaceTarget)surface error:(NSString **)error {
+    self = [super init];
+    if (self == nil) {
+        return nil;
+    }
+
+    self.device = MTLCreateSystemDefaultDevice();
+    if (self.device == nil) {
+        if (error != NULL) {
+            *error = @"Metal is unavailable on this macOS host";
+        }
+        return nil;
+    }
+    self.commandQueue = [self.device newCommandQueue];
+    if (self.commandQueue == nil) {
+        if (error != NULL) {
+            *error = @"failed to create Metal command queue";
+        }
+        return nil;
+    }
+
+    NSError *shader_error = nil;
+    id<MTLLibrary> library = [self.device newLibraryWithSource:PlayerMacosMetalPresenterShaderSource
+                                                       options:nil
+                                                         error:&shader_error];
+    if (library == nil) {
+        if (error != NULL) {
+            *error = shader_error.localizedDescription ?: @"failed to compile Metal presenter shaders";
+        }
+        return nil;
+    }
+    MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
+    descriptor.vertexFunction = [library newFunctionWithName:@"vertex_main"];
+    descriptor.fragmentFunction = [library newFunctionWithName:@"fragment_main"];
+    descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    self.pipelineState = [self.device newRenderPipelineStateWithDescriptor:descriptor
+                                                                      error:&shader_error];
+    if (self.pipelineState == nil) {
+        if (error != NULL) {
+            *error = shader_error.localizedDescription ?: @"failed to create Metal presenter pipeline";
+        }
+        return nil;
+    }
+
+    CVReturn cache_status = CVMetalTextureCacheCreate(kCFAllocatorDefault,
+                                                      NULL,
+                                                      self.device,
+                                                      NULL,
+                                                      &_textureCache);
+    if (cache_status != kCVReturnSuccess || self.textureCache == NULL) {
+        if (error != NULL) {
+            *error = [NSString stringWithFormat:@"failed to create CVMetalTextureCache: %d",
+                                                cache_status];
+        }
+        return nil;
+    }
+
+    if (![self attachSurfaceOnMain:surface error:error]) {
+        if (error != NULL) {
+            *error = *error ?: @"failed to attach Metal presenter surface";
+        }
+        return nil;
+    }
+
+    return self;
+}
+
+- (void)dealloc {
+    [self detachSurface];
+    if (_textureCache != NULL) {
+        CFRelease(_textureCache);
+        _textureCache = NULL;
+    }
+}
+
+- (BOOL)attachSurfaceOnMain:(PlayerMacosVideoSurfaceTarget)surface error:(NSString **)error {
+    if (surface.handle == 0) {
+        if (error != NULL) {
+            *error = @"Metal presenter requires a non-null video surface";
+        }
+        return NO;
+    }
+
+    CAMetalLayer *metal_layer = nil;
+    CALayer *layer_host = nil;
+    BOOL owns_layer = NO;
+
+    switch ((PlayerMacosVideoSurfaceKind)surface.kind) {
+        case PlayerMacosVideoSurfaceKindNsView: {
+            NSView *view = (__bridge NSView *)((void *)surface.handle);
+            if (view == nil) {
+                if (error != NULL) {
+                    *error = @"received a null NSView handle for Metal presenter";
+                }
+                return NO;
+            }
+            [view setWantsLayer:YES];
+            metal_layer = [CAMetalLayer layer];
+            metal_layer.frame = view.bounds;
+            metal_layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+            metal_layer.contentsScale = view.window.backingScaleFactor ?: NSScreen.mainScreen.backingScaleFactor;
+            [view.layer addSublayer:metal_layer];
+            layer_host = view.layer;
+            owns_layer = YES;
+            break;
+        }
+        case PlayerMacosVideoSurfaceKindMetalLayer:
+        case PlayerMacosVideoSurfaceKindPlayerLayer: {
+            CALayer *layer = (__bridge CALayer *)((void *)surface.handle);
+            if (layer == nil) {
+                if (error != NULL) {
+                    *error = @"received a null CALayer handle for Metal presenter";
+                }
+                return NO;
+            }
+            if ([layer isKindOfClass:[CAMetalLayer class]]) {
+                metal_layer = (CAMetalLayer *)layer;
+                layer_host = layer.superlayer;
+                owns_layer = NO;
+            } else {
+                metal_layer = [CAMetalLayer layer];
+                metal_layer.frame = layer.bounds;
+                metal_layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+                metal_layer.contentsScale = layer.contentsScale ?: NSScreen.mainScreen.backingScaleFactor;
+                [layer addSublayer:metal_layer];
+                layer_host = layer;
+                owns_layer = YES;
+            }
+            break;
+        }
+        case PlayerMacosVideoSurfaceKindUiView:
+            if (error != NULL) {
+                *error = @"UiView is not a valid macOS Metal presenter surface";
+            }
+            return NO;
+    }
+
+    metal_layer.device = self.device;
+    metal_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    metal_layer.framebufferOnly = YES;
+    metal_layer.opaque = YES;
+    metal_layer.contentsGravity = kCAGravityResizeAspect;
+    self.metalLayer = metal_layer;
+    self.layerHost = layer_host;
+    self.ownsMetalLayer = owns_layer;
+    self.requiresMainThread = player_surface_requires_main_thread(surface.kind);
+    return YES;
+}
+
+- (void)detachSurface {
+    if (self.ownsMetalLayer) {
+        CAMetalLayer *layer = self.metalLayer;
+        if (self.requiresMainThread) {
+            player_run_sync_on_main(^{
+              [layer removeFromSuperlayer];
+            });
+        } else {
+            [layer removeFromSuperlayer];
+        }
+    }
+    self.metalLayer = nil;
+    self.layerHost = nil;
+    self.ownsMetalLayer = NO;
+    self.requiresMainThread = NO;
+}
+
+- (BOOL)presentPixelBuffer:(CVPixelBufferRef)pixelBuffer error:(NSString **)error {
+    if (pixelBuffer == NULL) {
+        if (error != NULL) {
+            *error = @"cannot present a null CVPixelBuffer";
+        }
+        return NO;
+    }
+    if (self.metalLayer == nil || self.textureCache == NULL) {
+        if (error != NULL) {
+            *error = @"Metal presenter is not attached to a layer";
+        }
+        return NO;
+    }
+    if (CVPixelBufferGetPlaneCount(pixelBuffer) < 2) {
+        if (error != NULL) {
+            *error = @"Metal presenter currently requires NV12 bi-planar pixel buffers";
+        }
+        return NO;
+    }
+
+    CVMetalTextureRef y_ref = NULL;
+    CVMetalTextureRef uv_ref = NULL;
+    size_t y_width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0);
+    size_t y_height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0);
+    size_t uv_width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
+    size_t uv_height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
+    if (y_width == 0 || y_height == 0 || uv_width == 0 || uv_height == 0) {
+        if (error != NULL) {
+            *error = @"Metal presenter received an empty CVPixelBuffer plane";
+        }
+        return NO;
+    }
+    CVReturn y_status = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
+                                                                  self.textureCache,
+                                                                  pixelBuffer,
+                                                                  NULL,
+                                                                  MTLPixelFormatR8Unorm,
+                                                                  y_width,
+                                                                  y_height,
+                                                                  0,
+                                                                  &y_ref);
+    CVReturn uv_status = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
+                                                                   self.textureCache,
+                                                                   pixelBuffer,
+                                                                   NULL,
+                                                                   MTLPixelFormatRG8Unorm,
+                                                                   uv_width,
+                                                                   uv_height,
+                                                                   1,
+                                                                   &uv_ref);
+    if (y_status != kCVReturnSuccess || uv_status != kCVReturnSuccess || y_ref == NULL ||
+        uv_ref == NULL) {
+        if (y_ref != NULL) {
+            CFRelease(y_ref);
+        }
+        if (uv_ref != NULL) {
+            CFRelease(uv_ref);
+        }
+        if (error != NULL) {
+            *error = [NSString stringWithFormat:@"failed to bind CVPixelBuffer to Metal textures: y=%d uv=%d",
+                                                y_status,
+                                                uv_status];
+        }
+        return NO;
+    }
+
+    id<MTLTexture> y_texture = CVMetalTextureGetTexture(y_ref);
+    id<MTLTexture> uv_texture = CVMetalTextureGetTexture(uv_ref);
+    CGFloat scale = self.metalLayer.contentsScale > 0.0
+                        ? self.metalLayer.contentsScale
+                        : NSScreen.mainScreen.backingScaleFactor;
+    CGSize bounds_size = self.metalLayer.bounds.size;
+    CGSize drawable_size =
+        CGSizeMake(MAX(bounds_size.width * scale, 1.0), MAX(bounds_size.height * scale, 1.0));
+    self.metalLayer.drawableSize = drawable_size;
+    id<CAMetalDrawable> drawable = [self.metalLayer nextDrawable];
+    if (drawable == nil || y_texture == nil || uv_texture == nil) {
+        CFRelease(y_ref);
+        CFRelease(uv_ref);
+        if (error != NULL) {
+            *error = @"failed to acquire Metal drawable or source texture";
+        }
+        return NO;
+    }
+
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = drawable.texture;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+
+    id<MTLCommandBuffer> command_buffer = [self.commandQueue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
+    double drawable_width = (double)drawable.texture.width;
+    double drawable_height = (double)drawable.texture.height;
+    double source_width = (double)y_width;
+    double source_height = (double)y_height;
+    double scale_x = drawable_width / source_width;
+    double scale_y = drawable_height / source_height;
+    double fit_scale = MIN(scale_x, scale_y);
+    double viewport_width = MAX(floor(source_width * fit_scale), 1.0);
+    double viewport_height = MAX(floor(source_height * fit_scale), 1.0);
+    MTLViewport viewport = {
+        .originX = floor((drawable_width - viewport_width) * 0.5),
+        .originY = floor((drawable_height - viewport_height) * 0.5),
+        .width = viewport_width,
+        .height = viewport_height,
+        .znear = 0.0,
+        .zfar = 1.0,
+    };
+    [encoder setRenderPipelineState:self.pipelineState];
+    [encoder setFragmentTexture:y_texture atIndex:0];
+    [encoder setFragmentTexture:uv_texture atIndex:1];
+    [encoder setViewport:viewport];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    [encoder endEncoding];
+    [command_buffer presentDrawable:drawable];
+    [command_buffer commit];
+
+    CFRelease(y_ref);
+    CFRelease(uv_ref);
+    return YES;
+}
+
+@end
+
+void *player_macos_metal_presenter_create(PlayerMacosVideoSurfaceTarget surface,
+                                          char *error_message,
+                                          size_t error_message_size) {
+    @autoreleasepool {
+        __block PlayerMacosMetalPresenter *presenter = nil;
+        __block NSString *create_error = nil;
+        dispatch_block_t create_block = ^{
+          presenter = [[PlayerMacosMetalPresenter alloc] initWithSurface:surface
+                                                                    error:&create_error];
+        };
+        if (player_surface_requires_main_thread(surface.kind)) {
+            player_run_sync_on_main(create_block);
+        } else {
+            create_block();
+        }
+        if (presenter == nil) {
+            player_write_error_message(create_error ?: @"failed to create Metal presenter",
+                                       error_message,
+                                       error_message_size);
+            return NULL;
+        }
+
+        player_copy_utf8(NULL, error_message, error_message_size);
+        return (__bridge_retained void *)presenter;
+    }
+}
+
+bool player_macos_metal_presenter_present_cv_pixel_buffer(void *presenter_handle,
+                                                          void *pixel_buffer_handle,
+                                                          char *error_message,
+                                                          size_t error_message_size) {
+    @autoreleasepool {
+        PlayerMacosMetalPresenter *presenter =
+            (__bridge PlayerMacosMetalPresenter *)presenter_handle;
+        CVPixelBufferRef pixel_buffer = (CVPixelBufferRef)pixel_buffer_handle;
+        if (presenter == nil) {
+            player_copy_utf8("Metal presenter handle must not be null",
+                             error_message,
+                             error_message_size);
+            return false;
+        }
+
+        NSString *present_error = nil;
+        BOOL succeeded = [presenter presentPixelBuffer:pixel_buffer error:&present_error];
+        player_write_error_message(present_error, error_message, error_message_size);
+        return succeeded;
+    }
+}
+
+void player_macos_metal_presenter_destroy(void *presenter_handle) {
+    if (presenter_handle == NULL) {
+        return;
+    }
+
+    @autoreleasepool {
+        PlayerMacosMetalPresenter *presenter =
+            (__bridge_transfer PlayerMacosMetalPresenter *)presenter_handle;
+        (void)presenter;
+    }
+}
+
 void *player_macos_test_create_player_layer(void) {
     @autoreleasepool {
         AVPlayerLayer *layer = [AVPlayerLayer playerLayerWithPlayer:nil];
+        layer.frame = CGRectMake(0, 0, 320, 180);
         return (__bridge_retained void *)layer;
     }
 }

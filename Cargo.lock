@@ -1602,6 +1602,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-decoder-videotoolbox"
+version = "0.1.0"
+dependencies = [
+ "player-plugin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "player-download"
 version = "0.1.0"
 dependencies = [
@@ -1718,6 +1727,7 @@ dependencies = [
 name = "player-platform-macos"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "player-backend-ffmpeg",
  "player-core",
  "player-platform-apple",

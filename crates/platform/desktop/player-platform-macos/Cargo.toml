@@ -6,6 +6,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
 player-platform-apple = { path = "../../common/player-platform-apple" }
 player-core = { path = "../../../core/player-core" }

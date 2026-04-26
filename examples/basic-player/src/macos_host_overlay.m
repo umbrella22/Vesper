@@ -100,6 +100,9 @@ static NSString *player_format_duration(uint64_t millis) {
 @property(nonatomic, weak) BasicPlayerMacosOverlayController *owner;
 @end
 
+@interface BasicPlayerMacosBitmapOverlayView : NSView
+@end
+
 @implementation BasicPlayerMacosOverlayButton
 
 - (NSView *)hitTest:(NSPoint)point {
@@ -181,6 +184,134 @@ static NSString *player_format_duration(uint64_t millis) {
 - (void)layout {
     [super layout];
     [self.owner layoutControls];
+}
+
+@end
+
+@implementation BasicPlayerMacosBitmapOverlayView
+
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+
+@end
+
+@interface BasicPlayerMacosBitmapOverlayController : NSObject
+
+@property(nonatomic, weak) NSView *hostView;
+@property(nonatomic, strong) BasicPlayerMacosBitmapOverlayView *overlayView;
+
+- (instancetype)initWithHostView:(NSView *)hostView error:(NSString **)error;
+- (BOOL)updateWithRgbaBytes:(const uint8_t *)bytes
+                     length:(size_t)length
+                      width:(uint32_t)width
+                     height:(uint32_t)height
+                      error:(NSString **)error;
+- (void)clear;
+
+@end
+
+@implementation BasicPlayerMacosBitmapOverlayController
+
+- (instancetype)initWithHostView:(NSView *)hostView error:(NSString **)error {
+    self = [super init];
+    if (self == nil) {
+        return nil;
+    }
+
+    if (hostView == nil) {
+        if (error != NULL) {
+            *error = @"received a null NSView handle for basic-player bitmap overlay";
+        }
+        return nil;
+    }
+
+    self.hostView = hostView;
+    BasicPlayerMacosBitmapOverlayView *overlay_view =
+        [[BasicPlayerMacosBitmapOverlayView alloc] initWithFrame:hostView.bounds];
+    overlay_view.wantsLayer = YES;
+    overlay_view.layer.backgroundColor = NSColor.clearColor.CGColor;
+    overlay_view.layer.contentsGravity = kCAGravityResize;
+    overlay_view.layer.magnificationFilter = kCAFilterLinear;
+    overlay_view.layer.minificationFilter = kCAFilterLinear;
+    overlay_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [hostView addSubview:overlay_view positioned:NSWindowAbove relativeTo:nil];
+    self.overlayView = overlay_view;
+    return self;
+}
+
+- (void)dealloc {
+    [self.overlayView removeFromSuperview];
+}
+
+- (BOOL)updateWithRgbaBytes:(const uint8_t *)bytes
+                     length:(size_t)length
+                      width:(uint32_t)width
+                     height:(uint32_t)height
+                      error:(NSString **)error {
+    if (self.hostView == nil || self.overlayView == nil) {
+        if (error != NULL) {
+            *error = @"basic-player bitmap overlay is detached";
+        }
+        return NO;
+    }
+    if (bytes == NULL || width == 0 || height == 0) {
+        [self clear];
+        return YES;
+    }
+
+    size_t expected_length = (size_t)width * (size_t)height * 4;
+    if (length < expected_length) {
+        if (error != NULL) {
+            *error = @"basic-player bitmap overlay received a short RGBA buffer";
+        }
+        return NO;
+    }
+
+    NSData *data = [NSData dataWithBytes:bytes length:expected_length];
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    CGImageRef image = CGImageCreate(width,
+                                     height,
+                                     8,
+                                     32,
+                                     (size_t)width * 4,
+                                     color_space,
+                                     kCGBitmapByteOrder32Big | kCGImageAlphaLast,
+                                     provider,
+                                     NULL,
+                                     false,
+                                     kCGRenderingIntentDefault);
+    if (color_space != NULL) {
+        CGColorSpaceRelease(color_space);
+    }
+    if (provider != NULL) {
+        CGDataProviderRelease(provider);
+    }
+    if (image == NULL) {
+        if (error != NULL) {
+            *error = @"failed to create basic-player bitmap overlay image";
+        }
+        return NO;
+    }
+
+    self.overlayView.frame = self.hostView.bounds;
+    self.overlayView.layer.contentsScale =
+        self.hostView.window.backingScaleFactor ?: NSScreen.mainScreen.backingScaleFactor;
+    self.overlayView.layer.contents = (__bridge id)image;
+    self.overlayView.hidden = NO;
+    CGImageRelease(image);
+    return YES;
+}
+
+- (void)clear {
+    self.overlayView.layer.contents = nil;
+    self.overlayView.hidden = YES;
 }
 
 @end
@@ -765,6 +896,94 @@ void basic_player_macos_overlay_update(void *overlay_handle, BasicPlayerMacosOve
           BasicPlayerMacosOverlayController *overlay =
               (__bridge BasicPlayerMacosOverlayController *)overlay_handle;
           [overlay updateState:state];
+        });
+    }
+}
+
+bool basic_player_macos_bitmap_overlay_create(uintptr_t ns_view_handle,
+                                              void **out_overlay,
+                                              char *error_message,
+                                              size_t error_message_size) {
+    if (out_overlay == NULL) {
+        player_copy_utf8("bitmap overlay output handle must not be null",
+                         error_message,
+                         error_message_size);
+        return false;
+    }
+
+    @autoreleasepool {
+        __block BasicPlayerMacosBitmapOverlayController *overlay = nil;
+        __block NSString *create_error = nil;
+        player_run_sync_on_main(^{
+          NSView *host_view = (__bridge NSView *)((void *)ns_view_handle);
+          overlay = [[BasicPlayerMacosBitmapOverlayController alloc] initWithHostView:host_view
+                                                                                error:&create_error];
+        });
+
+        if (overlay == nil) {
+            player_write_error_message(create_error, error_message, error_message_size);
+            return false;
+        }
+
+        *out_overlay = (__bridge_retained void *)overlay;
+        player_copy_utf8(NULL, error_message, error_message_size);
+        return true;
+    }
+}
+
+bool basic_player_macos_bitmap_overlay_update(void *overlay_handle,
+                                              const uint8_t *bytes,
+                                              size_t byte_length,
+                                              uint32_t width,
+                                              uint32_t height,
+                                              char *error_message,
+                                              size_t error_message_size) {
+    if (overlay_handle == NULL) {
+        player_copy_utf8("bitmap overlay handle must not be null", error_message, error_message_size);
+        return false;
+    }
+
+    @autoreleasepool {
+        __block BOOL succeeded = NO;
+        __block NSString *update_error = nil;
+        player_run_sync_on_main(^{
+          BasicPlayerMacosBitmapOverlayController *overlay =
+              (__bridge BasicPlayerMacosBitmapOverlayController *)overlay_handle;
+          succeeded = [overlay updateWithRgbaBytes:bytes
+                                            length:byte_length
+                                             width:width
+                                            height:height
+                                             error:&update_error];
+        });
+        player_write_error_message(update_error, error_message, error_message_size);
+        return succeeded;
+    }
+}
+
+void basic_player_macos_bitmap_overlay_clear(void *overlay_handle) {
+    if (overlay_handle == NULL) {
+        return;
+    }
+
+    @autoreleasepool {
+        player_run_sync_on_main(^{
+          BasicPlayerMacosBitmapOverlayController *overlay =
+              (__bridge BasicPlayerMacosBitmapOverlayController *)overlay_handle;
+          [overlay clear];
+        });
+    }
+}
+
+void basic_player_macos_bitmap_overlay_destroy(void *overlay_handle) {
+    if (overlay_handle == NULL) {
+        return;
+    }
+
+    @autoreleasepool {
+        player_run_sync_on_main(^{
+          BasicPlayerMacosBitmapOverlayController *overlay =
+              (__bridge_transfer BasicPlayerMacosBitmapOverlayController *)overlay_handle;
+          (void)overlay;
         });
     }
 }

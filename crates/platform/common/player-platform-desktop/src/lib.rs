@@ -47,6 +47,119 @@ const AUDIO_OUTPUT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const AUDIO_CLOCK_STALL_TOLERANCE: Duration = Duration::from_millis(250);
 const SOFTWARE_BUFFERING_GRACE_PERIOD: Duration = Duration::from_millis(120);
 
+#[derive(Debug)]
+pub struct DesktopVideoFrame {
+    pub presentation_time: Duration,
+    pub width: u32,
+    pub height: u32,
+    pub cpu_frame: Option<DecodedVideoFrame>,
+    presentation: Option<Box<dyn DesktopVideoFramePresentation>>,
+}
+
+impl DesktopVideoFrame {
+    pub fn from_cpu_frame(frame: DecodedVideoFrame) -> Self {
+        Self {
+            presentation_time: frame.presentation_time,
+            width: frame.width,
+            height: frame.height,
+            cpu_frame: Some(frame),
+            presentation: None,
+        }
+    }
+
+    pub fn native_presented(presentation_time: Duration, width: u32, height: u32) -> Self {
+        Self {
+            presentation_time,
+            width,
+            height,
+            cpu_frame: None,
+            presentation: None,
+        }
+    }
+
+    pub fn native_deferred(
+        presentation_time: Duration,
+        width: u32,
+        height: u32,
+        presentation: Box<dyn DesktopVideoFramePresentation>,
+    ) -> Self {
+        Self {
+            presentation_time,
+            width,
+            height,
+            cpu_frame: None,
+            presentation: Some(presentation),
+        }
+    }
+
+    fn present(mut self) -> anyhow::Result<Option<DecodedVideoFrame>> {
+        if let Some(presentation) = self.presentation.take() {
+            presentation.present()?;
+        }
+        Ok(self.cpu_frame)
+    }
+}
+
+pub trait DesktopVideoFramePresentation: Send + std::fmt::Debug {
+    fn present(self: Box<Self>) -> anyhow::Result<()>;
+}
+
+#[derive(Debug)]
+pub enum DesktopVideoFramePoll {
+    Ready(DesktopVideoFrame),
+    Pending,
+    EndOfStream,
+}
+
+pub trait DesktopVideoSource: Send {
+    fn recv_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>>;
+    fn try_recv_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll>;
+    fn seek_to(&mut self, position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>>;
+    fn buffered_frame_count(&self) -> usize;
+    fn set_prefetch_limit(&self, limit: usize);
+}
+
+pub struct DesktopVideoSourceBootstrap {
+    pub source: Box<dyn DesktopVideoSource>,
+    pub decode_info: BackendVideoDecodeInfo,
+    pub probe: MediaProbe,
+}
+
+pub trait DesktopVideoSourceFactory: Send + Sync + std::fmt::Debug {
+    fn open_video_source(
+        &self,
+        source: MediaSource,
+        buffer_capacity: usize,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> anyhow::Result<DesktopVideoSourceBootstrap>;
+}
+
+pub fn merge_runtime_fallback_reason(
+    fallback_reason: &str,
+    runtime_error_message: &str,
+    existing: Option<String>,
+) -> String {
+    match existing {
+        Some(existing) if !existing.is_empty() => {
+            format!("{}: {}; {}", fallback_reason, runtime_error_message, existing)
+        }
+        _ => format!("{}: {}", fallback_reason, runtime_error_message),
+    }
+}
+
+pub fn runtime_fallback_events(runtime_error_message: &str) -> VecDeque<PlayerRuntimeEvent> {
+    let mut events = VecDeque::new();
+    events.push_back(PlayerRuntimeEvent::VideoSurfaceChanged { attached: false });
+    events.push_back(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
+        PlayerRuntimeErrorCode::BackendFailure,
+        format!("runtime fallback activated: {}", runtime_error_message),
+    )));
+    events
+}
+
+#[derive(Debug, Default)]
+pub struct FfmpegDesktopVideoSourceFactory;
+
 pub fn desktop_runtime_adapter_factory() -> &'static dyn PlayerRuntimeAdapterFactory {
     static FACTORY: SoftwarePlayerRuntimeAdapterFactory = SoftwarePlayerRuntimeAdapterFactory;
     &FACTORY
@@ -96,6 +209,59 @@ pub fn open_platform_desktop_source_with_options_and_interrupt(
     })
 }
 
+pub fn probe_platform_desktop_source_with_video_source_factory_and_options(
+    adapter_id: &'static str,
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
+    capabilities: PlayerRuntimeAdapterCapabilities,
+) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    Ok(Box::new(PlatformDesktopRuntimeAdapterInitializer {
+        adapter_id,
+        inner: Box::new(
+            SoftwarePlayerRuntimeInitializer::probe_source_with_options_and_video_source_factory(
+                source,
+                options,
+                None,
+                video_source_factory,
+                capabilities,
+            )?,
+        ),
+    }))
+}
+
+pub fn open_platform_desktop_source_with_video_source_factory_and_options_and_interrupt(
+    adapter_id: &'static str,
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+    video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
+    capabilities: PlayerRuntimeAdapterCapabilities,
+) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    let initializer =
+        SoftwarePlayerRuntimeInitializer::probe_source_with_options_and_video_source_factory(
+            source,
+            options,
+            Some(interrupt_flag),
+            video_source_factory,
+            capabilities,
+        )?;
+    let PlayerRuntimeAdapterBootstrap {
+        runtime,
+        initial_frame,
+        startup,
+    } = Box::new(initializer).initialize()?;
+
+    Ok(PlayerRuntimeAdapterBootstrap {
+        runtime: Box::new(PlatformDesktopRuntimeAdapter {
+            adapter_id,
+            inner: runtime,
+        }),
+        initial_frame,
+        startup,
+    })
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SoftwarePlayerRuntimeAdapterFactory;
 
@@ -107,6 +273,8 @@ pub struct SoftwarePlayerRuntimeInitializer {
     audio_output: AudioOutputDescriptor,
     options: PlayerRuntimeOptions,
     interrupt_flag: Option<Arc<AtomicBool>>,
+    video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
+    capabilities: PlayerRuntimeAdapterCapabilities,
 }
 
 #[derive(Debug)]
@@ -122,6 +290,8 @@ struct SoftwareRuntimeConfig {
     audio_output_enabled: bool,
     source_audio_track: Option<DecodedAudioTrack>,
     interrupt_flag: Option<Arc<AtomicBool>>,
+    video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
+    capabilities: PlayerRuntimeAdapterCapabilities,
     video_prefetch_capacity: usize,
     video_present_early_tolerance: Duration,
     video_idle_poll_interval: Duration,
@@ -131,6 +301,7 @@ pub struct SoftwarePlayerRuntime {
     backend: FfmpegBackend,
     source: MediaSource,
     media_info: PlayerMediaInfo,
+    capabilities: PlayerRuntimeAdapterCapabilities,
     session: PlaybackSessionModel,
     playback_rate: f32,
     initial_media_position: Duration,
@@ -139,9 +310,9 @@ pub struct SoftwarePlayerRuntime {
     audio_output_config: Option<AudioOutputConfig>,
     audio_output_enabled: bool,
     source_audio_track: Option<DecodedAudioTrack>,
-    video_source: BufferedVideoSource,
+    video_source: Box<dyn DesktopVideoSource>,
     video_end_of_stream: bool,
-    next_frame: Option<DecodedVideoFrame>,
+    next_frame: Option<DesktopVideoFrame>,
     audio_sink: Option<AudioSink>,
     audio_sink_controller: Option<AudioSinkController>,
     playback_clock: Option<PlaybackClock>,
@@ -227,6 +398,57 @@ struct PlatformDesktopRuntimeAdapter {
     inner: Box<dyn PlayerRuntimeAdapter>,
 }
 
+impl DesktopVideoSource for BufferedVideoSource {
+    fn recv_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>> {
+        BufferedVideoSource::recv_frame(self)
+            .map(|frame| frame.map(DesktopVideoFrame::from_cpu_frame))
+    }
+
+    fn try_recv_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
+        match BufferedVideoSource::try_recv_frame(self)? {
+            BufferedFramePoll::Ready(frame) => Ok(DesktopVideoFramePoll::Ready(
+                DesktopVideoFrame::from_cpu_frame(frame),
+            )),
+            BufferedFramePoll::Pending => Ok(DesktopVideoFramePoll::Pending),
+            BufferedFramePoll::EndOfStream => Ok(DesktopVideoFramePoll::EndOfStream),
+        }
+    }
+
+    fn seek_to(&mut self, position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>> {
+        BufferedVideoSource::seek_to(self, position)
+            .map(|frame| frame.map(DesktopVideoFrame::from_cpu_frame))
+    }
+
+    fn buffered_frame_count(&self) -> usize {
+        BufferedVideoSource::buffered_frame_count(self)
+    }
+
+    fn set_prefetch_limit(&self, limit: usize) {
+        BufferedVideoSource::set_prefetch_limit(self, limit);
+    }
+}
+
+impl DesktopVideoSourceFactory for FfmpegDesktopVideoSourceFactory {
+    fn open_video_source(
+        &self,
+        source: MediaSource,
+        buffer_capacity: usize,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> anyhow::Result<DesktopVideoSourceBootstrap> {
+        let BufferedVideoSourceBootstrap {
+            source,
+            decode_info,
+            probe,
+        } = BufferedVideoSource::new_with_interrupt(source, buffer_capacity, interrupt_flag)?;
+
+        Ok(DesktopVideoSourceBootstrap {
+            source: Box::new(source),
+            decode_info,
+            probe,
+        })
+    }
+}
+
 impl std::fmt::Debug for PlatformDesktopRuntimeAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlatformDesktopRuntimeAdapter")
@@ -295,7 +517,7 @@ impl PlayerRuntimeAdapterInitializer for PlatformDesktopRuntimeAdapterInitialize
 
 impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
     fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
-        software_desktop_capabilities()
+        self.capabilities.clone()
     }
 
     fn media_info(&self) -> PlayerMediaInfo {
@@ -323,6 +545,8 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             audio_output,
             options,
             interrupt_flag,
+            video_source_factory,
+            capabilities,
         } = *self;
 
         let decoded_audio = match audio_output.default_output_config.clone() {
@@ -378,6 +602,8 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             audio_output_enabled,
             source_audio_track: decoded_audio.clone(),
             interrupt_flag,
+            video_source_factory,
+            capabilities,
             video_prefetch_capacity: resolved_video_prefetch_capacity(
                 options.video_prefetch_capacity,
                 &resolved_buffering_policy,
@@ -402,6 +628,22 @@ impl SoftwarePlayerRuntimeInitializer {
         source: MediaSource,
         options: PlayerRuntimeOptions,
         interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> PlayerRuntimeResult<Self> {
+        Self::probe_source_with_options_and_video_source_factory(
+            source,
+            options,
+            interrupt_flag,
+            Arc::new(FfmpegDesktopVideoSourceFactory),
+            software_desktop_capabilities(),
+        )
+    }
+
+    pub fn probe_source_with_options_and_video_source_factory(
+        source: MediaSource,
+        options: PlayerRuntimeOptions,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+        video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
+        capabilities: PlayerRuntimeAdapterCapabilities,
     ) -> PlayerRuntimeResult<Self> {
         let backend = FfmpegBackend::new().map_err(|error| {
             runtime_error(
@@ -447,6 +689,8 @@ impl SoftwarePlayerRuntimeInitializer {
             audio_output,
             options,
             interrupt_flag,
+            video_source_factory,
+            capabilities,
         })
     }
 }
@@ -457,7 +701,7 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
     }
 
     fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
-        software_desktop_capabilities()
+        self.capabilities.clone()
     }
 
     fn media_info(&self) -> &PlayerMediaInfo {
@@ -594,6 +838,14 @@ impl PlayerRuntimeAdapter for PlatformDesktopRuntimeAdapter {
         self.inner.presentation_state()
     }
 
+    fn has_video_surface(&self) -> bool {
+        self.inner.has_video_surface()
+    }
+
+    fn is_interrupted(&self) -> bool {
+        self.inner.is_interrupted()
+    }
+
     fn is_buffering(&self) -> bool {
         self.inner.is_buffering()
     }
@@ -635,22 +887,24 @@ impl SoftwarePlayerRuntime {
         config: SoftwareRuntimeConfig,
         mut startup: PlayerRuntimeStartup,
     ) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
-        let BufferedVideoSourceBootstrap {
+        let DesktopVideoSourceBootstrap {
             source: mut video_source,
             decode_info,
             probe: opened_probe,
-        } = BufferedVideoSource::new_with_interrupt(
-            config.source.clone(),
-            config.video_prefetch_capacity,
-            config.interrupt_flag.clone(),
-        )
-        .map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::BackendFailure,
-                "failed to create buffered video source",
-                error,
+        } = config
+            .video_source_factory
+            .open_video_source(
+                config.source.clone(),
+                config.video_prefetch_capacity,
+                config.interrupt_flag.clone(),
             )
-        })?;
+            .map_err(|error| {
+                runtime_error(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    "failed to create buffered video source",
+                    error,
+                )
+            })?;
         let probe = config.probe.unwrap_or(opened_probe);
         let initial_frame = video_source
             .recv_frame()
@@ -702,6 +956,7 @@ impl SoftwarePlayerRuntime {
             backend: config.backend,
             source: config.source,
             media_info,
+            capabilities: config.capabilities,
             session,
             playback_rate: DEFAULT_PLAYBACK_RATE,
             initial_media_position: Duration::ZERO,
@@ -745,9 +1000,19 @@ impl SoftwarePlayerRuntime {
             runtime.source_audio_track.as_ref(),
             initial_frame.presentation_time,
         );
+        let initial_presentation_time = initial_frame.presentation_time;
+        let initial_width = initial_frame.width;
+        let initial_height = initial_frame.height;
+        let initial_cpu_frame = initial_frame.present().map_err(|error| {
+            runtime_error(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "failed to present initial video frame",
+                error,
+            )
+        })?;
         runtime.initial_media_position = initial_media_position;
         runtime.initial_video_position = initial_video_position;
-        runtime.set_playback_clock(initial_frame.presentation_time);
+        runtime.set_playback_clock(initial_presentation_time);
         runtime.maybe_start_audio_metadata_probe_worker()?;
         runtime.maybe_start_audio_decode_worker()?;
         runtime.ensure_audio_output(initial_media_position, runtime.playback_rate)?;
@@ -758,9 +1023,9 @@ impl SoftwarePlayerRuntime {
             runtime.media_info.clone(),
         ));
         runtime.emit_event(PlayerRuntimeEvent::FirstFrameReady(FirstFrameReady {
-            presentation_time: initial_frame.presentation_time,
-            width: initial_frame.width,
-            height: initial_frame.height,
+            presentation_time: initial_presentation_time,
+            width: initial_width,
+            height: initial_height,
         }));
         runtime.emit_event(PlayerRuntimeEvent::PlaybackStateChanged(
             runtime.presentation_state(),
@@ -768,7 +1033,7 @@ impl SoftwarePlayerRuntime {
 
         Ok(PlayerRuntimeAdapterBootstrap {
             runtime: Box::new(runtime),
-            initial_frame: Some(initial_frame),
+            initial_frame: initial_cpu_frame,
             startup,
         })
     }
@@ -885,7 +1150,20 @@ impl SoftwarePlayerRuntime {
                 break;
             }
 
-            latest_frame = self.next_frame.take();
+            latest_frame = self
+                .next_frame
+                .take()
+                .map(|frame| {
+                    frame.present().map_err(|error| {
+                        runtime_error(
+                            PlayerRuntimeErrorCode::BackendFailure,
+                            "failed to present decoded video frame",
+                            error,
+                        )
+                    })
+                })
+                .transpose()?
+                .flatten();
             self.fill_next_frame()?;
         }
 
@@ -915,6 +1193,7 @@ impl SoftwarePlayerRuntime {
     ) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
         let previous_state = self.presentation_state();
         let target_position = self.session.clamp_seek_position(position);
+        self.next_frame = None;
         let seeked_frame = self
             .video_source
             .seek_to(target_position)
@@ -927,7 +1206,6 @@ impl SoftwarePlayerRuntime {
             })?;
 
         let Some(first_frame) = seeked_frame else {
-            self.next_frame = None;
             self.video_end_of_stream = true;
             self.restore_seek_state(previous_state);
             self.ensure_audio_output(target_position, self.playback_rate)?;
@@ -942,7 +1220,6 @@ impl SoftwarePlayerRuntime {
         };
 
         self.video_end_of_stream = false;
-        self.next_frame = None;
         self.video_buffering_window = VideoBufferingWindow::Startup;
         self.audio_buffering_window = AudioBufferingWindow::Startup;
         self.fill_next_frame()?;
@@ -956,7 +1233,13 @@ impl SoftwarePlayerRuntime {
         });
         self.update_buffering_state();
 
-        Ok(Some(first_frame))
+        first_frame.present().map_err(|error| {
+            runtime_error(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "failed to present seeked video frame",
+                error,
+            )
+        })
     }
 
     fn stop(&mut self) -> PlayerRuntimeResult<(bool, Option<DecodedVideoFrame>)> {
@@ -1171,11 +1454,11 @@ impl SoftwarePlayerRuntime {
                 error,
             )
         })? {
-            BufferedFramePoll::Ready(frame) => {
+            DesktopVideoFramePoll::Ready(frame) => {
                 self.next_frame = Some(frame);
             }
-            BufferedFramePoll::Pending => {}
-            BufferedFramePoll::EndOfStream => {
+            DesktopVideoFramePoll::Pending => {}
+            DesktopVideoFramePoll::EndOfStream => {
                 self.video_end_of_stream = true;
             }
         }
@@ -1229,7 +1512,13 @@ impl SoftwarePlayerRuntime {
         self.emit_state_change_if_needed(previous_state);
         self.update_buffering_state();
 
-        Ok(Some(first_frame))
+        first_frame.present().map_err(|error| {
+            runtime_error(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "failed to present rewound video frame",
+                error,
+            )
+        })
     }
 
     fn restore_seek_state(&mut self, previous_state: PresentationState) {
@@ -2438,6 +2727,7 @@ mod tests {
     use super::*;
     use player_core::MediaSource;
     use player_runtime::PlayerRuntimeOptions;
+    use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 
     #[test]
     fn audio_output_descriptor_change_detects_device_name_switch() {
@@ -2835,5 +3125,164 @@ mod tests {
             initial_restart_positions(None, Duration::from_millis(10_016)),
             (Duration::from_millis(10_016), Duration::from_millis(10_016))
         );
+    }
+
+    #[test]
+    fn seek_drops_pending_deferred_frame_before_video_source_seek() {
+        let dropped_before_seek = Arc::new(StdAtomicBool::new(false));
+        let seek_observed_drop = Arc::new(StdAtomicBool::new(false));
+        let mut runtime = test_runtime_with_video_source(Box::new(SeekOrderVideoSource {
+            dropped_before_seek: dropped_before_seek.clone(),
+            seek_observed_drop: seek_observed_drop.clone(),
+        }));
+        runtime.next_frame = Some(DesktopVideoFrame::native_deferred(
+            Duration::from_millis(100),
+            16,
+            16,
+            Box::new(DropFlagPresentation {
+                dropped: dropped_before_seek.clone(),
+            }),
+        ));
+
+        runtime
+            .try_seek_to(Duration::from_millis(250))
+            .expect("seek should succeed");
+
+        assert!(dropped_before_seek.load(StdOrdering::SeqCst));
+        assert!(seek_observed_drop.load(StdOrdering::SeqCst));
+    }
+
+    #[derive(Debug)]
+    struct DropFlagPresentation {
+        dropped: Arc<StdAtomicBool>,
+    }
+
+    impl DesktopVideoFramePresentation for DropFlagPresentation {
+        fn present(self: Box<Self>) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Drop for DropFlagPresentation {
+        fn drop(&mut self) {
+            self.dropped.store(true, StdOrdering::SeqCst);
+        }
+    }
+
+    struct SeekOrderVideoSource {
+        dropped_before_seek: Arc<StdAtomicBool>,
+        seek_observed_drop: Arc<StdAtomicBool>,
+    }
+
+    impl DesktopVideoSource for SeekOrderVideoSource {
+        fn recv_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>> {
+            Ok(None)
+        }
+
+        fn try_recv_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
+            Ok(DesktopVideoFramePoll::Pending)
+        }
+
+        fn seek_to(&mut self, _position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>> {
+            self.seek_observed_drop.store(
+                self.dropped_before_seek.load(StdOrdering::SeqCst),
+                StdOrdering::SeqCst,
+            );
+            Ok(Some(DesktopVideoFrame::native_presented(
+                Duration::from_millis(250),
+                16,
+                16,
+            )))
+        }
+
+        fn buffered_frame_count(&self) -> usize {
+            0
+        }
+
+        fn set_prefetch_limit(&self, _limit: usize) {}
+    }
+
+    fn test_runtime_with_video_source(
+        video_source: Box<dyn DesktopVideoSource>,
+    ) -> SoftwarePlayerRuntime {
+        let media_info = PlayerMediaInfo {
+            source_uri: "file:///tmp/test.mp4".to_owned(),
+            source_kind: MediaSourceKind::Local,
+            source_protocol: MediaSourceProtocol::File,
+            duration: Some(Duration::from_secs(10)),
+            bit_rate: Some(1_000_000),
+            audio_streams: 0,
+            video_streams: 1,
+            best_video: Some(PlayerVideoInfo {
+                codec: "H264".to_owned(),
+                width: 16,
+                height: 16,
+                frame_rate: Some(30.0),
+            }),
+            best_audio: None,
+            track_catalog: Default::default(),
+            track_selection: Default::default(),
+        };
+        SoftwarePlayerRuntime {
+            backend: FfmpegBackend::new().expect("ffmpeg backend should initialize"),
+            source: MediaSource::new("file:///tmp/test.mp4"),
+            media_info,
+            capabilities: PlayerRuntimeAdapterCapabilities {
+                adapter_id: SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                backend_family: PlayerRuntimeAdapterBackendFamily::SoftwareDesktop,
+                supports_audio_output: false,
+                supports_frame_output: true,
+                supports_external_video_surface: false,
+                supports_seek: true,
+                supports_stop: true,
+                supports_playback_rate: true,
+                playback_rate_min: Some(player_runtime::MIN_PLAYBACK_RATE),
+                playback_rate_max: Some(player_runtime::MAX_PLAYBACK_RATE),
+                natural_playback_rate_max: Some(player_runtime::NATURAL_PLAYBACK_RATE_MAX),
+                supports_hardware_decode: false,
+                supports_streaming: false,
+                supports_hdr: false,
+            },
+            session: PlaybackSessionModel::new(Some(Duration::from_secs(10)), Some(30.0)),
+            playback_rate: DEFAULT_PLAYBACK_RATE,
+            initial_media_position: Duration::ZERO,
+            initial_video_position: Duration::ZERO,
+            audio_output_descriptor: AudioOutputDescriptor {
+                default_output_device: None,
+                default_output_config: None,
+            },
+            audio_output_config: None,
+            audio_output_enabled: false,
+            source_audio_track: None,
+            video_source,
+            video_end_of_stream: false,
+            next_frame: None,
+            audio_sink: None,
+            audio_sink_controller: None,
+            playback_clock: None,
+            video_playback_start_buffer_frames: 1,
+            video_rebuffer_frames: 1,
+            video_buffering_window: VideoBufferingWindow::Startup,
+            audio_playback_start_buffer_duration: Duration::ZERO,
+            audio_stream_target_buffer_duration: Duration::ZERO,
+            audio_rebuffer_duration: Duration::ZERO,
+            audio_buffering_window: AudioBufferingWindow::Startup,
+            video_present_early_tolerance: Duration::ZERO,
+            video_idle_poll_interval: Duration::from_millis(16),
+            buffering_policy: PlayerBufferingPolicy::default(),
+            cache_policy: PlayerCachePolicy::default(),
+            base_video_prefetch_capacity: 1,
+            pending_audio_metadata_worker: None,
+            pending_audio_decode_worker: None,
+            pending_audio_stream_worker: None,
+            pending_audio_metadata_retry: None,
+            pending_audio_stream_retry: None,
+            is_buffering: false,
+            buffering_candidate_since: None,
+            last_audio_output_poll: Instant::now(),
+            retry_policy: PlayerRetryPolicy::default(),
+            resilience_metrics: PlayerResilienceMetricsTracker::default(),
+            events: VecDeque::new(),
+        }
     }
 }

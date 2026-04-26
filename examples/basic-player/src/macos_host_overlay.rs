@@ -5,6 +5,7 @@ use std::ffi::{c_char, c_float, c_void};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use player_render_wgpu::RgbaOverlayFrame;
 use player_runtime::PlayerSnapshot;
 use tracing::info;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -15,6 +16,10 @@ use crate::desktop_ui::{ControlAction, DesktopUiLayoutMetrics, DesktopUiViewMode
 pub struct MacosHostOverlay {
     handle: *mut c_void,
     callback_context: Box<MacosHostOverlayCallbackContext>,
+}
+
+pub struct MacosBitmapOverlay {
+    handle: *mut c_void,
 }
 
 struct MacosHostOverlayCallbackContext {
@@ -150,6 +155,70 @@ impl MacosHostOverlay {
     }
 }
 
+impl MacosBitmapOverlay {
+    pub fn attach(window: &Window) -> Result<Self> {
+        let ns_view_handle = macos_ns_view_handle(window)?;
+        let mut overlay_handle = std::ptr::null_mut();
+        let mut error_message = [0 as c_char; 256];
+        let created = unsafe {
+            basic_player_macos_bitmap_overlay_create(
+                ns_view_handle as usize,
+                &mut overlay_handle,
+                error_message.as_mut_ptr(),
+                error_message.len(),
+            )
+        };
+        if !created {
+            anyhow::bail!(
+                "{}",
+                c_string_buffer_to_string(&error_message)
+                    .if_empty("failed to create macOS bitmap overlay")
+            );
+        }
+
+        Ok(Self {
+            handle: overlay_handle,
+        })
+    }
+
+    pub fn update(&self, overlay: &RgbaOverlayFrame) -> Result<()> {
+        let mut error_message = [0 as c_char; 256];
+        let updated = unsafe {
+            basic_player_macos_bitmap_overlay_update(
+                self.handle,
+                overlay.bytes.as_ptr(),
+                overlay.bytes.len(),
+                overlay.width,
+                overlay.height,
+                error_message.as_mut_ptr(),
+                error_message.len(),
+            )
+        };
+        if !updated {
+            anyhow::bail!(
+                "{}",
+                c_string_buffer_to_string(&error_message)
+                    .if_empty("failed to update macOS bitmap overlay")
+            );
+        }
+        Ok(())
+    }
+
+    pub fn clear(&self) {
+        unsafe {
+            basic_player_macos_bitmap_overlay_clear(self.handle);
+        }
+    }
+}
+
+impl Drop for MacosBitmapOverlay {
+    fn drop(&mut self) {
+        unsafe {
+            basic_player_macos_bitmap_overlay_destroy(self.handle);
+        }
+    }
+}
+
 fn duration_to_millis_u64(duration: std::time::Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
@@ -237,4 +306,25 @@ unsafe extern "C" {
         overlay_handle: *mut c_void,
         state: BasicPlayerMacosOverlayState,
     );
+
+    fn basic_player_macos_bitmap_overlay_create(
+        ns_view_handle: usize,
+        out_overlay: *mut *mut c_void,
+        error_message: *mut c_char,
+        error_message_size: usize,
+    ) -> bool;
+
+    fn basic_player_macos_bitmap_overlay_update(
+        overlay_handle: *mut c_void,
+        bytes: *const u8,
+        byte_length: usize,
+        width: u32,
+        height: u32,
+        error_message: *mut c_char,
+        error_message_size: usize,
+    ) -> bool;
+
+    fn basic_player_macos_bitmap_overlay_clear(overlay_handle: *mut c_void);
+
+    fn basic_player_macos_bitmap_overlay_destroy(overlay_handle: *mut c_void);
 }

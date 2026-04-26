@@ -88,6 +88,8 @@ pub struct DecoderPacket {
     pub stream_index: u32,
     pub key_frame: bool,
     pub discontinuity: bool,
+    #[serde(default)]
+    pub end_of_stream: bool,
 }
 
 /// Result returned after sending one compressed packet.
@@ -177,6 +179,78 @@ pub enum DecoderReceiveFrameOutput {
     Eof,
 }
 
+/// Native frame handle kinds returned by decoder plugin ABI v2.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DecoderNativeHandleKind {
+    CvPixelBuffer,
+    IoSurface,
+    MetalTexture,
+    DmaBuf,
+    VaapiSurface,
+    D3D11Texture2D,
+    DxgiSurface,
+    VulkanImage,
+    Unknown(String),
+}
+
+/// Metadata for a decoded native frame. The native handle is transferred separately.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderNativeFrameMetadata {
+    pub media_kind: DecoderMediaKind,
+    pub format: DecoderFrameFormat,
+    pub codec: String,
+    pub pts_us: Option<i64>,
+    pub duration_us: Option<i64>,
+    pub width: u32,
+    pub height: u32,
+    pub handle_kind: DecoderNativeHandleKind,
+}
+
+/// A decoded native frame returned by the Rust-side decoder session trait.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecoderNativeFrame {
+    pub metadata: DecoderNativeFrameMetadata,
+    pub handle: usize,
+}
+
+/// Metadata returned by the dynamic ABI v2 native-frame receive call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderReceiveNativeFrameMetadata {
+    pub status: DecoderReceiveFrameStatus,
+    pub frame: Option<DecoderNativeFrameMetadata>,
+}
+
+impl DecoderReceiveNativeFrameMetadata {
+    pub fn frame(frame: DecoderNativeFrameMetadata) -> Self {
+        Self {
+            status: DecoderReceiveFrameStatus::Frame,
+            frame: Some(frame),
+        }
+    }
+
+    pub fn need_more_input() -> Self {
+        Self {
+            status: DecoderReceiveFrameStatus::NeedMoreInput,
+            frame: None,
+        }
+    }
+
+    pub fn eof() -> Self {
+        Self {
+            status: DecoderReceiveFrameStatus::Eof,
+            frame: None,
+        }
+    }
+}
+
+/// Rust-side receive result returned by native decoder sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecoderReceiveNativeFrameOutput {
+    Frame(DecoderNativeFrame),
+    NeedMoreInput,
+    Eof,
+}
+
 /// Empty success payload used by flush/close operations.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DecoderOperationStatus {
@@ -236,6 +310,18 @@ pub trait DecoderPluginFactory: Send + Sync {
     ) -> Result<Box<dyn DecoderSession>, DecoderError>;
 }
 
+/// Creates native-frame decoder sessions for one plugin.
+pub trait NativeDecoderPluginFactory: Send + Sync {
+    fn name(&self) -> &str;
+
+    fn capabilities(&self) -> DecoderCapabilities;
+
+    fn open_native_session(
+        &self,
+        config: &DecoderSessionConfig,
+    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError>;
+}
+
 /// Stateful decoder session created by a decoder plugin factory.
 pub trait DecoderSession: Send {
     fn session_info(&self) -> DecoderSessionInfo;
@@ -247,6 +333,25 @@ pub trait DecoderSession: Send {
     ) -> Result<DecoderPacketResult, DecoderError>;
 
     fn receive_frame(&mut self) -> Result<DecoderReceiveFrameOutput, DecoderError>;
+
+    fn flush(&mut self) -> Result<(), DecoderError>;
+
+    fn close(&mut self) -> Result<(), DecoderError>;
+}
+
+/// Stateful native-frame decoder session created by a v2 decoder plugin factory.
+pub trait NativeDecoderSession: Send {
+    fn session_info(&self) -> DecoderSessionInfo;
+
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, DecoderError>;
+
+    fn receive_native_frame(&mut self) -> Result<DecoderReceiveNativeFrameOutput, DecoderError>;
+
+    fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError>;
 
     fn flush(&mut self) -> Result<(), DecoderError>;
 

@@ -227,6 +227,31 @@ impl Default for VesperDecoderReceiveFrameResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperDecoderPluginApiV2::receive_native_frame`.
+///
+/// On success, `metadata` must encode a `DecoderReceiveNativeFrameMetadata`
+/// JSON document. When that metadata reports a frame, `handle` is a plugin-owned
+/// native frame handle that must later be released through
+/// `release_native_frame`. On failure, `metadata` must encode a `DecoderError`
+/// JSON document and `handle` must be zero.
+pub struct VesperDecoderReceiveNativeFrameResult {
+    pub status: VesperPluginResultStatus,
+    pub metadata: VesperPluginBytes,
+    pub handle: usize,
+}
+
+impl Default for VesperDecoderReceiveNativeFrameResult {
+    fn default() -> Self {
+        Self {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::null(),
+            handle: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 /// C ABI exposed by a decoder plugin.
 ///
 /// The v1 decoder ABI transfers compressed packet bytes from host to plugin as
@@ -286,6 +311,72 @@ unsafe impl Sync for VesperDecoderPluginApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// C ABI exposed by a decoder plugin that returns native frame handles.
+///
+/// The v2 decoder ABI keeps the v1 packet/session lifecycle but returns a
+/// platform native frame handle from `receive_native_frame`. The host must call
+/// `release_native_frame` exactly once for every successful frame handle.
+pub struct VesperDecoderPluginApiV2 {
+    pub context: *mut c_void,
+    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
+    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
+    pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub open_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            config_json: *const u8,
+            config_json_len: usize,
+        ) -> VesperDecoderOpenSessionResult,
+    >,
+    pub send_packet: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            packet_json: *const u8,
+            packet_json_len: usize,
+            packet_data: *const u8,
+            packet_data_len: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub receive_native_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperDecoderReceiveNativeFrameResult,
+    >,
+    pub release_native_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            handle_kind: u32,
+            handle: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub flush_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub close_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
+}
+
+// SAFETY: host-side wrappers only expose this API behind
+// `NativeDecoderPluginFactory`, and plugin authors must uphold the declared
+// `Send + Sync` contract for the underlying context pointer and callbacks.
+unsafe impl Send for VesperDecoderPluginApiV2 {}
+// SAFETY: same reasoning as above; the plugin context is required to be safe for
+// concurrent shared access when exposed as a decoder plugin.
+unsafe impl Sync for VesperDecoderPluginApiV2 {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 /// Plugin descriptor exported by `vesper_plugin_entry`.
 ///
 /// `plugin_name` must be a valid NUL-terminated UTF-8 string and `api` must
@@ -302,5 +393,7 @@ pub type VesperPluginEntryPoint = unsafe extern "C" fn() -> *const VesperPluginD
 
 /// Current ABI version shared by the host and plugin crates.
 pub const VESPER_PLUGIN_ABI_VERSION: u32 = 1;
+/// Native-frame decoder plugin ABI version.
+pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = 2;
 /// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

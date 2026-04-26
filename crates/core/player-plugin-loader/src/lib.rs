@@ -7,15 +7,18 @@ use std::sync::Arc;
 use libloading::Library;
 use player_plugin::{
     CompletedDownloadInfo, DecoderCapabilities, DecoderCodecCapability, DecoderError,
-    DecoderMediaKind, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
-    DecoderPluginFactory, DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput,
-    DecoderReceiveFrameStatus, DecoderSession, DecoderSessionConfig, DecoderSessionInfo,
-    PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
-    ProcessorOutput, ProcessorProgress, VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApi, VesperDecoderReceiveFrameResult,
-    VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
-    VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind, DecoderOperationStatus,
+    DecoderPacket, DecoderPacketResult, DecoderPluginFactory, DecoderReceiveFrameMetadata,
+    DecoderReceiveFrameOutput, DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata,
+    DecoderReceiveNativeFrameOutput, DecoderSession, DecoderSessionConfig, DecoderSessionInfo,
+    NativeDecoderPluginFactory, NativeDecoderSession, PipelineEvent, PipelineEventHook,
+    PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,
+    ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ABI_VERSION,
+    VESPER_PLUGIN_ENTRY_SYMBOL, VesperDecoderOpenSessionResult, VesperDecoderPluginApi,
+    VesperDecoderPluginApiV2, VesperDecoderReceiveFrameResult,
+    VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
+    VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
+    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -63,6 +66,7 @@ pub struct LoadedDynamicPlugin {
     post_download_processor: Option<Arc<DynamicPostDownloadProcessor>>,
     pipeline_event_hook: Option<Arc<DynamicPipelineEventHook>>,
     decoder_plugin_factory: Option<Arc<DynamicDecoderPluginFactory>>,
+    native_decoder_plugin_factory: Option<Arc<DynamicNativeDecoderPluginFactory>>,
 }
 
 impl LoadedDynamicPlugin {
@@ -123,11 +127,19 @@ impl LoadedDynamicPlugin {
             .map(|factory| factory as Arc<dyn DecoderPluginFactory>)
     }
 
+    pub fn native_decoder_plugin_factory(&self) -> Option<Arc<dyn NativeDecoderPluginFactory>> {
+        self.native_decoder_plugin_factory
+            .clone()
+            .map(|factory| factory as Arc<dyn NativeDecoderPluginFactory>)
+    }
+
     fn from_descriptor(
         library: Option<Arc<LibraryHolder>>,
         descriptor: &VesperPluginDescriptor,
     ) -> Result<Self, PluginLoadError> {
-        if descriptor.abi_version != VESPER_PLUGIN_ABI_VERSION {
+        if descriptor.abi_version != VESPER_PLUGIN_ABI_VERSION
+            && descriptor.abi_version != VESPER_DECODER_PLUGIN_ABI_VERSION_V2
+        {
             return Err(PluginLoadError::AbiVersionMismatch {
                 expected: VESPER_PLUGIN_ABI_VERSION,
                 actual: descriptor.abi_version,
@@ -156,6 +168,7 @@ impl LoadedDynamicPlugin {
                     post_download_processor: Some(Arc::new(processor)),
                     pipeline_event_hook: None,
                     decoder_plugin_factory: None,
+                    native_decoder_plugin_factory: None,
                 })
             }
             VesperPluginKind::PipelineEventHook => {
@@ -178,29 +191,54 @@ impl LoadedDynamicPlugin {
                     post_download_processor: None,
                     pipeline_event_hook: Some(Arc::new(hook)),
                     decoder_plugin_factory: None,
+                    native_decoder_plugin_factory: None,
                 })
             }
             VesperPluginKind::Decoder => {
-                let api_ptr = descriptor.api.cast::<VesperDecoderPluginApi>();
-                let api =
-                    // SAFETY: `descriptor.api` must point at the ABI table that
-                    // matches `plugin_kind` when the plugin exports a valid
-                    // descriptor.
-                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                        field: "decoder_plugin_api",
-                    })?;
-                let factory = DynamicDecoderPluginFactory::new(
-                    library,
-                    descriptor_name.clone(),
-                    CheckedDecoderPluginApi::try_from(*api)?,
-                )?;
-                Ok(Self {
-                    name: descriptor_name,
-                    plugin_kind: descriptor.plugin_kind,
-                    post_download_processor: None,
-                    pipeline_event_hook: None,
-                    decoder_plugin_factory: Some(Arc::new(factory)),
-                })
+                if descriptor.abi_version == VESPER_DECODER_PLUGIN_ABI_VERSION_V2 {
+                    let api_ptr = descriptor.api.cast::<VesperDecoderPluginApiV2>();
+                    let api =
+                        // SAFETY: `descriptor.api` must point at the ABI table that
+                        // matches `plugin_kind` and `abi_version`.
+                        unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                            field: "decoder_plugin_api_v2",
+                        })?;
+                    let factory = DynamicNativeDecoderPluginFactory::new(
+                        library,
+                        descriptor_name.clone(),
+                        CheckedNativeDecoderPluginApi::try_from(*api)?,
+                    )?;
+                    Ok(Self {
+                        name: descriptor_name,
+                        plugin_kind: descriptor.plugin_kind,
+                        post_download_processor: None,
+                        pipeline_event_hook: None,
+                        decoder_plugin_factory: None,
+                        native_decoder_plugin_factory: Some(Arc::new(factory)),
+                    })
+                } else {
+                    let api_ptr = descriptor.api.cast::<VesperDecoderPluginApi>();
+                    let api =
+                        // SAFETY: `descriptor.api` must point at the ABI table that
+                        // matches `plugin_kind` when the plugin exports a valid
+                        // descriptor.
+                        unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                            field: "decoder_plugin_api",
+                        })?;
+                    let factory = DynamicDecoderPluginFactory::new(
+                        library,
+                        descriptor_name.clone(),
+                        CheckedDecoderPluginApi::try_from(*api)?,
+                    )?;
+                    Ok(Self {
+                        name: descriptor_name,
+                        plugin_kind: descriptor.plugin_kind,
+                        post_download_processor: None,
+                        pipeline_event_hook: None,
+                        decoder_plugin_factory: Some(Arc::new(factory)),
+                        native_decoder_plugin_factory: None,
+                    })
+                }
             }
         }
     }
@@ -243,6 +281,7 @@ impl From<&DecoderCodecCapability> for DecoderPluginCodecSummary {
 pub struct DecoderPluginCapabilitySummary {
     pub typed_codecs: Vec<DecoderPluginCodecSummary>,
     pub codecs: Vec<String>,
+    pub supports_native_frame_output: bool,
     pub supports_hardware_decode: bool,
     pub supports_cpu_video_frames: bool,
     pub supports_audio_frames: bool,
@@ -254,6 +293,15 @@ pub struct DecoderPluginCapabilitySummary {
 
 impl From<&DecoderCapabilities> for DecoderPluginCapabilitySummary {
     fn from(capabilities: &DecoderCapabilities) -> Self {
+        Self::from_capabilities(capabilities, false)
+    }
+}
+
+impl DecoderPluginCapabilitySummary {
+    fn from_capabilities(
+        capabilities: &DecoderCapabilities,
+        supports_native_frame_output: bool,
+    ) -> Self {
         let typed_codecs = capabilities
             .codecs
             .iter()
@@ -267,6 +315,7 @@ impl From<&DecoderCapabilities> for DecoderPluginCapabilitySummary {
         Self {
             typed_codecs,
             codecs,
+            supports_native_frame_output,
             supports_hardware_decode: capabilities.supports_hardware_decode,
             supports_cpu_video_frames: capabilities.supports_cpu_video_frames,
             supports_audio_frames: capabilities.supports_audio_frames,
@@ -306,50 +355,69 @@ impl PluginDiagnosticRecord {
         decoder_match: Option<&DecoderPluginMatchRequest>,
     ) -> Self {
         let path = path.into();
-        match plugin.decoder_plugin_factory() {
-            Some(factory) => {
-                let capabilities = factory.capabilities();
-                match decoder_match {
-                    Some(request)
-                        if capabilities.supports_codec(&request.codec, request.media_kind) =>
-                    {
-                        Self {
-                            path,
-                            status: PluginDiagnosticStatus::DecoderSupported,
-                            plugin_name: Some(factory.name().to_owned()),
-                            plugin_kind: Some(plugin.plugin_kind()),
-                            decoder_capabilities: Some((&capabilities).into()),
-                            message: Some(format!(
-                                "{} advertises {:?} {} support",
-                                factory.name(),
-                                request.media_kind,
-                                request.codec
-                            )),
-                        }
-                    }
-                    Some(request) => Self {
+        match decoder_factory_summary(plugin) {
+            Some((name, capabilities, native_frame_output)) => match decoder_match {
+                Some(request)
+                    if capabilities.supports_codec(&request.codec, request.media_kind) =>
+                {
+                    Self {
                         path,
-                        status: PluginDiagnosticStatus::DecoderUnsupported,
-                        plugin_name: Some(factory.name().to_owned()),
+                        status: PluginDiagnosticStatus::DecoderSupported,
+                        plugin_name: Some(name.clone()),
                         plugin_kind: Some(plugin.plugin_kind()),
-                        decoder_capabilities: Some((&capabilities).into()),
+                        decoder_capabilities: Some(
+                            DecoderPluginCapabilitySummary::from_capabilities(
+                                &capabilities,
+                                native_frame_output,
+                            ),
+                        ),
                         message: Some(format!(
-                            "{} does not advertise {:?} {} support",
-                            factory.name(),
+                            "{} advertises {:?} {} support{}",
+                            name,
                             request.media_kind,
-                            request.codec
+                            request.codec,
+                            if native_frame_output {
+                                " with native-frame output"
+                            } else {
+                                ""
+                            }
                         )),
-                    },
-                    None => Self {
-                        path,
-                        status: PluginDiagnosticStatus::Loaded,
-                        plugin_name: Some(factory.name().to_owned()),
-                        plugin_kind: Some(plugin.plugin_kind()),
-                        decoder_capabilities: Some((&capabilities).into()),
-                        message: Some(format!("{} decoder plugin loaded", factory.name())),
-                    },
+                    }
                 }
-            }
+                Some(request) => Self {
+                    path,
+                    status: PluginDiagnosticStatus::DecoderUnsupported,
+                    plugin_name: Some(name.clone()),
+                    plugin_kind: Some(plugin.plugin_kind()),
+                    decoder_capabilities: Some(DecoderPluginCapabilitySummary::from_capabilities(
+                        &capabilities,
+                        native_frame_output,
+                    )),
+                    message: Some(format!(
+                        "{} does not advertise {:?} {} support",
+                        name, request.media_kind, request.codec
+                    )),
+                },
+                None => Self {
+                    path,
+                    status: PluginDiagnosticStatus::Loaded,
+                    plugin_name: Some(name.clone()),
+                    plugin_kind: Some(plugin.plugin_kind()),
+                    decoder_capabilities: Some(DecoderPluginCapabilitySummary::from_capabilities(
+                        &capabilities,
+                        native_frame_output,
+                    )),
+                    message: Some(format!(
+                        "{} decoder plugin loaded{}",
+                        name,
+                        if native_frame_output {
+                            " with native-frame output"
+                        } else {
+                            ""
+                        }
+                    )),
+                },
+            },
             None => Self {
                 path,
                 status: PluginDiagnosticStatus::UnsupportedKind,
@@ -379,6 +447,17 @@ impl PluginDiagnosticRecord {
             .or_else(|| self.plugin_name.clone())
             .unwrap_or_else(|| self.path.display().to_string())
     }
+}
+
+fn decoder_factory_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<(String, DecoderCapabilities, bool)> {
+    if let Some(factory) = plugin.native_decoder_plugin_factory() {
+        return Some((factory.name().to_owned(), factory.capabilities(), true));
+    }
+    plugin
+        .decoder_plugin_factory()
+        .map(|factory| (factory.name().to_owned(), factory.capabilities(), false))
 }
 
 /// Aggregated loader-side report for inspected dynamic plugin paths.
@@ -446,8 +525,31 @@ impl PluginRegistry {
         })
     }
 
+    pub fn best_native_decoder_for(
+        &self,
+        request: &DecoderPluginMatchRequest,
+    ) -> Option<&PluginDiagnosticRecord> {
+        self.records.iter().find(|record| {
+            record.status == PluginDiagnosticStatus::DecoderSupported
+                && record
+                    .decoder_capabilities
+                    .as_ref()
+                    .is_some_and(|capabilities| {
+                        capabilities.supports_native_frame_output
+                            && capabilities.typed_codecs.iter().any(|codec| {
+                                codec.media_kind == request.media_kind
+                                    && codec.codec.eq_ignore_ascii_case(&request.codec)
+                            })
+                    })
+        })
+    }
+
     pub fn supports_decoder(&self, request: &DecoderPluginMatchRequest) -> bool {
         self.best_decoder_for(request).is_some()
+    }
+
+    pub fn supports_native_decoder(&self, request: &DecoderPluginMatchRequest) -> bool {
+        self.best_native_decoder_for(request).is_some()
     }
 
     pub fn decoder_supported_plugin_names(&self) -> Vec<&str> {
@@ -545,6 +647,16 @@ type DecoderReceiveFrameFn = unsafe extern "C" fn(
     context: *mut c_void,
     session: *mut c_void,
 ) -> VesperDecoderReceiveFrameResult;
+type DecoderReceiveNativeFrameFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+) -> VesperDecoderReceiveNativeFrameResult;
+type DecoderReleaseNativeFrameFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+    handle_kind: u32,
+    handle: usize,
+) -> VesperPluginProcessResult;
 type DecoderSessionOperationFn =
     unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
 
@@ -671,6 +783,70 @@ impl TryFrom<VesperDecoderPluginApi> for CheckedDecoderPluginApi {
             })?,
             close_session: api.close_session.ok_or(PluginLoadError::MissingField {
                 field: "decoder_plugin_api.close_session",
+            })?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CheckedNativeDecoderPluginApi {
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
+    name: Option<NameFn>,
+    capabilities_json: CapabilitiesJsonFn,
+    free_bytes: FreeBytesFn,
+    open_session_json: DecoderOpenSessionJsonFn,
+    send_packet: DecoderSendPacketFn,
+    receive_native_frame: DecoderReceiveNativeFrameFn,
+    release_native_frame: DecoderReleaseNativeFrameFn,
+    flush_session: DecoderSessionOperationFn,
+    close_session: DecoderSessionOperationFn,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through
+// `NativeDecoderPluginFactory`.
+unsafe impl Send for CheckedNativeDecoderPluginApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedNativeDecoderPluginApi {}
+
+impl TryFrom<VesperDecoderPluginApiV2> for CheckedNativeDecoderPluginApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperDecoderPluginApiV2) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            capabilities_json: api.capabilities_json.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v2.capabilities_json",
+            })?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v2.free_bytes",
+            })?,
+            open_session_json: api.open_session_json.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v2.open_session_json",
+            })?,
+            send_packet: api.send_packet.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v2.send_packet",
+            })?,
+            receive_native_frame: api.receive_native_frame.ok_or(
+                PluginLoadError::MissingField {
+                    field: "decoder_plugin_api_v2.receive_native_frame",
+                },
+            )?,
+            release_native_frame: api.release_native_frame.ok_or(
+                PluginLoadError::MissingField {
+                    field: "decoder_plugin_api_v2.release_native_frame",
+                },
+            )?,
+            flush_session: api.flush_session.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v2.flush_session",
+            })?,
+            close_session: api.close_session.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v2.close_session",
             })?,
         })
     }
@@ -1016,6 +1192,143 @@ impl DecoderPluginFactory for DynamicDecoderPluginFactory {
 }
 
 #[derive(Debug)]
+struct DynamicNativeDecoderPluginFactoryInner {
+    #[allow(dead_code)]
+    library: Option<Arc<LibraryHolder>>,
+    name: String,
+    api: CheckedNativeDecoderPluginApi,
+    capabilities: DecoderCapabilities,
+}
+
+impl Drop for DynamicNativeDecoderPluginFactoryInner {
+    fn drop(&mut self) {
+        if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
+            unsafe { destroy(self.api.context) };
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DynamicNativeDecoderPluginFactory {
+    inner: Arc<DynamicNativeDecoderPluginFactoryInner>,
+}
+
+impl DynamicNativeDecoderPluginFactory {
+    fn new(
+        library: Option<Arc<LibraryHolder>>,
+        fallback_name: String,
+        api: CheckedNativeDecoderPluginApi,
+    ) -> Result<Self, PluginLoadError> {
+        let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
+            let name_ptr = unsafe { name_fn(api.context) };
+            if name_ptr.is_null() {
+                fallback_name
+            } else {
+                c_string_field(name_ptr, "decoder_name")?
+            }
+        } else {
+            fallback_name
+        };
+        let capabilities = decode_plugin_bytes::<DecoderCapabilities>(
+            // SAFETY: the validated API guarantees `capabilities_json` and
+            // `free_bytes` are present and use the shared `VesperPluginBytes`
+            // ownership contract documented in `player-plugin`.
+            unsafe { (api.capabilities_json)(api.context) },
+            api.free_bytes,
+            api.context,
+        )
+        .map_err(map_capabilities_payload_error)?;
+
+        Ok(Self {
+            inner: Arc::new(DynamicNativeDecoderPluginFactoryInner {
+                library,
+                name,
+                api,
+                capabilities,
+            }),
+        })
+    }
+}
+
+impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn capabilities(&self) -> DecoderCapabilities {
+        self.inner.capabilities.clone()
+    }
+
+    fn open_native_session(
+        &self,
+        config: &DecoderSessionConfig,
+    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
+        let config_json = serde_json::to_vec(config).map_err(|error| {
+            DecoderError::payload_codec(format!(
+                "serialize native decoder config for `{}` failed: {error}",
+                self.inner.name
+            ))
+        })?;
+
+        // SAFETY: the validated plugin API guarantees `open_session_json` is
+        // present, and `config_json` remains alive for the duration of this
+        // synchronous callback.
+        let result = unsafe {
+            (self.inner.api.open_session_json)(
+                self.inner.api.context,
+                config_json.as_ptr(),
+                config_json.len(),
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                if result.session.is_null() {
+                    reclaim_decoder_payload(
+                        result.payload,
+                        self.inner.api.free_bytes,
+                        self.inner.api.context,
+                    );
+                    return Err(DecoderError::abi_violation(format!(
+                        "native decoder plugin `{}` returned a null session pointer",
+                        self.inner.name
+                    )));
+                }
+                let session_info = decode_plugin_bytes_or_default::<DecoderSessionInfo>(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                )
+                .map_err(|error| {
+                    map_decoder_payload_error(&self.inner.name, "open_native", error)
+                })?;
+                Ok(Box::new(DynamicNativeDecoderSession {
+                    factory: self.inner.clone(),
+                    session: result.session,
+                    session_info,
+                    closed: false,
+                }))
+            }
+            VesperPluginResultStatus::Failure => {
+                let error = decode_decoder_error_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                    &self.inner.name,
+                    "open_native",
+                );
+                Err(error)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 struct DynamicDecoderSession {
     factory: Arc<DynamicDecoderPluginFactoryInner>,
     session: *mut c_void,
@@ -1205,6 +1518,222 @@ impl Drop for DynamicDecoderSession {
     }
 }
 
+#[derive(Debug)]
+struct DynamicNativeDecoderSession {
+    factory: Arc<DynamicNativeDecoderPluginFactoryInner>,
+    session: *mut c_void,
+    session_info: DecoderSessionInfo,
+    closed: bool,
+}
+
+// SAFETY: the dynamic native decoder session is only exposed through
+// `NativeDecoderSession: Send`; the plugin ABI requires the opaque session
+// pointer to be safe to move across threads when exported through this API.
+unsafe impl Send for DynamicNativeDecoderSession {}
+
+impl DynamicNativeDecoderSession {
+    fn ensure_open(&self) -> Result<(), DecoderError> {
+        if self.closed || self.session.is_null() {
+            Err(DecoderError::NotConfigured)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn decode_operation_result(
+        &self,
+        result: VesperPluginProcessResult,
+        operation: &'static str,
+    ) -> Result<(), DecoderError> {
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let _ = decode_plugin_bytes_or_default::<DecoderOperationStatus>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| map_decoder_payload_error(&self.factory.name, operation, error))?;
+                Ok(())
+            }
+            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                operation,
+            )),
+        }
+    }
+}
+
+impl NativeDecoderSession for DynamicNativeDecoderSession {
+    fn session_info(&self) -> DecoderSessionInfo {
+        self.session_info.clone()
+    }
+
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, DecoderError> {
+        self.ensure_open()?;
+        let packet_json = serde_json::to_vec(packet).map_err(|error| {
+            DecoderError::payload_codec(format!(
+                "serialize native decoder packet for `{}` failed: {error}",
+                self.factory.name
+            ))
+        })?;
+        let data_ptr = if data.is_empty() {
+            std::ptr::null()
+        } else {
+            data.as_ptr()
+        };
+
+        // SAFETY: the validated plugin API guarantees `send_packet` is present.
+        // The JSON and packet data buffers remain alive for this synchronous call.
+        let result = unsafe {
+            (self.factory.api.send_packet)(
+                self.factory.api.context,
+                self.session,
+                packet_json.as_ptr(),
+                packet_json.len(),
+                data_ptr,
+                data.len(),
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => decode_plugin_bytes_or_default::<
+                DecoderPacketResult,
+            >(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+            )
+            .map_err(|error| map_decoder_payload_error(&self.factory.name, "send_packet", error)),
+            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                "send_packet",
+            )),
+        }
+    }
+
+    fn receive_native_frame(&mut self) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+        self.ensure_open()?;
+        // SAFETY: the validated plugin API guarantees `receive_native_frame` is
+        // present and returns plugin-owned byte buffers reclaimed below.
+        let result = unsafe {
+            (self.factory.api.receive_native_frame)(self.factory.api.context, self.session)
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let metadata = decode_plugin_bytes::<DecoderReceiveNativeFrameMetadata>(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_decoder_payload_error(&self.factory.name, "receive_native_frame", error)
+                })?;
+                match metadata.status {
+                    DecoderReceiveFrameStatus::Frame => {
+                        if result.handle == 0 {
+                            return Err(DecoderError::abi_violation(format!(
+                                "native decoder plugin `{}` returned frame status with a null handle",
+                                self.factory.name
+                            )));
+                        }
+                        let frame = metadata.frame.ok_or_else(|| {
+                            DecoderError::abi_violation(format!(
+                                "native decoder plugin `{}` returned frame status without frame metadata",
+                                self.factory.name
+                            ))
+                        })?;
+                        Ok(DecoderReceiveNativeFrameOutput::Frame(DecoderNativeFrame {
+                            metadata: frame,
+                            handle: result.handle,
+                        }))
+                    }
+                    DecoderReceiveFrameStatus::NeedMoreInput => {
+                        Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
+                    }
+                    DecoderReceiveFrameStatus::Eof => Ok(DecoderReceiveNativeFrameOutput::Eof),
+                }
+            }
+            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+                result.metadata,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                "receive_native_frame",
+            )),
+        }
+    }
+
+    fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
+        self.ensure_open()?;
+        let handle_kind = native_handle_kind_code(&frame.metadata.handle_kind)?;
+        // SAFETY: the validated plugin API guarantees `release_native_frame` is
+        // present. The handle came from the same plugin session.
+        let result = unsafe {
+            (self.factory.api.release_native_frame)(
+                self.factory.api.context,
+                self.session,
+                handle_kind,
+                frame.handle,
+            )
+        };
+        self.decode_operation_result(result, "release_native_frame")
+    }
+
+    fn flush(&mut self) -> Result<(), DecoderError> {
+        self.ensure_open()?;
+        // SAFETY: the validated plugin API guarantees `flush_session` is present.
+        let result =
+            unsafe { (self.factory.api.flush_session)(self.factory.api.context, self.session) };
+        self.decode_operation_result(result, "flush")
+    }
+
+    fn close(&mut self) -> Result<(), DecoderError> {
+        if self.closed || self.session.is_null() {
+            return Ok(());
+        }
+        // SAFETY: the validated plugin API guarantees `close_session` is present
+        // and consumes or releases the opaque session pointer exactly once.
+        let result =
+            unsafe { (self.factory.api.close_session)(self.factory.api.context, self.session) };
+        self.closed = true;
+        self.session = std::ptr::null_mut();
+        self.decode_operation_result(result, "close")
+    }
+}
+
+impl Drop for DynamicNativeDecoderSession {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
+fn native_handle_kind_code(handle_kind: &DecoderNativeHandleKind) -> Result<u32, DecoderError> {
+    match handle_kind {
+        DecoderNativeHandleKind::CvPixelBuffer => Ok(1),
+        DecoderNativeHandleKind::IoSurface => Ok(2),
+        DecoderNativeHandleKind::MetalTexture => Ok(3),
+        DecoderNativeHandleKind::DmaBuf => Ok(4),
+        DecoderNativeHandleKind::VaapiSurface => Ok(5),
+        DecoderNativeHandleKind::D3D11Texture2D => Ok(6),
+        DecoderNativeHandleKind::DxgiSurface => Ok(7),
+        DecoderNativeHandleKind::VulkanImage => Ok(8),
+        DecoderNativeHandleKind::Unknown(kind) => Err(DecoderError::abi_violation(format!(
+            "native decoder handle kind `{kind}` cannot be released through ABI v2"
+        ))),
+    }
+}
+
 struct ProgressAdapter<'a> {
     progress: &'a dyn ProcessorProgress,
 }
@@ -1374,12 +1903,15 @@ mod tests {
     use player_plugin::{
         CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DecoderCapabilities,
         DecoderCodecCapability, DecoderError, DecoderFrameFormat, DecoderFrameMetadata,
-        DecoderFramePlane, DecoderMediaKind, DecoderOperationStatus, DecoderPacket,
-        DecoderPacketResult, DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput,
-        DecoderSessionConfig, DecoderSessionInfo, DownloadMetadata, OutputFormat, PipelineEvent,
-        ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
+        DecoderFramePlane, DecoderMediaKind, DecoderNativeFrameMetadata, DecoderNativeHandleKind,
+        DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveFrameMetadata,
+        DecoderReceiveFrameOutput, DecoderReceiveNativeFrameMetadata,
+        DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
+        DownloadMetadata, OutputFormat, PipelineEvent, ProcessorCapabilities, ProcessorError,
+        ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
         VESPER_PLUGIN_ABI_VERSION, VesperDecoderOpenSessionResult, VesperDecoderPluginApi,
-        VesperDecoderReceiveFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
+        VesperDecoderPluginApiV2, VesperDecoderReceiveFrameResult,
+        VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
         VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
         VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     };
@@ -1601,6 +2133,109 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_native_decoder_plugin_adapter_round_trips_native_frame() {
+        let api = fixture_native_decoder_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        };
+
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect("load native decoder plugin");
+        assert!(plugin.decoder_plugin_factory().is_none());
+        let factory = plugin
+            .native_decoder_plugin_factory()
+            .expect("native decoder factory should be available");
+        assert_eq!(factory.name(), "fixture-decoder");
+        assert!(factory.capabilities().supports_hardware_decode);
+        assert!(factory.capabilities().supports_gpu_handles);
+
+        let mut session = factory
+            .open_native_session(&DecoderSessionConfig {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                prefer_hardware: true,
+                require_cpu_output: false,
+                ..DecoderSessionConfig::default()
+            })
+            .expect("open native decoder session");
+        assert_eq!(
+            session.session_info().selected_hardware_backend.as_deref(),
+            Some("fixture-native")
+        );
+
+        let send = session
+            .send_packet(
+                &DecoderPacket {
+                    pts_us: Some(2_000),
+                    key_frame: true,
+                    ..DecoderPacket::default()
+                },
+                &[9, 8, 7, 6],
+            )
+            .expect("send native packet");
+        assert!(send.accepted);
+
+        let frame = session
+            .receive_native_frame()
+            .expect("receive native frame");
+        let frame = match frame {
+            DecoderReceiveNativeFrameOutput::Frame(frame) => frame,
+            other => panic!("expected native frame, got {other:?}"),
+        };
+        assert_ne!(frame.handle, 0);
+        assert_eq!(frame.metadata.pts_us, Some(2_000));
+        assert_eq!(
+            frame.metadata.handle_kind,
+            DecoderNativeHandleKind::IoSurface
+        );
+        session
+            .release_native_frame(frame)
+            .expect("release native frame");
+        assert_eq!(
+            session.receive_native_frame().expect("need more input"),
+            DecoderReceiveNativeFrameOutput::NeedMoreInput
+        );
+        session.close().expect("close native session");
+    }
+
+    #[test]
+    fn dynamic_native_decoder_plugin_rejects_null_native_frame_handles() {
+        let api = VesperDecoderPluginApiV2 {
+            receive_native_frame: Some(fixture_decoder_receive_null_native_frame),
+            ..fixture_native_decoder_api()
+        };
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        };
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect("load native decoder plugin");
+        let factory = plugin
+            .native_decoder_plugin_factory()
+            .expect("native decoder factory should be available");
+        let mut session = factory
+            .open_native_session(&DecoderSessionConfig {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                ..DecoderSessionConfig::default()
+            })
+            .expect("open native decoder session");
+        session
+            .send_packet(&DecoderPacket::default(), &[1])
+            .expect("send packet");
+
+        let error = session
+            .receive_native_frame()
+            .expect_err("null native frame handle should fail");
+        assert!(matches!(error, DecoderError::AbiViolation { .. }));
+    }
+
+    #[test]
     fn plugin_registry_reports_missing_decoder_path() {
         let registry = PluginRegistry::inspect_decoder_support(
             [PathBuf::from("/tmp/missing-vesper-decoder-plugin")],
@@ -1785,6 +2420,54 @@ mod tests {
     }
 
     #[test]
+    fn plugin_registry_prefers_native_decoder_candidates_when_requested() {
+        let cpu_api = fixture_decoder_api();
+        let cpu_descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&cpu_api as *const VesperDecoderPluginApi).cast(),
+        };
+        let cpu_decoder =
+            LoadedDynamicPlugin::from_descriptor(None, &cpu_descriptor).expect("load decoder");
+        let native_api = fixture_native_decoder_api();
+        let native_descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&native_api as *const VesperDecoderPluginApiV2).cast(),
+        };
+        let native_decoder = LoadedDynamicPlugin::from_descriptor(None, &native_descriptor)
+            .expect("load native decoder");
+        let request = DecoderPluginMatchRequest::video("fixture-video");
+        let registry = PluginRegistry::from_records(vec![
+            PluginDiagnosticRecord::from_loaded_plugin(
+                PathBuf::from("fixture-cpu-decoder"),
+                &cpu_decoder,
+                Some(&request),
+            ),
+            PluginDiagnosticRecord::from_loaded_plugin(
+                PathBuf::from("fixture-native-decoder"),
+                &native_decoder,
+                Some(&request),
+            ),
+        ]);
+
+        assert!(registry.supports_decoder(&request));
+        assert!(registry.supports_native_decoder(&request));
+        let native_record = registry
+            .best_native_decoder_for(&request)
+            .expect("native decoder should be selected");
+        assert_eq!(native_record.path, PathBuf::from("fixture-native-decoder"));
+        assert!(
+            native_record
+                .decoder_capabilities
+                .as_ref()
+                .is_some_and(|capabilities| capabilities.supports_native_frame_output)
+        );
+    }
+
+    #[test]
     fn dynamic_post_download_processor_reports_payload_codec_errors() {
         let api = VesperPostDownloadProcessorApi {
             process_json: Some(fixture_payload_codec_process_json),
@@ -1911,7 +2594,7 @@ mod tests {
     #[test]
     #[ignore = "requires a built player-decoder-fixture shared library artifact"]
     fn dynamic_loader_opens_real_decoder_fixture_shared_library() {
-        let plugin_path = resolve_plugin_path("player_decoder_fixture")
+        let plugin_path = resolve_decoder_fixture_plugin_path()
             .unwrap_or_else(|error| panic!("failed to resolve fixture decoder path: {error}"));
 
         let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
@@ -1925,6 +2608,75 @@ mod tests {
         assert!(plugin.post_download_processor().is_none());
         assert!(plugin.pipeline_event_hook().is_none());
         assert!(plugin.decoder_plugin_factory().is_some());
+    }
+
+    #[test]
+    #[ignore = "requires a built player-decoder-fixture shared library artifact"]
+    fn dynamic_loader_opens_real_decoder_fixture_shared_library_as_native_v2() {
+        let plugin_path = resolve_decoder_fixture_plugin_path()
+            .unwrap_or_else(|error| panic!("failed to resolve fixture decoder path: {error}"));
+        // SAFETY: this ignored integration test runs a single plugin load with
+        // an isolated process-wide fixture switch.
+        unsafe { env::set_var("VESPER_DECODER_FIXTURE_ABI", "v2") };
+
+        let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to load decoder fixture shared library `{}` as v2: {error}",
+                plugin_path.display()
+            )
+        });
+        unsafe { env::remove_var("VESPER_DECODER_FIXTURE_ABI") };
+
+        assert_eq!(plugin.plugin_name(), "player-decoder-fixture");
+        assert!(plugin.post_download_processor().is_none());
+        assert!(plugin.pipeline_event_hook().is_none());
+        assert!(plugin.decoder_plugin_factory().is_none());
+        let factory = plugin
+            .native_decoder_plugin_factory()
+            .expect("player-decoder-fixture should export a native decoder factory in v2 mode");
+        assert!(factory.capabilities().supports_hardware_decode);
+        assert!(factory.capabilities().supports_gpu_handles);
+    }
+
+    #[test]
+    #[ignore = "requires a built player-decoder-videotoolbox shared library artifact"]
+    fn dynamic_loader_opens_real_videotoolbox_decoder_shared_library() {
+        let plugin_path = resolve_decoder_videotoolbox_plugin_path().unwrap_or_else(|error| {
+            panic!("failed to resolve VideoToolbox decoder plugin path: {error}")
+        });
+
+        let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to load VideoToolbox decoder shared library `{}`: {error}",
+                plugin_path.display()
+            )
+        });
+
+        assert_eq!(plugin.plugin_name(), "player-decoder-videotoolbox");
+        assert!(plugin.decoder_plugin_factory().is_none());
+        let factory = plugin
+            .native_decoder_plugin_factory()
+            .expect("player-decoder-videotoolbox should export a native decoder factory");
+        let capabilities = factory.capabilities();
+        assert!(capabilities.supports_codec("H264", DecoderMediaKind::Video));
+        assert!(capabilities.supports_codec("HEVC", DecoderMediaKind::Video));
+        assert!(capabilities.supports_hardware_decode);
+        assert!(capabilities.supports_gpu_handles);
+
+        let session = factory
+            .open_native_session(&DecoderSessionConfig {
+                codec: "H264".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                width: Some(1920),
+                height: Some(1080),
+                prefer_hardware: true,
+                ..DecoderSessionConfig::default()
+            })
+            .expect("VideoToolbox plugin should open a lazy native session");
+        assert_eq!(
+            session.session_info().selected_hardware_backend.as_deref(),
+            Some("VideoToolbox")
+        );
     }
 
     fn fixture_processor_api() -> VesperPostDownloadProcessorApi {
@@ -1957,6 +2709,22 @@ mod tests {
             open_session_json: Some(fixture_decoder_open_session_json),
             send_packet: Some(fixture_decoder_send_packet),
             receive_frame: Some(fixture_decoder_receive_frame),
+            flush_session: Some(fixture_decoder_flush_session),
+            close_session: Some(fixture_decoder_close_session),
+        }
+    }
+
+    fn fixture_native_decoder_api() -> VesperDecoderPluginApiV2 {
+        VesperDecoderPluginApiV2 {
+            context: std::ptr::null_mut(),
+            destroy: None,
+            name: Some(fixture_decoder_name),
+            capabilities_json: Some(fixture_native_decoder_capabilities_json),
+            free_bytes: Some(fixture_free_bytes),
+            open_session_json: Some(fixture_native_decoder_open_session_json),
+            send_packet: Some(fixture_decoder_send_packet),
+            receive_native_frame: Some(fixture_decoder_receive_native_frame),
+            release_native_frame: Some(fixture_decoder_release_native_frame),
             flush_session: Some(fixture_decoder_flush_session),
             close_session: Some(fixture_decoder_close_session),
         }
@@ -2044,6 +2812,27 @@ mod tests {
         VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
     }
 
+    unsafe extern "C" fn fixture_native_decoder_capabilities_json(
+        _context: *mut c_void,
+    ) -> VesperPluginBytes {
+        let capabilities = DecoderCapabilities {
+            codecs: vec![DecoderCodecCapability {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                profiles: vec!["baseline".to_owned()],
+                output_formats: vec![DecoderFrameFormat::Nv12],
+            }],
+            supports_hardware_decode: true,
+            supports_cpu_video_frames: false,
+            supports_audio_frames: false,
+            supports_gpu_handles: true,
+            supports_flush: true,
+            supports_drain: true,
+            max_sessions: Some(1),
+        };
+        VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
+    }
+
     #[derive(Debug, Default)]
     struct FixtureDecoderSession {
         last_pts_us: Option<i64>,
@@ -2073,6 +2862,37 @@ mod tests {
             decoder_name: Some("fixture-decoder".to_owned()),
             selected_hardware_backend: None,
             output_format: Some(DecoderFrameFormat::Rgba8888),
+        };
+        VesperDecoderOpenSessionResult {
+            status: VesperPluginResultStatus::Success,
+            session: session.cast::<c_void>(),
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&info).expect("serialize info"),
+            ),
+        }
+    }
+
+    unsafe extern "C" fn fixture_native_decoder_open_session_json(
+        _context: *mut c_void,
+        config_json: *const u8,
+        config_json_len: usize,
+    ) -> VesperDecoderOpenSessionResult {
+        let config = decode_fixture_json::<DecoderSessionConfig>(config_json, config_json_len);
+        let config = match config {
+            Ok(config) => config,
+            Err(error) => return decoder_open_error(error),
+        };
+        if config.codec != "fixture-video" || config.media_kind != DecoderMediaKind::Video {
+            return decoder_open_error(DecoderError::UnsupportedCodec {
+                codec: config.codec,
+            });
+        }
+
+        let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
+        let info = DecoderSessionInfo {
+            decoder_name: Some("fixture-decoder".to_owned()),
+            selected_hardware_backend: Some("fixture-native".to_owned()),
+            output_format: Some(DecoderFrameFormat::Nv12),
         };
         VesperDecoderOpenSessionResult {
             status: VesperPluginResultStatus::Success,
@@ -2140,6 +2960,74 @@ mod tests {
             }],
         };
         decoder_frame_success(&DecoderReceiveFrameMetadata::frame(metadata), data)
+    }
+
+    unsafe extern "C" fn fixture_decoder_receive_native_frame(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperDecoderReceiveNativeFrameResult {
+        let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+            return decoder_native_frame_error(DecoderError::NotConfigured);
+        };
+        let Some(data) = session.pending_frame.take() else {
+            return decoder_native_frame_success(
+                &DecoderReceiveNativeFrameMetadata::need_more_input(),
+                0,
+            );
+        };
+        let handle = Box::into_raw(Box::new(data)) as usize;
+        let metadata = DecoderNativeFrameMetadata {
+            media_kind: DecoderMediaKind::Video,
+            format: DecoderFrameFormat::Nv12,
+            codec: "fixture-video".to_owned(),
+            pts_us: session.last_pts_us,
+            duration_us: Some(33_333),
+            width: 2,
+            height: 2,
+            handle_kind: DecoderNativeHandleKind::IoSurface,
+        };
+        decoder_native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), handle)
+    }
+
+    unsafe extern "C" fn fixture_decoder_receive_null_native_frame(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperDecoderReceiveNativeFrameResult {
+        let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+            return decoder_native_frame_error(DecoderError::NotConfigured);
+        };
+        if session.pending_frame.take().is_none() {
+            return decoder_native_frame_success(
+                &DecoderReceiveNativeFrameMetadata::need_more_input(),
+                0,
+            );
+        };
+        let metadata = DecoderNativeFrameMetadata {
+            media_kind: DecoderMediaKind::Video,
+            format: DecoderFrameFormat::Nv12,
+            codec: "fixture-video".to_owned(),
+            pts_us: session.last_pts_us,
+            duration_us: Some(33_333),
+            width: 2,
+            height: 2,
+            handle_kind: DecoderNativeHandleKind::IoSurface,
+        };
+        decoder_native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), 0)
+    }
+
+    unsafe extern "C" fn fixture_decoder_release_native_frame(
+        _context: *mut c_void,
+        _session: *mut c_void,
+        handle_kind: u32,
+        handle: usize,
+    ) -> VesperPluginProcessResult {
+        if handle_kind != 2 || handle == 0 {
+            return decoder_process_error(DecoderError::abi_violation(
+                "fixture native frame release received an invalid handle",
+            ));
+        }
+        let _ = unsafe { Box::from_raw(handle as *mut Vec<u8>) };
+        decoder_process_success(&DecoderOperationStatus { completed: true })
     }
 
     unsafe extern "C" fn fixture_decoder_flush_session(
@@ -2281,6 +3169,29 @@ mod tests {
         }
     }
 
+    fn decoder_native_frame_success(
+        metadata: &DecoderReceiveNativeFrameMetadata,
+        handle: usize,
+    ) -> VesperDecoderReceiveNativeFrameResult {
+        VesperDecoderReceiveNativeFrameResult {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(metadata).expect("serialize native frame metadata"),
+            ),
+            handle,
+        }
+    }
+
+    fn decoder_native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
+        VesperDecoderReceiveNativeFrameResult {
+            status: VesperPluginResultStatus::Failure,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize error"),
+            ),
+            handle: 0,
+        }
+    }
+
     unsafe extern "C" fn fixture_free_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
         // SAFETY: the fixture only reclaims buffers it allocated with
         // `VesperPluginBytes::from_vec`.
@@ -2300,6 +3211,47 @@ mod tests {
         }
 
         resolve_plugin_path("player_ffmpeg")
+    }
+
+    fn resolve_decoder_fixture_plugin_path() -> Result<PathBuf, String> {
+        if let Some(path) = env::var_os("VESPER_DECODER_FIXTURE_PLUGIN_PATH") {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "environment variable VESPER_DECODER_FIXTURE_PLUGIN_PATH points to missing file `{}`",
+                path.display()
+            ));
+        }
+        if let Some(paths) = env::var_os("VESPER_DECODER_PLUGIN_PATHS")
+            && let Some(path) = env::split_paths(&paths).next()
+        {
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "environment variable VESPER_DECODER_PLUGIN_PATHS points to missing file `{}`",
+                path.display()
+            ));
+        }
+
+        resolve_plugin_path("player_decoder_fixture")
+    }
+
+    fn resolve_decoder_videotoolbox_plugin_path() -> Result<PathBuf, String> {
+        if let Some(path) = env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH") {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "environment variable VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH points to missing file `{}`",
+                path.display()
+            ));
+        }
+
+        resolve_plugin_path("player_decoder_videotoolbox")
     }
 
     fn resolve_plugin_path(stem: &str) -> Result<PathBuf, String> {

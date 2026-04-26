@@ -98,6 +98,34 @@ pub struct VideoFrameSource {
     end_of_input_sent: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct VideoPacketStreamInfo {
+    pub stream_index: usize,
+    pub codec: String,
+    pub extradata: Vec<u8>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub frame_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompressedVideoPacket {
+    pub pts_us: Option<i64>,
+    pub dts_us: Option<i64>,
+    pub duration_us: Option<i64>,
+    pub stream_index: u32,
+    pub key_frame: bool,
+    pub discontinuity: bool,
+    pub data: Vec<u8>,
+}
+
+pub struct VideoPacketSource {
+    input: ffmpeg::format::context::Input,
+    stream_index: usize,
+    time_base: ffmpeg::Rational,
+    stream_info: VideoPacketStreamInfo,
+}
+
 enum VideoFrameOutput {
     DirectYuv420p,
     Rgba(ScalingContext),
@@ -286,6 +314,43 @@ impl FfmpegBackend {
             decode_info,
             decoded_frame_index: 0,
             end_of_input_sent: false,
+        })
+    }
+
+    pub fn open_video_packet_source(&self, source: MediaSource) -> Result<VideoPacketSource> {
+        self.open_video_packet_source_with_interrupt(source, None)
+    }
+
+    pub fn open_video_packet_source_with_interrupt(
+        &self,
+        source: MediaSource,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<VideoPacketSource> {
+        let video_source = resolve_video_decode_source(&source, interrupt_flag.clone())
+            .unwrap_or_else(|error| {
+                warn!(
+                    source = source.uri(),
+                    error = %error,
+                    "failed to resolve remote HLS video variant playlist for packet demux; falling back to the original source"
+                );
+                source.clone()
+            });
+        let input = open_media_input(&video_source, InputOpenPurpose::VideoDecode, interrupt_flag)
+            .with_context(|| format!("failed to open media source: {}", video_source.uri()))?;
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .context("no video stream found in media source")?;
+        let stream_index = stream.index();
+        let time_base = stream.time_base();
+        let stream_info = video_packet_stream_info(&stream)
+            .context("failed to inspect compressed video stream")?;
+
+        Ok(VideoPacketSource {
+            input,
+            stream_index,
+            time_base,
+            stream_info,
         })
     }
 
@@ -1372,6 +1437,49 @@ impl VideoFrameSource {
     }
 }
 
+impl VideoPacketSource {
+    pub fn stream_info(&self) -> &VideoPacketStreamInfo {
+        &self.stream_info
+    }
+
+    pub fn next_packet(&mut self) -> Result<Option<CompressedVideoPacket>> {
+        for (stream, packet) in self.input.packets() {
+            if stream.index() != self.stream_index {
+                continue;
+            }
+
+            let data = packet.data().map(<[u8]>::to_vec).unwrap_or_default();
+            let stream_index = u32::try_from(self.stream_index).unwrap_or(u32::MAX);
+            return Ok(Some(CompressedVideoPacket {
+                pts_us: packet
+                    .pts()
+                    .and_then(|timestamp| timestamp_to_micros(timestamp, self.time_base)),
+                dts_us: packet
+                    .dts()
+                    .and_then(|timestamp| timestamp_to_micros(timestamp, self.time_base)),
+                duration_us: timestamp_to_micros(packet.duration(), self.time_base)
+                    .filter(|duration| *duration > 0),
+                stream_index,
+                key_frame: packet.is_key(),
+                discontinuity: false,
+                data,
+            }));
+        }
+
+        Ok(None)
+    }
+
+    pub fn seek_to(&mut self, position: Duration) -> Result<()> {
+        let timestamp = duration_to_av_timestamp(position);
+        self.input.seek(timestamp, ..timestamp).with_context(|| {
+            format!(
+                "failed to seek video packet source to {:.3}s",
+                position.as_secs_f64()
+            )
+        })
+    }
+}
+
 fn open_video_decoder(
     parameters: &ffmpeg::codec::Parameters,
 ) -> Result<(ffmpeg::decoder::Video, VideoDecodeInfo)> {
@@ -1474,6 +1582,43 @@ fn video_stream_probe(stream: ffmpeg::Stream<'_>) -> Result<VideoStreamProbe> {
     })
 }
 
+fn video_packet_stream_info(stream: &ffmpeg::Stream<'_>) -> Result<VideoPacketStreamInfo> {
+    let parameters = stream.parameters();
+    let codec = ffmpeg::codec::context::Context::from_parameters(parameters.clone())
+        .context("failed to create decoder context for compressed video stream")?;
+    let codec_id = format!("{:?}", codec.id());
+    let decoder = codec
+        .decoder()
+        .video()
+        .context("failed to inspect compressed video stream")?;
+
+    Ok(VideoPacketStreamInfo {
+        stream_index: stream.index(),
+        codec: codec_id,
+        extradata: codec_parameters_extradata(&parameters),
+        width: Some(decoder.width()).filter(|width| *width > 0),
+        height: Some(decoder.height()).filter(|height| *height > 0),
+        frame_rate: rational_to_f64(stream.avg_frame_rate())
+            .or_else(|| rational_to_f64(stream.rate())),
+    })
+}
+
+fn codec_parameters_extradata(parameters: &ffmpeg::codec::Parameters) -> Vec<u8> {
+    // SAFETY: `parameters` is owned by FFmpeg and remains valid for this call;
+    // extradata is copied into an owned Vec before returning.
+    unsafe {
+        let parameters = parameters.as_ptr();
+        if parameters.is_null()
+            || (*parameters).extradata.is_null()
+            || (*parameters).extradata_size <= 0
+        {
+            return Vec::new();
+        }
+        let len = usize::try_from((*parameters).extradata_size).unwrap_or_default();
+        std::slice::from_raw_parts((*parameters).extradata, len).to_vec()
+    }
+}
+
 fn audio_stream_probe(stream: ffmpeg::Stream<'_>) -> Result<AudioStreamProbe> {
     let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .context("failed to create decoder context for best audio stream")?;
@@ -1547,6 +1692,19 @@ fn timestamp_to_duration(timestamp: i64, time_base: ffmpeg::Rational) -> Option<
     }
 
     Some(Duration::from_secs_f64(seconds))
+}
+
+fn timestamp_to_micros(timestamp: i64, time_base: ffmpeg::Rational) -> Option<i64> {
+    let numerator = i128::from(time_base.numerator());
+    let denominator = i128::from(time_base.denominator());
+    if denominator <= 0 {
+        return None;
+    }
+    let value = i128::from(timestamp)
+        .saturating_mul(numerator)
+        .saturating_mul(1_000_000)
+        / denominator;
+    Some(value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
 }
 
 fn frame_interval_from_stream(stream: &ffmpeg::Stream<'_>) -> Duration {

@@ -62,6 +62,200 @@ impl Drop for MacosSystemNativeCommandSink {
     }
 }
 
+pub struct MacosMetalLayerPresenter {
+    handle: *mut c_void,
+}
+
+unsafe impl Send for MacosMetalLayerPresenter {}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MacosVideoLayerFrame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+pub struct MacosVideoLayerSurface {
+    handle: *mut c_void,
+    target: PlayerVideoSurfaceTarget,
+}
+
+unsafe impl Send for MacosVideoLayerSurface {}
+
+impl MacosVideoLayerSurface {
+    pub fn new(
+        host_surface: PlayerVideoSurfaceTarget,
+        frame: MacosVideoLayerFrame,
+    ) -> PlayerRuntimeResult<Self> {
+        #[cfg(target_os = "macos")]
+        {
+            let host_surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(host_surface);
+            let frame = MacosLayerFrameRepr::from_frame(frame);
+            let mut error_message = [0 as c_char; 256];
+            let handle = unsafe {
+                player_macos_video_layer_surface_create(
+                    host_surface,
+                    frame,
+                    error_message.as_mut_ptr(),
+                    error_message.len(),
+                )
+            };
+            if handle.is_null() {
+                return Err(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    c_string_buffer_to_string(&error_message),
+                ));
+            }
+
+            let target = unsafe { player_macos_video_layer_surface_target(handle) }
+                .to_runtime_surface()
+                .ok_or_else(|| {
+                    PlayerRuntimeError::new(
+                        PlayerRuntimeErrorCode::BackendFailure,
+                        "macOS video layer surface did not expose a valid target",
+                    )
+                })?;
+            Ok(Self { handle, target })
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (host_surface, frame);
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "macOS video layer surface is only available on macOS targets",
+            ))
+        }
+    }
+
+    pub fn target(&self) -> PlayerVideoSurfaceTarget {
+        self.target
+    }
+
+    pub fn update_frame(&self, frame: MacosVideoLayerFrame) -> PlayerRuntimeResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            let frame = MacosLayerFrameRepr::from_frame(frame);
+            let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
+                player_macos_video_layer_surface_update_frame(self.handle, frame, buffer, len)
+            });
+            if succeeded {
+                return Ok(());
+            }
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                if error_message.is_empty() {
+                    "macOS video layer surface failed to update its frame".to_owned()
+                } else {
+                    error_message
+                },
+            ))
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = frame;
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "macOS video layer surface is only available on macOS targets",
+            ))
+        }
+    }
+}
+
+impl Drop for MacosVideoLayerSurface {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            player_macos_video_layer_surface_destroy(self.handle);
+        }
+    }
+}
+
+impl MacosMetalLayerPresenter {
+    pub fn new(video_surface: PlayerVideoSurfaceTarget) -> PlayerRuntimeResult<Self> {
+        #[cfg(target_os = "macos")]
+        {
+            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface);
+            let mut error_message = [0 as c_char; 256];
+            let handle = unsafe {
+                player_macos_metal_presenter_create(
+                    surface,
+                    error_message.as_mut_ptr(),
+                    error_message.len(),
+                )
+            };
+            if handle.is_null() {
+                return Err(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    c_string_buffer_to_string(&error_message),
+                ));
+            }
+            Ok(Self { handle })
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = video_surface;
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "MetalLayer presenter is only available on macOS targets",
+            ))
+        }
+    }
+
+    pub fn present_cv_pixel_buffer_handle(&mut self, handle: usize) -> PlayerRuntimeResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            #[cfg(test)]
+            if std::env::var_os("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE").is_some() {
+                return Err(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    "forced test presenter failure",
+                ));
+            }
+            let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
+                player_macos_metal_presenter_present_cv_pixel_buffer(
+                    self.handle,
+                    handle as *mut c_void,
+                    buffer,
+                    len,
+                )
+            });
+            if succeeded {
+                return Ok(());
+            }
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                if error_message.is_empty() {
+                    "MetalLayer presenter failed to present CVPixelBuffer".to_owned()
+                } else {
+                    error_message
+                },
+            ))
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = handle;
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::Unsupported,
+                "MetalLayer presenter is only available on macOS targets",
+            ))
+        }
+    }
+}
+
+impl Drop for MacosMetalLayerPresenter {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            player_macos_metal_presenter_destroy(self.handle);
+        }
+    }
+}
+
 impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
     fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerRuntimeResult<()> {
         #[cfg(target_os = "macos")]
@@ -418,6 +612,42 @@ impl MacosAvFoundationSurfaceTarget {
             handle: surface.handle,
         }
     }
+
+    fn to_runtime_surface(self) -> Option<PlayerVideoSurfaceTarget> {
+        let kind = match self.kind {
+            0 => PlayerVideoSurfaceKind::NsView,
+            1 => PlayerVideoSurfaceKind::UiView,
+            2 => PlayerVideoSurfaceKind::PlayerLayer,
+            3 => PlayerVideoSurfaceKind::MetalLayer,
+            _ => return None,
+        };
+        (self.handle != 0).then_some(PlayerVideoSurfaceTarget {
+            kind,
+            handle: self.handle,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MacosLayerFrameRepr {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosLayerFrameRepr {
+    fn from_frame(frame: MacosVideoLayerFrame) -> Self {
+        Self {
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: frame.height,
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -677,6 +907,41 @@ unsafe extern "C" {
         error_message: *mut c_char,
         error_message_size: usize,
     ) -> bool;
+
+    fn player_macos_video_layer_surface_create(
+        host_surface: MacosAvFoundationSurfaceTarget,
+        frame: MacosLayerFrameRepr,
+        error_message: *mut c_char,
+        error_message_size: usize,
+    ) -> *mut c_void;
+
+    fn player_macos_video_layer_surface_update_frame(
+        surface_handle: *mut c_void,
+        frame: MacosLayerFrameRepr,
+        error_message: *mut c_char,
+        error_message_size: usize,
+    ) -> bool;
+
+    fn player_macos_video_layer_surface_target(
+        surface_handle: *mut c_void,
+    ) -> MacosAvFoundationSurfaceTarget;
+
+    fn player_macos_video_layer_surface_destroy(surface_handle: *mut c_void);
+
+    fn player_macos_metal_presenter_create(
+        surface: MacosAvFoundationSurfaceTarget,
+        error_message: *mut c_char,
+        error_message_size: usize,
+    ) -> *mut c_void;
+
+    fn player_macos_metal_presenter_present_cv_pixel_buffer(
+        presenter_handle: *mut c_void,
+        pixel_buffer_handle: *mut c_void,
+        error_message: *mut c_char,
+        error_message_size: usize,
+    ) -> bool;
+
+    fn player_macos_metal_presenter_destroy(presenter_handle: *mut c_void);
 }
 
 #[cfg(target_os = "macos")]
@@ -696,7 +961,10 @@ mod tests {
     use std::os::raw::c_void;
     use std::path::Path;
 
-    use super::{MacosSystemAvFoundationBridgeBindings, probe_source_with_avfoundation};
+    use super::{
+        MacosMetalLayerPresenter, MacosSystemAvFoundationBridgeBindings,
+        probe_source_with_avfoundation,
+    };
     use crate::native::{
         MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext,
         MacosManagedNativeSessionController, MacosNativePlayerCommand,
@@ -838,6 +1106,40 @@ mod tests {
         sink.submit_command(MacosNativePlayerCommand::Pause)
             .expect("native session should accept pause");
         drop(sink);
+
+        unsafe {
+            player_macos_test_release_object(layer_handle);
+        }
+    }
+
+    #[test]
+    fn system_metal_presenter_creates_with_layer_surface() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+
+        let layer_handle = unsafe { player_macos_test_create_player_layer() };
+        assert!(
+            !layer_handle.is_null(),
+            "test layer handle should be created"
+        );
+
+        let presenter_result = MacosMetalLayerPresenter::new(PlayerVideoSurfaceTarget {
+            kind: PlayerVideoSurfaceKind::PlayerLayer,
+            handle: layer_handle as usize,
+        });
+        let presenter = match presenter_result {
+            Ok(presenter) => presenter,
+            Err(error) if error.message().contains("Metal is unavailable") => {
+                unsafe {
+                    player_macos_test_release_object(layer_handle);
+                }
+                eprintln!("skipping Metal presenter layer test: {}", error.message());
+                return;
+            }
+            Err(error) => panic!("Metal presenter should attach to a CALayer host: {error:?}"),
+        };
+        drop(presenter);
 
         unsafe {
             player_macos_test_release_object(layer_handle);

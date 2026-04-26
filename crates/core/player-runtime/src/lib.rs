@@ -99,6 +99,7 @@ pub struct PlayerRuntimeOptions {
     pub enable_audio_output: bool,
     pub video_surface: Option<PlayerVideoSurfaceTarget>,
     pub decoder_plugin_library_paths: Vec<PathBuf>,
+    pub decoder_plugin_video_mode: PlayerDecoderPluginVideoMode,
     pub video_prefetch_capacity: usize,
     pub video_present_early_tolerance: Duration,
     pub video_idle_poll_interval: Duration,
@@ -107,6 +108,12 @@ pub struct PlayerRuntimeOptions {
     pub cache_policy: PlayerCachePolicy,
     pub preload_budget: PlayerPreloadBudgetPolicy,
     pub track_preferences: PlayerTrackPreferencePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerDecoderPluginVideoMode {
+    DiagnosticsOnly,
+    PreferNativeFrame,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,6 +347,7 @@ pub struct PlayerPluginCodecCapability {
 pub struct PlayerPluginDecoderCapabilitySummary {
     pub codecs: Vec<PlayerPluginCodecCapability>,
     pub legacy_codecs: Vec<String>,
+    pub supports_native_frame_output: bool,
     pub supports_hardware_decode: bool,
     pub supports_cpu_video_frames: bool,
     pub supports_audio_frames: bool,
@@ -479,6 +487,7 @@ impl Default for PlayerRuntimeOptions {
             enable_audio_output: true,
             video_surface: None,
             decoder_plugin_library_paths: Vec::new(),
+            decoder_plugin_video_mode: PlayerDecoderPluginVideoMode::DiagnosticsOnly,
             video_prefetch_capacity: DEFAULT_VIDEO_PREFETCH_CAPACITY,
             video_present_early_tolerance: DEFAULT_VIDEO_PRESENT_EARLY_TOLERANCE,
             video_idle_poll_interval: DEFAULT_VIDEO_IDLE_POLL_INTERVAL,
@@ -502,6 +511,11 @@ impl PlayerRuntimeOptions {
         paths: impl IntoIterator<Item = PathBuf>,
     ) -> Self {
         self.decoder_plugin_library_paths = paths.into_iter().collect();
+        self
+    }
+
+    pub fn with_decoder_plugin_video_mode(mut self, mode: PlayerDecoderPluginVideoMode) -> Self {
+        self.decoder_plugin_video_mode = mode;
         self
     }
 

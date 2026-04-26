@@ -32,14 +32,17 @@ use player_core::MediaSource;
 use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window_with_options;
 #[cfg(not(target_os = "macos"))]
 use player_host_desktop::probe_desktop_host_launch_plan_uri_with_options;
-#[cfg(target_os = "macos")]
-use player_host_desktop::render_config_from_media_info;
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
     normalize_desktop_host_source_uri,
 };
 #[cfg(target_os = "macos")]
-use player_platform_macos::open_macos_software_runtime_uri_with_options_and_interrupt;
+use player_host_desktop::{render_config_from_media_info, runtime_options_for_winit_window};
+#[cfg(target_os = "macos")]
+use player_platform_macos::{
+    MacosVideoLayerFrame, MacosVideoLayerSurface,
+    open_macos_software_runtime_uri_with_options_and_interrupt,
+};
 #[cfg(not(target_os = "macos"))]
 use player_render_wgpu::preferred_backends;
 use player_render_wgpu::{
@@ -48,11 +51,11 @@ use player_render_wgpu::{
 };
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
-    PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot, PlayerTimelineKind,
-    PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState,
-    VideoPixelFormat,
+    PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap,
+    PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+    PresentationState, VideoPixelFormat,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -72,6 +75,7 @@ const PLAYBACK_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(125);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DECODER_PLUGIN_PATHS_ENV: &str = "VESPER_DECODER_PLUGIN_PATHS";
+const DECODER_PLUGIN_VIDEO_MODE_ENV: &str = "VESPER_DECODER_PLUGIN_VIDEO_MODE";
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
 const MIN_WINDOW_INNER_WIDTH: u32 = 1280;
@@ -166,6 +170,8 @@ struct DesktopPlayerApp {
     uses_external_video_surface: bool,
     window: Option<Arc<Window>>,
     renderer: Option<VideoRenderer>,
+    #[cfg(target_os = "macos")]
+    native_video_surface: Option<MacosVideoLayerSurface>,
     title_cache: Option<String>,
     cursor_position: Option<(f64, f64)>,
     pointer_inside_window: bool,
@@ -223,6 +229,8 @@ impl DesktopPlayerApp {
             uses_external_video_surface: false,
             window: None,
             renderer: None,
+            #[cfg(target_os = "macos")]
+            native_video_surface: None,
             title_cache: None,
             cursor_position: None,
             pointer_inside_window: true,
@@ -451,6 +459,10 @@ impl DesktopPlayerApp {
         self.last_frame = None;
         self.last_overlay_refresh_at = None;
         self.uses_external_video_surface = false;
+        #[cfg(target_os = "macos")]
+        {
+            self.native_video_surface = None;
+        }
         self.seek_preview = None;
     }
 
@@ -516,6 +528,53 @@ impl DesktopPlayerApp {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn native_video_layer_frame_for_window(&self, window: &Window) -> MacosVideoLayerFrame {
+        let stage_rect =
+            self.stage_display_rect_for_size(window.inner_size(), window.scale_factor());
+        let scale_factor = window.scale_factor().max(1.0);
+        MacosVideoLayerFrame {
+            x: f64::from(stage_rect.x) / scale_factor,
+            y: f64::from(stage_rect.y) / scale_factor,
+            width: f64::from(stage_rect.width.max(1)) / scale_factor,
+            height: f64::from(stage_rect.height.max(1)) / scale_factor,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ensure_native_video_surface(
+        &mut self,
+        window: &Window,
+    ) -> Result<player_runtime::PlayerVideoSurfaceTarget> {
+        let frame = self.native_video_layer_frame_for_window(window);
+        if let Some(surface) = self.native_video_surface.as_ref() {
+            surface.update_frame(frame)?;
+            return Ok(surface.target());
+        }
+
+        let host_surface =
+            runtime_options_for_winit_window(window, PlayerRuntimeOptions::default())?
+                .video_surface
+                .context("macOS window did not expose an NSView video surface")?;
+        let surface = MacosVideoLayerSurface::new(host_surface, frame)?;
+        let target = surface.target();
+        self.native_video_surface = Some(surface);
+        Ok(target)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_native_video_surface_frame(&mut self) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let frame = self.native_video_layer_frame_for_window(window.as_ref());
+        if let Some(surface) = self.native_video_surface.as_ref()
+            && let Err(error) = surface.update_frame(frame)
+        {
+            warn!(?error, "failed to update macOS native video surface frame");
+        }
+    }
+
     fn request_source_launch(&mut self, source: String, label: Option<String>) -> Result<()> {
         let label = label.unwrap_or_else(|| source_display_label(&source));
         let request_id = self.next_launch_request_id;
@@ -536,43 +595,100 @@ impl DesktopPlayerApp {
         self.sync_ui_presenter();
         self.refresh_overlay()?;
 
+        #[cfg(target_os = "macos")]
+        let native_frame_options = if decoder_plugin_video_mode_from_env()
+            == PlayerDecoderPluginVideoMode::PreferNativeFrame
+        {
+            let window = self
+                .window
+                .as_ref()
+                .cloned()
+                .context("window missing while preparing macOS native-frame launch")?;
+            let video_surface = self.ensure_native_video_surface(window.as_ref())?;
+            let options = basic_player_runtime_options().with_video_surface(video_surface);
+            Some(runtime_options_for_winit_window(window.as_ref(), options)?)
+        } else {
+            None
+        };
+
         let cancel_flag = self.replace_active_launch_cancel_flag();
         let launch_tx = self.launch_tx.clone();
         thread::spawn(move || {
             let prepare_started_at = Instant::now();
             #[cfg(target_os = "macos")]
-            let event = match open_basic_player_runtime_for_source(&source, cancel_flag.clone()) {
-                Ok((prepared_bootstrap, capabilities)) => {
-                    let launch_plan = RuntimeLaunchPlan {
-                        source: source.clone(),
-                        render_config: render_config_from_media_info(
-                            prepared_bootstrap.runtime.media_info(),
-                        ),
-                    };
-                    info!(
-                        source = source.as_str(),
-                        adapter_id = prepared_bootstrap.runtime.adapter_id(),
-                        prepare_ms = prepare_started_at.elapsed().as_millis(),
-                        supports_frame_output = capabilities.supports_frame_output,
-                        supports_external_video_surface =
-                            capabilities.supports_external_video_surface,
-                        "prepared desktop runtime off the main thread"
-                    );
-                    LaunchEvent::Prepared {
+            let event = if let Some(options) = native_frame_options {
+                match open_macos_software_runtime_uri_with_options_and_interrupt(
+                    source.clone(),
+                    options,
+                    cancel_flag.clone(),
+                ) {
+                    Ok(prepared_bootstrap) => {
+                        let capabilities = prepared_bootstrap.runtime.capabilities();
+                        let launch_plan = RuntimeLaunchPlan {
+                            source: source.clone(),
+                            render_config: render_config_from_media_info(
+                                prepared_bootstrap.runtime.media_info(),
+                            ),
+                        };
+                        info!(
+                            source = source.as_str(),
+                            adapter_id = prepared_bootstrap.runtime.adapter_id(),
+                            prepare_ms = prepare_started_at.elapsed().as_millis(),
+                            supports_frame_output = capabilities.supports_frame_output,
+                            supports_external_video_surface =
+                                capabilities.supports_external_video_surface,
+                            "prepared macOS native-frame runtime off the main thread"
+                        );
+                        LaunchEvent::Prepared {
+                            request_id,
+                            source,
+                            label,
+                            prepare_duration: prepare_started_at.elapsed(),
+                            launch_plan,
+                            prepared_bootstrap,
+                        }
+                    }
+                    Err(error) => LaunchEvent::Failed {
                         request_id,
-                        source,
                         label,
                         prepare_duration: prepare_started_at.elapsed(),
-                        launch_plan,
-                        prepared_bootstrap,
-                    }
+                        error: error.to_string(),
+                    },
                 }
-                Err(error) => LaunchEvent::Failed {
-                    request_id,
-                    label,
-                    prepare_duration: prepare_started_at.elapsed(),
-                    error: error.to_string(),
-                },
+            } else {
+                match open_basic_player_runtime_for_source(&source, cancel_flag.clone()) {
+                    Ok((prepared_bootstrap, capabilities)) => {
+                        let launch_plan = RuntimeLaunchPlan {
+                            source: source.clone(),
+                            render_config: render_config_from_media_info(
+                                prepared_bootstrap.runtime.media_info(),
+                            ),
+                        };
+                        info!(
+                            source = source.as_str(),
+                            adapter_id = prepared_bootstrap.runtime.adapter_id(),
+                            prepare_ms = prepare_started_at.elapsed().as_millis(),
+                            supports_frame_output = capabilities.supports_frame_output,
+                            supports_external_video_surface =
+                                capabilities.supports_external_video_surface,
+                            "prepared desktop runtime off the main thread"
+                        );
+                        LaunchEvent::Prepared {
+                            request_id,
+                            source,
+                            label,
+                            prepare_duration: prepare_started_at.elapsed(),
+                            launch_plan,
+                            prepared_bootstrap,
+                        }
+                    }
+                    Err(error) => LaunchEvent::Failed {
+                        request_id,
+                        label,
+                        prepare_duration: prepare_started_at.elapsed(),
+                        error: error.to_string(),
+                    },
+                }
             };
 
             #[cfg(not(target_os = "macos"))]
@@ -914,6 +1030,10 @@ impl DesktopPlayerApp {
             plugin_diagnostics_summary(&startup.plugin_diagnostics);
 
         if capabilities.supports_frame_output {
+            #[cfg(target_os = "macos")]
+            {
+                self.native_video_surface = None;
+            }
             let initial_frame =
                 initial_frame.context("desktop runtime did not provide an initial frame")?;
             let renderer_started_at = Instant::now();
@@ -931,6 +1051,14 @@ impl DesktopPlayerApp {
         } else {
             self.renderer = None;
             self.last_frame = None;
+            #[cfg(target_os = "macos")]
+            {
+                if capabilities.supports_external_video_surface {
+                    self.sync_native_video_surface_frame();
+                } else {
+                    self.native_video_surface = None;
+                }
+            }
         }
 
         self.title_cache = None;
@@ -1025,6 +1153,12 @@ impl DesktopPlayerApp {
             if self.host_message.is_some() {
                 return self.refresh_host_overlay();
             }
+            if self.uses_external_video_surface {
+                self.sync_ui_presenter();
+                self.overlay_dirty = false;
+                self.last_overlay_refresh_at = Some(Instant::now());
+                return Ok(());
+            }
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_overlay();
             }
@@ -1050,6 +1184,10 @@ impl DesktopPlayerApp {
         };
         let frame_texture = upload_video_frame.then(|| video_frame_texture(frame));
         let Some(renderer) = self.renderer.as_mut() else {
+            if self.uses_external_video_surface {
+                self.sync_ui_presenter();
+                self.last_overlay_refresh_at = Some(Instant::now());
+            }
             self.overlay_dirty = false;
             return Ok(());
         };
@@ -1411,7 +1549,7 @@ impl DesktopPlayerApp {
     }
 
     fn handle_pointer_click(&mut self) -> Result<()> {
-        if self.renderer.is_none() {
+        if self.renderer.is_none() && !self.uses_external_video_surface {
             return Ok(());
         }
 
@@ -1589,6 +1727,8 @@ impl DesktopPlayerApp {
             renderer.resize(size);
         }
         self.sync_renderer_stage_viewport();
+        #[cfg(target_os = "macos")]
+        self.sync_native_video_surface_frame();
         if let Err(error) = self.refresh_overlay_ui_only() {
             error!(?error, "failed to refresh overlay during resize");
         }
@@ -1623,6 +1763,8 @@ impl DesktopPlayerApp {
                 &overlay_view_model,
                 window.inner_size(),
                 window.scale_factor(),
+                self.seek_preview,
+                self.uses_external_video_surface,
             );
         }
     }
@@ -1758,12 +1900,26 @@ fn open_basic_player_runtime_for_window(
 fn basic_player_runtime_options() -> PlayerRuntimeOptions {
     PlayerRuntimeOptions::default()
         .with_decoder_plugin_library_paths(decoder_plugin_library_paths_from_env())
+        .with_decoder_plugin_video_mode(decoder_plugin_video_mode_from_env())
 }
 
 fn decoder_plugin_library_paths_from_env() -> Vec<PathBuf> {
     std::env::var_os(DECODER_PLUGIN_PATHS_ENV)
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default()
+}
+
+fn decoder_plugin_video_mode_from_env() -> PlayerDecoderPluginVideoMode {
+    decoder_plugin_video_mode_from_value(std::env::var(DECODER_PLUGIN_VIDEO_MODE_ENV).ok())
+}
+
+fn decoder_plugin_video_mode_from_value(value: Option<String>) -> PlayerDecoderPluginVideoMode {
+    match value {
+        Some(value) if value.eq_ignore_ascii_case("native-frame") => {
+            PlayerDecoderPluginVideoMode::PreferNativeFrame
+        }
+        _ => PlayerDecoderPluginVideoMode::DiagnosticsOnly,
+    }
 }
 
 fn video_frame_texture(frame: &DecodedVideoFrame) -> VideoFrameTexture {
@@ -1830,6 +1986,8 @@ impl ApplicationHandler for DesktopPlayerApp {
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 self.sync_renderer_stage_viewport();
+                #[cfg(target_os = "macos")]
+                self.sync_native_video_surface_frame();
                 self.sync_ui_presenter();
                 if let Err(error) = self.refresh_overlay_ui_only() {
                     error!(
@@ -2259,7 +2417,18 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
     let supported_decoders = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderSupported)
-        .filter_map(|record| record.plugin_name.as_deref())
+        .map(|record| {
+            let name = record.plugin_name.as_deref().unwrap_or("unknown-decoder");
+            if record
+                .decoder_capabilities
+                .as_ref()
+                .is_some_and(|capabilities| capabilities.supports_native_frame_output)
+            {
+                format!("{name} native-frame")
+            } else {
+                name.to_owned()
+            }
+        })
         .collect::<Vec<_>>();
     if !supported_decoders.is_empty() {
         return Some(format!(
@@ -2353,8 +2522,10 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
 mod tests {
     use super::{
         ControlAction, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL,
-        DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus, resolve_media_source_argument,
+        DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus,
+        decoder_plugin_video_mode_from_value, resolve_media_source_argument,
     };
+    use player_runtime::PlayerDecoderPluginVideoMode;
 
     #[test]
     fn resolve_media_source_argument_maps_demo_flags() {
@@ -2365,6 +2536,30 @@ mod tests {
         assert_eq!(
             resolve_media_source_argument(DASH_DEMO_CLI_FLAG.to_owned()).expect("dash demo"),
             DESKTOP_DASH_DEMO_URL
+        );
+    }
+
+    #[test]
+    fn decoder_plugin_video_mode_defaults_to_diagnostics_only() {
+        assert_eq!(
+            decoder_plugin_video_mode_from_value(None),
+            PlayerDecoderPluginVideoMode::DiagnosticsOnly
+        );
+        assert_eq!(
+            decoder_plugin_video_mode_from_value(Some("diagnostics".to_owned())),
+            PlayerDecoderPluginVideoMode::DiagnosticsOnly
+        );
+    }
+
+    #[test]
+    fn decoder_plugin_video_mode_native_frame_opt_in_is_case_insensitive() {
+        assert_eq!(
+            decoder_plugin_video_mode_from_value(Some("native-frame".to_owned())),
+            PlayerDecoderPluginVideoMode::PreferNativeFrame
+        );
+        assert_eq!(
+            decoder_plugin_video_mode_from_value(Some("NATIVE-FRAME".to_owned())),
+            PlayerDecoderPluginVideoMode::PreferNativeFrame
         );
     }
 
