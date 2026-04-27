@@ -14,7 +14,7 @@ use player_runtime::{
 };
 use winit::window::Window;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use player_runtime::{PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget};
 
 #[cfg(target_os = "linux")]
@@ -29,7 +29,7 @@ use player_platform_macos::{
 use player_platform_windows::{
     open_windows_host_runtime_uri_with_options, probe_windows_host_runtime_uri_with_options,
 };
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[derive(Debug, Clone)]
@@ -298,7 +298,17 @@ pub fn runtime_options_for_winit_window(
         return Ok(options);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let mut options = options;
+        if options.video_surface.is_none() {
+            options = options.with_video_surface(windows_video_surface_target(window)?);
+        }
+
+        return Ok(options);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = window;
         Ok(options)
@@ -367,6 +377,20 @@ fn macos_video_surface_target(window: &Window) -> Result<PlayerVideoSurfaceTarge
             handle: handle.ns_view.as_ptr() as usize,
         }),
         raw => anyhow::bail!("expected an AppKit window handle on macOS, received {raw:?}"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_video_surface_target(window: &Window) -> Result<PlayerVideoSurfaceTarget> {
+    let handle = window
+        .window_handle()
+        .context("failed to resolve the Windows raw window handle")?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(handle) => Ok(PlayerVideoSurfaceTarget {
+            kind: PlayerVideoSurfaceKind::Win32Hwnd,
+            handle: handle.hwnd.get() as usize,
+        }),
+        raw => anyhow::bail!("expected a Win32 window handle on Windows, received {raw:?}"),
     }
 }
 

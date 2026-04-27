@@ -63,6 +63,8 @@ pub struct DecoderSessionConfig {
     pub channels: Option<u16>,
     pub prefer_hardware: bool,
     pub require_cpu_output: bool,
+    #[serde(default)]
+    pub native_device_context: Option<DecoderNativeDeviceContext>,
 }
 
 impl Default for DecoderMediaKind {
@@ -191,6 +193,20 @@ pub enum DecoderNativeHandleKind {
     DxgiSurface,
     VulkanImage,
     Unknown(String),
+}
+
+/// Native graphics device/context kinds that a host may share with a decoder plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DecoderNativeDeviceContextKind {
+    D3D11Device,
+    Unknown(String),
+}
+
+/// Borrowed native device/context pointer passed from host to decoder plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderNativeDeviceContext {
+    pub kind: DecoderNativeDeviceContextKind,
+    pub handle: usize,
 }
 
 /// Metadata for a decoded native frame. The native handle is transferred separately.

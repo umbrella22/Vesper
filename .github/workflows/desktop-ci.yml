@@ -17,6 +17,7 @@ on:
   push:
     branches:
       - main
+      - "codex-*"
     paths:
       - ".github/workflows/desktop-ci.yml"
       - "Cargo.toml"

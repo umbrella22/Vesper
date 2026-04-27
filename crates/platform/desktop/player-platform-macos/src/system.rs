@@ -90,7 +90,7 @@ impl MacosVideoLayerSurface {
     ) -> PlayerRuntimeResult<Self> {
         #[cfg(target_os = "macos")]
         {
-            let host_surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(host_surface);
+            let host_surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(host_surface)?;
             let frame = MacosLayerFrameRepr::from_frame(frame);
             let mut error_message = [0 as c_char; 256];
             let handle = unsafe {
@@ -177,7 +177,7 @@ impl MacosMetalLayerPresenter {
     pub fn new(video_surface: PlayerVideoSurfaceTarget) -> PlayerRuntimeResult<Self> {
         #[cfg(target_os = "macos")]
         {
-            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface);
+            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface)?;
             let mut error_message = [0 as c_char; 256];
             let handle = unsafe {
                 player_macos_metal_presenter_create(
@@ -328,7 +328,7 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
     ) -> PlayerRuntimeResult<()> {
         #[cfg(target_os = "macos")]
         {
-            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface);
+            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface)?;
             let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
                 player_macos_avfoundation_session_attach_surface(
                     self.session_handle,
@@ -450,7 +450,7 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                 on_error: Some(macos_on_error),
                 context: callback_context.cast(),
             };
-            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(surface);
+            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(surface)?;
             let mut session_handle = std::ptr::null_mut();
             let mut error_message = [0 as c_char; 256];
             let created = unsafe {
@@ -601,16 +601,23 @@ struct MacosAvFoundationSurfaceTarget {
 
 #[cfg(target_os = "macos")]
 impl MacosAvFoundationSurfaceTarget {
-    fn from_runtime_surface(surface: PlayerVideoSurfaceTarget) -> Self {
-        Self {
-            kind: match surface.kind {
-                PlayerVideoSurfaceKind::NsView => 0,
-                PlayerVideoSurfaceKind::UiView => 1,
-                PlayerVideoSurfaceKind::PlayerLayer => 2,
-                PlayerVideoSurfaceKind::MetalLayer => 3,
-            },
+    fn from_runtime_surface(surface: PlayerVideoSurfaceTarget) -> PlayerRuntimeResult<Self> {
+        let kind = match surface.kind {
+            PlayerVideoSurfaceKind::NsView => 0,
+            PlayerVideoSurfaceKind::UiView => 1,
+            PlayerVideoSurfaceKind::PlayerLayer => 2,
+            PlayerVideoSurfaceKind::MetalLayer => 3,
+            PlayerVideoSurfaceKind::Win32Hwnd => {
+                return Err(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::InvalidArgument,
+                    "macos AVFoundation bridge does not support Win32 HWND video surfaces",
+                ));
+            }
+        };
+        Ok(Self {
+            kind,
             handle: surface.handle,
-        }
+        })
     }
 
     fn to_runtime_surface(self) -> Option<PlayerVideoSurfaceTarget> {

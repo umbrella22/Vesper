@@ -1903,7 +1903,8 @@ mod tests {
     use player_plugin::{
         CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DecoderCapabilities,
         DecoderCodecCapability, DecoderError, DecoderFrameFormat, DecoderFrameMetadata,
-        DecoderFramePlane, DecoderMediaKind, DecoderNativeFrameMetadata, DecoderNativeHandleKind,
+        DecoderFramePlane, DecoderMediaKind, DecoderNativeDeviceContext,
+        DecoderNativeDeviceContextKind, DecoderNativeFrameMetadata, DecoderNativeHandleKind,
         DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveFrameMetadata,
         DecoderReceiveFrameOutput, DecoderReceiveNativeFrameMetadata,
         DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
@@ -2199,6 +2200,42 @@ mod tests {
             DecoderReceiveNativeFrameOutput::NeedMoreInput
         );
         session.close().expect("close native session");
+    }
+
+    #[test]
+    fn dynamic_native_decoder_plugin_receives_native_device_context() {
+        let api = fixture_native_decoder_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::Decoder,
+            plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        };
+
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect("load native decoder plugin");
+        let factory = plugin
+            .native_decoder_plugin_factory()
+            .expect("native decoder factory should be available");
+
+        let session = factory
+            .open_native_session(&DecoderSessionConfig {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                prefer_hardware: true,
+                require_cpu_output: false,
+                native_device_context: Some(DecoderNativeDeviceContext {
+                    kind: DecoderNativeDeviceContextKind::D3D11Device,
+                    handle: 42,
+                }),
+                ..DecoderSessionConfig::default()
+            })
+            .expect("open native decoder session");
+
+        assert_eq!(
+            session.session_info().selected_hardware_backend.as_deref(),
+            Some("fixture-native-d3d11-device-42")
+        );
     }
 
     #[test]
@@ -2889,9 +2926,15 @@ mod tests {
         }
 
         let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
+        let selected_hardware_backend = match config.native_device_context.as_ref() {
+            Some(context) if context.kind == DecoderNativeDeviceContextKind::D3D11Device => {
+                Some(format!("fixture-native-d3d11-device-{}", context.handle))
+            }
+            _ => Some("fixture-native".to_owned()),
+        };
         let info = DecoderSessionInfo {
             decoder_name: Some("fixture-decoder".to_owned()),
-            selected_hardware_backend: Some("fixture-native".to_owned()),
+            selected_hardware_backend,
             output_format: Some(DecoderFrameFormat::Nv12),
         };
         VesperDecoderOpenSessionResult {

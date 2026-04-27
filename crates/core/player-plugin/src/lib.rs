@@ -17,12 +17,13 @@ pub use abi::{
 pub use capability::ProcessorCapabilities;
 pub use decoder::{
     DecoderCapabilities, DecoderCodecCapability, DecoderError, DecoderFrame, DecoderFrameFormat,
-    DecoderFrameMetadata, DecoderFramePlane, DecoderMediaKind, DecoderNativeFrame,
-    DecoderNativeFrameMetadata, DecoderNativeHandleKind, DecoderOperationStatus, DecoderPacket,
-    DecoderPacketResult, DecoderPluginFactory, DecoderReceiveFrameMetadata,
-    DecoderReceiveFrameOutput, DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata,
-    DecoderReceiveNativeFrameOutput, DecoderSession, DecoderSessionConfig, DecoderSessionInfo,
-    NativeDecoderPluginFactory, NativeDecoderSession,
+    DecoderFrameMetadata, DecoderFramePlane, DecoderMediaKind, DecoderNativeDeviceContext,
+    DecoderNativeDeviceContextKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
+    DecoderNativeHandleKind, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
+    DecoderPluginFactory, DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput,
+    DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput,
+    DecoderSession, DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory,
+    NativeDecoderSession,
 };
 pub use hook::{PipelineEvent, PipelineEventHook};
 pub use processor::{
