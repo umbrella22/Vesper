@@ -237,8 +237,14 @@ mod windows_d3d11_presenter {
         device: ID3D11Device,
         context: ID3D11DeviceContext,
         swap_chain: Option<IDXGISwapChain1>,
-        attached_hwnd: Option<HWND>,
+        attached_hwnd: Option<usize>,
         swap_chain_size: Option<(u32, u32)>,
+    }
+
+    #[allow(dead_code)]
+    fn assert_presenter_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<WindowsD3D11NativeFramePresenter>();
     }
 
     impl WindowsD3D11NativeFramePresenter {
@@ -289,12 +295,13 @@ mod windows_d3d11_presenter {
         }
 
         fn ensure_swap_chain(&mut self) -> PlayerRuntimeResult<()> {
-            let hwnd = self.attached_hwnd.ok_or_else(|| {
+            let hwnd_handle = self.attached_hwnd.ok_or_else(|| {
                 PlayerRuntimeError::new(
                     PlayerRuntimeErrorCode::BackendFailure,
                     "windows D3D11 native-frame presenter is not attached to a Win32 HWND",
                 )
             })?;
+            let hwnd = HWND(hwnd_handle as *mut c_void);
             let size = client_size(hwnd)?;
             if size.0 == 0 || size.1 == 0 {
                 return Err(PlayerRuntimeError::new(
@@ -593,7 +600,7 @@ mod windows_d3d11_presenter {
                     "windows D3D11 native-frame presenter requires a non-null Win32 HWND",
                 ));
             }
-            self.attached_hwnd = Some(HWND(target.handle as *mut c_void));
+            self.attached_hwnd = Some(target.handle);
             self.swap_chain = None;
             self.swap_chain_size = None;
             self.ensure_swap_chain()
