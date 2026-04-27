@@ -6,6 +6,20 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
 player-core = { path = "../../../core/player-core" }
 player-platform-desktop = { path = "../../common/player-platform-desktop" }
+player-plugin = { path = "../../../core/player-plugin" }
+player-plugin-loader = { path = "../../../core/player-plugin-loader" }
 player-runtime = { path = "../../../core/player-runtime" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }

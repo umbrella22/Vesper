@@ -1611,6 +1611,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-decoder-windows-d3d11-fixture"
+version = "0.1.0"
+dependencies = [
+ "player-plugin",
+ "serde",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
 name = "player-download"
 version = "0.1.0"
 dependencies = [
@@ -1741,9 +1751,14 @@ dependencies = [
 name = "player-platform-windows"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "player-backend-ffmpeg",
  "player-core",
  "player-platform-desktop",
+ "player-plugin",
+ "player-plugin-loader",
  "player-runtime",
+ "windows",
 ]
 
 [[package]]

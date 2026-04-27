@@ -188,6 +188,7 @@ pub enum PlayerVideoSurfaceKind {
     UiView,
     PlayerLayer,
     MetalLayer,
+    Win32Hwnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

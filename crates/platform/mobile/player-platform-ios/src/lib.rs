@@ -1700,10 +1700,10 @@ fn ios_surface_from_runtime_surface(
         PlayerVideoSurfaceKind::UiView => IosVideoSurfaceKind::UiView,
         PlayerVideoSurfaceKind::PlayerLayer => IosVideoSurfaceKind::PlayerLayer,
         PlayerVideoSurfaceKind::MetalLayer => IosVideoSurfaceKind::MetalLayer,
-        PlayerVideoSurfaceKind::NsView => {
+        PlayerVideoSurfaceKind::NsView | PlayerVideoSurfaceKind::Win32Hwnd => {
             return Err(PlayerRuntimeError::new(
                 PlayerRuntimeErrorCode::InvalidArgument,
-                "ios native backend does not support NsView as a video surface target",
+                "ios native backend only supports UIKit/AVPlayerLayer/MetalLayer video surface targets",
             ));
         }
     };
@@ -1733,13 +1733,15 @@ fn validate_ios_video_surface(
         PlayerVideoSurfaceKind::UiView
         | PlayerVideoSurfaceKind::PlayerLayer
         | PlayerVideoSurfaceKind::MetalLayer => Ok(()),
-        PlayerVideoSurfaceKind::NsView => Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::InvalidArgument,
-            format!(
-                "ios native backend does not support NsView as a video surface for {} playback",
-                best_video.codec
-            ),
-        )),
+        PlayerVideoSurfaceKind::NsView | PlayerVideoSurfaceKind::Win32Hwnd => {
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::InvalidArgument,
+                format!(
+                    "ios native backend only supports UIKit/AVPlayerLayer/MetalLayer video surfaces for {} playback",
+                    best_video.codec
+                ),
+            ))
+        }
     }
 }
 

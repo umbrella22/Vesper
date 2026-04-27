@@ -1187,13 +1187,15 @@ fn validate_macos_video_surface(
         PlayerVideoSurfaceKind::NsView
         | PlayerVideoSurfaceKind::PlayerLayer
         | PlayerVideoSurfaceKind::MetalLayer => Ok(()),
-        PlayerVideoSurfaceKind::UiView => Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::InvalidArgument,
-            format!(
-                "macos native backend does not support UiView as a video surface for {} playback",
-                best_video.codec
-            ),
-        )),
+        PlayerVideoSurfaceKind::UiView | PlayerVideoSurfaceKind::Win32Hwnd => {
+            Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::InvalidArgument,
+                format!(
+                    "macos native backend only supports NsView/AVPlayerLayer/MetalLayer video surfaces for {} playback",
+                    best_video.codec
+                ),
+            ))
+        }
     }
 }
 
