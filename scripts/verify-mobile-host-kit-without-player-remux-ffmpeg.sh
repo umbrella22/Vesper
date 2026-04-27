@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MODE="${1:-all}"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vesper-player-ffmpeg-verify.XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vesper-player-remux-ffmpeg-verify.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 ANDROID_AARS=(
@@ -16,8 +16,8 @@ has_ffmpeg_payload() {
   local search_root="$1"
   find "$search_root" -type f \
     \( \
-      -name 'libplayer_ffmpeg*.so' -o \
-      -name 'libplayer_ffmpeg*.dylib' -o \
+      -name 'libplayer_remux_ffmpeg*.so' -o \
+      -name 'libplayer_remux_ffmpeg*.dylib' -o \
       -name 'libavcodec*.so' -o \
       -name 'libavcodec*.dylib' -o \
       -name 'libavformat*.so' -o \
@@ -86,7 +86,7 @@ verify_ios() {
   fi
 
   while IFS= read -r framework_binary; do
-    if otool -L "$framework_binary" | grep -Eq 'player_ffmpeg|libav(codec|format|util|filter|device|swresample|swscale)'; then
+    if otool -L "$framework_binary" | grep -Eq 'player_remux_ffmpeg|libav(codec|format|util|filter|device|swresample|swscale)'; then
       echo "Unexpected FFmpeg linkage found in framework binary: $framework_binary" >&2
       otool -L "$framework_binary" >&2
       exit 1

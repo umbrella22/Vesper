@@ -11,11 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use player_core::{MediaSource, MediaSourceProtocol};
-use player_ffmpeg::FfmpegPostDownloadProcessor;
 use player_plugin::{
     CompletedContentFormat, CompletedDownloadInfo, DownloadMetadata, PostDownloadProcessor,
     ProcessorOutput, ProcessorProgress,
 };
+use player_remux_ffmpeg::FfmpegRemuxProcessor;
 use player_runtime::{
     DownloadAssetIndex, DownloadContentFormat, DownloadManager, DownloadManagerConfig,
     DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord,
@@ -173,7 +173,7 @@ pub struct DesktopDownloadController {
 
 impl DesktopDownloadController {
     pub fn new() -> Self {
-        Self::with_post_processor(Arc::new(FfmpegPostDownloadProcessor::new()))
+        Self::with_post_processor(Arc::new(FfmpegRemuxProcessor::new()))
     }
 
     fn with_post_processor(processor: Arc<dyn PostDownloadProcessor>) -> Self {
@@ -1693,19 +1693,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a built player-ffmpeg shared library artifact and local ffmpeg/ffprobe CLIs"]
+    #[ignore = "requires a built player-remux-ffmpeg shared library artifact and local ffmpeg/ffprobe CLIs"]
     fn desktop_export_remuxes_downloaded_hls_fixture_to_mp4_via_dynamic_plugin() {
         ensure_media_tool_available("ffmpeg");
         ensure_media_tool_available("ffprobe");
 
         let workspace = TestWorkspace::new("desktop-remux");
         let manifest_path = create_local_hls_fixture(workspace.path());
-        let plugin = LoadedDynamicPlugin::load(resolve_player_ffmpeg_plugin_path()).unwrap_or_else(
-            |error| panic!("failed to load player-ffmpeg plugin for desktop remux test: {error}"),
-        );
+        let plugin = LoadedDynamicPlugin::load(resolve_player_remux_ffmpeg_plugin_path())
+            .unwrap_or_else(|error| {
+                panic!("failed to load player-remux-ffmpeg plugin for desktop remux test: {error}")
+            });
         let processor = plugin
             .post_download_processor()
-            .expect("player-ffmpeg plugin should export a post-download processor");
+            .expect("player-remux-ffmpeg plugin should export a post-download processor");
 
         let mut controller = DesktopDownloadController::with_post_processor(processor);
         let asset_id = format!("desktop-remux-{}", unique_suffix());
@@ -1908,12 +1909,12 @@ mod tests {
         assert!(status.success(), "media tool `{binary}` should be callable");
     }
 
-    fn resolve_player_ffmpeg_plugin_path() -> PathBuf {
-        if let Some(path) = std::env::var_os("VESPER_PLAYER_FFMPEG_PLUGIN_PATH") {
+    fn resolve_player_remux_ffmpeg_plugin_path() -> PathBuf {
+        if let Some(path) = std::env::var_os("VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH") {
             let path = PathBuf::from(path);
             assert!(
                 path.is_file(),
-                "VESPER_PLAYER_FFMPEG_PLUGIN_PATH points to a missing file `{}`",
+                "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH points to a missing file `{}`",
                 path.display()
             );
             return path;
@@ -1933,7 +1934,7 @@ mod tests {
                 }
             })
             .unwrap_or_else(|| workspace_root.join("target"));
-        let library_name = shared_library_name("player_ffmpeg");
+        let library_name = shared_library_name("player_remux_ffmpeg");
         let candidates = [
             target_dir.join("debug").join(&library_name),
             target_dir.join("debug").join("deps").join(&library_name),
@@ -1946,7 +1947,7 @@ mod tests {
             .find(|path| path.is_file())
             .unwrap_or_else(|| {
                 panic!(
-                    "could not find `{library_name}` under `{}`; build it first with `cargo build -p player-ffmpeg` or set VESPER_PLAYER_FFMPEG_PLUGIN_PATH",
+                    "could not find `{library_name}` under `{}`; build it first with `cargo build -p player-remux-ffmpeg` or set VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH",
                     target_dir.display()
                 )
             })

@@ -2577,25 +2577,26 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a built player-ffmpeg shared library artifact"]
-    fn dynamic_loader_opens_real_player_ffmpeg_shared_library() {
-        let plugin_path = resolve_player_ffmpeg_plugin_path()
-            .unwrap_or_else(|error| panic!("failed to resolve player-ffmpeg plugin path: {error}"));
+    #[ignore = "requires a built player-remux-ffmpeg shared library artifact"]
+    fn dynamic_loader_opens_real_player_remux_ffmpeg_shared_library() {
+        let plugin_path = resolve_player_remux_ffmpeg_plugin_path().unwrap_or_else(|error| {
+            panic!("failed to resolve player-remux-ffmpeg plugin path: {error}")
+        });
 
         let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
             panic!(
-                "failed to load player-ffmpeg shared library `{}`: {error}",
+                "failed to load player-remux-ffmpeg shared library `{}`: {error}",
                 plugin_path.display()
             )
         });
 
-        assert_eq!(plugin.plugin_name(), "player-ffmpeg");
+        assert_eq!(plugin.plugin_name(), "player-remux-ffmpeg");
         assert!(plugin.pipeline_event_hook().is_none());
 
         let processor = plugin
             .post_download_processor()
-            .expect("player-ffmpeg should export a post-download processor");
-        assert_eq!(processor.name(), "player-ffmpeg");
+            .expect("player-remux-ffmpeg should export a post-download processor");
+        assert_eq!(processor.name(), "player-remux-ffmpeg");
         assert_eq!(
             processor.capabilities(),
             ProcessorCapabilities {
@@ -2622,7 +2623,7 @@ mod tests {
                 Path::new("/tmp/output.mp4"),
                 &progress,
             )
-            .expect("single-file input should be skipped by player-ffmpeg");
+            .expect("single-file input should be skipped by player-remux-ffmpeg");
 
         assert_eq!(output, ProcessorOutput::Skipped);
         assert!(progress.ratios().is_empty());
@@ -3241,19 +3242,19 @@ mod tests {
         let _ = unsafe { payload.into_vec() };
     }
 
-    fn resolve_player_ffmpeg_plugin_path() -> Result<PathBuf, String> {
-        if let Some(path) = env::var_os("VESPER_PLAYER_FFMPEG_PLUGIN_PATH") {
+    fn resolve_player_remux_ffmpeg_plugin_path() -> Result<PathBuf, String> {
+        if let Some(path) = env::var_os("VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH") {
             let path = PathBuf::from(path);
             if path.is_file() {
                 return Ok(path);
             }
             return Err(format!(
-                "environment variable VESPER_PLAYER_FFMPEG_PLUGIN_PATH points to missing file `{}`",
+                "environment variable VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH points to missing file `{}`",
                 path.display()
             ));
         }
 
-        resolve_plugin_path("player_ffmpeg")
+        resolve_plugin_path("player_remux_ffmpeg")
     }
 
     fn resolve_decoder_fixture_plugin_path() -> Result<PathBuf, String> {

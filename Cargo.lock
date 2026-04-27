@@ -154,11 +154,11 @@ dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
  "player-core",
- "player-ffmpeg",
  "player-host-desktop",
  "player-platform-macos",
  "player-plugin",
  "player-plugin-loader",
+ "player-remux-ffmpeg",
  "player-render-wgpu",
  "player-runtime",
  "pollster",
@@ -1593,6 +1593,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-decoder-d3d11"
+version = "0.1.0"
+dependencies = [
+ "player-plugin",
+ "serde",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
 name = "player-decoder-fixture"
 version = "0.1.0"
 dependencies = [
@@ -1608,16 +1618,6 @@ dependencies = [
  "player-plugin",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "player-decoder-windows-d3d11-fixture"
-version = "0.1.0"
-dependencies = [
- "player-plugin",
- "serde",
- "serde_json",
- "windows",
 ]
 
 [[package]]
@@ -1649,17 +1649,6 @@ dependencies = [
  "player-plugin",
  "player-policy-resolver",
  "player-runtime",
-]
-
-[[package]]
-name = "player-ffmpeg"
-version = "0.1.0"
-dependencies = [
- "ffmpeg-next",
- "player-plugin",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1802,6 +1791,17 @@ version = "0.1.0"
 dependencies = [
  "player-core",
  "player-download",
+]
+
+[[package]]
+name = "player-remux-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
+ "player-plugin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

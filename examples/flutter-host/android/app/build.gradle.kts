@@ -94,16 +94,16 @@ flutter {
     source = "../.."
 }
 
-val buildPlayerFfmpegAndroidPlugin by tasks.registering(Exec::class) {
-    description = "Builds the Android player-ffmpeg plugin libraries used by the Flutter host."
+val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
+    description = "Builds the Android player-remux-ffmpeg plugin libraries used by the Flutter host."
     group = "vesper"
 
-    val scriptFile = workspaceRootDir.file("scripts/build-android-player-ffmpeg-plugin.sh")
+    val scriptFile = workspaceRootDir.file("scripts/build-android-player-remux-ffmpeg-plugin.sh")
 
     inputs.file(scriptFile)
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
-    inputs.dir(workspaceRootDir.dir("crates/extension/player-ffmpeg"))
+    inputs.dir(workspaceRootDir.dir("crates/extension/player-remux-ffmpeg"))
     inputs.dir(workspaceRootDir.dir("crates/core/player-plugin"))
     inputs.dir(workspaceRootDir.dir("third_party/ffmpeg/android"))
     inputs.property("abis", configuredAndroidAbis)
@@ -123,5 +123,5 @@ val buildPlayerFfmpegAndroidPlugin by tasks.registering(Exec::class) {
 }
 
 tasks.named("preBuild").configure {
-    dependsOn(buildPlayerFfmpegAndroidPlugin)
+    dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
 }

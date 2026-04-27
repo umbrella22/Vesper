@@ -322,9 +322,9 @@ Notes:
   `DASH` is still reported as unsupported on the AVPlayer backend.
 - Pause, resume, and remove operations should be keyed by `taskId`, not by URL.
 
-### Optional `.mp4` export through `player-ffmpeg`
+### Optional `.mp4` export through `player-remux-ffmpeg`
 
-`player-ffmpeg` is an optional dynamic plugin that remuxes downloaded HLS or
+`player-remux-ffmpeg` is an optional dynamic plugin that remuxes downloaded HLS or
 DASH assets into `.mp4`. The Flutter packages do not bundle it automatically.
 Export becomes available only after the host app packages the plugin library
 and passes its absolute path through
@@ -332,7 +332,7 @@ and passes its absolute path through
 
 ```dart
 final pluginLibraryPaths = <String>[
-  '/absolute/path/to/libplayer_ffmpeg.so',
+  '/absolute/path/to/libplayer_remux_ffmpeg.so',
 ];
 
 final manager = await VesperDownloadManager.create(
@@ -354,7 +354,7 @@ await manager.exportTaskOutput(taskId, '/path/to/output.mp4');
 Key points:
 
 - `pluginLibraryPaths` must point to an already packaged and accessible
-  `libplayer_ffmpeg.so` or `libplayer_ffmpeg.dylib`.
+  `libplayer_remux_ffmpeg.so` or `libplayer_remux_ffmpeg.dylib`.
 - `exportTaskOutput(...)` triggers the plugin and reports progress through
   `VesperDownloadExportProgressEvent`.
 - The mobile examples in this repository already show the full host wiring:

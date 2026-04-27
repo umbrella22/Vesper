@@ -104,7 +104,7 @@ class MainActivity : FlutterActivity() {
   }
 
   private fun bundledDownloadPluginLibraryPaths(): List<String> {
-    val libraryName = "player_ffmpeg"
+    val libraryName = "player_remux_ffmpeg"
     val resolvedPath =
       (classLoader as? BaseDexClassLoader)?.findLibrary(libraryName)?.takeIf { path ->
         path.isNotBlank() && File(path).isFile

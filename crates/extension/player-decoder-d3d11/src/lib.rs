@@ -10,7 +10,7 @@ use player_plugin::{
     VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
 
-static PLUGIN_NAME: &[u8] = b"player-decoder-windows-d3d11-fixture\0";
+static PLUGIN_NAME: &[u8] = b"player-decoder-d3d11\0";
 const HANDLE_KIND_D3D11_TEXTURE_2D: u32 = 6;
 const DEFAULT_WIDTH: u32 = 16;
 const DEFAULT_HEIGHT: u32 = 16;
@@ -28,7 +28,7 @@ struct PendingFrame {
     data_len: usize,
 }
 
-struct D3D11FixtureSession {
+struct D3D11DecoderSession {
     codec: String,
     width: u32,
     height: u32,
@@ -39,7 +39,7 @@ struct D3D11FixtureSession {
     color_seed: u8,
 }
 
-impl D3D11FixtureSession {
+impl D3D11DecoderSession {
     fn open(config: DecoderSessionConfig) -> Result<Self, DecoderError> {
         if !decoder_capabilities().supports_codec(&config.codec, config.media_kind) {
             return Err(DecoderError::UnsupportedCodec {
@@ -126,7 +126,7 @@ impl D3D11FixtureSession {
     ) -> Result<(), DecoderError> {
         if handle_kind != HANDLE_KIND_D3D11_TEXTURE_2D || handle == 0 {
             return Err(DecoderError::abi_violation(
-                "windows D3D11 fixture release received an invalid texture handle",
+                "D3D11 decoder release received an invalid texture handle",
             ));
         }
         self.inner.release_frame_texture(handle)
@@ -185,11 +185,11 @@ unsafe extern "C" fn decoder_open_session_json(
         Err(error) => return open_error(error),
     };
 
-    match D3D11FixtureSession::open(config) {
+    match D3D11DecoderSession::open(config) {
         Ok(session) => {
             let info = DecoderSessionInfo {
-                decoder_name: Some("player-decoder-windows-d3d11-fixture".to_owned()),
-                selected_hardware_backend: Some("windows-d3d11-fixture".to_owned()),
+                decoder_name: Some("player-decoder-d3d11".to_owned()),
+                selected_hardware_backend: Some("D3D11".to_owned()),
                 output_format: Some(DecoderFrameFormat::Bgra8888),
             };
             open_success(Box::into_raw(Box::new(session)).cast::<c_void>(), &info)
@@ -206,7 +206,7 @@ unsafe extern "C" fn decoder_send_packet(
     packet_data: *const u8,
     packet_data_len: usize,
 ) -> VesperPluginProcessResult {
-    let Some(session) = (unsafe { session.cast::<D3D11FixtureSession>().as_mut() }) else {
+    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
         return process_error(DecoderError::NotConfigured);
     };
     let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
@@ -226,7 +226,7 @@ unsafe extern "C" fn decoder_receive_native_frame(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperDecoderReceiveNativeFrameResult {
-    let Some(session) = (unsafe { session.cast::<D3D11FixtureSession>().as_mut() }) else {
+    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
         return native_frame_error(DecoderError::NotConfigured);
     };
 
@@ -242,7 +242,7 @@ unsafe extern "C" fn decoder_release_native_frame(
     handle_kind: u32,
     handle: usize,
 ) -> VesperPluginProcessResult {
-    let Some(session) = (unsafe { session.cast::<D3D11FixtureSession>().as_mut() }) else {
+    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
         return process_error(DecoderError::NotConfigured);
     };
 
@@ -256,7 +256,7 @@ unsafe extern "C" fn decoder_flush_session(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
-    let Some(session) = (unsafe { session.cast::<D3D11FixtureSession>().as_mut() }) else {
+    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
         return process_error(DecoderError::NotConfigured);
     };
     session.flush();
@@ -270,7 +270,7 @@ unsafe extern "C" fn decoder_close_session(
     if session.is_null() {
         return process_error(DecoderError::NotConfigured);
     }
-    let _ = unsafe { Box::from_raw(session.cast::<D3D11FixtureSession>()) };
+    let _ = unsafe { Box::from_raw(session.cast::<D3D11DecoderSession>()) };
     process_success(&DecoderOperationStatus { completed: true })
 }
 
@@ -412,7 +412,7 @@ mod platform {
                     .map(|device| device.clone())
                     .ok_or_else(|| {
                         DecoderError::abi_violation(
-                            "windows D3D11 fixture received an invalid D3D11Device handle",
+                            "D3D11 decoder received an invalid D3D11Device handle",
                         )
                     })?
             };
@@ -430,10 +430,10 @@ mod platform {
             data_len: usize,
             key_frame: bool,
         ) -> Result<usize, DecoderError> {
-            let pixels = bgra_fixture_pixels(width, height, color_seed, data_len, key_frame)?;
-            let pitch = width.checked_mul(4).ok_or_else(|| {
-                DecoderError::internal("windows D3D11 fixture texture pitch overflowed")
-            })?;
+            let pixels = bgra_test_pattern_pixels(width, height, color_seed, data_len, key_frame)?;
+            let pitch = width
+                .checked_mul(4)
+                .ok_or_else(|| DecoderError::internal("D3D11 decoder texture pitch overflowed"))?;
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: width,
                 Height: height,
@@ -476,13 +476,13 @@ mod platform {
                 .map(|_| ())
                 .ok_or_else(|| {
                     DecoderError::abi_violation(
-                        "windows D3D11 fixture release received an unknown texture handle",
+                        "D3D11 decoder release received an unknown texture handle",
                     )
                 })
         }
     }
 
-    fn bgra_fixture_pixels(
+    fn bgra_test_pattern_pixels(
         width: u32,
         height: u32,
         color_seed: u8,
@@ -493,9 +493,7 @@ mod platform {
             .checked_mul(height)
             .and_then(|pixels| pixels.checked_mul(4))
             .map(|len| len as usize)
-            .ok_or_else(|| {
-                DecoderError::internal("windows D3D11 fixture texture size overflowed")
-            })?;
+            .ok_or_else(|| DecoderError::internal("D3D11 decoder texture size overflowed"))?;
         let mut pixels = vec![0; len];
         let key_bias = if key_frame { 64 } else { 0 };
         let packet_bias = (data_len as u8).wrapping_mul(3);

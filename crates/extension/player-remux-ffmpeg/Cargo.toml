@@ -1,5 +1,5 @@
 [package]
-name = "player-decoder-windows-d3d11-fixture"
+name = "player-remux-ffmpeg"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,12 +9,8 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ffmpeg-next.workspace = true
 player-plugin = { path = "../../core/player-plugin" }
 serde.workspace = true
 serde_json.workspace = true
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62.2", features = [
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Dxgi_Common",
-] }
+thiserror.workspace = true

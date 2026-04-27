@@ -205,9 +205,9 @@ jobs:
       - name: Example host check
         run: cargo check -p basic-player -p player-ffi
 
-      - name: Verify desktop player-ffmpeg remux path
+      - name: Verify desktop player-remux-ffmpeg remux path
         shell: bash
-        run: ./scripts/verify-desktop-player-ffmpeg-remux.sh
+        run: ./scripts/verify-desktop-player-remux-ffmpeg.sh
 
       - name: Build Vesper desktop demo
         if: github.event_name == 'workflow_dispatch'

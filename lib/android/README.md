@@ -44,7 +44,7 @@ Current Android download package names:
 Android packaging in this repository is intentionally `arm64-v8a`-only:
 
 - Android `AAR` release assets ship `arm64-v8a` only
-- generated JNI libraries and optional player-ffmpeg plugin artifacts ship `arm64-v8a` only
+- generated JNI libraries and optional player-remux-ffmpeg plugin artifacts ship `arm64-v8a` only
 - use an arm64 Android emulator if emulator-side validation is needed
 - do not reintroduce `x86` or `x86_64` Android ABIs in packaging scripts, CI inputs, or release assets
 

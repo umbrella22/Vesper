@@ -72,11 +72,11 @@ points instead of pretending that DASH is supported.
 - View embedding: `UiKitView` with view type `io.github.ikaros.vesper_player/platform_view`
 - Rust runtime: bridged through the `player-ffi-resolver` XCFramework so defaults, timeline, resilience, and playlist behavior stay aligned with the shared runtime
 
-## Optional `player-ffmpeg` Remux Plugin
+## Optional `player-remux-ffmpeg` Remux Plugin
 
 If the host app wants to export downloaded HLS or DASH content to `.mp4`, it
-must embed the `player-ffmpeg` dynamic library into the app bundle and pass the
-real `libplayer_ffmpeg.dylib` path through
+must embed the `player-remux-ffmpeg` dynamic library into the app bundle and pass the
+real `libplayer_remux_ffmpeg.dylib` path through
 `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 Typical setup:
@@ -84,12 +84,12 @@ Typical setup:
 1. Add an Xcode Run Script phase to the app target:
 
    ```sh
-   /bin/bash "$SRCROOT/../../../scripts/embed-ios-player-ffmpeg-plugin.sh" "vesper_player_ios.framework"
+   /bin/bash "$SRCROOT/../../../scripts/embed-ios-player-remux-ffmpeg-plugin.sh" "vesper_player_ios.framework"
    ```
 
    For the native iOS host kit, replace the argument with `VesperPlayerKit.framework`.
 
-2. Resolve `libplayer_ffmpeg.dylib` at runtime from `Bundle.main.privateFrameworksPath`
+2. Resolve `libplayer_remux_ffmpeg.dylib` at runtime from `Bundle.main.privateFrameworksPath`
    or the app `Frameworks` directory
 3. Pass the resolved absolute path into the download manager configuration
 

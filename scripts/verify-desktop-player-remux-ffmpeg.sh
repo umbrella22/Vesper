@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="debug"
 MODE="all"
-LIBRARY_PATH_OVERRIDE="${VESPER_PLAYER_FFMPEG_PLUGIN_PATH:-}"
+LIBRARY_PATH_OVERRIDE="${VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH:-}"
 
 usage() {
   cat <<EOF >&2
@@ -36,13 +36,13 @@ done
 shared_library_name() {
   case "$(uname -s)" in
     Darwin)
-      echo "libplayer_ffmpeg.dylib"
+      echo "libplayer_remux_ffmpeg.dylib"
       ;;
     Linux)
-      echo "libplayer_ffmpeg.so"
+      echo "libplayer_remux_ffmpeg.so"
       ;;
     MINGW*|MSYS*|CYGWIN*)
-      echo "player_ffmpeg.dll"
+      echo "player_remux_ffmpeg.dll"
       ;;
     *)
       echo "Unsupported platform: $(uname -s)" >&2
@@ -99,7 +99,7 @@ resolve_plugin_path() {
 
   if [[ -n "$LIBRARY_PATH_OVERRIDE" ]]; then
     if [[ ! -f "$LIBRARY_PATH_OVERRIDE" ]]; then
-      echo "VESPER_PLAYER_FFMPEG_PLUGIN_PATH points to a missing file: $LIBRARY_PATH_OVERRIDE" >&2
+      echo "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH points to a missing file: $LIBRARY_PATH_OVERRIDE" >&2
       exit 1
     fi
     printf '%s\n' "$LIBRARY_PATH_OVERRIDE"
@@ -119,7 +119,7 @@ resolve_plugin_path() {
     fi
   done
 
-  echo "Could not find $library_name under $target_dir; build player-ffmpeg first or set VESPER_PLAYER_FFMPEG_PLUGIN_PATH." >&2
+  echo "Could not find $library_name under $target_dir; build player-remux-ffmpeg first or set VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH." >&2
   exit 1
 }
 
@@ -129,16 +129,16 @@ build_plugin() {
   fi
 
   if [[ "$PROFILE" == "release" ]]; then
-    cargo build -p player-ffmpeg --release
+    cargo build -p player-remux-ffmpeg --release
   else
-    cargo build -p player-ffmpeg
+    cargo build -p player-remux-ffmpeg
   fi
 }
 
 run_loader_test() {
   cargo test \
     -p player-plugin-loader \
-    tests::dynamic_loader_opens_real_player_ffmpeg_shared_library \
+    tests::dynamic_loader_opens_real_player_remux_ffmpeg_shared_library \
     -- \
     --ignored \
     --exact
@@ -175,9 +175,9 @@ main() {
 
   build_plugin
   plugin_path="$(resolve_plugin_path "$library_name" "$target_dir")"
-  export VESPER_PLAYER_FFMPEG_PLUGIN_PATH="$(normalize_runtime_path "$plugin_path")"
+  export VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH="$(normalize_runtime_path "$plugin_path")"
 
-  echo "Using player-ffmpeg plugin: $VESPER_PLAYER_FFMPEG_PLUGIN_PATH"
+  echo "Using player-remux-ffmpeg plugin: $VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH"
 
   case "$MODE" in
     loader)

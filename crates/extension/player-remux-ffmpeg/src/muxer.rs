@@ -13,17 +13,17 @@ use player_plugin::{
 use crate::error::FfmpegProcessorError;
 
 #[derive(Debug, Default)]
-pub struct FfmpegPostDownloadProcessor;
+pub struct FfmpegRemuxProcessor;
 
-impl FfmpegPostDownloadProcessor {
+impl FfmpegRemuxProcessor {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl PostDownloadProcessor for FfmpegPostDownloadProcessor {
+impl PostDownloadProcessor for FfmpegRemuxProcessor {
     fn name(&self) -> &str {
-        "player-ffmpeg"
+        "player-remux-ffmpeg"
     }
 
     fn supported_input_formats(&self) -> &[ContentFormatKind] {
@@ -263,7 +263,7 @@ impl IntoProcessorError for FfmpegProcessorError {
 
 #[cfg(test)]
 mod tests {
-    use super::FfmpegPostDownloadProcessor;
+    use super::FfmpegRemuxProcessor;
     use player_plugin::{
         CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DownloadMetadata,
         OutputFormat, PostDownloadProcessor, ProcessorOutput, ProcessorProgress,
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn ffmpeg_processor_declares_expected_capabilities() {
-        let processor = FfmpegPostDownloadProcessor::new();
+        let processor = FfmpegRemuxProcessor::new();
 
         assert_eq!(
             processor.supported_input_formats(),
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn ffmpeg_processor_skips_single_file_inputs() {
-        let processor = FfmpegPostDownloadProcessor::new();
+        let processor = FfmpegRemuxProcessor::new();
         let progress = RecordingProgress::default();
 
         let result = processor

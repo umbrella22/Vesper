@@ -10,7 +10,7 @@ publish = false
 anyhow.workspace = true
 pollster.workspace = true
 player-core = { path = "../../crates/core/player-core" }
-player-ffmpeg = { path = "../../crates/extension/player-ffmpeg" }
+player-remux-ffmpeg = { path = "../../crates/extension/player-remux-ffmpeg" }
 player-backend-ffmpeg = { path = "../../crates/backend/player-backend-ffmpeg" }
 player-host-desktop = { path = "../../crates/platform/desktop/player-host-desktop" }
 player-plugin = { path = "../../crates/core/player-plugin" }

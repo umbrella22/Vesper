@@ -500,9 +500,9 @@ func bundledDownloadPluginLibraryPaths() -> [String] {
     let fileManager = FileManager.default
     let frameworksPath = Bundle.main.privateFrameworksPath ?? "\(Bundle.main.bundlePath)/Frameworks"
     let candidates = [
-        "\(frameworksPath)/VesperPlayerKit.framework/libplayer_ffmpeg.dylib",
-        "\(frameworksPath)/libplayer_ffmpeg.dylib",
-        "\(Bundle.main.bundlePath)/libplayer_ffmpeg.dylib",
+        "\(frameworksPath)/VesperPlayerKit.framework/libplayer_remux_ffmpeg.dylib",
+        "\(frameworksPath)/libplayer_remux_ffmpeg.dylib",
+        "\(Bundle.main.bundlePath)/libplayer_remux_ffmpeg.dylib",
     ]
 
     return candidates.compactMap { candidate in

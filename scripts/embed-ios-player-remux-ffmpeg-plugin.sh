@@ -68,17 +68,17 @@ case "${PLATFORM_NAME:-}" in
     fi
     ;;
   *)
-    echo "Skipping player-ffmpeg embed for unsupported platform: ${PLATFORM_NAME:-unknown}" >&2
+    echo "Skipping player-remux-ffmpeg embed for unsupported platform: ${PLATFORM_NAME:-unknown}" >&2
     exit 0
     ;;
 esac
 
-OUTPUT_DIR="${DERIVED_FILE_DIR:-${TARGET_TEMP_DIR:-/tmp}}/vesper-ios-player-ffmpeg"
-"$ROOT_DIR/scripts/build-ios-player-ffmpeg-plugin.sh" "$OUTPUT_DIR" "$PROFILE" "${selected_slices[@]}"
+OUTPUT_DIR="${DERIVED_FILE_DIR:-${TARGET_TEMP_DIR:-/tmp}}/vesper-ios-player-remux-ffmpeg"
+"$ROOT_DIR/scripts/build-ios-player-remux-ffmpeg-plugin.sh" "$OUTPUT_DIR" "$PROFILE" "${selected_slices[@]}"
 
 SOURCE_DIR="$OUTPUT_DIR/$source_subdir"
 if [[ ! -d "$SOURCE_DIR" ]]; then
-  echo "Expected player-ffmpeg output directory was not found: $SOURCE_DIR" >&2
+  echo "Expected player-remux-ffmpeg output directory was not found: $SOURCE_DIR" >&2
   exit 1
 fi
 
@@ -87,7 +87,7 @@ while IFS= read -r existing_binary; do
 done < <(
   find "$DESTINATION_DIRECTORY" -maxdepth 1 -type f \
     \( \
-      -name 'libplayer_ffmpeg*.dylib*' -o \
+      -name 'libplayer_remux_ffmpeg*.dylib*' -o \
       -name 'libavcodec*.dylib*' -o \
       -name 'libavformat*.dylib*' -o \
       -name 'libavutil*.dylib*' -o \
@@ -115,4 +115,4 @@ if [[ "${CODE_SIGNING_ALLOWED:-NO}" != "NO" ]]; then
   fi
 fi
 
-echo "Embedded player-ffmpeg plugin dylibs into $DESTINATION_DIRECTORY"
+echo "Embedded player-remux-ffmpeg plugin dylibs into $DESTINATION_DIRECTORY"

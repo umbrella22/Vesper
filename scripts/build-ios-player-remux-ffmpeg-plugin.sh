@@ -22,7 +22,7 @@ DEFAULT_SLICES=(
   "ios-arm64"
   "ios-simulator-arm64"
 )
-# Apple 侧 player-ffmpeg plugin 分发统一收敛为 arm64-only。
+# Apple 侧 player-remux-ffmpeg plugin 分发统一收敛为 arm64-only。
 
 resolve_selected_slices() {
   local -a resolved=()
@@ -35,7 +35,7 @@ resolve_selected_slices() {
   fi
 
   if [[ ${#resolved[@]} -eq 0 ]]; then
-    echo "No iOS player-ffmpeg slices were selected." >&2
+    echo "No iOS player-remux-ffmpeg slices were selected." >&2
     exit 1
   fi
 
@@ -44,7 +44,7 @@ resolve_selected_slices() {
       ios-arm64|ios-simulator-arm64)
         ;;
       *)
-        echo "Unsupported iOS player-ffmpeg slice: $token" >&2
+        echo "Unsupported iOS player-remux-ffmpeg slice: $token" >&2
         echo "Supported slices: ios-arm64, ios-simulator-arm64" >&2
         exit 1
         ;;
@@ -85,10 +85,10 @@ slice_prebuilt_root() {
 slice_output_path() {
   case "$1" in
     ios-arm64)
-      echo "$OUTPUT_DIR/iphoneos/libplayer_ffmpeg.dylib"
+      echo "$OUTPUT_DIR/iphoneos/libplayer_remux_ffmpeg.dylib"
       ;;
     ios-simulator-arm64)
-      echo "$OUTPUT_DIR/iphonesimulator/$(slice_rust_target "$1")/libplayer_ffmpeg.dylib"
+      echo "$OUTPUT_DIR/iphonesimulator/$(slice_rust_target "$1")/libplayer_remux_ffmpeg.dylib"
       ;;
     *)
       return 1
@@ -151,7 +151,7 @@ prepare_runtime_directory() {
 
 prepare_plugin_binary() {
   local binary_path="$1"
-  install_name_tool -id "@rpath/libplayer_ffmpeg.dylib" "$binary_path"
+  install_name_tool -id "@rpath/libplayer_remux_ffmpeg.dylib" "$binary_path"
   ensure_loader_rpath "$binary_path"
 }
 
@@ -209,12 +209,12 @@ for slice in "${selected_slices[@]}"; do
   ffmpeg_dir="$(slice_prebuilt_root "$slice")"
   ffmpeg_libdir="$(slice_prebuilt_libdir "$slice")"
   output_path="$(slice_output_path "$slice")"
-  cargo_target_dir="$ROOT_DIR/target/player-ffmpeg-ios/$(path_cache_key "$ffmpeg_dir")"
+  cargo_target_dir="$ROOT_DIR/target/player-remux-ffmpeg-ios/$(path_cache_key "$ffmpeg_dir")"
   cargo_command=(
     cargo
     build
     --target "$rust_target"
-    -p player-ffmpeg
+    -p player-remux-ffmpeg
   )
 
   if [[ ${#BUILD_FLAGS[@]} -gt 0 ]]; then
@@ -228,7 +228,7 @@ for slice in "${selected_slices[@]}"; do
     CARGO_TARGET_DIR="$cargo_target_dir" \
     "${cargo_command[@]}"
 
-  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libplayer_ffmpeg.dylib" "$output_path"
+  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libplayer_remux_ffmpeg.dylib" "$output_path"
   if compgen -G "$ffmpeg_dir/lib/$ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
     cp -RP "$ffmpeg_dir"/lib/"$ffmpeg_libdir"/lib*.dylib* "$(dirname "$output_path")/"
   fi
@@ -249,7 +249,7 @@ if [[ ${#simulator_slices[@]} -gt 0 ]]; then
   mkdir -p "$OUTPUT_DIR/iphonesimulator"
   cp \
     "$(slice_output_path "${simulator_slices[0]}")" \
-    "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
+    "$OUTPUT_DIR/iphonesimulator/libplayer_remux_ffmpeg.dylib"
   simulator_ffmpeg_dir="$(slice_prebuilt_root "${simulator_slices[0]}")"
   simulator_ffmpeg_libdir="$(slice_prebuilt_libdir "${simulator_slices[0]}")"
   if compgen -G "$simulator_ffmpeg_dir/lib/$simulator_ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
@@ -258,11 +258,11 @@ if [[ ${#simulator_slices[@]} -gt 0 ]]; then
       "$OUTPUT_DIR/iphonesimulator/"
   fi
   prepare_runtime_directory "$OUTPUT_DIR/iphonesimulator"
-  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_ffmpeg.dylib"
+  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_remux_ffmpeg.dylib"
 fi
 
 echo
-echo "Built iOS player-ffmpeg plugin libraries into:"
+echo "Built iOS player-remux-ffmpeg plugin libraries into:"
 echo "  $OUTPUT_DIR"
 echo "Selected slices:"
 for slice in "${selected_slices[@]}"; do

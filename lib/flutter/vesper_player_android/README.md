@@ -33,11 +33,11 @@ directly.
 - Runtime observation: also exposes `controller.snapshot.videoVariantObservation`, derived from ExoPlayer's active `videoFormat` bitrate and rendered size
 - Rust runtime: bridged through JNI so defaults, timeline, resilience, and playlist semantics stay aligned with the rest of the SDK
 
-## Optional `player-ffmpeg` Remux Plugin
+## Optional `player-remux-ffmpeg` Remux Plugin
 
 To export downloaded HLS or DASH assets as `.mp4`, the host app must package
-the optional `player-ffmpeg` plugin and pass the absolute path to
-`libplayer_ffmpeg.so` through
+the optional `player-remux-ffmpeg` plugin and pass the absolute path to
+`libplayer_remux_ffmpeg.so` through
 `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 Typical setup:
@@ -45,11 +45,11 @@ Typical setup:
 1. Build the Android plugin artifact:
 
    ```sh
-   ./scripts/build-android-player-ffmpeg-plugin.sh <output-dir> [debug|release] [abi...]
+   ./scripts/build-android-player-remux-ffmpeg-plugin.sh <output-dir> [debug|release] [abi...]
    ```
 
 2. Add the output directory to `sourceSets.main.jniLibs` in the host app
-3. Resolve `libplayer_ffmpeg.so` from `applicationInfo.nativeLibraryDir` at runtime
+3. Resolve `libplayer_remux_ffmpeg.so` from `applicationInfo.nativeLibraryDir` at runtime
 4. Pass the resolved absolute path into the download manager configuration
 
 Android FFmpeg prebuilts are generated on demand. The repository only builds

@@ -77,7 +77,7 @@ internal class PlayerHostViewModel(
     }
 
     private fun bundledDownloadPluginLibraryPaths(application: Application): List<String> {
-        val libraryName = "player_ffmpeg"
+        val libraryName = "player_remux_ffmpeg"
         val resolvedPath =
             (
                 application.classLoader as? BaseDexClassLoader

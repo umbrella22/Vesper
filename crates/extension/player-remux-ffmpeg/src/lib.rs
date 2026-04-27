@@ -9,9 +9,9 @@ use player_plugin::{
     VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
 };
 
-pub use muxer::FfmpegPostDownloadProcessor;
+pub use muxer::FfmpegRemuxProcessor;
 
-static PLUGIN_NAME: &[u8] = b"player-ffmpeg\0";
+static PLUGIN_NAME: &[u8] = b"player-remux-ffmpeg\0";
 
 struct PluginBundle {
     api: VesperPostDownloadProcessorApi,
@@ -20,7 +20,7 @@ struct PluginBundle {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
-    let processor = Box::new(FfmpegPostDownloadProcessor::new());
+    let processor = Box::new(FfmpegRemuxProcessor::new());
     let processor = Box::into_raw(processor);
 
     let mut bundle = Box::new(PluginBundle {
@@ -49,7 +49,7 @@ unsafe extern "C" fn destroy_processor(context: *mut c_void) {
         return;
     }
 
-    let processor = context.cast::<FfmpegPostDownloadProcessor>();
+    let processor = context.cast::<FfmpegRemuxProcessor>();
     let _ = unsafe { Box::from_raw(processor) };
 }
 
@@ -58,7 +58,7 @@ unsafe extern "C" fn processor_name(_context: *mut c_void) -> *const c_char {
 }
 
 unsafe extern "C" fn processor_capabilities_json(context: *mut c_void) -> VesperPluginBytes {
-    let processor = unsafe { &*(context.cast::<FfmpegPostDownloadProcessor>()) };
+    let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
     serialize_payload(&processor.capabilities())
 }
 
@@ -73,7 +73,7 @@ unsafe extern "C" fn processor_process_json(
     output_path: *const c_char,
     progress: VesperPluginProgressCallbacks,
 ) -> VesperPluginProcessResult {
-    let processor = unsafe { &*(context.cast::<FfmpegPostDownloadProcessor>()) };
+    let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
     let result = decode_input(input_json, input_json_len).and_then(|input| {
         if output_path.is_null() {
             return Err(ProcessorError::AbiViolation(

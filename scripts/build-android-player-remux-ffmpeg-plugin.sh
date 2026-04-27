@@ -23,7 +23,7 @@ fi
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
 ANDROID_NDK_VERSION="29.0.14206865"
 ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
-# Android 侧 player-ffmpeg plugin 分发统一收敛为 arm64-only。
+# Android 侧 player-remux-ffmpeg plugin 分发统一收敛为 arm64-only。
 DEFAULT_ABIS=(
   "arm64-v8a"
 )
@@ -84,7 +84,7 @@ done
 installed_targets="$(rustup target list --installed)"
 
 if ! command -v cargo-ndk >/dev/null 2>&1; then
-  echo "cargo-ndk is required to build Android player-ffmpeg plugins." >&2
+  echo "cargo-ndk is required to build Android player-remux-ffmpeg plugins." >&2
   echo "Install it with: cargo install cargo-ndk" >&2
   exit 1
 fi
@@ -176,7 +176,7 @@ for abi in "${selected_abis[@]}"; do
         -o "$OUTPUT_DIR" \
         -t "$abi" \
         build \
-        -p player-ffmpeg \
+        -p player-remux-ffmpeg \
         --release
   else
     env \
@@ -186,7 +186,7 @@ for abi in "${selected_abis[@]}"; do
         -o "$OUTPUT_DIR" \
         -t "$abi" \
         build \
-        -p player-ffmpeg
+        -p player-remux-ffmpeg
   fi
 
   mkdir -p "$OUTPUT_DIR/$abi"
@@ -203,7 +203,7 @@ for abi in "${selected_abis[@]}"; do
 done
 
 echo
-echo "Built Android player-ffmpeg plugin libraries into:"
+echo "Built Android player-remux-ffmpeg plugin libraries into:"
 echo "  $OUTPUT_DIR"
 echo "Selected Android ABIs:"
 for abi in "${selected_abis[@]}"; do
