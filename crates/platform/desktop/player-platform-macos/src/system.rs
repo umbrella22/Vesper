@@ -1,3 +1,5 @@
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_float, c_uchar, c_void};
 use std::sync::{Arc, OnceLock};

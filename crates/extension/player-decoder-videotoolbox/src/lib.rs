@@ -1,3 +1,5 @@
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+
 use std::ffi::{c_char, c_void};
 
 use player_plugin::{
