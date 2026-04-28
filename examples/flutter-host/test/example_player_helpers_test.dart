@@ -31,6 +31,7 @@ void main() {
 
     expect(liveButtonLabel(timeline), '直播 -00:05');
     expect(timelineSummary(timeline, null), '00:45 / 00:50');
+    expect(compactTimelineSummary(timeline, null), '00:45/00:50');
   });
 
   test('live edge tolerance keeps live badge active', () {
@@ -44,6 +45,7 @@ void main() {
 
     expect(liveButtonLabel(timeline), '直播');
     expect(timelineSummary(timeline, null), '直播 • 实时点 02:00');
+    expect(compactTimelineSummary(timeline, null), '直播');
   });
 
   test('pending ratio is clamped to seekable range', () {
@@ -57,6 +59,7 @@ void main() {
     );
 
     expect(timelineSummary(timeline, 1.4), '01:00 / 01:00');
+    expect(compactTimelineSummary(timeline, 1.4), '01:00/01:00');
   });
 
   test('window shrink clamps stale position before rendering', () {

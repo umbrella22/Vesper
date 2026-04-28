@@ -260,6 +260,18 @@ internal fun timelineSummary(
     }
 
 @Composable
+internal fun compactTimelineSummary(
+    timeline: TimelineUiState,
+    pendingSeekRatio: Float?,
+): String =
+    when (val state = timelineSummaryState(timeline, pendingSeekRatio)) {
+        ExampleTimelineSummaryState.Live -> stringResource(R.string.example_stage_live)
+        is ExampleTimelineSummaryState.LiveEdge -> stringResource(R.string.example_stage_live)
+        is ExampleTimelineSummaryState.Window ->
+            "${formatMillis(state.positionMs)}/${formatMillis(state.endMs)}"
+    }
+
+@Composable
 internal fun formatBitRate(value: Long): String =
     when {
         value >= 1_000_000L -> stringResource(R.string.example_unit_bitrate_mbps, value / 1_000_000.0)

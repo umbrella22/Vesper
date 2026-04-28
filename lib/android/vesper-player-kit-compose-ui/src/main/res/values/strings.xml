@@ -1,0 +1,19 @@
+<resources>
+    <string name="vesper_player_stage_buffering">Buffering</string>
+    <string name="vesper_player_stage_more">More</string>
+    <string name="vesper_player_stage_pause">Pause</string>
+    <string name="vesper_player_stage_play">Play</string>
+    <string name="vesper_player_stage_fullscreen">Fullscreen</string>
+    <string name="vesper_player_stage_exit_fullscreen">Exit fullscreen</string>
+    <string name="vesper_player_stage_rate">%1$sx</string>
+    <string name="vesper_player_stage_quality">Quality</string>
+    <string name="vesper_player_stage_quality_locked">Locked · %1$s</string>
+    <string name="vesper_player_stage_auto">Auto</string>
+    <string name="vesper_player_stage_live_stream">Live stream</string>
+    <string name="vesper_player_stage_live_dvr">Live with DVR window</string>
+    <string name="vesper_player_stage_vod">Video on demand</string>
+    <string name="vesper_player_stage_go_live">Go live</string>
+    <string name="vesper_player_stage_live">LIVE</string>
+    <string name="vesper_player_stage_live_behind">LIVE -%1$s</string>
+    <string name="vesper_player_stage_live_edge">LIVE · Edge %1$s</string>
+</resources>

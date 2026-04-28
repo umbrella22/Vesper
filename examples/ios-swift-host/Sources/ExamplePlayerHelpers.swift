@@ -410,6 +410,15 @@ func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> 
     }
 }
 
+func compactTimelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> String {
+    switch timelineSummaryState(timeline, pendingSeekRatio: pendingSeekRatio) {
+    case .live, .liveEdge:
+        return ExampleI18n.live
+    case let .window(positionMs, endMs):
+        return "\(formatMillis(positionMs))/\(formatMillis(endMs))"
+    }
+}
+
 func speedBadge(_ value: Float) -> String {
     return ExampleI18n.playbackRate(Double(value))
 }

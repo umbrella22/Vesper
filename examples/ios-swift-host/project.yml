@@ -14,6 +14,8 @@ targets:
     dependencies:
       - package: VesperPlayerKit
         product: VesperPlayerKit
+      - package: VesperPlayerKit
+        product: VesperPlayerKitUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.ikaros.vesper.example.ioshost

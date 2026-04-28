@@ -19,6 +19,10 @@ import VesperPlayerKit
                 )
             ),
             uiState: previewPlayerUiState(),
+            trackCatalog: previewTrackCatalog(),
+            trackSelection: previewTrackSelection(),
+            effectiveVideoTrackId: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+            fixedTrackStatus: nil,
             controlsVisible: .constant(true),
             pendingSeekRatio: .constant(nil),
             isCompactLayout: true,
@@ -45,6 +49,10 @@ import VesperPlayerKit
             )
         ),
         uiState: previewPlayerUiState(),
+        trackCatalog: previewTrackCatalog(),
+        trackSelection: previewTrackSelection(),
+        effectiveVideoTrackId: "video:hls:cavc1:b1500000:w1280:h720:f3000",
+        fixedTrackStatus: nil,
         controlsVisible: .constant(true),
         pendingSeekRatio: .constant(nil),
         isCompactLayout: true,

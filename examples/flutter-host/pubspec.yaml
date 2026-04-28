@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   vesper_player:
     path: ../../lib/flutter/vesper_player
+  vesper_player_ui:
+    path: ../../lib/flutter/vesper_player_ui
 
 dev_dependencies:
   flutter_test:

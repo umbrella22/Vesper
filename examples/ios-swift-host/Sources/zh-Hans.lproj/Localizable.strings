@@ -146,6 +146,8 @@
 "example.stage.live_behind" = "直播 -%@";
 "example.stage.live_edge" = "直播 • 实时点 %@";
 "example.stage.buffering" = "缓冲中";
+"example.stage.play" = "播放";
+"example.stage.pause" = "暂停";
 
 "example.track.audio_track" = "音轨";
 "example.track.audio_channels" = "%d 声道";

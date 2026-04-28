@@ -62,7 +62,7 @@ android {
     }
 
     sourceSets {
-        getByName("main").jniLibs.srcDir(playerFfmpegPluginJniLibsDirFile)
+        getByName("main").jniLibs.directories.add(playerFfmpegPluginJniLibsDirFile.absolutePath)
     }
 
     packaging {

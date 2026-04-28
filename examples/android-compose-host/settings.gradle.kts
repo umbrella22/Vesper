@@ -31,6 +31,8 @@ include(":app")
 
 include(":vesper-player-kit")
 include(":vesper-player-kit-compose")
+include(":vesper-player-kit-compose-ui")
 
 project(":vesper-player-kit").projectDir = file("../../lib/android/vesper-player-kit")
 project(":vesper-player-kit-compose").projectDir = file("../../lib/android/vesper-player-kit-compose")
+project(":vesper-player-kit-compose-ui").projectDir = file("../../lib/android/vesper-player-kit-compose-ui")

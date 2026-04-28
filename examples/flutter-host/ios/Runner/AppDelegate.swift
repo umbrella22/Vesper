@@ -1,11 +1,16 @@
+import AVFoundation
 import Flutter
+import MediaPlayer
 import Photos
 import UIKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, UIDocumentPickerDelegate {
   private var mediaPickerChannel: FlutterMethodChannel?
+  private var deviceControlsChannel: FlutterMethodChannel?
   private var pendingVideoPickerResult: FlutterResult?
+  private let volumeView = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+  private weak var volumeSlider: UISlider?
 
   override func application(
     _ application: UIApplication,
@@ -32,6 +37,14 @@ import UIKit
       }
     }
     mediaPickerChannel = channel
+    let deviceChannel = FlutterMethodChannel(
+      name: "io.github.ikaros.vesper.example.flutter_host/device_controls",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    deviceChannel.setMethodCallHandler { [weak self] call, result in
+      self?.handleDeviceControl(call: call, result: result)
+    }
+    deviceControlsChannel = deviceChannel
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
   }
 
@@ -104,6 +117,83 @@ import UIKit
       return topViewController(base: presentedViewController)
     }
     return rootController
+  }
+
+  private func handleDeviceControl(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "getBrightness":
+      result(Double(UIScreen.main.brightness).clampedToUnit())
+    case "setBrightness":
+      guard let ratio = ratioArgument(from: call) else {
+        result(
+          FlutterError(
+            code: "invalid_argument",
+            message: "Missing brightness ratio.",
+            details: nil
+          )
+        )
+        return
+      }
+      let nextRatio = CGFloat(ratio.clamped(min: 0.02, max: 1))
+      UIScreen.main.brightness = nextRatio
+      result(Double(UIScreen.main.brightness).clampedToUnit())
+    case "getVolume":
+      result(currentVolumeRatio())
+    case "setVolume":
+      guard let ratio = ratioArgument(from: call) else {
+        result(
+          FlutterError(
+            code: "invalid_argument",
+            message: "Missing volume ratio.",
+            details: nil
+          )
+        )
+        return
+      }
+      result(setVolumeRatio(ratio))
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func ratioArgument(from call: FlutterMethodCall) -> Double? {
+    guard
+      let arguments = call.arguments as? [String: Any],
+      let ratio = arguments["ratio"] as? NSNumber
+    else {
+      return nil
+    }
+    return ratio.doubleValue
+  }
+
+  private func currentVolumeRatio() -> Double? {
+    prepareVolumeViewIfNeeded()
+    if let volumeSlider {
+      return Double(volumeSlider.value).clampedToUnit()
+    }
+    return Double(AVAudioSession.sharedInstance().outputVolume).clampedToUnit()
+  }
+
+  private func setVolumeRatio(_ ratio: Double) -> Double? {
+    prepareVolumeViewIfNeeded()
+    guard let volumeSlider else {
+      return currentVolumeRatio()
+    }
+    let nextRatio = Float(ratio.clampedToUnit())
+    volumeSlider.setValue(nextRatio, animated: false)
+    volumeSlider.sendActions(for: .valueChanged)
+    volumeSlider.sendActions(for: .touchUpInside)
+    return Double(volumeSlider.value).clampedToUnit()
+  }
+
+  private func prepareVolumeViewIfNeeded() {
+    try? AVAudioSession.sharedInstance().setActive(true)
+    if volumeView.superview == nil {
+      volumeView.showsVolumeSlider = true
+      volumeView.alpha = 0.01
+      activeRootViewController()?.view.addSubview(volumeView)
+    }
+    volumeSlider = volumeView.subviews.compactMap { $0 as? UISlider }.first
   }
 
   private func activeRootViewController() -> UIViewController? {
@@ -242,5 +332,15 @@ private enum ExamplePhotoLibraryExportError: LocalizedError {
     case .saveFailed:
       return "Failed to save the downloaded video to Photos."
     }
+  }
+}
+
+private extension Double {
+  func clamped(min lowerBound: Double, max upperBound: Double) -> Double {
+    Swift.min(Swift.max(self, lowerBound), upperBound)
+  }
+
+  func clampedToUnit() -> Double {
+    clamped(min: 0, max: 1)
   }
 }

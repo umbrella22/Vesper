@@ -28,6 +28,14 @@ let package = Package(
             name: "VesperPlayerKit",
             targets: ["VesperPlayerKit"]
         ),
+        .library(
+            name: "VesperPlayerKitUI",
+            targets: ["VesperPlayerKitUI"]
+        ),
+        .library(
+            name: "VesperPlayerFFI",
+            targets: ["VesperPlayerFFI"]
+        ),
     ],
     targets: [
         .binaryTarget(
@@ -46,6 +54,11 @@ let package = Package(
             resources: [
                 .process("Resources"),
             ]
+        ),
+        .target(
+            name: "VesperPlayerKitUI",
+            dependencies: ["VesperPlayerKit"],
+            path: "Sources/VesperPlayerKitUI"
         ),
         .testTarget(
             name: "VesperPlayerKitTests",

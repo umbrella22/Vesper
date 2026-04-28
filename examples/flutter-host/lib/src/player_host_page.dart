@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vesper_player/vesper_player.dart';
 
+import 'example_device_controls.dart';
 import 'example_download_planner.dart';
 import 'example_download_sections.dart';
 import 'example_local_media_picker.dart';
@@ -31,6 +32,7 @@ class PlayerHostPage extends StatefulWidget {
 class _PlayerHostPageState extends State<PlayerHostPage> {
   late final TextEditingController _remoteUrlController;
   late final TextEditingController _downloadUrlController;
+  final ExampleDeviceControls _deviceControls = ExampleDeviceControls();
   late Future<VesperPlayerController> _controllerFuture;
   Future<VesperDownloadManager>? _downloadManagerFuture;
 
@@ -778,6 +780,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
               snapshot: snapshot,
               isPortrait: true,
               sheetOpen: _sheetOpen,
+              deviceControls: _deviceControls,
               onOpenSheet: (sheet) =>
                   unawaited(_openToolSheet(controller, sheet)),
               onToggleFullscreen: () =>
@@ -858,6 +861,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
             snapshot: snapshot,
             isPortrait: false,
             sheetOpen: _sheetOpen,
+            deviceControls: _deviceControls,
             onOpenSheet: (sheet) =>
                 unawaited(_openToolSheet(controller, sheet)),
             onToggleFullscreen: () =>

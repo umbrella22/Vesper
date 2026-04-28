@@ -28,6 +28,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             timelineSummaryState(timeline, pendingSeekRatio: nil),
             .window(positionMs: 45_000, endMs: 50_000)
         )
+        XCTAssertEqual(compactTimelineSummary(timeline, pendingSeekRatio: nil), "00:45/00:50")
     }
 
     func testLiveEdgeToleranceKeepsLiveBadgeActive() {
@@ -45,6 +46,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             timelineSummaryState(timeline, pendingSeekRatio: nil),
             .liveEdge(120_000)
         )
+        XCTAssertEqual(compactTimelineSummary(timeline, pendingSeekRatio: nil), ExampleI18n.live)
     }
 
     func testPendingRatioIsClampedToSeekableRange() {
@@ -62,6 +64,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             timelineSummaryState(timeline, pendingSeekRatio: 1.4),
             .window(positionMs: 60_000, endMs: 60_000)
         )
+        XCTAssertEqual(compactTimelineSummary(timeline, pendingSeekRatio: 1.4), "01:00/01:00")
     }
 
     func testWindowShrinkClampsStalePositionBeforeRendering() {

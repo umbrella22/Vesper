@@ -146,6 +146,8 @@
 "example.stage.live_behind" = "LIVE -%@";
 "example.stage.live_edge" = "LIVE • Edge %@";
 "example.stage.buffering" = "Buffering";
+"example.stage.play" = "Play";
+"example.stage.pause" = "Pause";
 
 "example.track.audio_track" = "Audio Track";
 "example.track.audio_channels" = "%d ch";

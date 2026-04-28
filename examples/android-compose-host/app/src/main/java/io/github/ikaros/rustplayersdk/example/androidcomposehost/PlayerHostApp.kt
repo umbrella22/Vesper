@@ -1,8 +1,12 @@
 package io.github.ikaros.vesper.example.androidcomposehost
 
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.media.AudioManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -59,6 +63,7 @@ import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
 import java.io.File
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 @Composable
@@ -70,6 +75,9 @@ fun PlayerHostApp(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+    val deviceControls = remember(context, activity) {
+        ExampleAndroidDeviceControls(context.applicationContext, activity)
+    }
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     var selectedTab by rememberSaveable { mutableStateOf(ExampleHostTab.Player) }
@@ -460,6 +468,8 @@ fun PlayerHostApp(
                                 controlsVisible = controlsVisible,
                                 pendingSeekRatio = pendingSeekRatio,
                                 isPortrait = false,
+                                trackCatalog = trackCatalog,
+                                trackSelection = trackSelection,
                                 modifier = Modifier.fillMaxSize(),
                                 onControlsVisibilityChange = { controlsVisible = it },
                                 onPendingSeekRatioChange = { pendingSeekRatio = it },
@@ -468,6 +478,10 @@ fun PlayerHostApp(
                                     activity?.requestedOrientation =
                                         ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
                                 },
+                                currentBrightnessRatio = deviceControls::currentBrightnessRatio,
+                                onSetBrightnessRatio = deviceControls::setBrightnessRatio,
+                                currentVolumeRatio = deviceControls::currentVolumeRatio,
+                                onSetVolumeRatio = deviceControls::setVolumeRatio,
                             )
                         }
 
@@ -491,6 +505,8 @@ fun PlayerHostApp(
                                     controlsVisible = controlsVisible,
                                     pendingSeekRatio = pendingSeekRatio,
                                     isPortrait = true,
+                                    trackCatalog = trackCatalog,
+                                    trackSelection = trackSelection,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(248.dp),
@@ -501,6 +517,10 @@ fun PlayerHostApp(
                                         activity?.requestedOrientation =
                                             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                                     },
+                                    currentBrightnessRatio = deviceControls::currentBrightnessRatio,
+                                    onSetBrightnessRatio = deviceControls::setBrightnessRatio,
+                                    currentVolumeRatio = deviceControls::currentVolumeRatio,
+                                    onSetVolumeRatio = deviceControls::setVolumeRatio,
                                 )
 
                                 ExampleSourceSection(
@@ -703,6 +723,56 @@ fun PlayerHostApp(
                 }
             }
         }
+    }
+}
+
+private class ExampleAndroidDeviceControls(
+    private val context: Context,
+    private val activity: Activity?,
+) {
+    private val audioManager: AudioManager?
+        get() = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    fun currentBrightnessRatio(): Float? {
+        val windowBrightness = activity?.window?.attributes?.screenBrightness
+        if (windowBrightness != null && windowBrightness >= 0f) {
+            return windowBrightness.coerceIn(0f, 1f)
+        }
+        return runCatching {
+            Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+        }.getOrDefault(0.5f).coerceIn(0f, 1f)
+    }
+
+    fun setBrightnessRatio(ratio: Float): Float? {
+        val window = activity?.window ?: return null
+        val nextRatio = ratio.coerceIn(0.02f, 1f)
+        val attributes = window.attributes
+        attributes.screenBrightness = nextRatio
+        window.attributes = attributes
+        return nextRatio
+    }
+
+    fun currentVolumeRatio(): Float? {
+        val audioManager = audioManager ?: return null
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (maxVolume <= 0) {
+            return null
+        }
+        return (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVolume)
+            .coerceIn(0f, 1f)
+    }
+
+    fun setVolumeRatio(ratio: Float): Float? {
+        val audioManager = audioManager ?: return null
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (maxVolume <= 0) {
+            return null
+        }
+        val nextVolume = (ratio.coerceIn(0f, 1f) * maxVolume).roundToInt().coerceIn(0, maxVolume)
+        return runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVolume
+        }.getOrNull()?.coerceIn(0f, 1f)
     }
 }
 

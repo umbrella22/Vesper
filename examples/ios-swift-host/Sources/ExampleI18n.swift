@@ -201,6 +201,8 @@ enum ExampleI18n {
         string("example.stage.live_edge", time)
     }
     static var buffering: String { string("example.stage.buffering") }
+    static var play: String { string("example.stage.play") }
+    static var pause: String { string("example.stage.pause") }
 
     static var audioTrack: String { string("example.track.audio_track") }
     static func audioChannels(_ value: Int) -> String {

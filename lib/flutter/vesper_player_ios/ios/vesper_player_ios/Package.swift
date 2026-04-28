@@ -47,6 +47,7 @@ let package = Package(
             dependencies: [
                 .product(name: "FlutterFramework", package: "FlutterFramework"),
                 .product(name: "VesperPlayerKit", package: "VesperPlayerKit"),
+                .product(name: "VesperPlayerFFI", package: "VesperPlayerKit"),
             ]
         ),
     ]

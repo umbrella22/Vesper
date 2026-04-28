@@ -118,6 +118,30 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
   }
 }
 
+String compactTimelineSummary(
+  VesperTimeline timeline,
+  double? pendingSeekRatio,
+) {
+  final displayedPosition = pendingSeekRatio == null
+      ? timeline.clampedPosition(timeline.positionMs)
+      : timeline.positionForRatio(pendingSeekRatio);
+
+  switch (timeline.kind) {
+    case VesperTimelineKind.live:
+      return '直播';
+    case VesperTimelineKind.liveDvr:
+      final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
+      final rangeStart = timeline.seekableRange?.startMs ?? 0;
+      final windowPosition = (displayedPosition - rangeStart)
+          .clamp(0, liveEdge)
+          .toInt();
+      final windowEnd = (liveEdge - rangeStart).clamp(0, liveEdge).toInt();
+      return '${formatMillis(windowPosition)}/${formatMillis(windowEnd)}';
+    case VesperTimelineKind.vod:
+      return '${formatMillis(displayedPosition)}/${formatMillis(timeline.durationMs ?? 0)}';
+  }
+}
+
 String qualityButtonLabel(
   VesperTrackCatalog trackCatalog,
   VesperTrackSelectionSnapshot trackSelection,

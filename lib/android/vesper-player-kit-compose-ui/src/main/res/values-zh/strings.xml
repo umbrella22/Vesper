@@ -1,0 +1,19 @@
+<resources>
+    <string name="vesper_player_stage_buffering">缓冲中</string>
+    <string name="vesper_player_stage_more">更多</string>
+    <string name="vesper_player_stage_pause">暂停</string>
+    <string name="vesper_player_stage_play">播放</string>
+    <string name="vesper_player_stage_fullscreen">全屏</string>
+    <string name="vesper_player_stage_exit_fullscreen">退出全屏</string>
+    <string name="vesper_player_stage_rate">%1$sx</string>
+    <string name="vesper_player_stage_quality">画质</string>
+    <string name="vesper_player_stage_quality_locked">锁定 · %1$s</string>
+    <string name="vesper_player_stage_auto">自动</string>
+    <string name="vesper_player_stage_live_stream">直播流</string>
+    <string name="vesper_player_stage_live_dvr">带 DVR 窗口的直播</string>
+    <string name="vesper_player_stage_vod">点播视频</string>
+    <string name="vesper_player_stage_go_live">回到直播</string>
+    <string name="vesper_player_stage_live">直播</string>
+    <string name="vesper_player_stage_live_behind">直播 -%1$s</string>
+    <string name="vesper_player_stage_live_edge">直播 · 实时点 %1$s</string>
+</resources>

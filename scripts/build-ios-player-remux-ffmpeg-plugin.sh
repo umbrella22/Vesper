@@ -5,6 +5,26 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FFMPEG_APPLE_DIR="${VESPER_APPLE_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/apple}"
 OUTPUT_DIR="${1:-}"
 
+if [[ -f "${HOME:-}/.cargo/env" ]]; then
+  # Xcode 的 Run Script phase 不是登录 shell，需要显式补齐 Rust 工具链路径。
+  # shellcheck disable=SC1090
+  source "$HOME/.cargo/env"
+fi
+
+export PATH="${HOME:-}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "rustup was not found in PATH. Install Rust or expose rustup to Xcode script phases." >&2
+  echo "Current PATH: $PATH" >&2
+  exit 1
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "cargo was not found in PATH. Install Rust or expose cargo to Xcode script phases." >&2
+  echo "Current PATH: $PATH" >&2
+  exit 1
+fi
+
 if [[ -z "$OUTPUT_DIR" ]]; then
   echo "Usage: $0 <output-dir> [debug|release] [slice...]" >&2
   exit 1

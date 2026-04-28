@@ -1,3 +1,5 @@
+import AVFoundation
+import MediaPlayer
 import Photos
 import SwiftUI
 import UIKit
@@ -12,6 +14,7 @@ struct PlayerHostView: View {
     @StateObject private var controller: VesperPlayerController
     @StateObject private var playlistCoordinator: VesperPlaylistCoordinator
     @StateObject private var downloadManager: VesperDownloadManager
+    @StateObject private var deviceControls = ExampleIOSDeviceControls()
     @State private var pendingSeekRatio: Double?
     @State private var isVideoImporterPresented = false
     @State private var hostMessage: String?
@@ -145,6 +148,12 @@ struct PlayerHostView: View {
                 }
                 .tint(palette.primaryAction)
             }
+
+            ExampleHiddenVolumeView(deviceControls: deviceControls)
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .preferredColorScheme(themeMode.preferredColorScheme)
         .statusBarHidden(isFullscreen)
@@ -399,6 +408,10 @@ struct PlayerHostView: View {
         ExamplePlayerStage(
             surface: AnyView(PlayerSurfaceContainer(controller: controller)),
             uiState: uiState,
+            trackCatalog: controller.trackCatalog,
+            trackSelection: controller.trackSelection,
+            effectiveVideoTrackId: controller.effectiveVideoTrackId,
+            fixedTrackStatus: controller.fixedTrackStatus,
             controlsVisible: $controlsVisible,
             pendingSeekRatio: $pendingSeekRatio,
             isCompactLayout: isCompactLayout,
@@ -407,10 +420,15 @@ struct PlayerHostView: View {
             onTogglePause: { controller.togglePause() },
             onSeekToRatio: { controller.seek(toRatio: $0) },
             onSeekToLiveEdge: { controller.seekToLiveEdge() },
+            onSetPlaybackRate: { controller.setPlaybackRate($0) },
             onToggleFullscreen: {
                 setFullscreen(!isFullscreen)
             },
-            onOpenSheet: { activeSheet = $0 }
+            onOpenSheet: { activeSheet = $0 },
+            currentBrightnessRatio: deviceControls.currentBrightnessRatio,
+            onSetBrightnessRatio: deviceControls.setBrightnessRatio,
+            currentVolumeRatio: deviceControls.currentVolumeRatio,
+            onSetVolumeRatio: deviceControls.setVolumeRatio
         )
     }
 
@@ -815,6 +833,74 @@ struct PlayerHostView: View {
             return fileURL
         }
         return URL(fileURLWithPath: completedPath)
+    }
+}
+
+@MainActor
+private final class ExampleIOSDeviceControls: ObservableObject {
+    fileprivate let volumeView: MPVolumeView
+    private weak var volumeSlider: UISlider?
+
+    init() {
+        volumeView = MPVolumeView(frame: .zero)
+        volumeView.showsVolumeSlider = true
+    }
+
+    func currentBrightnessRatio() -> Double? {
+        Double(UIScreen.main.brightness).clamped(to: 0...1)
+    }
+
+    func setBrightnessRatio(_ ratio: Double) -> Double? {
+        let nextRatio = CGFloat(ratio.clamped(to: 0.02...1))
+        UIScreen.main.brightness = nextRatio
+        return Double(UIScreen.main.brightness).clamped(to: 0...1)
+    }
+
+    func currentVolumeRatio() -> Double? {
+        prepareAudioSessionIfNeeded()
+        refreshVolumeSlider()
+        if let volumeSlider {
+            return Double(volumeSlider.value).clamped(to: 0...1)
+        }
+        return Double(AVAudioSession.sharedInstance().outputVolume).clamped(to: 0...1)
+    }
+
+    func setVolumeRatio(_ ratio: Double) -> Double? {
+        prepareAudioSessionIfNeeded()
+        refreshVolumeSlider()
+        guard let volumeSlider else {
+            return currentVolumeRatio()
+        }
+        let nextRatio = Float(ratio.clamped(to: 0...1))
+        volumeSlider.setValue(nextRatio, animated: false)
+        volumeSlider.sendActions(for: .valueChanged)
+        volumeSlider.sendActions(for: .touchUpInside)
+        return Double(volumeSlider.value).clamped(to: 0...1)
+    }
+
+    fileprivate func refreshVolumeSlider() {
+        volumeSlider = volumeView.subviews.compactMap { $0 as? UISlider }.first
+    }
+
+    private func prepareAudioSessionIfNeeded() {
+        try? AVAudioSession.sharedInstance().setActive(true)
+    }
+}
+
+private struct ExampleHiddenVolumeView: UIViewRepresentable {
+    let deviceControls: ExampleIOSDeviceControls
+
+    func makeUIView(context: Context) -> MPVolumeView {
+        DispatchQueue.main.async {
+            deviceControls.refreshVolumeSlider()
+        }
+        return deviceControls.volumeView
+    }
+
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {
+        DispatchQueue.main.async {
+            deviceControls.refreshVolumeSlider()
+        }
     }
 }
 

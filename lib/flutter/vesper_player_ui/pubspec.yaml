@@ -1,0 +1,18 @@
+name: vesper_player_ui
+description: Optional Flutter UI controls and stage for Vesper Player.
+version: 0.1.0
+homepage: https://github.com/ikaros/rust-player-sdk
+publish_to: none
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.41.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  vesper_player:
+    path: ../vesper_player
+
+flutter:
+  uses-material-design: true
