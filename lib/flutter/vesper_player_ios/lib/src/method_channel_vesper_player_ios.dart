@@ -77,6 +77,13 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
   }
 
   @override
+  Future<void> refreshPlayer(String playerId) {
+    return _invokeVoid('refreshPlayer', <String, Object?>{
+      'playerId': playerId,
+    });
+  }
+
+  @override
   Future<void> selectSource(String playerId, VesperPlayerSource source) {
     return _invokeVoid('selectSource', <String, Object?>{
       'playerId': playerId,

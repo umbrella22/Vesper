@@ -88,6 +88,8 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func dispose() {}
 
+    func refresh() {}
+
     func selectSource(_ source: VesperPlayerSource) {
         currentSource = source
         publishedEffectiveVideoTrackId = nil

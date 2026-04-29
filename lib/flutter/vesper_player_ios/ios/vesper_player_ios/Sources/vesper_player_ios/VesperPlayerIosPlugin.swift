@@ -80,6 +80,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 disposeSession(session)
                 return nil
             }
+        case "refreshPlayer":
+            handleSessionCommand(call, result: result) { session in
+                session.lastError = nil
+                session.controller.refresh()
+                emitSnapshot(for: session)
+                return nil
+            }
         case "refreshDownloadManager":
             handleDownloadSessionCommand(call, result: result) { session in
                 session.lastError = nil

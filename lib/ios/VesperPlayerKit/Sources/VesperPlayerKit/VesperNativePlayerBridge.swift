@@ -174,6 +174,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         tearDownActivePlayback()
     }
 
+    func refresh() {
+        refreshPlaybackState()
+    }
+
     func selectSource(_ source: VesperPlayerSource) {
         clearLastError()
         iosHostLog(

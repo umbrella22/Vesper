@@ -67,6 +67,7 @@ public final class VesperPlayerController: ObservableObject {
     private var bridgeObservation: AnyCancellable?
     private let initializeImpl: () -> Void
     private let disposeImpl: () -> Void
+    private let refreshImpl: () -> Void
     private let selectSourceImpl: (VesperPlayerSource) -> Void
     private let attachSurfaceHostImpl: (UIView) -> Void
     private let detachSurfaceHostImpl: () -> Void
@@ -96,6 +97,7 @@ public final class VesperPlayerController: ObservableObject {
         publishedLastError = bridge.publishedLastError
         initializeImpl = bridge.initialize
         disposeImpl = bridge.dispose
+        refreshImpl = bridge.refresh
         selectSourceImpl = bridge.selectSource
         attachSurfaceHostImpl = { host in
             bridge.attachSurfaceHost(host)
@@ -139,6 +141,10 @@ public final class VesperPlayerController: ObservableObject {
 
     public func dispose() {
         disposeImpl()
+    }
+
+    public func refresh() {
+        refreshImpl()
     }
 
     public func selectSource(_ source: VesperPlayerSource) {

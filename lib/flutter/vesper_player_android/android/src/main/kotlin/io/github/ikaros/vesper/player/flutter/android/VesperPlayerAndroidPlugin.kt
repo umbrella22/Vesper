@@ -131,6 +131,12 @@ class VesperPlayerAndroidPlugin :
                 disposeSession(session)
                 null
             }
+            "refreshPlayer" -> handleSessionCommand(call, result) { session ->
+                session.lastError = null
+                session.controller.refresh()
+                emitSnapshot(session)
+                null
+            }
             "refreshDownloadManager" -> handleDownloadSessionCommand(call, result) { session ->
                 session.lastError = null
                 session.manager.refresh()

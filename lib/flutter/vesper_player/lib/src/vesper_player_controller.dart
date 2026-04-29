@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
+const Duration _progressRefreshInterval = Duration(milliseconds: 250);
+
 class VesperPlayerController {
   VesperPlayerController._({
     required this.playerId,
@@ -14,6 +16,7 @@ class VesperPlayerController {
        ) {
     _snapshotsController.add(initialSnapshot);
     _bindPlatformEvents();
+    _syncProgressRefreshTimer(initialSnapshot);
   }
 
   static Future<VesperPlayerController> create({
@@ -48,6 +51,8 @@ class VesperPlayerController {
       StreamController<VesperPlayerSnapshot>.broadcast();
 
   StreamSubscription<VesperPlayerEvent>? _platformSubscription;
+  Timer? _progressRefreshTimer;
+  bool _refreshInFlight = false;
   bool _disposed = false;
 
   VesperPlayerSnapshot get snapshot => snapshotListenable.value;
@@ -66,6 +71,8 @@ class VesperPlayerController {
       return;
     }
     _disposed = true;
+    _progressRefreshTimer?.cancel();
+    _progressRefreshTimer = null;
 
     Object? platformError;
     StackTrace? platformStackTrace;
@@ -90,6 +97,9 @@ class VesperPlayerController {
 
   Future<void> selectSource(VesperPlayerSource source) =>
       _runVoidOperation(() => _platform.selectSource(playerId, source));
+
+  Future<void> refresh() =>
+      _runVoidOperation(() => _platform.refreshPlayer(playerId));
 
   Future<void> play() => _runVoidOperation(() => _platform.play(playerId));
 
@@ -172,6 +182,7 @@ class VesperPlayerController {
     _eventsController.add(
       VesperPlayerSnapshotEvent(playerId: playerId, snapshot: snapshot),
     );
+    _syncProgressRefreshTimer(snapshot);
   }
 
   void _applyPlatformError(VesperPlayerErrorEvent event) {
@@ -189,6 +200,47 @@ class VesperPlayerController {
         snapshot: snapshot,
       ),
     );
+    _syncProgressRefreshTimer(snapshot);
+  }
+
+  void _syncProgressRefreshTimer([VesperPlayerSnapshot? nextSnapshot]) {
+    final effectiveSnapshot = nextSnapshot ?? snapshot;
+    if (_disposed || !_shouldRefreshProgress(effectiveSnapshot)) {
+      _progressRefreshTimer?.cancel();
+      _progressRefreshTimer = null;
+      return;
+    }
+
+    if (_progressRefreshTimer != null) {
+      return;
+    }
+
+    _progressRefreshTimer = Timer.periodic(_progressRefreshInterval, (_) {
+      unawaited(_refreshTimelineTick());
+    });
+  }
+
+  Future<void> _refreshTimelineTick() async {
+    if (_disposed || _refreshInFlight || !_shouldRefreshProgress(snapshot)) {
+      _syncProgressRefreshTimer();
+      return;
+    }
+
+    _refreshInFlight = true;
+    var refreshFailed = false;
+    try {
+      await _platform.refreshPlayer(playerId);
+    } catch (error, stackTrace) {
+      refreshFailed = true;
+      _publishSyntheticError(error, stackTrace);
+      _progressRefreshTimer?.cancel();
+      _progressRefreshTimer = null;
+    } finally {
+      _refreshInFlight = false;
+      if (!refreshFailed) {
+        _syncProgressRefreshTimer();
+      }
+    }
   }
 
   Future<void> _runVoidOperation(Future<void> Function() operation) async {
@@ -223,6 +275,7 @@ class VesperPlayerController {
         snapshot: snapshot,
       ),
     );
+    _syncProgressRefreshTimer(snapshot);
     FlutterError.reportError(
       FlutterErrorDetails(
         exception: error,
@@ -238,4 +291,9 @@ class VesperPlayerController {
       throw StateError('VesperPlayerController has already been disposed.');
     }
   }
+}
+
+bool _shouldRefreshProgress(VesperPlayerSnapshot snapshot) {
+  return snapshot.playbackState == VesperPlaybackState.playing ||
+      snapshot.isBuffering;
 }

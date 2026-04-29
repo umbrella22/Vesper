@@ -85,6 +85,19 @@ void main() {
     },
   );
 
+  test('refreshPlayer forwards player id', () async {
+    final platform = MethodChannelVesperPlayerIos();
+
+    await platform.refreshPlayer('ios-player');
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'refreshPlayer');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{'playerId': 'ios-player'},
+    );
+  });
+
   test('updateViewport forwards derived shared hint payload', () async {
     final platform = MethodChannelVesperPlayerIos();
     const viewport = VesperPlayerViewport(

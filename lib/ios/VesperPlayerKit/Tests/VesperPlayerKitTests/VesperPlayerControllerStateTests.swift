@@ -130,6 +130,7 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
 
     func initialize() {}
     func dispose() {}
+    func refresh() {}
     func selectSource(_ source: VesperPlayerSource) {}
     func attachSurfaceHost(_ host: UIView) {}
     func detachSurfaceHost() {}

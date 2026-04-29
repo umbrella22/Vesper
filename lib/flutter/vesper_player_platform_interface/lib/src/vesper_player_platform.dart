@@ -78,6 +78,10 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
 
   Future<void> dispose(String playerId);
 
+  Future<void> refreshPlayer(String playerId) async {
+    throw UnimplementedError('refreshPlayer() has not been implemented.');
+  }
+
   Future<void> selectSource(String playerId, VesperPlayerSource source);
 
   Future<void> play(String playerId);
@@ -181,6 +185,10 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
 
   @override
   Future<void> dispose(String playerId) async => throw VesperUnsupportedError();
+
+  @override
+  Future<void> refreshPlayer(String playerId) async =>
+      throw VesperUnsupportedError();
 
   @override
   Future<void> selectSource(String playerId, VesperPlayerSource source) async =>

@@ -7,15 +7,20 @@ private func resolveVesperPlayerKitPath() -> String {
     var searchDirectory = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .standardizedFileURL
+    let candidatePathComponents: [[String]] = [
+        ["lib", "ios", "VesperPlayerKit"],
+        ["third_party", "vesper-player-sdk", "lib", "ios", "VesperPlayerKit"],
+    ]
 
     while true {
-        let candidate = searchDirectory
-            .appendingPathComponent("lib", isDirectory: true)
-            .appendingPathComponent("ios", isDirectory: true)
-            .appendingPathComponent("VesperPlayerKit", isDirectory: true)
+        for pathComponents in candidatePathComponents {
+            let candidate = pathComponents.reduce(searchDirectory) { partial, component in
+                partial.appendingPathComponent(component, isDirectory: true)
+            }
 
-        if fileManager.fileExists(atPath: candidate.path) {
-            return candidate.path
+            if fileManager.fileExists(atPath: candidate.path) {
+                return candidate.path
+            }
         }
 
         let parent = searchDirectory.deletingLastPathComponent()
@@ -25,7 +30,7 @@ private func resolveVesperPlayerKitPath() -> String {
         searchDirectory = parent
     }
 
-    fatalError("Unable to locate lib/ios/VesperPlayerKit from \(#filePath)")
+    fatalError("Unable to locate VesperPlayerKit from \(#filePath)")
 }
 
 let package = Package(
