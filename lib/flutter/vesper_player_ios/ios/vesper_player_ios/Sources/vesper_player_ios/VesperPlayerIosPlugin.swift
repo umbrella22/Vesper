@@ -636,7 +636,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "supportsLocalFiles": true,
             "supportsRemoteUrls": true,
             "supportsHls": true,
-            "supportsDash": false,
+            "supportsDash": true,
             "supportsTrackCatalog": true,
             "supportsTrackSelection": true,
             "supportsVideoTrackSelection": false,
@@ -910,6 +910,22 @@ private func stringKeyedMap(_ value: Any?) -> [String: Any]? {
     return nil
 }
 
+private func stringMap(_ value: Any?) -> [String: String] {
+    guard let raw = stringKeyedMap(value), !raw.isEmpty else {
+        return [:]
+    }
+
+    var decoded: [String: String] = [:]
+    decoded.reserveCapacity(raw.count)
+    for (key, value) in raw {
+        guard let stringValue = value as? String else {
+            continue
+        }
+        decoded[key] = stringValue
+    }
+    return decoded
+}
+
 private extension Dictionary where Key == String, Value == Any {
     func toVesperPlayerSource() throws -> VesperPlayerSource {
         guard let uri = self["uri"] as? String, !uri.isEmpty else {
@@ -934,11 +950,13 @@ private extension Dictionary where Key == String, Value == Any {
         default:
             `protocol` = .unknown
         }
+        let headers = stringMap(self["headers"])
         return try VesperPlayerSource(
             uri: uri,
             label: label,
             kind: kind,
-            protocol: `protocol`
+            protocol: `protocol`,
+            headers: headers
         )
         .validatedForIosBackend()
     }
@@ -966,11 +984,13 @@ private extension Dictionary where Key == String, Value == Any {
         default:
             `protocol` = .unknown
         }
+        let headers = stringMap(self["headers"])
         return try VesperPlayerSource(
             uri: uri,
             label: label,
             kind: kind,
-            protocol: `protocol`
+            protocol: `protocol`,
+            headers: headers
         )
     }
 
@@ -1378,6 +1398,7 @@ private extension VesperPlayerSource {
             "label": label,
             "kind": kind.rawValue,
             "protocol": `protocol`.rawValue,
+            "headers": headers,
         ]
     }
 }
@@ -1586,9 +1607,6 @@ private extension PlayerBridgeBackend {
 
 private extension VesperPlayerSource {
     func validatedForIosBackend() throws -> VesperPlayerSource {
-        if kind == .remote, `protocol` == .dash {
-            throw PluginError.unsupported(iosDashUnsupportedMessage)
-        }
         return self
     }
 }
@@ -1730,4 +1748,3 @@ private let methodChannelName = "io.github.ikaros.vesper_player"
 private let eventChannelName = "io.github.ikaros.vesper_player/events"
 private let downloadEventChannelName = "io.github.ikaros.vesper_player/download_events"
 private let playerViewType = "io.github.ikaros.vesper_player/platform_view"
-private let iosDashUnsupportedMessage = "DASH streams are not supported by the iOS AVPlayer backend."

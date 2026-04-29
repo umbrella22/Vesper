@@ -18,6 +18,7 @@ targets:
         product: VesperPlayerKitUI
     settings:
       base:
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
         PRODUCT_BUNDLE_IDENTIFIER: io.github.ikaros.vesper.example.ioshost
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true

@@ -11,19 +11,19 @@ selection, resilience, download, and preload flows aligned across platforms.
 
 ## Platform Support
 
-| Feature | Android | iOS | macOS |
-|---|---|---|---|
-| Local files | ✅ | ✅ | ⚠️ Experimental |
-| Progressive HTTP | ✅ | ✅ | ⚠️ Experimental |
-| HLS | ✅ | ✅ | ⚠️ Experimental |
-| DASH | ✅ | ❌ | ⚠️ Experimental |
-| Live streams | ✅ | ✅ | ⚠️ Experimental |
-| Live DVR | ✅ | ✅ | ⚠️ Experimental |
-| Track selection | ✅ | ✅ | ⚠️ Experimental |
-| Adaptive bitrate (ABR) | ✅ | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ⚠️ Experimental |
-| Buffering / retry policy | ✅ | ✅ | ⚠️ Experimental |
-| Download management | ✅ | ✅ | ❌ |
-| Preload | ✅ | ✅ | ❌ |
+| Feature                  | Android | iOS                                                 | macOS           |
+| ------------------------ | ------- | --------------------------------------------------- | --------------- |
+| Local files              | ✅      | ✅                                                  | ⚠️ Experimental |
+| Progressive HTTP         | ✅      | ✅                                                  | ⚠️ Experimental |
+| HLS                      | ✅      | ✅                                                  | ⚠️ Experimental |
+| DASH                     | ✅      | ⚠️ Experimental (DASH→HLS bridge over AVPlayer)     | ⚠️ Experimental |
+| Live streams             | ✅      | ✅                                                  | ⚠️ Experimental |
+| Live DVR                 | ✅      | ✅                                                  | ⚠️ Experimental |
+| Track selection          | ✅      | ✅                                                  | ⚠️ Experimental |
+| Adaptive bitrate (ABR)   | ✅      | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ⚠️ Experimental |
+| Buffering / retry policy | ✅      | ✅                                                  | ⚠️ Experimental |
+| Download management      | ✅      | ✅                                                  | ❌              |
+| Preload                  | ✅      | ✅                                                  | ❌              |
 
 > The macOS backend is still experimental, so its capability matrix and runtime
 > behavior may differ from the mobile implementations.
@@ -140,7 +140,13 @@ VesperPlayerView(
 
 ```dart
 VesperPlayerSource.hls(uri: 'https://example.com/stream.m3u8')
-VesperPlayerSource.dash(uri: 'https://example.com/manifest.mpd') // Android only
+VesperPlayerSource.dash(
+  uri: 'https://example.com/manifest.mpd',
+  headers: <String, String>{
+    'Referer': 'https://www.bilibili.com/',
+    'User-Agent': 'VesperPlayer',
+  },
+)
 VesperPlayerSource.local(uri: '/storage/emulated/0/Movies/video.mp4')
 VesperPlayerSource.remote(uri: 'https://example.com/video.mp4')
 ```
@@ -256,13 +262,13 @@ print('Active buffering preset: ${effectivePolicy.buffering.preset}');
 
 Built-in presets:
 
-| Preset | Buffering | Retry | Recommended for |
-|---|---|---|---|
-| `default` | default | default | General use |
-| `balanced()` | balanced | linear backoff | Stable networks |
-| `streaming()` | streaming-first | aggressive retries | Continuous streaming |
-| `resilient()` | larger buffers | exponential backoff x6 | Weak networks |
-| `lowLatency()` | low latency | fail fast | Low-latency live playback |
+| Preset         | Buffering       | Retry                  | Recommended for           |
+| -------------- | --------------- | ---------------------- | ------------------------- |
+| `default`      | default         | default                | General use               |
+| `balanced()`   | balanced        | linear backoff         | Stable networks           |
+| `streaming()`  | streaming-first | aggressive retries     | Continuous streaming      |
+| `resilient()`  | larger buffers  | exponential backoff x6 | Weak networks             |
+| `lowLatency()` | low latency     | fail fast              | Low-latency live playback |
 
 ## Download Management
 
@@ -319,7 +325,9 @@ Benefits:
 Notes:
 
 - The current iOS example uses this planning flow for remote `HLS` only.
-  `DASH` is still reported as unsupported on the AVPlayer backend.
+  Remote `DASH` playback is supported on iOS via an in-process DASH→HLS bridge
+  in `lib/ios/VesperPlayerKit`, but the download / export planning flow has not
+  been wired through that bridge yet.
 - Pause, resume, and remove operations should be keyed by `taskId`, not by URL.
 
 ### Optional `.mp4` export through `player-remux-ffmpeg`
@@ -403,9 +411,9 @@ if (caps.isExperimental) {
 
 ## Related Packages
 
-| Package | Description |
-|---|---|
-| `vesper_player_platform_interface` | Shared platform contract and DTOs |
-| `vesper_player_android` | Android implementation built on ExoPlayer |
-| `vesper_player_ios` | iOS implementation built on AVPlayer |
-| `vesper_player_macos` | Experimental macOS implementation |
+| Package                            | Description                               |
+| ---------------------------------- | ----------------------------------------- |
+| `vesper_player_platform_interface` | Shared platform contract and DTOs         |
+| `vesper_player_android`            | Android implementation built on ExoPlayer |
+| `vesper_player_ios`                | iOS implementation built on AVPlayer      |
+| `vesper_player_macos`              | Experimental macOS implementation         |

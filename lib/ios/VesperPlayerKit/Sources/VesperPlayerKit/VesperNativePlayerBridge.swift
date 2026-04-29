@@ -18,6 +18,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     private var currentSource: VesperPlayerSource?
     private var player: AVPlayer?
+    private var dashResourceLoaderDelegate: VesperDashResourceLoaderDelegate?
     private weak var surfaceHost: PlayerSurfaceView?
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
@@ -221,6 +222,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         player?.pause()
         surfaceHost?.attach(player: nil)
         player = nil
+        dashResourceLoaderDelegate = nil
         resetTrackState()
     }
 
@@ -636,14 +638,6 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
         }
 
-        if currentSource.kind == .remote, currentSource.protocol == .dash {
-            throw NSError(
-                domain: "io.github.ikaros.vesper.host.ios",
-                code: -3,
-                userInfo: [NSLocalizedDescriptionKey: VesperPlayerI18n.dashUnsupportedOnIos]
-            )
-        }
-
         let url = try resolvedUrl(for: currentSource)
         iosHostLog("loadCurrentSource url=\(url.absoluteString)")
         let resolvedResiliencePolicy = currentResiliencePolicy.resolvedForRuntimeSource(currentSource)
@@ -655,7 +649,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         preloadCoordinator.configure(cachePolicy: cachePolicy)
         preloadCoordinator.warmCurrentSource(source: currentSource, url: url)
-        let item = AVPlayerItem(url: url)
+        let item = makePlayerItem(for: currentSource, url: url)
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
         let player = AVPlayer(playerItem: item)
@@ -691,6 +685,36 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 )
             )
         }
+    }
+
+    private func makePlayerItem(for source: VesperPlayerSource, url: URL) -> AVPlayerItem {
+        guard source.protocol == .dash else {
+            dashResourceLoaderDelegate = nil
+            guard !source.headers.isEmpty else {
+                return AVPlayerItem(url: url)
+            }
+            let asset = AVURLAsset(
+                url: url,
+                options: [vesperAVURLAssetHTTPHeaderFieldsKey: source.headers]
+            )
+            return AVPlayerItem(asset: asset)
+        }
+
+        let session = VesperDashSession(sourceURL: url, headers: source.headers)
+        let loaderDelegate = VesperDashResourceLoaderDelegate(session: session)
+        let asset = source.headers.isEmpty
+            ? AVURLAsset(url: session.masterPlaylistURL)
+            : AVURLAsset(
+                url: session.masterPlaylistURL,
+                options: [vesperAVURLAssetHTTPHeaderFieldsKey: source.headers]
+            )
+        asset.resourceLoader.setDelegate(
+            loaderDelegate,
+            queue: loaderDelegate.resourceLoadingQueue
+        )
+        dashResourceLoaderDelegate = loaderDelegate
+        iosHostLog("configured DASH bridge master=\(session.masterPlaylistURL.absoluteString)")
+        return AVPlayerItem(asset: asset)
     }
 
     private func seekToPosition(_ positionMs: Int64) {
@@ -744,6 +768,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                     self.refreshPlaybackState()
                 case .failed:
                     self.pendingPlaybackStart = false
+                    logPlayerItemErrorLog(item)
                     self.handlePlaybackFailure(
                         error: item.error,
                         fallbackMessage: errorMessage
@@ -2108,7 +2133,16 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         guard let item = player.currentItem else {
             return "player item is attached"
         }
-        if item.status != .readyToPlay {
+        switch item.status {
+        case .readyToPlay:
+            break
+        case .failed:
+            return "current item recovers from failure"
+        case .unknown:
+            if currentSource?.protocol != .dash {
+                return "current item becomes ready"
+            }
+        @unknown default:
             return "current item becomes ready"
         }
         if currentSource?.kind == .local, let surfaceHost, !surfaceHost.isReadyForDisplay {
@@ -3357,8 +3391,14 @@ private final class VesperNativePreloadCoordinator {
             switch command.kind {
             case .start:
                 let task = command.task
+                let headers = source.headers
                 warmupTask = Task.detached(priority: .utility) {
-                    await Self.executeWarmup(handle: self.sessionHandle, task: task, url: url)
+                    await Self.executeWarmup(
+                        handle: self.sessionHandle,
+                        task: task,
+                        url: url,
+                        headers: headers
+                    )
                 }
             case .cancel:
                 warmupTask?.cancel()
@@ -3401,10 +3441,12 @@ private final class VesperNativePreloadCoordinator {
     private static func executeWarmup(
         handle: UInt64,
         task: VesperRuntimePreloadTask,
-        url: URL
+        url: URL,
+        headers: [String: String]
     ) async {
         let warmupBytes = max(Int64(task.expected_memory_bytes), 1)
         var request = URLRequest(url: url)
+        applyHttpHeaders(headers, to: &request)
         request.cachePolicy = .returnCacheDataElseLoad
         request.timeoutInterval = TimeInterval(max(Int64(task.warmup_window_ms), 1_000)) / 1000.0
         request.setValue("bytes=0-\(max(warmupBytes - 1, 0))", forHTTPHeaderField: "Range")
@@ -3525,6 +3567,17 @@ private func itemStatusName(_ status: AVPlayerItem.Status) -> String {
         return "failed"
     @unknown default:
         return "unknown"
+    }
+}
+
+private func logPlayerItemErrorLog(_ item: AVPlayerItem) {
+    guard let events = item.errorLog()?.events, !events.isEmpty else {
+        return
+    }
+    for event in events.suffix(5) {
+        iosHostLog(
+            "itemErrorLog uri=\(event.uri ?? "nil") status=\(event.errorStatusCode) domain=\(event.errorDomain) comment=\(event.errorComment ?? "nil")"
+        )
     }
 }
 

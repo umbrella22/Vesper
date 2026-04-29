@@ -82,6 +82,36 @@ if [[ ! -d "$SOURCE_DIR" ]]; then
   exit 1
 fi
 
+resolve_codesign_entitlements() {
+  local candidates=()
+  local candidate
+
+  if [[ -n "${EXPANDED_CODE_SIGN_ENTITLEMENTS:-}" ]]; then
+    candidates+=("$EXPANDED_CODE_SIGN_ENTITLEMENTS")
+  fi
+  if [[ -n "${TARGET_TEMP_DIR:-}" ]]; then
+    if [[ -n "${FULL_PRODUCT_NAME:-}" ]]; then
+      candidates+=("$TARGET_TEMP_DIR/$FULL_PRODUCT_NAME.xcent")
+    fi
+    if [[ -n "${PRODUCT_NAME:-}" ]]; then
+      candidates+=("$TARGET_TEMP_DIR/$PRODUCT_NAME.app.xcent")
+      candidates+=("$TARGET_TEMP_DIR/$PRODUCT_NAME.xcent")
+    fi
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [[ "$candidate" != /* ]]; then
+      candidate="${PROJECT_DIR:-$PWD}/$candidate"
+    fi
+    if [[ -f "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 while IFS= read -r existing_binary; do
   rm -f "$existing_binary"
 done < <(
@@ -111,7 +141,13 @@ if [[ "${CODE_SIGNING_ALLOWED:-NO}" != "NO" ]]; then
   if [[ "$DESTINATION_DIRECTORY" == *.framework ]]; then
     codesign --force --sign "$signing_identity" --timestamp=none "$DESTINATION_DIRECTORY"
   elif [[ -n "${CODESIGNING_FOLDER_PATH:-}" && -d "${CODESIGNING_FOLDER_PATH:-}" ]]; then
-    codesign --force --sign "$signing_identity" --timestamp=none "$CODESIGNING_FOLDER_PATH"
+    app_codesign_args=(--force --sign "$signing_identity" --timestamp=none)
+    app_entitlements="$(resolve_codesign_entitlements || true)"
+    if [[ -n "$app_entitlements" ]]; then
+      # 重新签名 app 时必须保留 Xcode 注入的 base entitlements，否则真机会拒绝安装。
+      app_codesign_args+=(--entitlements "$app_entitlements" --generate-entitlement-der)
+    fi
+    codesign "${app_codesign_args[@]}" "$CODESIGNING_FOLDER_PATH"
   fi
 fi
 

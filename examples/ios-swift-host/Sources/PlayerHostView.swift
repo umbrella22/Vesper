@@ -299,8 +299,8 @@ struct PlayerHostView: View {
                     themeMode: themeMode,
                     remoteStreamUrl: $remoteStreamUrl,
                     hostMessage: hostMessage,
-                    dashDemoEnabled: false,
-                    dashDemoNote: ExampleI18n.dashDemoUnavailableNote,
+                    dashDemoEnabled: true,
+                    dashDemoNote: nil,
                     onThemeModeChange: { themeModeRaw = $0.rawValue },
                     onPickVideo: {
                         pickVideo()
@@ -317,7 +317,18 @@ struct PlayerHostView: View {
                         )
                         controlsVisible = true
                     },
-                    onUseDashDemo: {},
+                    onUseDashDemo: {
+                        hostMessage = nil
+                        let nextPlaylistItemIds = enqueuePlaylistItem(
+                            playlistItemIds,
+                            itemId: IOS_DASH_PLAYLIST_ITEM_ID
+                        )
+                        applyPlaylistQueue(
+                            focusItemId: IOS_DASH_PLAYLIST_ITEM_ID,
+                            playlistItemIds: nextPlaylistItemIds
+                        )
+                        controlsVisible = true
+                    },
                     onUseLiveDvrAcceptance: {
                         hostMessage = nil
                         let nextPlaylistItemIds = enqueuePlaylistItem(
@@ -454,10 +465,6 @@ struct PlayerHostView: View {
             return
         }
         let source = VesperPlayerSource.remoteUrl(url, label: ExampleI18n.customRemoteUrlLabel)
-        if source.protocol == .dash {
-            hostMessage = ExampleI18n.dashNotSupportedOnIos
-            return
-        }
         hostMessage = nil
         queuedRemoteSource = source
         let nextPlaylistItemIds = enqueuePlaylistItem(

@@ -20,6 +20,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
@@ -86,7 +87,7 @@ class VesperNativeJniBindings(
         val mediaSourceFactory =
             DefaultMediaSourceFactory(appContext)
                 .setDataSourceFactory(
-                    buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache)
+                    buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache, source.headers)
                 )
                 .setLoadErrorHandlingPolicy(
                     buildLoadErrorHandlingPolicy(source, resolvedResiliencePolicy.retry) { attempt, delayMs ->
@@ -391,7 +392,12 @@ class VesperNativeJniBindings(
                     TAG,
                     "onVideoSizeChanged width=${videoSize.width} height=${videoSize.height} pixelRatio=${videoSize.pixelWidthHeightRatio}",
                 )
-                currentVideoLayoutState = videoSize.toNativeVideoLayoutInfo()
+                val layoutInfo = videoSize.toNativeVideoLayoutInfo()
+                if (layoutInfo == null) {
+                    Log.d(TAG, "ignoring transient empty video size during renderer switch")
+                    return
+                }
+                currentVideoLayoutState = layoutInfo
                 notifyNativeUpdate()
             }
 
@@ -528,16 +534,22 @@ class VesperNativeJniBindings(
     private fun executePreloadWarmupCommands(source: VesperPlayerSource) {
         preloadCoordinator.planCurrentSource(source).forEach { command ->
             when (command) {
-                is NativePreloadCommand.Start -> runWarmup(command.task)
+                is NativePreloadCommand.Start -> runWarmup(command.task, source)
                 is NativePreloadCommand.Cancel -> Unit
             }
         }
     }
 
-    private fun runWarmup(task: NativePreloadTask) {
-        val source = currentSourceOrFallback(task.sourceUri)
+    private fun runWarmup(task: NativePreloadTask, currentSource: VesperPlayerSource) {
+        val source =
+            currentSource.takeIf { it.uri == task.sourceUri }
+                ?: currentSourceOrFallback(task.sourceUri)
         val resolvedResiliencePolicy = resolveResiliencePolicy(source, VesperPlaybackResiliencePolicy())
-        val dataSourceFactory = buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache)
+        val dataSourceFactory = buildDataSourceFactory(
+            appContext,
+            resolvedResiliencePolicy.cache,
+            source.headers,
+        )
         val dataSource = dataSourceFactory.createDataSource()
 
         val readLength =
@@ -1420,8 +1432,11 @@ private fun buildMediaItem(source: VesperPlayerSource): MediaItem {
 private fun buildDataSourceFactory(
     appContext: Context,
     cachePolicy: NativeCachePolicy,
+    headers: Map<String, String> = emptyMap(),
 ): androidx.media3.datasource.DataSource.Factory {
-    val upstreamFactory = DefaultDataSource.Factory(appContext)
+    val httpFactory = DefaultHttpDataSource.Factory()
+        .setDefaultRequestProperties(headers)
+    val upstreamFactory = DefaultDataSource.Factory(appContext, httpFactory)
     val resolvedCachePolicy = resolveCachePolicy(cachePolicy)
     if (!resolvedCachePolicy.enabled) {
         return upstreamFactory

@@ -2,6 +2,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('player source preserves request headers in wire map', () {
+    final source = VesperPlayerSource.dash(
+      uri: 'https://example.com/video.mpd',
+      label: 'DASH',
+      headers: const <String, String>{
+        'Referer': 'https://www.bilibili.com/',
+        'User-Agent': 'VesperTest',
+      },
+    );
+
+    expect(source.toMap()['headers'], <String, String>{
+      'Referer': 'https://www.bilibili.com/',
+      'User-Agent': 'VesperTest',
+    });
+
+    final restored = VesperPlayerSource.fromMap(source.toMap());
+    expect(restored.headers, source.headers);
+    expect(restored.protocol, VesperPlayerSourceProtocol.dash);
+  });
+
   test('live dvr timeline helpers fall back to seekable window end', () {
     const timeline = VesperTimeline(
       kind: VesperTimelineKind.liveDvr,

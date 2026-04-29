@@ -19,17 +19,20 @@ public struct VesperPlayerSource: Equatable {
     public let label: String
     public let kind: VesperPlayerSourceKind
     public let `protocol`: VesperPlayerSourceProtocol
+    public let headers: [String: String]
 
     public init(
         uri: String,
         label: String,
         kind: VesperPlayerSourceKind,
         protocol: VesperPlayerSourceProtocol,
+        headers: [String: String] = [:],
     ) {
         self.uri = uri
         self.label = label
         self.kind = kind
         self.protocol = `protocol`
+        self.headers = headers
     }
 
     public static func localFile(url: URL, label: String? = nil) -> VesperPlayerSource {
@@ -45,21 +48,31 @@ public struct VesperPlayerSource: Equatable {
         _ url: URL,
         label: String? = nil,
         protocol: VesperPlayerSourceProtocol? = nil,
+        headers: [String: String] = [:],
     ) -> VesperPlayerSource {
         VesperPlayerSource(
             uri: url.absoluteString,
             label: label ?? url.absoluteString,
             kind: .remote,
-            protocol: `protocol` ?? inferRemoteProtocol(for: url)
+            protocol: `protocol` ?? inferRemoteProtocol(for: url),
+            headers: headers
         )
     }
 
-    public static func hls(url: URL, label: String? = nil) -> VesperPlayerSource {
-        remoteUrl(url, label: label, protocol: .hls)
+    public static func hls(
+        url: URL,
+        label: String? = nil,
+        headers: [String: String] = [:]
+    ) -> VesperPlayerSource {
+        remoteUrl(url, label: label, protocol: .hls, headers: headers)
     }
 
-    public static func dash(url: URL, label: String? = nil) -> VesperPlayerSource {
-        remoteUrl(url, label: label, protocol: .dash)
+    public static func dash(
+        url: URL,
+        label: String? = nil,
+        headers: [String: String] = [:]
+    ) -> VesperPlayerSource {
+        remoteUrl(url, label: label, protocol: .dash, headers: headers)
     }
 
     private static func inferLocalProtocol(for url: URL) -> VesperPlayerSourceProtocol {

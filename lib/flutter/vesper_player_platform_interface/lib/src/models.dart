@@ -142,6 +142,23 @@ Map<Object?, Object?>? _rawMap(Object? raw) {
   return null;
 }
 
+Map<String, String> _decodeStringMap(Object? raw) {
+  final map = _rawMap(raw);
+  if (map == null || map.isEmpty) {
+    return const <String, String>{};
+  }
+
+  final decoded = <String, String>{};
+  for (final entry in map.entries) {
+    final key = entry.key;
+    final value = entry.value;
+    if (key is String && value is String) {
+      decoded[key] = value;
+    }
+  }
+  return decoded;
+}
+
 const Object _vesperRetryMaxAttemptsUnset = Object();
 
 final class VesperPlayerSource {
@@ -150,14 +167,20 @@ final class VesperPlayerSource {
     required this.label,
     required this.kind,
     required this.protocol,
+    this.headers = const <String, String>{},
   });
 
-  factory VesperPlayerSource.local({required String uri, String? label}) {
+  factory VesperPlayerSource.local({
+    required String uri,
+    String? label,
+    Map<String, String> headers = const <String, String>{},
+  }) {
     return VesperPlayerSource(
       uri: uri,
       label: label ?? uri,
       kind: VesperPlayerSourceKind.local,
       protocol: _inferLocalProtocol(uri),
+      headers: headers,
     );
   }
 
@@ -165,28 +188,40 @@ final class VesperPlayerSource {
     required String uri,
     String? label,
     VesperPlayerSourceProtocol? protocol,
+    Map<String, String> headers = const <String, String>{},
   }) {
     return VesperPlayerSource(
       uri: uri,
       label: label ?? uri,
       kind: VesperPlayerSourceKind.remote,
       protocol: protocol ?? _inferRemoteProtocol(uri),
+      headers: headers,
     );
   }
 
-  factory VesperPlayerSource.hls({required String uri, String? label}) {
+  factory VesperPlayerSource.hls({
+    required String uri,
+    String? label,
+    Map<String, String> headers = const <String, String>{},
+  }) {
     return VesperPlayerSource.remote(
       uri: uri,
       label: label,
       protocol: VesperPlayerSourceProtocol.hls,
+      headers: headers,
     );
   }
 
-  factory VesperPlayerSource.dash({required String uri, String? label}) {
+  factory VesperPlayerSource.dash({
+    required String uri,
+    String? label,
+    Map<String, String> headers = const <String, String>{},
+  }) {
     return VesperPlayerSource.remote(
       uri: uri,
       label: label,
       protocol: VesperPlayerSourceProtocol.dash,
+      headers: headers,
     );
   }
 
@@ -207,6 +242,7 @@ final class VesperPlayerSource {
         map['protocol'],
         VesperPlayerSourceProtocol.unknown,
       ),
+      headers: _decodeStringMap(map['headers']),
     );
   }
 
@@ -214,6 +250,7 @@ final class VesperPlayerSource {
   final String label;
   final VesperPlayerSourceKind kind;
   final VesperPlayerSourceProtocol protocol;
+  final Map<String, String> headers;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -221,6 +258,7 @@ final class VesperPlayerSource {
       'label': label,
       'kind': kind.name,
       'protocol': protocol.name,
+      'headers': headers,
     };
   }
 

@@ -13,7 +13,7 @@ does not need to depend on it directly.
 | Local files | ✅ |
 | Progressive HTTP | ✅ |
 | HLS | ✅ |
-| DASH | ❌ Not supported by the AVPlayer backend |
+| DASH | ⚠️ Experimental DASH-to-HLS bridge for static fMP4 VOD |
 | Live streams | ✅ |
 | Live DVR | ✅ |
 | Track selection (audio / subtitles) | ✅ |
@@ -23,8 +23,11 @@ does not need to depend on it directly.
 | Download management | ✅ |
 | Preload | ✅ |
 
-> The DASH DTOs already exist, but the AVPlayer backend reports DASH as
-> unsupported. Do not use `VesperPlayerSource.dash()` on iOS. Check
+> The iOS DASH path currently supports static single-period fMP4 VOD manifests
+> using `SegmentBase` plus `sidx`. Source headers are forwarded to MPD, SIDX,
+> init segment, and media segment requests; media bytes are served through the
+> SDK resource-loader proxy so protected origins do not depend on AVPlayer
+> propagating headers to nested HLS segment URLs. Check
 > `controller.snapshot.capabilities.supportsDash` if you need a runtime guard.
 > For advanced playback controls, also prefer the fine-grained capability flags
 > such as `supportsVideoTrackSelection` and `supportsAbrFixedTrack`.

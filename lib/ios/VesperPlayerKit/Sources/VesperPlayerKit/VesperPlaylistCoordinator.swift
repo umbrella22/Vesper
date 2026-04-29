@@ -414,8 +414,10 @@ public final class VesperPlaylistCoordinator: ObservableObject {
         )
 
         let handle = sessionHandle
+        let headers = source.source.headers
         warmupTasks[task.taskId] = Task.detached(priority: .utility) {
             var request = URLRequest(url: source.url)
+            applyHttpHeaders(headers, to: &request)
             request.cachePolicy = .returnCacheDataElseLoad
             let clampedWarmupWindowMs = Int64(min(task.warmupWindowMs, UInt64(Int64.max)))
             request.timeoutInterval = TimeInterval(max(clampedWarmupWindowMs, 1_000)) / 1000.0

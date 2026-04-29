@@ -1593,6 +1593,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-dash-hls-bridge"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "player-decoder-d3d11"
 version = "0.1.0"
 dependencies = [

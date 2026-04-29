@@ -45,7 +45,7 @@ final class PlayerErrorStateTests: XCTestCase {
         )
     }
 
-    func testSelectingUnsupportedSourceClearsPreviousSurfaceAttachmentAndTrackState() throws {
+    func testSelectingDashSourceClearsPreviousTrackStateAndUsesDashBridge() throws {
         let tempUrl = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("mp4")
@@ -62,18 +62,19 @@ final class PlayerErrorStateTests: XCTestCase {
         bridge.selectSource(
             .dash(
                 url: URL(string: "https://example.com/playlist.mpd")!,
-                label: "Unsupported DASH"
+                label: "DASH"
             )
         )
 
-        XCTAssertNil(attachedPlayer(in: surface))
+        XCTAssertNotNil(attachedPlayer(in: surface))
         XCTAssertEqual(bridge.trackCatalog, .empty)
         XCTAssertEqual(bridge.trackSelection, VesperTrackSelectionSnapshot())
         XCTAssertNil(bridge.effectiveVideoTrackId)
         XCTAssertNil(bridge.videoVariantObservation)
         XCTAssertNil(bridge.fixedTrackStatus)
-        XCTAssertEqual(bridge.lastError?.category, .unsupported)
-        XCTAssertEqual(bridge.lastError?.message, VesperPlayerI18n.dashUnsupportedOnIos)
+        XCTAssertNil(bridge.lastError)
+        XCTAssertEqual(bridge.uiState.sourceLabel, "DASH")
+        XCTAssertEqual(bridge.uiState.subtitle, VesperPlayerI18n.nativeRemoteSourceSubtitle("dash"))
     }
 
     func testStaleStopSeekCompletionDoesNotOverwriteNewSourceStopSeekState() throws {

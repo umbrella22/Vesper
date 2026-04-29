@@ -879,6 +879,15 @@ private fun MethodCall.argumentMap(): Map<String, Any?> =
 private fun Map<*, *>.stringMap(): Map<String, Any?> =
     entries.associate { (key, value) -> key.toString() to value }
 
+private fun Any?.stringStringMap(): Map<String, String> {
+    val raw = this as? Map<*, *> ?: return emptyMap()
+    return raw.entries.mapNotNull { (key, value) ->
+        val stringKey = key as? String ?: return@mapNotNull null
+        val stringValue = value as? String ?: return@mapNotNull null
+        stringKey to stringValue
+    }.toMap()
+}
+
 private fun requireNestedMap(
     arguments: Map<String, Any?>,
     key: String,
@@ -905,6 +914,7 @@ private fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
             "dash" -> VesperPlayerSourceProtocol.Dash
             else -> VesperPlayerSourceProtocol.Unknown
         },
+        headers = this["headers"].stringStringMap(),
     )
 }
 
@@ -1326,6 +1336,7 @@ private fun VesperPlayerSource.toMap(): Map<String, Any?> =
         "label" to label,
         "kind" to kind.toWireName(),
         "protocol" to protocol.toWireName(),
+        "headers" to headers,
     )
 
 private fun VesperDownloadTaskSnapshot.toMap(): Map<String, Any?> =
