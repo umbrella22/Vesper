@@ -60,7 +60,7 @@ where
         .filter(|set| set.kind == DashAdaptationKind::Audio)
     {
         for representation in &adaptation_set.representations {
-            require_segment_base(representation)?;
+            require_segment_addressing(representation)?;
             if !representation.codecs.is_empty() {
                 push_unique_codec(&mut audio_codecs, &representation.codecs);
             }
@@ -87,7 +87,7 @@ where
         .filter(|set| set.kind == DashAdaptationKind::Video)
     {
         for representation in &adaptation_set.representations {
-            require_segment_base(representation)?;
+            require_segment_addressing(representation)?;
             let bandwidth = representation.bandwidth.ok_or_else(|| {
                 DashHlsError::InvalidHlsInput(format!(
                     "video Representation `{}` is missing bandwidth",
@@ -265,10 +265,10 @@ fn append_variant(output: &mut String, variant: &HlsVariant) -> DashHlsResult<()
     Ok(())
 }
 
-fn require_segment_base(representation: &DashRepresentation) -> DashHlsResult<()> {
-    if representation.segment_base.is_none() {
+fn require_segment_addressing(representation: &DashRepresentation) -> DashHlsResult<()> {
+    if representation.segment_base.is_none() && representation.segment_template.is_none() {
         return Err(DashHlsError::UnsupportedMpd(format!(
-            "Representation `{}` must use SegmentBase for DASH-to-HLS bridge MVP",
+            "Representation `{}` must use SegmentBase or SegmentTemplate for DASH-to-HLS bridge",
             representation.id
         )));
     }
@@ -396,6 +396,7 @@ mod tests {
                                 initialization: crate::dash::ByteRange::new(0, 99),
                                 index_range: crate::dash::ByteRange::new(100, 199),
                             }),
+                            segment_template: None,
                         }],
                     },
                     DashAdaptationSet {
@@ -417,6 +418,7 @@ mod tests {
                                 initialization: crate::dash::ByteRange::new(0, 49),
                                 index_range: crate::dash::ByteRange::new(50, 99),
                             }),
+                            segment_template: None,
                         }],
                     },
                 ],

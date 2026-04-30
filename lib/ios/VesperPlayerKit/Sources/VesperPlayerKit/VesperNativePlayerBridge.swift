@@ -1620,7 +1620,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         return LoadedTrackCatalogState(
             catalog: VesperTrackCatalog(
                 tracks: tracks,
-                adaptiveVideo: currentSource?.kind == .remote && currentSource?.protocol == .hls,
+                adaptiveVideo: sourceSupportsVideoVariantCatalog(currentSource),
                 adaptiveAudio: false
             ),
             audioGroup: audibleGroup,
@@ -1632,7 +1632,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func loadVideoVariantState(for asset: AVAsset) async -> LoadedVideoVariantState {
-        guard currentSource?.kind == .remote, currentSource?.protocol == .hls else {
+        guard sourceSupportsVideoVariantCatalog(currentSource) else {
             return .empty
         }
         guard #available(iOS 15.0, *) else {
@@ -2796,6 +2796,13 @@ func abrPolicyRequiresLoadedVideoVariantCatalog(_ policy: VesperAbrPolicy) -> Bo
     case .auto:
         return false
     }
+}
+
+private func sourceSupportsVideoVariantCatalog(_ source: VesperPlayerSource?) -> Bool {
+    guard source?.kind == .remote else {
+        return false
+    }
+    return source?.protocol == .hls || source?.protocol == .dash
 }
 
 func resolveFixedTrackStatus(

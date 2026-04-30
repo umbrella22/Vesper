@@ -2243,6 +2243,64 @@ pub extern "C" fn player_ffi_resolve_track_preferences(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_dash_bridge_execute_json(
+    request_json: *const c_char,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if request_json.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "request_json was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+    if out_json.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let request_json = match unsafe { CStr::from_ptr(request_json) }.to_str() {
+        Ok(value) => value,
+        Err(_) => {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidUtf8,
+                    "request_json was not valid UTF-8",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let response_json = match player_dash_hls_bridge::ops::execute_json(request_json) {
+        Ok(value) => value,
+        Err(error) => {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    unsafe {
+        ptr::write(out_json, into_c_string_ptr(response_json));
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_dash_bridge_string_free(value: *mut c_char) {
+    let mut value = value;
+    free_c_string(&mut value);
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
     let Some(error) = (unsafe { error.as_mut() }) else {
         return;
@@ -3196,8 +3254,9 @@ fn free_c_string(value: &mut *mut c_char) {
     }
 }
 
-fn write_error(out_error: *mut PlayerFfiError, error: PlayerFfiError) {
+fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiError) {
     if out_error.is_null() {
+        free_c_string(&mut error.message);
         return;
     }
 

@@ -551,4 +551,11 @@ bool vesper_runtime_resolve_track_preferences(
 void vesper_runtime_track_preferences_free(
     VesperRuntimeTrackPreferencePolicy *track_preferences);
 
+bool vesper_dash_bridge_execute_json(
+    const char *request_json,
+    char **out_json,
+    char **out_error_message);
+
+void vesper_dash_bridge_string_free(char *value);
+
 #endif

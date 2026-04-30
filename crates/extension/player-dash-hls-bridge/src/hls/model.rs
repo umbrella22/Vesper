@@ -1,6 +1,8 @@
 use crate::dash::ByteRange;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HlsMasterInput {
     pub variants: Vec<HlsVariant>,
     pub audio_renditions: Vec<HlsAudioRendition>,
@@ -17,7 +19,8 @@ impl Default for HlsMasterInput {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HlsVariant {
     pub uri: String,
     pub bandwidth: u64,
@@ -29,13 +32,15 @@ pub struct HlsVariant {
     pub video_range: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HlsResolution {
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HlsAudioRendition {
     pub group_id: String,
     pub name: String,
@@ -46,7 +51,8 @@ pub struct HlsAudioRendition {
     pub channels: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HlsMediaInput {
     pub uri: String,
     pub initialization: ByteRange,
@@ -54,7 +60,8 @@ pub struct HlsMediaInput {
     pub independent_segments: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HlsMediaSegment {
     pub duration_seconds: f64,
     pub byte_range: ByteRange,

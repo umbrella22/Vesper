@@ -11,6 +11,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 player-core = { path = "../player-core" }
+player-dash-hls-bridge = { path = "../../extension/player-dash-hls-bridge" }
 player-plugin = { path = "../player-plugin" }
 player-policy-resolver = { path = "../player-policy-resolver" }
 player-platform-ios = { path = "../../platform/mobile/player-platform-ios" }

@@ -19,13 +19,11 @@ use player_core::{MediaSource, MediaSourceProtocol};
 use player_platform_apple::{VIDEOTOOLBOX_BACKEND_NAME, probe_videotoolbox_hardware_decode};
 use player_platform_desktop::{
     DesktopVideoFrame, DesktopVideoFramePoll, DesktopVideoFramePresentation, DesktopVideoSource,
-    DesktopVideoSourceBootstrap, DesktopVideoSourceFactory,
-    merge_runtime_fallback_reason,
+    DesktopVideoSourceBootstrap, DesktopVideoSourceFactory, merge_runtime_fallback_reason,
     open_platform_desktop_source_with_options_and_interrupt,
     open_platform_desktop_source_with_video_source_factory_and_options_and_interrupt,
     probe_platform_desktop_source_with_options,
-    probe_platform_desktop_source_with_video_source_factory_and_options,
-    runtime_fallback_events,
+    probe_platform_desktop_source_with_video_source_factory_and_options, runtime_fallback_events,
 };
 use player_plugin::{
     DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind, DecoderPacket,
@@ -724,7 +722,10 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
 }
 
 impl MacosRuntimeAdapter {
-    fn activate_runtime_fallback(&mut self, runtime_error_message: &str) -> PlayerRuntimeResult<()> {
+    fn activate_runtime_fallback(
+        &mut self,
+        runtime_error_message: &str,
+    ) -> PlayerRuntimeResult<()> {
         let Some(fallback) = self.runtime_fallback.take() else {
             return Ok(());
         };
@@ -743,7 +744,10 @@ impl MacosRuntimeAdapter {
         &mut self,
         runtime_error_message: &str,
         fallback: MacosRuntimeActiveFallback,
-        open_fallback: impl FnOnce(MediaSource, PlayerRuntimeOptions) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap>,
+        open_fallback: impl FnOnce(
+            MediaSource,
+            PlayerRuntimeOptions,
+        ) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap>,
     ) -> PlayerRuntimeResult<()> {
         let progress = self.inner.progress();
         let playback_rate = self.inner.playback_rate();
@@ -755,10 +759,7 @@ impl MacosRuntimeAdapter {
             runtime_error_message,
             None,
         );
-        apply_video_decode_fallback_reason(
-            &mut bootstrap.startup,
-            Some(fallback_reason.clone()),
-        );
+        apply_video_decode_fallback_reason(&mut bootstrap.startup, Some(fallback_reason.clone()));
 
         let mut runtime = bootstrap.runtime;
         if !progress.position().is_zero() {
@@ -808,7 +809,9 @@ fn should_trigger_runtime_fallback_for_command(
     }
     let message = error.message().to_ascii_lowercase();
     match command {
-        PlayerRuntimeCommand::SeekTo { .. } => message.contains("seek") || message.contains("present"),
+        PlayerRuntimeCommand::SeekTo { .. } => {
+            message.contains("seek") || message.contains("present")
+        }
         PlayerRuntimeCommand::Play => message.contains("play") || message.contains("present"),
         PlayerRuntimeCommand::SetPlaybackRate { .. } => {
             message.contains("rate") || message.contains("present")
@@ -1180,8 +1183,12 @@ fn present_and_release_native_frame(
         presentation_epoch: current_epoch,
     } = &mut *shared;
     if *current_epoch != presentation_epoch {
-        return release_native_frame_with_counter(session.as_mut(), outstanding_frames.as_ref(), frame)
-            .map_err(|error| anyhow::anyhow!(error.to_string()));
+        return release_native_frame_with_counter(
+            session.as_mut(),
+            outstanding_frames.as_ref(),
+            frame,
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()));
     }
     present_and_release_native_frame_with(
         session.as_mut(),
@@ -1207,7 +1214,9 @@ fn present_if_current_epoch_and_release(
     present(frame)
 }
 
-fn shared_presentation_epoch(shared: &Arc<Mutex<MacosNativeFrameDecoderState>>) -> anyhow::Result<u64> {
+fn shared_presentation_epoch(
+    shared: &Arc<Mutex<MacosNativeFrameDecoderState>>,
+) -> anyhow::Result<u64> {
     shared
         .lock()
         .map(|state| state.presentation_epoch)
@@ -1220,12 +1229,11 @@ fn present_and_release_native_frame_with(
     outstanding_frames: &AtomicUsize,
     frame: DecoderNativeFrame,
 ) -> anyhow::Result<()> {
-    present_and_release_native_frame_with_presenter(
-        session,
-        outstanding_frames,
-        frame,
-        |handle| presenter.present_cv_pixel_buffer_handle(handle).map_err(|error| error.message().to_owned()),
-    )
+    present_and_release_native_frame_with_presenter(session, outstanding_frames, frame, |handle| {
+        presenter
+            .present_cv_pixel_buffer_handle(handle)
+            .map_err(|error| error.message().to_owned())
+    })
 }
 
 fn present_and_release_native_frame_with_presenter(
@@ -1235,8 +1243,8 @@ fn present_and_release_native_frame_with_presenter(
     present: impl FnOnce(usize) -> Result<(), String>,
 ) -> anyhow::Result<()> {
     let present_result = present(frame.handle).map_err(|error| anyhow::anyhow!(error));
-    let release_result =
-        release_native_frame_with_counter(session, outstanding_frames, frame).map_err(|error| anyhow::anyhow!(error.to_string()));
+    let release_result = release_native_frame_with_counter(session, outstanding_frames, frame)
+        .map_err(|error| anyhow::anyhow!(error.to_string()));
 
     present_result.and(release_result)
 }
@@ -1870,26 +1878,28 @@ mod tests {
     use std::collections::VecDeque;
     use std::os::raw::c_void;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
     use std::time::{Duration, Instant};
 
     use super::{
         MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
-        MacosRuntimeActiveFallback, MacosRuntimeAdapter,
-        MacosRuntimeAdapterFallback, MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
-        MacosSoftwarePlayerRuntimeAdapterFactory,
-        apply_decoder_plugin_diagnostics,
+        MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
+        MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
+        MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics,
         apply_decoder_plugin_diagnostics_to_video_decode,
-        apply_decoder_plugin_registry_to_video_decode, macos_runtime_adapter_factory,
-        macos_native_frame_decoder_video_decode_info, macos_runtime_diagnostics,
-        macos_video_decode_info, present_if_current_epoch_and_release,
-        present_and_release_native_frame_with_presenter, release_native_frame_with_counter,
-        should_trigger_runtime_fallback_for_advance, should_trigger_runtime_fallback_for_command,
+        apply_decoder_plugin_registry_to_video_decode,
+        macos_native_frame_decoder_video_decode_info, macos_runtime_adapter_factory,
+        macos_runtime_diagnostics, macos_video_decode_info,
         open_macos_host_runtime_source_with_options,
         open_macos_software_runtime_source_with_options_and_interrupt,
+        present_and_release_native_frame_with_presenter, present_if_current_epoch_and_release,
         probe_macos_host_runtime_initializer_with_factories,
-        probe_macos_host_runtime_source_with_options,
+        probe_macos_host_runtime_source_with_options, release_native_frame_with_counter,
+        should_trigger_runtime_fallback_for_advance, should_trigger_runtime_fallback_for_command,
     };
     use player_backend_ffmpeg::FfmpegBackend;
     use player_core::MediaSource;
@@ -2251,7 +2261,12 @@ mod tests {
             PlayerRuntimeAdapterBackendFamily::SoftwareDesktop
         );
         assert!(bootstrap.runtime.capabilities().supports_frame_output);
-        assert!(!bootstrap.runtime.capabilities().supports_external_video_surface);
+        assert!(
+            !bootstrap
+                .runtime
+                .capabilities()
+                .supports_external_video_surface
+        );
         assert!(
             bootstrap
                 .startup
@@ -2333,10 +2348,15 @@ mod tests {
         assert_eq!(adapter.progress().position(), Duration::from_secs(5));
         assert_eq!(adapter.presentation_state(), PresentationState::Playing);
         let events = adapter.drain_events();
-        assert!(events.iter().any(|event| matches!(event, PlayerRuntimeEvent::Error(_))));
-        assert!(events.iter().any(
-            |event| matches!(event, PlayerRuntimeEvent::VideoSurfaceChanged { attached: false })
-        ));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, PlayerRuntimeEvent::Error(_)))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PlayerRuntimeEvent::VideoSurfaceChanged { attached: false }
+        )));
         assert!(
             adapter
                 .video_decode
@@ -2400,11 +2420,9 @@ mod tests {
             .take()
             .expect("runtime fallback config should exist");
         let result = adapter
-            .activate_runtime_fallback_with(
-                "forced seek failure",
-                fallback,
-                |_source, _options| Ok(test_fallback_bootstrap()),
-            )
+            .activate_runtime_fallback_with("forced seek failure", fallback, |_source, _options| {
+                Ok(test_fallback_bootstrap())
+            })
             .and_then(|()| {
                 adapter.dispatch(PlayerRuntimeCommand::SeekTo {
                     position: Duration::from_secs(7),
@@ -2457,9 +2475,7 @@ mod tests {
                         PlayerRuntimeErrorCode::BackendFailure,
                         match command {
                             PlayerRuntimeCommand::Play => "forced play failure",
-                            PlayerRuntimeCommand::SetPlaybackRate { .. } => {
-                                "forced rate failure"
-                            }
+                            PlayerRuntimeCommand::SetPlaybackRate { .. } => "forced rate failure",
                             _ => unreachable!(),
                         },
                     )),
@@ -2506,47 +2522,72 @@ mod tests {
 
     #[test]
     fn runtime_fallback_trigger_only_matches_expected_paths() {
-        assert!(should_trigger_runtime_fallback_for_advance(&PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::BackendFailure,
-            "failed to present decoded video frame"
-        )));
-        assert!(should_trigger_runtime_fallback_for_advance(&PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::BackendFailure,
-            "failed to present seeked video frame"
-        )));
-        assert!(!should_trigger_runtime_fallback_for_advance(&PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::BackendFailure,
-            "failed to decode audio stream"
-        )));
-        assert!(should_trigger_runtime_fallback_for_advance(&PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::BackendFailure,
-            "native-frame decoder state is poisoned"
-        )));
-        assert!(!should_trigger_runtime_fallback_for_advance(&PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::SeekFailure,
-            "failed to present decoded video frame"
-        )));
+        assert!(should_trigger_runtime_fallback_for_advance(
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "failed to present decoded video frame"
+            )
+        ));
+        assert!(should_trigger_runtime_fallback_for_advance(
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "failed to present seeked video frame"
+            )
+        ));
+        assert!(!should_trigger_runtime_fallback_for_advance(
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "failed to decode audio stream"
+            )
+        ));
+        assert!(should_trigger_runtime_fallback_for_advance(
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "native-frame decoder state is poisoned"
+            )
+        ));
+        assert!(!should_trigger_runtime_fallback_for_advance(
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::SeekFailure,
+                "failed to present decoded video frame"
+            )
+        ));
         assert!(should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::SeekTo {
                 position: Duration::from_secs(1)
             },
-            &PlayerRuntimeError::new(PlayerRuntimeErrorCode::BackendFailure, "forced seek failure")
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "forced seek failure"
+            )
         ));
         assert!(should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::Play,
-            &PlayerRuntimeError::new(PlayerRuntimeErrorCode::BackendFailure, "forced play failure")
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "forced play failure"
+            )
         ));
         assert!(should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::SetPlaybackRate { rate: 1.5 },
-            &PlayerRuntimeError::new(PlayerRuntimeErrorCode::BackendFailure, "forced rate failure")
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "forced rate failure"
+            )
         ));
         assert!(!should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::Pause,
-            &PlayerRuntimeError::new(PlayerRuntimeErrorCode::BackendFailure, "forced pause failure")
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "forced pause failure"
+            )
         ));
         assert!(!should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::Stop,
-            &PlayerRuntimeError::new(PlayerRuntimeErrorCode::BackendFailure, "forced stop failure")
+            &PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                "forced stop failure"
+            )
         ));
     }
 
@@ -2573,7 +2614,10 @@ mod tests {
                     },
                     media_info: media_info_with_codec("H264"),
                     playback_rate: 1.0,
-                    progress: PlaybackProgress::new(Duration::from_secs(2), Some(Duration::from_secs(30))),
+                    progress: PlaybackProgress::new(
+                        Duration::from_secs(2),
+                        Some(Duration::from_secs(30)),
+                    ),
                     state: PresentationState::Playing,
                     events: VecDeque::new(),
                     advance_error: None,
@@ -2603,7 +2647,9 @@ mod tests {
                 pending_runtime_fallback_events: VecDeque::new(),
             };
 
-            let error = adapter.dispatch(command).expect_err("pause/stop should not fallback");
+            let error = adapter
+                .dispatch(command)
+                .expect_err("pause/stop should not fallback");
             assert_eq!(error.code(), PlayerRuntimeErrorCode::BackendFailure);
             assert!(adapter.runtime_fallback.is_some());
             assert!(adapter.inner.capabilities().supports_external_video_surface);
@@ -3057,7 +3103,9 @@ mod tests {
                 .expect("set playback rate should succeed before fallback");
 
             for _ in 0..240 {
-                let _ = runtime.advance().expect("advance should fallback instead of failing");
+                let _ = runtime
+                    .advance()
+                    .expect("advance should fallback instead of failing");
                 if runtime.capabilities().supports_frame_output
                     && !runtime.capabilities().supports_external_video_surface
                 {
@@ -3084,7 +3132,10 @@ mod tests {
             let mut saw_surface_detached = false;
             let mut saw_runtime_fallback_error = false;
             for event in runtime.drain_events() {
-                if matches!(event, PlayerRuntimeEvent::VideoSurfaceChanged { attached: false }) {
+                if matches!(
+                    event,
+                    PlayerRuntimeEvent::VideoSurfaceChanged { attached: false }
+                ) {
                     saw_surface_detached = true;
                 }
                 if let PlayerRuntimeEvent::Error(error) = event
@@ -3093,7 +3144,10 @@ mod tests {
                     saw_runtime_fallback_error = true;
                 }
             }
-            assert!(saw_surface_detached, "expected native surface detachment event after fallback");
+            assert!(
+                saw_surface_detached,
+                "expected native surface detachment event after fallback"
+            );
             assert!(
                 saw_runtime_fallback_error,
                 "expected explicit runtime fallback error event after fallback"
@@ -3414,7 +3468,10 @@ mod tests {
         assert!(result.is_ok());
         assert!(!present_called.load(Ordering::SeqCst));
         assert_eq!(outstanding_frames.load(Ordering::SeqCst), 0);
-        assert_eq!(session.session_info().decoder_name.as_deref(), Some("released=1"));
+        assert_eq!(
+            session.session_info().decoder_name.as_deref(),
+            Some("released=1")
+        );
     }
 
     fn media_info_with_codec(codec: &str) -> PlayerMediaInfo {
@@ -3751,7 +3808,9 @@ mod tests {
             Ok(DecoderPacketResult { accepted: true })
         }
 
-        fn receive_native_frame(&mut self) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+        fn receive_native_frame(
+            &mut self,
+        ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
             Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
         }
 

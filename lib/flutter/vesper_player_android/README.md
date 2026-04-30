@@ -9,19 +9,19 @@ directly.
 
 ## Platform Capabilities
 
-| Format / feature | Status |
-|---|---|
-| Local files | ✅ |
-| Progressive HTTP | ✅ |
-| HLS | ✅ |
-| DASH | ✅ |
-| Live streams | ✅ |
-| Live DVR | ✅ |
-| Track selection (video / audio / subtitles) | ✅ |
-| Adaptive bitrate (ABR) | ✅ Auto / Constrained / FixedTrack |
-| Buffering / retry / cache policy | ✅ |
-| Download management | ✅ |
-| Preload | ✅ |
+| Format / feature                            | Status                             |
+| ------------------------------------------- | ---------------------------------- |
+| Local files                                 | ✅                                 |
+| Progressive HTTP                            | ✅                                 |
+| HLS                                         | ✅                                 |
+| DASH                                        | ✅                                 |
+| Live streams                                | ✅                                 |
+| Live DVR                                    | ✅                                 |
+| Track selection (video / audio / subtitles) | ✅                                 |
+| Adaptive bitrate (ABR)                      | ✅ Auto / Constrained / FixedTrack |
+| Buffering / retry / cache policy            | ✅                                 |
+| Download management                         | ✅                                 |
+| Preload                                     | ✅                                 |
 
 ## Technical Notes
 

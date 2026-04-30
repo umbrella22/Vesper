@@ -8,23 +8,24 @@ does not need to depend on it directly.
 
 ## Platform Capabilities
 
-| Format / feature | Status |
-|---|---|
-| Local files | ✅ |
-| Progressive HTTP | ✅ |
-| HLS | ✅ |
-| DASH | ⚠️ Experimental DASH-to-HLS bridge for static fMP4 VOD |
-| Live streams | ✅ |
-| Live DVR | ✅ |
-| Track selection (audio / subtitles) | ✅ |
-| Track selection (video) | ⚠️ Not exposed on the current AVPlayer route |
-| Adaptive bitrate (ABR) | ⚠️ `constrained` is supported; `fixedTrack` is available as best-effort variant pinning on iOS 15+ |
-| Buffering / retry / cache policy | ✅ |
-| Download management | ✅ |
-| Preload | ✅ |
+| Format / feature                    | Status                                                                                             |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Local files                         | ✅                                                                                                 |
+| Progressive HTTP                    | ✅                                                                                                 |
+| HLS                                 | ✅                                                                                                 |
+| DASH                                | ⚠️ Experimental DASH-to-HLS bridge for static fMP4 VOD                                             |
+| Live streams                        | ✅                                                                                                 |
+| Live DVR                            | ✅                                                                                                 |
+| Track selection (audio / subtitles) | ✅                                                                                                 |
+| Track selection (video)             | ⚠️ Not exposed on the current AVPlayer route                                                       |
+| Adaptive bitrate (ABR)              | ⚠️ `constrained` is supported; `fixedTrack` is available as best-effort variant pinning on iOS 15+ |
+| Buffering / retry / cache policy    | ✅                                                                                                 |
+| Download management                 | ✅                                                                                                 |
+| Preload                             | ✅                                                                                                 |
 
 > The iOS DASH path currently supports static single-period fMP4 VOD manifests
-> using `SegmentBase` plus `sidx`. Source headers are forwarded to MPD, SIDX,
+> using either `SegmentBase + sidx` or `SegmentTemplate` / `SegmentTimeline`.
+> Source headers are forwarded to MPD, SIDX,
 > init segment, and media segment requests; media bytes are served through the
 > SDK resource-loader proxy so protected origins do not depend on AVPlayer
 > propagating headers to nested HLS segment URLs. Check

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     dash::model::{
         ByteRange, DashAdaptationKind, DashAdaptationSet, DashManifest, DashPeriod,
-        DashRepresentation, DashSegmentBase,
+        DashRepresentation, DashSegmentBase, DashSegmentTemplate, DashSegmentTimelineEntry,
     },
     error::{DashHlsError, DashHlsResult},
 };
@@ -41,7 +41,7 @@ pub fn parse_mpd_with_base_uri(
 
     let mut periods = Vec::new();
     for period in mpd.children_named("Period") {
-        periods.push(parse_period(period, &mpd_base));
+        periods.push(parse_period(period, &mpd_base)?);
     }
 
     if periods.is_empty() {
@@ -57,23 +57,26 @@ pub fn parse_mpd_with_base_uri(
     })
 }
 
-fn parse_period(node: &XmlNode, inherited_base_uri: &str) -> DashPeriod {
+fn parse_period(node: &XmlNode, inherited_base_uri: &str) -> DashHlsResult<DashPeriod> {
     let period_base = child_text(node, "BaseURL")
         .map(|base| resolve_uri(inherited_base_uri, base))
         .unwrap_or_else(|| inherited_base_uri.to_owned());
     let mut adaptation_sets = Vec::new();
 
     for adaptation in node.children_named("AdaptationSet") {
-        adaptation_sets.push(parse_adaptation_set(adaptation, &period_base));
+        adaptation_sets.push(parse_adaptation_set(adaptation, &period_base)?);
     }
 
-    DashPeriod {
+    Ok(DashPeriod {
         id: node.attr("id").map(str::to_owned),
         adaptation_sets,
-    }
+    })
 }
 
-fn parse_adaptation_set(node: &XmlNode, inherited_base_uri: &str) -> DashAdaptationSet {
+fn parse_adaptation_set(
+    node: &XmlNode,
+    inherited_base_uri: &str,
+) -> DashHlsResult<DashAdaptationSet> {
     let adaptation_base = child_text(node, "BaseURL")
         .map(|base| resolve_uri(inherited_base_uri, base))
         .unwrap_or_else(|| inherited_base_uri.to_owned());
@@ -83,7 +86,8 @@ fn parse_adaptation_set(node: &XmlNode, inherited_base_uri: &str) -> DashAdaptat
         mime_type.as_deref(),
         node.attr("lang"),
     );
-    let inherited_segment_base = parse_segment_base(node);
+    let inherited_segment_base = parse_segment_base(node)?;
+    let inherited_segment_template = parse_segment_template(node)?;
     let mut representations = Vec::new();
 
     for representation in node.children_named("Representation") {
@@ -105,7 +109,9 @@ fn parse_adaptation_set(node: &XmlNode, inherited_base_uri: &str) -> DashAdaptat
             .unwrap_or_default()
             .to_owned();
         let segment_base =
-            parse_segment_base(representation).or_else(|| inherited_segment_base.clone());
+            parse_segment_base(representation)?.or_else(|| inherited_segment_base.clone());
+        let segment_template =
+            parse_segment_template(representation)?.or_else(|| inherited_segment_template.clone());
 
         representations.push(DashRepresentation {
             id,
@@ -118,16 +124,17 @@ fn parse_adaptation_set(node: &XmlNode, inherited_base_uri: &str) -> DashAdaptat
             frame_rate: representation.attr("frameRate").map(str::to_owned),
             audio_sampling_rate: representation.attr("audioSamplingRate").map(str::to_owned),
             segment_base,
+            segment_template,
         });
     }
 
-    DashAdaptationSet {
+    Ok(DashAdaptationSet {
         id: node.attr("id").map(str::to_owned),
         kind,
         mime_type,
         language: node.attr("lang").map(str::to_owned),
         representations,
-    }
+    })
 }
 
 fn adaptation_kind(
@@ -152,29 +159,159 @@ fn adaptation_kind(
     }
 }
 
-fn parse_segment_base(node: &XmlNode) -> Option<DashSegmentBase> {
-    let segment_base = node.children_named("SegmentBase").next()?;
-    let index_range = segment_base.attr("indexRange").and_then(parse_byte_range)?;
-    let initialization = segment_base
+fn parse_segment_base(node: &XmlNode) -> DashHlsResult<Option<DashSegmentBase>> {
+    let Some(segment_base) = node.children_named("SegmentBase").next() else {
+        return Ok(None);
+    };
+    let Some(index_range_value) = segment_base.attr("indexRange") else {
+        return Ok(None);
+    };
+    let Some(initialization_value) = segment_base
         .children_named("Initialization")
         .next()
         .and_then(|node| node.attr("range"))
-        .and_then(parse_byte_range)?;
+    else {
+        return Ok(None);
+    };
+    let index_range = parse_byte_range(index_range_value)?;
+    let initialization = parse_byte_range(initialization_value)?;
 
-    Some(DashSegmentBase {
+    Ok(Some(DashSegmentBase {
         initialization,
         index_range,
-    })
+    }))
 }
 
-fn parse_byte_range(value: &str) -> Option<ByteRange> {
-    let (start, end) = value.split_once('-')?;
-    let start = start.trim().parse().ok()?;
-    let end = end.trim().parse().ok()?;
-    if end < start {
-        return None;
+fn parse_segment_template(node: &XmlNode) -> DashHlsResult<Option<DashSegmentTemplate>> {
+    let Some(segment_template) = node.children_named("SegmentTemplate").next() else {
+        return Ok(None);
+    };
+    let duration = parse_positive_u64(
+        segment_template.attr("duration"),
+        "SegmentTemplate duration",
+    )?;
+    let timescale = segment_template
+        .attr("timescale")
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                DashHlsError::InvalidMpd("SegmentTemplate timescale must be positive".to_owned())
+            })
+        })
+        .transpose()?
+        .unwrap_or(1);
+    if timescale == 0 {
+        return Err(DashHlsError::InvalidMpd(
+            "SegmentTemplate timescale must be positive".to_owned(),
+        ));
     }
-    Some(ByteRange { start, end })
+    let start_number = segment_template
+        .attr("startNumber")
+        .and_then(parse_u64)
+        .unwrap_or(1);
+    let presentation_time_offset = segment_template
+        .attr("presentationTimeOffset")
+        .and_then(parse_u64)
+        .unwrap_or(0);
+    let timeline = parse_segment_timeline(segment_template)?;
+    if duration.is_none() && timeline.is_empty() {
+        return Err(DashHlsError::UnsupportedMpd(
+            "SegmentTemplate requires duration or SegmentTimeline".to_owned(),
+        ));
+    }
+    let initialization = segment_template.attr("initialization").unwrap_or_default();
+    let media = segment_template.attr("media").unwrap_or_default();
+    if initialization.is_empty() || media.is_empty() {
+        return Err(DashHlsError::UnsupportedMpd(
+            "SegmentTemplate must provide initialization and media templates".to_owned(),
+        ));
+    }
+
+    Ok(Some(DashSegmentTemplate {
+        timescale,
+        duration,
+        start_number,
+        presentation_time_offset,
+        initialization: initialization.to_owned(),
+        media: media.to_owned(),
+        timeline,
+    }))
+}
+
+fn parse_segment_timeline(node: &XmlNode) -> DashHlsResult<Vec<DashSegmentTimelineEntry>> {
+    let Some(timeline) = node.children_named("SegmentTimeline").next() else {
+        return Ok(Vec::new());
+    };
+    let mut entries = Vec::new();
+    for entry in timeline.children_named("S") {
+        let duration =
+            parse_positive_u64(entry.attr("d"), "SegmentTimeline S@d")?.ok_or_else(|| {
+                DashHlsError::InvalidMpd(
+                    "SegmentTimeline S must provide positive duration".to_owned(),
+                )
+            })?;
+        let repeat_count = match entry.attr("r") {
+            Some(value) => {
+                let parsed = value.parse::<i32>().map_err(|_| {
+                    DashHlsError::InvalidMpd(format!(
+                        "invalid SegmentTimeline repeat count {value}"
+                    ))
+                })?;
+                if parsed < -1 {
+                    return Err(DashHlsError::InvalidMpd(format!(
+                        "invalid SegmentTimeline repeat count {value}"
+                    )));
+                }
+                parsed
+            }
+            None => 0,
+        };
+        entries.push(DashSegmentTimelineEntry {
+            start_time: entry.attr("t").and_then(parse_u64),
+            duration,
+            repeat_count,
+        });
+    }
+    if entries.is_empty() {
+        return Err(DashHlsError::InvalidMpd(
+            "SegmentTimeline must contain at least one S entry".to_owned(),
+        ));
+    }
+    Ok(entries)
+}
+
+fn parse_positive_u64(value: Option<&str>, field: &str) -> DashHlsResult<Option<u64>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| DashHlsError::InvalidMpd(format!("{field} must be a positive integer")))?;
+    if parsed == 0 {
+        return Err(DashHlsError::InvalidMpd(format!(
+            "{field} must be a positive integer"
+        )));
+    }
+    Ok(Some(parsed))
+}
+
+fn parse_byte_range(value: &str) -> DashHlsResult<ByteRange> {
+    let (start, end) = value
+        .split_once('-')
+        .ok_or_else(|| DashHlsError::InvalidMpd(format!("invalid byte range {value}")))?;
+    let start = start
+        .trim()
+        .parse()
+        .map_err(|_| DashHlsError::InvalidMpd(format!("invalid byte range {value}")))?;
+    let end = end
+        .trim()
+        .parse()
+        .map_err(|_| DashHlsError::InvalidMpd(format!("invalid byte range {value}")))?;
+    if end < start {
+        return Err(DashHlsError::InvalidMpd(format!(
+            "invalid byte range {value}"
+        )));
+    }
+    Ok(ByteRange { start, end })
 }
 
 fn parse_iso8601_duration_ms(value: &str) -> Option<u64> {

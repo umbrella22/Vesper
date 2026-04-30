@@ -141,7 +141,10 @@ pub fn merge_runtime_fallback_reason(
 ) -> String {
     match existing {
         Some(existing) if !existing.is_empty() => {
-            format!("{}: {}; {}", fallback_reason, runtime_error_message, existing)
+            format!(
+                "{}: {}; {}",
+                fallback_reason, runtime_error_message, existing
+            )
         }
         _ => format!("{}: {}", fallback_reason, runtime_error_message),
     }

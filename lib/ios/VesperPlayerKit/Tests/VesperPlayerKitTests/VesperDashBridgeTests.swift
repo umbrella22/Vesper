@@ -253,6 +253,163 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(ports.count, 1)
     }
 
+    func testDashSessionMasterPlaylistExposesAllVideoVariantsForAbr() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(sampleMultiVideoSegmentTemplateMpd.utf8).write(to: manifestURL)
+
+        let session = VesperDashSession(sourceURL: manifestURL)
+        let playlist = String(
+            decoding: try await session.masterPlaylistData(),
+            as: UTF8.self
+        )
+
+        XCTAssertEqual(countOccurrences(of: "#EXT-X-STREAM-INF", in: playlist), 3)
+        XCTAssertTrue(playlist.contains("vesper-dash://media/\(session.id)/v1_257.m3u8"))
+        XCTAssertTrue(playlist.contains("vesper-dash://media/\(session.id)/v2_257.m3u8"))
+        XCTAssertTrue(playlist.contains("vesper-dash://media/\(session.id)/v7_257.m3u8"))
+        XCTAssertTrue(playlist.contains("vesper-dash://media/\(session.id)/v4_258.m3u8"))
+    }
+
+    func testSegmentTemplateCachePrunesOldMediaFiles() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let requestedMediaCount = VesperDashSession.segmentCacheMaxEntryCount + 12
+        let manifest = sampleSegmentTemplateMpd.replacingOccurrences(
+            of: #"mediaPresentationDuration="PT193.680S""#,
+            with: #"mediaPresentationDuration="PT360S""#
+        )
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(manifest.utf8).write(to: manifestURL)
+
+        let mediaData = mp4Box(type: "styp", payload: Data([0x03, 0x04]))
+        try writeSegmentTemplateFiles(
+            directory: directory,
+            renditionId: "v1_257",
+            initData: mp4Box(type: "ftyp", payload: Data([0x01])),
+            mediaData: mediaData,
+            segmentCount: requestedMediaCount
+        )
+
+        let session = VesperDashSession(sourceURL: manifestURL)
+        for index in 0..<requestedMediaCount {
+            _ = try await session.segmentRedirectURL(
+                renditionId: "v1_257",
+                segment: .media(index)
+            )
+        }
+
+        let cachedMediaFiles = try FileManager.default.contentsOfDirectory(
+            at: session.segmentCacheDirectory,
+            includingPropertiesForKeys: nil
+        )
+        .filter { $0.pathExtension == "m4s" }
+
+        XCTAssertLessThanOrEqual(
+            cachedMediaFiles.count,
+            VesperDashSession.segmentCacheMaxEntryCount
+        )
+    }
+
+    func testLargeSegmentTemplateLoopbackStreamsTemporaryFileAndSkipsCache() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(sampleSegmentTemplateMpd.utf8).write(to: manifestURL)
+
+        let mediaURL = directory.appendingPathComponent("v1_257-270146-i-1.m4s")
+        FileManager.default.createFile(atPath: mediaURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: mediaURL)
+        try handle.truncate(atOffset: VesperDashSession.segmentCacheMaxSingleMediaBytes + 4_096)
+        try handle.seek(toOffset: 0)
+        handle.write(Data((0..<16).map(UInt8.init)))
+        try handle.close()
+
+        let session = VesperDashSession(sourceURL: manifestURL)
+        let playlist = String(
+            decoding: try await session.mediaPlaylistData(renditionId: "v1_257"),
+            as: UTF8.self
+        )
+        let mediaURLText = try XCTUnwrap(
+            firstMatch(#"http://127\.0\.0\.1:[0-9]+/dash/[^[:space:]]+/v1_257/0\.m4s"#, in: playlist)
+        )
+        var request = URLRequest(url: try XCTUnwrap(URL(string: mediaURLText)))
+        request.setValue("bytes=0-15", forHTTPHeaderField: "Range")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let httpResponse = try XCTUnwrap(response as? HTTPURLResponse)
+
+        XCTAssertEqual(httpResponse.statusCode, 206)
+        XCTAssertEqual(data, Data((0..<16).map(UInt8.init)))
+
+        let cachedFiles = try FileManager.default.contentsOfDirectory(
+            at: session.segmentCacheDirectory,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertTrue(cachedFiles.filter { $0.pathExtension == "m4s" }.isEmpty)
+        XCTAssertTrue(cachedFiles.filter { $0.lastPathComponent.hasPrefix("tmp-") }.isEmpty)
+    }
+
+    func testSegmentBaseMediaPlaylistUsesSessionCache() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let mediaURL = directory.appendingPathComponent("media.m4s")
+        var mediaData = Data([0x01, 0x02, 0x03, 0x04])
+        mediaData.append(mp4Box(type: "sidx", payload: sidxPayloadV0()))
+        try mediaData.write(to: mediaURL)
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        let manifest = #"""
+        <?xml version="1.0"?>
+        <MPD type="static" mediaPresentationDuration="PT12S">
+          <Period id="p0">
+            <AdaptationSet id="v" contentType="video" mimeType="video/mp4">
+              <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720">
+                <BaseURL>media.m4s</BaseURL>
+                <SegmentBase indexRange="4-59">
+                  <Initialization range="0-3"/>
+                </SegmentBase>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>
+        """#
+        try Data(manifest.utf8).write(to: manifestURL)
+
+        let session = VesperDashSession(sourceURL: manifestURL)
+        let firstPlaylist = try await session.mediaPlaylistData(renditionId: "v1")
+
+        try FileManager.default.removeItem(at: mediaURL)
+        let secondPlaylist = try await session.mediaPlaylistData(renditionId: "v1")
+
+        XCTAssertEqual(secondPlaylist, firstPlaylist)
+    }
+
     func testHlsBuilderCreatesMasterAndMediaPlaylists() throws {
         let manifest = try VesperDashManifestParser.parse(
             data: Data(sampleMpd.utf8),

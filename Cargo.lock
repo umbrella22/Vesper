@@ -1596,6 +1596,8 @@ dependencies = [
 name = "player-dash-hls-bridge"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -1652,6 +1654,7 @@ name = "player-ffi-resolver"
 version = "0.1.0"
 dependencies = [
  "player-core",
+ "player-dash-hls-bridge",
  "player-platform-ios",
  "player-plugin",
  "player-policy-resolver",

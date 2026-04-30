@@ -15,55 +15,55 @@ authors. Application code should usually depend on `vesper_player` directly.
 
 ### Player data models
 
-| Type | Description |
-|---|---|
-| `VesperPlayerSource` | Media source definition for local files, remote URLs, HLS, or DASH |
-| `VesperPlayerSnapshot` | Full player state snapshot, including runtime capabilities, current track selection, the effective video variant, raw video-variant observation, fixed-track settling state, resilience policy, and last error |
-| `VesperPlayerCapabilities` | Capability set reported by the active backend, including fine-grained track-selection and ABR support |
-| `VesperTimeline` | Playback timeline for VOD, live, and live DVR |
-| `VesperSeekableRange` | Seekable range, mainly for DVR windows |
-| `VesperTrackCatalog` | Available video, audio, and subtitle tracks |
-| `VesperMediaTrack` | Details for a single media track |
-| `VesperTrackSelection` | Track selection command: auto, disabled, or explicit track |
-| `VesperTrackSelectionSnapshot` | Current track selection state |
-| `VesperAbrPolicy` | Adaptive bitrate policy: auto, constrained, or fixed track |
-| `VesperTrackPreferencePolicy` | Preferred languages and default track preferences |
-| `VesperPlaybackResiliencePolicy` | Top-level buffering, retry, and cache policy |
-| `VesperBufferingPolicy` | Buffering policy presets or explicit values |
-| `VesperRetryPolicy` | Retry attempts, backoff mode, and delay limits |
-| `VesperCachePolicy` | Memory and disk cache policy |
-| `VesperPreloadBudgetPolicy` | Preload budget for concurrency, memory, disk, and warm windows |
-| `VesperPlayerViewport` | Normalized viewport rectangle used for viewport hints |
-| `VesperViewportHint` | Visibility hint: visible, near visible, prefetch only, or hidden |
-| `VesperPlayerError` | Playback error with category and retryability metadata |
+| Type                             | Description                                                                                                                                                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VesperPlayerSource`             | Media source definition for local files, remote URLs, HLS, or DASH                                                                                                                                             |
+| `VesperPlayerSnapshot`           | Full player state snapshot, including runtime capabilities, current track selection, the effective video variant, raw video-variant observation, fixed-track settling state, resilience policy, and last error |
+| `VesperPlayerCapabilities`       | Capability set reported by the active backend, including fine-grained track-selection and ABR support                                                                                                          |
+| `VesperTimeline`                 | Playback timeline for VOD, live, and live DVR                                                                                                                                                                  |
+| `VesperSeekableRange`            | Seekable range, mainly for DVR windows                                                                                                                                                                         |
+| `VesperTrackCatalog`             | Available video, audio, and subtitle tracks                                                                                                                                                                    |
+| `VesperMediaTrack`               | Details for a single media track                                                                                                                                                                               |
+| `VesperTrackSelection`           | Track selection command: auto, disabled, or explicit track                                                                                                                                                     |
+| `VesperTrackSelectionSnapshot`   | Current track selection state                                                                                                                                                                                  |
+| `VesperAbrPolicy`                | Adaptive bitrate policy: auto, constrained, or fixed track                                                                                                                                                     |
+| `VesperTrackPreferencePolicy`    | Preferred languages and default track preferences                                                                                                                                                              |
+| `VesperPlaybackResiliencePolicy` | Top-level buffering, retry, and cache policy                                                                                                                                                                   |
+| `VesperBufferingPolicy`          | Buffering policy presets or explicit values                                                                                                                                                                    |
+| `VesperRetryPolicy`              | Retry attempts, backoff mode, and delay limits                                                                                                                                                                 |
+| `VesperCachePolicy`              | Memory and disk cache policy                                                                                                                                                                                   |
+| `VesperPreloadBudgetPolicy`      | Preload budget for concurrency, memory, disk, and warm windows                                                                                                                                                 |
+| `VesperPlayerViewport`           | Normalized viewport rectangle used for viewport hints                                                                                                                                                          |
+| `VesperViewportHint`             | Visibility hint: visible, near visible, prefetch only, or hidden                                                                                                                                               |
+| `VesperPlayerError`              | Playback error with category and retryability metadata                                                                                                                                                         |
 
 ### Player events
 
-| Event type | Emitted when |
-|---|---|
-| `VesperPlayerSnapshotEvent` | Player state changes |
-| `VesperPlayerErrorEvent` | A playback error occurs |
-| `VesperPlayerDisposedEvent` | The player is disposed |
+| Event type                  | Emitted when            |
+| --------------------------- | ----------------------- |
+| `VesperPlayerSnapshotEvent` | Player state changes    |
+| `VesperPlayerErrorEvent`    | A playback error occurs |
+| `VesperPlayerDisposedEvent` | The player is disposed  |
 
 ### Download data models
 
-| Type | Description |
-|---|---|
-| `VesperDownloadConfiguration` | Download manager configuration |
-| `VesperDownloadSource` | Download source including content format |
-| `VesperDownloadProfile` | Download preferences such as language, tracks, directory, and network limits |
-| `VesperDownloadAssetIndex` | Planned resources, segments, size, version, and checksum metadata |
-| `VesperDownloadTaskSnapshot` | Snapshot for a single task |
-| `VesperDownloadSnapshot` | Aggregate snapshot for all tasks |
-| `VesperDownloadProgressSnapshot` | Byte, segment, and ratio-based progress |
-| `VesperDownloadError` | Download-specific error model |
+| Type                             | Description                                                                  |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `VesperDownloadConfiguration`    | Download manager configuration                                               |
+| `VesperDownloadSource`           | Download source including content format                                     |
+| `VesperDownloadProfile`          | Download preferences such as language, tracks, directory, and network limits |
+| `VesperDownloadAssetIndex`       | Planned resources, segments, size, version, and checksum metadata            |
+| `VesperDownloadTaskSnapshot`     | Snapshot for a single task                                                   |
+| `VesperDownloadSnapshot`         | Aggregate snapshot for all tasks                                             |
+| `VesperDownloadProgressSnapshot` | Byte, segment, and ratio-based progress                                      |
+| `VesperDownloadError`            | Download-specific error model                                                |
 
 ### Download events
 
-| Event type | Emitted when |
-|---|---|
-| `VesperDownloadSnapshotEvent` | Download state changes |
-| `VesperDownloadErrorEvent` | A download error occurs |
+| Event type                    | Emitted when                     |
+| ----------------------------- | -------------------------------- |
+| `VesperDownloadSnapshotEvent` | Download state changes           |
+| `VesperDownloadErrorEvent`    | A download error occurs          |
 | `VesperDownloadDisposedEvent` | The download manager is disposed |
 
 ### Enums

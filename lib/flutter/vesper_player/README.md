@@ -4,35 +4,40 @@ A cross-platform Flutter video player built around native-first backends:
 
 - Android uses ExoPlayer through the Vesper Android host kit
 - iOS uses AVPlayer through the Vesper iOS host kit
-- macOS is currently experimental
+- macOS is currently a package stub without a real playback backend
 
 The package exposes one Dart API surface so host apps can keep playback, track
 selection, resilience, download, and preload flows aligned across platforms.
 
 ## Platform Support
 
-| Feature                  | Android | iOS                                                 | macOS           |
-| ------------------------ | ------- | --------------------------------------------------- | --------------- |
-| Local files              | ✅      | ✅                                                  | ⚠️ Experimental |
-| Progressive HTTP         | ✅      | ✅                                                  | ⚠️ Experimental |
-| HLS                      | ✅      | ✅                                                  | ⚠️ Experimental |
-| DASH                     | ✅      | ⚠️ Experimental (DASH→HLS bridge over AVPlayer)     | ⚠️ Experimental |
-| Live streams             | ✅      | ✅                                                  | ⚠️ Experimental |
-| Live DVR                 | ✅      | ✅                                                  | ⚠️ Experimental |
-| Track selection          | ✅      | ✅                                                  | ⚠️ Experimental |
-| Adaptive bitrate (ABR)   | ✅      | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ⚠️ Experimental |
-| Buffering / retry policy | ✅      | ✅                                                  | ⚠️ Experimental |
-| Download management      | ✅      | ✅                                                  | ❌              |
-| Preload                  | ✅      | ✅                                                  | ❌              |
+| Feature                  | Android | iOS                                                 | macOS package        |
+| ------------------------ | ------- | --------------------------------------------------- | -------------------- |
+| Local files              | ✅      | ✅                                                  | ❌ Backend not wired |
+| Progressive HTTP         | ✅      | ✅                                                  | ❌ Backend not wired |
+| HLS                      | ✅      | ✅                                                  | ❌ Backend not wired |
+| DASH                     | ✅      | ⚠️ Static fMP4 VOD through DASH→HLS bridge          | ❌ Backend not wired |
+| Live streams             | ✅      | ✅                                                  | ❌ Backend not wired |
+| Live DVR                 | ✅      | ✅                                                  | ❌ Backend not wired |
+| Track selection          | ✅      | ✅                                                  | ❌ Backend not wired |
+| Adaptive bitrate (ABR)   | ✅      | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ❌ Backend not wired |
+| Buffering / retry policy | ✅      | ✅                                                  | ❌ Backend not wired |
+| Download management      | ✅      | ✅                                                  | ❌                   |
+| Preload                  | ✅      | ✅                                                  | ❌                   |
 
-> The macOS backend is still experimental, so its capability matrix and runtime
-> behavior may differ from the mobile implementations.
+> `vesper_player_macos` exists as an experimental federated package stub. The
+> main package currently registers Android and iOS implementations only.
 
 ## Installation
 
+The Flutter packages are source-distributed from this repository and currently
+set `publish_to: none`. In a host app, use path or git dependencies until the
+package family is published:
+
 ```yaml
 dependencies:
-  vesper_player: ^0.1.0
+  vesper_player:
+    path: path/to/rust-player-sdk/lib/flutter/vesper_player
 ```
 
 ## Quick Start
@@ -149,6 +154,34 @@ VesperPlayerSource.dash(
 )
 VesperPlayerSource.local(uri: '/storage/emulated/0/Movies/video.mp4')
 VesperPlayerSource.remote(uri: 'https://example.com/video.mp4')
+```
+
+### Snapshot Listenable
+
+`VesperPlayerController` also exposes `snapshotListenable`, a `ValueNotifier<VesperPlayerSnapshot>`
+you can pass directly to `ValueListenableBuilder` for granular widget rebuilds without subscribing
+to the `snapshots` stream:
+
+```dart
+ValueListenableBuilder<VesperPlayerSnapshot>(
+  valueListenable: controller.snapshotListenable,
+  builder: (context, snapshot, _) => Text('${snapshot.timeline.positionMs} ms'),
+)
+```
+
+### Preload Budget
+
+`VesperPreloadBudgetPolicy` can be supplied at controller creation to cap preload concurrency,
+memory, disk, and warm-up window:
+
+```dart
+final controller = await VesperPlayerController.create(
+  preloadBudgetPolicy: const VesperPreloadBudgetPolicy(
+    maxConcurrentTasks: 2,
+    maxMemoryBytes: 64 * 1024 * 1024,
+    warmupWindowMs: 8000,
+  ),
+);
 ```
 
 ## Track Selection And ABR
@@ -416,4 +449,4 @@ if (caps.isExperimental) {
 | `vesper_player_platform_interface` | Shared platform contract and DTOs         |
 | `vesper_player_android`            | Android implementation built on ExoPlayer |
 | `vesper_player_ios`                | iOS implementation built on AVPlayer      |
-| `vesper_player_macos`              | Experimental macOS implementation         |
+| `vesper_player_macos`              | Experimental macOS package stub           |

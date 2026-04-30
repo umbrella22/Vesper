@@ -1,159 +1,80 @@
 # Vesper Android Host Demo
 
-This example is the runnable Android host app for the Vesper Player SDK.
+A runnable Jetpack Compose sample app that integrates the Vesper Player SDK
+through the [`vesper-player-kit`](../../lib/android/) Android host kit.
 
-It intentionally lives under `examples/` so it can serve as:
+Use this example as a reference for:
 
-- a host-integration reference
-- a runnable preview app
-- a UI demo for platform consumers
+- Wiring `VesperPlayerController` and `VesperPlayerSurface` into a Compose UI
+- Selecting local files via the Android document picker
+- Playing HLS, DASH, or progressive HTTP streams
+- Switching themes, sources, tracks, and ABR policies through bottom sheets
 
-## Stack
+## Features Demonstrated
 
-- `Jetpack Compose`
-- `Kotlin 2`
-- Android host UI owns controls and progress UI
-- video presentation stays in a native surface container hosted from Compose
+- System / Light / Dark theme modes
+- Fullscreen stage
+- Quality / audio / subtitle / playback-speed bottom sheets
+- Double-tap seek, draggable scrubber
+- Compose previews
+- Built-in HLS demo source
+- Built-in DASH demo source
+- Generic remote URL field with `HLS / DASH / progressive` inference
 
-## Current Status
+The demo URLs are owned by the example app. The reusable library under
+[`lib/android/vesper-player-kit`](../../lib/android/) does not embed demo URLs
+and only accepts generic `VesperPlayerSource` values.
 
-This host app is now intentionally thin:
+## Requirements
 
-- the app shell is Compose-based
-- the actual Kotlin/JNI integration layer now lives under `lib/android/vesper-player-kit`
-- the Compose adapter now lives under `lib/android/vesper-player-kit-compose`
-- the example app consumes those library modules as normal dependencies
-- the current project now boots the Rust-native bridge by default
-- the sample app now includes the first polished player shell:
-  - `System / Light / Dark` theme modes
-  - fullscreen stage
-  - quality / audio / subtitle / speed bottom sheets
-  - double-tap seek, draggable scrubber, and Compose previews
+- Android Studio (Ladybug or newer)
+- Android SDK 36 / minSdk 26
+- NDK `29.0.14206865`
+- Rust toolchain with `aarch64-linux-android` target
+- arm64 device or arm64 emulator
 
-This keeps the sample app closer to real SDK consumption instead of acting like a hidden SDK layer.
+## Run
 
-The host-facing Android integration surface now lives in the library modules:
+1. Build the Android JNI libraries:
 
-- `VesperPlayerSource`
-- `VesperPlayerController`
-- `VesperPlayerSurface`
-- `rememberVesperPlayerUiState`
+   ```sh
+   ./scripts/build-android-vesper-player-kit-jni.sh
+   # or for release: ./scripts/build-android-vesper-player-kit-jni.sh release
+   ```
 
-The example Compose screen consumes those wrappers instead of binding directly to the raw bridge
-contract.
+   Output is written to
+   `lib/android/vesper-player-kit/src/main/jniLibs/<abi>/libvesper_player_android.so`.
 
-## Bridge Modes
+   If the script fails, install missing tooling:
 
-The Android library is shaped around one bridge contract with two implementations:
+   ```sh
+   rustup target add aarch64-linux-android
+   ```
 
-- `FakePlayerBridge`
-  - local interactive preview bridge
-- `VesperNativePlayerBridge`
-  - JNI-backed bridge that mirrors the Rust host session and drives `ExoPlayer`
+   Override the NDK with `ANDROID_NDK_ROOT=...` when needed.
 
-The default example now boots with `VesperNativePlayerBridge`, but the Compose UI and surface host
-no longer depend on that specific implementation.
+2. Open `examples/android-compose-host` in Android Studio and sync Gradle.
 
-The core library exposes a host-facing controller layer:
+3. Run the app on an arm64 emulator or physical device.
 
-- `VesperPlayerController`
-  - source selection, playback commands, state flow, backend label
-- `VesperPlayerSource`
-  - stable source DTO used by the host UI
+## Build From CLI
 
-The optional Compose adapter exposes:
+```sh
+examples/android-compose-host/gradlew -p examples/android-compose-host \
+  -Pvesper.player.android.abis=arm64-v8a \
+  assembleRelease
+```
 
-- `rememberVesperPlayerController`
-- `rememberVesperPlayerUiState`
-- `VesperPlayerSurface`
+## Test
 
-The Android library now also exposes first-round playback resilience knobs:
+```sh
+./scripts/build-android-vesper-player-kit-jni.sh release arm64-v8a
+examples/android-compose-host/gradlew -p examples/android-compose-host \
+  -Pvesper.player.android.abis=arm64-v8a \
+  :app:testDebugUnitTest
+```
 
-- `VesperPlaybackResiliencePolicy`
-- `VesperBufferingPolicy`
-- `VesperRetryPolicy`
-- `VesperCachePolicy`
-
-The native path now also has a concrete surface strategy:
-
-- host UI stays in `Compose`
-- video attaches through a `TextureView`
-- the Rust bridge plugs in through `VesperNativeJni.kt`
-- Rust-side mirror DTOs now live in `crates/platform/mobile/player-platform-android`
-  - `AndroidHostSnapshot`
-  - `AndroidHostEvent`
-- the JNI symbols are now implemented in `crates/platform/jni/player-jni-android`
-
-The example app also supports selecting a local video through the Android document picker. The
-selected `content://` URI is passed directly into the JNI/ExoPlayer bridge. For remote playback,
-the example app itself now owns these preset/test inputs:
-
-- built-in HLS demo
-- built-in DASH demo
-- a generic remote stream URL field that infers `HLS / DASH / progressive` from the URL
-
-Those preset URLs intentionally live in `examples/android-compose-host`; the reusable library under
-`lib/android/vesper-player-kit` only accepts generic `VesperPlayerSource` values and does not embed demo URLs.
-
-## Project Split
-
-- `lib/android/vesper-player-kit`
-  - Android library module / future `AAR`
-- `lib/android/vesper-player-kit-compose`
-  - optional Compose adapter / future companion `AAR`
-- `examples/android-compose-host`
-  - runnable sample app that depends on `:vesper-player-kit-compose`
-
-## Android Studio Handoff
-
-You can now choose between two entrypoints:
-
-1. open `lib/android`
-   - work on the reusable Android library / future `AAR`
-2. open `examples/android-compose-host`
-   - run the sample app that consumes the library
-
-For a runnable app flow:
-
-1. open `examples/android-compose-host`
-2. sync the Gradle project
-3. build the Android JNI libraries:
-   - `scripts/build-android-vesper-player-kit-jni.sh`
-   - or `scripts/build-android-vesper-player-kit-jni.sh release`
-   - or run Gradle tasks on `:vesper-player-kit`
-   - if this fails, first verify Rust targets are installed:
-     - `rustup target add aarch64-linux-android`
-   - then verify Android Studio has fully installed `NDK (Side by side) 29.0.14206865`
-   - if Studio installs a different NDK version, the script will automatically use the newest complete NDK under your Android SDK, or you can override it with `ANDROID_NDK_ROOT=...`
-4. confirm `.so` files landed under `lib/android/vesper-player-kit/src/main/jniLibs`
-   - expected file name: `libvesper_player_android.so`
-   - these JNI artifacts are generated locally and ignored by git
-5. run the app on an arm64 emulator or physical device
-6. validate the `TextureView + ExoPlayer + Rust session` playback loop
-
-For the reusable library artifact itself, use:
-
-- `scripts/build-android-vesper-player-kit-aar.sh`
-
-## Host Regression
-
-The executable host regression path for this example is now:
-
-1. build JNI once for the target ABI:
-   - `./scripts/build-android-vesper-player-kit-jni.sh release arm64-v8a`
-2. run the example-level LiveDvr regression tests:
-   - `examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=arm64-v8a :app:testDebugUnitTest`
-3. optionally assemble the host app:
-   - `examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=arm64-v8a assembleRelease`
-
-The regression cases currently cover:
-
-- `Go Live` fallback to the seekable window end
-- live edge tolerance / offset behavior
-- pending seek ratio clamp
-- stale position clamp after DVR window shrink
-
-## Tooling Notes
+## Toolchain Pinning
 
 The project is pinned to:
 
@@ -163,49 +84,30 @@ The project is pinned to:
 - Compose BOM `2026.02.01`
 - Android NDK `29.0.14206865`
 
-With `AGP 9.x`, Kotlin Android support is built in, so this example does not apply the
-`org.jetbrains.kotlin.android` plugin separately.
+With AGP 9.x, the `org.jetbrains.kotlin.android` plugin is built in and is not
+applied separately.
 
-Project-local Gradle storage is also intentional:
+Gradle storage is project-local and does not affect any shared global Gradle
+cache:
 
-- wrapper distributions are stored under `examples/android-compose-host/.gradle/wrapper/dists`
-- Android Studio Gradle service home is pinned to
-  `examples/android-compose-host/.gradle/local-gradle-user-home`
+- wrapper distributions: `examples/android-compose-host/.gradle/wrapper/dists`
+- Gradle service home: `examples/android-compose-host/.gradle/local-gradle-user-home`
 
-If you open `lib/android` directly, that project has its own local Gradle state as well.
+References:
 
-This keeps the example from polluting a shared global Gradle cache setup.
-
-These choices follow current official docs:
-
-- AGP release notes: https://developer.android.com/build/releases/agp-9-1-0-release-notes
-- Gradle release notes: https://docs.gradle.org/current/release-notes.html
-- Kotlin releases: https://kotlinlang.org/docs/releases.html
-- Compose compiler/setup: https://developer.android.com/develop/ui/compose/setup-compose-dependencies-and-compiler
-- Compose BOM: https://developer.android.com/develop/ui/compose/bom
-- Media3 / ExoPlayer: https://developer.android.com/media/media3/exoplayer/hello-world
+- [AGP release notes](https://developer.android.com/build/releases/agp-9-1-0-release-notes)
+- [Gradle release notes](https://docs.gradle.org/current/release-notes.html)
+- [Kotlin releases](https://kotlinlang.org/docs/releases.html)
+- [Compose setup](https://developer.android.com/develop/ui/compose/setup-compose-dependencies-and-compiler)
+- [Compose BOM](https://developer.android.com/develop/ui/compose/bom)
+- [Media3 / ExoPlayer](https://developer.android.com/media/media3/exoplayer/hello-world)
 
 ## Layout
 
-- `app/src/main/java/.../MainActivity.kt`
-  - Android entrypoint
-- `app/src/main/java/.../PlayerHostApp.kt`
-  - Compose host UI
-- `../../lib/android/vesper-player-kit/src/main/java/.../VesperPlayerController.kt`
-  - host-facing controller wrapper
-- `../../lib/android/vesper-player-kit/src/main/java/.../VesperPlayerSource.kt`
-  - host-facing source DTO
-- `../../lib/android/vesper-player-kit-compose/src/main/java/.../VesperPlayerCompose.kt`
-  - Compose helpers, reusable surface host, UI-scoped progress refresh
-- `../../lib/android/vesper-player-kit/src/main/java/.../PlayerBridge.kt`
-  - bridge-facing host contract
-- `../../lib/android/vesper-player-kit/src/main/java/.../FakePlayerBridge.kt`
-  - local interactive preview placeholder
-- `../../lib/android/vesper-player-kit/src/main/java/.../VesperNativeJniBindings.kt`
-  - ExoPlayer-backed JNI bridge implementation
-- `scripts/build-android-vesper-player-kit-jni.sh`
-  - helper for building `player-jni-android` into `lib/android/vesper-player-kit/src/main/jniLibs`
+- `app/src/main/java/.../MainActivity.kt` — Android entrypoint
+- `app/src/main/java/.../PlayerHostApp.kt` — Compose host UI
 
-The sample app now loads the branded native library name:
+Reusable host kit (separate project):
 
-- `System.loadLibrary("vesper_player_android")`
+- [`lib/android/vesper-player-kit`](../../lib/android/) — `VesperPlayerController`, `VesperPlayerSource`, JNI bridge
+- [`lib/android/vesper-player-kit-compose`](../../lib/android/) — Compose helpers, reusable surface host

@@ -22,11 +22,9 @@ abstract final class VesperPlayerMacosPackage {
 ## Planned Direction
 
 The macOS backend is expected to stay native-first and use AVFoundation. The
-current plan is to validate the basic control loop first, including local files,
-basic streaming, and the core state pipeline, then fill in the remaining
-capabilities gradually.
-
-See Phase 4 in the repository roadmap for the broader direction.
+next useful milestone is validating the basic control loop, including local
+files, basic streaming, and the core state pipeline, before filling in the
+remaining capabilities gradually.
 
 ## Related Resources
 

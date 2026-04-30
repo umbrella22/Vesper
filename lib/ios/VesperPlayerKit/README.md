@@ -1,86 +1,79 @@
 # VesperPlayerKit for iOS
 
-`lib/ios/VesperPlayerKit` is the iOS-native VesperPlayerKit integration project for the Vesper Player SDK.
+iOS-native host kit for the Vesper Player SDK. Distributed as a Swift Package
+or a prebuilt `XCFramework`, and consumable from any UIKit / SwiftUI app.
 
-## Delivery Shapes
+## Delivery
 
-This folder now contains both native packaging entrypoints:
+- `Package.swift` — local Swift Package consumed by app projects
+- `project.yml` — XcodeGen descriptor for the framework / `XCFramework` build
 
-- `Package.swift`
-  - local Swift Package used by the demo app
-- `project.yml`
-  - XcodeGen descriptor for building a framework / future `XCFramework`
+GitHub Releases publish the following artifacts via
+`.github/workflows/mobile-lib-release.yml`:
 
-## Packaging Helper
+- `VesperPlayerKit-ios-arm64.framework.zip` — device-only packaging
+- `VesperPlayerKit-ios-simulator-arm64.framework.zip` — Apple Silicon Simulator
+- `VesperPlayerKit.xcframework.zip` — combined device + Apple Silicon Simulator
 
-You can build the iOS binary artifact through:
+Apple packaging is `arm64`-only across iOS device, iOS Simulator, and (when
+enabled) Mac Catalyst. Use an Apple Silicon Mac for Simulator validation. See
+[Release Downloads](../../../README.md#release-downloads) for the public
+package names and artifact-selection notes.
 
-- `scripts/build-ios-player-ffi-xcframework.sh`
-- `scripts/build-ios-vesper-player-kit-xcframework.sh`
-- `scripts/stage-ios-vesper-player-kit-release.sh`
+## Minimum Requirements
 
-When consuming `lib/ios/VesperPlayerKit` as a local Swift Package, build the Rust resolver bundle
-first:
+- iOS 14.0+
+- Xcode 16+
+- Apple Silicon Mac for Simulator builds
+- Rust toolchain with iOS targets installed (when consuming as a local Swift Package)
 
-- `scripts/build-ios-player-ffi-xcframework.sh`
+## Installation
 
-The native unit-test baseline is now expected to run through Xcode as well. Do not use plain
-`swift test` for iOS validation because SwiftPM will compile for the host macOS target and UIKit
-will be unavailable.
+### Swift Package (local)
 
-- iOS Simulator: first choose an installed simulator with `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -showdestinations`, then run `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -destination id=<SIMULATOR_ID> ARCHS=arm64 ONLY_ACTIVE_ARCH=YES test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
-- Mac Catalyst: `xcodebuild -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj -scheme VesperPlayerKit -destination 'platform=macOS,variant=Mac Catalyst,name=My Mac' ARCHS=arm64 ONLY_ACTIVE_ARCH=YES test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
+For app projects in this repository, depend on `lib/ios/VesperPlayerKit` as a
+local Swift Package. Build the Rust resolver bundle once before resolving the
+package:
 
-That script:
+```sh
+./scripts/build-ios-player-ffi-xcframework.sh
+```
 
-- builds the Rust `player-ffi-resolver` Apple bundle consumed by the Swift package / shim
-- regenerates the framework project with `xcodegen`
-- archives iOS + iOS Simulator frameworks
-- creates `VesperPlayerKit.xcframework`
+### XCFramework
 
-### Apple Architecture Policy
+For distribution, build a self-contained framework:
 
-Apple packaging in this repository is intentionally `arm64`-only:
+```sh
+./scripts/build-ios-vesper-player-kit-xcframework.sh
+./scripts/stage-ios-vesper-player-kit-release.sh
+```
 
-- iOS device artifacts ship `arm64`
-- iOS Simulator artifacts ship `arm64` only
-- Mac Catalyst artifacts, when enabled, ship `arm64` only
-- local `xcodebuild` verification should also stay on `ARCHS=arm64` for Simulator / Mac Catalyst
-- do not reintroduce `x86_64` simulator or Catalyst slices in packaging scripts, CI inputs, or release assets
+The build script:
 
-GitHub Releases now publish VesperPlayerKit for iOS downloads through:
+- Compiles the Rust `player-ffi-resolver` Apple bundle
+- Regenerates the framework project with `xcodegen`
+- Archives iOS + iOS Simulator frameworks
+- Produces `VesperPlayerKit.xcframework`
 
-- `.github/workflows/mobile-lib-release.yml`
+## Public API
 
-Current iOS download package names:
+- `VesperPlayerController` — playback control surface (`@MainActor`); exposes `@Published` `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `fixedTrackStatus`, `resiliencePolicy`, `lastError`
+- `VesperPlayerControllerFactory` — controller construction with policy presets
+- `VesperPlayerSource` — media source DTO with `localFile(url:)`, `remoteUrl(_:)`, `hls(url:)`, `dash(url:)` factories
+- `PlayerSurfaceContainer` — `UIViewRepresentable` SwiftUI surface
+- `PlayerHostUiState` — published UI state DTO
+- `VesperTrackSelection` — `.auto` / `.disabled` / `.track(id:)`
+- `VesperAbrPolicy` — adaptive bitrate policy (`auto`, `constrained`, `fixedTrack`)
+- `VesperPlaybackResiliencePolicy` with presets: `.balanced()`, `.streaming()`, `.resilient()`, `.lowLatency()`
+- `VesperBufferingPolicy`, `VesperRetryPolicy`, `VesperCachePolicy`
+- `VesperPreloadBudgetPolicy` — caps for concurrent preload tasks, memory, disk, warm-up window
+- `VesperTrackPreferencePolicy` — preferred audio / subtitle languages
+- `VesperCodecSupport` — hardware decode capability probe
+- `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / drainEvents`
 
-- `VesperPlayerKit-ios-arm64.framework.zip`
-- `VesperPlayerKit-ios-simulator-arm64.framework.zip`
-- `VesperPlayerKit.xcframework.zip`
-
-Download guidance:
-
-- use `VesperPlayerKit-ios-arm64.framework.zip` for device-only packaging
-- use `VesperPlayerKit-ios-simulator-arm64.framework.zip` when validating on Apple Silicon iOS Simulator
-- use `VesperPlayerKit.xcframework.zip` when you want one distributable Apple package that covers device + Apple Silicon simulator targets
-- see [newDoc/RELEASE-DOWNLOAD-GUIDE.md](../../../newDoc/RELEASE-DOWNLOAD-GUIDE.md) for the full package-selection guide
-
-## What The Package Exposes
-
-- `VesperPlayerController`
-- `VesperPlayerControllerFactory`
-- `VesperPlayerSource`
-- `PlayerSurfaceContainer`
-- host UI state DTOs such as `PlayerHostUiState`
-
-The lower bridge internals stay inside the package:
-
-- `PlayerBridge`
-- `FakePlayerBridge`
-- `VesperNativePlayerBridge`
-
-The package intentionally does not embed demo URLs or preset source choices. Those belong in a
-consuming host app such as `examples/ios-swift-host`.
+The package does not embed demo URLs or preset sources. Construct
+`VesperPlayerSource` from your own content. A runnable sample lives at
+[`examples/ios-swift-host`](../../../examples/ios-swift-host/).
 
 ## Minimal SwiftUI Usage
 
@@ -88,23 +81,19 @@ consuming host app such as `examples/ios-swift-host`.
 import VesperPlayerKit
 import SwiftUI
 
-struct DemoPlayerView: View {
+struct PlayerView: View {
     @StateObject private var controller = VesperPlayerControllerFactory.makeDefault(
         resiliencePolicy: .resilient()
     )
 
     var body: some View {
-        let uiState = controller.uiState
-
         VStack {
             PlayerSurfaceContainer(controller: controller)
                 .frame(height: 240)
 
-            Text(uiState.playbackState.rawValue)
+            Text(controller.uiState.playbackState.rawValue)
 
-            Button("Play") {
-                controller.play()
-            }
+            Button("Play") { controller.play() }
         }
         .onAppear { controller.initialize() }
         .onDisappear { controller.dispose() }
@@ -112,87 +101,165 @@ struct DemoPlayerView: View {
 }
 ```
 
-The iOS host API now exposes first-round playback resilience controls:
+## Resilience Policy
 
-- `VesperPlaybackResiliencePolicy`
-- `VesperBufferingPolicy`
-- `VesperRetryPolicy`
-- `VesperCachePolicy`
+`VesperPlaybackResiliencePolicy` shapes `AVPlayer` buffering and controlled
+retry/backoff for remote sources. Cache configuration is mapped as a
+best-effort process-wide `URLCache.shared` capacity hint for remote playback;
+it does not match the transport depth that Media3 offers on Android.
 
-These now shape `AVPlayer` buffering behavior and controlled retry/backoff for remote
-sources. Cache configuration is currently mapped as a best-effort process-wide `URLCache.shared`
-capacity hint for remote playback, and it does not pretend to offer the same transport depth that
-`Media3` exposes on Android.
+## Hardware Decode Probe
 
-The iOS host API also exposes a lightweight hardware decode probe:
+`VesperCodecSupport.hardwareDecodeSupported(for:)` normalizes common codec
+aliases (`H264 / AVC / AVC1`, `HEVC / H265 / HVC1 / HEV1`) and checks
+VideoToolbox support. Unknown codec names return `false`.
 
-- `VesperCodecSupport.hardwareDecodeSupported(for:)`
+## Adaptive Bitrate
 
-It currently normalizes the common `H264 / AVC / AVC1` and `HEVC / H265 / HVC1 / HEV1` aliases and
-checks VideoToolbox support for the requested codec. Unknown codec names return `false`.
-
-## ABR Notes
-
-`VesperPlayerKit` now exposes two iOS ABR routes on top of `AVPlayer`:
+`VesperPlayerKit` exposes two ABR routes on top of `AVPlayer`:
 
 - `VesperAbrPolicy.constrained(...)`
 - `VesperAbrPolicy.fixedTrack(...)`
 
-Important iOS-specific semantics:
+iOS-specific semantics:
 
-- `fixedTrack` is best-effort HLS variant pinning on iOS 15+, not exact AVPlayer video-track
-  switching
-- capability reporting must preserve that distinction: iOS reports exact video-track selection as
-  unsupported while `fixedTrack` only means best-effort HLS variant pinning
-- single-axis constrained limits such as `VesperAbrPolicy.constrained(maxHeight: 720)` are
-  supported for HLS, but the host waits for the current variant catalog before inferring the
-  missing width/height
-- `effectiveVideoTrackId` is also best-effort: it is derived from the current HLS variant ladder,
-  access-log bitrate, and presentation size once the runtime has enough evidence
-- `videoVariantObservation` exposes the raw runtime evidence the host is using for that inference:
-  access-log bitrate plus the latest rendered presentation size
-- `fixedTrackStatus` gives the latest runtime convergence signal for a best-effort fixed-track
-  request: `.pending` while runtime evidence is missing or still settling, `.locked` only after the
-  observed variant has remained on the requested track long enough to be treated as stable, or
-  `.fallback` when sustained evidence shows a different variant
-- resilience reload / restore now defer both `fixedTrack` and single-axis constrained ABR until
-  the current HLS variant catalog is loaded, so those policies do not fail early during reload
-- if a restored fixed-track `trackId` no longer exists verbatim after the HLS ladder drifts, the
-  host now tries to remap it onto the closest semantically equivalent variant before surfacing
-  unsupported
-- if a restored fixed-track request keeps rendering a different observed variant after sustained
-  runtime evidence, the host now surfaces a non-fatal `lastError` and degrades that restored
-  request into constrained ABR using the requested variant limits when possible, otherwise back to
-  automatic ABR
+- `fixedTrack` is best-effort HLS variant pinning on iOS 15+, not exact
+  AVPlayer video-track switching. `supportsVideoTrackSelection` reports
+  unsupported on iOS while `supportsAbrFixedTrack` reports supported as
+  best-effort pinning.
+- Single-axis constraints such as `constrained(maxHeight: 720)` are supported
+  for HLS but apply only after the variant catalog is available, so the
+  missing axis can be inferred safely.
+- `effectiveVideoTrackId` is best-effort: derived from the current HLS variant
+  ladder, access-log bitrate, and presentation size.
+- `videoVariantObservation` exposes the raw runtime evidence (access-log
+  bitrate, latest rendered presentation size).
+- `fixedTrackStatus` reports best-effort convergence: `.pending` while
+  evidence is settling, `.locked` after stable match, `.fallback` after
+  sustained mismatch.
+- Resilience reload defers `fixedTrack` and single-axis constrained ABR until
+  the variant catalog is loaded.
+- If a restored fixed-track `trackId` no longer exists verbatim after the HLS
+  ladder drifts, the host attempts to remap it onto the closest semantically
+  equivalent variant.
+- If a restored fixed-track request keeps rendering a different observed
+  variant under sustained evidence, the host surfaces a non-fatal `lastError`
+  and degrades the request into constrained ABR using the requested limits,
+  otherwise back to automatic ABR.
 
-## Download Flow Notes
+## DASH Support
 
-`VesperDownloadManager` can manage single-file and segmented downloads, but remote segmented sources
-work best when the host app performs a small planning step before calling `createTask(...)`.
+DASH playback uses a Rust core (`crates/extension/player-dash-hls-bridge`)
+plus a thin Swift transport layer. It currently supports static single-period
+fMP4 VOD manifests that use either `SegmentBase + sidx` or
+`SegmentTemplate` / `SegmentTimeline` addressing.
 
-Recommended host flow for remote HLS on iOS:
+Responsibility split:
 
-- show an optimistic "preparing" row in the UI immediately after the user taps create
-- read the remote manifest in the background and build `VesperDownloadAssetIndex(resources +
-  segments)` plus a dedicated `targetDirectory`
-- call `createTask(...)` only after the prepared source / profile / asset index are ready
+| Layer | Responsibilities                                                                                                                                                                          |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust  | MPD / `SegmentBase` / `SegmentTemplate` / `SegmentTimeline` parsing, SIDX parsing, representation selection, HLS playlist generation, template expansion                                  |
+| Swift | `AVAssetResourceLoaderDelegate` + `vesper-dash://` URL routing, `URLSession` requests, header injection, `NWListener` loopback HTTP server, segment cache, prefetch, AVPlayer integration |
 
-Additional notes:
+FFI entry point (single coarse-grained JSON op):
 
-- the foreground executor now downloads `assetIndex.resources + assetIndex.segments` together when
-  both are provided
-- pause / resume / remove should always be keyed by `taskId`; do not merge multiple tasks by URL in
-  host UI state
-- the current iOS example only wires this segmented download path for HLS; DASH stays explicitly
-  unsupported on the AVPlayer backend
+- Rust: `player_dash_hls_bridge::ops::execute_json`
+- C export: `player_ffi_dash_bridge_execute_json` (provided by the
+  `player-ffi-resolver` Apple bundle, **not** by `include/player_ffi.h`)
+- Swift call site: `VesperPlayerKitBridgeShim`
 
-## How It Relates To The Example
+Segment caching:
 
-`examples/ios-swift-host` now imports `VesperPlayerKit` as a local package dependency.
+- Per-session LRU file cache: max 160 entries, max 256 MiB total
+- Segments larger than 32 MiB stream through a session temp file in 256 KiB
+  chunks instead of being held in memory
 
-That means:
+ABR behavior:
 
-- `lib/ios/VesperPlayerKit`
-  - reusable Swift-native integration surface
-- `examples/ios-swift-host`
-  - runnable sample app showing how to use it
+- The synthesized HLS master playlist exposes the full DASH variant ladder so
+  AVPlayer can perform ABR
+- Startup prefetch targets a single variant; oversized media segments are
+  skipped
+- `VesperAbrPolicy` applies to both HLS and the DASH bridge
+
+## Download Manager
+
+`VesperDownloadManager` supports single-file and segmented downloads.
+
+Recommended flow for remote HLS:
+
+1. Show an optimistic "preparing" entry in the UI when the user starts a download.
+2. Read the manifest in the background and build
+   `VesperDownloadAssetIndex(resources + segments)` plus a dedicated
+   `targetDirectory`.
+3. Call `createTask(...)` only after the source / profile / asset index are ready.
+
+Notes:
+
+- The foreground executor downloads `assetIndex.resources + assetIndex.segments`
+  together when both are provided.
+- Pause / resume / remove are keyed by `taskId`; do not merge tasks by URL in
+  host UI state.
+- The bundled iOS example wires this segmented flow for HLS only. DASH
+  download is not supported on the AVPlayer backend.
+
+## Testing The Package
+
+Use Xcode for native unit tests; `swift test` will compile for the host macOS
+target where UIKit is unavailable.
+
+iOS Simulator (replace `<SIMULATOR_ID>` with an installed Simulator):
+
+```sh
+cd lib/ios/VesperPlayerKit
+xcodegen generate
+xcodebuild \
+  -project VesperPlayerKit.xcodeproj \
+  -scheme VesperPlayerKit \
+  -destination 'id=<SIMULATOR_ID>' \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
+```
+
+Mac Catalyst:
+
+```sh
+cd lib/ios/VesperPlayerKit
+xcodegen generate
+xcodebuild \
+  -project VesperPlayerKit.xcodeproj \
+  -scheme VesperPlayerKit \
+  -destination 'platform=macOS,variant=Mac Catalyst,name=My Mac' \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
+```
+
+List Simulator IDs:
+
+```sh
+cd lib/ios/VesperPlayerKit
+xcodegen generate
+xcodebuild \
+  -project VesperPlayerKit.xcodeproj \
+  -scheme VesperPlayerKit -showdestinations
+```
+
+DASH bridge tests:
+
+```sh
+cargo test -p player-dash-hls-bridge -p player-ffi-resolver --lib
+./scripts/build-ios-player-ffi-xcframework.sh debug
+cd lib/ios/VesperPlayerKit
+xcodegen generate
+xcodebuild test \
+  -project VesperPlayerKit.xcodeproj \
+  -scheme VesperPlayerKit \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:VesperPlayerKitTests/VesperDashBridgeTests \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+## Runnable Sample
+
+A SwiftUI sample app that consumes this package lives at
+[`examples/ios-swift-host`](../../../examples/ios-swift-host/).

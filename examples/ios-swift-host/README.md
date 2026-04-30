@@ -1,143 +1,110 @@
 # Vesper iOS Host Demo
 
-This example is the runnable iOS host app for the Vesper Player SDK.
+A runnable SwiftUI sample app that integrates the Vesper Player SDK through
+the [`VesperPlayerKit`](../../lib/ios/VesperPlayerKit/) Swift Package.
 
-It intentionally lives under `examples/` so it can serve as:
+Use this example as a reference for:
 
-- a host-integration reference
-- a runnable preview app
-- a UI demo for platform consumers
+- Embedding `VesperPlayerController` and `PlayerSurfaceContainer` in SwiftUI
+- Selecting local videos via the Photos picker
+- Playing HLS or local files through `AVPlayer`
+- Switching themes, sources, tracks, and ABR policies
 
-## Stack
+## Features Demonstrated
 
-- `Swift`
-- `SwiftUI` for host controls and app shell
-- `UIView` + `AVPlayerLayer` wrapper for the video presentation surface
-- host UI owns controls and progress UI
+- System / Light / Dark theme modes
+- Fullscreen stage
+- Quality / audio / subtitle / playback-speed bottom sheets
+- Double-tap seek
+- Video-only Photos picker
+- Built-in Apple HLS sample preset
 
-## Current Status
+Demo URLs are owned by the example. The reusable package under
+[`lib/ios/VesperPlayerKit`](../../lib/ios/VesperPlayerKit/) only exposes
+generic `VesperPlayerSource` APIs.
 
-This host app is now intentionally thin:
+## Requirements
 
-- the app shell is SwiftUI
-- the actual iOS integration layer now lives under `lib/ios/VesperPlayerKit`
-- the example app imports that package as a local dependency
-- the default host path now boots through an `AVPlayer`-backed native bridge
-- the example app owns its own Apple HLS sample preset
-- the host can switch between that preset source and a user-picked local video file
-- the sample app now includes the first polished player shell:
-  - `System / Light / Dark` theme modes
-  - fullscreen stage
-  - quality / audio / subtitle / speed bottom sheets
-  - double-tap seek and SwiftUI previews
-  - video-only Photos picker
+- Xcode 16+
+- iOS 14.0+ deployment target
+- Rust toolchain with iOS targets installed
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+- Apple Silicon Mac (Simulator slices are arm64-only)
 
-The host-facing shape now lives in the package itself:
+## Run
 
-- `VesperPlayerSource`
-- `VesperPlayerController`
-- `PlayerSurfaceContainer`
+1. Build the Rust iOS resolver bundle (required before resolving the Swift
+   package):
 
-The SwiftUI demo now consumes that wrapper layer instead of talking to the raw bridge directly.
+   ```sh
+   ./scripts/build-ios-player-ffi-xcframework.sh
+   ```
 
-## Bridge Modes
+2. Generate the Xcode project:
 
-The package is shaped around one bridge contract with two implementations:
+   ```sh
+   cd examples/ios-swift-host && xcodegen generate
+   ```
 
-- `FakePlayerBridge`
-  - local interactive preview bridge
-- `VesperNativePlayerBridge`
-  - current `AVPlayer`-backed native host bridge and the integration point for `player-platform-ios`
+3. Open `VesperPlayerHostDemo.xcodeproj` in Xcode and run on an arm64
+   Simulator or device.
 
-The current SwiftUI screen now boots with the native bridge by default, while the fake bridge is
-still kept in-tree as a lightweight fallback/reference implementation.
+## Build From CLI
 
-The package exposes a host-facing controller layer:
+Debug build for an installed Simulator:
 
-- `VesperPlayerController`
-  - source selection, playback commands, published UI state, backend label
-- `VesperPlayerSource`
-  - stable source DTO used by the host UI
-- `PlayerSurfaceContainer`
-  - reusable SwiftUI surface wrapper over `UIView + AVPlayerLayer`
+```sh
+cd examples/ios-swift-host
+xcodegen generate
+xcodebuild \
+  -project VesperPlayerHostDemo.xcodeproj \
+  -scheme VesperPlayerHostDemo \
+  -destination 'generic/platform=iOS Simulator' \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+  CODE_SIGNING_ALLOWED=NO build
+```
 
-The host UI now also has a local source-selection path through the Photos video picker so the source
-selection behavior can converge with Android before streaming-specific UI is introduced.
+Release build for device (no codesign):
 
-Those preset/demo sources intentionally live in `examples/ios-swift-host`; the reusable package under
-`lib/ios/VesperPlayerKit` exposes only generic `VesperPlayerSource` APIs and does not embed demo URLs.
+```sh
+cd examples/ios-swift-host
+xcodegen generate
+xcodebuild \
+  -project VesperPlayerHostDemo.xcodeproj \
+  -scheme VesperPlayerHostDemo \
+  -configuration Release \
+  -sdk iphoneos \
+  -destination 'generic/platform=iOS' \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+```
 
-## Project Split
+## Test
 
-- `lib/ios/VesperPlayerKit`
-  - local Swift Package + future `XCFramework` project
-- `examples/ios-swift-host`
-  - runnable sample app that imports the package
+```sh
+./scripts/build-ios-player-ffi-xcframework.sh release
+cd examples/ios-swift-host
+xcodegen generate
+xcodebuild test \
+  -project VesperPlayerHostDemo.xcodeproj \
+  -scheme VesperPlayerHostDemo \
+  -destination 'id=<SIMULATOR_ID>' \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+```
 
-## Xcode Handoff
+List available Simulator IDs with:
 
-XcodeGen now has two useful entrypoints:
-
-1. `lib/ios/VesperPlayerKit/project.yml`
-   - framework project for future `XCFramework` packaging
-2. `examples/ios-swift-host/project.yml`
-   - runnable demo app that imports `VesperPlayerKit`
-
-For the demo app:
-
-1. build the Rust iOS resolver bundle with `scripts/build-ios-player-ffi-xcframework.sh`
-2. generate or open the demo project from `project.yml`
-3. confirm the Swift host app boots with the AVPlayer native bridge
-4. validate Photos video picker / `play / pause / seek / stop / rate`
-5. validate fullscreen, theme switching, and track/ABR sheets
-
-The local `VesperPlayerKit` Swift package now expects that generated Rust Apple bundle to exist
-before package resolution.
-
-For the reusable iOS binary artifact itself, use:
-
-- `scripts/build-ios-vesper-player-kit-xcframework.sh`
-
-## Host Regression
-
-The executable host regression path for this example is now:
-
-1. build the Rust resolver bundle:
-   - `./scripts/build-ios-player-ffi-xcframework.sh release`
-2. generate the host project:
-   - `cd examples/ios-swift-host && xcodegen generate`
-3. run the example-level LiveDvr regression tests:
-   - choose an installed simulator with `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -showdestinations`
-   - `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -configuration Debug -destination id=<SIMULATOR_ID> ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test`
-4. optionally build the release app:
-   - `xcodebuild -project examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj -scheme VesperPlayerHostDemo -configuration Release -sdk iphoneos -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build`
-
-The regression cases currently cover:
-
-- `Go Live` fallback to the seekable window end
-- live edge tolerance / offset behavior
-- pending seek ratio clamp
-- stale position clamp after DVR window shrink
+```sh
+xcodebuild -project VesperPlayerHostDemo.xcodeproj \
+  -scheme VesperPlayerHostDemo -showdestinations
+```
 
 ## Layout
 
-- `project.yml`
-  - XcodeGen descriptor for the demo app
-- `Sources/VesperPlayerHostDemoApp.swift`
-  - iOS app entrypoint
-- `Sources/PlayerHostView.swift`
-  - SwiftUI host UI
-- `../../lib/ios/VesperPlayerKit/Package.swift`
-  - local Swift Package entrypoint
-- `../../lib/ios/VesperPlayerKit/project.yml`
-  - framework/XCFramework-oriented XcodeGen descriptor
-- `../../lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/VesperPlayerController.swift`
-  - host-facing controller wrapper
-- `../../lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/VesperPlayerSource.swift`
-  - host-facing source DTO
-- `../../lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/PlayerSurfaceView.swift`
-  - `UIViewRepresentable` + `UIView` video host shell
-- `../../lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/PlayerBridge.swift`
-  - bridge-facing host contract
-- `../../lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/FakePlayerBridge.swift`
-  - local interactive placeholder until native bridge lands
+- `project.yml` — XcodeGen descriptor
+- `Sources/VesperPlayerHostDemoApp.swift` — iOS app entrypoint
+- `Sources/PlayerHostView.swift` — SwiftUI host UI
+
+Reusable host kit (separate project):
+
+- [`lib/ios/VesperPlayerKit`](../../lib/ios/VesperPlayerKit/) — Swift Package and XCFramework project for `VesperPlayerController`, `VesperPlayerSource`, `PlayerSurfaceContainer`

@@ -1,6 +1,8 @@
 use crate::error::{DashHlsError, DashHlsResult};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SidxBox {
     pub timescale: u32,
     pub earliest_presentation_time: u64,
@@ -8,7 +10,8 @@ pub struct SidxBox {
     pub references: Vec<SidxReference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SidxReference {
     pub reference_type: u8,
     pub referenced_size: u32,
@@ -31,6 +34,32 @@ pub fn parse_sidx(data: &[u8]) -> DashHlsResult<SidxBox> {
     Err(DashHlsError::InvalidMp4(
         "missing sidx box in MP4 data".to_owned(),
     ))
+}
+
+pub fn remove_top_level_sidx_boxes(data: &[u8]) -> DashHlsResult<Vec<u8>> {
+    let mut cursor = 0;
+    let mut kept_ranges = Vec::new();
+    let mut removed_sidx = false;
+
+    while cursor < data.len() {
+        let header = Mp4BoxHeader::parse(data, cursor)?;
+        if header.box_type == *b"sidx" {
+            removed_sidx = true;
+        } else {
+            kept_ranges.push(cursor..header.end);
+        }
+        cursor = header.end;
+    }
+
+    if !removed_sidx {
+        return Ok(data.to_vec());
+    }
+
+    let mut output = Vec::with_capacity(data.len());
+    for range in kept_ranges {
+        output.extend_from_slice(&data[range]);
+    }
+    Ok(output)
 }
 
 fn parse_sidx_payload(payload: &[u8]) -> DashHlsResult<SidxBox> {

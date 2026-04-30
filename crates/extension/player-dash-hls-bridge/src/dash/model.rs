@@ -1,4 +1,7 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ByteRange {
     pub start: u64,
     pub end: u64,
@@ -14,20 +17,23 @@ impl ByteRange {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DashManifest {
     pub duration_ms: Option<u64>,
     pub min_buffer_time_ms: Option<u64>,
     pub periods: Vec<DashPeriod>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DashPeriod {
     pub id: Option<String>,
     pub adaptation_sets: Vec<DashAdaptationSet>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DashAdaptationKind {
     Video,
     Audio,
@@ -35,7 +41,8 @@ pub enum DashAdaptationKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DashAdaptationSet {
     pub id: Option<String>,
     pub kind: DashAdaptationKind,
@@ -44,9 +51,11 @@ pub struct DashAdaptationSet {
     pub representations: Vec<DashRepresentation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DashRepresentation {
     pub id: String,
+    #[serde(rename = "baseURL")]
     pub base_url: String,
     pub mime_type: String,
     pub codecs: String,
@@ -56,10 +65,32 @@ pub struct DashRepresentation {
     pub frame_rate: Option<String>,
     pub audio_sampling_rate: Option<String>,
     pub segment_base: Option<DashSegmentBase>,
+    pub segment_template: Option<DashSegmentTemplate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DashSegmentBase {
     pub initialization: ByteRange,
     pub index_range: ByteRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashSegmentTemplate {
+    pub timescale: u64,
+    pub duration: Option<u64>,
+    pub start_number: u64,
+    pub presentation_time_offset: u64,
+    pub initialization: String,
+    pub media: String,
+    pub timeline: Vec<DashSegmentTimelineEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashSegmentTimelineEntry {
+    pub start_time: Option<u64>,
+    pub duration: u64,
+    pub repeat_count: i32,
 }

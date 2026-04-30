@@ -592,6 +592,13 @@ extern PlayerFfiCallStatus player_ffi_resolve_track_preferences(
     PlayerFfiTrackPreferences *out_preferences,
     PlayerFfiError *out_error);
 
+extern PlayerFfiCallStatus player_ffi_dash_bridge_execute_json(
+    const char *request_json,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern void player_ffi_dash_bridge_string_free(char *value);
+
 extern void player_ffi_error_free(PlayerFfiError *error);
 extern void player_ffi_track_preferences_free(PlayerFfiTrackPreferences *track_preferences);
 
@@ -1627,4 +1634,38 @@ void vesper_runtime_track_preferences_free(
   free((void *)track_preferences->subtitle_selection.track_id);
   free((void *)track_preferences->abr_policy.track_id);
   memset(track_preferences, 0, sizeof(*track_preferences));
+}
+
+bool vesper_dash_bridge_execute_json(
+    const char *request_json,
+    char **out_json,
+    char **out_error_message) {
+  if (request_json == NULL || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_dash_bridge_execute_json(
+      request_json,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_json != NULL;
+}
+
+void vesper_dash_bridge_string_free(char *value) {
+  player_ffi_dash_bridge_string_free(value);
 }

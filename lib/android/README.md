@@ -1,129 +1,101 @@
 # VesperPlayerKit for Android
 
-`lib/android` now holds the Android-native VesperPlayerKit integration project for the Vesper Player SDK.
+Android-native host kit for the Vesper Player SDK. Distributed as Android `AAR`
+artifacts and consumable from any Android app or library.
 
-## What Lives Here
+## Modules
 
-- `vesper-player-kit`
-  - Android library module that packages:
-    - Kotlin host facade
-    - JNI-backed `ExoPlayer` bridge
-    - Rust-generated `libvesper_player_android.so` files in `src/main/jniLibs`
-- `vesper-player-kit-compose`
-  - optional Compose adapter that packages:
-    - Compose controller helpers
-    - Compose surface wrapper
-    - lifecycle-scoped progress refresh
+| Module                         | Purpose                                                                                                                                                                             |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vesper-player-kit`            | Core Android library: `VesperPlayerController`, `VesperPlayerSource`, `VesperTrackSelection`, `VesperDownloadManager`, JNI-backed `ExoPlayer` bridge, `libvesper_player_android.so` |
+| `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
+| `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
-This project is the future landing point for Android `AAR` generation.
+The Compose adapter and the higher-level Compose UI are both optional.
+View-based or non-Compose hosts can depend on `vesper-player-kit` alone
+without pulling in Compose or Material3.
 
-The current Kotlin package namespace is:
+Kotlin namespaces:
 
 - `io.github.ikaros.vesper.player.android`
 - `io.github.ikaros.vesper.player.android.compose`
+- `io.github.ikaros.vesper.player.android.compose.ui`
 
-The current Android native library basename is:
+Native library: `libvesper_player_android.so`.
 
-- `vesper_player_android`
+## Distribution
 
-Which means Android loads:
-
-- `libvesper_player_android.so`
-
-GitHub Releases now publish VesperPlayerKit for Android downloads through:
-
-- `.github/workflows/mobile-lib-release.yml`
-
-Current Android download package names:
+GitHub Releases publish the following artifacts via
+`.github/workflows/mobile-lib-release.yml`:
 
 - `VesperPlayerKit-android-arm64-v8a.aar`
 - `VesperPlayerKitCompose-android-arm64-v8a.aar`
 
-## Android Architecture Policy
+Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
+emulator. See [Release Downloads](../../README.md#release-downloads) for the
+public package names and artifact-selection notes.
 
-Android packaging in this repository is intentionally `arm64-v8a`-only:
+The optional `vesper-player-kit-compose-ui` module is built from source in this
+project. It does not currently have a separate release download artifact.
 
-- Android `AAR` release assets ship `arm64-v8a` only
-- generated JNI libraries and optional player-remux-ffmpeg plugin artifacts ship `arm64-v8a` only
-- use an arm64 Android emulator if emulator-side validation is needed
-- do not reintroduce `x86` or `x86_64` Android ABIs in packaging scripts, CI inputs, or release assets
+## Minimum Requirements
 
-Download guidance:
+- Android API Level 26+
+- Kotlin 2.x
+- arm64 device or arm64 emulator
 
-- use `arm64-v8a` for physical Android devices
-- use an arm64 Android emulator when emulator-side validation is needed
-- see [newDoc/RELEASE-DOWNLOAD-GUIDE.md](../../newDoc/RELEASE-DOWNLOAD-GUIDE.md) for the full package-selection guide
+## Building From Source
 
-## Packaging Helper
+From the repository root:
 
-You can build the Android library artifact through:
+```sh
+./scripts/build-android-vesper-player-kit-aar.sh
+./scripts/stage-android-vesper-player-kit-release.sh
+```
 
-- `scripts/build-android-vesper-player-kit-aar.sh`
-- `scripts/stage-android-vesper-player-kit-release.sh`
+Without a Gradle CLI, open `lib/android` in Android Studio and run:
 
-If no Gradle CLI is available on the machine, the script will tell you to open `lib/android` in
-Android Studio and run both `:vesper-player-kit:assembleRelease` and
-`:vesper-player-kit-compose:assembleRelease` there.
+- `:vesper-player-kit:assembleRelease`
+- `:vesper-player-kit-compose:assembleRelease`
+- `:vesper-player-kit-compose-ui:assembleRelease`
 
-## How It Relates To The Example
+## Public API
 
-`examples/android-compose-host` is now just a runnable host app that depends on this module.
+Core (`vesper-player-kit`):
 
-That means:
+- `VesperPlayerController` — playback control surface (`play / pause / seek / selectSource / setPlaybackRate / setAbrPolicy / setResiliencePolicy / set*TrackSelection`)
+- `VesperPlayerControllerFactory` — `createDefault(...)` for production bridge, `createPreview(...)` for a Fake bridge
+- `VesperPlayerSource` — media source DTO with `local / remote / hls / dash` factories
+- `VesperTrackSelection` — audio / subtitle / video track selection (`auto`, `disabled`, `track(id)`)
+- Reactive state on the controller: `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `resiliencePolicy` (all `StateFlow<...>`)
+- `VesperAbrPolicy` — `auto`, `constrained`, `fixedTrack`
+- `VesperPlaybackResiliencePolicy` with presets: `balanced()`, `streaming()`, `resilient()`, `lowLatency()`
+- `VesperBufferingPolicy`, `VesperRetryPolicy`, `VesperCachePolicy`
+- `VesperPreloadBudgetPolicy` — caps for concurrent preload tasks, memory, disk, warm-up window
+- `VesperTrackPreferencePolicy` — preferred audio / subtitle languages
+- `VesperDecoderBackend` — `SystemOnly` / `SystemPreferred` / `ExtensionPreferred`
+- `NativeVideoSurfaceKind` — `SurfaceView` (default, HDR / high frame rate) or `TextureView` (scrolling / animated stages)
+- `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput`
 
-- `lib/android/vesper-player-kit`
-  - integration library / future distributable SDK layer
-- `lib/android/vesper-player-kit-compose`
-  - optional Compose integration layer
-- `examples/android-compose-host`
-  - sample app that demonstrates how to call the library
+Compose adapter (`vesper-player-kit-compose`):
 
-The current Android host surface is also expected to handle:
+- `VesperPlayerSurface`
+- `rememberVesperPlayerController`
+- `rememberVesperPlayerUiState`
 
-- local files
-- remote progressive URLs
+Compose UI (`vesper-player-kit-compose-ui`):
+
+- `VesperPlayerStage` — opinionated player stage with controls overlay, gestures, fullscreen, sheets
+
+The library does not ship preset URLs or demo sources. Construct
+`VesperPlayerSource` from your own content.
+
+## Supported Sources
+
+- Local files
+- Progressive HTTP/HTTPS
 - HLS (`.m3u8`)
 - DASH (`.mpd`)
-
-The library intentionally does not ship built-in demo URLs or preset source choices. Those belong
-in a consuming host app such as `examples/android-compose-host`.
-
-The Android host API now exposes first-round playback resilience controls:
-
-- `VesperPlaybackResiliencePolicy`
-- `VesperBufferingPolicy`
-- `VesperRetryPolicy`
-- `VesperCachePolicy`
-
-These are now used to shape `ExoPlayer` startup buffering, retry behavior, and first-round disk
-caching for remote streams, especially `HLS / DASH`.
-
-The Android host API also exposes decoder selection through `VesperDecoderBackend`:
-
-- `SystemOnly`
-  - keep using platform decoders only
-- `SystemPreferred`
-  - allow optional extension decoders, but still prefer system decoders first
-- `ExtensionPreferred`
-  - allow optional extension decoders and prefer them when both paths can play the same track
-
-`vesper-player-kit` does not pull in `androidx.media3:media3-exoplayer-ffmpeg` by default, so the
-baseline AAR size stays unchanged when you do not need the FFmpeg extension. If a host app wants
-to use `SystemPreferred` or `ExtensionPreferred` with the FFmpeg extension path, it should add that
-Media3 dependency itself.
-
-## Key Entry Points
-
-- `vesper-player-kit/build.gradle.kts`
-  - Android core library module config
-- `vesper-player-kit-compose/build.gradle.kts`
-  - Android Compose adapter module config
-- `vesper-player-kit/src/main/java/.../VesperPlayerController.kt`
-  - host-facing controller API
-- `vesper-player-kit/src/main/java/.../VesperPlayerSource.kt`
-  - host-facing source DTO
-- `vesper-player-kit-compose/src/main/java/.../VesperPlayerCompose.kt`
-  - Compose helpers and reusable video surface
 
 ## Minimal Compose Usage
 
@@ -136,54 +108,50 @@ import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerContro
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
 
 @Composable
-fun DemoPlayerScreen() {
-    val controller =
-        rememberVesperPlayerController(
-            resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
-            decoderBackend = VesperDecoderBackend.SystemOnly,
-        )
+fun PlayerScreen() {
+    val controller = rememberVesperPlayerController(
+        resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
+        decoderBackend = VesperDecoderBackend.SystemOnly,
+    )
     val uiState = rememberVesperPlayerUiState(controller)
 
     VesperPlayerSurface(controller = controller)
 
-    // Then bind your own controls to:
-    // controller.play()
-    // controller.pause()
-    // controller.seekBy(...)
-    // controller.selectSource(...)
-    // uiState.playbackState / uiState.timeline / uiState.playbackRate
+    // Bind your controls to:
+    //   controller.play() / controller.pause()
+    //   controller.seekBy(...) / controller.selectSource(...)
+    //   uiState.playbackState / uiState.timeline / uiState.playbackRate
 }
 ```
 
-## Why The Compose Adapter Is Optional
+## Decoder Backends
 
-`vesper-player-kit` intentionally stays UI-framework-neutral:
+`VesperDecoderBackend` controls how `vesper-player-kit` resolves decoders:
 
-- Compose is not forced onto every Android consumer
-- non-Compose hosts can depend on the core library without pulling in Compose or Material3
-- future View-based, Flutter, React Native, or custom host wrappers can reuse the same core API
+| Mode                 | Behavior                                                     |
+| -------------------- | ------------------------------------------------------------ |
+| `SystemOnly`         | Use platform decoders only (default)                         |
+| `SystemPreferred`    | Allow optional extension decoders, prefer system decoders    |
+| `ExtensionPreferred` | Prefer extension decoders when both paths can play the track |
 
-The Compose module is where UI-scoped refresh behavior now lives, so playback position updates are
-driven only while a Compose host screen is active instead of being baked into the bridge itself.
+`vesper-player-kit` does not depend on `androidx.media3:media3-exoplayer-ffmpeg`,
+so the baseline AAR size stays unchanged when the FFmpeg extension is not
+needed. Apps that want `SystemPreferred` or `ExtensionPreferred` with the FFmpeg
+extension must add the Media3 FFmpeg dependency themselves.
 
-## JNI Build
+## JNI Artifacts
 
-Rust JNI artifacts are built through:
+When building from source, the native library is produced by:
 
-- `scripts/build-android-vesper-player-kit-jni.sh`
+```sh
+./scripts/build-android-vesper-player-kit-jni.sh
+```
 
-The script now writes `.so` outputs into:
+Output is written to
+`lib/android/vesper-player-kit/src/main/jniLibs/<abi>/libvesper_player_android.so`.
+Generated `.so` files are not committed to the repository.
 
-- `lib/android/vesper-player-kit/src/main/jniLibs`
+## Runnable Sample
 
-The generated file name is:
-
-- `libvesper_player_android.so`
-
-These JNI outputs are treated as generated artifacts:
-
-- the repository keeps only `src/main/jniLibs/.gitkeep`
-- ABI folders and `.so` files are rebuilt locally through the helper script or Gradle tasks
-- generated JNI binaries are intentionally ignored by git
-
-So both the standalone library project and the example app consume the same native artifacts.
+A Compose sample app that consumes these modules lives at
+[examples/android-compose-host](../../examples/android-compose-host/).

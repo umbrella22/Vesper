@@ -3,6 +3,6 @@ pub mod parse;
 
 pub use model::{
     ByteRange, DashAdaptationKind, DashAdaptationSet, DashManifest, DashPeriod, DashRepresentation,
-    DashSegmentBase,
+    DashSegmentBase, DashSegmentTemplate, DashSegmentTimelineEntry,
 };
 pub use parse::{parse_mpd, parse_mpd_with_base_uri};
