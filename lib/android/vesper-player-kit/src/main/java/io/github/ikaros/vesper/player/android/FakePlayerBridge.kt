@@ -13,10 +13,12 @@ class FakePlayerBridge(
     resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+    benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     appContext: Context? = null,
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private val i18n = VesperPlayerI18n.fromContext(appContext)
+    private val benchmarkRecorder = VesperBenchmarkRecorder(benchmarkConfiguration)
 
     private val _uiState = MutableStateFlow(
         PlayerHostUiState(
@@ -55,13 +57,27 @@ class FakePlayerBridge(
     override val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy> =
         _resiliencePolicy.asStateFlow()
 
-    override fun initialize() = Unit
+    override fun initialize() {
+        recordBenchmark("initialize_start")
+        if (currentSource == null) {
+            recordBenchmark("initialize_without_source")
+        } else {
+            recordBenchmark("initialize_completed")
+        }
+    }
 
-    override fun dispose() = Unit
+    override fun dispose() {
+        recordBenchmark("dispose_command")
+        benchmarkRecorder.dispose()
+    }
 
     override fun refresh() = Unit
 
     override fun selectSource(source: VesperPlayerSource) {
+        recordBenchmark(
+            "select_source_start",
+            mapOf("targetProtocol" to source.protocol.name.lowercase()),
+        )
         currentSource = source
         _effectiveVideoTrackId.value = null
         _videoVariantObservation.value = null
@@ -93,12 +109,14 @@ class FakePlayerBridge(
     override fun detachSurfaceHost(host: ViewGroup?) = Unit
 
     override fun play() {
+        recordBenchmark("play_command")
         updateState {
             copy(playbackState = PlaybackStateUi.Playing, isBuffering = false)
         }
     }
 
     override fun pause() {
+        recordBenchmark("pause_command")
         updateState { copy(playbackState = PlaybackStateUi.Paused, isBuffering = false) }
     }
 
@@ -113,6 +131,7 @@ class FakePlayerBridge(
     }
 
     override fun stop() {
+        recordBenchmark("stop_command")
         updateState {
             copy(
                 playbackState = PlaybackStateUi.Ready,
@@ -126,6 +145,7 @@ class FakePlayerBridge(
         updateState {
             val timeline = timeline
             val target = timeline.clampedPosition(timeline.positionMs + deltaMs)
+            recordBenchmark("seek_start", mapOf("positionMs" to target.toString()))
             copy(timeline = timeline.copy(positionMs = target))
         }
     }
@@ -134,6 +154,7 @@ class FakePlayerBridge(
         updateState {
             val timeline = timeline
             val position = timeline.positionForRatio(ratio)
+            recordBenchmark("seek_start", mapOf("positionMs" to position.toString()))
             copy(timeline = timeline.copy(positionMs = position))
         }
     }
@@ -141,11 +162,13 @@ class FakePlayerBridge(
     override fun seekToLiveEdge() {
         updateState {
             val liveEdge = timeline.goLivePositionMs ?: timeline.positionMs
+            recordBenchmark("seek_start", mapOf("positionMs" to liveEdge.toString()))
             copy(timeline = timeline.copy(positionMs = liveEdge))
         }
     }
 
     override fun setPlaybackRate(rate: Float) {
+        recordBenchmark("set_playback_rate_command", mapOf("rate" to rate.toString()))
         updateState { copy(playbackRate = rate) }
     }
 
@@ -161,8 +184,21 @@ class FakePlayerBridge(
         _resiliencePolicy.value = policy
     }
 
+    override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
+        benchmarkRecorder.drainEvents()
+
+    override fun benchmarkSummary(): VesperBenchmarkSummary =
+        benchmarkRecorder.summary()
+
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
+    }
+
+    private fun recordBenchmark(
+        eventName: String,
+        attributes: Map<String, String> = emptyMap(),
+    ) {
+        benchmarkRecorder.record(eventName, currentSource?.protocol, attributes)
     }
 
     private fun previewSourceSubtitle(source: VesperPlayerSource): String =

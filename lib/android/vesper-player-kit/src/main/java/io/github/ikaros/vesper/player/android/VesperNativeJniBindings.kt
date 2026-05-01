@@ -43,6 +43,7 @@ class VesperNativeJniBindings(
     context: Context,
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
+    private val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
 ) : VesperNativeBindings {
     private val appContext = context.applicationContext
     private val i18n = VesperPlayerI18n.fromContext(appContext)
@@ -65,14 +66,18 @@ class VesperNativeJniBindings(
             bindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
             preloadBudgetPolicy = preloadBudgetPolicy,
         )
+    private var currentBenchmarkSourceProtocol: VesperPlayerSourceProtocol? = null
 
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         trackPreferencePolicy: VesperTrackPreferencePolicy,
     ): NativeBridgeStartup {
+        currentBenchmarkSourceProtocol = source.protocol
+        recordBenchmark("source_load_start")
         Log.i(TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
         dispose()
+        currentBenchmarkSourceProtocol = source.protocol
         VesperNativeLibrary.ensureLoaded()
 
         val handle = VesperNativeJni.createSession(source.uri)
@@ -114,6 +119,7 @@ class VesperNativeJniBindings(
             exoPlayer.setVideoSurface(surface)
         }
         exoPlayer.prepare()
+        recordBenchmark("source_load_configured")
         executePreloadWarmupCommands(source)
 
         player = exoPlayer
@@ -150,6 +156,7 @@ class VesperNativeJniBindings(
         currentEffectiveVideoTrackIdState = null
         currentVideoVariantObservationState = null
         currentVideoLayoutState = null
+        currentBenchmarkSourceProtocol = null
     }
 
     override fun refreshSnapshot() {
@@ -173,6 +180,7 @@ class VesperNativeJniBindings(
 
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) {
         Log.i(TAG, "attachSurface kind=$surfaceKind")
+        recordBenchmark("surface_attach", mapOf("surfaceKind" to surfaceKind.name))
         attachedSurface = surface
         player?.setVideoSurface(surface)
         sessionHandle?.let { handle ->
@@ -184,6 +192,7 @@ class VesperNativeJniBindings(
 
     override fun detachSurface() {
         Log.i(TAG, "detachSurface")
+        recordBenchmark("surface_detach")
         player?.clearVideoSurface()
         attachedSurface = null
         sessionHandle?.let(VesperNativeJni::detachSurface)
@@ -198,31 +207,37 @@ class VesperNativeJniBindings(
 
     override fun play() {
         Log.i(TAG, "play")
+        recordBenchmark("native_play_command")
         dispatchRustCommand { handle -> VesperNativeJni.play(handle) }
     }
 
     override fun pause() {
         Log.i(TAG, "pause")
+        recordBenchmark("native_pause_command")
         dispatchRustCommand { handle -> VesperNativeJni.pause(handle) }
     }
 
     override fun stop() {
         Log.i(TAG, "stop")
+        recordBenchmark("native_stop_command")
         dispatchRustCommand { handle -> VesperNativeJni.stop(handle) }
     }
 
     override fun seekTo(positionMs: Long) {
         Log.i(TAG, "seekTo positionMs=$positionMs")
+        recordBenchmark("native_seek_command", mapOf("positionMs" to positionMs.toString()))
         dispatchRustCommand { handle -> VesperNativeJni.seekTo(handle, positionMs) }
     }
 
     override fun setPlaybackRate(rate: Float) {
         Log.i(TAG, "setPlaybackRate rate=$rate")
+        recordBenchmark("native_set_playback_rate_command", mapOf("rate" to rate.toString()))
         dispatchRustCommand { handle -> VesperNativeJni.setPlaybackRate(handle, rate) }
     }
 
     override fun setVideoTrackSelection(selection: VesperTrackSelection) {
         Log.i(TAG, "setVideoTrackSelection mode=${selection.mode} trackId=${selection.trackId}")
+        recordBenchmark("native_set_video_track_selection_command")
         dispatchRustCommand { handle ->
             VesperNativeJni.setVideoTrackSelection(handle, selection.toNativePayload())
         }
@@ -230,6 +245,7 @@ class VesperNativeJniBindings(
 
     override fun setAudioTrackSelection(selection: VesperTrackSelection) {
         Log.i(TAG, "setAudioTrackSelection mode=${selection.mode} trackId=${selection.trackId}")
+        recordBenchmark("native_set_audio_track_selection_command")
         dispatchRustCommand { handle ->
             VesperNativeJni.setAudioTrackSelection(handle, selection.toNativePayload())
         }
@@ -240,6 +256,7 @@ class VesperNativeJniBindings(
             TAG,
             "setSubtitleTrackSelection mode=${selection.mode} trackId=${selection.trackId}",
         )
+        recordBenchmark("native_set_subtitle_track_selection_command")
         dispatchRustCommand { handle ->
             VesperNativeJni.setSubtitleTrackSelection(handle, selection.toNativePayload())
         }
@@ -250,6 +267,7 @@ class VesperNativeJniBindings(
             TAG,
             "setAbrPolicy mode=${policy.mode} trackId=${policy.trackId} maxBitRate=${policy.maxBitRate} maxWidth=${policy.maxWidth} maxHeight=${policy.maxHeight}",
         )
+        recordBenchmark("native_set_abr_policy_command", mapOf("mode" to policy.mode.name))
         dispatchRustCommand { handle ->
             VesperNativeJni.setAbrPolicy(handle, policy.toNativePayload())
         }
@@ -352,18 +370,33 @@ class VesperNativeJniBindings(
                     TAG,
                     "onPlaybackStateChanged state=${exoPlaybackStateName(playbackState)} playWhenReady=${player?.playWhenReady}",
                 )
+                recordBenchmark(
+                    "playback_state_changed",
+                    mapOf("state" to exoPlaybackStateName(playbackState)),
+                )
                 pushSnapshotToRust()
                 notifyNativeUpdate()
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 Log.d(TAG, "onPlayWhenReadyChanged playWhenReady=$playWhenReady reason=$reason")
+                recordBenchmark(
+                    "play_when_ready_changed",
+                    mapOf(
+                        "playWhenReady" to playWhenReady.toString(),
+                        "reason" to reason.toString(),
+                    ),
+                )
                 pushSnapshotToRust()
                 notifyNativeUpdate()
             }
 
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
                 Log.d(TAG, "onPlaybackParametersChanged speed=${playbackParameters.speed}")
+                recordBenchmark(
+                    "playback_parameters_changed",
+                    mapOf("speed" to playbackParameters.speed.toString()),
+                )
                 pushSnapshotToRust()
                 pushTrackStateToRust()
                 notifyNativeUpdate()
@@ -371,6 +404,7 @@ class VesperNativeJniBindings(
 
             override fun onTracksChanged(tracks: Tracks) {
                 Log.d(TAG, "onTracksChanged groups=${tracks.groups.size}")
+                recordBenchmark("tracks_changed", mapOf("groups" to tracks.groups.size.toString()))
                 player?.let { exoPlayer ->
                     pendingTrackOverrides?.let { defaults ->
                         applyTrackPreferenceTrackOverrides(exoPlayer, defaults)
@@ -383,6 +417,10 @@ class VesperNativeJniBindings(
 
             override fun onTrackSelectionParametersChanged(parameters: TrackSelectionParameters) {
                 Log.d(TAG, "onTrackSelectionParametersChanged overrides=${parameters.overrides.size}")
+                recordBenchmark(
+                    "track_selection_parameters_changed",
+                    mapOf("overrides" to parameters.overrides.size.toString()),
+                )
                 pushTrackStateToRust()
                 notifyNativeUpdate()
             }
@@ -397,6 +435,13 @@ class VesperNativeJniBindings(
                     Log.d(TAG, "ignoring transient empty video size during renderer switch")
                     return
                 }
+                recordBenchmark(
+                    "video_size_changed",
+                    mapOf(
+                        "width" to videoSize.width.toString(),
+                        "height" to videoSize.height.toString(),
+                    ),
+                )
                 currentVideoLayoutState = layoutInfo
                 notifyNativeUpdate()
             }
@@ -411,6 +456,10 @@ class VesperNativeJniBindings(
                         val completedPositionMs =
                             player?.timelinePositionForWindowPosition(newPosition.positionMs)
                                 ?: newPosition.positionMs
+                        recordBenchmark(
+                            "seek_completed",
+                            mapOf("positionMs" to completedPositionMs.toString()),
+                        )
                         VesperNativeJni.reportSeekCompleted(handle, completedPositionMs)
                     }
                 }
@@ -424,6 +473,13 @@ class VesperNativeJniBindings(
 
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "onPlayerError ${error.errorCodeName}: ${error.message}", error)
+                recordBenchmark(
+                    "playback_error",
+                    mapOf(
+                        "code" to error.errorCodeName,
+                        "message" to (error.message ?: ""),
+                    ),
+                )
                 val classified = classifyPlaybackException(error)
                 sessionHandle?.let { handle ->
                     VesperNativeJni.reportError(
@@ -450,8 +506,28 @@ class VesperNativeJniBindings(
                     TAG,
                     "onVideoInputFormatChanged formatId=${format.id} bitrate=${format.bitrate} width=${format.width} height=${format.height}",
                 )
+                recordBenchmark(
+                    "video_input_format_changed",
+                    mapOf(
+                        "formatId" to (format.id ?: ""),
+                        "bitrate" to format.bitrate.toString(),
+                        "width" to format.width.toString(),
+                        "height" to format.height.toString(),
+                    ),
+                )
                 pushTrackStateToRust()
                 notifyNativeUpdate()
+            }
+
+            override fun onRenderedFirstFrame(
+                eventTime: AnalyticsListener.EventTime,
+                output: Any,
+                renderTimeMs: Long,
+            ) {
+                recordBenchmark(
+                    "first_frame_rendered",
+                    mapOf("renderTimeMs" to renderTimeMs.toString()),
+                )
             }
         }
 
@@ -597,6 +673,13 @@ class VesperNativeJniBindings(
         } else {
             mainHandler.post { listener.invoke() }
         }
+    }
+
+    private fun recordBenchmark(
+        eventName: String,
+        attributes: Map<String, String> = emptyMap(),
+    ) {
+        benchmarkRecorder.record(eventName, currentBenchmarkSourceProtocol, attributes)
     }
 }
 

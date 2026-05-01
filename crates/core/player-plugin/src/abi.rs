@@ -6,6 +6,7 @@ pub enum VesperPluginKind {
     PostDownloadProcessor = 1,
     PipelineEventHook = 2,
     Decoder = 3,
+    BenchmarkSink = 4,
 }
 
 #[repr(u32)]
@@ -176,6 +177,37 @@ unsafe impl Send for VesperPipelineEventHookApi {}
 // SAFETY: same reasoning as above; the plugin context is required to be safe for
 // concurrent shared access when exposed as a pipeline event hook.
 unsafe impl Sync for VesperPipelineEventHookApi {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// C ABI exposed by a benchmark sink plugin.
+///
+/// `on_event_batch_json` receives one UTF-8 JSON `BenchmarkEventBatch` payload
+/// per call. `flush_json` returns a UTF-8 JSON `BenchmarkSinkReport` payload on
+/// success. Plugins must not retain host-owned pointers after a callback
+/// returns.
+pub struct VesperBenchmarkSinkApi {
+    pub context: *mut c_void,
+    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
+    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
+    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
+    pub on_event_batch_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            batch_json: *const u8,
+            batch_json_len: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub flush_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginProcessResult>,
+}
+
+// SAFETY: host-side wrappers only expose this API behind `BenchmarkSink`, and
+// plugin authors must uphold the declared `Send + Sync` contract for the
+// underlying context pointer and callbacks.
+unsafe impl Send for VesperBenchmarkSinkApi {}
+// SAFETY: same reasoning as above; the plugin context is required to be safe for
+// concurrent shared access when exposed as a benchmark sink.
+unsafe impl Sync for VesperBenchmarkSinkApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

@@ -84,6 +84,8 @@ public final class VesperPlayerController: ObservableObject {
     private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
+    private let drainBenchmarkEventsImpl: () -> [VesperBenchmarkEvent]
+    private let benchmarkSummaryImpl: () -> VesperBenchmarkSummary
 
     init<Bridge: ObservablePlayerBridge>(_ bridge: Bridge) {
         backend = bridge.backend
@@ -120,6 +122,8 @@ public final class VesperPlayerController: ObservableObject {
         setSubtitleTrackSelectionImpl = bridge.setSubtitleTrackSelection
         setAbrPolicyImpl = bridge.setAbrPolicy
         setResiliencePolicyImpl = bridge.setResiliencePolicy
+        drainBenchmarkEventsImpl = bridge.drainBenchmarkEvents
+        benchmarkSummaryImpl = bridge.benchmarkSummary
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
@@ -214,6 +218,14 @@ public final class VesperPlayerController: ObservableObject {
 
     public func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
         setResiliencePolicyImpl(policy)
+    }
+
+    public func drainBenchmarkEvents() -> [VesperBenchmarkEvent] {
+        drainBenchmarkEventsImpl()
+    }
+
+    public func benchmarkSummary() -> VesperBenchmarkSummary {
+        benchmarkSummaryImpl()
     }
 
     /// Playback rates exposed by the current iOS host surface.

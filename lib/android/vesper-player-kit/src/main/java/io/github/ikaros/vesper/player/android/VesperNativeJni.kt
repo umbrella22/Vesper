@@ -10,6 +10,7 @@ object VesperNativeJni {
     external fun createSession(sourceUri: String): Long
     external fun createPreloadSession(preloadBudget: NativeResolvedPreloadBudgetPolicy): Long
     external fun createDownloadSession(config: NativeDownloadConfig): Long
+    external fun createBenchmarkSinkSession(pluginLibraryPaths: Array<String>): Long
     external fun createPlaylistSession(
         config: NativePlaylistConfig,
         preloadBudget: NativeResolvedPreloadBudgetPolicy,
@@ -28,7 +29,10 @@ object VesperNativeJni {
     external fun disposeSession(sessionHandle: Long)
     external fun disposePreloadSession(sessionHandle: Long)
     external fun disposeDownloadSession(sessionHandle: Long)
+    external fun disposeBenchmarkSinkSession(sessionHandle: Long)
     external fun disposePlaylistSession(sessionHandle: Long)
+    external fun submitBenchmarkSinkEvents(sessionHandle: Long, batchJson: String): String
+    external fun flushBenchmarkSinkSession(sessionHandle: Long): String
     external fun attachSurface(
         sessionHandle: Long,
         surface: Surface,

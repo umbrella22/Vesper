@@ -16,6 +16,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedLastError: VesperPlayerError?
 
     let backend: PlayerBridgeBackend = .fakeDemo
+    private let benchmarkRecorder: VesperBenchmarkRecorder
 
     var uiState: PlayerHostUiState {
         publishedUiState
@@ -49,14 +50,27 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedLastError
     }
 
+    private func recordBenchmark(
+        _ eventName: String,
+        attributes: [String: String] = [:]
+    ) {
+        benchmarkRecorder.record(
+            eventName,
+            sourceProtocol: currentSource?.protocol,
+            attributes: attributes
+        )
+    }
+
     init(
         initialSource: VesperPlayerSource? = nil,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
-        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
     ) {
         _ = trackPreferencePolicy
         _ = preloadBudgetPolicy
+        benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
         currentSource = initialSource
         publishedUiState = PlayerHostUiState(
             title: VesperPlayerI18n.playerTitle,
@@ -84,13 +98,27 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedLastError = nil
     }
 
-    func initialize() {}
+    func initialize() {
+        recordBenchmark("initialize_start")
+        if currentSource == nil {
+            recordBenchmark("initialize_without_source")
+        } else {
+            recordBenchmark("initialize_completed")
+        }
+    }
 
-    func dispose() {}
+    func dispose() {
+        recordBenchmark("dispose_command")
+        benchmarkRecorder.dispose()
+    }
 
     func refresh() {}
 
     func selectSource(_ source: VesperPlayerSource) {
+        recordBenchmark(
+            "select_source_start",
+            attributes: ["targetProtocol": source.protocol.rawValue]
+        )
         currentSource = source
         publishedEffectiveVideoTrackId = nil
         publishedVideoVariantObservation = nil
@@ -137,6 +165,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func detachSurfaceHost() {}
 
     func play() {
+        recordBenchmark("play_command")
         update {
             PlayerHostUiState(
                 title: $0.title,
@@ -152,6 +181,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func pause() {
+        recordBenchmark("pause_command")
         update {
             PlayerHostUiState(
                 title: $0.title,
@@ -176,6 +206,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func stop() {
+        recordBenchmark("stop_command")
         update { current in
             PlayerHostUiState(
                 title: current.title,
@@ -200,6 +231,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func seek(by deltaMs: Int64) {
         update { current in
             let target = current.timeline.clampedPosition(current.timeline.positionMs + deltaMs)
+            recordBenchmark("seek_start", attributes: ["positionMs": "\(target)"])
             return PlayerHostUiState(
                 title: current.title,
                 subtitle: current.subtitle,
@@ -223,6 +255,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func seek(toRatio ratio: Double) {
         update { current in
             let position = current.timeline.position(forRatio: ratio)
+            recordBenchmark("seek_start", attributes: ["positionMs": "\(position)"])
 
             return PlayerHostUiState(
                 title: current.title,
@@ -247,6 +280,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func seekToLiveEdge() {
         update { current in
             let target = current.timeline.goLivePositionMs ?? current.timeline.positionMs
+            recordBenchmark("seek_start", attributes: ["positionMs": "\(target)"])
             return PlayerHostUiState(
                 title: current.title,
                 subtitle: current.subtitle,
@@ -268,6 +302,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     func setPlaybackRate(_ rate: Float) {
+        recordBenchmark("set_playback_rate_command", attributes: ["rate": "\(rate)"])
         update { current in
             PlayerHostUiState(
                 title: current.title,
@@ -292,6 +327,14 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
         publishedResiliencePolicy = policy
+    }
+
+    func drainBenchmarkEvents() -> [VesperBenchmarkEvent] {
+        benchmarkRecorder.drainEvents()
+    }
+
+    func benchmarkSummary() -> VesperBenchmarkSummary {
+        benchmarkRecorder.summary()
     }
 
     private func update(_ transform: (PlayerHostUiState) -> PlayerHostUiState) {

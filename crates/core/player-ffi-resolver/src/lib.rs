@@ -12,6 +12,7 @@ use player_platform_ios::{
     IosPreloadBridgeSession, IosPreloadCommand,
 };
 use player_plugin::ProcessorProgress;
+use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_policy_resolver::{
     resolve_preload_budget as resolve_preload_budget_with_runtime,
     resolve_resilience_policy as resolve_resilience_policy_with_runtime,
@@ -335,6 +336,8 @@ static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<IosDownloadBridgeSession
     OnceLock::new();
 static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaylistBridgeSession>>> =
     OnceLock::new();
+static BENCHMARK_SESSIONS: OnceLock<Mutex<HandleRegistry<BenchmarkSinkPluginSession>>> =
+    OnceLock::new();
 
 fn preload_sessions() -> &'static Mutex<HandleRegistry<IosPreloadBridgeSession>> {
     PRELOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
@@ -346,6 +349,10 @@ fn download_sessions() -> &'static Mutex<HandleRegistry<IosDownloadBridgeSession
 
 fn playlist_sessions() -> &'static Mutex<HandleRegistry<IosPlaylistBridgeSession>> {
     PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
+}
+
+fn benchmark_sessions() -> &'static Mutex<HandleRegistry<BenchmarkSinkPluginSession>> {
+    BENCHMARK_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 #[repr(C)]
@@ -2240,6 +2247,200 @@ pub extern "C" fn player_ffi_resolve_track_preferences(
         ptr::write(out_preferences, resolved.into());
     }
     PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_benchmark_session_create(
+    plugin_library_paths: *mut *mut c_char,
+    plugin_library_paths_len: usize,
+    out_handle: *mut u64,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_handle.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "out_handle was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let plugin_library_paths = match read_string_list(
+        plugin_library_paths,
+        plugin_library_paths_len,
+        "plugin_library_paths",
+    ) {
+        Ok(paths) => paths.into_iter().map(PathBuf::from).collect::<Vec<_>>(),
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let session = match BenchmarkSinkPluginSession::load_paths(plugin_library_paths) {
+        Ok(session) => session,
+        Err(error) => {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let Ok(mut sessions) = benchmark_sessions().lock() else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "benchmark session registry lock failed",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+    let handle = sessions.insert(session);
+    unsafe {
+        ptr::write(out_handle, handle);
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_benchmark_session_dispose(handle: u64) {
+    if let Ok(mut sessions) = benchmark_sessions().lock() {
+        sessions.remove(&handle);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
+    handle: u64,
+    batch_json: *const c_char,
+    out_report_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if batch_json.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "batch_json was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+    if out_report_json.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "out_report_json was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let batch_json = match unsafe { CStr::from_ptr(batch_json) }.to_str() {
+        Ok(value) => value,
+        Err(_) => {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidUtf8,
+                    "batch_json was not valid UTF-8",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let Ok(sessions) = benchmark_sessions().lock() else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "benchmark session registry lock failed",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+    let Some(session) = sessions.get(&handle) else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "invalid benchmark session handle",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    let report_json = match session.on_event_batch_report_json(batch_json) {
+        Ok(value) => value,
+        Err(error) => {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    unsafe {
+        ptr::write(out_report_json, into_c_string_ptr(report_json));
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_benchmark_session_flush_json(
+    handle: u64,
+    out_report_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    if out_report_json.is_null() {
+        write_error(
+            out_error,
+            owned_api_error(PlayerFfiErrorCode::NullPointer, "out_report_json was null"),
+        );
+        return PlayerFfiCallStatus::Error;
+    }
+
+    let Ok(sessions) = benchmark_sessions().lock() else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "benchmark session registry lock failed",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+    let Some(session) = sessions.get(&handle) else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "invalid benchmark session handle",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    let report_json = match session.flush_json() {
+        Ok(value) => value,
+        Err(error) => {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    unsafe {
+        ptr::write(out_report_json, into_c_string_ptr(report_json));
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_char) {
+    let mut value = value;
+    free_c_string(&mut value);
 }
 
 #[unsafe(no_mangle)]

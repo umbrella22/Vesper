@@ -1657,6 +1657,7 @@ dependencies = [
  "player-dash-hls-bridge",
  "player-platform-ios",
  "player-plugin",
+ "player-plugin-loader",
  "player-policy-resolver",
  "player-runtime",
 ]
@@ -1683,6 +1684,7 @@ dependencies = [
  "player-core",
  "player-platform-android",
  "player-plugin",
+ "player-plugin-loader",
  "player-policy-resolver",
  "player-runtime",
 ]

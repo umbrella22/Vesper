@@ -4,9 +4,44 @@ import android.view.Surface
 import androidx.media3.common.Format
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VesperNativePlayerBridgeTest {
+    @Test
+    fun benchmarkRecorderDefaultsDisabled() {
+        val bridge = VesperNativePlayerBridge(bindings = FakeBindings())
+
+        bridge.initialize()
+        bridge.play()
+
+        assertTrue(bridge.drainBenchmarkEvents().isEmpty())
+        assertEquals(0L, bridge.benchmarkSummary().acceptedEvents)
+    }
+
+    @Test
+    fun benchmarkRecorderDrainsRawEventsAndKeepsSummary() {
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = FakeBindings(),
+                benchmarkRecorder =
+                    VesperBenchmarkRecorder(
+                        VesperBenchmarkConfiguration(enabled = true),
+                    ),
+            )
+
+        bridge.initialize()
+        bridge.play()
+
+        val events = bridge.drainBenchmarkEvents()
+        val eventNames = events.map { it.eventName }.toSet()
+        assertTrue(eventNames.contains("initialize_start"))
+        assertTrue(eventNames.contains("initialize_without_source"))
+        assertTrue(eventNames.contains("play_command"))
+        assertTrue(bridge.drainBenchmarkEvents().isEmpty())
+        assertEquals(events.size.toLong(), bridge.benchmarkSummary().acceptedEvents)
+    }
+
     @Test
     fun refreshMirrorsEffectiveVideoTrackIdFromBindings() {
         val bindings =

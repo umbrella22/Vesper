@@ -23,6 +23,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private weak var surfaceHost: PlayerSurfaceView?
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
+    private var playbackStalledObserver: NSObjectProtocol?
     private var pendingAutoPlay = false
     private var playbackEpoch: UInt64 = 0
     private var timeControlObservation: NSKeyValueObservation?
@@ -47,6 +48,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var retryAttemptCount = 0
     private let cachePolicyToken = UUID()
     private let preloadCoordinator: VesperNativePreloadCoordinator
+    private let benchmarkRecorder: VesperBenchmarkRecorder
     private var fixedTrackConvergenceState: FixedTrackConvergenceState?
     private var fixedTrackIssueActive = false
 
@@ -82,16 +84,29 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedLastError
     }
 
+    private func recordBenchmark(
+        _ eventName: String,
+        attributes: [String: String] = [:]
+    ) {
+        benchmarkRecorder.record(
+            eventName,
+            sourceProtocol: currentSource?.protocol,
+            attributes: attributes
+        )
+    }
+
     init(
         initialSource: VesperPlayerSource? = nil,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
-        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
     ) {
         currentSource = initialSource
         currentResiliencePolicy = resiliencePolicy
         self.trackPreferencePolicy = trackPreferencePolicy
         resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
+        benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
         preloadCoordinator = VesperNativePreloadCoordinator(
             budgetPolicy: preloadBudgetPolicy.resolvedForRuntime()
         )
@@ -123,7 +138,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func initialize() {
         clearLastError()
+        recordBenchmark("initialize_start")
         guard let currentSource else {
+            recordBenchmark("initialize_without_source")
             updateState {
                 PlayerHostUiState(
                     title: $0.title,
@@ -158,15 +175,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 startPlayback()
             }
             refreshPlaybackState()
+            recordBenchmark("initialize_completed")
         } catch {
             pendingAutoPlay = false
             iosHostLog("initialize failed: \(error.localizedDescription)")
+            recordBenchmark(
+                "initialize_failed",
+                attributes: ["error": error.localizedDescription]
+            )
             handlePlaybackFailure(error: error, fallbackMessage: error.localizedDescription)
         }
     }
 
     func dispose() {
         clearLastError()
+        recordBenchmark("dispose_command")
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
         pendingResilienceRestore = nil
@@ -174,6 +197,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         hasAppliedDefaultTrackPreferences = false
         pendingAutoPlay = false
         tearDownActivePlayback()
+        benchmarkRecorder.dispose()
     }
 
     func refresh() {
@@ -182,6 +206,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func selectSource(_ source: VesperPlayerSource) {
         clearLastError()
+        recordBenchmark(
+            "select_source_start",
+            attributes: ["targetProtocol": source.protocol.rawValue]
+        )
         iosHostLog(
             "selectSource source=\(source.uri) label=\(source.label) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
         )
@@ -242,6 +270,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         host.onReadyForDisplay = { [weak self] in
             Task { @MainActor in
                 iosHostLog("surfaceReadyForDisplay")
+                self?.recordBenchmark("first_frame_rendered")
                 self?.attemptPendingPlaybackStart(reason: "surfaceReadyForDisplay")
             }
         }
@@ -258,6 +287,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func play() {
         clearLastError()
+        recordBenchmark("play_command")
         if player == nil {
             pendingAutoPlay = true
             initialize()
@@ -277,12 +307,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     private func startPlayback() {
         guard let player else { return }
+        recordBenchmark("start_playback_attempt")
         if publishedUiState.playbackState == .finished {
             player.seek(to: .zero)
         }
 
         if let deferralReason = playbackStartDeferralReason(player) {
             pendingPlaybackStart = true
+            recordBenchmark(
+                "start_playback_deferred",
+                attributes: ["reason": deferralReason]
+            )
             iosHostLog("deferring playback until \(deferralReason)")
             return
         }
@@ -291,11 +326,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let rate = desiredPlaybackRate
         applyDefaultPlaybackRate(rate, to: player)
         iosHostLog("startPlayback rate=\(rate)")
+        recordBenchmark("start_playback_applied", attributes: ["rate": "\(rate)"])
         player.playImmediately(atRate: rate)
     }
 
     func pause() {
         clearLastError()
+        recordBenchmark("pause_command")
         iosHostLog("pause")
         player?.pause()
         refreshPlaybackState()
@@ -312,6 +349,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func stop() {
         clearLastError()
+        recordBenchmark("stop_command")
         iosHostLog("stop")
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = true
@@ -631,6 +669,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         initialize()
     }
 
+    func drainBenchmarkEvents() -> [VesperBenchmarkEvent] {
+        benchmarkRecorder.drainEvents()
+    }
+
+    func benchmarkSummary() -> VesperBenchmarkSummary {
+        benchmarkRecorder.summary()
+    }
+
     private func loadCurrentSource() throws {
         guard let currentSource else {
             throw NSError(
@@ -640,6 +686,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
         }
 
+        recordBenchmark("source_load_start")
         let url = try resolvedUrl(for: currentSource)
         iosHostLog("loadCurrentSource url=\(url.absoluteString)")
         let resolvedResiliencePolicy = currentResiliencePolicy.resolvedForRuntimeSource(currentSource)
@@ -667,6 +714,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         self.player = player
         surfaceHost?.attach(player: player)
         installObservers(for: player, item: item, playbackEpoch: playbackEpoch)
+        recordBenchmark("source_load_configured")
 
         updateState {
             PlayerHostUiState(
@@ -718,12 +766,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         currentDashSession = session
         dashResourceLoaderDelegate = loaderDelegate
         iosHostLog("configured DASH bridge master=\(session.masterPlaylistURL.absoluteString)")
+        recordBenchmark("dash_bridge_configured")
         return AVPlayerItem(asset: asset)
     }
 
     private func seekToPosition(_ positionMs: Int64) {
         let playbackEpoch = currentPlaybackEpoch()
         let time = CMTime(milliseconds: positionMs)
+        recordBenchmark("seek_start", attributes: ["positionMs": "\(positionMs)"])
         player?.seek(to: time) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
@@ -747,11 +797,23 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             }
         }
 
-        timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { player, _ in
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
             let reason = player.reasonForWaitingToPlay?.rawValue ?? "nil"
             iosHostLog(
                 "timeControlStatus=\(timeControlStatusName(player.timeControlStatus)) reason=\(reason) rate=\(player.rate)"
             )
+            Task { @MainActor in
+                guard let self, self.isPlaybackEpochCurrent(playbackEpoch) else {
+                    return
+                }
+                self.recordBenchmark(
+                    "time_control_status_changed",
+                    attributes: [
+                        "status": timeControlStatusName(player.timeControlStatus),
+                        "reason": reason,
+                    ]
+                )
+            }
         }
 
         itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
@@ -765,6 +827,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 }
                 switch item.status {
                 case .readyToPlay:
+                    self.recordBenchmark("player_item_ready")
                     self.cancelPendingRetry(resetAttempts: true)
                     self.refreshTrackCatalogAndSelection(for: item)
                     self.applyPendingResilienceRestore(ifNeededFor: item, phase: .coreState)
@@ -785,8 +848,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             }
         }
 
-        itemBufferEmptyObservation = item.observe(\.isPlaybackBufferEmpty, options: [.initial, .new]) { item, _ in
+        itemBufferEmptyObservation = item.observe(\.isPlaybackBufferEmpty, options: [.initial, .new]) { [weak self] item, _ in
             iosHostLog("itemBufferEmpty=\(item.isPlaybackBufferEmpty)")
+            Task { @MainActor in
+                guard let self, self.isPlaybackEpochCurrent(playbackEpoch) else {
+                    return
+                }
+                self.recordBenchmark(
+                    "buffer_empty_changed",
+                    attributes: ["empty": "\(item.isPlaybackBufferEmpty)"]
+                )
+            }
         }
 
         itemLikelyToKeepUpObservation = item.observe(\.isPlaybackLikelyToKeepUp, options: [.initial, .new]) {
@@ -800,7 +872,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                         iosHostLog("ignored stale likelyToKeepUp playbackEpoch=\(playbackEpoch)")
                         return
                     }
+                    self.recordBenchmark(
+                        "likely_to_keep_up_changed",
+                        attributes: ["likely": "\(item.isPlaybackLikelyToKeepUp)"]
+                    )
                     self.attemptPendingPlaybackStart(reason: "itemLikelyToKeepUp")
+                }
+            } else {
+                Task { @MainActor in
+                    guard self.isPlaybackEpochCurrent(playbackEpoch) else {
+                        return
+                    }
+                    self.recordBenchmark(
+                        "likely_to_keep_up_changed",
+                        attributes: ["likely": "\(item.isPlaybackLikelyToKeepUp)"]
+                    )
                 }
             }
         }
@@ -817,6 +903,20 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                     return
                 }
                 self.handlePlaybackEnded()
+            }
+        }
+
+        playbackStalledObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                guard self.isPlaybackEpochCurrent(playbackEpoch) else {
+                    return
+                }
+                self.recordBenchmark("playback_stalled")
             }
         }
 
@@ -837,6 +937,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+        if let playbackStalledObserver {
+            NotificationCenter.default.removeObserver(playbackStalledObserver)
+        }
+        playbackStalledObserver = nil
     }
 
     private func advancePlaybackEpoch() -> UInt64 {
@@ -870,6 +974,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
             return
         }
+        recordBenchmark("seek_completed", attributes: ["positionMs": "\(positionMs)"])
         updateTimelinePosition(positionMs)
         refreshPlaybackState()
     }
@@ -882,6 +987,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             return
         }
         iosHostLog("stop seek completed")
+        recordBenchmark("stop_seek_completed")
         isSeekingToStartAfterStop = false
         updateTimelinePosition(0)
         if pendingPlayAfterStopSeek {
@@ -893,6 +999,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func handlePlaybackEnded() {
+        recordBenchmark("playback_ended")
         let durationMs = currentDurationMs() ?? publishedUiState.timeline.durationMs ?? 0
         updateState {
             PlayerHostUiState(
@@ -1807,6 +1914,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let resolvedError = classifyPlaybackFailure(error, fallbackMessage: fallbackMessage)
         iosHostLog(
             "playbackFailure category=\(resolvedError.category.rawValue) retriable=\(resolvedError.retriable) message=\(resolvedError.message)"
+        )
+        recordBenchmark(
+            "playback_error",
+            attributes: [
+                "category": resolvedError.category.rawValue,
+                "retriable": "\(resolvedError.retriable)",
+            ]
         )
         fixedTrackIssueActive = false
         publishedLastError = resolvedError.toPlayerError()

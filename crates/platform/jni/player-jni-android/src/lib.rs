@@ -5,6 +5,7 @@ mod preload_jni;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -12,12 +13,13 @@ use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
 use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
 use jni::signature::{RuntimeFieldSignature, RuntimeMethodSignature};
 use jni::strings::JNIString;
-use jni::sys::{jboolean, jfloat, jint, jlong, jobject, jobjectArray};
+use jni::sys::{jboolean, jfloat, jint, jlong, jobject, jobjectArray, jstring};
 use jni::{Env, EnvUnowned};
 use player_platform_android::{
     AndroidExoPlaybackSnapshot, AndroidExoPlaybackState, AndroidHostBridgeSession,
     AndroidHostCommand, AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind,
 };
+use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_policy_resolver::{
     resolve_preload_budget as resolve_preload_budget_via_shared_resolver,
     resolve_resilience_policy as resolve_resilience_policy_via_shared_resolver,
@@ -202,13 +204,23 @@ pub(crate) fn u128_to_jlong_saturating(value: u128) -> jlong {
 type AndroidJniSession = Arc<Mutex<AndroidHostBridgeSession>>;
 
 static SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniSession>>> = OnceLock::new();
+static BENCHMARK_SINK_SESSIONS: OnceLock<Mutex<HandleRegistry<BenchmarkSinkPluginSession>>> =
+    OnceLock::new();
 
 fn sessions() -> &'static Mutex<HandleRegistry<AndroidJniSession>> {
     SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
+fn benchmark_sink_sessions() -> &'static Mutex<HandleRegistry<BenchmarkSinkPluginSession>> {
+    BENCHMARK_SINK_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
+}
+
 fn invalid_handle_error() -> &'static str {
     "invalid android JNI session handle"
+}
+
+fn invalid_benchmark_sink_handle_error() -> &'static str {
+    "invalid android benchmark sink session handle"
 }
 
 pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
@@ -259,6 +271,44 @@ fn new_session(source_uri: String) -> Result<jlong, &'static str> {
         return Err("android JNI session registry overflow");
     }
     Ok(handle)
+}
+
+fn new_benchmark_sink_session(paths: Vec<String>) -> Result<jlong, String> {
+    let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    let session =
+        BenchmarkSinkPluginSession::load_paths(paths).map_err(|error| error.to_string())?;
+    let mut guard = lock_or_recover(benchmark_sink_sessions());
+    let handle = guard.insert(session);
+    if handle == 0 {
+        return Err("android benchmark sink session registry overflow".to_owned());
+    }
+    Ok(handle)
+}
+
+fn with_benchmark_sink_session<R>(
+    env: &mut Env<'_>,
+    handle: jlong,
+    f: impl FnOnce(&BenchmarkSinkPluginSession) -> Result<R, String>,
+) -> Option<R> {
+    let guard = lock_or_recover(benchmark_sink_sessions());
+    let Some(session) = guard.get(&handle) else {
+        let _ = env.throw_new(
+            jni_name("java/lang/IllegalArgumentException"),
+            jni_name(invalid_benchmark_sink_handle_error()),
+        );
+        return None;
+    };
+
+    match f(session) {
+        Ok(value) => Some(value),
+        Err(message) => {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalStateException"),
+                jni_name(message),
+            );
+            None
+        }
+    }
 }
 
 fn boxed_long<'local>(env: &mut Env<'local>, value: Option<u64>) -> JniResult<JObject<'local>> {
@@ -898,6 +948,22 @@ fn string_from_java_object(env: &mut Env<'_>, object: JObject<'_>) -> JniResult<
     Ok(Some(value.try_to_string(env)?))
 }
 
+fn string_array_to_vec(env: &mut Env<'_>, values: JObjectArray<'_>) -> JniResult<Vec<String>> {
+    if values.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let len = values.len(env)?;
+    let mut result = Vec::with_capacity(len);
+    for index in 0..len {
+        let value = values.get_element(env, index)?;
+        if let Some(value) = string_from_java_object(env, value)? {
+            result.push(value);
+        }
+    }
+    Ok(result)
+}
+
 fn string_field(
     env: &mut Env<'_>,
     object: &JObject<'_>,
@@ -1248,6 +1314,87 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                         Ok(0)
                     }
                 }
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createBenchmarkSinkSession(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    plugin_library_paths: JObjectArray<'_>,
+) -> jlong {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jlong> {
+                let paths = string_array_to_vec(env, plugin_library_paths)?;
+                match new_benchmark_sink_session(paths) {
+                    Ok(handle) => Ok(handle),
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(message),
+                        )?;
+                        Ok(0)
+                    }
+                }
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeBenchmarkSinkSession(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    run_jni_entry(&mut unowned_env, |_unowned_env| {
+        let mut guard = lock_or_recover(benchmark_sink_sessions());
+        guard.remove(&handle);
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_submitBenchmarkSinkEvents(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    batch_json: JString<'_>,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let batch_json = batch_json.try_to_string(env)?;
+                let Some(report_json) = with_benchmark_sink_session(env, handle, |session| {
+                    session
+                        .on_event_batch_report_json(&batch_json)
+                        .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(report_json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_flushBenchmarkSinkSession(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(report_json) = with_benchmark_sink_session(env, handle, |session| {
+                    session.flush_json().map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(report_json)?.into_raw())
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     })

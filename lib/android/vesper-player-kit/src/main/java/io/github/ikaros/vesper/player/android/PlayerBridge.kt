@@ -142,4 +142,6 @@ interface PlayerBridge {
     fun setSubtitleTrackSelection(selection: VesperTrackSelection)
     fun setAbrPolicy(policy: VesperAbrPolicy)
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy)
+    fun drainBenchmarkEvents(): List<VesperBenchmarkEvent>
+    fun benchmarkSummary(): VesperBenchmarkSummary
 }

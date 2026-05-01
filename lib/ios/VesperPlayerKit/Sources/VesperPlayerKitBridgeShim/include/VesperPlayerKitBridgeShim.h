@@ -551,6 +551,27 @@ bool vesper_runtime_resolve_track_preferences(
 void vesper_runtime_track_preferences_free(
     VesperRuntimeTrackPreferencePolicy *track_preferences);
 
+bool vesper_runtime_benchmark_sink_session_create(
+    char **plugin_library_paths,
+    uintptr_t plugin_library_paths_len,
+    uint64_t *out_handle,
+    char **out_error_message);
+
+void vesper_runtime_benchmark_sink_session_dispose(uint64_t handle);
+
+bool vesper_runtime_benchmark_sink_session_submit_json(
+    uint64_t handle,
+    const char *batch_json,
+    char **out_report_json,
+    char **out_error_message);
+
+bool vesper_runtime_benchmark_sink_session_flush_json(
+    uint64_t handle,
+    char **out_report_json,
+    char **out_error_message);
+
+void vesper_runtime_benchmark_string_free(char *value);
+
 bool vesper_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,

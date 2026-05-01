@@ -12,7 +12,8 @@ enum PlayerBridgeFactory {
         initialSource: VesperPlayerSource? = nil,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
-        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
     ) -> VesperPlayerController {
         switch defaultBackend {
         case .fakeDemo:
@@ -21,7 +22,8 @@ enum PlayerBridgeFactory {
                     initialSource: initialSource,
                     resiliencePolicy: resiliencePolicy,
                     trackPreferencePolicy: trackPreferencePolicy,
-                    preloadBudgetPolicy: preloadBudgetPolicy
+                    preloadBudgetPolicy: preloadBudgetPolicy,
+                    benchmarkConfiguration: benchmarkConfiguration
                 )
             )
         case .rustNativeStub:
@@ -30,7 +32,8 @@ enum PlayerBridgeFactory {
                     initialSource: initialSource,
                     resiliencePolicy: resiliencePolicy,
                     trackPreferencePolicy: trackPreferencePolicy,
-                    preloadBudgetPolicy: preloadBudgetPolicy
+                    preloadBudgetPolicy: preloadBudgetPolicy,
+                    benchmarkConfiguration: benchmarkConfiguration
                 )
             )
         }
@@ -47,13 +50,15 @@ public enum VesperPlayerControllerFactory {
         initialSource: VesperPlayerSource? = nil,
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
-        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy()
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
     ) -> VesperPlayerController {
         PlayerBridgeFactory.makeDefaultBridge(
             initialSource: initialSource,
             resiliencePolicy: resiliencePolicy,
             trackPreferencePolicy: trackPreferencePolicy,
-            preloadBudgetPolicy: preloadBudgetPolicy
+            preloadBudgetPolicy: preloadBudgetPolicy,
+            benchmarkConfiguration: benchmarkConfiguration
         )
     }
 }

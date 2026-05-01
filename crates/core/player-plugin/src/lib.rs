@@ -1,6 +1,7 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 mod abi;
+mod benchmark;
 mod capability;
 mod decoder;
 mod hook;
@@ -8,11 +9,15 @@ mod processor;
 
 pub use abi::{
     VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApi, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveFrameResult, VesperDecoderReceiveNativeFrameResult,
-    VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
-    VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApi,
+    VesperDecoderPluginApiV2, VesperDecoderReceiveFrameResult,
+    VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
+    VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
+    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+};
+pub use benchmark::{
+    BenchmarkEvent, BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
+    BenchmarkSinkStatus,
 };
 pub use capability::ProcessorCapabilities;
 pub use decoder::{

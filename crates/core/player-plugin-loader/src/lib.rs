@@ -6,19 +6,21 @@ use std::sync::Arc;
 
 use libloading::Library;
 use player_plugin::{
-    CompletedDownloadInfo, DecoderCapabilities, DecoderCodecCapability, DecoderError,
-    DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind, DecoderOperationStatus,
-    DecoderPacket, DecoderPacketResult, DecoderPluginFactory, DecoderReceiveFrameMetadata,
-    DecoderReceiveFrameOutput, DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata,
-    DecoderReceiveNativeFrameOutput, DecoderSession, DecoderSessionConfig, DecoderSessionInfo,
-    NativeDecoderPluginFactory, NativeDecoderSession, PipelineEvent, PipelineEventHook,
-    PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,
-    ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ABI_VERSION,
-    VESPER_PLUGIN_ENTRY_SYMBOL, VesperDecoderOpenSessionResult, VesperDecoderPluginApi,
-    VesperDecoderPluginApiV2, VesperDecoderReceiveFrameResult,
-    VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
-    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
+    BenchmarkSinkStatus, CompletedDownloadInfo, DecoderCapabilities, DecoderCodecCapability,
+    DecoderError, DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind,
+    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderPluginFactory,
+    DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput, DecoderReceiveFrameStatus,
+    DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSession,
+    DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
+    PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
+    ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+    VESPER_PLUGIN_ABI_VERSION, VESPER_PLUGIN_ENTRY_SYMBOL, VesperBenchmarkSinkApi,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApi, VesperDecoderPluginApiV2,
+    VesperDecoderReceiveFrameResult, VesperDecoderReceiveNativeFrameResult,
+    VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
+    VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
+    VesperPluginResultStatus, VesperPostDownloadProcessorApi,
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -65,8 +67,109 @@ pub struct LoadedDynamicPlugin {
     plugin_kind: VesperPluginKind,
     post_download_processor: Option<Arc<DynamicPostDownloadProcessor>>,
     pipeline_event_hook: Option<Arc<DynamicPipelineEventHook>>,
+    benchmark_sink: Option<Arc<DynamicBenchmarkSink>>,
     decoder_plugin_factory: Option<Arc<DynamicDecoderPluginFactory>>,
     native_decoder_plugin_factory: Option<Arc<DynamicNativeDecoderPluginFactory>>,
+}
+
+pub struct BenchmarkSinkPluginSession {
+    sinks: Vec<Arc<dyn BenchmarkSink>>,
+}
+
+impl std::fmt::Debug for BenchmarkSinkPluginSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BenchmarkSinkPluginSession")
+            .field("sink_count", &self.sinks.len())
+            .finish()
+    }
+}
+
+impl BenchmarkSinkPluginSession {
+    pub fn load_paths(
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> Result<Self, PluginLoadError> {
+        let mut sinks = Vec::new();
+        for path in paths {
+            let plugin = LoadedDynamicPlugin::load(path.as_ref())?;
+            if let Some(sink) = plugin.benchmark_sink() {
+                sinks.push(sink);
+            }
+        }
+
+        Ok(Self { sinks })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sinks.is_empty()
+    }
+
+    pub fn on_event_batch_json(
+        &self,
+        batch_json: &str,
+    ) -> Result<BenchmarkSinkReport, BenchmarkSinkError> {
+        let batch = serde_json::from_str::<BenchmarkEventBatch>(batch_json).map_err(|error| {
+            BenchmarkSinkError::PayloadCodec(format!(
+                "decode benchmark event batch payload failed: {error}"
+            ))
+        })?;
+        Ok(self.on_event_batch(&batch))
+    }
+
+    pub fn on_event_batch_report_json(
+        &self,
+        batch_json: &str,
+    ) -> Result<String, BenchmarkSinkError> {
+        serde_json::to_string(&self.on_event_batch_json(batch_json)?).map_err(|error| {
+            BenchmarkSinkError::PayloadCodec(format!(
+                "encode benchmark sink status failed: {error}"
+            ))
+        })
+    }
+
+    pub fn on_event_batch(&self, batch: &BenchmarkEventBatch) -> BenchmarkSinkReport {
+        let mut report = BenchmarkSinkReport::default();
+        for sink in &self.sinks {
+            match sink.on_event_batch(batch) {
+                Ok(status) => {
+                    report.accepted_events += status.accepted_events;
+                }
+                Err(error) => {
+                    report.dropped_events += batch.events.len() as u64;
+                    report
+                        .plugin_errors
+                        .push(format!("{}: {error}", sink.name()));
+                }
+            }
+        }
+        report
+    }
+
+    pub fn flush(&self) -> BenchmarkSinkReport {
+        let mut report = BenchmarkSinkReport::default();
+        for sink in &self.sinks {
+            match sink.flush() {
+                Ok(sink_report) => {
+                    report.accepted_events += sink_report.accepted_events;
+                    report.dropped_events += sink_report.dropped_events;
+                    report.plugin_errors.extend(sink_report.plugin_errors);
+                }
+                Err(error) => {
+                    report
+                        .plugin_errors
+                        .push(format!("{}: {error}", sink.name()));
+                }
+            }
+        }
+        report
+    }
+
+    pub fn flush_json(&self) -> Result<String, BenchmarkSinkError> {
+        serde_json::to_string(&self.flush()).map_err(|error| {
+            BenchmarkSinkError::PayloadCodec(format!(
+                "encode benchmark sink report failed: {error}"
+            ))
+        })
+    }
 }
 
 impl LoadedDynamicPlugin {
@@ -121,6 +224,12 @@ impl LoadedDynamicPlugin {
             .map(|hook| hook as Arc<dyn PipelineEventHook>)
     }
 
+    pub fn benchmark_sink(&self) -> Option<Arc<dyn BenchmarkSink>> {
+        self.benchmark_sink
+            .clone()
+            .map(|sink| sink as Arc<dyn BenchmarkSink>)
+    }
+
     pub fn decoder_plugin_factory(&self) -> Option<Arc<dyn DecoderPluginFactory>> {
         self.decoder_plugin_factory
             .clone()
@@ -167,6 +276,7 @@ impl LoadedDynamicPlugin {
                     plugin_kind: descriptor.plugin_kind,
                     post_download_processor: Some(Arc::new(processor)),
                     pipeline_event_hook: None,
+                    benchmark_sink: None,
                     decoder_plugin_factory: None,
                     native_decoder_plugin_factory: None,
                 })
@@ -190,6 +300,31 @@ impl LoadedDynamicPlugin {
                     plugin_kind: descriptor.plugin_kind,
                     post_download_processor: None,
                     pipeline_event_hook: Some(Arc::new(hook)),
+                    benchmark_sink: None,
+                    decoder_plugin_factory: None,
+                    native_decoder_plugin_factory: None,
+                })
+            }
+            VesperPluginKind::BenchmarkSink => {
+                let api_ptr = descriptor.api.cast::<VesperBenchmarkSinkApi>();
+                let api =
+                    // SAFETY: `descriptor.api` must point at the ABI table that
+                    // matches `plugin_kind` when the plugin exports a valid
+                    // descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "benchmark_sink_api",
+                    })?;
+                let sink = DynamicBenchmarkSink::new(
+                    library,
+                    descriptor_name.clone(),
+                    CheckedBenchmarkSinkApi::try_from(*api)?,
+                )?;
+                Ok(Self {
+                    name: descriptor_name,
+                    plugin_kind: descriptor.plugin_kind,
+                    post_download_processor: None,
+                    pipeline_event_hook: None,
+                    benchmark_sink: Some(Arc::new(sink)),
                     decoder_plugin_factory: None,
                     native_decoder_plugin_factory: None,
                 })
@@ -213,6 +348,7 @@ impl LoadedDynamicPlugin {
                         plugin_kind: descriptor.plugin_kind,
                         post_download_processor: None,
                         pipeline_event_hook: None,
+                        benchmark_sink: None,
                         decoder_plugin_factory: None,
                         native_decoder_plugin_factory: Some(Arc::new(factory)),
                     })
@@ -235,6 +371,7 @@ impl LoadedDynamicPlugin {
                         plugin_kind: descriptor.plugin_kind,
                         post_download_processor: None,
                         pipeline_event_hook: None,
+                        benchmark_sink: None,
                         decoder_plugin_factory: Some(Arc::new(factory)),
                         native_decoder_plugin_factory: None,
                     })
@@ -630,6 +767,12 @@ type OnEventJsonFn = unsafe extern "C" fn(
     event_json: *const u8,
     event_json_len: usize,
 ) -> bool;
+type OnBenchmarkEventBatchJsonFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    batch_json: *const u8,
+    batch_json_len: usize,
+) -> VesperPluginProcessResult;
+type BenchmarkFlushJsonFn = unsafe extern "C" fn(context: *mut c_void) -> VesperPluginProcessResult;
 type DecoderOpenSessionJsonFn = unsafe extern "C" fn(
     context: *mut c_void,
     config_json: *const u8,
@@ -728,6 +871,45 @@ impl TryFrom<VesperPipelineEventHookApi> for CheckedPipelineEventHookApi {
             on_event_json: api.on_event_json.ok_or(PluginLoadError::MissingField {
                 field: "pipeline_event_hook_api.on_event_json",
             })?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CheckedBenchmarkSinkApi {
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
+    name: Option<NameFn>,
+    free_bytes: FreeBytesFn,
+    on_event_batch_json: OnBenchmarkEventBatchJsonFn,
+    flush_json: Option<BenchmarkFlushJsonFn>,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through `BenchmarkSink`.
+unsafe impl Send for CheckedBenchmarkSinkApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedBenchmarkSinkApi {}
+
+impl TryFrom<VesperBenchmarkSinkApi> for CheckedBenchmarkSinkApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperBenchmarkSinkApi) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "benchmark_sink_api.free_bytes",
+            })?,
+            on_event_batch_json: api
+                .on_event_batch_json
+                .ok_or(PluginLoadError::MissingField {
+                    field: "benchmark_sink_api.on_event_batch_json",
+                })?,
+            flush_json: api.flush_json,
         })
     }
 }
@@ -1053,6 +1235,129 @@ impl PipelineEventHook for DynamicPipelineEventHook {
                 event_json.len(),
             )
         };
+    }
+}
+
+#[derive(Debug)]
+struct DynamicBenchmarkSinkInner {
+    #[allow(dead_code)]
+    library: Option<Arc<LibraryHolder>>,
+    name: String,
+    api: CheckedBenchmarkSinkApi,
+}
+
+impl Drop for DynamicBenchmarkSinkInner {
+    fn drop(&mut self) {
+        if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
+            unsafe { destroy(self.api.context) };
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DynamicBenchmarkSink {
+    inner: Arc<DynamicBenchmarkSinkInner>,
+}
+
+impl DynamicBenchmarkSink {
+    fn new(
+        library: Option<Arc<LibraryHolder>>,
+        fallback_name: String,
+        api: CheckedBenchmarkSinkApi,
+    ) -> Result<Self, PluginLoadError> {
+        let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
+            let name_ptr = unsafe { name_fn(api.context) };
+            if name_ptr.is_null() {
+                fallback_name
+            } else {
+                c_string_field(name_ptr, "benchmark_sink_name")?
+            }
+        } else {
+            fallback_name
+        };
+
+        Ok(Self {
+            inner: Arc::new(DynamicBenchmarkSinkInner { library, name, api }),
+        })
+    }
+
+    fn decode_result<T: DeserializeOwned>(
+        &self,
+        result: VesperPluginProcessResult,
+        operation: &'static str,
+    ) -> Result<T, BenchmarkSinkError> {
+        match result.status {
+            VesperPluginResultStatus::Success => decode_plugin_bytes::<T>(
+                result.payload,
+                self.inner.api.free_bytes,
+                self.inner.api.context,
+            )
+            .map_err(|error| {
+                BenchmarkSinkError::PayloadCodec(format!(
+                    "decode benchmark sink `{}` {operation} payload failed: {error}",
+                    self.inner.name
+                ))
+            }),
+            VesperPluginResultStatus::Failure => {
+                let decoded = decode_plugin_bytes::<BenchmarkSinkError>(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                )
+                .unwrap_or_else(|error| {
+                    BenchmarkSinkError::PayloadCodec(format!(
+                        "decode benchmark sink `{}` {operation} error payload failed: {error}",
+                        self.inner.name
+                    ))
+                });
+                Err(decoded)
+            }
+        }
+    }
+}
+
+impl BenchmarkSink for DynamicBenchmarkSink {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn on_event_batch(
+        &self,
+        batch: &BenchmarkEventBatch,
+    ) -> Result<BenchmarkSinkStatus, BenchmarkSinkError> {
+        let batch_json = serde_json::to_vec(batch).map_err(|error| {
+            BenchmarkSinkError::PayloadCodec(format!(
+                "serialize benchmark batch for `{}` failed: {error}",
+                self.inner.name
+            ))
+        })?;
+
+        // SAFETY: the validated sink API guarantees `on_event_batch_json` is
+        // present, and `batch_json` remains alive for the duration of this
+        // synchronous callback.
+        let result = unsafe {
+            (self.inner.api.on_event_batch_json)(
+                self.inner.api.context,
+                batch_json.as_ptr(),
+                batch_json.len(),
+            )
+        };
+        self.decode_result(result, "batch")
+    }
+
+    fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkError> {
+        let Some(flush_json) = self.inner.api.flush_json else {
+            return Ok(BenchmarkSinkReport::default());
+        };
+        // SAFETY: the validated sink API declares `flush_json` with this
+        // context. The callback is synchronous and returns plugin-owned bytes.
+        let result = unsafe { flush_json(self.inner.api.context) };
+        self.decode_result(result, "flush")
     }
 }
 
@@ -1901,6 +2206,7 @@ mod tests {
         PluginDiagnosticRecord, PluginDiagnosticStatus, PluginLoadError, PluginRegistry,
     };
     use player_plugin::{
+        BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkReport, BenchmarkSinkStatus,
         CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DecoderCapabilities,
         DecoderCodecCapability, DecoderError, DecoderFrameFormat, DecoderFrameMetadata,
         DecoderFramePlane, DecoderMediaKind, DecoderNativeDeviceContext,
@@ -1910,12 +2216,13 @@ mod tests {
         DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
         DownloadMetadata, OutputFormat, PipelineEvent, ProcessorCapabilities, ProcessorError,
         ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
-        VESPER_PLUGIN_ABI_VERSION, VesperDecoderOpenSessionResult, VesperDecoderPluginApi,
-        VesperDecoderPluginApiV2, VesperDecoderReceiveFrameResult,
+        VESPER_PLUGIN_ABI_VERSION, VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult,
+        VesperDecoderPluginApi, VesperDecoderPluginApiV2, VesperDecoderReceiveFrameResult,
         VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
         VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
         VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     };
+    use std::collections::BTreeMap;
     use std::env;
     use std::ffi::{c_char, c_void};
     use std::path::{Path, PathBuf};
@@ -1923,8 +2230,11 @@ mod tests {
 
     static PROCESSOR_NAME: &[u8] = b"fixture-processor\0";
     static HOOK_NAME: &[u8] = b"fixture-hook\0";
+    static SINK_NAME: &[u8] = b"fixture-benchmark-sink\0";
     static DECODER_NAME: &[u8] = b"fixture-decoder\0";
     static EVENTS: LazyLock<Mutex<Vec<PipelineEvent>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+    static BENCHMARK_BATCHES: LazyLock<Mutex<Vec<BenchmarkEventBatch>>> =
+        LazyLock::new(|| Mutex::new(Vec::new()));
 
     #[derive(Default)]
     struct RecordingProgress {
@@ -2028,6 +2338,67 @@ mod tests {
             vec![PipelineEvent::DownloadTaskCompleted {
                 task_id: "42".to_owned(),
             }]
+        );
+    }
+
+    #[test]
+    fn dynamic_benchmark_sink_adapter_round_trips_json() {
+        if let Ok(mut batches) = BENCHMARK_BATCHES.lock() {
+            batches.clear();
+        }
+
+        let api = fixture_benchmark_sink_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            plugin_kind: VesperPluginKind::BenchmarkSink,
+            plugin_name: SINK_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperBenchmarkSinkApi).cast(),
+        };
+
+        let plugin =
+            LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load benchmark sink");
+        assert!(plugin.post_download_processor().is_none());
+        assert!(plugin.pipeline_event_hook().is_none());
+
+        let sink = plugin
+            .benchmark_sink()
+            .expect("benchmark sink should be available");
+        let event = BenchmarkEvent {
+            run_id: "run-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            platform: "ios".to_owned(),
+            source_protocol: Some("dash".to_owned()),
+            event_name: "first_frame_rendered".to_owned(),
+            timestamp_ns: 100,
+            elapsed_ns: 90,
+            thread: Some("main".to_owned()),
+            attributes: BTreeMap::from([("width".to_owned(), "1920".to_owned())]),
+        };
+        let status = sink
+            .on_event_batch(&BenchmarkEventBatch {
+                events: vec![event.clone()],
+            })
+            .expect("batch should be accepted");
+        let report = sink.flush().expect("flush should succeed");
+
+        assert_eq!(sink.name(), "fixture-benchmark-sink");
+        assert_eq!(status.accepted_events, 1);
+        assert_eq!(
+            BENCHMARK_BATCHES
+                .lock()
+                .map(|batches| batches.clone())
+                .unwrap_or_default(),
+            vec![BenchmarkEventBatch {
+                events: vec![event],
+            }]
+        );
+        assert_eq!(
+            report,
+            BenchmarkSinkReport {
+                accepted_events: 1,
+                dropped_events: 0,
+                plugin_errors: Vec::new(),
+            }
         );
     }
 
@@ -2737,6 +3108,17 @@ mod tests {
         }
     }
 
+    fn fixture_benchmark_sink_api() -> VesperBenchmarkSinkApi {
+        VesperBenchmarkSinkApi {
+            context: std::ptr::null_mut(),
+            destroy: None,
+            name: Some(fixture_benchmark_sink_name),
+            free_bytes: Some(fixture_free_bytes),
+            on_event_batch_json: Some(fixture_benchmark_on_event_batch_json),
+            flush_json: Some(fixture_benchmark_flush_json),
+        }
+    }
+
     fn fixture_decoder_api() -> VesperDecoderPluginApi {
         VesperDecoderPluginApi {
             context: std::ptr::null_mut(),
@@ -2776,8 +3158,57 @@ mod tests {
         HOOK_NAME.as_ptr().cast::<c_char>()
     }
 
+    unsafe extern "C" fn fixture_benchmark_sink_name(_context: *mut c_void) -> *const c_char {
+        SINK_NAME.as_ptr().cast::<c_char>()
+    }
+
     unsafe extern "C" fn fixture_decoder_name(_context: *mut c_void) -> *const c_char {
         DECODER_NAME.as_ptr().cast::<c_char>()
+    }
+
+    unsafe extern "C" fn fixture_benchmark_on_event_batch_json(
+        _context: *mut c_void,
+        batch_json: *const u8,
+        batch_json_len: usize,
+    ) -> VesperPluginProcessResult {
+        let batch = decode_fixture_json::<BenchmarkEventBatch>(batch_json, batch_json_len)
+            .expect("decode benchmark batch");
+        let accepted_events = batch.events.len() as u64;
+        if let Ok(mut batches) = BENCHMARK_BATCHES.lock() {
+            batches.push(batch);
+        }
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Success,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&BenchmarkSinkStatus { accepted_events })
+                    .expect("serialize benchmark status"),
+            ),
+        }
+    }
+
+    unsafe extern "C" fn fixture_benchmark_flush_json(
+        _context: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        let accepted_events = BENCHMARK_BATCHES
+            .lock()
+            .map(|batches| {
+                batches
+                    .iter()
+                    .map(|batch| batch.events.len() as u64)
+                    .sum::<u64>()
+            })
+            .unwrap_or_default();
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Success,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&BenchmarkSinkReport {
+                    accepted_events,
+                    dropped_events: 0,
+                    plugin_errors: Vec::new(),
+                })
+                .expect("serialize benchmark report"),
+            ),
+        }
     }
 
     unsafe extern "C" fn fixture_processor_capabilities_json(

@@ -592,6 +592,27 @@ extern PlayerFfiCallStatus player_ffi_resolve_track_preferences(
     PlayerFfiTrackPreferences *out_preferences,
     PlayerFfiError *out_error);
 
+extern PlayerFfiCallStatus player_ffi_benchmark_session_create(
+    char **plugin_library_paths,
+    uintptr_t plugin_library_paths_len,
+    uint64_t *out_handle,
+    PlayerFfiError *out_error);
+
+extern void player_ffi_benchmark_session_dispose(uint64_t handle);
+
+extern PlayerFfiCallStatus player_ffi_benchmark_session_on_event_batch_json(
+    uint64_t handle,
+    const char *batch_json,
+    char **out_report_json,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_benchmark_session_flush_json(
+    uint64_t handle,
+    char **out_report_json,
+    PlayerFfiError *out_error);
+
+extern void player_ffi_benchmark_report_string_free(char *value);
+
 extern PlayerFfiCallStatus player_ffi_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,
@@ -1634,6 +1655,108 @@ void vesper_runtime_track_preferences_free(
   free((void *)track_preferences->subtitle_selection.track_id);
   free((void *)track_preferences->abr_policy.track_id);
   memset(track_preferences, 0, sizeof(*track_preferences));
+}
+
+bool vesper_runtime_benchmark_sink_session_create(
+    char **plugin_library_paths,
+    uintptr_t plugin_library_paths_len,
+    uint64_t *out_handle,
+    char **out_error_message) {
+  if (out_handle == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_handle = 0;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_benchmark_session_create(
+      plugin_library_paths,
+      plugin_library_paths_len,
+      out_handle,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_handle != 0;
+}
+
+void vesper_runtime_benchmark_sink_session_dispose(uint64_t handle) {
+  player_ffi_benchmark_session_dispose(handle);
+}
+
+bool vesper_runtime_benchmark_sink_session_submit_json(
+    uint64_t handle,
+    const char *batch_json,
+    char **out_report_json,
+    char **out_error_message) {
+  if (batch_json == NULL || out_report_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_report_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_benchmark_session_on_event_batch_json(
+      handle,
+      batch_json,
+      out_report_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_report_json != NULL;
+}
+
+bool vesper_runtime_benchmark_sink_session_flush_json(
+    uint64_t handle,
+    char **out_report_json,
+    char **out_error_message) {
+  if (out_report_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_report_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_benchmark_session_flush_json(
+      handle,
+      out_report_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_report_json != NULL;
+}
+
+void vesper_runtime_benchmark_string_free(char *value) {
+  player_ffi_benchmark_report_string_free(value);
 }
 
 bool vesper_dash_bridge_execute_json(

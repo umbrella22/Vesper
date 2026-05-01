@@ -16,6 +16,7 @@ class VesperNativePlayerBridge(
     private var trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
     private val preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
+    private val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
     appContext: Context? = null,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ) : PlayerBridge {
@@ -72,7 +73,9 @@ class VesperNativePlayerBridge(
         if (isDisposed) {
             return
         }
+        recordBenchmark("initialize_start")
         val source = currentSource ?: run {
+            recordBenchmark("initialize_without_source")
             clearTrackState()
             updateState {
                 copy(
@@ -88,6 +91,7 @@ class VesperNativePlayerBridge(
         advanceNativeUpdateEpoch()
         runCatching { bindings.initialize(source, currentResiliencePolicy, trackPreferencePolicy) }
             .onSuccess {
+                recordBenchmark("initialize_completed")
                 hasInitializedSource = true
                 Log.i(
                     TAG,
@@ -109,6 +113,10 @@ class VesperNativePlayerBridge(
                 refreshFromNative()
             }
             .onFailure {
+                recordBenchmark(
+                    "initialize_failed",
+                    mapOf("error" to (it.message ?: it::class.java.simpleName)),
+                )
                 hasInitializedSource = false
                 pendingAutoPlay = false
                 clearTrackState()
@@ -133,6 +141,8 @@ class VesperNativePlayerBridge(
         clearTrackState()
         surfaceHost.detach()
         bindings.dispose()
+        recordBenchmark("dispose_command")
+        benchmarkRecorder.dispose()
     }
 
     override fun refresh() {
@@ -147,6 +157,10 @@ class VesperNativePlayerBridge(
         if (isDisposed) {
             return
         }
+        recordBenchmark(
+            "select_source_start",
+            mapOf("targetProtocol" to source.protocol.name.lowercase()),
+        )
         currentSource = source
         pendingAutoPlay = true
         clearTrackState()
@@ -167,22 +181,26 @@ class VesperNativePlayerBridge(
     }
 
     override fun attachSurfaceHost(host: ViewGroup) {
+        recordBenchmark("attach_surface_host")
         surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
         surfaceHost.attach(host)
         refreshFromNative()
     }
 
     override fun detachSurfaceHost(host: ViewGroup?) {
+        recordBenchmark("detach_surface_host")
         surfaceHost.detach(host)
     }
 
     override fun play() {
+        recordBenchmark("play_command")
         bindings.play()
         updateState { copy(playbackState = PlaybackStateUi.Playing, isBuffering = false) }
         refreshFromNative()
     }
 
     override fun pause() {
+        recordBenchmark("pause_command")
         bindings.pause()
         updateState { copy(playbackState = PlaybackStateUi.Paused, isBuffering = false) }
         refreshFromNative()
@@ -199,6 +217,7 @@ class VesperNativePlayerBridge(
     }
 
     override fun stop() {
+        recordBenchmark("stop_command")
         bindings.stop()
         updateState {
             copy(
@@ -213,6 +232,7 @@ class VesperNativePlayerBridge(
     override fun seekBy(deltaMs: Long) {
         val current = _uiState.value.timeline
         val target = current.clampedPosition(current.positionMs + deltaMs)
+        recordBenchmark("seek_start", mapOf("positionMs" to target.toString()))
         bindings.seekTo(target)
         updateState { copy(timeline = timeline.copy(positionMs = target)) }
         refreshFromNative()
@@ -221,6 +241,7 @@ class VesperNativePlayerBridge(
     override fun seekToRatio(ratio: Float) {
         val timeline = _uiState.value.timeline
         val position = timeline.positionForRatio(ratio)
+        recordBenchmark("seek_start", mapOf("positionMs" to position.toString()))
         bindings.seekTo(position)
         updateState { copy(timeline = timeline.copy(positionMs = position)) }
         refreshFromNative()
@@ -229,33 +250,39 @@ class VesperNativePlayerBridge(
     override fun seekToLiveEdge() {
         val timeline = _uiState.value.timeline
         val liveEdge = timeline.goLivePositionMs ?: return
+        recordBenchmark("seek_start", mapOf("positionMs" to liveEdge.toString()))
         bindings.seekTo(liveEdge)
         updateState { copy(timeline = timeline.copy(positionMs = liveEdge)) }
         refreshFromNative()
     }
 
     override fun setPlaybackRate(rate: Float) {
+        recordBenchmark("set_playback_rate_command", mapOf("rate" to rate.toString()))
         bindings.setPlaybackRate(rate)
         updateState { copy(playbackRate = rate) }
         refreshFromNative()
     }
 
     override fun setVideoTrackSelection(selection: VesperTrackSelection) {
+        recordBenchmark("set_video_track_selection_command", mapOf("mode" to selection.mode.name))
         bindings.setVideoTrackSelection(selection)
         refreshFromNative()
     }
 
     override fun setAudioTrackSelection(selection: VesperTrackSelection) {
+        recordBenchmark("set_audio_track_selection_command", mapOf("mode" to selection.mode.name))
         bindings.setAudioTrackSelection(selection)
         refreshFromNative()
     }
 
     override fun setSubtitleTrackSelection(selection: VesperTrackSelection) {
+        recordBenchmark("set_subtitle_track_selection_command", mapOf("mode" to selection.mode.name))
         bindings.setSubtitleTrackSelection(selection)
         refreshFromNative()
     }
 
     override fun setAbrPolicy(policy: VesperAbrPolicy) {
+        recordBenchmark("set_abr_policy_command", mapOf("mode" to policy.mode.name))
         bindings.setAbrPolicy(policy)
         refreshFromNative()
     }
@@ -267,6 +294,7 @@ class VesperNativePlayerBridge(
 
         currentResiliencePolicy = policy
         _resiliencePolicy.value = policy
+        recordBenchmark("set_resilience_policy_command")
         val source = currentSource ?: return
         if (!hasInitializedSource) {
             return
@@ -286,8 +314,21 @@ class VesperNativePlayerBridge(
         restorePlaybackState(source, preservedState)
     }
 
+    override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
+        benchmarkRecorder.drainEvents()
+
+    override fun benchmarkSummary(): VesperBenchmarkSummary =
+        benchmarkRecorder.summary()
+
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
+    }
+
+    private fun recordBenchmark(
+        eventName: String,
+        attributes: Map<String, String> = emptyMap(),
+    ) {
+        benchmarkRecorder.record(eventName, currentSource?.protocol, attributes)
     }
 
     private fun restorePlaybackState(
@@ -360,40 +401,100 @@ class VesperNativePlayerBridge(
 
         bindings.drainEvents().forEach { event ->
             when (event) {
-                is NativeBridgeEvent.PlaybackStateChanged -> updateState {
-                    copy(playbackState = event.state)
-                }
-                is NativeBridgeEvent.PlaybackRateChanged -> updateState {
-                    copy(playbackRate = event.rate)
-                }
-                is NativeBridgeEvent.BufferingChanged -> updateState {
-                    copy(isBuffering = event.isBuffering)
-                }
-                is NativeBridgeEvent.InterruptionChanged -> updateState {
-                    copy(isInterrupted = event.isInterrupted)
-                }
-                is NativeBridgeEvent.VideoSurfaceChanged -> updateState {
-                    copy(
-                        subtitle = if (event.attached) {
-                            i18n.surfaceAttached(currentSource?.let(::sourceSubtitle))
-                        } else {
-                            i18n.surfaceDetached(currentSource?.let(::sourceSubtitle))
-                        }
+                is NativeBridgeEvent.PlaybackStateChanged -> {
+                    recordBenchmark(
+                        "playback_state_changed",
+                        mapOf("state" to event.state.name),
                     )
+                    updateState {
+                        copy(playbackState = event.state)
+                    }
                 }
-                is NativeBridgeEvent.SeekCompleted -> updateState {
-                    copy(timeline = timeline.copy(positionMs = event.positionMs))
-                }
-                is NativeBridgeEvent.RetryScheduled -> updateState {
-                    copy(
-                        subtitle = i18n.retryScheduled(i18n.retryDelay(event.delayMs), event.attempt),
+                is NativeBridgeEvent.PlaybackRateChanged -> {
+                    recordBenchmark(
+                        "playback_rate_changed",
+                        mapOf("rate" to event.rate.toString()),
                     )
+                    updateState {
+                        copy(playbackRate = event.rate)
+                    }
                 }
-                is NativeBridgeEvent.Ended -> updateState {
-                    copy(playbackState = PlaybackStateUi.Finished, isBuffering = false)
+                is NativeBridgeEvent.BufferingChanged -> {
+                    recordBenchmark(
+                        "buffering_changed",
+                        mapOf("isBuffering" to event.isBuffering.toString()),
+                    )
+                    updateState {
+                        copy(isBuffering = event.isBuffering)
+                    }
                 }
-                is NativeBridgeEvent.Error -> updateState {
-                    copy(subtitle = i18n.nativeError(event.message))
+                is NativeBridgeEvent.InterruptionChanged -> {
+                    recordBenchmark(
+                        "interruption_changed",
+                        mapOf("isInterrupted" to event.isInterrupted.toString()),
+                    )
+                    updateState {
+                        copy(isInterrupted = event.isInterrupted)
+                    }
+                }
+                is NativeBridgeEvent.VideoSurfaceChanged -> {
+                    recordBenchmark(
+                        "video_surface_changed",
+                        mapOf("attached" to event.attached.toString()),
+                    )
+                    updateState {
+                        copy(
+                            subtitle = if (event.attached) {
+                                i18n.surfaceAttached(currentSource?.let(::sourceSubtitle))
+                            } else {
+                                i18n.surfaceDetached(currentSource?.let(::sourceSubtitle))
+                            }
+                        )
+                    }
+                }
+                is NativeBridgeEvent.SeekCompleted -> {
+                    recordBenchmark(
+                        "seek_completed",
+                        mapOf("positionMs" to event.positionMs.toString()),
+                    )
+                    updateState {
+                        copy(timeline = timeline.copy(positionMs = event.positionMs))
+                    }
+                }
+                is NativeBridgeEvent.RetryScheduled -> {
+                    recordBenchmark(
+                        "retry_scheduled",
+                        mapOf(
+                            "attempt" to event.attempt.toString(),
+                            "delayMs" to event.delayMs.toString(),
+                        ),
+                    )
+                    updateState {
+                        copy(
+                            subtitle = i18n.retryScheduled(
+                                i18n.retryDelay(event.delayMs),
+                                event.attempt,
+                            ),
+                        )
+                    }
+                }
+                is NativeBridgeEvent.Ended -> {
+                    recordBenchmark("playback_ended")
+                    updateState {
+                        copy(playbackState = PlaybackStateUi.Finished, isBuffering = false)
+                    }
+                }
+                is NativeBridgeEvent.Error -> {
+                    recordBenchmark(
+                        "playback_error",
+                        mapOf(
+                            "categoryOrdinal" to event.categoryOrdinal.toString(),
+                            "retriable" to event.retriable.toString(),
+                        ),
+                    )
+                    updateState {
+                        copy(subtitle = i18n.nativeError(event.message))
+                    }
                 }
             }
         }

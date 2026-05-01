@@ -70,6 +70,10 @@ class VesperPlayerController internal constructor(
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) =
         bridge.setResiliencePolicy(policy)
 
+    fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> = bridge.drainBenchmarkEvents()
+
+    fun benchmarkSummary(): VesperBenchmarkSummary = bridge.benchmarkSummary()
+
     companion object {
         val supportedPlaybackRates: List<Float> = listOf(0.5f, 1.0f, 1.5f, 2.0f, 3.0f)
     }
@@ -84,6 +88,7 @@ object VesperPlayerControllerFactory {
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
         decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
         surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+        benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     ): VesperPlayerController =
         VesperPlayerController(
             PlayerBridgeFactory.createDefault(
@@ -94,11 +99,18 @@ object VesperPlayerControllerFactory {
                 preloadBudgetPolicy = preloadBudgetPolicy,
                 decoderBackend = decoderBackend,
                 surfaceKind = surfaceKind,
+                benchmarkConfiguration = benchmarkConfiguration,
             )
         )
 
     fun createPreview(
         initialSource: VesperPlayerSource? = null,
+        benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     ): VesperPlayerController =
-        VesperPlayerController(FakePlayerBridge(initialSource))
+        VesperPlayerController(
+            FakePlayerBridge(
+                initialSource = initialSource,
+                benchmarkConfiguration = benchmarkConfiguration,
+            )
+        )
 }

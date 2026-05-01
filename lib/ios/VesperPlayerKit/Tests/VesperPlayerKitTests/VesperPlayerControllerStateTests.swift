@@ -84,6 +84,35 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertNil(controller.lastError)
     }
 
+    func testBenchmarkRecorderDefaultsDisabled() {
+        let bridge = FakePlayerBridge(benchmarkConfiguration: .disabled)
+        let controller = VesperPlayerController(bridge)
+
+        controller.initialize()
+        controller.play()
+
+        XCTAssertTrue(controller.drainBenchmarkEvents().isEmpty)
+        XCTAssertEqual(controller.benchmarkSummary().acceptedEvents, 0)
+    }
+
+    func testBenchmarkRecorderDrainsRawEventsAndKeepsSummary() {
+        let bridge = FakePlayerBridge(
+            benchmarkConfiguration: VesperBenchmarkConfiguration(enabled: true)
+        )
+        let controller = VesperPlayerController(bridge)
+
+        controller.initialize()
+        controller.play()
+
+        let events = controller.drainBenchmarkEvents()
+        let eventNames = Set(events.map(\.eventName))
+        XCTAssertTrue(eventNames.contains("initialize_start"))
+        XCTAssertTrue(eventNames.contains("initialize_without_source"))
+        XCTAssertTrue(eventNames.contains("play_command"))
+        XCTAssertTrue(controller.drainBenchmarkEvents().isEmpty)
+        XCTAssertEqual(controller.benchmarkSummary().acceptedEvents, UInt64(events.count))
+    }
+
     private func settleControllerObservation() async {
         await Task.yield()
         await Task.yield()
@@ -147,6 +176,19 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {}
     func setAbrPolicy(_ policy: VesperAbrPolicy) {}
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {}
+    func drainBenchmarkEvents() -> [VesperBenchmarkEvent] { [] }
+    func benchmarkSummary() -> VesperBenchmarkSummary {
+        VesperBenchmarkSummary(
+            runId: "test-run",
+            sessionId: "test-session",
+            acceptedEvents: 0,
+            droppedEvents: 0,
+            pluginAcceptedEvents: 0,
+            pluginDroppedEvents: 0,
+            metrics: [],
+            pluginErrors: []
+        )
+    }
 }
 
 private let sampleTrackCatalog = VesperTrackCatalog(
