@@ -389,6 +389,50 @@ void main() {
     expect(policy.warmupWindowMs, 30000);
   });
 
+  test('benchmark configuration serializes explicit console logging options',
+      () {
+    const configuration = VesperBenchmarkConfiguration(
+      enabled: true,
+      maxBufferedEvents: 512,
+      includeRawEvents: false,
+      consoleLogging: true,
+      pluginLibraryPaths: <String>['/tmp/libvesper_benchmark_sink.dylib'],
+    );
+
+    expect(configuration.hasOverrides, isTrue);
+    expect(configuration.toMap(), <String, Object?>{
+      'enabled': true,
+      'maxBufferedEvents': 512,
+      'includeRawEvents': false,
+      'consoleLogging': true,
+      'pluginLibraryPaths': <String>['/tmp/libvesper_benchmark_sink.dylib'],
+    });
+
+    final restored = VesperBenchmarkConfiguration.fromMap(
+      configuration.toMap(),
+    );
+    expect(restored.enabled, isTrue);
+    expect(restored.maxBufferedEvents, 512);
+    expect(restored.includeRawEvents, isFalse);
+    expect(restored.consoleLogging, isTrue);
+    expect(restored.pluginLibraryPaths, <String>[
+      '/tmp/libvesper_benchmark_sink.dylib',
+    ]);
+  });
+
+  test('disabled benchmark configuration has no channel overrides', () {
+    const configuration = VesperBenchmarkConfiguration.disabled();
+
+    expect(configuration.hasOverrides, isFalse);
+    expect(configuration.toMap(), <String, Object?>{
+      'enabled': false,
+      'maxBufferedEvents': 2048,
+      'includeRawEvents': true,
+      'consoleLogging': false,
+      'pluginLibraryPaths': <String>[],
+    });
+  });
+
   test('viewport hint classification follows visible near prefetch bands', () {
     const visibleViewport = VesperPlayerViewport(
       left: 0,

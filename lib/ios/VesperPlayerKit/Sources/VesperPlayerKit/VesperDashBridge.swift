@@ -90,6 +90,14 @@ fileprivate enum VesperDashSegmentPayload {
     }
 }
 
+private struct VesperDashSegmentPayloadResult {
+    let payload: VesperDashSegmentPayload
+    let cacheHit: Bool
+    let segmentType: String
+    let byteRange: VesperDashByteRange?
+    let delivery: String
+}
+
 final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     let resourceLoadingQueue: DispatchQueue
 
@@ -744,6 +752,8 @@ private final class VesperDashAtomicBool: @unchecked Sendable {
 }
 
 actor VesperDashSession {
+    typealias BenchmarkEventRecorder = @MainActor @Sendable (String, [String: String]) -> Void
+
     nonisolated static let scheme = "vesper-dash"
     nonisolated static let segmentCacheMaxBytes: UInt64 = 256 * 1024 * 1024
     nonisolated static let segmentCacheMaxEntryCount = 160
@@ -771,6 +781,7 @@ actor VesperDashSession {
     private var backgroundPrefetchLargeMediaRenditionIds: Set<String> = []
     private var loopbackServer: VesperDashLoopbackServer?
     private var loopbackServerStartTask: Task<VesperDashLoopbackServer, Error>?
+    private let benchmarkEventRecorder: BenchmarkEventRecorder?
 
     nonisolated var masterPlaylistURL: URL {
         URL(string: "\(Self.scheme)://master/\(id)/master.m3u8")!
@@ -779,7 +790,8 @@ actor VesperDashSession {
     init(
         sourceURL: URL,
         headers: [String: String] = [:],
-        networkClient: VesperDashNetworkClient? = nil
+        networkClient: VesperDashNetworkClient? = nil,
+        benchmarkEventRecorder: BenchmarkEventRecorder? = nil
     ) {
         let sessionId = UUID().uuidString
         id = sessionId
@@ -787,6 +799,7 @@ actor VesperDashSession {
         segmentCacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-dash-\(sessionId)", isDirectory: true)
         self.networkClient = networkClient ?? VesperDashNetworkClient(headers: headers)
+        self.benchmarkEventRecorder = benchmarkEventRecorder
     }
 
     deinit {
@@ -848,35 +861,67 @@ actor VesperDashSession {
     }
 
     func masterPlaylistData() async throws -> Data {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        await recordBenchmarkEvent("dash_master_playlist_request_start")
         if let masterPlaylistCache, manifest?.type != .dynamic {
+            await recordBenchmarkEvent(
+                "dash_master_playlist_request_end",
+                attributes: playlistBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    bytes: masterPlaylistCache.count,
+                    cacheHit: true
+                )
+            )
             return masterPlaylistCache
         }
-        let manifest = try await loadManifest()
-        let variantPolicy = VesperDashMasterPlaylistVariantPolicy.all
-        let playlist = try VesperDashHlsBuilder.buildMasterPlaylist(
-            manifest: manifest,
-            variantPolicy: variantPolicy,
-            mediaURL: { [weak self] renditionId in
-                guard let self else { return "" }
-                return self.mediaPlaylistURL(for: renditionId).absoluteString
-            }
-        )
-        let data = Data(playlist.utf8)
-        if manifest.type != .dynamic {
-            masterPlaylistCache = data
-        }
 
-        let startupSelected = try selectedPlayableRepresentations(
-            manifest: manifest,
-            variantPolicy: .startupSingleVariant
-        )
-        startBackgroundPrefetch(for: startupSelected.audio + startupSelected.video, manifest: manifest)
+        do {
+            let manifest = try await loadManifest()
+            let variantPolicy = VesperDashMasterPlaylistVariantPolicy.all
+            let playlist = try VesperDashHlsBuilder.buildMasterPlaylist(
+                manifest: manifest,
+                variantPolicy: variantPolicy,
+                mediaURL: { [weak self] renditionId in
+                    guard let self else { return "" }
+                    return self.mediaPlaylistURL(for: renditionId).absoluteString
+                }
+            )
+            let data = Data(playlist.utf8)
+            if manifest.type != .dynamic {
+                masterPlaylistCache = data
+            }
+
+            let startupSelected = try selectedPlayableRepresentations(
+                manifest: manifest,
+                variantPolicy: .startupSingleVariant
+            )
+            startBackgroundPrefetch(for: startupSelected.audio + startupSelected.video, manifest: manifest)
 #if DEBUG
-        iosHostLog(
-            "dashMasterPlaylist policy=all startupVideo=\(startupSelected.video.map(\.renditionId).joined(separator: ",")) startupAudio=\(startupSelected.audio.map(\.renditionId).joined(separator: ","))"
-        )
+            iosHostLog(
+                "dashMasterPlaylist policy=all startupVideo=\(startupRenditionSummary(startupSelected.video)) startupAudio=\(startupRenditionSummary(startupSelected.audio))"
+            )
 #endif
-        return data
+            await recordBenchmarkEvent(
+                "dash_master_playlist_request_end",
+                attributes: playlistBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    bytes: data.count,
+                    cacheHit: false
+                )
+            )
+            return data
+        } catch {
+            await recordBenchmarkEvent(
+                "dash_master_playlist_request_end",
+                attributes: playlistBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    bytes: nil,
+                    cacheHit: false,
+                    error: error
+                )
+            )
+            throw error
+        }
     }
 
     func manifestTrackCatalogSnapshot() async throws -> VesperDashManifestTrackCatalogSnapshot {
@@ -893,9 +938,52 @@ actor VesperDashSession {
     }
 
     func mediaPlaylistData(renditionId: String) async throws -> Data {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        await recordBenchmarkEvent(
+            "dash_media_playlist_request_start",
+            attributes: ["renditionId": renditionId]
+        )
         if let cached = mediaPlaylistCacheByRenditionId[renditionId], manifest?.type != .dynamic {
+            await recordBenchmarkEvent(
+                "dash_media_playlist_request_end",
+                attributes: playlistBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    bytes: cached.count,
+                    cacheHit: true,
+                    extra: ["renditionId": renditionId]
+                )
+            )
             return cached
         }
+
+        do {
+            let data = try await buildMediaPlaylistData(renditionId: renditionId)
+            await recordBenchmarkEvent(
+                "dash_media_playlist_request_end",
+                attributes: playlistBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    bytes: data.count,
+                    cacheHit: false,
+                    extra: ["renditionId": renditionId]
+                )
+            )
+            return data
+        } catch {
+            await recordBenchmarkEvent(
+                "dash_media_playlist_request_end",
+                attributes: playlistBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    bytes: nil,
+                    cacheHit: false,
+                    error: error,
+                    extra: ["renditionId": renditionId]
+                )
+            )
+            throw error
+        }
+    }
+
+    private func buildMediaPlaylistData(renditionId: String) async throws -> Data {
         let manifest = try await loadManifest()
         let playable = try await playableRepresentation(renditionId: renditionId)
         if let segmentBase = playable.representation.segmentBase {
@@ -1029,7 +1117,11 @@ actor VesperDashSession {
             guard let self else {
                 throw VesperDashBridgeError.network("DASH session is no longer available")
             }
-            return try await self.segmentPayload(renditionId: renditionId, segment: segment)
+            return try await self.segmentPayload(
+                renditionId: renditionId,
+                segment: segment,
+                requestOrigin: "loopback"
+            )
         }
         let startTask = Task { () throws -> VesperDashLoopbackServer in
             try await server.start()
@@ -1053,13 +1145,59 @@ actor VesperDashSession {
     }
 
     func segmentData(renditionId: String, segment: VesperDashSegmentRequest) async throws -> Data {
-        try await segmentPayload(renditionId: renditionId, segment: segment).readData()
+        try await segmentPayload(
+            renditionId: renditionId,
+            segment: segment,
+            requestOrigin: "resourceLoader"
+        ).readData()
     }
 
     private func segmentPayload(
         renditionId: String,
-        segment: VesperDashSegmentRequest
+        segment: VesperDashSegmentRequest,
+        requestOrigin: String = "playback"
     ) async throws -> VesperDashSegmentPayload {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        await recordBenchmarkEvent(
+            segmentBenchmarkEventName(segment, suffix: "start"),
+            attributes: segmentBenchmarkStartAttributes(
+                renditionId: renditionId,
+                segment: segment,
+                requestOrigin: requestOrigin
+            )
+        )
+        do {
+            let result = try await resolveSegmentPayload(renditionId: renditionId, segment: segment)
+            await recordBenchmarkEvent(
+                segmentBenchmarkEventName(segment, suffix: "end"),
+                attributes: segmentBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    renditionId: renditionId,
+                    segment: segment,
+                    requestOrigin: requestOrigin,
+                    result: result
+                )
+            )
+            return result.payload
+        } catch {
+            await recordBenchmarkEvent(
+                segmentBenchmarkEventName(segment, suffix: "end"),
+                attributes: segmentBenchmarkEndAttributes(
+                    startedAt: startedAt,
+                    renditionId: renditionId,
+                    segment: segment,
+                    requestOrigin: requestOrigin,
+                    error: error
+                )
+            )
+            throw error
+        }
+    }
+
+    private func resolveSegmentPayload(
+        renditionId: String,
+        segment: VesperDashSegmentRequest
+    ) async throws -> VesperDashSegmentPayloadResult {
         let manifest = try await loadManifest()
         let playable = try await playableRepresentation(renditionId: renditionId)
         if let segmentBase = playable.representation.segmentBase {
@@ -1089,17 +1227,31 @@ actor VesperDashSession {
             }
 
             if mediaURL.isFileURL {
-                return .file(
+                let payload = VesperDashSegmentPayload.file(
                     url: mediaURL,
                     offset: byteRange.start,
                     size: byteRange.length,
                     removeAfterServing: false,
                     contentType: dashSegmentContentType(for: playable, segment: segment)
                 )
+                return VesperDashSegmentPayloadResult(
+                    payload: payload,
+                    cacheHit: false,
+                    segmentType: "base",
+                    byteRange: byteRange,
+                    delivery: "localFile"
+                )
             }
-            return .data(
-                try await networkClient.data(for: mediaURL, byteRange: byteRange),
-                contentType: dashSegmentContentType(for: playable, segment: segment)
+            let data = try await networkClient.data(for: mediaURL, byteRange: byteRange)
+            return VesperDashSegmentPayloadResult(
+                payload: .data(
+                    data,
+                    contentType: dashSegmentContentType(for: playable, segment: segment)
+                ),
+                cacheHit: false,
+                segmentType: "base",
+                byteRange: byteRange,
+                delivery: "networkData"
             )
         }
 
@@ -1121,7 +1273,7 @@ actor VesperDashSession {
         playable: VesperDashPlayableRepresentation,
         segmentTemplate: VesperDashSegmentTemplate,
         segment: VesperDashSegmentRequest
-    ) async throws -> VesperDashSegmentPayload {
+    ) async throws -> VesperDashSegmentPayloadResult {
         let contentType = dashSegmentContentType(for: playable, segment: segment)
         let key = VesperDashSegmentCacheKey(
             renditionId: playable.renditionId,
@@ -1132,10 +1284,16 @@ actor VesperDashSession {
             segment: segment
         )
         if let cached = cachedSegmentFilePayload(for: key, at: cacheURL, contentType: contentType) {
-            return cached
+            return VesperDashSegmentPayloadResult(
+                payload: cached,
+                cacheHit: true,
+                segmentType: "template",
+                byteRange: nil,
+                delivery: "cacheFile"
+            )
         }
         if case .media = segment {
-            return try await fetchSegmentTemplateFile(
+            let payload = try await fetchSegmentTemplateFile(
                 manifest: manifest,
                 playable: playable,
                 segmentTemplate: segmentTemplate,
@@ -1144,6 +1302,13 @@ actor VesperDashSession {
                 key: key,
                 allowSkippingLargeMediaEntry: true,
                 contentType: contentType
+            )
+            return VesperDashSegmentPayloadResult(
+                payload: payload,
+                cacheHit: false,
+                segmentType: "template",
+                byteRange: nil,
+                delivery: payload.isTemporaryFile ? "temporaryFile" : "cacheFile"
             )
         }
 
@@ -1160,10 +1325,23 @@ actor VesperDashSession {
             key: key,
             allowSkippingLargeMediaEntry: true
         ) {
-            return cachedSegmentFilePayload(for: key, at: cacheURL, contentType: contentType)
+            let payload = cachedSegmentFilePayload(for: key, at: cacheURL, contentType: contentType)
                 ?? .data(data, contentType: contentType)
+            return VesperDashSegmentPayloadResult(
+                payload: payload,
+                cacheHit: false,
+                segmentType: "template",
+                byteRange: nil,
+                delivery: "cacheFile"
+            )
         }
-        return .data(data, contentType: contentType)
+        return VesperDashSegmentPayloadResult(
+            payload: .data(data, contentType: contentType),
+            cacheHit: false,
+            segmentType: "template",
+            byteRange: nil,
+            delivery: "networkData"
+        )
     }
 
     private func fetchSegmentTemplateFile(
@@ -1584,6 +1762,148 @@ actor VesperDashSession {
         return shouldPrefetch
     }
 
+    private func startupRenditionSummary(
+        _ playables: [VesperDashPlayableRepresentation]
+    ) -> String {
+        guard !playables.isEmpty else {
+            return "none"
+        }
+        return playables
+            .map(startupRenditionDescription)
+            .joined(separator: ";")
+    }
+
+    private func startupRenditionDescription(
+        _ playable: VesperDashPlayableRepresentation
+    ) -> String {
+        let representation = playable.representation
+        return [
+            "id=\(playable.renditionId)",
+            "codec=\(emptyAsNil(representation.codecs))",
+            "width=\(representation.width.map(String.init) ?? "nil")",
+            "height=\(representation.height.map(String.init) ?? "nil")",
+            "bitrate=\(representation.bandwidth.map(String.init) ?? "nil")",
+            "frameRate=\(representation.frameRate ?? "nil")",
+            "segmentType=\(dashSegmentTypeName(representation))",
+        ].joined(separator: ",")
+    }
+
+    private func recordBenchmarkEvent(
+        _ eventName: String,
+        attributes: [String: String] = [:]
+    ) async {
+        guard let benchmarkEventRecorder else {
+            return
+        }
+        await benchmarkEventRecorder(eventName, attributes)
+    }
+
+    private func playlistBenchmarkEndAttributes(
+        startedAt: UInt64,
+        bytes: Int?,
+        cacheHit: Bool,
+        error: Error? = nil,
+        extra: [String: String] = [:]
+    ) -> [String: String] {
+        var attributes = extra
+        attributes["elapsedMs"] = elapsedMillisecondsString(since: startedAt)
+        attributes["cacheHit"] = "\(cacheHit)"
+        if let bytes {
+            attributes["bytes"] = "\(bytes)"
+        }
+        if let error {
+            attributes["error"] = error.localizedDescription
+        }
+        return attributes
+    }
+
+    private func segmentBenchmarkEventName(
+        _ segment: VesperDashSegmentRequest,
+        suffix: String
+    ) -> String {
+        switch segment {
+        case .initialization:
+            return "dash_init_segment_request_\(suffix)"
+        case .media:
+            return "dash_media_segment_request_\(suffix)"
+        }
+    }
+
+    private func segmentBenchmarkStartAttributes(
+        renditionId: String,
+        segment: VesperDashSegmentRequest,
+        requestOrigin: String
+    ) -> [String: String] {
+        segmentBenchmarkBaseAttributes(
+            renditionId: renditionId,
+            segment: segment,
+            requestOrigin: requestOrigin
+        )
+    }
+
+    private func segmentBenchmarkEndAttributes(
+        startedAt: UInt64,
+        renditionId: String,
+        segment: VesperDashSegmentRequest,
+        requestOrigin: String,
+        result: VesperDashSegmentPayloadResult
+    ) -> [String: String] {
+        var attributes = segmentBenchmarkBaseAttributes(
+            renditionId: renditionId,
+            segment: segment,
+            requestOrigin: requestOrigin
+        )
+        attributes["elapsedMs"] = elapsedMillisecondsString(since: startedAt)
+        attributes["bytes"] = "\(result.payload.size)"
+        attributes["cacheHit"] = "\(result.cacheHit)"
+        attributes["segmentType"] = result.segmentType
+        attributes["delivery"] = result.delivery
+        attributes["contentType"] = result.payload.contentType
+        if let byteRange = result.byteRange {
+            attributes["byteRange"] = "\(byteRange.start)-\(byteRange.end)"
+        }
+        return attributes
+    }
+
+    private func segmentBenchmarkEndAttributes(
+        startedAt: UInt64,
+        renditionId: String,
+        segment: VesperDashSegmentRequest,
+        requestOrigin: String,
+        error: Error
+    ) -> [String: String] {
+        var attributes = segmentBenchmarkBaseAttributes(
+            renditionId: renditionId,
+            segment: segment,
+            requestOrigin: requestOrigin
+        )
+        attributes["elapsedMs"] = elapsedMillisecondsString(since: startedAt)
+        attributes["error"] = error.localizedDescription
+        return attributes
+    }
+
+    private func segmentBenchmarkBaseAttributes(
+        renditionId: String,
+        segment: VesperDashSegmentRequest,
+        requestOrigin: String
+    ) -> [String: String] {
+        var attributes = [
+            "renditionId": renditionId,
+            "segmentKind": dashSegmentKindName(segment),
+            "requestOrigin": requestOrigin,
+        ]
+        if case let .media(index) = segment {
+            attributes["index"] = "\(index)"
+        }
+        return attributes
+    }
+
+    private func elapsedMillisecondsString(since startedAt: UInt64) -> String {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let elapsedNs = now >= startedAt ? now - startedAt : 0
+        return "\(elapsedNs / 1_000_000)"
+    }
+
     private func runBackgroundSegmentPrefetch(
         renditionId: String,
         segmentCount: Int,
@@ -1642,7 +1962,8 @@ actor VesperDashSession {
         do {
             let payload = try await segmentPayload(
                 renditionId: renditionId,
-                segment: segment
+                segment: segment,
+                requestOrigin: "prefetch"
             )
             let shouldContinue = !(segment.isMedia && payload.isTemporaryFile)
             if !shouldContinue {
@@ -2087,6 +2408,29 @@ private func resolveDashURI(base: String, reference: String) -> String {
         return reference
     }
     return resolved.absoluteString
+}
+
+private func dashSegmentTypeName(_ representation: VesperDashRepresentation) -> String {
+    if representation.segmentTemplate != nil {
+        return "template"
+    }
+    if representation.segmentBase != nil {
+        return "base"
+    }
+    return "unknown"
+}
+
+private func emptyAsNil(_ value: String) -> String {
+    value.isEmpty ? "nil" : value
+}
+
+private func dashSegmentKindName(_ segment: VesperDashSegmentRequest) -> String {
+    switch segment {
+    case .initialization:
+        return "initialization"
+    case .media:
+        return "media"
+    }
 }
 
 func applyHttpHeaders(_ headers: [String: String], to request: inout URLRequest) {

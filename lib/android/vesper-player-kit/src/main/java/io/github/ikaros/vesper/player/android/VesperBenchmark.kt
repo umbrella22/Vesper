@@ -9,6 +9,7 @@ data class VesperBenchmarkConfiguration(
     val enabled: Boolean = false,
     val maxBufferedEvents: Int = 2_048,
     val includeRawEvents: Boolean = true,
+    val consoleLogging: Boolean = false,
     val pluginLibraryPaths: List<String> = emptyList(),
 ) {
     companion object {

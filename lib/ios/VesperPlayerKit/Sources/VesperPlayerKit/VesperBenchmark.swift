@@ -5,17 +5,20 @@ public struct VesperBenchmarkConfiguration: Equatable {
     public let enabled: Bool
     public let maxBufferedEvents: Int
     public let includeRawEvents: Bool
+    public let consoleLogging: Bool
     public let pluginLibraryPaths: [String]
 
     public init(
         enabled: Bool = false,
         maxBufferedEvents: Int = 2_048,
         includeRawEvents: Bool = true,
+        consoleLogging: Bool = false,
         pluginLibraryPaths: [String] = []
     ) {
         self.enabled = enabled
         self.maxBufferedEvents = max(maxBufferedEvents, 0)
         self.includeRawEvents = includeRawEvents
+        self.consoleLogging = consoleLogging
         self.pluginLibraryPaths = pluginLibraryPaths
     }
 

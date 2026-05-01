@@ -159,6 +159,16 @@ Map<String, String> _decodeStringMap(Object? raw) {
   return decoded;
 }
 
+List<String> _decodeStringList(Object? raw) {
+  if (raw is! Iterable) {
+    return const <String>[];
+  }
+  return raw
+      .map((value) => value?.toString() ?? '')
+      .where((value) => value.isNotEmpty)
+      .toList(growable: false);
+}
+
 const Object _vesperRetryMaxAttemptsUnset = Object();
 
 final class VesperPlayerSource {
@@ -990,6 +1000,57 @@ final class VesperPreloadBudgetPolicy {
       if (maxMemoryBytes != null) 'maxMemoryBytes': maxMemoryBytes,
       if (maxDiskBytes != null) 'maxDiskBytes': maxDiskBytes,
       if (warmupWindowMs != null) 'warmupWindowMs': warmupWindowMs,
+    };
+  }
+}
+
+final class VesperBenchmarkConfiguration {
+  const VesperBenchmarkConfiguration({
+    this.enabled = false,
+    this.maxBufferedEvents = 2048,
+    this.includeRawEvents = true,
+    this.consoleLogging = false,
+    this.pluginLibraryPaths = const <String>[],
+  });
+
+  const VesperBenchmarkConfiguration.disabled()
+      : enabled = false,
+        maxBufferedEvents = 2048,
+        includeRawEvents = true,
+        consoleLogging = false,
+        pluginLibraryPaths = const <String>[];
+
+  factory VesperBenchmarkConfiguration.fromMap(Map<Object?, Object?> map) {
+    final normalized = vesperDecodeMap(map);
+    return VesperBenchmarkConfiguration(
+      enabled: normalized['enabled'] as bool? ?? false,
+      maxBufferedEvents: normalized['maxBufferedEvents'] as int? ?? 2048,
+      includeRawEvents: normalized['includeRawEvents'] as bool? ?? true,
+      consoleLogging: normalized['consoleLogging'] as bool? ?? false,
+      pluginLibraryPaths: _decodeStringList(normalized['pluginLibraryPaths']),
+    );
+  }
+
+  final bool enabled;
+  final int maxBufferedEvents;
+  final bool includeRawEvents;
+  final bool consoleLogging;
+  final List<String> pluginLibraryPaths;
+
+  bool get hasOverrides =>
+      enabled ||
+      maxBufferedEvents != 2048 ||
+      !includeRawEvents ||
+      consoleLogging ||
+      pluginLibraryPaths.isNotEmpty;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'enabled': enabled,
+      'maxBufferedEvents': maxBufferedEvents,
+      'includeRawEvents': includeRawEvents,
+      'consoleLogging': consoleLogging,
+      'pluginLibraryPaths': pluginLibraryPaths,
     };
   }
 }

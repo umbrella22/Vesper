@@ -70,6 +70,8 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    VesperBenchmarkConfiguration benchmarkConfiguration =
+        const VesperBenchmarkConfiguration.disabled(),
   });
 
   Stream<VesperPlayerEvent> eventsFor(String playerId);
@@ -170,6 +172,8 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    VesperBenchmarkConfiguration benchmarkConfiguration =
+        const VesperBenchmarkConfiguration.disabled(),
   }) async {
     throw VesperUnsupportedError();
   }

@@ -311,13 +311,48 @@ fn startup_video_representation(
 ) -> Option<&PlayableRepresentation> {
     video
         .iter()
-        .find(|item| is_avc_codec(&item.representation.codecs))
-        .or_else(|| {
-            video
-                .iter()
-                .find(|item| is_hevc_codec(&item.representation.codecs))
-        })
-        .or_else(|| video.first())
+        .enumerate()
+        .min_by_key(|(index, item)| startup_video_score(item, *index))
+        .map(|(_, item)| item)
+}
+
+fn startup_video_score(
+    item: &PlayableRepresentation,
+    index: usize,
+) -> (u8, u8, u8, u32, u64, u32, usize) {
+    const STARTUP_MAX_HEIGHT: u32 = 720;
+    const STARTUP_MAX_BANDWIDTH: u64 = 800_000;
+
+    let representation = &item.representation;
+    let codec_rank = video_codec_startup_rank(&representation.codecs);
+    let exceeds_startup_target = u8::from(
+        representation
+            .height
+            .is_none_or(|height| height > STARTUP_MAX_HEIGHT)
+            || representation
+                .bandwidth
+                .is_none_or(|bandwidth| bandwidth > STARTUP_MAX_BANDWIDTH),
+    );
+    let missing_bandwidth = u8::from(representation.bandwidth.is_none());
+    (
+        u8::from(codec_rank == u8::MAX),
+        exceeds_startup_target,
+        missing_bandwidth,
+        representation.height.unwrap_or(u32::MAX),
+        representation.bandwidth.unwrap_or(u64::MAX),
+        representation.width.unwrap_or(u32::MAX),
+        index,
+    )
+}
+
+fn video_codec_startup_rank(value: &str) -> u8 {
+    if is_avc_codec(value) {
+        return 0;
+    }
+    if is_hevc_codec(value) {
+        return 1;
+    }
+    u8::MAX
 }
 
 fn is_avc_codec(value: &str) -> bool {
@@ -1040,6 +1075,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn startup_video_prefers_low_cost_supported_variant() {
+        let video = vec![
+            playable_video(
+                "avc-2160",
+                "avc1.640033",
+                Some(20_000_000),
+                Some(3840),
+                Some(2160),
+            ),
+            playable_video(
+                "avc-360",
+                "avc1.4d401e",
+                Some(109_000),
+                Some(640),
+                Some(360),
+            ),
+            playable_video(
+                "avc-720",
+                "avc1.4d401f",
+                Some(800_000),
+                Some(1280),
+                Some(720),
+            ),
+        ];
+
+        let selected = startup_video_representation(&video).expect("startup video");
+
+        assert_eq!(selected.rendition_id, "avc-360");
+    }
+
+    #[test]
+    fn startup_video_keeps_supported_codec_before_unknown_low_variant() {
+        let video = vec![
+            playable_video(
+                "vp9-360",
+                "vp09.00.10.08",
+                Some(90_000),
+                Some(640),
+                Some(360),
+            ),
+            playable_video(
+                "avc-720",
+                "avc1.4d401f",
+                Some(800_000),
+                Some(1280),
+                Some(720),
+            ),
+        ];
+
+        let selected = startup_video_representation(&video).expect("startup video");
+
+        assert_eq!(selected.rendition_id, "avc-720");
+    }
+
+    #[test]
     fn expands_segment_template_timeline() {
         let template = DashSegmentTemplate {
             timescale: 1_000,
@@ -1090,5 +1180,45 @@ mod tests {
                 },
             ]
         );
+    }
+
+    fn playable_video(
+        id: &str,
+        codecs: &str,
+        bandwidth: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> PlayableRepresentation {
+        PlayableRepresentation {
+            rendition_id: id.to_owned(),
+            adaptation_set: DashAdaptationSet {
+                id: None,
+                kind: DashAdaptationKind::Video,
+                mime_type: Some("video/mp4".to_owned()),
+                language: None,
+                representations: Vec::new(),
+            },
+            representation: DashRepresentation {
+                id: id.to_owned(),
+                base_url: format!("{id}.m4s"),
+                mime_type: "video/mp4".to_owned(),
+                codecs: codecs.to_owned(),
+                bandwidth,
+                width,
+                height,
+                frame_rate: None,
+                audio_sampling_rate: None,
+                segment_base: None,
+                segment_template: Some(DashSegmentTemplate {
+                    timescale: 1_000,
+                    duration: Some(2_000),
+                    start_number: 1,
+                    presentation_time_offset: 0,
+                    initialization: Some("init.mp4".to_owned()),
+                    media: "chunk-$Number$.m4s".to_owned(),
+                    timeline: Vec::new(),
+                }),
+            },
+        }
     }
 }

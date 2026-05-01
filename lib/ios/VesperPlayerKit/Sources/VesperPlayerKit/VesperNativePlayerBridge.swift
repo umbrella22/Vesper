@@ -6,6 +6,9 @@ import VesperPlayerKitBridgeShim
 @MainActor
 final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     let backend: PlayerBridgeBackend = .rustNativeStub
+    private static let dashStartupAbrPeakBitRate = 800_000.0
+    private static let dashStartupAbrMaxWidth = 1280
+    private static let dashStartupAbrMaxHeight = 720
 
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
@@ -37,6 +40,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var audioGroup: AVMediaSelectionGroup?
     private var subtitleGroup: AVMediaSelectionGroup?
     private var videoVariantPinsByTrackId: [String: LoadedVideoVariantPin] = [:]
+    private var desiredVideoVariantPin: LoadedVideoVariantPin?
+    private var dashStartupAbrLimitPin: LoadedVideoVariantPin?
     private var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var currentResiliencePolicy: VesperPlaybackResiliencePolicy
@@ -260,6 +265,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         guard let host = host as? PlayerSurfaceView else {
             return
         }
+        recordBenchmark("attach_surface_host")
         if surfaceHost !== host {
             iosHostLog("attachSurfaceHost")
         }
@@ -270,7 +276,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         host.onReadyForDisplay = { [weak self] in
             Task { @MainActor in
                 iosHostLog("surfaceReadyForDisplay")
+                self?.recordBenchmark("ready_for_display")
                 self?.recordBenchmark("first_frame_rendered")
+                self?.releaseDashStartupAbrLimitIfNeeded(reason: "readyForDisplay", item: nil)
                 self?.attemptPendingPlaybackStart(reason: "surfaceReadyForDisplay")
             }
         }
@@ -280,6 +288,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func detachSurfaceHost() {
         iosHostLog("detachSurfaceHost")
+        recordBenchmark("detach_surface_host")
         surfaceHost?.onReadyForDisplay = nil
         surfaceHost?.attach(player: nil)
         surfaceHost = nil
@@ -711,6 +720,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         pendingPlaybackStart = false
         hasAppliedDefaultTrackPreferences = false
         resetTrackState()
+        applyDashStartupAbrLimitIfNeeded(for: currentSource, to: item)
         self.player = player
         surfaceHost?.attach(player: player)
         installObservers(for: player, item: item, playbackEpoch: playbackEpoch)
@@ -751,7 +761,19 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             return AVPlayerItem(asset: asset)
         }
 
-        let session = VesperDashSession(sourceURL: url, headers: source.headers)
+        let dashBenchmarkEventRecorder: VesperDashSession.BenchmarkEventRecorder?
+        if benchmarkRecorder.isEnabled {
+            dashBenchmarkEventRecorder = { [weak self] eventName, attributes in
+                self?.recordBenchmark(eventName, attributes: attributes)
+            }
+        } else {
+            dashBenchmarkEventRecorder = nil
+        }
+        let session = VesperDashSession(
+            sourceURL: url,
+            headers: source.headers,
+            benchmarkEventRecorder: dashBenchmarkEventRecorder
+        )
         let loaderDelegate = VesperDashResourceLoaderDelegate(session: session)
         let asset = source.headers.isEmpty
             ? AVURLAsset(url: session.masterPlaylistURL)
@@ -825,6 +847,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                     iosHostLog("ignored stale item status playbackEpoch=\(playbackEpoch)")
                     return
                 }
+                self.recordBenchmark(
+                    "player_item_status_changed",
+                    attributes: [
+                        "status": itemStatusName(item.status),
+                        "error": errorMessage,
+                    ]
+                )
                 switch item.status {
                 case .readyToPlay:
                     self.recordBenchmark("player_item_ready")
@@ -875,6 +904,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                     self.recordBenchmark(
                         "likely_to_keep_up_changed",
                         attributes: ["likely": "\(item.isPlaybackLikelyToKeepUp)"]
+                    )
+                    self.releaseDashStartupAbrLimitIfNeeded(
+                        reason: "likelyToKeepUp",
+                        item: item
                     )
                     self.attemptPendingPlaybackStart(reason: "itemLikelyToKeepUp")
                 }
@@ -1165,6 +1198,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         audioGroup = nil
         subtitleGroup = nil
         videoVariantPinsByTrackId = [:]
+        desiredVideoVariantPin = nil
+        dashStartupAbrLimitPin = nil
         audioOptionsByTrackId = [:]
         subtitleOptionsByTrackId = [:]
         hasAppliedDefaultTrackPreferences = false
@@ -1856,8 +1891,61 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func applyVideoVariantPin(_ pin: LoadedVideoVariantPin?, to item: AVPlayerItem) {
-        item.preferredPeakBitRate = pin?.peakBitRate ?? 0
-        if let maxWidth = pin?.maxWidth, let maxHeight = pin?.maxHeight {
+        desiredVideoVariantPin = pin
+        applyEffectiveVideoVariantPin(pin, to: item)
+    }
+
+    private func applyDashStartupAbrLimitIfNeeded(
+        for source: VesperPlayerSource,
+        to item: AVPlayerItem
+    ) {
+        guard source.protocol == .dash else {
+            dashStartupAbrLimitPin = nil
+            return
+        }
+
+        dashStartupAbrLimitPin = LoadedVideoVariantPin(
+            peakBitRate: Self.dashStartupAbrPeakBitRate,
+            maxWidth: Self.dashStartupAbrMaxWidth,
+            maxHeight: Self.dashStartupAbrMaxHeight
+        )
+        applyEffectiveVideoVariantPin(desiredVideoVariantPin, to: item)
+        recordBenchmark(
+            "dash_startup_abr_limit_applied",
+            attributes: [
+                "maxBitRate": "\(Int(Self.dashStartupAbrPeakBitRate))",
+                "maxWidth": "\(Self.dashStartupAbrMaxWidth)",
+                "maxHeight": "\(Self.dashStartupAbrMaxHeight)",
+            ]
+        )
+        iosHostLog(
+            "dashStartupAbrLimit applied maxBitRate=\(Int(Self.dashStartupAbrPeakBitRate)) maxWidth=\(Self.dashStartupAbrMaxWidth) maxHeight=\(Self.dashStartupAbrMaxHeight)"
+        )
+    }
+
+    private func releaseDashStartupAbrLimitIfNeeded(reason: String, item: AVPlayerItem?) {
+        guard dashStartupAbrLimitPin != nil else {
+            return
+        }
+        dashStartupAbrLimitPin = nil
+        guard let item = item ?? player?.currentItem else {
+            return
+        }
+        applyEffectiveVideoVariantPin(desiredVideoVariantPin, to: item)
+        recordBenchmark(
+            "dash_startup_abr_limit_released",
+            attributes: ["reason": reason]
+        )
+        iosHostLog("dashStartupAbrLimit released reason=\(reason)")
+    }
+
+    private func applyEffectiveVideoVariantPin(
+        _ pin: LoadedVideoVariantPin?,
+        to item: AVPlayerItem
+    ) {
+        let effectivePin = combinedVideoVariantPin(pin, dashStartupAbrLimitPin)
+        item.preferredPeakBitRate = effectivePin?.peakBitRate ?? 0
+        if let maxWidth = effectivePin?.maxWidth, let maxHeight = effectivePin?.maxHeight {
             item.preferredMaximumResolution = CGSize(
                 width: CGFloat(maxWidth),
                 height: CGFloat(maxHeight)
@@ -1865,6 +1953,23 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         } else {
             item.preferredMaximumResolution = .zero
         }
+    }
+
+    private func combinedVideoVariantPin(
+        _ desiredPin: LoadedVideoVariantPin?,
+        _ temporaryPin: LoadedVideoVariantPin?
+    ) -> LoadedVideoVariantPin? {
+        guard let desiredPin else {
+            return temporaryPin
+        }
+        guard let temporaryPin else {
+            return desiredPin
+        }
+        return LoadedVideoVariantPin(
+            peakBitRate: minimumOptional(desiredPin.peakBitRate, temporaryPin.peakBitRate),
+            maxWidth: minimumOptional(desiredPin.maxWidth, temporaryPin.maxWidth),
+            maxHeight: minimumOptional(desiredPin.maxHeight, temporaryPin.maxHeight)
+        )
     }
 
     private func resolvedUrl(for source: VesperPlayerSource) throws -> URL {
@@ -2970,6 +3075,19 @@ private extension VesperRuntimePreloadCommandKind {
 
     static var cancel: VesperRuntimePreloadCommandKind {
         VesperRuntimePreloadCommandKindCancel
+    }
+}
+
+private func minimumOptional<T: Comparable>(_ lhs: T?, _ rhs: T?) -> T? {
+    switch (lhs, rhs) {
+    case let (lhs?, rhs?):
+        return min(lhs, rhs)
+    case let (lhs?, nil):
+        return lhs
+    case let (nil, rhs?):
+        return rhs
+    case (nil, nil):
+        return nil
     }
 }
 

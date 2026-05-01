@@ -64,6 +64,32 @@ void main() {
     );
   });
 
+  test('createPlayer forwards benchmark configuration when provided', () async {
+    final platform = MethodChannelVesperPlayerIos();
+    const benchmarkConfiguration = VesperBenchmarkConfiguration(
+      enabled: true,
+      maxBufferedEvents: 1024,
+      includeRawEvents: true,
+      consoleLogging: true,
+      pluginLibraryPaths: <String>['/tmp/libvesper_sink.dylib'],
+    );
+
+    await platform.createPlayer(
+      benchmarkConfiguration: benchmarkConfiguration,
+    );
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'createPlayer');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{
+        'initialSource': null,
+        'resiliencePolicy': const VesperPlaybackResiliencePolicy().toMap(),
+        'benchmarkConfiguration': benchmarkConfiguration.toMap(),
+      },
+    );
+  });
+
   test(
     'setResiliencePolicy preserves explicit unlimited retry override',
     () async {

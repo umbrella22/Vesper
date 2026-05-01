@@ -42,6 +42,8 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    VesperBenchmarkConfiguration benchmarkConfiguration =
+        const VesperBenchmarkConfiguration.disabled(),
   }) async {
     final trackPreferenceMap = trackPreferencePolicy.toMap();
     final preloadBudgetMap = preloadBudgetPolicy.toMap();
@@ -52,6 +54,8 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
       if (trackPreferenceMap.isNotEmpty)
         'trackPreferencePolicy': trackPreferenceMap,
       if (preloadBudgetMap.isNotEmpty) 'preloadBudgetPolicy': preloadBudgetMap,
+      if (benchmarkConfiguration.hasOverrides)
+        'benchmarkConfiguration': benchmarkConfiguration.toMap(),
     });
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)

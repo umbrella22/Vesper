@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.player.flutter.android
 
 import android.content.Context
 import android.graphics.Color
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -21,6 +22,10 @@ import io.github.ikaros.vesper.player.android.TimelineUiState
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.VesperAbrMode
 import io.github.ikaros.vesper.player.android.VesperAbrPolicy
+import io.github.ikaros.vesper.player.android.VesperBenchmarkConfiguration
+import io.github.ikaros.vesper.player.android.VesperBenchmarkEvent
+import io.github.ikaros.vesper.player.android.VesperBenchmarkMetricSummary
+import io.github.ikaros.vesper.player.android.VesperBenchmarkSummary
 import io.github.ikaros.vesper.player.android.VesperBufferingPolicy
 import io.github.ikaros.vesper.player.android.VesperBufferingPreset
 import io.github.ikaros.vesper.player.android.VesperCachePolicy
@@ -62,6 +67,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 class VesperPlayerAndroidPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
@@ -339,6 +346,11 @@ class VesperPlayerAndroidPlugin :
             val resiliencePolicyMap = arguments["resiliencePolicy"] as? Map<*, *>
             val trackPreferencePolicyMap = arguments["trackPreferencePolicy"] as? Map<*, *>
             val preloadBudgetPolicyMap = arguments["preloadBudgetPolicy"] as? Map<*, *>
+            val benchmarkConfiguration =
+                (arguments["benchmarkConfiguration"] as? Map<*, *>)
+                    ?.stringMap()
+                    ?.toBenchmarkConfiguration()
+                    ?: VesperBenchmarkConfiguration.Disabled
 
             val session = PlayerSession(
                 id = UUID.randomUUID().toString(),
@@ -353,8 +365,10 @@ class VesperPlayerAndroidPlugin :
                     preloadBudgetPolicy =
                         preloadBudgetPolicyMap?.stringMap()?.toPreloadBudgetPolicy()
                             ?: VesperPreloadBudgetPolicy(),
+                    benchmarkConfiguration = benchmarkConfiguration,
                     surfaceKind = NativeVideoSurfaceKind.SurfaceView,
                 ),
+                benchmarkConsoleLogging = benchmarkConfiguration.consoleLogging,
             )
 
             sessions[session.id] = session
@@ -616,6 +630,7 @@ class VesperPlayerAndroidPlugin :
                         "snapshot" to snapshot,
                     ),
                 )
+                emitBenchmarkConsoleLog(session)
             }
         }
     }
@@ -636,6 +651,7 @@ class VesperPlayerAndroidPlugin :
                 "snapshot" to buildSnapshotMap(session),
             ),
         )
+        emitBenchmarkConsoleLog(session)
     }
 
     private fun emitError(session: PlayerSession, error: Throwable) {
@@ -647,6 +663,7 @@ class VesperPlayerAndroidPlugin :
                 "snapshot" to buildSnapshotMap(session),
             ),
         )
+        emitBenchmarkConsoleLog(session, force = true)
     }
 
     private fun emitDownloadSnapshot(session: DownloadSession) {
@@ -687,6 +704,32 @@ class VesperPlayerAndroidPlugin :
 
     private fun emitEvent(payload: Map<String, Any?>) {
         eventSink?.success(payload)
+    }
+
+    private fun emitBenchmarkConsoleLog(
+        session: PlayerSession,
+        force: Boolean = false,
+    ) {
+        if (!session.benchmarkConsoleLogging) {
+            return
+        }
+
+        val events = session.controller.drainBenchmarkEvents()
+        val summary = session.controller.benchmarkSummary()
+        if (events.isEmpty() && summary.acceptedEvents == 0L) {
+            return
+        }
+        if (events.isEmpty() && !force) {
+            return
+        }
+
+        logBenchmarkJson(
+            JSONObject()
+                .put("playerId", session.id)
+                .put("events", events.toBenchmarkJsonArray())
+                .put("summary", summary.toBenchmarkJsonObject())
+                .toString(),
+        )
     }
 
     private fun buildSnapshotMap(session: PlayerSession): Map<String, Any?> {
@@ -786,6 +829,7 @@ class VesperPlayerAndroidPlugin :
         session.hostView?.let(session.controller::detachSurfaceHost)
         session.hostView = null
         session.controller.dispose()
+        emitBenchmarkConsoleLog(session, force = true)
         sessions.remove(session.id)
         emitEvent(
             mapOf(
@@ -821,6 +865,7 @@ class VesperPlayerAndroidPlugin :
 private data class PlayerSession(
     val id: String,
     val controller: VesperPlayerController,
+    val benchmarkConsoleLogging: Boolean = false,
     var hostView: FrameLayout? = null,
     var observerJob: Job? = null,
     var lastError: Map<String, Any?>? = null,
@@ -900,6 +945,18 @@ private fun requireNestedMap(
     val raw = arguments[key] as? Map<*, *>
     return raw?.stringMap() ?: throw IllegalArgumentException("Missing $key.")
 }
+
+private fun Map<String, Any?>.toBenchmarkConfiguration(): VesperBenchmarkConfiguration =
+    VesperBenchmarkConfiguration(
+        enabled = this["enabled"] as? Boolean ?: false,
+        maxBufferedEvents = (this["maxBufferedEvents"] as? Number)?.toInt() ?: 2_048,
+        includeRawEvents = this["includeRawEvents"] as? Boolean ?: true,
+        consoleLogging = this["consoleLogging"] as? Boolean ?: false,
+        pluginLibraryPaths =
+            (this["pluginLibraryPaths"] as? List<*>)
+                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
+                ?: emptyList(),
+    )
 
 private fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
     val uri = this["uri"] as? String ?: throw IllegalArgumentException("Missing source uri.")
@@ -1253,6 +1310,73 @@ private fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
         "message" to (message ?: toString()),
     )
 
+private fun List<VesperBenchmarkEvent>.toBenchmarkJsonArray(): JSONArray =
+    JSONArray().also { array ->
+        forEach { event -> array.put(event.toBenchmarkJsonObject()) }
+    }
+
+private fun VesperBenchmarkEvent.toBenchmarkJsonObject(): JSONObject {
+    val attributesJson = JSONObject()
+    attributes.toSortedMap().forEach { (key, value) ->
+        attributesJson.put(key, value)
+    }
+    return JSONObject()
+        .put("runId", runId)
+        .put("sessionId", sessionId)
+        .put("platform", platform)
+        .put("sourceProtocol", sourceProtocol ?: JSONObject.NULL)
+        .put("eventName", eventName)
+        .put("timestampNs", timestampNs)
+        .put("elapsedNs", elapsedNs)
+        .put("thread", thread ?: JSONObject.NULL)
+        .put("attributes", attributesJson)
+}
+
+private fun VesperBenchmarkSummary.toBenchmarkJsonObject(): JSONObject =
+    JSONObject()
+        .put("runId", runId)
+        .put("sessionId", sessionId)
+        .put("acceptedEvents", acceptedEvents)
+        .put("droppedEvents", droppedEvents)
+        .put("pluginAcceptedEvents", pluginAcceptedEvents)
+        .put("pluginDroppedEvents", pluginDroppedEvents)
+        .put(
+            "metrics",
+            JSONArray().also { array ->
+                metrics.forEach { metric -> array.put(metric.toBenchmarkJsonObject()) }
+            },
+        )
+        .put(
+            "pluginErrors",
+            JSONArray().also { array ->
+                pluginErrors.forEach { error -> array.put(error) }
+            },
+        )
+
+private fun VesperBenchmarkMetricSummary.toBenchmarkJsonObject(): JSONObject =
+    JSONObject()
+        .put("name", name)
+        .put("count", count)
+        .put("minNs", minNs)
+        .put("maxNs", maxNs)
+        .put("p50Ns", p50Ns)
+        .put("p90Ns", p90Ns)
+        .put("p95Ns", p95Ns)
+
+private fun logBenchmarkJson(json: String) {
+    if (json.length <= BENCHMARK_LOG_CHUNK_SIZE) {
+        Log.i(BENCHMARK_LOG_TAG, json)
+        return
+    }
+
+    var offset = 0
+    while (offset < json.length) {
+        val end = (offset + BENCHMARK_LOG_CHUNK_SIZE).coerceAtMost(json.length)
+        Log.i(BENCHMARK_LOG_TAG, json.substring(offset, end))
+        offset = end
+    }
+}
+
 private fun PlaybackStateUi.toWireName(): String =
     when (this) {
         PlaybackStateUi.Ready -> "ready"
@@ -1444,3 +1568,5 @@ private const val METHOD_CHANNEL_NAME = "io.github.ikaros.vesper_player"
 private const val EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player/events"
 private const val DOWNLOAD_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player/download_events"
 private const val PLAYER_VIEW_TYPE = "io.github.ikaros.vesper_player/platform_view"
+private const val BENCHMARK_LOG_TAG = "VesperBenchmark"
+private const val BENCHMARK_LOG_CHUNK_SIZE = 3500

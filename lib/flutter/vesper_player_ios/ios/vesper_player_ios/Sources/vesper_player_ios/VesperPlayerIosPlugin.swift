@@ -328,6 +328,12 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             } else {
                 preloadBudgetPolicy = VesperPreloadBudgetPolicy()
             }
+            let benchmarkConfiguration: VesperBenchmarkConfiguration
+            if let benchmarkConfigurationMap = try nestedMap(arguments["benchmarkConfiguration"]) {
+                benchmarkConfiguration = benchmarkConfigurationMap.toBenchmarkConfiguration()
+            } else {
+                benchmarkConfiguration = .disabled
+            }
 
             let session = PlayerSession(
                 id: UUID().uuidString,
@@ -335,8 +341,10 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     initialSource: initialSource,
                     resiliencePolicy: resiliencePolicy,
                     trackPreferencePolicy: trackPreferencePolicy,
-                    preloadBudgetPolicy: preloadBudgetPolicy
-                )
+                    preloadBudgetPolicy: preloadBudgetPolicy,
+                    benchmarkConfiguration: benchmarkConfiguration
+                ),
+                benchmarkConsoleLogging: benchmarkConfiguration.consoleLogging
             )
             sessions[session.id] = session
             observeSession(session)
@@ -526,6 +534,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "type": "snapshot",
             "snapshot": buildSnapshotMap(for: session),
         ])
+        emitBenchmarkConsoleLog(for: session)
     }
 
     @MainActor
@@ -536,6 +545,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "error": resolvedPlayerErrorMap(for: session) ?? errorMap(from: error),
             "snapshot": buildSnapshotMap(for: session),
         ])
+        emitBenchmarkConsoleLog(for: session, force: true)
     }
 
     @MainActor
@@ -574,6 +584,36 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     private func emitEvent(_ payload: [String: Any]) {
         eventSink?(payload)
+    }
+
+    @MainActor
+    private func emitBenchmarkConsoleLog(for session: PlayerSession, force: Bool = false) {
+        guard session.benchmarkConsoleLogging else {
+            return
+        }
+
+        let events = session.controller.drainBenchmarkEvents()
+        let summary = session.controller.benchmarkSummary()
+        guard !events.isEmpty || summary.acceptedEvents > 0 else {
+            return
+        }
+        guard force || !events.isEmpty else {
+            return
+        }
+
+        let payload = BenchmarkConsolePayload(
+            playerId: session.id,
+            events: events,
+            summary: summary
+        )
+        do {
+            let data = try JSONEncoder().encode(payload)
+            if let json = String(data: data, encoding: .utf8) {
+                print("[VesperBenchmark] \(json)")
+            }
+        } catch {
+            print("[VesperBenchmark] {\"error\":\"\(error.localizedDescription)\"}")
+        }
     }
 
     @MainActor
@@ -674,6 +714,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         session.controller.detachSurfaceHost()
         session.hostView = nil
         session.controller.dispose()
+        emitBenchmarkConsoleLog(for: session, force: true)
         sessions.removeValue(forKey: session.id)
         emitEvent([
             "playerId": session.id,
@@ -696,16 +737,28 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 private final class PlayerSession {
     let id: String
     let controller: VesperPlayerController
+    let benchmarkConsoleLogging: Bool
     var hostView: PlayerSurfaceView?
     var observation: AnyCancellable?
     var lastError: [String: Any]?
     var viewport: FlutterViewport?
     var viewportHint: FlutterViewportHint = .hidden
 
-    init(id: String, controller: VesperPlayerController) {
+    init(
+        id: String,
+        controller: VesperPlayerController,
+        benchmarkConsoleLogging: Bool = false
+    ) {
         self.id = id
         self.controller = controller
+        self.benchmarkConsoleLogging = benchmarkConsoleLogging
     }
+}
+
+private struct BenchmarkConsolePayload: Encodable {
+    let playerId: String
+    let events: [VesperBenchmarkEvent]
+    let summary: VesperBenchmarkSummary
 }
 
 private final class DownloadSession {
@@ -1065,6 +1118,19 @@ private extension Dictionary where Key == String, Value == Any {
             maxMemoryBytes: (self["maxMemoryBytes"] as? NSNumber)?.int64Value,
             maxDiskBytes: (self["maxDiskBytes"] as? NSNumber)?.int64Value,
             warmupWindowMs: (self["warmupWindowMs"] as? NSNumber)?.int64Value
+        )
+    }
+
+    func toBenchmarkConfiguration() -> VesperBenchmarkConfiguration {
+        VesperBenchmarkConfiguration(
+            enabled: self["enabled"] as? Bool ?? false,
+            maxBufferedEvents: (self["maxBufferedEvents"] as? NSNumber)?.intValue ?? 2_048,
+            includeRawEvents: self["includeRawEvents"] as? Bool ?? true,
+            consoleLogging: self["consoleLogging"] as? Bool ?? false,
+            pluginLibraryPaths:
+                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
+                    value as? String
+                } ?? []
         )
     }
 

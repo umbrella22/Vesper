@@ -10,10 +10,10 @@ class VesperPlayerController {
     required this.playerId,
     required VesperPlayerSnapshot initialSnapshot,
     required VesperPlayerPlatform platform,
-  }) : _platform = platform,
-       snapshotListenable = ValueNotifier<VesperPlayerSnapshot>(
-         initialSnapshot,
-       ) {
+  })  : _platform = platform,
+        snapshotListenable = ValueNotifier<VesperPlayerSnapshot>(
+          initialSnapshot,
+        ) {
     _snapshotsController.add(initialSnapshot);
     _bindPlatformEvents();
     _syncProgressRefreshTimer(initialSnapshot);
@@ -27,6 +27,8 @@ class VesperPlayerController {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    VesperBenchmarkConfiguration benchmarkConfiguration =
+        const VesperBenchmarkConfiguration.disabled(),
   }) async {
     final platform = VesperPlayerPlatform.instance;
     final result = await platform.createPlayer(
@@ -34,6 +36,7 @@ class VesperPlayerController {
       resiliencePolicy: resiliencePolicy,
       trackPreferencePolicy: trackPreferencePolicy,
       preloadBudgetPolicy: preloadBudgetPolicy,
+      benchmarkConfiguration: benchmarkConfiguration,
     );
     return VesperPlayerController._(
       playerId: result.playerId,
@@ -142,7 +145,8 @@ class VesperPlayerController {
 
   Future<void> setPlaybackResiliencePolicy(
     VesperPlaybackResiliencePolicy policy,
-  ) => _runVoidOperation(() => _platform.setResiliencePolicy(playerId, policy));
+  ) =>
+      _runVoidOperation(() => _platform.setResiliencePolicy(playerId, policy));
 
   Future<void> setResiliencePolicy(VesperPlaybackResiliencePolicy policy) =>
       setPlaybackResiliencePolicy(policy);
@@ -154,23 +158,21 @@ class VesperPlayerController {
       _runVoidOperation(() => _platform.clearViewport(playerId));
 
   void _bindPlatformEvents() {
-    _platformSubscription = _platform
-        .eventsFor(playerId)
-        .listen(
-          (event) {
-            switch (event) {
-              case VesperPlayerSnapshotEvent():
-                _applySnapshot(event.snapshot);
-              case VesperPlayerErrorEvent():
-                _applyPlatformError(event);
-              case VesperPlayerDisposedEvent():
-                _eventsController.add(event);
-            }
-          },
-          onError: (Object error, StackTrace stackTrace) {
-            _publishSyntheticError(error, stackTrace);
-          },
-        );
+    _platformSubscription = _platform.eventsFor(playerId).listen(
+      (event) {
+        switch (event) {
+          case VesperPlayerSnapshotEvent():
+            _applySnapshot(event.snapshot);
+          case VesperPlayerErrorEvent():
+            _applyPlatformError(event);
+          case VesperPlayerDisposedEvent():
+            _eventsController.add(event);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        _publishSyntheticError(error, stackTrace);
+      },
+    );
   }
 
   void _applySnapshot(VesperPlayerSnapshot snapshot) {

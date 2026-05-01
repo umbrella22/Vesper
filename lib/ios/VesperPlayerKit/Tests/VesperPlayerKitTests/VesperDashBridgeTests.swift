@@ -220,6 +220,75 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(loadedMediaData, mediaData)
     }
 
+    @MainActor
+    func testDashBenchmarkRecordsPlaylistAndSegmentRequests() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(sampleSegmentTemplateMpd.utf8).write(to: manifestURL)
+
+        var initData = mp4Box(type: "ftyp", payload: Data([0x01]))
+        initData.append(mp4Box(type: "moov", payload: Data([0x02])))
+
+        var mediaData = mp4Box(type: "styp", payload: Data([0x03]))
+        mediaData.append(mp4Box(type: "sidx", payload: Data([0x04])))
+        mediaData.append(mp4Box(type: "moof", payload: Data([0x05])))
+        try writeSegmentTemplateFiles(
+            directory: directory,
+            renditionId: "v4_258",
+            initData: initData,
+            mediaData: mediaData
+        )
+
+        var events: [(name: String, attributes: [String: String])] = []
+        let session = VesperDashSession(
+            sourceURL: manifestURL,
+            benchmarkEventRecorder: { name, attributes in
+                events.append((name, attributes))
+            }
+        )
+
+        _ = try await session.masterPlaylistData()
+        _ = try await session.mediaPlaylistData(renditionId: "v4_258")
+        _ = try await session.segmentData(renditionId: "v4_258", segment: .initialization)
+        _ = try await session.segmentData(renditionId: "v4_258", segment: .media(0))
+
+        XCTAssertTrue(events.contains { $0.name == "dash_master_playlist_request_start" })
+        XCTAssertEqual(
+            eventAttributes("dash_master_playlist_request_end", in: events)?["cacheHit"],
+            "false"
+        )
+
+        let mediaPlaylistEnd = try XCTUnwrap(
+            eventAttributes("dash_media_playlist_request_end", in: events)
+        )
+        XCTAssertEqual(mediaPlaylistEnd["renditionId"], "v4_258")
+        XCTAssertEqual(mediaPlaylistEnd["cacheHit"], "false")
+
+        let initSegmentEnd = try XCTUnwrap(
+            eventAttributes("dash_init_segment_request_end", in: events)
+        )
+        XCTAssertEqual(initSegmentEnd["renditionId"], "v4_258")
+        XCTAssertEqual(initSegmentEnd["segmentKind"], "initialization")
+        XCTAssertEqual(initSegmentEnd["bytes"], "\(initData.count)")
+        XCTAssertEqual(initSegmentEnd["requestOrigin"], "resourceLoader")
+
+        let mediaSegmentEnd = try XCTUnwrap(
+            eventAttributes("dash_media_segment_request_end", in: events)
+        )
+        XCTAssertEqual(mediaSegmentEnd["renditionId"], "v4_258")
+        XCTAssertEqual(mediaSegmentEnd["index"], "0")
+        XCTAssertEqual(mediaSegmentEnd["bytes"], "\(mediaData.count)")
+        XCTAssertEqual(mediaSegmentEnd["segmentType"], "template")
+        XCTAssertEqual(mediaSegmentEnd["cacheHit"], "false")
+    }
+
     func testConcurrentSegmentTemplateMediaPlaylistsShareLoopbackServer() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1120,6 +1189,13 @@ private func firstLoopbackPort(in playlist: String) throws -> Int {
     )
     let url = try XCTUnwrap(URL(string: urlText))
     return try XCTUnwrap(url.port)
+}
+
+private func eventAttributes(
+    _ name: String,
+    in events: [(name: String, attributes: [String: String])]
+) -> [String: String]? {
+    events.first { $0.name == name }?.attributes
 }
 
 private func writeSegmentTemplateFiles(
