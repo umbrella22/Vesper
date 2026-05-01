@@ -7,7 +7,8 @@ A cross-platform Flutter video player built around native-first backends:
 - macOS is currently a package stub without a real playback backend
 
 The package exposes one Dart API surface so host apps can keep playback, track
-selection, resilience, download, and preload flows aligned across platforms.
+selection, resilience, download, preload, and benchmark capture flows aligned
+across platforms.
 
 ## Platform Support
 
@@ -183,6 +184,26 @@ final controller = await VesperPlayerController.create(
   ),
 );
 ```
+
+### Benchmark Configuration
+
+`VesperBenchmarkConfiguration` can be supplied at controller creation when you
+need native host-kit benchmark events during profiling:
+
+```dart
+final controller = await VesperPlayerController.create(
+  benchmarkConfiguration: const VesperBenchmarkConfiguration(
+    enabled: true,
+    includeRawEvents: true,
+    maxBufferedEvents: 2048,
+    consoleLogging: true,
+  ),
+);
+```
+
+`enabled` turns on benchmark capture. `consoleLogging` is separate and remains
+off by default; keep it disabled in normal app builds unless you are actively
+tracing startup or playback behavior.
 
 ## Track Selection And ABR
 

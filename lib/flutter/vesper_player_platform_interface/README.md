@@ -12,6 +12,7 @@ authors. Application code should usually depend on `vesper_player` directly.
 
 - `VesperPlayerPlatform`: the abstract base class every platform package must extend
 - `VesperPlatformCreateResult`: the result type returned by `createPlayer`
+- `VesperBenchmarkConfiguration`: opt-in benchmark capture and console logging settings forwarded by `createPlayer`
 
 ### Player data models
 
@@ -33,6 +34,7 @@ authors. Application code should usually depend on `vesper_player` directly.
 | `VesperRetryPolicy`              | Retry attempts, backoff mode, and delay limits                                                                                                                                                                 |
 | `VesperCachePolicy`              | Memory and disk cache policy                                                                                                                                                                                   |
 | `VesperPreloadBudgetPolicy`      | Preload budget for concurrency, memory, disk, and warm windows                                                                                                                                                 |
+| `VesperBenchmarkConfiguration`   | Opt-in benchmark collection, raw-event buffering, and console logging settings                                                                                                                                |
 | `VesperPlayerViewport`           | Normalized viewport rectangle used for viewport hints                                                                                                                                                          |
 | `VesperViewportHint`             | Visibility hint: visible, near visible, prefetch only, or hidden                                                                                                                                               |
 | `VesperPlayerError`              | Playback error with category and retryability metadata                                                                                                                                                         |
@@ -119,6 +121,11 @@ evidence when the backend can expose bitrate and rendered size directly.
 Backends should also provide `fixedTrackStatus` when they can observe
 fixed-track convergence directly, so Flutter UI can render the effective
 runtime state instead of only optimistic local intent.
+
+`createPlayer` also accepts `benchmarkConfiguration` so platform plugins can
+enable benchmark capture and console logging only when profiling is requested.
+Native implementations should forward it to the host kit and keep
+`consoleLogging` disabled by default.
 
 Coarse capability fields such as `supportsTrackSelection` or
 `supportsAbrPolicy` should not be treated as implicit support for every
