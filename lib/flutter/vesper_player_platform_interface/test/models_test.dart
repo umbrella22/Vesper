@@ -106,6 +106,11 @@ void main() {
     expect(capabilities.supportsAbrPolicy, isTrue);
     expect(capabilities.supportsAbrConstrained, isFalse);
     expect(capabilities.supportsAbrFixedTrack, isFalse);
+    expect(capabilities.supportsDashStaticVod, isFalse);
+    expect(capabilities.supportsDashDynamicLive, isFalse);
+    expect(capabilities.supportsDashManifestTrackCatalog, isFalse);
+    expect(capabilities.supportsDashTextTracks, isFalse);
+    expect(capabilities.supportsExactAbrFixedTrack, isFalse);
     expect(capabilities.supportsAbrMaxBitRate, isFalse);
     expect(capabilities.supportsAbrMaxResolution, isFalse);
     expect(
@@ -161,6 +166,7 @@ void main() {
       'supportsAbrPolicy': true,
       'supportsAbrConstrained': true,
       'supportsAbrFixedTrack': true,
+      'supportsExactAbrFixedTrack': false,
       'supportsAbrMaxBitRate': true,
       'supportsAbrMaxResolution': true,
     });
@@ -173,9 +179,37 @@ void main() {
     expect(capabilities.supportsAbrPolicy, isTrue);
     expect(capabilities.supportsAbrConstrained, isTrue);
     expect(capabilities.supportsAbrFixedTrack, isTrue);
+    expect(capabilities.supportsExactAbrFixedTrack, isFalse);
     expect(capabilities.supportsAbrMode(VesperAbrMode.fixedTrack), isTrue);
     expect(capabilities.supportsAbrMaxBitRate, isTrue);
     expect(capabilities.supportsAbrMaxResolution, isTrue);
+  });
+
+  test('capabilities expose DASH sub-capabilities and exact fixed-track', () {
+    final capabilities = VesperPlayerCapabilities.fromMap(<Object?, Object?>{
+      'supportsDash': true,
+      'supportsDashStaticVod': true,
+      'supportsDashDynamicLive': true,
+      'supportsDashManifestTrackCatalog': true,
+      'supportsDashTextTracks': true,
+      'supportsAbrFixedTrack': true,
+      'supportsExactAbrFixedTrack': true,
+    });
+
+    expect(capabilities.supportsDash, isTrue);
+    expect(capabilities.supportsDashStaticVod, isTrue);
+    expect(capabilities.supportsDashDynamicLive, isTrue);
+    expect(capabilities.supportsDashManifestTrackCatalog, isTrue);
+    expect(capabilities.supportsDashTextTracks, isTrue);
+    expect(capabilities.supportsAbrFixedTrack, isTrue);
+    expect(capabilities.supportsExactAbrFixedTrack, isTrue);
+    expect(capabilities.toMap()['supportsDashStaticVod'], isTrue);
+    expect(capabilities.toMap()['supportsExactAbrFixedTrack'], isTrue);
+
+    final inferredDash = VesperPlayerCapabilities.fromMap(<Object?, Object?>{
+      'supportsDashManifestTrackCatalog': true,
+    });
+    expect(inferredDash.supportsDash, isTrue);
   });
 
   test(

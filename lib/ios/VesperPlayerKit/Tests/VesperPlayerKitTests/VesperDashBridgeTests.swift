@@ -80,6 +80,32 @@ final class VesperDashBridgeTests: XCTestCase {
         }
     }
 
+    func testManifestParserRejectsDrmAndSegmentList() {
+        XCTAssertThrowsError(
+            try VesperDashManifestParser.parse(
+                data: Data(#"<MPD type="static"><Period><AdaptationSet><ContentProtection /></AdaptationSet></Period></MPD>"#.utf8),
+                manifestURL: URL(string: "https://example.com/drm.mpd")!
+            )
+        ) { error in
+            guard case VesperDashBridgeError.unsupportedManifest = error else {
+                XCTFail("unexpected error \(error)")
+                return
+            }
+        }
+
+        XCTAssertThrowsError(
+            try VesperDashManifestParser.parse(
+                data: Data(#"<MPD type="static"><Period><AdaptationSet><SegmentList /></AdaptationSet></Period></MPD>"#.utf8),
+                manifestURL: URL(string: "https://example.com/segment-list.mpd")!
+            )
+        ) { error in
+            guard case VesperDashBridgeError.unsupportedManifest = error else {
+                XCTFail("unexpected error \(error)")
+                return
+            }
+        }
+    }
+
     func testSidxParserReadsVersionZeroBox() throws {
         var data = mp4Box(type: "ftyp", payload: Data([0, 0, 0, 0]))
         data.append(mp4Box(type: "sidx", payload: sidxPayloadV0()))
@@ -564,6 +590,63 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertTrue(master.contains("vesper-dash://media/session/v4_258.m3u8"))
         XCTAssertFalse(master.contains("vesper-dash://media/session/v2_257.m3u8"))
         XCTAssertFalse(master.contains("vesper-dash://media/session/v7_257.m3u8"))
+    }
+
+    func testDashManifestTrackCatalogExposesPlayableAudioAndVideoTracks() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleMultiVideoSegmentTemplateMpd.utf8),
+            manifestURL: URL(string: "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd")!
+        )
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: manifest,
+            variantPolicy: .all
+        )
+
+        let snapshot = VesperDashManifestTrackCatalogSnapshot(
+            audio: selected.audio,
+            video: selected.video
+        )
+
+        XCTAssertTrue(snapshot.adaptiveVideo)
+        XCTAssertFalse(snapshot.adaptiveAudio)
+        XCTAssertEqual(
+            snapshot.videoTracks.map(\.id),
+            [
+                "video:dash:v1_257",
+                "video:dash:v2_257",
+                "video:dash:v7_257",
+            ]
+        )
+        XCTAssertEqual(snapshot.videoTracks[0].bitRate, 1_200_000)
+        XCTAssertEqual(snapshot.videoTracks[0].width, 768)
+        XCTAssertEqual(snapshot.videoTracks[0].height, 432)
+        XCTAssertEqual(snapshot.videoTracks[0].codec, "avc1.4D401E")
+        XCTAssertEqual(snapshot.videoTracks[0].frameRate ?? 0, 30_000.0 / 1_001.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.audioTracks.map(\.id), ["audio:dash:v4_258"])
+        XCTAssertEqual(snapshot.audioTracks[0].language, "qaa")
+        XCTAssertEqual(snapshot.audioTracks[0].codec, "mp4a.40.2")
+        XCTAssertEqual(snapshot.audioTracks[0].sampleRate, 48_000)
+        XCTAssertEqual(snapshot.videoVariantPinsByTrackId["video:dash:v7_257"]?.maxHeight, 1_080)
+    }
+
+    func testDashManifestTrackCatalogMarksSingleVideoAsNonAdaptive() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleSegmentTemplateMpd.utf8),
+            manifestURL: URL(string: "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd")!
+        )
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: manifest,
+            variantPolicy: .all
+        )
+
+        let snapshot = VesperDashManifestTrackCatalogSnapshot(
+            audio: selected.audio,
+            video: selected.video
+        )
+
+        XCTAssertFalse(snapshot.adaptiveVideo)
+        XCTAssertFalse(snapshot.adaptiveAudio)
+        XCTAssertEqual(snapshot.videoTracks.map(\.id), ["video:dash:v1_257"])
     }
 
     func testManifestParserReadsSegmentTimelineTemplate() throws {

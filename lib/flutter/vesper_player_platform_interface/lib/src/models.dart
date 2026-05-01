@@ -295,6 +295,10 @@ final class VesperPlayerCapabilities {
     this.supportsRemoteUrls = false,
     this.supportsHls = false,
     this.supportsDash = false,
+    this.supportsDashStaticVod = false,
+    this.supportsDashDynamicLive = false,
+    this.supportsDashManifestTrackCatalog = false,
+    this.supportsDashTextTracks = false,
     this.supportsTrackCatalog = false,
     this.supportsTrackSelection = false,
     this.supportsVideoTrackSelection = false,
@@ -303,6 +307,7 @@ final class VesperPlayerCapabilities {
     this.supportsAbrPolicy = false,
     this.supportsAbrConstrained = false,
     this.supportsAbrFixedTrack = false,
+    this.supportsExactAbrFixedTrack = false,
     this.supportsAbrMaxBitRate = false,
     this.supportsAbrMaxResolution = false,
     this.supportsResiliencePolicy = false,
@@ -318,6 +323,10 @@ final class VesperPlayerCapabilities {
         supportsRemoteUrls = false,
         supportsHls = false,
         supportsDash = false,
+        supportsDashStaticVod = false,
+        supportsDashDynamicLive = false,
+        supportsDashManifestTrackCatalog = false,
+        supportsDashTextTracks = false,
         supportsTrackCatalog = false,
         supportsTrackSelection = false,
         supportsVideoTrackSelection = false,
@@ -326,6 +335,7 @@ final class VesperPlayerCapabilities {
         supportsAbrPolicy = false,
         supportsAbrConstrained = false,
         supportsAbrFixedTrack = false,
+        supportsExactAbrFixedTrack = false,
         supportsAbrMaxBitRate = false,
         supportsAbrMaxResolution = false,
         supportsResiliencePolicy = false,
@@ -364,12 +374,29 @@ final class VesperPlayerCapabilities {
         _decodeOptionalBool(map, 'supportsAbrMaxBitRate') ?? false;
     final supportsAbrMaxResolution =
         _decodeOptionalBool(map, 'supportsAbrMaxResolution') ?? false;
+    final supportsDashStaticVod =
+        _decodeOptionalBool(map, 'supportsDashStaticVod') ?? false;
+    final supportsDashDynamicLive =
+        _decodeOptionalBool(map, 'supportsDashDynamicLive') ?? false;
+    final supportsDashManifestTrackCatalog =
+        _decodeOptionalBool(map, 'supportsDashManifestTrackCatalog') ?? false;
+    final supportsDashTextTracks =
+        _decodeOptionalBool(map, 'supportsDashTextTracks') ?? false;
+    final supportsDash = _decodeBool(map, 'supportsDash') ||
+        supportsDashStaticVod ||
+        supportsDashDynamicLive ||
+        supportsDashManifestTrackCatalog ||
+        supportsDashTextTracks;
 
     return VesperPlayerCapabilities(
       supportsLocalFiles: _decodeBool(map, 'supportsLocalFiles'),
       supportsRemoteUrls: _decodeBool(map, 'supportsRemoteUrls'),
       supportsHls: _decodeBool(map, 'supportsHls'),
-      supportsDash: _decodeBool(map, 'supportsDash'),
+      supportsDash: supportsDash,
+      supportsDashStaticVod: supportsDashStaticVod,
+      supportsDashDynamicLive: supportsDashDynamicLive,
+      supportsDashManifestTrackCatalog: supportsDashManifestTrackCatalog,
+      supportsDashTextTracks: supportsDashTextTracks,
       supportsTrackCatalog: _decodeBool(map, 'supportsTrackCatalog'),
       supportsTrackSelection: supportsTrackSelection,
       supportsVideoTrackSelection: supportsVideoTrackSelection,
@@ -378,6 +405,8 @@ final class VesperPlayerCapabilities {
       supportsAbrPolicy: supportsAbrPolicy,
       supportsAbrConstrained: supportsAbrConstrained,
       supportsAbrFixedTrack: supportsAbrFixedTrack,
+      supportsExactAbrFixedTrack:
+          _decodeOptionalBool(map, 'supportsExactAbrFixedTrack') ?? false,
       supportsAbrMaxBitRate: supportsAbrMaxBitRate,
       supportsAbrMaxResolution: supportsAbrMaxResolution,
       supportsResiliencePolicy: _decodeBool(map, 'supportsResiliencePolicy'),
@@ -398,6 +427,10 @@ final class VesperPlayerCapabilities {
   final bool supportsRemoteUrls;
   final bool supportsHls;
   final bool supportsDash;
+  final bool supportsDashStaticVod;
+  final bool supportsDashDynamicLive;
+  final bool supportsDashManifestTrackCatalog;
+  final bool supportsDashTextTracks;
   final bool supportsTrackCatalog;
   final bool supportsTrackSelection;
   final bool supportsVideoTrackSelection;
@@ -406,6 +439,7 @@ final class VesperPlayerCapabilities {
   final bool supportsAbrPolicy;
   final bool supportsAbrConstrained;
   final bool supportsAbrFixedTrack;
+  final bool supportsExactAbrFixedTrack;
   final bool supportsAbrMaxBitRate;
   final bool supportsAbrMaxResolution;
   final bool supportsResiliencePolicy;
@@ -437,6 +471,10 @@ final class VesperPlayerCapabilities {
       'supportsRemoteUrls': supportsRemoteUrls,
       'supportsHls': supportsHls,
       'supportsDash': supportsDash,
+      'supportsDashStaticVod': supportsDashStaticVod,
+      'supportsDashDynamicLive': supportsDashDynamicLive,
+      'supportsDashManifestTrackCatalog': supportsDashManifestTrackCatalog,
+      'supportsDashTextTracks': supportsDashTextTracks,
       'supportsTrackCatalog': supportsTrackCatalog,
       'supportsTrackSelection': supportsTrackSelection,
       'supportsVideoTrackSelection': supportsVideoTrackSelection,
@@ -445,6 +483,7 @@ final class VesperPlayerCapabilities {
       'supportsAbrPolicy': supportsAbrPolicy,
       'supportsAbrConstrained': supportsAbrConstrained,
       'supportsAbrFixedTrack': supportsAbrFixedTrack,
+      'supportsExactAbrFixedTrack': supportsExactAbrFixedTrack,
       'supportsAbrMaxBitRate': supportsAbrMaxBitRate,
       'supportsAbrMaxResolution': supportsAbrMaxResolution,
       'supportsResiliencePolicy': supportsResiliencePolicy,

@@ -41,7 +41,7 @@ final class PlayerErrorStateTests: XCTestCase {
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(
             bridge.lastError?.message,
-            "setAbrPolicy constrained mode requires a loaded HLS variant catalog to infer a single-axis maxWidth/maxHeight limit on iOS"
+            "setAbrPolicy constrained mode requires a loaded iOS video variant catalog to infer a single-axis maxWidth/maxHeight limit"
         )
     }
 

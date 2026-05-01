@@ -32,6 +32,7 @@ lib/android/build/
 lib/android/vesper-player-kit/build/
 lib/android/vesper-player-kit-software/build/
 lib/android/vesper-player-kit-compose/build/
+lib/android/vesper-player-kit-compose-ui/build/
 lib/android/vesper-player-kit/src/main/jniLibs/*
 !lib/android/vesper-player-kit/src/main/jniLibs/.gitkeep
 lib/android/vesper-player-kit-software/src/main/jniLibs/*
