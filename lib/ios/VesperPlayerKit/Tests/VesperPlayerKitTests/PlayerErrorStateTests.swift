@@ -45,6 +45,28 @@ final class PlayerErrorStateTests: XCTestCase {
         )
     }
 
+    func testMislabeledLocalHlsFileDoesNotExposeAdaptiveVideoWithoutLoadedVariants() async throws {
+        let tempUrl = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mp4")
+        FileManager.default.createFile(atPath: tempUrl.path, contents: Data(), attributes: nil)
+        defer { try? FileManager.default.removeItem(at: tempUrl) }
+
+        let source = VesperPlayerSource(
+            uri: tempUrl.absoluteString,
+            label: "Mislabelled HLS",
+            kind: .local,
+            protocol: .hls
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+
+        bridge.initialize()
+        try await settleTrackCatalogRefresh()
+
+        XCTAssertFalse(bridge.trackCatalog.adaptiveVideo)
+        XCTAssertTrue(bridge.trackCatalog.videoTracks.isEmpty)
+    }
+
     func testSelectingDashSourceClearsPreviousTrackStateAndUsesDashBridge() throws {
         let tempUrl = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -181,4 +203,11 @@ private func attachedPlayer(in surface: PlayerSurfaceView) -> AVPlayer? {
         .compactMap { $0 as? AVPlayerLayer }
         .first?
         .player
+}
+
+private func settleTrackCatalogRefresh() async throws {
+    for _ in 0..<5 {
+        await Task.yield()
+    }
+    try await Task.sleep(nanoseconds: 100_000_000)
 }

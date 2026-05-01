@@ -1620,7 +1620,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         return LoadedTrackCatalogState(
             catalog: VesperTrackCatalog(
                 tracks: tracks,
-                adaptiveVideo: sourceSupportsVideoVariantCatalog(currentSource),
+                adaptiveVideo: !videoVariantState.tracks.isEmpty,
                 adaptiveAudio: false
             ),
             audioGroup: audibleGroup,
@@ -2799,10 +2799,10 @@ func abrPolicyRequiresLoadedVideoVariantCatalog(_ policy: VesperAbrPolicy) -> Bo
 }
 
 private func sourceSupportsVideoVariantCatalog(_ source: VesperPlayerSource?) -> Bool {
-    guard source?.kind == .remote else {
+    guard let source else {
         return false
     }
-    return source?.protocol == .hls || source?.protocol == .dash
+    return source.protocol == .hls || source.protocol == .dash
 }
 
 func resolveFixedTrackStatus(
