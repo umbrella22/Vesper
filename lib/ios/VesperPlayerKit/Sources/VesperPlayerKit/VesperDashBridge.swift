@@ -33,20 +33,29 @@ private enum VesperDashResourceResponse {
 }
 
 fileprivate enum VesperDashSegmentPayload {
-    case data(Data)
-    case file(url: URL, offset: UInt64, size: UInt64, removeAfterServing: Bool)
+    case data(Data, contentType: String)
+    case file(url: URL, offset: UInt64, size: UInt64, removeAfterServing: Bool, contentType: String)
 
     var size: UInt64 {
         switch self {
-        case let .data(data):
+        case let .data(data, _):
             return UInt64(data.count)
-        case let .file(_, _, size, _):
+        case let .file(_, _, size, _, _):
             return size
         }
     }
 
+    var contentType: String {
+        switch self {
+        case let .data(_, contentType):
+            return contentType
+        case let .file(_, _, _, _, contentType):
+            return contentType
+        }
+    }
+
     var isTemporaryFile: Bool {
-        if case .file(_, _, _, true) = self {
+        if case .file(_, _, _, true, _) = self {
             return true
         }
         return false
@@ -54,9 +63,9 @@ fileprivate enum VesperDashSegmentPayload {
 
     func readData() throws -> Data {
         switch self {
-        case let .data(data):
+        case let .data(data, _):
             return data
-        case let .file(url, offset, size, removeAfterServing):
+        case let .file(url, offset, size, removeAfterServing, _):
             defer {
                 if removeAfterServing {
                     try? FileManager.default.removeItem(at: url)
@@ -75,139 +84,10 @@ fileprivate enum VesperDashSegmentPayload {
     }
 
     func cleanupIfTemporary() {
-        if case let .file(url, _, _, true) = self {
+        if case let .file(url, _, _, true, _) = self {
             try? FileManager.default.removeItem(at: url)
         }
     }
-}
-
-private enum VesperDashRustBridge {
-    static func execute<Request: Encodable, Response: Decodable>(
-        _ request: Request,
-        response _: Response.Type = Response.self
-    ) throws -> Response {
-        let requestData = try JSONEncoder().encode(request)
-        guard let requestJson = String(data: requestData, encoding: .utf8) else {
-            throw VesperDashBridgeError.invalidManifest("failed to encode DASH bridge request")
-        }
-
-        var outputPointer: UnsafeMutablePointer<CChar>?
-        var errorPointer: UnsafeMutablePointer<CChar>?
-        let ok = requestJson.withCString { requestPointer in
-            vesper_dash_bridge_execute_json(requestPointer, &outputPointer, &errorPointer)
-        }
-        defer {
-            if let outputPointer {
-                vesper_dash_bridge_string_free(outputPointer)
-            }
-            if let errorPointer {
-                vesper_dash_bridge_string_free(errorPointer)
-            }
-        }
-
-        guard ok, let outputPointer else {
-            let message = errorPointer.map { String(cString: $0) } ?? "Rust DASH bridge call failed"
-            throw bridgeError(fromRustMessage: message)
-        }
-
-        let responseJson = String(cString: outputPointer)
-        guard let responseData = responseJson.data(using: .utf8) else {
-            throw VesperDashBridgeError.invalidManifest("failed to decode DASH bridge response")
-        }
-        do {
-            return try JSONDecoder().decode(Response.self, from: responseData)
-        } catch {
-            throw VesperDashBridgeError.invalidManifest(
-                "invalid DASH bridge response: \(error.localizedDescription)"
-            )
-        }
-    }
-
-    private static func bridgeError(fromRustMessage message: String) -> VesperDashBridgeError {
-        if message.hasPrefix("unsupported MPD:") {
-            return .unsupportedManifest(message)
-        }
-        if message.hasPrefix("invalid MPD:") {
-            return .invalidManifest(message)
-        }
-        if message.hasPrefix("unsupported MP4:") {
-            return .unsupportedMp4(message)
-        }
-        if message.hasPrefix("invalid MP4:") {
-            return .invalidMp4(message)
-        }
-        return .invalidManifest(message)
-    }
-}
-
-private struct VesperDashParseManifestRequest: Encodable {
-    let operation = "parse_manifest"
-    let mpd: String
-    let manifestUrl: String
-}
-
-private struct VesperDashParseSidxRequest: Encodable {
-    let operation = "parse_sidx"
-    let data: [UInt8]
-}
-
-private struct VesperDashRemoveTopLevelSidxRequest: Encodable {
-    let operation = "remove_top_level_sidx"
-    let data: [UInt8]
-}
-
-private struct VesperDashSelectedPlayableRequest: Encodable {
-    let operation = "selected_playable_representations"
-    let manifest: VesperDashManifest
-    let variantPolicy: VesperDashMasterPlaylistVariantPolicy
-}
-
-private struct VesperDashRenditionUrl: Codable, Equatable {
-    let renditionId: String
-    let url: String
-}
-
-private struct VesperDashBuildMasterPlaylistRequest: Encodable {
-    let operation = "build_master_playlist"
-    let manifest: VesperDashManifest
-    let variantPolicy: VesperDashMasterPlaylistVariantPolicy
-    let mediaUrls: [VesperDashRenditionUrl]
-}
-
-private struct VesperDashSelectedPlayableResponse: Codable, Equatable {
-    let audio: [VesperDashPlayableRepresentation]
-    let video: [VesperDashPlayableRepresentation]
-}
-
-private struct VesperDashMasterPlaylistResponse: Codable, Equatable {
-    let playlist: String
-    let selected: VesperDashSelectedPlayableResponse
-}
-
-private struct VesperDashMediaSegmentsRequest: Encodable {
-    let operation = "media_segments"
-    let segmentBase: VesperDashSegmentBase
-    let sidx: VesperDashSidxBox
-}
-
-private struct VesperDashTemplateSegmentsRequest: Encodable {
-    let operation = "template_segments"
-    let durationMs: UInt64?
-    let segmentTemplate: VesperDashSegmentTemplate
-}
-
-private struct VesperDashBuildExternalMediaPlaylistRequest: Encodable {
-    let operation = "build_external_media_playlist"
-    let map: VesperDashHlsMap
-    let segments: [VesperDashHlsSegment]
-}
-
-private struct VesperDashExpandTemplateRequest: Encodable {
-    let operation = "expand_template"
-    let template: String
-    let representation: VesperDashRepresentation
-    let number: UInt64?
-    let time: UInt64?
 }
 
 final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
@@ -655,7 +535,7 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
             contentRange = nil
         }
         var header = statusLine
-            + "Content-Type: video/mp4\r\n"
+            + "Content-Type: \(payload.contentType)\r\n"
             + "Content-Length: \(bodyLength)\r\n"
             + "Accept-Ranges: bytes\r\n"
             + "Cache-Control: no-store\r\n"
@@ -711,7 +591,7 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
         on connection: NWConnection
     ) {
         switch payload {
-        case let .data(data):
+        case let .data(data, _):
             let startIndex = Int(start)
             let endIndex = startIndex + Int(length)
             connection.send(
@@ -721,7 +601,7 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
                     self?.scheduleGracefulClose(connection)
                 }
             )
-        case let .file(url, offset, _, removeAfterServing):
+        case let .file(url, offset, _, removeAfterServing, _):
             do {
                 let handle = try FileHandle(forReadingFrom: url)
                 try handle.seek(toOffset: offset + start)
@@ -868,6 +748,8 @@ actor VesperDashSession {
     nonisolated static let segmentCacheMaxBytes: UInt64 = 256 * 1024 * 1024
     nonisolated static let segmentCacheMaxEntryCount = 160
     nonisolated static let segmentCacheMaxSingleMediaBytes: UInt64 = 32 * 1024 * 1024
+    nonisolated static let defaultDynamicManifestRefreshIntervalMs: UInt64 = 2_000
+    nonisolated static let minimumDynamicManifestRefreshIntervalMs: UInt64 = 500
 
     nonisolated let id: String
     nonisolated let sourceURL: URL
@@ -875,6 +757,7 @@ actor VesperDashSession {
 
     private let networkClient: VesperDashNetworkClient
     private var manifest: VesperDashManifest?
+    private var manifestLoadedAt: Date?
     private var masterPlaylistCache: Data?
     private var mediaPlaylistCacheByRenditionId: [String: Data] = [:]
     private var selectedPlayableByPolicy: [VesperDashMasterPlaylistVariantPolicy: VesperDashSelectedPlayableResponse] = [:]
@@ -965,7 +848,7 @@ actor VesperDashSession {
     }
 
     func masterPlaylistData() async throws -> Data {
-        if let masterPlaylistCache {
+        if let masterPlaylistCache, manifest?.type != .dynamic {
             return masterPlaylistCache
         }
         let manifest = try await loadManifest()
@@ -979,7 +862,9 @@ actor VesperDashSession {
             }
         )
         let data = Data(playlist.utf8)
-        masterPlaylistCache = data
+        if manifest.type != .dynamic {
+            masterPlaylistCache = data
+        }
 
         let startupSelected = try selectedPlayableRepresentations(
             manifest: manifest,
@@ -1002,21 +887,29 @@ actor VesperDashSession {
         )
         return VesperDashManifestTrackCatalogSnapshot(
             audio: selected.audio,
-            video: selected.video
+            video: selected.video,
+            subtitles: selected.subtitles
         )
     }
 
     func mediaPlaylistData(renditionId: String) async throws -> Data {
-        if let cached = mediaPlaylistCacheByRenditionId[renditionId] {
+        if let cached = mediaPlaylistCacheByRenditionId[renditionId], manifest?.type != .dynamic {
             return cached
         }
         let manifest = try await loadManifest()
         let playable = try await playableRepresentation(renditionId: renditionId)
         if let segmentBase = playable.representation.segmentBase {
+            if manifest.type == .dynamic {
+                throw VesperDashBridgeError.unsupportedManifest(
+                    "dynamic DASH SegmentBase is not supported on iOS"
+                )
+            }
             let segments = try await mediaSegments(for: playable, segmentBase: segmentBase)
             let mediaURL = playable.representation.baseURL
             let playlist = try VesperDashHlsBuilder.buildExternalMediaPlaylist(
                 map: VesperDashHlsMap(uri: mediaURL, byteRange: segmentBase.initialization),
+                playlistKind: .vod,
+                mediaSequence: nil,
                 segments: segments.map {
                     VesperDashHlsSegment(
                         duration: $0.duration,
@@ -1055,16 +948,24 @@ actor VesperDashSession {
         // 路径才会复用 loopback http），导致 init 段未交付 → 'frmt'。
         // 走 vesper-dash:// scheme 可以保证 AVPlayer 调用 resource loader
         // delegate，从而能记录 init 段是否被请求。
-        let initializationURL = self.segmentURL(
-            for: playable.renditionId,
-            segment: .initialization
-        )
+        let initializationURL = segmentTemplate.initialization.map { _ in
+            self.segmentURL(for: playable.renditionId, segment: .initialization).absoluteString
+        }
+        let playlistKind: VesperDashHlsPlaylistKind = manifest.type == .dynamic ? .live : .vod
+        let mediaSequence = manifest.type == .dynamic ? segments.first?.number : nil
         let playlist = try VesperDashHlsBuilder.buildExternalMediaPlaylist(
-            map: VesperDashHlsMap(uri: initializationURL.absoluteString, byteRange: nil),
+            map: initializationURL.map { VesperDashHlsMap(uri: $0, byteRange: nil) },
+            playlistKind: playlistKind,
+            mediaSequence: mediaSequence,
             segments: try segments.enumerated().map { index, segment in
+                let segmentIndex = try hlsSegmentIndex(
+                    manifest: manifest,
+                    segment: segment,
+                    fallbackIndex: index
+                )
                 let segmentURL = try server.segmentURL(
                     for: playable.renditionId,
-                    segment: .media(index)
+                    segment: .media(segmentIndex)
                 )
                 return VesperDashHlsSegment(
                     duration: segment.duration,
@@ -1075,7 +976,7 @@ actor VesperDashSession {
         )
 #if DEBUG
         iosHostLog(
-            "dashMediaPlaylist rendition=\(playable.renditionId) loopbackSegments=true count=\(segments.count) init=\(initializationURL.absoluteString)"
+            "dashMediaPlaylist rendition=\(playable.renditionId) loopbackSegments=true count=\(segments.count) init=\(initializationURL ?? "none")"
         )
         // 打印 playlist 头部 7 行，便于排查 HLS 标签拼接错误（曾因 multiline
         // 字符串末尾缺换行导致 EXT-X-PLAYLIST-TYPE 与 EXT-X-MAP 粘到一行）。
@@ -1088,6 +989,33 @@ actor VesperDashSession {
         let data = Data(playlist.utf8)
         mediaPlaylistCacheByRenditionId[renditionId] = data
         return data
+    }
+
+    private func hlsSegmentIndex(
+        manifest: VesperDashManifest,
+        segment: VesperDashTemplateSegment,
+        fallbackIndex: Int
+    ) throws -> Int {
+        guard manifest.type == .dynamic else {
+            return fallbackIndex
+        }
+        return try checkedInt(segment.number, field: "DASH live segment number")
+    }
+
+    private func dashSegmentContentType(
+        for playable: VesperDashPlayableRepresentation,
+        segment: VesperDashSegmentRequest
+    ) -> String {
+        if segment == .initialization {
+            return "video/mp4"
+        }
+        let mimeType = playable.representation.mimeType
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if mimeType == "text/vtt" || mimeType == "text/webvtt" || mimeType.contains("vtt") {
+            return "text/vtt"
+        }
+        return "video/mp4"
     }
 
     private func dashLoopbackServer() async throws -> VesperDashLoopbackServer {
@@ -1135,6 +1063,11 @@ actor VesperDashSession {
         let manifest = try await loadManifest()
         let playable = try await playableRepresentation(renditionId: renditionId)
         if let segmentBase = playable.representation.segmentBase {
+            if manifest.type == .dynamic {
+                throw VesperDashBridgeError.unsupportedManifest(
+                    "dynamic DASH SegmentBase is not supported on iOS"
+                )
+            }
             guard let mediaURL = URL(string: playable.representation.baseURL) else {
                 throw VesperDashBridgeError.invalidManifest(
                     "invalid media URL \(playable.representation.baseURL)"
@@ -1160,10 +1093,14 @@ actor VesperDashSession {
                     url: mediaURL,
                     offset: byteRange.start,
                     size: byteRange.length,
-                    removeAfterServing: false
+                    removeAfterServing: false,
+                    contentType: dashSegmentContentType(for: playable, segment: segment)
                 )
             }
-            return .data(try await networkClient.data(for: mediaURL, byteRange: byteRange))
+            return .data(
+                try await networkClient.data(for: mediaURL, byteRange: byteRange),
+                contentType: dashSegmentContentType(for: playable, segment: segment)
+            )
         }
 
         guard let segmentTemplate = playable.representation.segmentTemplate else {
@@ -1185,6 +1122,7 @@ actor VesperDashSession {
         segmentTemplate: VesperDashSegmentTemplate,
         segment: VesperDashSegmentRequest
     ) async throws -> VesperDashSegmentPayload {
+        let contentType = dashSegmentContentType(for: playable, segment: segment)
         let key = VesperDashSegmentCacheKey(
             renditionId: playable.renditionId,
             segment: segment
@@ -1193,7 +1131,7 @@ actor VesperDashSession {
             renditionId: playable.renditionId,
             segment: segment
         )
-        if let cached = cachedSegmentFilePayload(for: key, at: cacheURL) {
+        if let cached = cachedSegmentFilePayload(for: key, at: cacheURL, contentType: contentType) {
             return cached
         }
         if case .media = segment {
@@ -1204,7 +1142,8 @@ actor VesperDashSession {
                 segment: segment,
                 cacheURL: cacheURL,
                 key: key,
-                allowSkippingLargeMediaEntry: true
+                allowSkippingLargeMediaEntry: true,
+                contentType: contentType
             )
         }
 
@@ -1221,9 +1160,10 @@ actor VesperDashSession {
             key: key,
             allowSkippingLargeMediaEntry: true
         ) {
-            return cachedSegmentFilePayload(for: key, at: cacheURL) ?? .data(data)
+            return cachedSegmentFilePayload(for: key, at: cacheURL, contentType: contentType)
+                ?? .data(data, contentType: contentType)
         }
-        return .data(data)
+        return .data(data, contentType: contentType)
     }
 
     private func fetchSegmentTemplateFile(
@@ -1233,7 +1173,8 @@ actor VesperDashSession {
         segment: VesperDashSegmentRequest,
         cacheURL: URL,
         key: VesperDashSegmentCacheKey,
-        allowSkippingLargeMediaEntry: Bool
+        allowSkippingLargeMediaEntry: Bool,
+        contentType: String
     ) async throws -> VesperDashSegmentPayload {
         let url = try templateSegmentURL(
             manifest: manifest,
@@ -1257,7 +1198,8 @@ actor VesperDashSession {
             to: cacheURL,
             size: size,
             key: key,
-            allowSkippingLargeMediaEntry: allowSkippingLargeMediaEntry
+            allowSkippingLargeMediaEntry: allowSkippingLargeMediaEntry,
+            contentType: contentType
         )
     }
 
@@ -1266,7 +1208,8 @@ actor VesperDashSession {
         to cacheURL: URL,
         size: UInt64,
         key: VesperDashSegmentCacheKey,
-        allowSkippingLargeMediaEntry: Bool
+        allowSkippingLargeMediaEntry: Bool,
+        contentType: String
     ) throws -> VesperDashSegmentPayload {
         if allowSkippingLargeMediaEntry,
            case .media = key.segment,
@@ -1276,7 +1219,13 @@ actor VesperDashSession {
                 "dashSegmentCache streamLarge rendition=\(key.renditionId) segment=\(key.segment) bytes=\(size)"
             )
 #endif
-            return .file(url: temporaryURL, offset: 0, size: size, removeAfterServing: true)
+            return .file(
+                url: temporaryURL,
+                offset: 0,
+                size: size,
+                removeAfterServing: true,
+                contentType: contentType
+            )
         }
 
         try FileManager.default.createDirectory(
@@ -1298,7 +1247,13 @@ actor VesperDashSession {
         )
         segmentCacheTotalBytes = segmentCacheTotalBytes.saturatingAdd(size)
         try trimSegmentCache(reserving: 0, addingEntry: false, protecting: key)
-        return .file(url: cacheURL, offset: 0, size: size, removeAfterServing: false)
+        return .file(
+            url: cacheURL,
+            offset: 0,
+            size: size,
+            removeAfterServing: false,
+            contentType: contentType
+        )
     }
 
     private func temporarySegmentDownloadURL(
@@ -1403,7 +1358,8 @@ actor VesperDashSession {
 
     private func cachedSegmentFilePayload(
         for key: VesperDashSegmentCacheKey,
-        at url: URL
+        at url: URL,
+        contentType: String
     ) -> VesperDashSegmentPayload? {
         guard FileManager.default.fileExists(atPath: url.path) else {
             if let existing = cachedSegmentFiles.removeValue(forKey: key) {
@@ -1413,7 +1369,13 @@ actor VesperDashSession {
         }
         let size = fileSize(at: url) ?? cachedSegmentFiles[key]?.size ?? 0
         touchCachedSegmentFile(key: key, url: url, size: size)
-        return .file(url: url, offset: 0, size: size, removeAfterServing: false)
+        return .file(
+            url: url,
+            offset: 0,
+            size: size,
+            removeAfterServing: false,
+            contentType: contentType
+        )
     }
 
     private func cachedSegmentFileExists(
@@ -1718,9 +1680,10 @@ actor VesperDashSession {
                 segment: segment,
                 cacheURL: url,
                 key: key,
-                allowSkippingLargeMediaEntry: false
+                allowSkippingLargeMediaEntry: false,
+                contentType: dashSegmentContentType(for: playable, segment: segment)
             )
-            guard case let .file(fileURL, 0, _, false) = payload else {
+            guard case let .file(fileURL, 0, _, false, _) = payload else {
                 throw VesperDashBridgeError.network("DASH segment redirect requires a persistent local file")
             }
             return fileURL
@@ -1760,7 +1723,12 @@ actor VesperDashSession {
         let time: UInt64?
         switch segment {
         case .initialization:
-            template = segmentTemplate.initialization
+            guard let initialization = segmentTemplate.initialization else {
+                throw VesperDashBridgeError.unsupportedManifest(
+                    "Representation \(playable.representation.id) does not provide SegmentTemplate initialization"
+                )
+            }
+            template = initialization
             number = nil
             time = nil
         case let .media(index):
@@ -1769,14 +1737,25 @@ actor VesperDashSession {
                 manifest: manifest,
                 segmentTemplate: segmentTemplate
             )
-            guard segments.indices.contains(index) else {
-                throw VesperDashBridgeError.invalidManifest(
-                    "missing media segment \(index) for rendition \(playable.renditionId)"
-                )
+            let selectedSegment: VesperDashTemplateSegment
+            if manifest.type == .dynamic {
+                guard let matched = segments.first(where: { $0.number == UInt64(index) }) else {
+                    throw VesperDashBridgeError.invalidManifest(
+                        "missing media segment number \(index) for rendition \(playable.renditionId)"
+                    )
+                }
+                selectedSegment = matched
+            } else {
+                guard segments.indices.contains(index) else {
+                    throw VesperDashBridgeError.invalidManifest(
+                        "missing media segment \(index) for rendition \(playable.renditionId)"
+                    )
+                }
+                selectedSegment = segments[index]
             }
             template = segmentTemplate.media
-            number = segments[index].number
-            time = segments[index].time
+            number = selectedSegment.number
+            time = selectedSegment.time
         }
 
         return try expandedTemplateURL(
@@ -1819,12 +1798,13 @@ actor VesperDashSession {
         )
         let response = VesperDashSelectedPlayableResponse(
             audio: selected.audio,
-            video: selected.video
+            video: selected.video,
+            subtitles: selected.subtitles
         )
         selectedPlayableByPolicy[variantPolicy] = response
         if variantPolicy == .all {
             playableByRenditionId = Dictionary(
-                uniqueKeysWithValues: (response.audio + response.video).map {
+                uniqueKeysWithValues: (response.audio + response.video + response.subtitles).map {
                     ($0.renditionId, $0)
                 }
             )
@@ -1857,6 +1837,7 @@ actor VesperDashSession {
             return cached
         }
         let segments = try VesperDashHlsBuilder.templateSegments(
+            manifestType: manifest.type,
             durationMs: manifest.durationMs,
             segmentTemplate: segmentTemplate
         )
@@ -1865,13 +1846,41 @@ actor VesperDashSession {
     }
 
     private func loadManifest() async throws -> VesperDashManifest {
-        if let manifest {
+        if let manifest, !shouldRefreshManifest(manifest) {
             return manifest
         }
         let data = try await networkClient.data(for: sourceURL)
         let parsed = try VesperDashManifestParser.parse(data: data, manifestURL: sourceURL)
+        if manifest != nil, parsed.type == .dynamic {
+            clearManifestDerivedCaches()
+        }
         manifest = parsed
+        manifestLoadedAt = Date()
         return parsed
+    }
+
+    private func shouldRefreshManifest(_ manifest: VesperDashManifest) -> Bool {
+        guard manifest.type == .dynamic else {
+            return false
+        }
+        guard let manifestLoadedAt else {
+            return true
+        }
+        let refreshIntervalMs = max(
+            manifest.minimumUpdatePeriodMs ?? Self.defaultDynamicManifestRefreshIntervalMs,
+            Self.minimumDynamicManifestRefreshIntervalMs
+        )
+        return Date().timeIntervalSince(manifestLoadedAt) * 1_000 >= Double(refreshIntervalMs)
+    }
+
+    private func clearManifestDerivedCaches() {
+        masterPlaylistCache = nil
+        mediaPlaylistCacheByRenditionId = [:]
+        selectedPlayableByPolicy = [:]
+        playableByRenditionId = [:]
+        sidxByRenditionId = [:]
+        mediaSegmentsByRenditionId = [:]
+        templateSegmentsByRenditionId = [:]
     }
 
     private func playableRepresentation(renditionId: String) async throws -> VesperDashPlayableRepresentation {
@@ -1883,7 +1892,7 @@ actor VesperDashSession {
             manifest: manifest,
             variantPolicy: .all
         )
-        guard let playable = (selected.audio + selected.video).first(where: {
+        guard let playable = (selected.audio + selected.video + selected.subtitles).first(where: {
             $0.renditionId == renditionId
         }) else {
             throw VesperDashBridgeError.invalidManifest(
@@ -2023,194 +2032,6 @@ final class VesperDashNetworkClient {
             return nil
         }
         return value.uint64Value
-    }
-}
-
-enum VesperDashManifestParser {
-    static func parse(data: Data, manifestURL: URL) throws -> VesperDashManifest {
-        guard let mpd = String(data: data, encoding: .utf8) else {
-            throw VesperDashBridgeError.invalidManifest("MPD is not valid UTF-8")
-        }
-        if mpd.range(
-            of: #"<[^>]*ContentProtection\b"#,
-            options: [.regularExpression, .caseInsensitive]
-        ) != nil {
-            throw VesperDashBridgeError.unsupportedManifest(
-                "DASH ContentProtection/DRM is not supported on iOS"
-            )
-        }
-        if mpd.range(
-            of: #"<[^>]*SegmentList\b"#,
-            options: [.regularExpression, .caseInsensitive]
-        ) != nil {
-            throw VesperDashBridgeError.unsupportedManifest(
-                "DASH SegmentList is not supported on iOS"
-            )
-        }
-        return try VesperDashRustBridge.execute(
-            VesperDashParseManifestRequest(
-                mpd: mpd,
-                manifestUrl: manifestURL.absoluteString
-            ),
-            response: VesperDashManifest.self
-        )
-    }
-}
-
-enum VesperDashSidxParser {
-    static func parse(data: Data) throws -> VesperDashSidxBox {
-        try VesperDashRustBridge.execute(
-            VesperDashParseSidxRequest(data: [UInt8](data)),
-            response: VesperDashSidxBox.self
-        )
-    }
-}
-
-enum VesperDashMp4BoxFilter {
-    static func removingTopLevelSidxBoxes(from data: Data) throws -> Data {
-        let bytes: [UInt8] = try VesperDashRustBridge.execute(
-            VesperDashRemoveTopLevelSidxRequest(data: [UInt8](data)),
-            response: [UInt8].self
-        )
-        return Data(bytes)
-    }
-}
-
-enum VesperDashHlsBuilder {
-    /// 构造 HLS master playlist。
-    ///
-    /// 实现注意：所有 playlist 文本生成都使用 `[String]` lines + `joined("\n")` 模式，
-    /// 不再使用多行字符串字面量直接 `+=` 拼接。原因：Swift 多行字面量结尾的 `"""`
-    /// 会吞掉前一个换行，曾经导致 `#EXT-X-PLAYLIST-TYPE:VOD` 与后面 `#EXT-X-MAP`
-    /// 粘到同一行，HLS 解析器静默忽略未知整行 → AVPlayer 拿不到 init segment
-    /// → 报 `'frmt'`。逐行 append 在物理上不可能粘行。
-    static func buildMasterPlaylist(
-        manifest: VesperDashManifest,
-        variantPolicy: VesperDashMasterPlaylistVariantPolicy = .all,
-        mediaURL: (String) -> String
-    ) throws -> String {
-        let selected = try selectedPlayableRepresentations(
-            manifest: manifest,
-            variantPolicy: variantPolicy
-        )
-        let mediaUrls = (selected.audio + selected.video).map {
-            VesperDashRenditionUrl(renditionId: $0.renditionId, url: mediaURL($0.renditionId))
-        }
-        let response: VesperDashMasterPlaylistResponse = try VesperDashRustBridge.execute(
-            VesperDashBuildMasterPlaylistRequest(
-                manifest: manifest,
-                variantPolicy: variantPolicy,
-                mediaUrls: mediaUrls
-            ),
-            response: VesperDashMasterPlaylistResponse.self
-        )
-        return response.playlist
-    }
-
-    static func selectedPlayableRepresentations(
-        manifest: VesperDashManifest,
-        variantPolicy: VesperDashMasterPlaylistVariantPolicy
-    ) throws -> (audio: [VesperDashPlayableRepresentation], video: [VesperDashPlayableRepresentation]) {
-        let selected: VesperDashSelectedPlayableResponse = try VesperDashRustBridge.execute(
-            VesperDashSelectedPlayableRequest(
-                manifest: manifest,
-                variantPolicy: variantPolicy
-            ),
-            response: VesperDashSelectedPlayableResponse.self
-        )
-        return (selected.audio, selected.video)
-    }
-
-    static func buildMediaPlaylist(
-        initializationURI: String,
-        segments: [VesperDashMediaSegment],
-        segmentURI: (Int) -> String
-    ) throws -> String {
-        try buildExternalMediaPlaylist(
-            map: VesperDashHlsMap(uri: initializationURI, byteRange: nil),
-            segments: segments.enumerated().map { index, segment in
-                VesperDashHlsSegment(
-                    duration: segment.duration,
-                    uri: segmentURI(index),
-                    byteRange: nil
-                )
-            }
-        )
-    }
-
-    static func buildMediaPlaylist(
-        initializationURI: String,
-        segments: [VesperDashTemplateSegment],
-        segmentURI: (Int) -> String
-    ) throws -> String {
-        try buildExternalMediaPlaylist(
-            map: VesperDashHlsMap(uri: initializationURI, byteRange: nil),
-            segments: segments.enumerated().map { index, segment in
-                VesperDashHlsSegment(
-                    duration: segment.duration,
-                    uri: segmentURI(index),
-                    byteRange: nil
-                )
-            }
-        )
-    }
-
-    static func buildExternalMediaPlaylist(
-        map: VesperDashHlsMap,
-        segments: [VesperDashHlsSegment]
-    ) throws -> String {
-        try VesperDashRustBridge.execute(
-            VesperDashBuildExternalMediaPlaylistRequest(
-                map: map,
-                segments: segments
-            ),
-            response: String.self
-        )
-    }
-
-    static func mediaSegments(
-        segmentBase: VesperDashSegmentBase,
-        sidx: VesperDashSidxBox
-    ) throws -> [VesperDashMediaSegment] {
-        try VesperDashRustBridge.execute(
-            VesperDashMediaSegmentsRequest(
-                segmentBase: segmentBase,
-                sidx: sidx
-            ),
-            response: [VesperDashMediaSegment].self
-        )
-    }
-
-    static func templateSegments(
-        durationMs: UInt64?,
-        segmentTemplate: VesperDashSegmentTemplate
-    ) throws -> [VesperDashTemplateSegment] {
-        try VesperDashRustBridge.execute(
-            VesperDashTemplateSegmentsRequest(
-                durationMs: durationMs,
-                segmentTemplate: segmentTemplate
-            ),
-            response: [VesperDashTemplateSegment].self
-        )
-    }
-}
-
-enum VesperDashTemplateExpander {
-    static func expand(
-        _ template: String,
-        representation: VesperDashRepresentation,
-        number: UInt64?,
-        time: UInt64? = nil
-    ) throws -> String {
-        try VesperDashRustBridge.execute(
-            VesperDashExpandTemplateRequest(
-                template: template,
-                representation: representation,
-                number: number,
-                time: time
-            ),
-            response: String.self
-        )
     }
 }
 

@@ -372,8 +372,11 @@ mod tests {
     #[test]
     fn derives_master_input_from_single_period_dash_manifest() {
         let manifest = DashManifest {
+            manifest_type: crate::dash::DashManifestType::Static,
             duration_ms: Some(1_000),
             min_buffer_time_ms: None,
+            minimum_update_period_ms: None,
+            time_shift_buffer_depth_ms: None,
             periods: vec![crate::dash::DashPeriod {
                 id: Some("p0".to_owned()),
                 adaptation_sets: vec![

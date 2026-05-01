@@ -50,7 +50,7 @@ struct VesperDashSegmentTemplate: Codable, Equatable {
     let duration: UInt64?
     let startNumber: UInt64
     let presentationTimeOffset: UInt64
-    let initialization: String
+    let initialization: String?
     let media: String
     let timeline: [VesperDashSegmentTimelineEntry]
 }
@@ -95,9 +95,17 @@ struct VesperDashPeriod: Codable, Equatable {
     let adaptationSets: [VesperDashAdaptationSet]
 }
 
+enum VesperDashManifestType: String, Codable, Equatable {
+    case `static`
+    case dynamic
+}
+
 struct VesperDashManifest: Codable, Equatable {
+    let type: VesperDashManifestType
     let durationMs: UInt64?
     let minBufferTimeMs: UInt64?
+    let minimumUpdatePeriodMs: UInt64?
+    let timeShiftBufferDepthMs: UInt64?
     let periods: [VesperDashPeriod]
 }
 
@@ -148,6 +156,11 @@ struct VesperDashHlsSegment: Codable, Equatable {
     let duration: Double
     let uri: String
     let byteRange: VesperDashByteRange?
+}
+
+enum VesperDashHlsPlaylistKind: String, Codable, Equatable {
+    case vod
+    case live
 }
 
 enum VesperDashSegmentRequest: Hashable {

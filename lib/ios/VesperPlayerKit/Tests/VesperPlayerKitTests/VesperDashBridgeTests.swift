@@ -22,6 +22,7 @@ final class VesperDashBridgeTests: XCTestCase {
             manifestURL: URL(string: "https://origin.example.com/path/master.mpd")!
         )
 
+        XCTAssertEqual(manifest.type, .static)
         XCTAssertEqual(manifest.durationMs, 90_500)
         XCTAssertEqual(manifest.minBufferTimeMs, 1_500)
         XCTAssertEqual(manifest.periods.count, 1)
@@ -66,18 +67,18 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(audio.representations[0].segmentTemplate?.media, "$RepresentationID$-270146-i-$Number$.m4s")
     }
 
-    func testManifestParserRejectsDynamicMpd() {
-        XCTAssertThrowsError(
-            try VesperDashManifestParser.parse(
-                data: Data(#"<MPD type="dynamic"><Period /></MPD>"#.utf8),
-                manifestURL: URL(string: "https://example.com/live.mpd")!
-            )
-        ) { error in
-            guard case VesperDashBridgeError.unsupportedManifest = error else {
-                XCTFail("unexpected error \(error)")
-                return
-            }
-        }
+    func testManifestParserReadsDynamicMpdTiming() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(
+                #"<MPD type="dynamic" minimumUpdatePeriod="PT2S" timeShiftBufferDepth="PT30S"><Period /></MPD>"#
+                    .utf8
+            ),
+            manifestURL: URL(string: "https://example.com/live.mpd")!
+        )
+
+        XCTAssertEqual(manifest.type, .dynamic)
+        XCTAssertEqual(manifest.minimumUpdatePeriodMs, 2_000)
+        XCTAssertEqual(manifest.timeShiftBufferDepthMs, 30_000)
     }
 
     func testManifestParserRejectsDrmAndSegmentList() {
@@ -649,6 +650,57 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(snapshot.videoTracks.map(\.id), ["video:dash:v1_257"])
     }
 
+    func testDashWebVttSubtitlesReachMasterPlaylistAndTrackCatalog() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleWebVttSubtitleMpd.utf8),
+            manifestURL: URL(string: "https://cdn.example.com/vod/manifest.mpd")!
+        )
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: manifest,
+            variantPolicy: .all
+        )
+
+        XCTAssertEqual(selected.subtitles.map(\.renditionId), ["sub-en"])
+        let subtitleTemplate = try XCTUnwrap(
+            selected.subtitles[0].representation.segmentTemplate
+        )
+        XCTAssertNil(subtitleTemplate.initialization)
+
+        let master = try VesperDashHlsBuilder.buildMasterPlaylist(
+            manifest: manifest,
+            mediaURL: { "vesper-dash://media/session/\($0).m3u8" }
+        )
+        XCTAssertTrue(master.contains("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subtitles\""))
+        XCTAssertTrue(master.contains("LANGUAGE=\"en\""))
+        XCTAssertTrue(master.contains("SUBTITLES=\"subtitles\""))
+        XCTAssertTrue(master.contains("vesper-dash://media/session/sub-en.m3u8"))
+
+        let subtitleSegments = try VesperDashHlsBuilder.templateSegments(
+            manifestType: manifest.type,
+            durationMs: manifest.durationMs,
+            segmentTemplate: subtitleTemplate
+        )
+        let subtitleMedia = try VesperDashHlsBuilder.buildMediaPlaylist(
+            initializationURI: nil,
+            segments: subtitleSegments,
+            segmentURI: { _, segment in
+                "https://cdn.example.com/vod/sub-\(segment.number).vtt"
+            }
+        )
+        XCTAssertFalse(subtitleMedia.contains("#EXT-X-MAP"))
+        XCTAssertTrue(subtitleMedia.contains("https://cdn.example.com/vod/sub-1.vtt"))
+        XCTAssertTrue(subtitleMedia.hasSuffix("#EXT-X-ENDLIST\n"))
+
+        let snapshot = VesperDashManifestTrackCatalogSnapshot(
+            audio: selected.audio,
+            video: selected.video,
+            subtitles: selected.subtitles
+        )
+        XCTAssertEqual(snapshot.subtitleTracks.map(\.id), ["subtitle:dash:sub-en"])
+        XCTAssertEqual(snapshot.subtitleTracks[0].language, "en")
+        XCTAssertEqual(snapshot.subtitleTracks[0].codec, "wvtt")
+    }
+
     func testManifestParserReadsSegmentTimelineTemplate() throws {
         let manifest = try VesperDashManifestParser.parse(
             data: Data(sampleSegmentTimelineMpd.utf8),
@@ -701,6 +753,62 @@ final class VesperDashBridgeTests: XCTestCase {
             time: segments[0].time
         )
         XCTAssertEqual(expanded, "chunk-05000-7.m4s")
+    }
+
+    func testHlsBuilderCreatesLiveSegmentTimelinePlaylist() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleDynamicSegmentTimelineMpd.utf8),
+            manifestURL: URL(string: "https://cdn.example.com/live/manifest.mpd")!
+        )
+        let template = try XCTUnwrap(
+            manifest.periods[0].adaptationSets[0].representations[0].segmentTemplate
+        )
+        let segments = try VesperDashHlsBuilder.templateSegments(
+            manifestType: manifest.type,
+            durationMs: manifest.durationMs,
+            segmentTemplate: template
+        )
+
+        XCTAssertEqual(manifest.type, .dynamic)
+        XCTAssertEqual(segments.map(\.number), [101, 102, 103])
+
+        let media = try VesperDashHlsBuilder.buildMediaPlaylist(
+            initializationURI: "vesper-dash://segment/session/live/init.mp4",
+            segments: segments,
+            playlistKind: .live,
+            mediaSequence: segments.first?.number,
+            segmentURI: { _, segment in
+                "http://127.0.0.1:1/dash/session/live/\(segment.number).m4s"
+            }
+        )
+
+        XCTAssertTrue(media.contains("#EXT-X-MEDIA-SEQUENCE:101"))
+        XCTAssertTrue(media.contains("http://127.0.0.1:1/dash/session/live/101.m4s"))
+        XCTAssertFalse(media.contains("#EXT-X-PLAYLIST-TYPE:VOD"))
+        XCTAssertFalse(media.contains("#EXT-X-ENDLIST"))
+    }
+
+    func testHlsBuilderRejectsDynamicDurationOnlyTemplate() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleDynamicDurationTemplateMpd.utf8),
+            manifestURL: URL(string: "https://cdn.example.com/live/manifest.mpd")!
+        )
+        let template = try XCTUnwrap(
+            manifest.periods[0].adaptationSets[0].representations[0].segmentTemplate
+        )
+
+        XCTAssertThrowsError(
+            try VesperDashHlsBuilder.templateSegments(
+                manifestType: manifest.type,
+                durationMs: manifest.durationMs,
+                segmentTemplate: template
+            )
+        ) { error in
+            guard case VesperDashBridgeError.unsupportedManifest = error else {
+                XCTFail("unexpected error \(error)")
+                return
+            }
+        }
     }
 
     func testHlsBuilderExpandsOpenEndedSegmentTimeline() throws {
@@ -899,6 +1007,50 @@ private let sampleOpenEndedSegmentTimelineMpd = #"""
         </SegmentTimeline>
       </SegmentTemplate>
       <Representation id="video" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+private let sampleDynamicSegmentTimelineMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="dynamic" minimumUpdatePeriod="PT2S" timeShiftBufferDepth="PT20S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="chunk-$Time$.m4s" startNumber="101">
+        <SegmentTimeline>
+          <S t="200000" d="2000" r="2"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="live-video" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+private let sampleDynamicDurationTemplateMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="dynamic" minimumUpdatePeriod="PT2S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="chunk-$Number$.m4s" startNumber="101" duration="2000"/>
+      <Representation id="live-video" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+private let sampleWebVttSubtitleMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs" contentType="text" mimeType="text/vtt" lang="en">
+      <SegmentTemplate timescale="1000" media="sub-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt"/>
     </AdaptationSet>
   </Period>
 </MPD>

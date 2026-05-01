@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     dash::{
-        ByteRange, DashAdaptationKind, DashAdaptationSet, DashManifest, DashRepresentation,
-        DashSegmentBase, DashSegmentTemplate, parse_mpd_with_base_uri,
+        ByteRange, DashAdaptationKind, DashAdaptationSet, DashManifest, DashManifestType,
+        DashRepresentation, DashSegmentBase, DashSegmentTemplate, parse_mpd_with_base_uri,
     },
     error::{DashHlsError, DashHlsResult},
     mp4::{SidxBox, parse_sidx, remove_top_level_sidx_boxes},
@@ -42,12 +42,15 @@ enum BridgeRequest {
         sidx: SidxBox,
     },
     TemplateSegments {
+        manifest_type: Option<DashManifestType>,
         duration_ms: Option<u64>,
         segment_template: DashSegmentTemplate,
     },
     BuildExternalMediaPlaylist {
-        map: HlsMap,
+        map: Option<HlsMap>,
         segments: Vec<HlsSegment>,
+        playlist_kind: HlsPlaylistKind,
+        media_sequence: Option<u64>,
     },
     ExpandTemplate {
         template: String,
@@ -77,6 +80,7 @@ pub struct PlayableRepresentation {
 struct SelectedPlayableResponse {
     audio: Vec<PlayableRepresentation>,
     video: Vec<PlayableRepresentation>,
+    subtitles: Vec<PlayableRepresentation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +127,13 @@ struct HlsSegment {
     byte_range: Option<ByteRange>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum HlsPlaylistKind {
+    Vod,
+    Live,
+}
+
 /// Executes one JSON-encoded bridge operation and returns a JSON-encoded result.
 ///
 /// The operation schema is intentionally coarse-grained so Swift, macOS, and future
@@ -155,12 +166,25 @@ pub fn execute_json(request_json: &str) -> DashHlsResult<String> {
             to_json(&media_segments(&segment_base, &sidx)?)
         }
         BridgeRequest::TemplateSegments {
+            manifest_type,
             duration_ms,
             segment_template,
-        } => to_json(&template_segments(duration_ms, &segment_template)?),
-        BridgeRequest::BuildExternalMediaPlaylist { map, segments } => {
-            to_json(&build_external_media_playlist(&map, &segments)?)
-        }
+        } => to_json(&template_segments(
+            manifest_type,
+            duration_ms,
+            &segment_template,
+        )?),
+        BridgeRequest::BuildExternalMediaPlaylist {
+            map,
+            segments,
+            playlist_kind,
+            media_sequence,
+        } => to_json(&build_external_media_playlist(
+            map.as_ref(),
+            &segments,
+            playlist_kind,
+            media_sequence,
+        )?),
         BridgeRequest::ExpandTemplate {
             template,
             representation,
@@ -179,9 +203,23 @@ fn selected_playable_response(
     manifest: &DashManifest,
     variant_policy: VariantPolicy,
 ) -> DashHlsResult<SelectedPlayableResponse> {
-    let (mut audio, mut video): (Vec<_>, Vec<_>) = playable_representations(manifest)?
-        .into_iter()
-        .partition(|item| item.adaptation_set.kind == DashAdaptationKind::Audio);
+    let mut audio = Vec::new();
+    let mut video = Vec::new();
+    let mut subtitles = Vec::new();
+    for item in playable_representations(manifest)? {
+        match item.adaptation_set.kind {
+            DashAdaptationKind::Audio => audio.push(item),
+            DashAdaptationKind::Video => video.push(item),
+            DashAdaptationKind::Subtitle => subtitles.push(item),
+            DashAdaptationKind::Unknown => {}
+        }
+    }
+
+    if audio.is_empty() && video.is_empty() {
+        return Err(DashHlsError::UnsupportedMpd(
+            "MPD has no SegmentBase or SegmentTemplate audio/video representations".to_owned(),
+        ));
+    }
 
     if variant_policy == VariantPolicy::StartupSingleVariant {
         if let Some(first_audio) = audio.first().cloned() {
@@ -192,7 +230,11 @@ fn selected_playable_response(
         }
     }
 
-    Ok(SelectedPlayableResponse { audio, video })
+    Ok(SelectedPlayableResponse {
+        audio,
+        video,
+        subtitles,
+    })
 }
 
 fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<PlayableRepresentation>> {
@@ -210,7 +252,7 @@ fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<Playab
     for (adaptation_index, adaptation_set) in period.adaptation_sets.iter().enumerate() {
         if !matches!(
             adaptation_set.kind,
-            DashAdaptationKind::Audio | DashAdaptationKind::Video
+            DashAdaptationKind::Audio | DashAdaptationKind::Video | DashAdaptationKind::Subtitle
         ) {
             continue;
         }
@@ -244,7 +286,10 @@ fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<Playab
         }
     }
 
-    if playable.is_empty() {
+    if !playable
+        .iter()
+        .any(|item| item.adaptation_set.kind != DashAdaptationKind::Subtitle)
+    {
         return Err(DashHlsError::UnsupportedMpd(
             "MPD has no SegmentBase or SegmentTemplate audio/video representations".to_owned(),
         ));
@@ -329,9 +374,39 @@ fn build_master_playlist(
         }
     }
 
+    if !selected.subtitles.is_empty() {
+        for (index, item) in selected.subtitles.iter().enumerate() {
+            let name = item
+                .adaptation_set
+                .language
+                .as_deref()
+                .or(item.adaptation_set.id.as_deref())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("subtitles-{}", index + 1));
+            let media_url = required_media_url(media_urls, &item.rendition_id)?;
+            let mut attrs = format!(
+                "TYPE=SUBTITLES,GROUP-ID=\"subtitles\",NAME=\"{}\",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI=\"{}\"",
+                escape_attribute(&name),
+                escape_attribute(media_url)
+            );
+            if let Some(language) = &item.adaptation_set.language {
+                attrs.push_str(&format!(",LANGUAGE=\"{}\"", escape_attribute(language)));
+            }
+            lines.push(format!("#EXT-X-MEDIA:{attrs}"));
+        }
+    }
+
     if selected.video.is_empty() {
         for item in &selected.audio {
-            append_variant_lines(&mut lines, item, &[], 0, None, media_urls)?;
+            append_variant_lines(
+                &mut lines,
+                item,
+                &[],
+                0,
+                None,
+                (!selected.subtitles.is_empty()).then_some("subtitles"),
+                media_urls,
+            )?;
         }
     } else {
         let audio_codecs = unique_codecs(
@@ -353,6 +428,7 @@ fn build_master_playlist(
                 &audio_codecs,
                 max_audio_bandwidth,
                 (!selected.audio.is_empty()).then_some("audio"),
+                (!selected.subtitles.is_empty()).then_some("subtitles"),
                 media_urls,
             )?;
         }
@@ -368,6 +444,7 @@ fn append_variant_lines(
     extra_codecs: &[String],
     extra_bandwidth: u64,
     audio_group: Option<&str>,
+    subtitle_group: Option<&str>,
     media_urls: &HashMap<String, String>,
 ) -> DashHlsResult<()> {
     let base_bandwidth = item.representation.bandwidth.ok_or_else(|| {
@@ -408,6 +485,12 @@ fn append_variant_lines(
     }
     if let Some(audio_group) = audio_group {
         attrs.push(format!("AUDIO=\"{}\"", escape_attribute(audio_group)));
+    }
+    if let Some(subtitle_group) = subtitle_group {
+        attrs.push(format!(
+            "SUBTITLES=\"{}\"",
+            escape_attribute(subtitle_group)
+        ));
     }
 
     lines.push(format!("#EXT-X-STREAM-INF:{}", attrs.join(",")));
@@ -514,11 +597,17 @@ pub fn media_segments(
 }
 
 pub fn template_segments(
+    manifest_type: Option<DashManifestType>,
     duration_ms: Option<u64>,
     segment_template: &DashSegmentTemplate,
 ) -> DashHlsResult<Vec<TemplateSegment>> {
     if !segment_template.timeline.is_empty() {
         return timeline_template_segments(duration_ms, segment_template);
+    }
+    if manifest_type == Some(DashManifestType::Dynamic) {
+        return Err(DashHlsError::UnsupportedMpd(
+            "dynamic SegmentTemplate without SegmentTimeline is not supported".to_owned(),
+        ));
     }
     let declared_duration = segment_template.duration.ok_or_else(|| {
         DashHlsError::UnsupportedMpd(
@@ -729,7 +818,12 @@ fn normalized_fixed_template_duration(value: f64) -> f64 {
     }
 }
 
-fn build_external_media_playlist(map: &HlsMap, segments: &[HlsSegment]) -> DashHlsResult<String> {
+fn build_external_media_playlist(
+    map: Option<&HlsMap>,
+    segments: &[HlsSegment],
+    playlist_kind: HlsPlaylistKind,
+    media_sequence: Option<u64>,
+) -> DashHlsResult<String> {
     if segments.is_empty() {
         return Err(DashHlsError::InvalidMp4(
             "media playlist must contain at least one segment".to_owned(),
@@ -745,19 +839,23 @@ fn build_external_media_playlist(map: &HlsMap, segments: &[HlsSegment]) -> DashH
         "#EXTM3U".to_owned(),
         "#EXT-X-VERSION:7".to_owned(),
         format!("#EXT-X-TARGETDURATION:{target_duration}"),
-        "#EXT-X-MEDIA-SEQUENCE:1".to_owned(),
+        format!("#EXT-X-MEDIA-SEQUENCE:{}", media_sequence.unwrap_or(1)),
         "#EXT-X-INDEPENDENT-SEGMENTS".to_owned(),
-        "#EXT-X-PLAYLIST-TYPE:VOD".to_owned(),
     ];
-    if let Some(byte_range) = &map.byte_range {
-        lines.push(format!(
-            "#EXT-X-MAP:URI=\"{}\",BYTERANGE=\"{}@{}\"",
-            escape_attribute(&map.uri),
-            byte_range_len(byte_range, "map byte range")?,
-            byte_range.start
-        ));
-    } else {
-        lines.push(format!("#EXT-X-MAP:URI=\"{}\"", escape_attribute(&map.uri)));
+    if playlist_kind == HlsPlaylistKind::Vod {
+        lines.push("#EXT-X-PLAYLIST-TYPE:VOD".to_owned());
+    }
+    if let Some(map) = map {
+        if let Some(byte_range) = &map.byte_range {
+            lines.push(format!(
+                "#EXT-X-MAP:URI=\"{}\",BYTERANGE=\"{}@{}\"",
+                escape_attribute(&map.uri),
+                byte_range_len(byte_range, "map byte range")?,
+                byte_range.start
+            ));
+        } else {
+            lines.push(format!("#EXT-X-MAP:URI=\"{}\"", escape_attribute(&map.uri)));
+        }
     }
 
     for segment in segments {
@@ -776,7 +874,9 @@ fn build_external_media_playlist(map: &HlsMap, segments: &[HlsSegment]) -> DashH
         }
         lines.push(segment.uri.clone());
     }
-    lines.push("#EXT-X-ENDLIST".to_owned());
+    if playlist_kind == HlsPlaylistKind::Vod {
+        lines.push("#EXT-X-ENDLIST".to_owned());
+    }
     lines.push(String::new());
     Ok(lines.join("\n"))
 }
@@ -946,7 +1046,7 @@ mod tests {
             duration: None,
             start_number: 7,
             presentation_time_offset: 5_000,
-            initialization: "init.mp4".to_owned(),
+            initialization: Some("init.mp4".to_owned()),
             media: "chunk-$Time%05d$-$Number$.m4s".to_owned(),
             timeline: vec![
                 crate::dash::DashSegmentTimelineEntry {
@@ -962,7 +1062,8 @@ mod tests {
             ],
         };
 
-        let segments = template_segments(Some(7_000), &template).expect("segments");
+        let segments = template_segments(Some(DashManifestType::Static), Some(7_000), &template)
+            .expect("segments");
 
         assert_eq!(
             segments,

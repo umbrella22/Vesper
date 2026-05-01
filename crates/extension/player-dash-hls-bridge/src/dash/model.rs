@@ -20,9 +20,22 @@ impl ByteRange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashManifest {
+    #[serde(rename = "type")]
+    pub manifest_type: DashManifestType,
     pub duration_ms: Option<u64>,
     pub min_buffer_time_ms: Option<u64>,
+    pub minimum_update_period_ms: Option<u64>,
+    pub time_shift_buffer_depth_ms: Option<u64>,
     pub periods: Vec<DashPeriod>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DashManifestType {
+    #[serde(rename = "static")]
+    Static,
+    #[serde(rename = "dynamic")]
+    Dynamic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +95,7 @@ pub struct DashSegmentTemplate {
     pub duration: Option<u64>,
     pub start_number: u64,
     pub presentation_time_offset: u64,
-    pub initialization: String,
+    pub initialization: Option<String>,
     pub media: String,
     pub timeline: Vec<DashSegmentTimelineEntry>,
 }

@@ -3,13 +3,15 @@ import Foundation
 struct VesperDashManifestTrackCatalogSnapshot: Equatable {
     let videoTracks: [VesperMediaTrack]
     let audioTracks: [VesperMediaTrack]
+    let subtitleTracks: [VesperMediaTrack]
     let videoVariantPinsByTrackId: [String: LoadedVideoVariantPin]
     let adaptiveVideo: Bool
     let adaptiveAudio: Bool
 
     init(
         audio: [VesperDashPlayableRepresentation],
-        video: [VesperDashPlayableRepresentation]
+        video: [VesperDashPlayableRepresentation],
+        subtitles: [VesperDashPlayableRepresentation] = []
     ) {
         var pinsByTrackId: [String: LoadedVideoVariantPin] = [:]
         var videoTracks: [VesperMediaTrack] = []
@@ -30,6 +32,9 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
         audioTracks = audio.enumerated().map { index, item in
             Self.audioTrack(for: item, index: index)
         }
+        subtitleTracks = subtitles.enumerated().map { index, item in
+            Self.subtitleTrack(for: item, index: index)
+        }
         videoVariantPinsByTrackId = pinsByTrackId
         adaptiveVideo = video.count > 1
         adaptiveAudio = audio.count > 1
@@ -40,6 +45,13 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
             return nil
         }
         return audioTracks[index]
+    }
+
+    func subtitleMetadata(at index: Int) -> VesperMediaTrack? {
+        guard subtitleTracks.indices.contains(index) else {
+            return nil
+        }
+        return subtitleTracks[index]
     }
 
     private static func videoTrack(
@@ -86,6 +98,28 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
         )
     }
 
+    private static func subtitleTrack(
+        for item: VesperDashPlayableRepresentation,
+        index: Int
+    ) -> VesperMediaTrack {
+        let representation = item.representation
+        return VesperMediaTrack(
+            id: "subtitle:dash:\(item.renditionId)",
+            kind: .subtitle,
+            label: subtitleTrackLabel(item: item, index: index),
+            language: item.adaptationSet.language,
+            codec: mediaCodec(representation: representation),
+            bitRate: int64(representation.bandwidth),
+            width: nil,
+            height: nil,
+            frameRate: nil,
+            channels: nil,
+            sampleRate: nil,
+            isDefault: false,
+            isForced: false
+        )
+    }
+
     private static func videoTrackLabel(representation: VesperDashRepresentation) -> String {
         if let height = representation.height {
             return "\(height)p"
@@ -110,6 +144,19 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
             return id
         }
         return item.representation.id.isEmpty ? "audio-\(index + 1)" : item.representation.id
+    }
+
+    private static func subtitleTrackLabel(
+        item: VesperDashPlayableRepresentation,
+        index: Int
+    ) -> String {
+        if let language = item.adaptationSet.language, !language.isEmpty {
+            return language
+        }
+        if let id = item.adaptationSet.id, !id.isEmpty {
+            return id
+        }
+        return item.representation.id.isEmpty ? "subtitles-\(index + 1)" : item.representation.id
     }
 
     private static func mediaCodec(representation: VesperDashRepresentation) -> String? {

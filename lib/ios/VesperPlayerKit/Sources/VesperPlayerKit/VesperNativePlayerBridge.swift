@@ -1615,25 +1615,31 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         if let legibleGroup {
             for (index, option) in legibleGroup.options.enumerated() {
                 let trackId = "subtitle:\(index)"
+                let dashSubtitleMetadata = dashManifestCatalog?.subtitleMetadata(at: index)
                 subtitleOptionsByTrackId[trackId] = option
                 tracks.append(
                     VesperMediaTrack(
                         id: trackId,
                         kind: .subtitle,
-                        label: option.displayName,
-                        language: option.extendedLanguageTag ?? option.locale?.identifier,
-                        codec: nil,
-                        bitRate: nil,
+                        label: option.displayName.isEmpty
+                            ? dashSubtitleMetadata?.label
+                            : option.displayName,
+                        language: option.extendedLanguageTag ?? option.locale?.identifier
+                            ?? dashSubtitleMetadata?.language,
+                        codec: dashSubtitleMetadata?.codec,
+                        bitRate: dashSubtitleMetadata?.bitRate,
                         width: nil,
                         height: nil,
                         frameRate: nil,
-                        channels: nil,
-                        sampleRate: nil,
+                        channels: dashSubtitleMetadata?.channels,
+                        sampleRate: dashSubtitleMetadata?.sampleRate,
                         isDefault: legibleGroup.defaultOption == option,
                         isForced: option.hasMediaCharacteristic(.containsOnlyForcedSubtitles)
                     )
                 )
             }
+        } else if let dashManifestCatalog {
+            tracks.append(contentsOf: dashManifestCatalog.subtitleTracks)
         }
 
         return LoadedTrackCatalogState(

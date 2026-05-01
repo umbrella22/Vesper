@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use crate::{
     dash::model::{
-        ByteRange, DashAdaptationKind, DashAdaptationSet, DashManifest, DashPeriod,
-        DashRepresentation, DashSegmentBase, DashSegmentTemplate, DashSegmentTimelineEntry,
+        ByteRange, DashAdaptationKind, DashAdaptationSet, DashManifest, DashManifestType,
+        DashPeriod, DashRepresentation, DashSegmentBase, DashSegmentTemplate,
+        DashSegmentTimelineEntry,
     },
     error::{DashHlsError, DashHlsResult},
 };
@@ -26,17 +27,18 @@ pub fn parse_mpd_with_base_uri(
     let mpd_base = child_text(mpd, "BaseURL")
         .map(|base| resolve_uri(manifest_uri.unwrap_or_default(), base))
         .unwrap_or_else(|| manifest_uri.unwrap_or_default().to_owned());
-    let mpd_type = mpd.attr("type").unwrap_or("static");
-    if !mpd_type.eq_ignore_ascii_case("static") {
-        return Err(DashHlsError::UnsupportedMpd(format!(
-            "MPD type `{mpd_type}` is not supported"
-        )));
-    }
+    let manifest_type = parse_manifest_type(mpd.attr("type").unwrap_or("static"))?;
     let duration_ms = mpd
         .attr("mediaPresentationDuration")
         .and_then(parse_iso8601_duration_ms);
     let min_buffer_time_ms = mpd
         .attr("minBufferTime")
+        .and_then(parse_iso8601_duration_ms);
+    let minimum_update_period_ms = mpd
+        .attr("minimumUpdatePeriod")
+        .and_then(parse_iso8601_duration_ms);
+    let time_shift_buffer_depth_ms = mpd
+        .attr("timeShiftBufferDepth")
         .and_then(parse_iso8601_duration_ms);
 
     let mut periods = Vec::new();
@@ -51,10 +53,25 @@ pub fn parse_mpd_with_base_uri(
     }
 
     Ok(DashManifest {
+        manifest_type,
         duration_ms,
         min_buffer_time_ms,
+        minimum_update_period_ms,
+        time_shift_buffer_depth_ms,
         periods,
     })
+}
+
+fn parse_manifest_type(value: &str) -> DashHlsResult<DashManifestType> {
+    if value.eq_ignore_ascii_case("static") {
+        return Ok(DashManifestType::Static);
+    }
+    if value.eq_ignore_ascii_case("dynamic") {
+        return Ok(DashManifestType::Dynamic);
+    }
+    Err(DashHlsError::UnsupportedMpd(format!(
+        "MPD type `{value}` is not supported"
+    )))
 }
 
 fn parse_period(node: &XmlNode, inherited_base_uri: &str) -> DashHlsResult<DashPeriod> {
@@ -86,8 +103,12 @@ fn parse_adaptation_set(
         mime_type.as_deref(),
         node.attr("lang"),
     );
+    let requires_initialization = matches!(
+        kind,
+        DashAdaptationKind::Audio | DashAdaptationKind::Video | DashAdaptationKind::Unknown
+    );
     let inherited_segment_base = parse_segment_base(node)?;
-    let inherited_segment_template = parse_segment_template(node)?;
+    let inherited_segment_template = parse_segment_template(node, requires_initialization)?;
     let mut representations = Vec::new();
 
     for representation in node.children_named("Representation") {
@@ -110,8 +131,8 @@ fn parse_adaptation_set(
             .to_owned();
         let segment_base =
             parse_segment_base(representation)?.or_else(|| inherited_segment_base.clone());
-        let segment_template =
-            parse_segment_template(representation)?.or_else(|| inherited_segment_template.clone());
+        let segment_template = parse_segment_template(representation, requires_initialization)?
+            .or_else(|| inherited_segment_template.clone());
 
         representations.push(DashRepresentation {
             id,
@@ -182,7 +203,10 @@ fn parse_segment_base(node: &XmlNode) -> DashHlsResult<Option<DashSegmentBase>> 
     }))
 }
 
-fn parse_segment_template(node: &XmlNode) -> DashHlsResult<Option<DashSegmentTemplate>> {
+fn parse_segment_template(
+    node: &XmlNode,
+    requires_initialization: bool,
+) -> DashHlsResult<Option<DashSegmentTemplate>> {
     let Some(segment_template) = node.children_named("SegmentTemplate").next() else {
         return Ok(None);
     };
@@ -218,11 +242,19 @@ fn parse_segment_template(node: &XmlNode) -> DashHlsResult<Option<DashSegmentTem
             "SegmentTemplate requires duration or SegmentTimeline".to_owned(),
         ));
     }
-    let initialization = segment_template.attr("initialization").unwrap_or_default();
+    let initialization = segment_template
+        .attr("initialization")
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
     let media = segment_template.attr("media").unwrap_or_default();
-    if initialization.is_empty() || media.is_empty() {
+    if media.is_empty() {
         return Err(DashHlsError::UnsupportedMpd(
-            "SegmentTemplate must provide initialization and media templates".to_owned(),
+            "SegmentTemplate must provide media template".to_owned(),
+        ));
+    }
+    if requires_initialization && initialization.is_none() {
+        return Err(DashHlsError::UnsupportedMpd(
+            "SegmentTemplate must provide initialization template".to_owned(),
         ));
     }
 
@@ -231,7 +263,7 @@ fn parse_segment_template(node: &XmlNode) -> DashHlsResult<Option<DashSegmentTem
         duration,
         start_number,
         presentation_time_offset,
-        initialization: initialization.to_owned(),
+        initialization,
         media: media.to_owned(),
         timeline,
     }))
@@ -735,6 +767,7 @@ mod tests {
 
         assert_eq!(manifest.duration_ms, Some(90_500));
         assert_eq!(manifest.min_buffer_time_ms, Some(1_500));
+        assert_eq!(manifest.manifest_type, DashManifestType::Static);
         assert_eq!(manifest.periods.len(), 1);
         let video = &manifest.periods[0].adaptation_sets[0];
         assert_eq!(video.kind, DashAdaptationKind::Video);
@@ -767,9 +800,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_dynamic_mpd() {
-        let error = parse_mpd(r#"<MPD type="dynamic"><Period /></MPD>"#)
-            .expect_err("dynamic MPD should fail");
-        assert!(matches!(error, DashHlsError::UnsupportedMpd(_)));
+    fn parses_dynamic_mpd_timing_attributes() {
+        let manifest = parse_mpd(
+            r#"<MPD type="dynamic" minimumUpdatePeriod="PT2S" timeShiftBufferDepth="PT30S"><Period /></MPD>"#,
+        )
+        .expect("dynamic MPD should parse");
+
+        assert_eq!(manifest.manifest_type, DashManifestType::Dynamic);
+        assert_eq!(manifest.minimum_update_period_ms, Some(2_000));
+        assert_eq!(manifest.time_shift_buffer_depth_ms, Some(30_000));
     }
 }
