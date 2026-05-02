@@ -80,6 +80,7 @@ private struct VesperDashSelectedPlayableRequest: Encodable {
     let operation = "selected_playable_representations"
     let manifest: VesperDashManifest
     let variantPolicy: VesperDashMasterPlaylistVariantPolicy
+    let videoDecodeCapabilities: [VesperDashVideoDecodeCapability]?
 }
 
 private struct VesperDashRenditionUrl: Codable, Equatable {
@@ -92,6 +93,7 @@ private struct VesperDashBuildMasterPlaylistRequest: Encodable {
     let manifest: VesperDashManifest
     let variantPolicy: VesperDashMasterPlaylistVariantPolicy
     let mediaUrls: [VesperDashRenditionUrl]
+    let videoDecodeCapabilities: [VesperDashVideoDecodeCapability]?
 }
 
 struct VesperDashSelectedPlayableResponse: Codable, Equatable {
@@ -195,11 +197,13 @@ enum VesperDashHlsBuilder {
     static func buildMasterPlaylist(
         manifest: VesperDashManifest,
         variantPolicy: VesperDashMasterPlaylistVariantPolicy = .all,
+        videoDecodeCapabilities: [VesperDashVideoDecodeCapability]? = nil,
         mediaURL: (String) -> String
     ) throws -> String {
         let selected = try selectedPlayableRepresentations(
             manifest: manifest,
-            variantPolicy: variantPolicy
+            variantPolicy: variantPolicy,
+            videoDecodeCapabilities: videoDecodeCapabilities
         )
         let mediaUrls = (selected.audio + selected.video + selected.subtitles).map {
             VesperDashRenditionUrl(renditionId: $0.renditionId, url: mediaURL($0.renditionId))
@@ -208,7 +212,8 @@ enum VesperDashHlsBuilder {
             VesperDashBuildMasterPlaylistRequest(
                 manifest: manifest,
                 variantPolicy: variantPolicy,
-                mediaUrls: mediaUrls
+                mediaUrls: mediaUrls,
+                videoDecodeCapabilities: videoDecodeCapabilities
             ),
             response: VesperDashMasterPlaylistResponse.self
         )
@@ -217,7 +222,8 @@ enum VesperDashHlsBuilder {
 
     static func selectedPlayableRepresentations(
         manifest: VesperDashManifest,
-        variantPolicy: VesperDashMasterPlaylistVariantPolicy
+        variantPolicy: VesperDashMasterPlaylistVariantPolicy,
+        videoDecodeCapabilities: [VesperDashVideoDecodeCapability]? = nil
     ) throws -> (
         audio: [VesperDashPlayableRepresentation],
         video: [VesperDashPlayableRepresentation],
@@ -226,7 +232,8 @@ enum VesperDashHlsBuilder {
         let selected: VesperDashSelectedPlayableResponse = try VesperDashRustBridge.execute(
             VesperDashSelectedPlayableRequest(
                 manifest: manifest,
-                variantPolicy: variantPolicy
+                variantPolicy: variantPolicy,
+                videoDecodeCapabilities: videoDecodeCapabilities
             ),
             response: VesperDashSelectedPlayableResponse.self
         )

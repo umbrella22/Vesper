@@ -31,11 +31,15 @@ enum BridgeRequest {
     SelectedPlayableRepresentations {
         manifest: DashManifest,
         variant_policy: VariantPolicy,
+        #[serde(default)]
+        video_decode_capabilities: Option<Vec<VideoDecodeCapability>>,
     },
     BuildMasterPlaylist {
         manifest: DashManifest,
         variant_policy: VariantPolicy,
         media_urls: Vec<RenditionUrl>,
+        #[serde(default)]
+        video_decode_capabilities: Option<Vec<VideoDecodeCapability>>,
     },
     MediaSegments {
         segment_base: DashSegmentBase,
@@ -65,6 +69,26 @@ enum BridgeRequest {
 pub enum VariantPolicy {
     All,
     StartupSingleVariant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoCodecFamily {
+    Vvc,
+    Av1,
+    Hevc,
+    Avc,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoDecodeCapability {
+    pub rendition_id: String,
+    pub codec_family: VideoCodecFamily,
+    pub hardware_decode_supported: bool,
+    #[serde(default)]
+    pub decoder_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,13 +175,23 @@ pub fn execute_json(request_json: &str) -> DashHlsResult<String> {
         BridgeRequest::SelectedPlayableRepresentations {
             manifest,
             variant_policy,
-        } => to_json(&selected_playable_response(&manifest, variant_policy)?),
+            video_decode_capabilities,
+        } => to_json(&selected_playable_response(
+            &manifest,
+            variant_policy,
+            video_decode_capabilities.as_deref(),
+        )?),
         BridgeRequest::BuildMasterPlaylist {
             manifest,
             variant_policy,
             media_urls,
+            video_decode_capabilities,
         } => {
-            let selected = selected_playable_response(&manifest, variant_policy)?;
+            let selected = selected_playable_response(
+                &manifest,
+                variant_policy,
+                video_decode_capabilities.as_deref(),
+            )?;
             let media_urls = media_url_map(media_urls);
             let playlist = build_master_playlist(&selected, &media_urls)?;
             to_json(&MasterPlaylistResponse { playlist, selected })
@@ -202,6 +236,7 @@ fn to_json<T: Serialize>(value: &T) -> DashHlsResult<String> {
 fn selected_playable_response(
     manifest: &DashManifest,
     variant_policy: VariantPolicy,
+    video_decode_capabilities: Option<&[VideoDecodeCapability]>,
 ) -> DashHlsResult<SelectedPlayableResponse> {
     let mut audio = Vec::new();
     let mut video = Vec::new();
@@ -213,6 +248,14 @@ fn selected_playable_response(
             DashAdaptationKind::Subtitle => subtitles.push(item),
             DashAdaptationKind::Unknown => {}
         }
+    }
+    let source_has_video = !video.is_empty();
+    video = filter_hardware_decodable_video(video, video_decode_capabilities)?;
+    if source_has_video && video.is_empty() {
+        return Err(DashHlsError::UnsupportedMpd(
+            "MPD has video representations, but none are hardware-decodable on this device"
+                .to_owned(),
+        ));
     }
 
     if audio.is_empty() && video.is_empty() {
@@ -235,6 +278,47 @@ fn selected_playable_response(
         video,
         subtitles,
     })
+}
+
+fn filter_hardware_decodable_video(
+    video: Vec<PlayableRepresentation>,
+    video_decode_capabilities: Option<&[VideoDecodeCapability]>,
+) -> DashHlsResult<Vec<PlayableRepresentation>> {
+    let Some(capabilities) = video_decode_capabilities else {
+        return Ok(video);
+    };
+    if video.is_empty() {
+        return Ok(video);
+    }
+
+    let capabilities_by_rendition_id = capabilities
+        .iter()
+        .map(|capability| (capability.rendition_id.as_str(), capability))
+        .collect::<HashMap<_, _>>();
+    let mut filtered = Vec::new();
+    let mut unsupported = Vec::new();
+    for item in video {
+        match capabilities_by_rendition_id.get(item.rendition_id.as_str()) {
+            Some(capability) if capability.hardware_decode_supported => filtered.push(item),
+            Some(capability) => unsupported.push(format!(
+                "{}:{}:{}",
+                item.rendition_id,
+                item.representation.codecs,
+                video_codec_family_wire_name(capability.codec_family)
+            )),
+            None => unsupported.push(format!(
+                "{}:{}:missing-capability",
+                item.rendition_id, item.representation.codecs
+            )),
+        }
+    }
+    if filtered.is_empty() {
+        return Err(DashHlsError::UnsupportedMpd(format!(
+            "MPD has no hardware-decodable video representation; rejected={}",
+            unsupported.join(",")
+        )));
+    }
+    Ok(filtered)
 }
 
 fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<PlayableRepresentation>> {
@@ -319,12 +403,13 @@ fn startup_video_representation(
 fn startup_video_score(
     item: &PlayableRepresentation,
     index: usize,
-) -> (u8, u8, u8, u32, u64, u32, usize) {
+) -> (u8, u8, u8, u8, u32, u64, u32, usize) {
     const STARTUP_MAX_HEIGHT: u32 = 720;
     const STARTUP_MAX_BANDWIDTH: u64 = 800_000;
 
     let representation = &item.representation;
-    let codec_rank = video_codec_startup_rank(&representation.codecs);
+    let codec_family = video_codec_family(&representation.codecs);
+    let codec_rank = video_codec_startup_rank(codec_family);
     let exceeds_startup_target = u8::from(
         representation
             .height
@@ -337,6 +422,7 @@ fn startup_video_score(
     (
         u8::from(codec_rank == u8::MAX),
         exceeds_startup_target,
+        codec_rank,
         missing_bandwidth,
         representation.height.unwrap_or(u32::MAX),
         representation.bandwidth.unwrap_or(u64::MAX),
@@ -345,28 +431,62 @@ fn startup_video_score(
     )
 }
 
-fn video_codec_startup_rank(value: &str) -> u8 {
-    if is_avc_codec(value) {
-        return 0;
+fn video_codec_startup_rank(family: VideoCodecFamily) -> u8 {
+    match family {
+        VideoCodecFamily::Vvc => 0,
+        VideoCodecFamily::Av1 => 1,
+        VideoCodecFamily::Hevc => 2,
+        VideoCodecFamily::Avc => 3,
+        VideoCodecFamily::Unknown => u8::MAX,
     }
-    if is_hevc_codec(value) {
-        return 1;
-    }
-    u8::MAX
 }
 
-fn is_avc_codec(value: &str) -> bool {
-    value
+fn video_codec_family(value: &str) -> VideoCodecFamily {
+    for codec in value
         .split(',')
         .map(|codec| codec.trim().to_ascii_lowercase())
-        .any(|codec| codec.starts_with("avc1") || codec.starts_with("avc3"))
+        .filter(|codec| !codec.is_empty())
+    {
+        let codec = codec
+            .strip_prefix("video/")
+            .map(str::to_owned)
+            .unwrap_or(codec);
+        if codec.starts_with("vvc1")
+            || codec.starts_with("vvi1")
+            || codec == "vvc"
+            || codec == "h266"
+        {
+            return VideoCodecFamily::Vvc;
+        }
+        if codec.starts_with("av01") || codec == "av1" {
+            return VideoCodecFamily::Av1;
+        }
+        if codec.starts_with("hvc1")
+            || codec.starts_with("hev1")
+            || codec == "hevc"
+            || codec == "h265"
+        {
+            return VideoCodecFamily::Hevc;
+        }
+        if codec.starts_with("avc1")
+            || codec.starts_with("avc3")
+            || codec == "avc"
+            || codec == "h264"
+        {
+            return VideoCodecFamily::Avc;
+        }
+    }
+    VideoCodecFamily::Unknown
 }
 
-fn is_hevc_codec(value: &str) -> bool {
-    value
-        .split(',')
-        .map(|codec| codec.trim().to_ascii_lowercase())
-        .any(|codec| codec.starts_with("hvc1") || codec.starts_with("hev1"))
+fn video_codec_family_wire_name(family: VideoCodecFamily) -> &'static str {
+    match family {
+        VideoCodecFamily::Vvc => "vvc",
+        VideoCodecFamily::Av1 => "av1",
+        VideoCodecFamily::Hevc => "hevc",
+        VideoCodecFamily::Avc => "avc",
+        VideoCodecFamily::Unknown => "unknown",
+    }
 }
 
 fn media_url_map(entries: Vec<RenditionUrl>) -> HashMap<String, String> {
@@ -1132,6 +1252,137 @@ mod tests {
     }
 
     #[test]
+    fn startup_video_prefers_newer_hardware_codec_within_startup_target() {
+        let video = vec![
+            playable_video(
+                "hevc-720",
+                "hvc1.1.6.L93.B0",
+                Some(800_000),
+                Some(1280),
+                Some(720),
+            ),
+            playable_video(
+                "av1-720",
+                "av01.0.05M.08",
+                Some(780_000),
+                Some(1280),
+                Some(720),
+            ),
+        ];
+
+        let selected = startup_video_representation(&video).expect("startup video");
+
+        assert_eq!(selected.rendition_id, "av1-720");
+    }
+
+    #[test]
+    fn startup_video_keeps_startup_cost_before_codec_efficiency() {
+        let video = vec![
+            playable_video(
+                "av1-2160",
+                "av01.0.13M.10",
+                Some(16_000_000),
+                Some(3840),
+                Some(2160),
+            ),
+            playable_video(
+                "avc-360",
+                "avc1.4d401e",
+                Some(180_000),
+                Some(640),
+                Some(360),
+            ),
+        ];
+
+        let selected = startup_video_representation(&video).expect("startup video");
+
+        assert_eq!(selected.rendition_id, "avc-360");
+    }
+
+    #[test]
+    fn hardware_decode_capabilities_downgrade_unsupported_av1_to_hevc() {
+        let video = vec![
+            playable_video(
+                "av1-720",
+                "av01.0.05M.08",
+                Some(760_000),
+                Some(1280),
+                Some(720),
+            ),
+            playable_video(
+                "hevc-720",
+                "hvc1.1.6.L93.B0",
+                Some(800_000),
+                Some(1280),
+                Some(720),
+            ),
+            playable_video(
+                "avc-720",
+                "avc1.4d401f",
+                Some(800_000),
+                Some(1280),
+                Some(720),
+            ),
+        ];
+        let capabilities = vec![
+            video_decode_capability("av1-720", VideoCodecFamily::Av1, false),
+            video_decode_capability("hevc-720", VideoCodecFamily::Hevc, true),
+            video_decode_capability("avc-720", VideoCodecFamily::Avc, true),
+        ];
+
+        let filtered = filter_hardware_decodable_video(video, Some(&capabilities))
+            .expect("filtered hardware video");
+        let selected = startup_video_representation(&filtered).expect("startup video");
+
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|item| item.rendition_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hevc-720", "avc-720"]
+        );
+        assert_eq!(selected.rendition_id, "hevc-720");
+    }
+
+    #[test]
+    fn hardware_decode_capabilities_fail_when_every_video_is_software_only() {
+        let video = vec![playable_video(
+            "av1-720",
+            "av01.0.05M.08",
+            Some(760_000),
+            Some(1280),
+            Some(720),
+        )];
+        let capabilities = vec![video_decode_capability(
+            "av1-720",
+            VideoCodecFamily::Av1,
+            false,
+        )];
+
+        let error = filter_hardware_decodable_video(video, Some(&capabilities))
+            .expect_err("software-only source should fail");
+
+        assert!(error.to_string().contains("hardware-decodable"));
+    }
+
+    #[test]
+    fn video_codec_family_detects_modern_codec_tokens() {
+        assert_eq!(video_codec_family("vvc1.1.L123"), VideoCodecFamily::Vvc);
+        assert_eq!(video_codec_family("av01.0.05M.08"), VideoCodecFamily::Av1);
+        assert_eq!(video_codec_family("video/av01"), VideoCodecFamily::Av1);
+        assert_eq!(
+            video_codec_family("hvc1.1.6.L93.B0"),
+            VideoCodecFamily::Hevc
+        );
+        assert_eq!(
+            video_codec_family("hev1.1.6.L93.B0"),
+            VideoCodecFamily::Hevc
+        );
+        assert_eq!(video_codec_family("avc1.4d401f"), VideoCodecFamily::Avc);
+        assert_eq!(video_codec_family("mp4a.40.2"), VideoCodecFamily::Unknown);
+    }
+
+    #[test]
     fn master_playlist_orders_startup_video_first() {
         let selected = SelectedPlayableResponse {
             audio: Vec::new(),
@@ -1161,9 +1412,18 @@ mod tests {
             subtitles: Vec::new(),
         };
         let media_urls = HashMap::from([
-            ("avc-2160".to_owned(), "vesper-dash://media/avc-2160.m3u8".to_owned()),
-            ("avc-360".to_owned(), "vesper-dash://media/avc-360.m3u8".to_owned()),
-            ("avc-720".to_owned(), "vesper-dash://media/avc-720.m3u8".to_owned()),
+            (
+                "avc-2160".to_owned(),
+                "vesper-dash://media/avc-2160.m3u8".to_owned(),
+            ),
+            (
+                "avc-360".to_owned(),
+                "vesper-dash://media/avc-360.m3u8".to_owned(),
+            ),
+            (
+                "avc-720".to_owned(),
+                "vesper-dash://media/avc-720.m3u8".to_owned(),
+            ),
         ]);
 
         let playlist = build_master_playlist(&selected, &media_urls).expect("master playlist");
@@ -1272,6 +1532,19 @@ mod tests {
                     timeline: Vec::new(),
                 }),
             },
+        }
+    }
+
+    fn video_decode_capability(
+        rendition_id: &str,
+        codec_family: VideoCodecFamily,
+        hardware_decode_supported: bool,
+    ) -> VideoDecodeCapability {
+        VideoDecodeCapability {
+            rendition_id: rendition_id.to_owned(),
+            codec_family,
+            hardware_decode_supported,
+            decoder_name: None,
         }
     }
 }

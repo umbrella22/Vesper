@@ -4,6 +4,8 @@ pub const VIDEOTOOLBOX_BACKEND_NAME: &str = "VideoToolbox";
 pub enum AppleSystemVideoCodec {
     H264,
     Hevc,
+    Av1,
+    Vvc,
     Unknown,
 }
 
@@ -19,17 +21,49 @@ pub struct AppleHardwareDecodeSupport {
 
 impl AppleSystemVideoCodec {
     pub fn from_codec_name(codec_name: &str) -> Self {
-        match codec_name.trim().to_ascii_uppercase().as_str() {
-            "H264" | "AVC" | "AVC1" => Self::H264,
-            "HEVC" | "H265" | "HVC1" | "HEV1" => Self::Hevc,
-            _ => Self::Unknown,
+        for codec in codec_name
+            .split(',')
+            .map(|codec| codec.trim().to_ascii_lowercase())
+            .filter(|codec| !codec.is_empty())
+        {
+            let codec = codec
+                .strip_prefix("video/")
+                .map(str::to_owned)
+                .unwrap_or(codec);
+            if codec.starts_with("vvc1")
+                || codec.starts_with("vvi1")
+                || codec == "vvc"
+                || codec == "h266"
+            {
+                return Self::Vvc;
+            }
+            if codec.starts_with("av01") || codec == "av1" {
+                return Self::Av1;
+            }
+            if codec.starts_with("hvc1")
+                || codec.starts_with("hev1")
+                || codec == "hevc"
+                || codec == "h265"
+            {
+                return Self::Hevc;
+            }
+            if codec.starts_with("avc1")
+                || codec.starts_with("avc3")
+                || codec == "avc"
+                || codec == "h264"
+            {
+                return Self::H264;
+            }
         }
+        Self::Unknown
     }
 
     pub fn as_cm_video_codec_type(self) -> Option<u32> {
         match self {
             Self::H264 => Some(fourcc(*b"avc1")),
             Self::Hevc => Some(fourcc(*b"hvc1")),
+            Self::Av1 => Some(fourcc(*b"av01")),
+            Self::Vvc => None,
             Self::Unknown => None,
         }
     }
@@ -106,12 +140,24 @@ mod tests {
             AppleSystemVideoCodec::H264
         );
         assert_eq!(
+            AppleSystemVideoCodec::from_codec_name("avc1.4d401f"),
+            AppleSystemVideoCodec::H264
+        );
+        assert_eq!(
             AppleSystemVideoCodec::from_codec_name("HEVC"),
             AppleSystemVideoCodec::Hevc
         );
         assert_eq!(
             AppleSystemVideoCodec::from_codec_name("h265"),
             AppleSystemVideoCodec::Hevc
+        );
+        assert_eq!(
+            AppleSystemVideoCodec::from_codec_name("av01.0.05M.08"),
+            AppleSystemVideoCodec::Av1
+        );
+        assert_eq!(
+            AppleSystemVideoCodec::from_codec_name("vvc1.1.L123"),
+            AppleSystemVideoCodec::Vvc
         );
         assert_eq!(
             AppleSystemVideoCodec::from_codec_name("vp9"),

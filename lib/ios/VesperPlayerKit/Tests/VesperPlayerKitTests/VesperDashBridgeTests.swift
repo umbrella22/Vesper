@@ -158,7 +158,7 @@ final class VesperDashBridgeTests: XCTestCase {
         mediaData.append(mp4Box(type: "moof", payload: Data([0x05])))
         try mediaData.write(to: directory.appendingPathComponent("v1_257-270146-i-1.m4s"))
 
-        let session = VesperDashSession(sourceURL: manifestURL)
+        let session = makeTestDashSession(sourceURL: manifestURL)
         let initRedirectURL = try await session.segmentRedirectURL(
             renditionId: "v1_257",
             segment: .initialization
@@ -200,7 +200,7 @@ final class VesperDashBridgeTests: XCTestCase {
             mediaData: mediaData
         )
 
-        let session = VesperDashSession(sourceURL: manifestURL)
+        let session = makeTestDashSession(sourceURL: manifestURL)
         let data = try await session.mediaPlaylistData(renditionId: "v4_258")
         let playlist = String(decoding: data, as: UTF8.self)
 
@@ -249,6 +249,7 @@ final class VesperDashBridgeTests: XCTestCase {
         var events: [(name: String, attributes: [String: String])] = []
         let session = VesperDashSession(
             sourceURL: manifestURL,
+            videoDecodeCapabilityProvider: testHardwareVideoDecodeCapabilityProvider,
             benchmarkEventRecorder: { name, attributes in
                 events.append((name, attributes))
             }
@@ -327,7 +328,7 @@ final class VesperDashBridgeTests: XCTestCase {
             mediaData: mediaData
         )
 
-        let session = VesperDashSession(sourceURL: manifestURL)
+        let session = makeTestDashSession(sourceURL: manifestURL)
         let renditionIds = [
             "v4_258",
             "v1_257",
@@ -373,6 +374,7 @@ final class VesperDashBridgeTests: XCTestCase {
         let session = VesperDashSession(
             sourceURL: manifestURL,
             networkClient: networkClient,
+            videoDecodeCapabilityProvider: testHardwareVideoDecodeCapabilityProvider,
             benchmarkEventRecorder: { name, attributes in
                 events.append((name, attributes))
             }
@@ -405,7 +407,7 @@ final class VesperDashBridgeTests: XCTestCase {
         let manifestURL = directory.appendingPathComponent("manifest.mpd")
         try Data(sampleMultiVideoSegmentTemplateMpd.utf8).write(to: manifestURL)
 
-        let session = VesperDashSession(sourceURL: manifestURL)
+        let session = makeTestDashSession(sourceURL: manifestURL)
         let playlist = String(
             decoding: try await session.masterPlaylistData(),
             as: UTF8.self
@@ -444,7 +446,7 @@ final class VesperDashBridgeTests: XCTestCase {
             segmentCount: requestedMediaCount
         )
 
-        let session = VesperDashSession(sourceURL: manifestURL)
+        let session = makeTestDashSession(sourceURL: manifestURL)
         for index in 0..<requestedMediaCount {
             _ = try await session.segmentRedirectURL(
                 renditionId: "v1_257",
@@ -484,7 +486,7 @@ final class VesperDashBridgeTests: XCTestCase {
         handle.write(Data((0..<16).map(UInt8.init)))
         try handle.close()
 
-        let session = VesperDashSession(sourceURL: manifestURL)
+        let session = makeTestDashSession(sourceURL: manifestURL)
         let playlist = String(
             decoding: try await session.mediaPlaylistData(renditionId: "v1_257"),
             as: UTF8.self
@@ -541,7 +543,7 @@ final class VesperDashBridgeTests: XCTestCase {
         """#
         try Data(manifest.utf8).write(to: manifestURL)
 
-        let session = VesperDashSession(sourceURL: manifestURL)
+        let session = makeTestDashSession(sourceURL: manifestURL)
         let firstPlaylist = try await session.mediaPlaylistData(renditionId: "v1")
 
         try FileManager.default.removeItem(at: mediaURL)
@@ -704,6 +706,89 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertTrue(master.contains("vesper-dash://media/session/v4_258.m3u8"))
         XCTAssertFalse(master.contains("vesper-dash://media/session/v2_257.m3u8"))
         XCTAssertFalse(master.contains("vesper-dash://media/session/v7_257.m3u8"))
+    }
+
+    func testMasterPlaylistDowngradesUnsupportedAv1ToHardwareHevc() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleMultiCodecSegmentTemplateMpd.utf8),
+            manifestURL: URL(string: "https://example.com/manifest.mpd")!
+        )
+        let capabilities = [
+            VesperDashVideoDecodeCapability(
+                renditionId: "av1",
+                codecFamily: .av1,
+                hardwareDecodeSupported: false,
+                decoderName: nil
+            ),
+            VesperDashVideoDecodeCapability(
+                renditionId: "hevc",
+                codecFamily: .hevc,
+                hardwareDecodeSupported: true,
+                decoderName: "VideoToolbox"
+            ),
+            VesperDashVideoDecodeCapability(
+                renditionId: "avc",
+                codecFamily: .avc,
+                hardwareDecodeSupported: true,
+                decoderName: "VideoToolbox"
+            ),
+        ]
+
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: manifest,
+            variantPolicy: .startupSingleVariant,
+            videoDecodeCapabilities: capabilities
+        )
+        let master = try VesperDashHlsBuilder.buildMasterPlaylist(
+            manifest: manifest,
+            variantPolicy: .all,
+            videoDecodeCapabilities: capabilities,
+            mediaURL: { "vesper-dash://media/session/\($0).m3u8" }
+        )
+
+        XCTAssertEqual(selected.video.map(\.renditionId), ["hevc"])
+        XCTAssertFalse(master.contains("vesper-dash://media/session/av1.m3u8"))
+        XCTAssertTrue(master.contains("vesper-dash://media/session/hevc.m3u8"))
+        XCTAssertTrue(master.contains("vesper-dash://media/session/avc.m3u8"))
+    }
+
+    func testMasterPlaylistFailsWhenAllVideoIsSoftwareOnly() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleMultiCodecSegmentTemplateMpd.utf8),
+            manifestURL: URL(string: "https://example.com/manifest.mpd")!
+        )
+        let capabilities = [
+            VesperDashVideoDecodeCapability(
+                renditionId: "av1",
+                codecFamily: .av1,
+                hardwareDecodeSupported: false,
+                decoderName: nil
+            ),
+            VesperDashVideoDecodeCapability(
+                renditionId: "hevc",
+                codecFamily: .hevc,
+                hardwareDecodeSupported: false,
+                decoderName: nil
+            ),
+            VesperDashVideoDecodeCapability(
+                renditionId: "avc",
+                codecFamily: .avc,
+                hardwareDecodeSupported: false,
+                decoderName: nil
+            ),
+        ]
+
+        XCTAssertThrowsError(
+            try VesperDashHlsBuilder.selectedPlayableRepresentations(
+                manifest: manifest,
+                variantPolicy: .all,
+                videoDecodeCapabilities: capabilities
+            )
+        ) { error in
+            guard case VesperDashBridgeError.unsupportedManifest = error else {
+                return XCTFail("Expected unsupportedManifest, got \(error)")
+            }
+        }
     }
 
     func testDashManifestTrackCatalogExposesPlayableAudioAndVideoTracks() throws {
@@ -1032,6 +1117,25 @@ final class VesperDashBridgeTests: XCTestCase {
     }
 }
 
+private func makeTestDashSession(sourceURL: URL) -> VesperDashSession {
+    VesperDashSession(
+        sourceURL: sourceURL,
+        videoDecodeCapabilityProvider: testHardwareVideoDecodeCapabilityProvider
+    )
+}
+
+private let testHardwareVideoDecodeCapabilityProvider: VesperDashSession.VideoDecodeCapabilityProvider = { playable in
+    let candidate = VesperHardwareDecodeCandidateCodec(codecName: playable.representation.codecs)
+    let family = candidate.dashCodecFamily
+    let supported = family != .unknown
+    return VesperDashVideoDecodeCapability(
+        renditionId: playable.renditionId,
+        codecFamily: family,
+        hardwareDecodeSupported: supported,
+        decoderName: supported ? "UnitTestHardwareDecoder" : nil
+    )
+}
+
 private let sampleMpd = #"""
 <?xml version="1.0"?>
 <MPD type="static" mediaPresentationDuration="PT1M30.5S" minBufferTime="PT1.5S">
@@ -1087,6 +1191,24 @@ private let sampleMultiVideoSegmentTemplateMpd = #"""
     <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1" lang="qaa">
       <SegmentTemplate timescale="90000" initialization="$RepresentationID$-Header.m4s" media="$RepresentationID$-270146-i-$Number$.m4s" startNumber="1" duration="179704" presentationTimeOffset="0"/>
       <Representation id="v4_258" bandwidth="130800" codecs="mp4a.40.2" audioSamplingRate="48000"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+private let sampleMultiCodecSegmentTemplateMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT30S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
+      <SegmentTemplate timescale="1000" initialization="$RepresentationID$-init.mp4" media="$RepresentationID$-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="av1" bandwidth="760000" codecs="av01.0.05M.08" width="1280" height="720"/>
+      <Representation id="hevc" bandwidth="800000" codecs="hvc1.1.6.L93.B0" width="1280" height="720"/>
+      <Representation id="avc" bandwidth="800000" codecs="avc1.4D401F" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1" lang="und">
+      <SegmentTemplate timescale="1000" initialization="$RepresentationID$-init.mp4" media="$RepresentationID$-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="audio" bandwidth="128000" codecs="mp4a.40.2" audioSamplingRate="48000"/>
     </AdaptationSet>
   </Period>
 </MPD>

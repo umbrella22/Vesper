@@ -120,6 +120,21 @@ enum VesperDashMasterPlaylistVariantPolicy: String, Codable, Equatable, Hashable
     case startupSingleVariant
 }
 
+enum VesperDashVideoCodecFamily: String, Codable, Equatable {
+    case vvc
+    case av1
+    case hevc
+    case avc
+    case unknown
+}
+
+struct VesperDashVideoDecodeCapability: Codable, Equatable {
+    let renditionId: String
+    let codecFamily: VesperDashVideoCodecFamily
+    let hardwareDecodeSupported: Bool
+    let decoderName: String?
+}
+
 struct VesperDashSidxBox: Codable, Equatable {
     let timescale: UInt32
     let earliestPresentationTime: UInt64

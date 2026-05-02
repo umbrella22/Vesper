@@ -785,6 +785,9 @@ private final class VesperDashAtomicBool: @unchecked Sendable {
 
 actor VesperDashSession {
     typealias BenchmarkEventRecorder = @MainActor @Sendable (String, [String: String]) -> Void
+    typealias VideoDecodeCapabilityProvider = @Sendable (
+        VesperDashPlayableRepresentation
+    ) -> VesperDashVideoDecodeCapability
 
     nonisolated static let scheme = "vesper-dash"
     nonisolated static let segmentCacheMaxBytes: UInt64 = 256 * 1024 * 1024
@@ -809,6 +812,7 @@ actor VesperDashSession {
     private var segmentDownloadTasksByKey: [VesperDashSegmentCacheKey: Task<VesperDashSegmentPayloadResult, Error>] = [:]
     private var selectedPlayableByPolicy: [VesperDashMasterPlaylistVariantPolicy: VesperDashSelectedPlayableResponse] = [:]
     private var playableByRenditionId: [String: VesperDashPlayableRepresentation] = [:]
+    private var videoDecodeCapabilitiesCache: [VesperDashVideoDecodeCapability]?
     private var sidxByRenditionId: [String: VesperDashSidxBox] = [:]
     private var mediaSegmentsByRenditionId: [String: [VesperDashMediaSegment]] = [:]
     private var templateSegmentsByRenditionId: [String: [VesperDashTemplateSegment]] = [:]
@@ -818,6 +822,7 @@ actor VesperDashSession {
     private var backgroundPrefetchLargeMediaRenditionIds: Set<String> = []
     private var loopbackServer: VesperDashLoopbackServer?
     private var loopbackServerStartTask: Task<VesperDashLoopbackServer, Error>?
+    private let videoDecodeCapabilityProvider: VideoDecodeCapabilityProvider
     private let benchmarkEventRecorder: BenchmarkEventRecorder?
 
     nonisolated var masterPlaylistURL: URL {
@@ -828,6 +833,7 @@ actor VesperDashSession {
         sourceURL: URL,
         headers: [String: String] = [:],
         networkClient: VesperDashNetworkClient? = nil,
+        videoDecodeCapabilityProvider: VideoDecodeCapabilityProvider? = nil,
         benchmarkEventRecorder: BenchmarkEventRecorder? = nil
     ) {
         let sessionId = UUID().uuidString
@@ -836,6 +842,13 @@ actor VesperDashSession {
         segmentCacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-dash-\(sessionId)", isDirectory: true)
         self.networkClient = networkClient ?? VesperDashNetworkClient(headers: headers)
+        if let videoDecodeCapabilityProvider {
+            self.videoDecodeCapabilityProvider = videoDecodeCapabilityProvider
+        } else {
+            self.videoDecodeCapabilityProvider = { playable in
+                Self.defaultVideoDecodeCapability(for: playable)
+            }
+        }
         self.benchmarkEventRecorder = benchmarkEventRecorder
     }
 
@@ -915,9 +928,11 @@ actor VesperDashSession {
         do {
             let manifest = try await loadManifest()
             let variantPolicy = VesperDashMasterPlaylistVariantPolicy.all
+            let videoDecodeCapabilities = try videoDecodeCapabilities(for: manifest)
             let playlist = try VesperDashHlsBuilder.buildMasterPlaylist(
                 manifest: manifest,
                 variantPolicy: variantPolicy,
+                videoDecodeCapabilities: videoDecodeCapabilities,
                 mediaURL: { [weak self] renditionId in
                     guard let self else { return "" }
                     return self.mediaPlaylistURL(for: renditionId).absoluteString
@@ -943,7 +958,8 @@ actor VesperDashSession {
                 attributes: playlistBenchmarkEndAttributes(
                     startedAt: startedAt,
                     bytes: data.count,
-                    cacheHit: false
+                    cacheHit: false,
+                    extra: masterPlaylistDecodeSelectionAttributes(startupSelected: startupSelected)
                 )
             )
             return data
@@ -2069,15 +2085,41 @@ actor VesperDashSession {
         _ playable: VesperDashPlayableRepresentation
     ) -> String {
         let representation = playable.representation
+        let capability = videoDecodeCapabilitiesCache?.first { $0.renditionId == playable.renditionId }
         return [
             "id=\(playable.renditionId)",
             "codec=\(emptyAsNil(representation.codecs))",
+            "codecFamily=\(capability?.codecFamily.rawValue ?? "unknown")",
+            "hardwareDecodeSupported=\(capability.map { "\($0.hardwareDecodeSupported)" } ?? "unknown")",
             "width=\(representation.width.map(String.init) ?? "nil")",
             "height=\(representation.height.map(String.init) ?? "nil")",
             "bitrate=\(representation.bandwidth.map(String.init) ?? "nil")",
             "frameRate=\(representation.frameRate ?? "nil")",
             "segmentType=\(dashSegmentTypeName(representation))",
         ].joined(separator: ",")
+    }
+
+    private func masterPlaylistDecodeSelectionAttributes(
+        startupSelected: VesperDashSelectedPlayableResponse
+    ) -> [String: String] {
+        guard let startupVideo = startupSelected.video.first else {
+            return [:]
+        }
+        var attributes: [String: String] = [
+            "startupVideoRenditionId": startupVideo.renditionId,
+            "startupVideoCodec": startupVideo.representation.codecs,
+            "selectionReason": "hardware_decode_startup",
+        ]
+        if let capability = videoDecodeCapabilitiesCache?.first(where: {
+            $0.renditionId == startupVideo.renditionId
+        }) {
+            attributes["codecFamily"] = capability.codecFamily.rawValue
+            attributes["hardwareDecodeSupported"] = "\(capability.hardwareDecodeSupported)"
+            if let decoderName = capability.decoderName {
+                attributes["decoderName"] = decoderName
+            }
+        }
+        return attributes
     }
 
     private func recordBenchmarkEvent(
@@ -2408,9 +2450,11 @@ actor VesperDashSession {
         if let cached = selectedPlayableByPolicy[variantPolicy] {
             return cached
         }
+        let videoDecodeCapabilities = try videoDecodeCapabilities(for: manifest)
         let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
             manifest: manifest,
-            variantPolicy: variantPolicy
+            variantPolicy: variantPolicy,
+            videoDecodeCapabilities: videoDecodeCapabilities
         )
         let response = VesperDashSelectedPlayableResponse(
             audio: selected.audio,
@@ -2426,6 +2470,43 @@ actor VesperDashSession {
             )
         }
         return response
+    }
+
+    private func videoDecodeCapabilities(
+        for manifest: VesperDashManifest
+    ) throws -> [VesperDashVideoDecodeCapability] {
+        if let cached = videoDecodeCapabilitiesCache {
+            return cached
+        }
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: manifest,
+            variantPolicy: .all,
+            videoDecodeCapabilities: nil
+        )
+        let capabilities = selected.video.map(videoDecodeCapability)
+        videoDecodeCapabilitiesCache = capabilities
+        return capabilities
+    }
+
+    private func videoDecodeCapability(
+        for playable: VesperDashPlayableRepresentation
+    ) -> VesperDashVideoDecodeCapability {
+        videoDecodeCapabilityProvider(playable)
+    }
+
+    private nonisolated static func defaultVideoDecodeCapability(
+        for playable: VesperDashPlayableRepresentation
+    ) -> VesperDashVideoDecodeCapability {
+        let candidate = VesperHardwareDecodeCandidateCodec(codecName: playable.representation.codecs)
+        let hardwareDecodeSupported = VesperCodecSupport.hardwareDecodeSupported(
+            for: playable.representation.codecs
+        )
+        return VesperDashVideoDecodeCapability(
+            renditionId: playable.renditionId,
+            codecFamily: candidate.dashCodecFamily,
+            hardwareDecodeSupported: hardwareDecodeSupported,
+            decoderName: hardwareDecodeSupported ? "VideoToolbox" : nil
+        )
     }
 
     private func mediaSegments(
@@ -2511,6 +2592,7 @@ actor VesperDashSession {
         mediaPlaylistCacheByRenditionId = [:]
         selectedPlayableByPolicy = [:]
         playableByRenditionId = [:]
+        videoDecodeCapabilitiesCache = nil
         sidxByRenditionId = [:]
         mediaSegmentsByRenditionId = [:]
         templateSegmentsByRenditionId = [:]

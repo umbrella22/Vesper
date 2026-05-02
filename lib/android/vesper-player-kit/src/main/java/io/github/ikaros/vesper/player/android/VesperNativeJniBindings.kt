@@ -61,6 +61,7 @@ class VesperNativeJniBindings(
     private var currentEffectiveVideoTrackIdState: String? = null
     private var currentVideoVariantObservationState: VesperVideoVariantObservation? = null
     private var currentVideoLayoutState: NativeVideoLayoutInfo? = null
+    private var currentVideoDecoderName: String? = null
     private val preloadCoordinator =
         VesperNativePreloadCoordinator(
             bindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
@@ -89,6 +90,7 @@ class VesperNativeJniBindings(
         val renderersFactory =
             DefaultRenderersFactory(appContext)
                 .setExtensionRendererMode(decoderBackend.toExtensionRendererMode())
+                .setMediaCodecSelector(VesperHardwareMediaCodecSelector)
 
         val mediaSourceFactory =
             DefaultMediaSourceFactory(appContext)
@@ -157,6 +159,7 @@ class VesperNativeJniBindings(
         currentEffectiveVideoTrackIdState = null
         currentVideoVariantObservationState = null
         currentVideoLayoutState = null
+        currentVideoDecoderName = null
         currentBenchmarkSourceProtocol = null
     }
 
@@ -498,11 +501,32 @@ class VesperNativeJniBindings(
 
     private fun buildAnalyticsListener(): AnalyticsListener =
         object : AnalyticsListener {
+            override fun onVideoDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long,
+            ) {
+                currentVideoDecoderName = decoderName
+                recordBenchmark(
+                    "video_decoder_initialized",
+                    mapOf(
+                        "decoderName" to decoderName,
+                        "initializationDurationMs" to initializationDurationMs.toString(),
+                        "selectionReason" to "hardware_decode_required",
+                    ),
+                )
+            }
+
             override fun onVideoInputFormatChanged(
                 eventTime: AnalyticsListener.EventTime,
                 format: Format,
                 decoderReuseEvaluation: DecoderReuseEvaluation?,
             ) {
+                val codec = nativeTrackCodec(format) ?: ""
+                val mimeType = videoMimeType(format)
+                val hardwareDecodeSupported =
+                    VesperHardwareMediaCodecSelector.hasHardwareDecoder(mimeType)
                 Log.d(
                     TAG,
                     "onVideoInputFormatChanged formatId=${format.id} bitrate=${format.bitrate} width=${format.width} height=${format.height}",
@@ -511,10 +535,13 @@ class VesperNativeJniBindings(
                     "video_input_format_changed",
                     mapOf(
                         "formatId" to (format.id ?: ""),
+                        "codecFamily" to vesperAndroidVideoCodecFamily(codec).toBenchmarkValue(),
+                        "hardwareDecodeSupported" to hardwareDecodeSupported.toString(),
+                        "selectionReason" to "hardware_decode_source_selection",
                         "bitrate" to format.bitrate.toString(),
                         "width" to format.width.toString(),
                         "height" to format.height.toString(),
-                    ),
+                    ) + (currentVideoDecoderName?.let { mapOf("decoderName" to it) } ?: emptyMap()),
                 )
                 pushTrackStateToRust()
                 notifyNativeUpdate()
@@ -1512,6 +1539,15 @@ private fun nativeTrackId(trackGroup: TrackGroup, trackIndex: Int, format: Forma
 
 private fun nativeTrackCodec(format: Format): String? =
     format.codecs ?: format.sampleMimeType ?: format.containerMimeType
+
+private fun videoMimeType(format: Format): String? {
+    format.sampleMimeType?.takeIf(MimeTypes::isVideo)?.let { return it }
+    format.codecs
+        ?.let(MimeTypes::getMediaMimeType)
+        ?.takeIf(MimeTypes::isVideo)
+        ?.let { return it }
+    return format.containerMimeType?.takeIf(MimeTypes::isVideo)
+}
 
 private fun buildMediaItem(source: VesperPlayerSource): MediaItem {
     val builder = MediaItem.Builder()
