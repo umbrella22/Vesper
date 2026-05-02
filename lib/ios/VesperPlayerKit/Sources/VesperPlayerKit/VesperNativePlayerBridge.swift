@@ -29,6 +29,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var playbackStalledObserver: NSObjectProtocol?
     private var pendingAutoPlay = false
     private var playbackEpoch: UInt64 = 0
+    private var firstFrameRenderedPlaybackEpoch: UInt64?
+    private var readyForDisplayCountByEpoch: [UInt64: Int] = [:]
     private var timeControlObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
     private var itemBufferEmptyObservation: NSKeyValueObservation?
@@ -42,6 +44,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var videoVariantPinsByTrackId: [String: LoadedVideoVariantPin] = [:]
     private var desiredVideoVariantPin: LoadedVideoVariantPin?
     private var dashStartupAbrLimitPin: LoadedVideoVariantPin?
+    private var dashStartupAbrLimitAppliedAtNs: UInt64?
     private var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     private var currentResiliencePolicy: VesperPlaybackResiliencePolicy
@@ -246,6 +249,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func tearDownActivePlayback() {
+        releaseDashStartupAbrLimitIfNeeded(reason: "tearDown", item: player?.currentItem)
         _ = advancePlaybackEpoch()
         preloadCoordinator.cancelAll()
         VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
@@ -275,11 +279,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         surfaceHost = host
         host.onReadyForDisplay = { [weak self] in
             Task { @MainActor in
-                iosHostLog("surfaceReadyForDisplay")
-                self?.recordBenchmark("ready_for_display")
-                self?.recordBenchmark("first_frame_rendered")
-                self?.releaseDashStartupAbrLimitIfNeeded(reason: "readyForDisplay", item: nil)
-                self?.attemptPendingPlaybackStart(reason: "surfaceReadyForDisplay")
+                self?.handleSurfaceReadyForDisplay()
             }
         }
         host.attach(player: player)
@@ -360,6 +360,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         clearLastError()
         recordBenchmark("stop_command")
         iosHostLog("stop")
+        releaseDashStartupAbrLimitIfNeeded(reason: "stop", item: player?.currentItem)
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = true
         let playbackEpoch = currentPlaybackEpoch()
@@ -707,6 +708,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         preloadCoordinator.configure(cachePolicy: cachePolicy)
         preloadCoordinator.warmCurrentSource(source: currentSource, url: url)
+        releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
         let item = makePlayerItem(for: currentSource, url: url)
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
@@ -905,10 +907,6 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                         "likely_to_keep_up_changed",
                         attributes: ["likely": "\(item.isPlaybackLikelyToKeepUp)"]
                     )
-                    self.releaseDashStartupAbrLimitIfNeeded(
-                        reason: "likelyToKeepUp",
-                        item: item
-                    )
                     self.attemptPendingPlaybackStart(reason: "itemLikelyToKeepUp")
                 }
             } else {
@@ -1029,6 +1027,34 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             startPlayback()
         }
         refreshPlaybackState()
+    }
+
+    func handleSurfaceReadyForDisplay() {
+        let playbackEpoch = currentPlaybackEpoch()
+        let readyCount = (readyForDisplayCountByEpoch[playbackEpoch] ?? 0) + 1
+        readyForDisplayCountByEpoch[playbackEpoch] = readyCount
+        let isFirstForEpoch = firstFrameRenderedPlaybackEpoch != playbackEpoch
+
+        iosHostLog("surfaceReadyForDisplay epoch=\(playbackEpoch) firstForEpoch=\(isFirstForEpoch)")
+        recordBenchmark(
+            "ready_for_display",
+            attributes: [
+                "playbackEpoch": "\(playbackEpoch)",
+                "readyCount": "\(readyCount)",
+                "isFirstForEpoch": "\(isFirstForEpoch)",
+            ]
+        )
+
+        if isFirstForEpoch {
+            firstFrameRenderedPlaybackEpoch = playbackEpoch
+            recordBenchmark(
+                "first_frame_rendered",
+                attributes: ["playbackEpoch": "\(playbackEpoch)"]
+            )
+            releaseDashStartupAbrLimitIfNeeded(reason: "firstFrameRendered", item: nil)
+        }
+
+        attemptPendingPlaybackStart(reason: "surfaceReadyForDisplay")
     }
 
     private func handlePlaybackEnded() {
@@ -1901,6 +1927,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     ) {
         guard source.protocol == .dash else {
             dashStartupAbrLimitPin = nil
+            dashStartupAbrLimitAppliedAtNs = nil
             return
         }
 
@@ -1909,6 +1936,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             maxWidth: Self.dashStartupAbrMaxWidth,
             maxHeight: Self.dashStartupAbrMaxHeight
         )
+        dashStartupAbrLimitAppliedAtNs = DispatchTime.now().uptimeNanoseconds
         applyEffectiveVideoVariantPin(desiredVideoVariantPin, to: item)
         recordBenchmark(
             "dash_startup_abr_limit_applied",
@@ -1916,6 +1944,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 "maxBitRate": "\(Int(Self.dashStartupAbrPeakBitRate))",
                 "maxWidth": "\(Self.dashStartupAbrMaxWidth)",
                 "maxHeight": "\(Self.dashStartupAbrMaxHeight)",
+                "playbackEpoch": "\(currentPlaybackEpoch())",
             ]
         )
         iosHostLog(
@@ -1928,13 +1957,23 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             return
         }
         dashStartupAbrLimitPin = nil
-        guard let item = item ?? player?.currentItem else {
-            return
+        let appliedAtNs = dashStartupAbrLimitAppliedAtNs
+        dashStartupAbrLimitAppliedAtNs = nil
+        if let item = item ?? player?.currentItem {
+            applyEffectiveVideoVariantPin(desiredVideoVariantPin, to: item)
         }
-        applyEffectiveVideoVariantPin(desiredVideoVariantPin, to: item)
+
+        var attributes = [
+            "reason": reason,
+            "playbackEpoch": "\(currentPlaybackEpoch())",
+        ]
+        if let appliedAtNs {
+            let now = DispatchTime.now().uptimeNanoseconds
+            attributes["elapsedNs"] = "\(now >= appliedAtNs ? now - appliedAtNs : 0)"
+        }
         recordBenchmark(
             "dash_startup_abr_limit_released",
-            attributes: ["reason": reason]
+            attributes: attributes
         )
         iosHostLog("dashStartupAbrLimit released reason=\(reason)")
     }
@@ -2020,6 +2059,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         iosHostLog(
             "playbackFailure category=\(resolvedError.category.rawValue) retriable=\(resolvedError.retriable) message=\(resolvedError.message)"
         )
+        releaseDashStartupAbrLimitIfNeeded(reason: "playbackFailure", item: player?.currentItem)
         recordBenchmark(
             "playback_error",
             attributes: [

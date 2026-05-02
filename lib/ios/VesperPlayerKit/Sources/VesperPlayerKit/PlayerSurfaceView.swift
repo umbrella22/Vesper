@@ -49,6 +49,10 @@ public final class PlayerSurfaceView: UIView {
         playerLayer.isReadyForDisplay
     }
 
+    func clearReadyCallback() {
+        onReadyForDisplay = nil
+    }
+
     func attach(player: AVPlayer?) {
         if attachedPlayer === player, playerLayer.player === player {
             return
@@ -67,7 +71,7 @@ public final class PlayerSurfaceView: UIView {
 
     func detachBridgeIfNeeded() {
         attachedPlayer = nil
-        onReadyForDisplay = nil
+        clearReadyCallback()
         readyForDisplayObservation = nil
         attach(player: nil)
     }

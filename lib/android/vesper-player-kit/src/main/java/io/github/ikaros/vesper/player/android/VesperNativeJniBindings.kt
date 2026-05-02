@@ -67,17 +67,18 @@ class VesperNativeJniBindings(
             preloadBudgetPolicy = preloadBudgetPolicy,
         )
     private var currentBenchmarkSourceProtocol: VesperPlayerSourceProtocol? = null
+    private val firstFrameGate = VesperPlaybackEpochFirstFrameGate()
 
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         trackPreferencePolicy: VesperTrackPreferencePolicy,
     ): NativeBridgeStartup {
-        currentBenchmarkSourceProtocol = source.protocol
-        recordBenchmark("source_load_start")
         Log.i(TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
         dispose()
         currentBenchmarkSourceProtocol = source.protocol
+        firstFrameGate.advanceEpoch()
+        recordBenchmark("source_load_start")
         VesperNativeLibrary.ensureLoaded()
 
         val handle = VesperNativeJni.createSession(source.uri)
@@ -524,9 +525,16 @@ class VesperNativeJniBindings(
                 output: Any,
                 renderTimeMs: Long,
             ) {
+                val firstFrameMark = firstFrameGate.markFirstFrameRendered()
+                if (!firstFrameMark.isFirstForEpoch) {
+                    return
+                }
                 recordBenchmark(
                     "first_frame_rendered",
-                    mapOf("renderTimeMs" to renderTimeMs.toString()),
+                    mapOf(
+                        "renderTimeMs" to renderTimeMs.toString(),
+                        "isFirstForEpoch" to firstFrameMark.isFirstForEpoch.toString(),
+                    ),
                 )
             }
         }
@@ -679,7 +687,13 @@ class VesperNativeJniBindings(
         eventName: String,
         attributes: Map<String, String> = emptyMap(),
     ) {
-        benchmarkRecorder.record(eventName, currentBenchmarkSourceProtocol, attributes)
+        val enrichedAttributes =
+            if (firstFrameGate.currentEpoch > 0L) {
+                attributes + ("playbackEpoch" to firstFrameGate.currentEpoch.toString())
+            } else {
+                attributes
+            }
+        benchmarkRecorder.record(eventName, currentBenchmarkSourceProtocol, enrichedAttributes)
     }
 }
 

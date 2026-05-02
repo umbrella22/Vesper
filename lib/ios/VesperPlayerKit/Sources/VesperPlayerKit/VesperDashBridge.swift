@@ -96,6 +96,38 @@ private struct VesperDashSegmentPayloadResult {
     let segmentType: String
     let byteRange: VesperDashByteRange?
     let delivery: String
+    let coalesced: Bool
+
+    init(
+        payload: VesperDashSegmentPayload,
+        cacheHit: Bool,
+        segmentType: String,
+        byteRange: VesperDashByteRange?,
+        delivery: String,
+        coalesced: Bool = false
+    ) {
+        self.payload = payload
+        self.cacheHit = cacheHit
+        self.segmentType = segmentType
+        self.byteRange = byteRange
+        self.delivery = delivery
+        self.coalesced = coalesced
+    }
+
+    func markingCoalesced(
+        payload: VesperDashSegmentPayload? = nil,
+        cacheHit: Bool? = nil,
+        delivery: String? = nil
+    ) -> VesperDashSegmentPayloadResult {
+        VesperDashSegmentPayloadResult(
+            payload: payload ?? self.payload,
+            cacheHit: cacheHit ?? self.cacheHit,
+            segmentType: segmentType,
+            byteRange: byteRange,
+            delivery: delivery ?? self.delivery,
+            coalesced: true
+        )
+    }
 }
 
 final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
@@ -758,6 +790,7 @@ actor VesperDashSession {
     nonisolated static let segmentCacheMaxBytes: UInt64 = 256 * 1024 * 1024
     nonisolated static let segmentCacheMaxEntryCount = 160
     nonisolated static let segmentCacheMaxSingleMediaBytes: UInt64 = 32 * 1024 * 1024
+    nonisolated static let startupMediaSegmentPrefetchLimit = 2
     nonisolated static let defaultDynamicManifestRefreshIntervalMs: UInt64 = 2_000
     nonisolated static let minimumDynamicManifestRefreshIntervalMs: UInt64 = 500
 
@@ -770,6 +803,10 @@ actor VesperDashSession {
     private var manifestLoadedAt: Date?
     private var masterPlaylistCache: Data?
     private var mediaPlaylistCacheByRenditionId: [String: Data] = [:]
+    private var manifestLoadTask: Task<VesperDashManifest, Error>?
+    private var mediaPlaylistTasksByRenditionId: [String: Task<Data, Error>] = [:]
+    private var sidxLoadTasksByRenditionId: [String: Task<VesperDashSidxBox, Error>] = [:]
+    private var segmentDownloadTasksByKey: [VesperDashSegmentCacheKey: Task<VesperDashSegmentPayloadResult, Error>] = [:]
     private var selectedPlayableByPolicy: [VesperDashMasterPlaylistVariantPolicy: VesperDashSelectedPlayableResponse] = [:]
     private var playableByRenditionId: [String: VesperDashPlayableRepresentation] = [:]
     private var sidxByRenditionId: [String: VesperDashSidxBox] = [:]
@@ -895,7 +932,7 @@ actor VesperDashSession {
                 manifest: manifest,
                 variantPolicy: .startupSingleVariant
             )
-            startBackgroundPrefetch(for: startupSelected.audio + startupSelected.video, manifest: manifest)
+            startStartupPrefetch(for: startupSelected.audio + startupSelected.video, manifest: manifest)
 #if DEBUG
             iosHostLog(
                 "dashMasterPlaylist policy=all startupVideo=\(startupRenditionSummary(startupSelected.video)) startupAudio=\(startupRenditionSummary(startupSelected.audio))"
@@ -950,25 +987,69 @@ actor VesperDashSession {
                     startedAt: startedAt,
                     bytes: cached.count,
                     cacheHit: true,
-                    extra: ["renditionId": renditionId]
+                    extra: [
+                        "renditionId": renditionId,
+                        "coalesced": "false",
+                    ]
                 )
             )
             return cached
         }
 
+        if let inFlightTask = mediaPlaylistTasksByRenditionId[renditionId] {
+            do {
+                let data = try await inFlightTask.value
+                await recordBenchmarkEvent(
+                    "dash_media_playlist_request_end",
+                    attributes: playlistBenchmarkEndAttributes(
+                        startedAt: startedAt,
+                        bytes: data.count,
+                        cacheHit: false,
+                        extra: [
+                            "renditionId": renditionId,
+                            "coalesced": "true",
+                        ]
+                    )
+                )
+                return data
+            } catch {
+                await recordBenchmarkEvent(
+                    "dash_media_playlist_request_end",
+                    attributes: playlistBenchmarkEndAttributes(
+                        startedAt: startedAt,
+                        bytes: nil,
+                        cacheHit: false,
+                        error: error,
+                        extra: [
+                            "renditionId": renditionId,
+                            "coalesced": "true",
+                        ]
+                    )
+                )
+                throw error
+            }
+        }
+
+        let buildTask = Task { try await self.buildMediaPlaylistData(renditionId: renditionId) }
+        mediaPlaylistTasksByRenditionId[renditionId] = buildTask
         do {
-            let data = try await buildMediaPlaylistData(renditionId: renditionId)
+            let data = try await buildTask.value
+            mediaPlaylistTasksByRenditionId[renditionId] = nil
             await recordBenchmarkEvent(
                 "dash_media_playlist_request_end",
                 attributes: playlistBenchmarkEndAttributes(
                     startedAt: startedAt,
                     bytes: data.count,
                     cacheHit: false,
-                    extra: ["renditionId": renditionId]
+                    extra: [
+                        "renditionId": renditionId,
+                        "coalesced": "false",
+                    ]
                 )
             )
             return data
         } catch {
+            mediaPlaylistTasksByRenditionId[renditionId] = nil
             await recordBenchmarkEvent(
                 "dash_media_playlist_request_end",
                 attributes: playlistBenchmarkEndAttributes(
@@ -976,7 +1057,10 @@ actor VesperDashSession {
                     bytes: nil,
                     cacheHit: false,
                     error: error,
-                    extra: ["renditionId": renditionId]
+                    extra: [
+                        "renditionId": renditionId,
+                        "coalesced": "false",
+                    ]
                 )
             )
             throw error
@@ -1292,6 +1376,105 @@ actor VesperDashSession {
                 delivery: "cacheFile"
             )
         }
+
+        if shouldCoalesceSegmentTemplateDownload(
+            manifest: manifest,
+            playable: playable,
+            segmentTemplate: segmentTemplate,
+            segment: segment,
+            allowSkippingLargeMediaEntry: true
+        ) {
+            return try await coalescedSegmentTemplatePayload(
+                manifest: manifest,
+                playable: playable,
+                segmentTemplate: segmentTemplate,
+                segment: segment,
+                cacheURL: cacheURL,
+                key: key,
+                allowSkippingLargeMediaEntry: true,
+                contentType: contentType
+            )
+        }
+
+        return try await fetchSegmentTemplatePayload(
+            manifest: manifest,
+            playable: playable,
+            segmentTemplate: segmentTemplate,
+            segment: segment,
+            cacheURL: cacheURL,
+            key: key,
+            allowSkippingLargeMediaEntry: true,
+            contentType: contentType
+        )
+    }
+
+    private func coalescedSegmentTemplatePayload(
+        manifest: VesperDashManifest,
+        playable: VesperDashPlayableRepresentation,
+        segmentTemplate: VesperDashSegmentTemplate,
+        segment: VesperDashSegmentRequest,
+        cacheURL: URL,
+        key: VesperDashSegmentCacheKey,
+        allowSkippingLargeMediaEntry: Bool,
+        contentType: String
+    ) async throws -> VesperDashSegmentPayloadResult {
+        if let inFlightTask = segmentDownloadTasksByKey[key] {
+            let result = try await inFlightTask.value
+            if let cached = cachedSegmentFilePayload(for: key, at: cacheURL, contentType: contentType) {
+                return result.markingCoalesced(
+                    payload: cached,
+                    cacheHit: true,
+                    delivery: "coalescedCacheFile"
+                )
+            }
+            guard !result.payload.isTemporaryFile else {
+                return try await fetchSegmentTemplatePayload(
+                    manifest: manifest,
+                    playable: playable,
+                    segmentTemplate: segmentTemplate,
+                    segment: segment,
+                    cacheURL: cacheURL,
+                    key: key,
+                    allowSkippingLargeMediaEntry: allowSkippingLargeMediaEntry,
+                    contentType: contentType
+                )
+            }
+            return result.markingCoalesced()
+        }
+
+        let downloadTask = Task {
+            try await self.fetchSegmentTemplatePayload(
+                manifest: manifest,
+                playable: playable,
+                segmentTemplate: segmentTemplate,
+                segment: segment,
+                cacheURL: cacheURL,
+                key: key,
+                allowSkippingLargeMediaEntry: allowSkippingLargeMediaEntry,
+                contentType: contentType
+            )
+        }
+        segmentDownloadTasksByKey[key] = downloadTask
+        do {
+            let result = try await downloadTask.value
+            segmentDownloadTasksByKey[key] = nil
+            return result
+        } catch {
+            segmentDownloadTasksByKey[key] = nil
+            throw error
+        }
+    }
+
+    private func fetchSegmentTemplatePayload(
+        manifest: VesperDashManifest,
+        playable: VesperDashPlayableRepresentation,
+        segmentTemplate: VesperDashSegmentTemplate,
+        segment: VesperDashSegmentRequest,
+        cacheURL: URL,
+        key: VesperDashSegmentCacheKey,
+        allowSkippingLargeMediaEntry: Bool,
+        contentType: String
+    ) async throws -> VesperDashSegmentPayloadResult {
         if case .media = segment {
             let payload = try await fetchSegmentTemplateFile(
                 manifest: manifest,
@@ -1300,7 +1483,7 @@ actor VesperDashSession {
                 segment: segment,
                 cacheURL: cacheURL,
                 key: key,
-                allowSkippingLargeMediaEntry: true,
+                allowSkippingLargeMediaEntry: allowSkippingLargeMediaEntry,
                 contentType: contentType
             )
             return VesperDashSegmentPayloadResult(
@@ -1323,7 +1506,7 @@ actor VesperDashSession {
             data,
             to: cacheURL,
             key: key,
-            allowSkippingLargeMediaEntry: true
+            allowSkippingLargeMediaEntry: allowSkippingLargeMediaEntry
         ) {
             let payload = cachedSegmentFilePayload(for: key, at: cacheURL, contentType: contentType)
                 ?? .data(data, contentType: contentType)
@@ -1342,6 +1525,63 @@ actor VesperDashSession {
             byteRange: nil,
             delivery: "networkData"
         )
+    }
+
+    private func shouldCoalesceSegmentTemplateDownload(
+        manifest: VesperDashManifest,
+        playable: VesperDashPlayableRepresentation,
+        segmentTemplate: VesperDashSegmentTemplate,
+        segment: VesperDashSegmentRequest,
+        allowSkippingLargeMediaEntry: Bool
+    ) -> Bool {
+        guard allowSkippingLargeMediaEntry else {
+            return true
+        }
+        guard case let .media(index) = segment else {
+            return true
+        }
+        guard
+            let bandwidth = playable.representation.bandwidth,
+            bandwidth > 0,
+            let templateSegment = try? templateSegmentForRequest(
+                manifest: manifest,
+                playable: playable,
+                segmentTemplate: segmentTemplate,
+                index: index
+            )
+        else {
+            return false
+        }
+        let estimatedBytes = templateSegment.duration * Double(bandwidth) / 8
+        return estimatedBytes.isFinite
+            && estimatedBytes <= Double(Self.segmentCacheMaxSingleMediaBytes)
+    }
+
+    private func templateSegmentForRequest(
+        manifest: VesperDashManifest,
+        playable: VesperDashPlayableRepresentation,
+        segmentTemplate: VesperDashSegmentTemplate,
+        index: Int
+    ) throws -> VesperDashTemplateSegment {
+        let segments = try templateSegments(
+            for: playable,
+            manifest: manifest,
+            segmentTemplate: segmentTemplate
+        )
+        if manifest.type == .dynamic {
+            guard let matched = segments.first(where: { $0.number == UInt64(index) }) else {
+                throw VesperDashBridgeError.invalidManifest(
+                    "missing media segment number \(index) for rendition \(playable.renditionId)"
+                )
+            }
+            return matched
+        }
+        guard segments.indices.contains(index) else {
+            throw VesperDashBridgeError.invalidManifest(
+                "missing media segment \(index) for rendition \(playable.renditionId)"
+            )
+        }
+        return segments[index]
     }
 
     private func fetchSegmentTemplateFile(
@@ -1711,6 +1951,58 @@ actor VesperDashSession {
         }
     }
 
+    private func startStartupPrefetch(
+        for playables: [VesperDashPlayableRepresentation],
+        manifest: VesperDashManifest
+    ) {
+        guard !playables.isEmpty else {
+            return
+        }
+        startBackgroundPrefetch(for: playables, manifest: manifest)
+        let renditionIds = playables.map(\.renditionId)
+        Task(priority: .userInitiated) { [weak self] in
+            await self?.runStartupMediaPlaylistPrefetch(renditionIds: renditionIds)
+        }
+    }
+
+    private func runStartupMediaPlaylistPrefetch(renditionIds: [String]) async {
+        await recordBenchmarkEvent(
+            "dash_startup_prefetch_start",
+            attributes: ["renditionIds": renditionIds.joined(separator: ",")]
+        )
+        let succeeded = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+            for renditionId in renditionIds {
+                group.addTask { [weak self] in
+                    guard let self else {
+                        return false
+                    }
+                    do {
+                        _ = try await self.mediaPlaylistData(renditionId: renditionId)
+                        return true
+                    } catch {
+                        iosHostLog(
+                            "dashStartupPrefetch failed rendition=\(renditionId) error=\(error.localizedDescription)"
+                        )
+                        return false
+                    }
+                }
+            }
+
+            var count = 0
+            for await ok in group where ok {
+                count += 1
+            }
+            return count
+        }
+        await recordBenchmarkEvent(
+            "dash_startup_prefetch_end",
+            attributes: [
+                "requested": "\(renditionIds.count)",
+                "succeeded": "\(succeeded)",
+            ]
+        )
+    }
+
     private func startBackgroundPrefetch(
         for playables: [VesperDashPlayableRepresentation],
         manifest: VesperDashManifest
@@ -1856,6 +2148,7 @@ actor VesperDashSession {
         attributes["elapsedMs"] = elapsedMillisecondsString(since: startedAt)
         attributes["bytes"] = "\(result.payload.size)"
         attributes["cacheHit"] = "\(result.cacheHit)"
+        attributes["coalesced"] = "\(result.coalesced)"
         attributes["segmentType"] = result.segmentType
         attributes["delivery"] = result.delivery
         attributes["contentType"] = result.payload.contentType
@@ -1909,7 +2202,9 @@ actor VesperDashSession {
         segmentCount: Int,
         prefetchMediaSegments: Bool
     ) async {
-        let prefetchLimit = prefetchMediaSegments ? min(segmentCount, 120) : 0
+        let prefetchLimit = prefetchMediaSegments
+            ? min(segmentCount, Self.startupMediaSegmentPrefetchLimit)
+            : 0
         let requests = backgroundPrefetchRequests(
             count: prefetchLimit,
             includeMediaSegments: prefetchMediaSegments
@@ -1994,7 +2289,7 @@ actor VesperDashSession {
         let manifest = try await loadManifest()
         let playable = try await playableRepresentation(renditionId: renditionId)
         if let segmentTemplate = playable.representation.segmentTemplate {
-            let payload = try await fetchSegmentTemplateFile(
+            let payloadResult = try await coalescedSegmentTemplatePayload(
                 manifest: manifest,
                 playable: playable,
                 segmentTemplate: segmentTemplate,
@@ -2004,7 +2299,7 @@ actor VesperDashSession {
                 allowSkippingLargeMediaEntry: false,
                 contentType: dashSegmentContentType(for: playable, segment: segment)
             )
-            guard case let .file(fileURL, 0, _, false, _) = payload else {
+            guard case let .file(fileURL, 0, _, false, _) = payloadResult.payload else {
                 throw VesperDashBridgeError.network("DASH segment redirect requires a persistent local file")
             }
             return fileURL
@@ -2170,14 +2465,31 @@ actor VesperDashSession {
         if let manifest, !shouldRefreshManifest(manifest) {
             return manifest
         }
-        let data = try await networkClient.data(for: sourceURL)
-        let parsed = try VesperDashManifestParser.parse(data: data, manifestURL: sourceURL)
+        if let manifestLoadTask {
+            return try await manifestLoadTask.value
+        }
+
+        let task = Task { try await self.fetchManifestFromNetwork() }
+        manifestLoadTask = task
+        let parsed: VesperDashManifest
+        do {
+            parsed = try await task.value
+            manifestLoadTask = nil
+        } catch {
+            manifestLoadTask = nil
+            throw error
+        }
         if manifest != nil, parsed.type == .dynamic {
             clearManifestDerivedCaches()
         }
         manifest = parsed
         manifestLoadedAt = Date()
         return parsed
+    }
+
+    private func fetchManifestFromNetwork() async throws -> VesperDashManifest {
+        let data = try await networkClient.data(for: sourceURL)
+        return try VesperDashManifestParser.parse(data: data, manifestURL: sourceURL)
     }
 
     private func shouldRefreshManifest(_ manifest: VesperDashManifest) -> Bool {
@@ -2202,6 +2514,9 @@ actor VesperDashSession {
         sidxByRenditionId = [:]
         mediaSegmentsByRenditionId = [:]
         templateSegmentsByRenditionId = [:]
+        mediaPlaylistTasksByRenditionId = [:]
+        sidxLoadTasksByRenditionId = [:]
+        segmentDownloadTasksByKey = [:]
     }
 
     private func playableRepresentation(renditionId: String) async throws -> VesperDashPlayableRepresentation {
@@ -2227,24 +2542,47 @@ actor VesperDashSession {
         if let cached = sidxByRenditionId[playable.renditionId] {
             return cached
         }
+        if let inFlightTask = sidxLoadTasksByRenditionId[playable.renditionId] {
+            return try await inFlightTask.value
+        }
         guard let segmentBase = playable.representation.segmentBase else {
             throw VesperDashBridgeError.unsupportedManifest(
                 "Representation \(playable.representation.id) does not use SegmentBase"
             )
         }
+        let task = Task {
+            try await self.fetchSidx(
+                playable: playable,
+                segmentBase: segmentBase
+            )
+        }
+        sidxLoadTasksByRenditionId[playable.renditionId] = task
+        do {
+            let sidx = try await task.value
+            sidxLoadTasksByRenditionId[playable.renditionId] = nil
+            sidxByRenditionId[playable.renditionId] = sidx
+            return sidx
+        } catch {
+            sidxLoadTasksByRenditionId[playable.renditionId] = nil
+            throw error
+        }
+    }
+
+    private func fetchSidx(
+        playable: VesperDashPlayableRepresentation,
+        segmentBase: VesperDashSegmentBase
+    ) async throws -> VesperDashSidxBox {
         guard let mediaURL = URL(string: playable.representation.baseURL) else {
             throw VesperDashBridgeError.invalidManifest(
                 "invalid media URL \(playable.representation.baseURL)"
             )
         }
         let data = try await networkClient.data(for: mediaURL, byteRange: segmentBase.indexRange)
-        let sidx = try VesperDashSidxParser.parse(data: data)
-        sidxByRenditionId[playable.renditionId] = sidx
-        return sidx
+        return try VesperDashSidxParser.parse(data: data)
     }
 }
 
-final class VesperDashNetworkClient {
+class VesperDashNetworkClient {
     private let headers: [String: String]
 
     init(headers: [String: String] = [:]) {

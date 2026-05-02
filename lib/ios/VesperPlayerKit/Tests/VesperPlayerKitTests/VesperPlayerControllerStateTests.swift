@@ -113,6 +113,24 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(controller.benchmarkSummary().acceptedEvents, UInt64(events.count))
     }
 
+    func testNativeBridgeRecordsFirstFrameOncePerPlaybackEpoch() {
+        let bridge = VesperNativePlayerBridge(
+            benchmarkConfiguration: VesperBenchmarkConfiguration(enabled: true)
+        )
+
+        bridge.handleSurfaceReadyForDisplay()
+        bridge.handleSurfaceReadyForDisplay()
+
+        let events = bridge.drainBenchmarkEvents()
+        let readyEvents = events.filter { $0.eventName == "ready_for_display" }
+        let firstFrameEvents = events.filter { $0.eventName == "first_frame_rendered" }
+
+        XCTAssertEqual(readyEvents.count, 2)
+        XCTAssertEqual(firstFrameEvents.count, 1)
+        XCTAssertEqual(firstFrameEvents.first?.attributes["playbackEpoch"], "0")
+        XCTAssertEqual(readyEvents.last?.attributes["isFirstForEpoch"], "false")
+    }
+
     private func settleControllerObservation() async {
         await Task.yield()
         await Task.yield()

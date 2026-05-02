@@ -5,6 +5,8 @@ import UIKit
 import VesperPlayerKit
 
 public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
+    private static let hostDetachGraceDelayNanoseconds: UInt64 = 250_000_000
+
     private var methodChannel: FlutterMethodChannel?
     private var eventChannel: FlutterEventChannel?
     private var downloadEventChannel: FlutterEventChannel?
@@ -284,19 +286,48 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     fileprivate func bindSessionHost(playerId: String, host: PlayerSurfaceView) {
         guard let session = sessions[playerId] else { return }
-        if session.hostView !== host {
-            session.controller.detachSurfaceHost()
-            session.hostView = host
+        session.cancelPendingHostDetach()
+        _ = session.advanceHostDetachGeneration()
+        if session.hostView === host {
+            session.controller.attachSurfaceHost(host)
+            emitSnapshot(for: session)
+            return
         }
+
+        let previousHost = session.hostView
+        session.hostView = host
         session.controller.attachSurfaceHost(host)
+        previousHost?.detachBridgeIfNeeded()
         emitSnapshot(for: session)
     }
 
     @MainActor
     fileprivate func unbindSessionHost(playerId: String, host: PlayerSurfaceView) {
         guard let session = sessions[playerId], session.hostView === host else { return }
-        session.controller.detachSurfaceHost()
-        session.hostView = nil
+        session.cancelPendingHostDetach()
+        let generation = session.advanceHostDetachGeneration()
+        session.pendingHostDetachTask = Task { @MainActor [weak self, weak session, weak host] in
+            do {
+                try await Task.sleep(nanoseconds: Self.hostDetachGraceDelayNanoseconds)
+            } catch {
+                return
+            }
+            guard
+                !Task.isCancelled,
+                let self,
+                let session,
+                let host,
+                self.sessions[playerId] === session,
+                session.hostView === host,
+                session.hostDetachGeneration == generation
+            else {
+                return
+            }
+            session.controller.detachSurfaceHost()
+            session.hostView = nil
+            session.pendingHostDetachTask = nil
+            self.emitSnapshot(for: session)
+        }
         emitSnapshot(for: session)
     }
 
@@ -710,6 +741,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func disposeSession(_ session: PlayerSession) {
+        session.cancelPendingHostDetach()
+        _ = session.advanceHostDetachGeneration()
         session.observation?.cancel()
         session.controller.detachSurfaceHost()
         session.hostView = nil
@@ -739,6 +772,8 @@ private final class PlayerSession {
     let controller: VesperPlayerController
     let benchmarkConsoleLogging: Bool
     var hostView: PlayerSurfaceView?
+    var pendingHostDetachTask: Task<Void, Never>?
+    var hostDetachGeneration: UInt64 = 0
     var observation: AnyCancellable?
     var lastError: [String: Any]?
     var viewport: FlutterViewport?
@@ -752,6 +787,17 @@ private final class PlayerSession {
         self.id = id
         self.controller = controller
         self.benchmarkConsoleLogging = benchmarkConsoleLogging
+    }
+
+    func cancelPendingHostDetach() {
+        pendingHostDetachTask?.cancel()
+        pendingHostDetachTask = nil
+    }
+
+    @discardableResult
+    func advanceHostDetachGeneration() -> UInt64 {
+        hostDetachGeneration &+= 1
+        return hostDetachGeneration
     }
 }
 

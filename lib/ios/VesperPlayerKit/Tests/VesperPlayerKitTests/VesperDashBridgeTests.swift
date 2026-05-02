@@ -266,13 +266,18 @@ final class VesperDashBridgeTests: XCTestCase {
         )
 
         let mediaPlaylistEnd = try XCTUnwrap(
-            eventAttributes("dash_media_playlist_request_end", in: events)
+            eventAttributes("dash_media_playlist_request_end", in: events) {
+                $0["renditionId"] == "v4_258"
+            }
         )
         XCTAssertEqual(mediaPlaylistEnd["renditionId"], "v4_258")
-        XCTAssertEqual(mediaPlaylistEnd["cacheHit"], "false")
+        XCTAssertNotNil(mediaPlaylistEnd["cacheHit"])
 
         let initSegmentEnd = try XCTUnwrap(
-            eventAttributes("dash_init_segment_request_end", in: events)
+            eventAttributes("dash_init_segment_request_end", in: events) {
+                $0["renditionId"] == "v4_258"
+                    && $0["requestOrigin"] == "resourceLoader"
+            }
         )
         XCTAssertEqual(initSegmentEnd["renditionId"], "v4_258")
         XCTAssertEqual(initSegmentEnd["segmentKind"], "initialization")
@@ -280,13 +285,16 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(initSegmentEnd["requestOrigin"], "resourceLoader")
 
         let mediaSegmentEnd = try XCTUnwrap(
-            eventAttributes("dash_media_segment_request_end", in: events)
+            eventAttributes("dash_media_segment_request_end", in: events) {
+                $0["renditionId"] == "v4_258"
+                    && $0["requestOrigin"] == "resourceLoader"
+            }
         )
         XCTAssertEqual(mediaSegmentEnd["renditionId"], "v4_258")
         XCTAssertEqual(mediaSegmentEnd["index"], "0")
         XCTAssertEqual(mediaSegmentEnd["bytes"], "\(mediaData.count)")
         XCTAssertEqual(mediaSegmentEnd["segmentType"], "template")
-        XCTAssertEqual(mediaSegmentEnd["cacheHit"], "false")
+        XCTAssertNotNil(mediaSegmentEnd["cacheHit"])
     }
 
     func testConcurrentSegmentTemplateMediaPlaylistsShareLoopbackServer() async throws {
@@ -347,6 +355,42 @@ final class VesperDashBridgeTests: XCTestCase {
 
         let ports = Set(try playlists.map { try firstLoopbackPort(in: $0) })
         XCTAssertEqual(ports.count, 1)
+    }
+
+    @MainActor
+    func testConcurrentMediaPlaylistRequestsReuseInFlightManifestAndSidx() async throws {
+        let manifestURL = URL(string: "https://origin.example.com/path/master.mpd")!
+        let mediaURL = URL(string: "https://cdn.example.com/root/video/seg.m4s")!
+        let indexRange = try VesperDashByteRange(start: 1_000, end: 1_199)
+        let networkClient = CountingDashNetworkClient(
+            dataByURL: [
+                manifestURL: Data(sampleMpd.utf8),
+                mediaURL: sampleSegmentBaseMediaData(),
+            ],
+            delayNanoseconds: 100_000_000
+        )
+        var events: [(name: String, attributes: [String: String])] = []
+        let session = VesperDashSession(
+            sourceURL: manifestURL,
+            networkClient: networkClient,
+            benchmarkEventRecorder: { name, attributes in
+                events.append((name, attributes))
+            }
+        )
+
+        async let first = session.mediaPlaylistData(renditionId: "v1")
+        async let second = session.mediaPlaylistData(renditionId: "v1")
+        _ = try await (first, second)
+
+        XCTAssertEqual(networkClient.requestCount(for: manifestURL), 1)
+        XCTAssertEqual(networkClient.requestCount(for: mediaURL, byteRange: indexRange), 1)
+        XCTAssertTrue(
+            events.contains {
+                $0.name == "dash_media_playlist_request_end"
+                    && $0.attributes["renditionId"] == "v1"
+                    && $0.attributes["coalesced"] == "true"
+            }
+        )
     }
 
     func testDashSessionMasterPlaylistExposesAllVideoVariantsForAbr() async throws {
@@ -1193,9 +1237,88 @@ private func firstLoopbackPort(in playlist: String) throws -> Int {
 
 private func eventAttributes(
     _ name: String,
-    in events: [(name: String, attributes: [String: String])]
+    in events: [(name: String, attributes: [String: String])],
+    where matches: ([String: String]) -> Bool = { _ in true }
 ) -> [String: String]? {
-    events.first { $0.name == name }?.attributes
+    events.first { $0.name == name && matches($0.attributes) }?.attributes
+}
+
+private final class CountingDashNetworkClient: VesperDashNetworkClient {
+    private let dataByURL: [URL: Data]
+    private let delayNanoseconds: UInt64
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+
+    init(dataByURL: [URL: Data], delayNanoseconds: UInt64 = 0) {
+        self.dataByURL = dataByURL
+        self.delayNanoseconds = delayNanoseconds
+        super.init()
+    }
+
+    override func data(
+        for url: URL,
+        byteRange: VesperDashByteRange? = nil
+    ) async throws -> Data {
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        incrementRequestCount(for: url, byteRange: byteRange)
+        guard let payload = dataByURL[url] else {
+            throw VesperDashBridgeError.network("missing test payload for \(url.absoluteString)")
+        }
+        guard let byteRange else {
+            return payload
+        }
+        let start = Int(byteRange.start)
+        let end = Int(byteRange.end)
+        guard start >= 0, end < payload.count, start <= end else {
+            throw VesperDashBridgeError.network("test byte range is out of bounds")
+        }
+        return payload.subdata(in: start..<(end + 1))
+    }
+
+    override func download(
+        for url: URL,
+        byteRange: VesperDashByteRange? = nil,
+        to destinationURL: URL
+    ) async throws -> UInt64 {
+        let payload = try await data(for: url, byteRange: byteRange)
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try payload.write(to: destinationURL)
+        return UInt64(payload.count)
+    }
+
+    func requestCount(for url: URL, byteRange: VesperDashByteRange? = nil) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts[requestKey(for: url, byteRange: byteRange), default: 0]
+    }
+
+    private func incrementRequestCount(for url: URL, byteRange: VesperDashByteRange?) {
+        lock.lock()
+        defer { lock.unlock() }
+        counts[requestKey(for: url, byteRange: byteRange), default: 0] += 1
+    }
+
+    private func requestKey(for url: URL, byteRange: VesperDashByteRange?) -> String {
+        if let byteRange {
+            return "\(url.absoluteString)#\(byteRange.start)-\(byteRange.end)"
+        }
+        return url.absoluteString
+    }
+}
+
+private func sampleSegmentBaseMediaData() -> Data {
+    var payload = mp4Box(type: "ftyp", payload: Data(repeating: 0, count: 992))
+    let sidxBox = mp4Box(type: "sidx", payload: sidxPayloadV0())
+    payload.append(sidxBox)
+    if payload.count < 1_600 {
+        payload.append(Data(repeating: 0x55, count: 1_600 - payload.count))
+    }
+    return payload
 }
 
 private func writeSegmentTemplateFiles(

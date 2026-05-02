@@ -456,7 +456,9 @@ fn build_master_playlist(
             .filter_map(|item| item.representation.bandwidth)
             .max()
             .unwrap_or(0);
-        for item in &selected.video {
+        let mut ordered_video = selected.video.iter().enumerate().collect::<Vec<_>>();
+        ordered_video.sort_by_key(|(index, item)| startup_video_score(item, *index));
+        for (_, item) in ordered_video {
             append_variant_lines(
                 &mut lines,
                 item,
@@ -1127,6 +1129,57 @@ mod tests {
         let selected = startup_video_representation(&video).expect("startup video");
 
         assert_eq!(selected.rendition_id, "avc-720");
+    }
+
+    #[test]
+    fn master_playlist_orders_startup_video_first() {
+        let selected = SelectedPlayableResponse {
+            audio: Vec::new(),
+            video: vec![
+                playable_video(
+                    "avc-2160",
+                    "avc1.640033",
+                    Some(20_000_000),
+                    Some(3840),
+                    Some(2160),
+                ),
+                playable_video(
+                    "avc-360",
+                    "avc1.4d401e",
+                    Some(109_000),
+                    Some(640),
+                    Some(360),
+                ),
+                playable_video(
+                    "avc-720",
+                    "avc1.4d401f",
+                    Some(800_000),
+                    Some(1280),
+                    Some(720),
+                ),
+            ],
+            subtitles: Vec::new(),
+        };
+        let media_urls = HashMap::from([
+            ("avc-2160".to_owned(), "vesper-dash://media/avc-2160.m3u8".to_owned()),
+            ("avc-360".to_owned(), "vesper-dash://media/avc-360.m3u8".to_owned()),
+            ("avc-720".to_owned(), "vesper-dash://media/avc-720.m3u8".to_owned()),
+        ]);
+
+        let playlist = build_master_playlist(&selected, &media_urls).expect("master playlist");
+        let variant_urls = playlist
+            .lines()
+            .filter(|line| line.starts_with("vesper-dash://media/"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            variant_urls,
+            vec![
+                "vesper-dash://media/avc-360.m3u8",
+                "vesper-dash://media/avc-720.m3u8",
+                "vesper-dash://media/avc-2160.m3u8",
+            ]
+        );
     }
 
     #[test]

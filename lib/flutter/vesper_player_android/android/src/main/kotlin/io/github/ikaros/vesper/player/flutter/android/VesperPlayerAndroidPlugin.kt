@@ -64,6 +64,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -802,15 +803,18 @@ class VesperPlayerAndroidPlugin :
 
     private fun bindSessionHost(playerId: String, host: FrameLayout) {
         val session = sessions[playerId] ?: return
+        session.cancelPendingHostDetach()
+        session.advanceHostDetachGeneration()
         if (session.hostView === host) {
             session.controller.attachSurfaceHost(host)
             emitSnapshot(session)
             return
         }
 
-        session.hostView?.let(session.controller::detachSurfaceHost)
+        val previousHost = session.hostView
         session.hostView = host
         session.controller.attachSurfaceHost(host)
+        previousHost?.removeAllViews()
         emitSnapshot(session)
     }
 
@@ -819,13 +823,29 @@ class VesperPlayerAndroidPlugin :
         if (session.hostView !== host) {
             return
         }
-        session.controller.detachSurfaceHost(host)
-        session.hostView = null
-        emitSnapshot(session)
+        session.cancelPendingHostDetach()
+        val generation = session.advanceHostDetachGeneration()
+        session.pendingHostDetachJob = scope.launch {
+            delay(HOST_DETACH_GRACE_DELAY_MS)
+            val currentSession = sessions[playerId] ?: return@launch
+            if (
+                currentSession !== session ||
+                currentSession.hostView !== host ||
+                currentSession.hostDetachGeneration != generation
+            ) {
+                return@launch
+            }
+            currentSession.controller.detachSurfaceHost(host)
+            currentSession.hostView = null
+            currentSession.pendingHostDetachJob = null
+            emitSnapshot(currentSession)
+        }
     }
 
     private fun disposeSession(session: PlayerSession) {
         session.observerJob?.cancel()
+        session.cancelPendingHostDetach()
+        session.advanceHostDetachGeneration()
         session.hostView?.let(session.controller::detachSurfaceHost)
         session.hostView = null
         session.controller.dispose()
@@ -867,12 +887,24 @@ private data class PlayerSession(
     val controller: VesperPlayerController,
     val benchmarkConsoleLogging: Boolean = false,
     var hostView: FrameLayout? = null,
+    var pendingHostDetachJob: Job? = null,
+    var hostDetachGeneration: Long = 0L,
     var observerJob: Job? = null,
     var lastError: Map<String, Any?>? = null,
     var viewport: FlutterViewport? = null,
     var viewportHint: FlutterViewportHint = FlutterViewportHint.hidden(),
 ) {
     fun hasAttachedHost(): Boolean = hostView != null
+
+    fun cancelPendingHostDetach() {
+        pendingHostDetachJob?.cancel()
+        pendingHostDetachJob = null
+    }
+
+    fun advanceHostDetachGeneration(): Long {
+        hostDetachGeneration += 1L
+        return hostDetachGeneration
+    }
 }
 
 private data class DownloadSession(
@@ -1570,3 +1602,4 @@ private const val DOWNLOAD_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player/
 private const val PLAYER_VIEW_TYPE = "io.github.ikaros.vesper_player/platform_view"
 private const val BENCHMARK_LOG_TAG = "VesperBenchmark"
 private const val BENCHMARK_LOG_CHUNK_SIZE = 3500
+private const val HOST_DETACH_GRACE_DELAY_MS = 250L
