@@ -396,7 +396,9 @@ fn windows_video_surface_target(window: &Window) -> Result<PlayerVideoSurfaceTar
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use super::{
         DesktopNoopPreloadExecutor, DesktopPreloadBridgeSession, DesktopPreloadCommand,
@@ -412,8 +414,6 @@ mod tests {
         PreloadBudget, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
         PreloadEvent, PreloadExecutor, PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
     };
-    use std::time::{Duration, Instant};
-
     const HLS_REMOTE_SOURCE: &str = "https://example.com/stream/master.m3u8";
     const DASH_REMOTE_SOURCE: &str = "https://example.com/stream/manifest.mpd";
 
@@ -515,10 +515,27 @@ mod tests {
 
     #[test]
     fn normalize_desktop_source_canonicalizes_local_path() {
-        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        let file_name = format!(
+            "vesper-player-host-desktop-canonicalize-{}-{}.mp4",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after Unix epoch")
+                .as_nanos()
+        );
+        let fixture_path = std::env::temp_dir().join(&file_name);
+        fs::write(&fixture_path, b"canonicalize fixture").expect("fixture should be written");
+
         let source = canonical_desktop_host_local_path(&fixture_path)
             .expect("local path should canonicalize");
-        assert!(source.ends_with("test-video.mp4"));
+        fs::remove_file(&fixture_path).expect("fixture should be removed");
+
+        assert_eq!(
+            Path::new(&source)
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(file_name.as_str())
+        );
     }
 
     #[test]
