@@ -1,3 +1,5 @@
+#![allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
+
 mod buffered;
 
 use std::collections::HashMap;
@@ -796,7 +798,7 @@ fn resolve_remote_hls_sources(
 ) -> Result<ResolvedRemoteHlsSources> {
     if let Some(cached) = resolved_hls_source_cache()
         .lock()
-        .expect("resolved HLS source cache lock poisoned")
+        .unwrap_or_else(|error| error.into_inner())
         .get(manifest_uri)
         .cloned()
     {
@@ -809,7 +811,7 @@ fn resolve_remote_hls_sources(
 
     let mut cache = resolved_hls_source_cache()
         .lock()
-        .expect("resolved HLS source cache lock poisoned");
+        .unwrap_or_else(|error| error.into_inner());
     if !cache.contains_key(manifest_uri) && cache.len() >= MAX_RESOLVED_HLS_SOURCE_CACHE_ENTRIES {
         cache.clear();
     }

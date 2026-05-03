@@ -1145,10 +1145,7 @@ impl SoftwarePlayerRuntime {
         }
 
         let mut latest_frame = None;
-        loop {
-            let Some(next_frame) = self.next_frame.as_ref() else {
-                break;
-            };
+        while let Some(next_frame) = self.next_frame.as_ref() {
             if !self.should_present_frame(next_frame.presentation_time) {
                 break;
             }
@@ -1788,11 +1785,10 @@ impl SoftwarePlayerRuntime {
                             emit_chunk,
                         )
                     }
-                    .and_then(|_| {
+                    .map(|_| {
                         if controller.is_generation_active(generation) {
                             controller.finish_generation(generation);
                         }
-                        Ok(())
                     })
                     .map(|_| AudioStreamWorkerEvent::Finished)
                     .map_err(|error| error.to_string());
@@ -1879,11 +1875,10 @@ impl SoftwarePlayerRuntime {
                         emit_metadata,
                         emit_chunk,
                     )
-                    .and_then(|_| {
+                    .map(|_| {
                         if controller.is_generation_active(generation) {
                             controller.finish_generation(generation);
                         }
-                        Ok(())
                     })
                     .map(|_| AudioStreamWorkerEvent::Finished)
                     .map_err(|error| error.to_string());
@@ -1910,10 +1905,10 @@ impl SoftwarePlayerRuntime {
     }
 
     fn cancel_pending_audio_stream_worker(&mut self) {
-        if let Some(worker) = self.pending_audio_stream_worker.take() {
-            if let Some(interrupt_flag) = worker.interrupt_flag {
-                interrupt_flag.store(true, Ordering::SeqCst);
-            }
+        if let Some(worker) = self.pending_audio_stream_worker.take()
+            && let Some(interrupt_flag) = worker.interrupt_flag
+        {
+            interrupt_flag.store(true, Ordering::SeqCst);
         }
         self.pending_audio_stream_retry = None;
     }
@@ -1966,10 +1961,10 @@ impl SoftwarePlayerRuntime {
         self.cancel_pending_audio_stream_worker();
         self.set_playback_clock(current_position);
 
-        if self.audio_output_config.is_some() {
-            if let Err(error) = self.maybe_start_audio_decode_worker() {
-                self.emit_event(PlayerRuntimeEvent::Error(error));
-            }
+        if self.audio_output_config.is_some()
+            && let Err(error) = self.maybe_start_audio_decode_worker()
+        {
+            self.emit_event(PlayerRuntimeEvent::Error(error));
         }
 
         match self.ensure_audio_output(current_position, current_rate) {
@@ -2156,33 +2151,31 @@ impl SoftwarePlayerRuntime {
     fn poll_scheduled_retries(&mut self) {
         let now = Instant::now();
 
-        if let Some(retry) = self.pending_audio_metadata_retry {
-            if now >= retry.due_at
-                && self.pending_audio_metadata_worker.is_none()
-                && self.media_info.best_audio.is_none()
-            {
-                self.pending_audio_metadata_retry = None;
-                if let Err(error) = self.start_audio_metadata_probe_worker(retry.attempt) {
-                    self.emit_event(PlayerRuntimeEvent::Error(error));
-                }
+        if let Some(retry) = self.pending_audio_metadata_retry
+            && now >= retry.due_at
+            && self.pending_audio_metadata_worker.is_none()
+            && self.media_info.best_audio.is_none()
+        {
+            self.pending_audio_metadata_retry = None;
+            if let Err(error) = self.start_audio_metadata_probe_worker(retry.attempt) {
+                self.emit_event(PlayerRuntimeEvent::Error(error));
             }
         }
 
-        if let Some(retry) = self.pending_audio_stream_retry {
-            if now >= retry.due_at
-                && self.pending_audio_stream_worker.is_none()
-                && should_stream_audio_source_directly(&self.source)
-                && self.audio_output_config.is_some()
-                && self.audio_sink_controller.is_some()
-            {
-                self.pending_audio_stream_retry = None;
-                if let Err(error) = self.start_remote_audio_stream_with_retry_attempt(
-                    retry.position,
-                    retry.playback_rate,
-                    retry.attempt,
-                ) {
-                    self.emit_event(PlayerRuntimeEvent::Error(error));
-                }
+        if let Some(retry) = self.pending_audio_stream_retry
+            && now >= retry.due_at
+            && self.pending_audio_stream_worker.is_none()
+            && should_stream_audio_source_directly(&self.source)
+            && self.audio_output_config.is_some()
+            && self.audio_sink_controller.is_some()
+        {
+            self.pending_audio_stream_retry = None;
+            if let Err(error) = self.start_remote_audio_stream_with_retry_attempt(
+                retry.position,
+                retry.playback_rate,
+                retry.attempt,
+            ) {
+                self.emit_event(PlayerRuntimeEvent::Error(error));
             }
         }
     }

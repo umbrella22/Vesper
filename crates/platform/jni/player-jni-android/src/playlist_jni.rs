@@ -38,7 +38,7 @@ fn with_playlist_session_mut<R>(
 ) -> Option<R> {
     let session = {
         let guard = lock_or_recover(playlist_sessions());
-        let Some(session) = guard.get(&handle).cloned() else {
+        let Some(session) = guard.get(handle).cloned() else {
             let _ = env.throw_new(
                 jni_name("java/lang/IllegalArgumentException"),
                 jni_name(invalid_playlist_handle_error()),
@@ -60,7 +60,7 @@ fn with_playlist_session<R>(
 ) -> Option<R> {
     let session = {
         let guard = lock_or_recover(playlist_sessions());
-        let Some(session) = guard.get(&handle).cloned() else {
+        let Some(session) = guard.get(handle).cloned() else {
             let _ = env.throw_new(
                 jni_name("java/lang/IllegalArgumentException"),
                 jni_name(invalid_playlist_handle_error()),
@@ -272,7 +272,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|_env| -> JniResult<()> {
                 let mut guard = lock_or_recover(playlist_sessions());
-                guard.remove(&session_handle);
+                guard.remove(session_handle);
                 Ok(())
             })
             .resolve::<ThrowRuntimeExAndDefault>()
@@ -293,7 +293,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 let queue_array =
                     unsafe { JObjectArray::<JObject<'_>>::from_raw(env, queue as jobjectArray) };
                 let len = queue_array.len(env)?;
-                let mut rust_queue = Vec::with_capacity(len as usize);
+                let mut rust_queue = Vec::with_capacity(len);
                 for index in 0..len {
                     let item = queue_array.get_element(env, index)?;
                     if !item.is_null() {
@@ -327,7 +327,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 let hints_array =
                     unsafe { JObjectArray::<JObject<'_>>::from_raw(env, hints as jobjectArray) };
                 let len = hints_array.len(env)?;
-                let mut rust_hints = Vec::with_capacity(len as usize);
+                let mut rust_hints = Vec::with_capacity(len);
                 for index in 0..len {
                     let hint = hints_array.get_element(env, index)?;
                     if !hint.is_null() {

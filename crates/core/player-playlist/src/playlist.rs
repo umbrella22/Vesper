@@ -156,21 +156,11 @@ impl Default for PlaylistSwitchPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlaylistCoordinatorConfig {
     pub neighbor_window: PlaylistNeighborWindow,
     pub preload_window: PlaylistPreloadWindow,
     pub switch_policy: PlaylistSwitchPolicy,
-}
-
-impl Default for PlaylistCoordinatorConfig {
-    fn default() -> Self {
-        Self {
-            neighbor_window: PlaylistNeighborWindow::default(),
-            preload_window: PlaylistPreloadWindow::default(),
-            switch_policy: PlaylistSwitchPolicy::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

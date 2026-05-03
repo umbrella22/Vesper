@@ -6,17 +6,17 @@ use anyhow::{Context, Result, bail};
 pub fn pick_local_media_file() -> Result<Option<PathBuf>> {
     #[cfg(target_os = "macos")]
     {
-        return pick_local_media_file_macos();
+        pick_local_media_file_macos()
     }
 
     #[cfg(target_os = "linux")]
     {
-        return pick_local_media_file_linux();
+        pick_local_media_file_linux()
     }
 
     #[cfg(target_os = "windows")]
     {
-        return pick_local_media_file_windows();
+        pick_local_media_file_windows()
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

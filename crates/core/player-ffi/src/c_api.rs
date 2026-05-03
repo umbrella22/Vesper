@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 use std::any::Any;
 use std::ffi::{CStr, CString, c_char};
 use std::mem;
@@ -1267,7 +1269,7 @@ impl From<BridgeEvent> for PlayerFfiEvent {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_initializer_probe_uri(
+pub unsafe extern "C" fn player_ffi_initializer_probe_uri(
     uri: *const c_char,
     out_initializer: *mut PlayerFfiInitializerHandle,
     out_error: *mut PlayerFfiError,
@@ -1314,7 +1316,7 @@ pub extern "C" fn player_ffi_initializer_probe_uri(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_resolve_resilience_policy(
+pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
     source_kind: PlayerFfiMediaSourceKind,
     source_protocol: PlayerFfiMediaSourceProtocol,
     buffering_policy: *const PlayerFfiBufferingPolicy,
@@ -1370,7 +1372,7 @@ pub extern "C" fn player_ffi_resolve_resilience_policy(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_resolve_preload_budget(
+pub unsafe extern "C" fn player_ffi_resolve_preload_budget(
     preload_budget: *const PlayerFfiPreloadBudgetPolicy,
     out_budget: *mut PlayerFfiResolvedPreloadBudgetPolicy,
     out_error: *mut PlayerFfiError,
@@ -1401,7 +1403,7 @@ pub extern "C" fn player_ffi_resolve_preload_budget(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_resolve_track_preferences(
+pub unsafe extern "C" fn player_ffi_resolve_track_preferences(
     track_preferences: *const PlayerFfiTrackPreferences,
     out_preferences: *mut PlayerFfiTrackPreferences,
     out_error: *mut PlayerFfiError,
@@ -1436,7 +1438,7 @@ pub extern "C" fn player_ffi_resolve_track_preferences(
 ///
 /// Passing a zero-initialized handle is a no-op. Passing a stale or already
 /// consumed handle returns `PlayerFfiErrorCode::InvalidState`.
-pub extern "C" fn player_ffi_initializer_destroy(
+pub unsafe extern "C" fn player_ffi_initializer_destroy(
     handle: PlayerFfiInitializerHandle,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -1455,7 +1457,7 @@ pub extern "C" fn player_ffi_initializer_destroy(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_initializer_media_info(
+pub unsafe extern "C" fn player_ffi_initializer_media_info(
     handle: PlayerFfiInitializerHandle,
     out_media_info: *mut PlayerFfiMediaInfo,
     out_error: *mut PlayerFfiError,
@@ -1484,7 +1486,7 @@ pub extern "C" fn player_ffi_initializer_media_info(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_initializer_startup(
+pub unsafe extern "C" fn player_ffi_initializer_startup(
     handle: PlayerFfiInitializerHandle,
     out_startup: *mut PlayerFfiStartup,
     out_error: *mut PlayerFfiError,
@@ -1518,7 +1520,7 @@ pub extern "C" fn player_ffi_initializer_startup(
 /// `player_ffi_initializer_destroy` or any other `player_ffi_initializer_*`
 /// function afterwards. Reusing the consumed handle returns
 /// `PlayerFfiErrorCode::InvalidState`.
-pub extern "C" fn player_ffi_initializer_initialize(
+pub unsafe extern "C" fn player_ffi_initializer_initialize(
     handle: PlayerFfiInitializerHandle,
     out_player: *mut PlayerFfiHandle,
     out_has_initial_frame: *mut bool,
@@ -1586,7 +1588,7 @@ pub extern "C" fn player_ffi_initializer_initialize(
 ///
 /// Passing a zero-initialized handle is a no-op. Passing a stale or already
 /// destroyed handle returns `PlayerFfiErrorCode::InvalidState`.
-pub extern "C" fn player_ffi_player_destroy(
+pub unsafe extern "C" fn player_ffi_player_destroy(
     handle: PlayerFfiHandle,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -1605,7 +1607,7 @@ pub extern "C" fn player_ffi_player_destroy(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_snapshot(
+pub unsafe extern "C" fn player_ffi_player_snapshot(
     handle: PlayerFfiHandle,
     out_snapshot: *mut PlayerFfiSnapshot,
     out_error: *mut PlayerFfiError,
@@ -1636,7 +1638,7 @@ pub extern "C" fn player_ffi_player_snapshot(
 ///
 /// `out_frame` is optional. Pass `NULL` when the caller does not need an
 /// immediate frame payload for this dispatch.
-pub extern "C" fn player_ffi_player_dispatch(
+pub unsafe extern "C" fn player_ffi_player_dispatch(
     handle: PlayerFfiHandle,
     command: PlayerFfiCommandKind,
     position_ms: u64,
@@ -1688,7 +1690,7 @@ pub extern "C" fn player_ffi_player_dispatch(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_set_playback_rate(
+pub unsafe extern "C" fn player_ffi_player_set_playback_rate(
     handle: PlayerFfiHandle,
     playback_rate: f32,
     out_applied: *mut bool,
@@ -1731,7 +1733,7 @@ pub extern "C" fn player_ffi_player_set_playback_rate(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_set_video_track_selection(
+pub unsafe extern "C" fn player_ffi_player_set_video_track_selection(
     handle: PlayerFfiHandle,
     selection: *const PlayerFfiTrackSelection,
     out_applied: *mut bool,
@@ -1782,7 +1784,7 @@ pub extern "C" fn player_ffi_player_set_video_track_selection(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_set_audio_track_selection(
+pub unsafe extern "C" fn player_ffi_player_set_audio_track_selection(
     handle: PlayerFfiHandle,
     selection: *const PlayerFfiTrackSelection,
     out_applied: *mut bool,
@@ -1833,7 +1835,7 @@ pub extern "C" fn player_ffi_player_set_audio_track_selection(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_set_subtitle_track_selection(
+pub unsafe extern "C" fn player_ffi_player_set_subtitle_track_selection(
     handle: PlayerFfiHandle,
     selection: *const PlayerFfiTrackSelection,
     out_applied: *mut bool,
@@ -1884,7 +1886,7 @@ pub extern "C" fn player_ffi_player_set_subtitle_track_selection(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_set_abr_policy(
+pub unsafe extern "C" fn player_ffi_player_set_abr_policy(
     handle: PlayerFfiHandle,
     policy: *const PlayerFfiAbrPolicy,
     out_applied: *mut bool,
@@ -1933,7 +1935,7 @@ pub extern "C" fn player_ffi_player_set_abr_policy(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_drain_events(
+pub unsafe extern "C" fn player_ffi_player_drain_events(
     handle: PlayerFfiHandle,
     out_events: *mut PlayerFfiEventList,
     out_error: *mut PlayerFfiError,
@@ -1968,7 +1970,7 @@ pub extern "C" fn player_ffi_player_drain_events(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_advance(
+pub unsafe extern "C" fn player_ffi_player_advance(
     handle: PlayerFfiHandle,
     out_frame: *mut PlayerFfiVideoFrame,
     out_has_frame: *mut bool,
@@ -2011,7 +2013,7 @@ pub extern "C" fn player_ffi_player_advance(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_player_next_deadline_delay_ms(
+pub unsafe extern "C" fn player_ffi_player_next_deadline_delay_ms(
     handle: PlayerFfiHandle,
     out_has_deadline: *mut bool,
     out_delay_ms: *mut u64,
@@ -2044,7 +2046,7 @@ pub extern "C" fn player_ffi_player_next_deadline_delay_ms(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
+pub unsafe extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
     ffi_void(|| {
         let Some(error) = error_mut(error) else {
             return;
@@ -2056,7 +2058,7 @@ pub extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_media_info_free(media_info: *mut PlayerFfiMediaInfo) {
+pub unsafe extern "C" fn player_ffi_media_info_free(media_info: *mut PlayerFfiMediaInfo) {
     ffi_void(|| {
         let Some(media_info) = media_info_mut(media_info) else {
             return;
@@ -2067,7 +2069,7 @@ pub extern "C" fn player_ffi_media_info_free(media_info: *mut PlayerFfiMediaInfo
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_track_preferences_free(
+pub unsafe extern "C" fn player_ffi_track_preferences_free(
     track_preferences: *mut PlayerFfiTrackPreferences,
 ) {
     ffi_void(|| {
@@ -2080,7 +2082,7 @@ pub extern "C" fn player_ffi_track_preferences_free(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_startup_free(startup: *mut PlayerFfiStartup) {
+pub unsafe extern "C" fn player_ffi_startup_free(startup: *mut PlayerFfiStartup) {
     ffi_void(|| {
         let Some(startup) = startup_mut(startup) else {
             return;
@@ -2091,7 +2093,7 @@ pub extern "C" fn player_ffi_startup_free(startup: *mut PlayerFfiStartup) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_snapshot_free(snapshot: *mut PlayerFfiSnapshot) {
+pub unsafe extern "C" fn player_ffi_snapshot_free(snapshot: *mut PlayerFfiSnapshot) {
     ffi_void(|| {
         let Some(snapshot) = snapshot_mut(snapshot) else {
             return;
@@ -2102,7 +2104,7 @@ pub extern "C" fn player_ffi_snapshot_free(snapshot: *mut PlayerFfiSnapshot) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_video_frame_free(frame: *mut PlayerFfiVideoFrame) {
+pub unsafe extern "C" fn player_ffi_video_frame_free(frame: *mut PlayerFfiVideoFrame) {
     ffi_void(|| {
         let Some(frame) = video_frame_mut(frame) else {
             return;
@@ -2113,7 +2115,7 @@ pub extern "C" fn player_ffi_video_frame_free(frame: *mut PlayerFfiVideoFrame) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_event_list_free(events: *mut PlayerFfiEventList) {
+pub unsafe extern "C" fn player_ffi_event_list_free(events: *mut PlayerFfiEventList) {
     ffi_void(|| {
         let Some(events) = event_list_mut(events) else {
             return;
@@ -2529,7 +2531,7 @@ fn free_event(event: &mut PlayerFfiEvent) {
     free_startup(&mut event.initialized);
     free_media_info(&mut event.metadata_ready);
     free_audio_output(&mut event.audio_output);
-    player_ffi_error_free(&mut event.error);
+    unsafe { player_ffi_error_free(&mut event.error) };
     *event = PlayerFfiEvent::default();
 }
 
@@ -2903,94 +2905,98 @@ mod tests {
 
     #[test]
     fn initializer_probe_uri_rejects_null_output_pointer() {
-        let uri = CString::new("https://example.com/master.m3u8").expect("valid uri");
-        let mut error = PlayerFfiError::default();
+        unsafe {
+            let uri = CString::new("https://example.com/master.m3u8").expect("valid uri");
+            let mut error = PlayerFfiError::default();
 
-        let status = player_ffi_initializer_probe_uri(uri.as_ptr(), ptr::null_mut(), &mut error);
+            let status =
+                player_ffi_initializer_probe_uri(uri.as_ptr(), ptr::null_mut(), &mut error);
 
-        assert_eq!(status, PlayerFfiCallStatus::Error);
-        assert_eq!(error.code, PlayerFfiErrorCode::NullPointer);
-        assert_eq!(copy_c_string(error.message), "out_initializer was null");
-        super::player_ffi_error_free(&mut error);
+            assert_eq!(status, PlayerFfiCallStatus::Error);
+            assert_eq!(error.code, PlayerFfiErrorCode::NullPointer);
+            assert_eq!(copy_c_string(error.message), "out_initializer was null");
+            super::player_ffi_error_free(&mut error);
+        }
     }
 
     #[test]
     fn initializer_initialize_and_dispatch_accept_optional_frame_output() {
-        let initializer = fake_initializer("https://example.com/master.m3u8");
-        let handle = into_initializer_handle(initializer).expect("initializer handle should fit");
-        let mut player_handle = PlayerFfiHandle::default();
-        let mut has_initial_frame = false;
-        let mut initial_frame = PlayerFfiVideoFrame::default();
-        let mut startup = PlayerFfiStartup::default();
-        let mut error = PlayerFfiError::default();
+        unsafe {
+            let initializer = fake_initializer("https://example.com/master.m3u8");
+            let handle =
+                into_initializer_handle(initializer).expect("initializer handle should fit");
+            let mut player_handle = PlayerFfiHandle::default();
+            let mut has_initial_frame = false;
+            let mut initial_frame = PlayerFfiVideoFrame::default();
+            let mut startup = PlayerFfiStartup::default();
+            let mut error = PlayerFfiError::default();
 
-        let status = player_ffi_initializer_initialize(
-            handle,
-            &mut player_handle,
-            &mut has_initial_frame,
-            &mut initial_frame,
-            &mut startup,
-            &mut error,
-        );
+            let status = player_ffi_initializer_initialize(
+                handle,
+                &mut player_handle,
+                &mut has_initial_frame,
+                &mut initial_frame,
+                &mut startup,
+                &mut error,
+            );
 
-        assert_eq!(status, PlayerFfiCallStatus::Ok);
-        assert_ne!(player_handle.raw, 0);
-        assert!(has_initial_frame);
-        assert_eq!(initial_frame.width, 2);
-        assert!(startup.ffmpeg_initialized);
-        assert_eq!(
-            copy_c_string(startup.video_decode.hardware_backend),
-            "stub-hw"
-        );
-        player_ffi_video_frame_free(&mut initial_frame);
-        player_ffi_startup_free(&mut startup);
+            assert_eq!(status, PlayerFfiCallStatus::Ok);
+            assert_ne!(player_handle.raw, 0);
+            assert!(has_initial_frame);
+            assert_eq!(initial_frame.width, 2);
+            assert!(startup.ffmpeg_initialized);
+            assert_eq!(
+                copy_c_string(startup.video_decode.hardware_backend),
+                "stub-hw"
+            );
+            player_ffi_video_frame_free(&mut initial_frame);
+            player_ffi_startup_free(&mut startup);
 
-        let mut applied = false;
-        let mut snapshot = PlayerFfiSnapshot::default();
-        let dispatch_status = player_ffi_player_dispatch(
-            player_handle,
-            PlayerFfiCommandKind::Play,
-            0,
-            &mut applied,
-            ptr::null_mut(),
-            &mut snapshot,
-            &mut error,
-        );
+            let mut applied = false;
+            let mut snapshot = PlayerFfiSnapshot::default();
+            let dispatch_status = player_ffi_player_dispatch(
+                player_handle,
+                PlayerFfiCommandKind::Play,
+                0,
+                &mut applied,
+                ptr::null_mut(),
+                &mut snapshot,
+                &mut error,
+            );
 
-        assert_eq!(dispatch_status, PlayerFfiCallStatus::Ok);
-        assert!(applied);
-        assert_eq!(snapshot.state, PlayerFfiPlaybackState::Playing);
-        assert_eq!(
-            copy_c_string(snapshot.source_uri),
-            "https://example.com/master.m3u8"
-        );
-        assert_eq!(snapshot.media_info.track_catalog.len, 1);
-        assert_eq!(
-            unsafe { (*snapshot.media_info.track_catalog.tracks).kind },
-            PlayerFfiTrackKind::Video
-        );
-        assert_eq!(
-            snapshot.media_info.track_selection.abr_policy.mode,
-            PlayerFfiAbrMode::FixedTrack
-        );
-        player_ffi_snapshot_free(&mut snapshot);
+            assert_eq!(dispatch_status, PlayerFfiCallStatus::Ok);
+            assert!(applied);
+            assert_eq!(snapshot.state, PlayerFfiPlaybackState::Playing);
+            assert_eq!(
+                copy_c_string(snapshot.source_uri),
+                "https://example.com/master.m3u8"
+            );
+            assert_eq!(snapshot.media_info.track_catalog.len, 1);
+            assert_eq!(
+                (*snapshot.media_info.track_catalog.tracks).kind,
+                PlayerFfiTrackKind::Video
+            );
+            assert_eq!(
+                snapshot.media_info.track_selection.abr_policy.mode,
+                PlayerFfiAbrMode::FixedTrack
+            );
+            player_ffi_snapshot_free(&mut snapshot);
 
-        let mut events = super::PlayerFfiEventList::default();
-        let drain_status = player_ffi_player_drain_events(player_handle, &mut events, &mut error);
-        assert_eq!(drain_status, PlayerFfiCallStatus::Ok);
-        assert_eq!(events.len, 1);
-        assert_eq!(
-            unsafe { (*events.ptr).kind },
-            PlayerFfiEventKind::PlaybackStateChanged
-        );
-        assert_eq!(
-            unsafe { (*events.ptr).playback_state },
-            PlayerFfiPlaybackState::Playing
-        );
-        player_ffi_event_list_free(&mut events);
+            let mut events = super::PlayerFfiEventList::default();
+            let drain_status =
+                player_ffi_player_drain_events(player_handle, &mut events, &mut error);
+            assert_eq!(drain_status, PlayerFfiCallStatus::Ok);
+            assert_eq!(events.len, 1);
+            assert_eq!((*events.ptr).kind, PlayerFfiEventKind::PlaybackStateChanged);
+            assert_eq!(
+                (*events.ptr).playback_state,
+                PlayerFfiPlaybackState::Playing
+            );
+            player_ffi_event_list_free(&mut events);
 
-        let destroy_status = player_ffi_player_destroy(player_handle, &mut error);
-        assert_eq!(destroy_status, PlayerFfiCallStatus::Ok);
+            let destroy_status = player_ffi_player_destroy(player_handle, &mut error);
+            assert_eq!(destroy_status, PlayerFfiCallStatus::Ok);
+        }
     }
 
     #[test]
@@ -3005,239 +3011,251 @@ mod tests {
         assert_eq!(error.code, PlayerFfiErrorCode::BackendFailure);
         assert_eq!(error.category, super::PlayerFfiErrorCategory::Platform);
         assert!(copy_c_string(error.message).contains("ffi panic smoke"));
-        super::player_ffi_error_free(&mut error);
+        unsafe { super::player_ffi_error_free(&mut error) };
     }
 
     #[test]
     fn player_drain_events_preserves_order_and_is_one_shot() {
-        let initializer = fake_initializer("https://example.com/master.m3u8");
-        let handle = into_initializer_handle(initializer).expect("initializer handle should fit");
-        let mut player_handle = PlayerFfiHandle::default();
-        let mut has_initial_frame = false;
-        let mut initial_frame = PlayerFfiVideoFrame::default();
-        let mut startup = PlayerFfiStartup::default();
-        let mut error = PlayerFfiError::default();
+        unsafe {
+            let initializer = fake_initializer("https://example.com/master.m3u8");
+            let handle =
+                into_initializer_handle(initializer).expect("initializer handle should fit");
+            let mut player_handle = PlayerFfiHandle::default();
+            let mut has_initial_frame = false;
+            let mut initial_frame = PlayerFfiVideoFrame::default();
+            let mut startup = PlayerFfiStartup::default();
+            let mut error = PlayerFfiError::default();
 
-        let status = player_ffi_initializer_initialize(
-            handle,
-            &mut player_handle,
-            &mut has_initial_frame,
-            &mut initial_frame,
-            &mut startup,
-            &mut error,
-        );
-        assert_eq!(status, PlayerFfiCallStatus::Ok);
-        assert_ne!(player_handle.raw, 0);
-        player_ffi_video_frame_free(&mut initial_frame);
-        player_ffi_startup_free(&mut startup);
+            let status = player_ffi_initializer_initialize(
+                handle,
+                &mut player_handle,
+                &mut has_initial_frame,
+                &mut initial_frame,
+                &mut startup,
+                &mut error,
+            );
+            assert_eq!(status, PlayerFfiCallStatus::Ok);
+            assert_ne!(player_handle.raw, 0);
+            player_ffi_video_frame_free(&mut initial_frame);
+            player_ffi_startup_free(&mut startup);
 
-        let mut applied = false;
-        let mut snapshot = PlayerFfiSnapshot::default();
-        let play_status = player_ffi_player_dispatch(
-            player_handle,
-            PlayerFfiCommandKind::Play,
-            0,
-            &mut applied,
-            ptr::null_mut(),
-            &mut snapshot,
-            &mut error,
-        );
-        assert_eq!(play_status, PlayerFfiCallStatus::Ok);
-        assert!(applied);
-        player_ffi_snapshot_free(&mut snapshot);
+            let mut applied = false;
+            let mut snapshot = PlayerFfiSnapshot::default();
+            let play_status = player_ffi_player_dispatch(
+                player_handle,
+                PlayerFfiCommandKind::Play,
+                0,
+                &mut applied,
+                ptr::null_mut(),
+                &mut snapshot,
+                &mut error,
+            );
+            assert_eq!(play_status, PlayerFfiCallStatus::Ok);
+            assert!(applied);
+            player_ffi_snapshot_free(&mut snapshot);
 
-        let rate_status = player_ffi_player_set_playback_rate(
-            player_handle,
-            1.25,
-            &mut applied,
-            &mut snapshot,
-            &mut error,
-        );
-        assert_eq!(rate_status, PlayerFfiCallStatus::Ok);
-        assert!(applied);
-        player_ffi_snapshot_free(&mut snapshot);
+            let rate_status = player_ffi_player_set_playback_rate(
+                player_handle,
+                1.25,
+                &mut applied,
+                &mut snapshot,
+                &mut error,
+            );
+            assert_eq!(rate_status, PlayerFfiCallStatus::Ok);
+            assert!(applied);
+            player_ffi_snapshot_free(&mut snapshot);
 
-        let mut events = super::PlayerFfiEventList::default();
-        let drain_status = player_ffi_player_drain_events(player_handle, &mut events, &mut error);
-        assert_eq!(drain_status, PlayerFfiCallStatus::Ok);
-        assert_eq!(events.len, 2);
-        assert_eq!(
-            unsafe { (*events.ptr).kind },
-            PlayerFfiEventKind::PlaybackStateChanged
-        );
-        assert_eq!(
-            unsafe { (*events.ptr.add(1)).kind },
-            PlayerFfiEventKind::PlaybackRateChanged
-        );
-        assert_eq!(unsafe { (*events.ptr.add(1)).playback_rate }, 1.25);
-        player_ffi_event_list_free(&mut events);
+            let mut events = super::PlayerFfiEventList::default();
+            let drain_status =
+                player_ffi_player_drain_events(player_handle, &mut events, &mut error);
+            assert_eq!(drain_status, PlayerFfiCallStatus::Ok);
+            assert_eq!(events.len, 2);
+            assert_eq!((*events.ptr).kind, PlayerFfiEventKind::PlaybackStateChanged);
+            assert_eq!(
+                (*events.ptr.add(1)).kind,
+                PlayerFfiEventKind::PlaybackRateChanged
+            );
+            assert_eq!((*events.ptr.add(1)).playback_rate, 1.25);
+            player_ffi_event_list_free(&mut events);
 
-        let second_drain_status =
-            player_ffi_player_drain_events(player_handle, &mut events, &mut error);
-        assert_eq!(second_drain_status, PlayerFfiCallStatus::Ok);
-        assert_eq!(events.len, 0);
-        assert!(events.ptr.is_null());
-        player_ffi_event_list_free(&mut events);
+            let second_drain_status =
+                player_ffi_player_drain_events(player_handle, &mut events, &mut error);
+            assert_eq!(second_drain_status, PlayerFfiCallStatus::Ok);
+            assert_eq!(events.len, 0);
+            assert!(events.ptr.is_null());
+            player_ffi_event_list_free(&mut events);
 
-        let destroy_status = player_ffi_player_destroy(player_handle, &mut error);
-        assert_eq!(destroy_status, PlayerFfiCallStatus::Ok);
+            let destroy_status = player_ffi_player_destroy(player_handle, &mut error);
+            assert_eq!(destroy_status, PlayerFfiCallStatus::Ok);
+        }
     }
 
     #[test]
     fn initializer_media_info_and_startup_round_trip_fake_runtime_payload() {
-        let handle = into_initializer_handle(fake_initializer("https://example.com/video.mp4"))
-            .expect("initializer handle should fit");
-        let mut media_info = PlayerFfiMediaInfo::default();
-        let mut startup = PlayerFfiStartup::default();
-        let mut error = PlayerFfiError::default();
+        unsafe {
+            let handle = into_initializer_handle(fake_initializer("https://example.com/video.mp4"))
+                .expect("initializer handle should fit");
+            let mut media_info = PlayerFfiMediaInfo::default();
+            let mut startup = PlayerFfiStartup::default();
+            let mut error = PlayerFfiError::default();
 
-        let media_status = player_ffi_initializer_media_info(handle, &mut media_info, &mut error);
-        assert_eq!(media_status, PlayerFfiCallStatus::Ok);
-        assert_eq!(
-            copy_c_string(media_info.source_uri),
-            "https://example.com/video.mp4"
-        );
-        assert_eq!(
-            media_info.source_kind,
-            super::PlayerFfiMediaSourceKind::Remote
-        );
-        assert_eq!(
-            media_info.source_protocol,
-            super::PlayerFfiMediaSourceProtocol::Progressive
-        );
-        assert!(media_info.has_duration);
-        assert_eq!(media_info.duration_ms, 60_000);
-        assert!(media_info.has_best_video);
-        assert_eq!(copy_c_string(media_info.best_video.codec), "h264");
-        assert_eq!(media_info.track_catalog.len, 1);
-        assert_eq!(
-            unsafe { (*media_info.track_catalog.tracks).kind },
-            PlayerFfiTrackKind::Video
-        );
-        player_ffi_media_info_free(&mut media_info);
+            let media_status =
+                player_ffi_initializer_media_info(handle, &mut media_info, &mut error);
+            assert_eq!(media_status, PlayerFfiCallStatus::Ok);
+            assert_eq!(
+                copy_c_string(media_info.source_uri),
+                "https://example.com/video.mp4"
+            );
+            assert_eq!(
+                media_info.source_kind,
+                super::PlayerFfiMediaSourceKind::Remote
+            );
+            assert_eq!(
+                media_info.source_protocol,
+                super::PlayerFfiMediaSourceProtocol::Progressive
+            );
+            assert!(media_info.has_duration);
+            assert_eq!(media_info.duration_ms, 60_000);
+            assert!(media_info.has_best_video);
+            assert_eq!(copy_c_string(media_info.best_video.codec), "h264");
+            assert_eq!(media_info.track_catalog.len, 1);
+            assert_eq!(
+                (*media_info.track_catalog.tracks).kind,
+                PlayerFfiTrackKind::Video
+            );
+            player_ffi_media_info_free(&mut media_info);
 
-        let startup_status = player_ffi_initializer_startup(handle, &mut startup, &mut error);
-        assert_eq!(startup_status, PlayerFfiCallStatus::Ok);
-        assert!(startup.ffmpeg_initialized);
-        assert!(startup.has_audio_output);
-        assert_eq!(
-            copy_c_string(startup.audio_output.device_name),
-            "Stub Speaker"
-        );
-        assert!(startup.has_video_decode);
-        assert_eq!(
-            copy_c_string(startup.video_decode.hardware_backend),
-            "stub-hw"
-        );
-        player_ffi_startup_free(&mut startup);
+            let startup_status = player_ffi_initializer_startup(handle, &mut startup, &mut error);
+            assert_eq!(startup_status, PlayerFfiCallStatus::Ok);
+            assert!(startup.ffmpeg_initialized);
+            assert!(startup.has_audio_output);
+            assert_eq!(
+                copy_c_string(startup.audio_output.device_name),
+                "Stub Speaker"
+            );
+            assert!(startup.has_video_decode);
+            assert_eq!(
+                copy_c_string(startup.video_decode.hardware_backend),
+                "stub-hw"
+            );
+            player_ffi_startup_free(&mut startup);
 
-        let destroy_status = player_ffi_initializer_destroy(handle, &mut error);
-        assert_eq!(destroy_status, PlayerFfiCallStatus::Ok);
+            let destroy_status = player_ffi_initializer_destroy(handle, &mut error);
+            assert_eq!(destroy_status, PlayerFfiCallStatus::Ok);
+        }
     }
 
     #[test]
     fn initializer_initialize_rejects_invalid_handle() {
-        let mut player_handle = PlayerFfiHandle::default();
-        let mut has_initial_frame = false;
-        let mut initial_frame = PlayerFfiVideoFrame::default();
-        let mut startup = PlayerFfiStartup::default();
-        let mut error = PlayerFfiError::default();
+        unsafe {
+            let mut player_handle = PlayerFfiHandle::default();
+            let mut has_initial_frame = false;
+            let mut initial_frame = PlayerFfiVideoFrame::default();
+            let mut startup = PlayerFfiStartup::default();
+            let mut error = PlayerFfiError::default();
 
-        let status = player_ffi_initializer_initialize(
-            PlayerFfiInitializerHandle::default(),
-            &mut player_handle,
-            &mut has_initial_frame,
-            &mut initial_frame,
-            &mut startup,
-            &mut error,
-        );
+            let status = player_ffi_initializer_initialize(
+                PlayerFfiInitializerHandle::default(),
+                &mut player_handle,
+                &mut has_initial_frame,
+                &mut initial_frame,
+                &mut startup,
+                &mut error,
+            );
 
-        assert_eq!(status, PlayerFfiCallStatus::Error);
-        assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
-        assert_eq!(
-            copy_c_string(error.message),
-            "initializer handle was invalid"
-        );
-        super::player_ffi_error_free(&mut error);
+            assert_eq!(status, PlayerFfiCallStatus::Error);
+            assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
+            assert_eq!(
+                copy_c_string(error.message),
+                "initializer handle was invalid"
+            );
+            super::player_ffi_error_free(&mut error);
+        }
     }
 
     #[test]
     fn initializer_handle_becomes_invalid_after_initialize_consumes_it() {
-        let handle = into_initializer_handle(fake_initializer("https://example.com/consumed.m3u8"))
-            .expect("initializer handle should fit");
-        let mut player_handle = PlayerFfiHandle::default();
-        let mut has_initial_frame = false;
-        let mut initial_frame = PlayerFfiVideoFrame::default();
-        let mut startup = PlayerFfiStartup::default();
-        let mut error = PlayerFfiError::default();
+        unsafe {
+            let handle =
+                into_initializer_handle(fake_initializer("https://example.com/consumed.m3u8"))
+                    .expect("initializer handle should fit");
+            let mut player_handle = PlayerFfiHandle::default();
+            let mut has_initial_frame = false;
+            let mut initial_frame = PlayerFfiVideoFrame::default();
+            let mut startup = PlayerFfiStartup::default();
+            let mut error = PlayerFfiError::default();
 
-        let status = player_ffi_initializer_initialize(
-            handle,
-            &mut player_handle,
-            &mut has_initial_frame,
-            &mut initial_frame,
-            &mut startup,
-            &mut error,
-        );
-        assert_eq!(status, PlayerFfiCallStatus::Ok);
-        player_ffi_video_frame_free(&mut initial_frame);
-        player_ffi_startup_free(&mut startup);
+            let status = player_ffi_initializer_initialize(
+                handle,
+                &mut player_handle,
+                &mut has_initial_frame,
+                &mut initial_frame,
+                &mut startup,
+                &mut error,
+            );
+            assert_eq!(status, PlayerFfiCallStatus::Ok);
+            player_ffi_video_frame_free(&mut initial_frame);
+            player_ffi_startup_free(&mut startup);
 
-        let mut consumed_startup = PlayerFfiStartup::default();
-        let startup_status =
-            player_ffi_initializer_startup(handle, &mut consumed_startup, &mut error);
-        assert_eq!(startup_status, PlayerFfiCallStatus::Error);
-        assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
-        assert_eq!(
-            copy_c_string(error.message),
-            "initializer handle was invalid"
-        );
-        super::player_ffi_error_free(&mut error);
+            let mut consumed_startup = PlayerFfiStartup::default();
+            let startup_status =
+                player_ffi_initializer_startup(handle, &mut consumed_startup, &mut error);
+            assert_eq!(startup_status, PlayerFfiCallStatus::Error);
+            assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
+            assert_eq!(
+                copy_c_string(error.message),
+                "initializer handle was invalid"
+            );
+            super::player_ffi_error_free(&mut error);
 
-        let destroy_status = player_ffi_initializer_destroy(handle, &mut error);
-        assert_eq!(destroy_status, PlayerFfiCallStatus::Error);
-        assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
-        assert_eq!(
-            copy_c_string(error.message),
-            "initializer handle was invalid"
-        );
-        super::player_ffi_error_free(&mut error);
+            let destroy_status = player_ffi_initializer_destroy(handle, &mut error);
+            assert_eq!(destroy_status, PlayerFfiCallStatus::Error);
+            assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
+            assert_eq!(
+                copy_c_string(error.message),
+                "initializer handle was invalid"
+            );
+            super::player_ffi_error_free(&mut error);
 
-        let player_destroy_status = player_ffi_player_destroy(player_handle, &mut error);
-        assert_eq!(player_destroy_status, PlayerFfiCallStatus::Ok);
+            let player_destroy_status = player_ffi_player_destroy(player_handle, &mut error);
+            assert_eq!(player_destroy_status, PlayerFfiCallStatus::Ok);
+        }
     }
 
     #[test]
     fn player_destroy_rejects_double_destroy_with_invalid_state() {
-        let handle =
-            into_initializer_handle(fake_initializer("https://example.com/double-destroy.m3u8"))
-                .expect("initializer handle should fit");
-        let mut player_handle = PlayerFfiHandle::default();
-        let mut has_initial_frame = false;
-        let mut initial_frame = PlayerFfiVideoFrame::default();
-        let mut startup = PlayerFfiStartup::default();
-        let mut error = PlayerFfiError::default();
+        unsafe {
+            let handle = into_initializer_handle(fake_initializer(
+                "https://example.com/double-destroy.m3u8",
+            ))
+            .expect("initializer handle should fit");
+            let mut player_handle = PlayerFfiHandle::default();
+            let mut has_initial_frame = false;
+            let mut initial_frame = PlayerFfiVideoFrame::default();
+            let mut startup = PlayerFfiStartup::default();
+            let mut error = PlayerFfiError::default();
 
-        let status = player_ffi_initializer_initialize(
-            handle,
-            &mut player_handle,
-            &mut has_initial_frame,
-            &mut initial_frame,
-            &mut startup,
-            &mut error,
-        );
-        assert_eq!(status, PlayerFfiCallStatus::Ok);
-        player_ffi_video_frame_free(&mut initial_frame);
-        player_ffi_startup_free(&mut startup);
+            let status = player_ffi_initializer_initialize(
+                handle,
+                &mut player_handle,
+                &mut has_initial_frame,
+                &mut initial_frame,
+                &mut startup,
+                &mut error,
+            );
+            assert_eq!(status, PlayerFfiCallStatus::Ok);
+            player_ffi_video_frame_free(&mut initial_frame);
+            player_ffi_startup_free(&mut startup);
 
-        let first_destroy_status = player_ffi_player_destroy(player_handle, &mut error);
-        assert_eq!(first_destroy_status, PlayerFfiCallStatus::Ok);
+            let first_destroy_status = player_ffi_player_destroy(player_handle, &mut error);
+            assert_eq!(first_destroy_status, PlayerFfiCallStatus::Ok);
 
-        let second_destroy_status = player_ffi_player_destroy(player_handle, &mut error);
-        assert_eq!(second_destroy_status, PlayerFfiCallStatus::Error);
-        assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
-        assert_eq!(copy_c_string(error.message), "player handle was invalid");
-        super::player_ffi_error_free(&mut error);
+            let second_destroy_status = player_ffi_player_destroy(player_handle, &mut error);
+            assert_eq!(second_destroy_status, PlayerFfiCallStatus::Error);
+            assert_eq!(error.code, PlayerFfiErrorCode::InvalidState);
+            assert_eq!(copy_c_string(error.message), "player handle was invalid");
+            super::player_ffi_error_free(&mut error);
+        }
     }
 
     fn copy_c_string(value: *mut std::ffi::c_char) -> String {

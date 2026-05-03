@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Media kind handled by a decoder plugin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum DecoderMediaKind {
+    #[default]
     Video,
     Audio,
 }
@@ -65,12 +66,6 @@ pub struct DecoderSessionConfig {
     pub require_cpu_output: bool,
     #[serde(default)]
     pub native_device_context: Option<DecoderNativeDeviceContext>,
-}
-
-impl Default for DecoderMediaKind {
-    fn default() -> Self {
-        Self::Video
-    }
 }
 
 /// Optional session metadata returned by a plugin after opening a decoder.

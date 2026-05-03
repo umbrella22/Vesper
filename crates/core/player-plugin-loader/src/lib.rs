@@ -3034,6 +3034,8 @@ mod tests {
                 plugin_path.display()
             )
         });
+        // SAFETY: this ignored integration test owns the temporary
+        // process-wide fixture switch and clears it before assertions finish.
         unsafe { env::remove_var("VESPER_DECODER_FIXTURE_ABI") };
 
         assert_eq!(plugin.plugin_name(), "player-decoder-fixture");
@@ -3386,6 +3388,8 @@ mod tests {
         packet_data: *const u8,
         packet_data_len: usize,
     ) -> VesperPluginProcessResult {
+        // SAFETY: fixture tests pass the session pointer allocated by
+        // `fixture_decoder_open_session_json` for this callback family.
         let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
             return decoder_process_error(DecoderError::NotConfigured);
         };
@@ -3410,6 +3414,8 @@ mod tests {
         _context: *mut c_void,
         session: *mut c_void,
     ) -> VesperDecoderReceiveFrameResult {
+        // SAFETY: fixture tests pass the session pointer allocated by
+        // `fixture_decoder_open_session_json` for this callback family.
         let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
             return decoder_frame_error(DecoderError::NotConfigured);
         };
@@ -3441,6 +3447,8 @@ mod tests {
         _context: *mut c_void,
         session: *mut c_void,
     ) -> VesperDecoderReceiveNativeFrameResult {
+        // SAFETY: fixture tests pass the session pointer allocated by
+        // `fixture_decoder_open_session_json` for this callback family.
         let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
             return decoder_native_frame_error(DecoderError::NotConfigured);
         };
@@ -3468,6 +3476,8 @@ mod tests {
         _context: *mut c_void,
         session: *mut c_void,
     ) -> VesperDecoderReceiveNativeFrameResult {
+        // SAFETY: fixture tests pass the session pointer allocated by
+        // `fixture_decoder_open_session_json` for this callback family.
         let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
             return decoder_native_frame_error(DecoderError::NotConfigured);
         };
@@ -3501,6 +3511,8 @@ mod tests {
                 "fixture native frame release received an invalid handle",
             ));
         }
+        // SAFETY: the handle was allocated with `Box::into_raw` in this test
+        // fixture and is released exactly once here.
         let _ = unsafe { Box::from_raw(handle as *mut Vec<u8>) };
         decoder_process_success(&DecoderOperationStatus { completed: true })
     }
@@ -3509,6 +3521,8 @@ mod tests {
         _context: *mut c_void,
         session: *mut c_void,
     ) -> VesperPluginProcessResult {
+        // SAFETY: fixture tests pass the session pointer allocated by
+        // `fixture_decoder_open_session_json` for this callback family.
         let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
             return decoder_process_error(DecoderError::NotConfigured);
         };

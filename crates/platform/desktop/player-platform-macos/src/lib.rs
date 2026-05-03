@@ -336,6 +336,7 @@ pub struct MacosHostPlayerRuntimeAdapterFactory;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MacosSoftwarePlayerRuntimeAdapterFactory;
 
+#[allow(clippy::large_enum_variant)]
 enum MacosHostRuntimeSelection {
     NativePreferred {
         initializer: Box<dyn PlayerRuntimeAdapterInitializer>,
@@ -1056,7 +1057,7 @@ impl MacosNativeFrameVideoSource {
             .shared
             .lock()
             .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
-        let result = shared
+        shared
             .session
             .send_packet(
                 &DecoderPacket {
@@ -1071,7 +1072,7 @@ impl MacosNativeFrameVideoSource {
                 &packet.data,
             )
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        if result.accepted { Ok(()) } else { Ok(()) }
+        Ok(())
     }
 
     fn send_end_of_stream(&mut self) -> anyhow::Result<()> {
@@ -1727,6 +1728,7 @@ fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
         VesperPluginKind::PostDownloadProcessor => "post_download_processor",
         VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
         VesperPluginKind::Decoder => "decoder",
+        VesperPluginKind::BenchmarkSink => "benchmark_sink",
     }
 }
 
@@ -1832,16 +1834,15 @@ fn open_software_fallback_runtime(
     match PlayerRuntime::open_source_with_factory(source, options, macos_runtime_adapter_factory())
     {
         Ok(mut bootstrap) => {
-            if let Some(fallback_reason) = fallback_reason {
-                if let Some(video_decode) = bootstrap.startup.video_decode.as_mut() {
-                    video_decode.fallback_reason =
-                        Some(match video_decode.fallback_reason.take() {
-                            Some(existing) if !existing.is_empty() => {
-                                format!("{fallback_reason}; {existing}")
-                            }
-                            _ => fallback_reason,
-                        });
-                }
+            if let Some(fallback_reason) = fallback_reason
+                && let Some(video_decode) = bootstrap.startup.video_decode.as_mut()
+            {
+                video_decode.fallback_reason = Some(match video_decode.fallback_reason.take() {
+                    Some(existing) if !existing.is_empty() => {
+                        format!("{fallback_reason}; {existing}")
+                    }
+                    _ => fallback_reason,
+                });
             }
             Ok(bootstrap)
         }
@@ -3078,81 +3079,79 @@ mod tests {
         unsafe {
             std::env::set_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE", "1");
         }
-        let result = (|| {
-            let options = PlayerRuntimeOptions::default()
-                .with_video_surface(PlayerVideoSurfaceTarget {
-                    kind: PlayerVideoSurfaceKind::PlayerLayer,
-                    handle: layer_handle as usize,
-                })
-                .with_decoder_plugin_library_paths([plugin_path])
-                .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame);
-            let bootstrap = open_macos_software_runtime_source_with_options_and_interrupt(
-                MediaSource::new(source),
-                options,
-                Arc::new(AtomicBool::new(false)),
-            )
-            .expect("native-frame runtime open should succeed before presenter failure fallback");
-            let mut runtime = bootstrap.runtime;
-            let initial_rate = runtime.playback_rate();
+        let options = PlayerRuntimeOptions::default()
+            .with_video_surface(PlayerVideoSurfaceTarget {
+                kind: PlayerVideoSurfaceKind::PlayerLayer,
+                handle: layer_handle as usize,
+            })
+            .with_decoder_plugin_library_paths([plugin_path])
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame);
+        let bootstrap = open_macos_software_runtime_source_with_options_and_interrupt(
+            MediaSource::new(source),
+            options,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("native-frame runtime open should succeed before presenter failure fallback");
+        let mut runtime = bootstrap.runtime;
+        let initial_rate = runtime.playback_rate();
 
-            let _ = runtime
-                .dispatch(PlayerRuntimeCommand::Play)
-                .expect("play should succeed");
-            let _ = runtime
-                .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 1.25 })
-                .expect("set playback rate should succeed before fallback");
+        let _ = runtime
+            .dispatch(PlayerRuntimeCommand::Play)
+            .expect("play should succeed");
+        let _ = runtime
+            .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 1.25 })
+            .expect("set playback rate should succeed before fallback");
 
-            for _ in 0..240 {
-                let _ = runtime
-                    .advance()
-                    .expect("advance should fallback instead of failing");
-                if runtime.capabilities().supports_frame_output
-                    && !runtime.capabilities().supports_external_video_surface
-                {
-                    break;
-                }
+        for _ in 0..240 {
+            let _ = runtime
+                .advance()
+                .expect("advance should fallback instead of failing");
+            if runtime.capabilities().supports_frame_output
+                && !runtime.capabilities().supports_external_video_surface
+            {
+                break;
             }
+        }
 
-            assert!(runtime.capabilities().supports_frame_output);
-            assert!(!runtime.capabilities().supports_external_video_surface);
-            assert_eq!(runtime.presentation_state(), PresentationState::Playing);
-            assert!(runtime.playback_rate() >= initial_rate);
-            let resume_position = runtime.progress().position();
-            let _ = runtime
-                .dispatch(PlayerRuntimeCommand::SeekTo {
-                    position: resume_position,
-                })
-                .expect("seek should continue to work after fallback");
-            let _ = runtime
-                .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 1.0 })
-                .expect("rate change should continue to work after fallback");
-            let _ = runtime
-                .dispatch(PlayerRuntimeCommand::Play)
-                .expect("play should remain valid after fallback");
-            let mut saw_surface_detached = false;
-            let mut saw_runtime_fallback_error = false;
-            for event in runtime.drain_events() {
-                if matches!(
-                    event,
-                    PlayerRuntimeEvent::VideoSurfaceChanged { attached: false }
-                ) {
-                    saw_surface_detached = true;
-                }
-                if let PlayerRuntimeEvent::Error(error) = event
-                    && error.message().contains("runtime fallback activated")
-                {
-                    saw_runtime_fallback_error = true;
-                }
+        assert!(runtime.capabilities().supports_frame_output);
+        assert!(!runtime.capabilities().supports_external_video_surface);
+        assert_eq!(runtime.presentation_state(), PresentationState::Playing);
+        assert!(runtime.playback_rate() >= initial_rate);
+        let resume_position = runtime.progress().position();
+        let _ = runtime
+            .dispatch(PlayerRuntimeCommand::SeekTo {
+                position: resume_position,
+            })
+            .expect("seek should continue to work after fallback");
+        let _ = runtime
+            .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 1.0 })
+            .expect("rate change should continue to work after fallback");
+        let _ = runtime
+            .dispatch(PlayerRuntimeCommand::Play)
+            .expect("play should remain valid after fallback");
+        let mut saw_surface_detached = false;
+        let mut saw_runtime_fallback_error = false;
+        for event in runtime.drain_events() {
+            if matches!(
+                event,
+                PlayerRuntimeEvent::VideoSurfaceChanged { attached: false }
+            ) {
+                saw_surface_detached = true;
             }
-            assert!(
-                saw_surface_detached,
-                "expected native surface detachment event after fallback"
-            );
-            assert!(
-                saw_runtime_fallback_error,
-                "expected explicit runtime fallback error event after fallback"
-            );
-        })();
+            if let PlayerRuntimeEvent::Error(error) = event
+                && error.message().contains("runtime fallback activated")
+            {
+                saw_runtime_fallback_error = true;
+            }
+        }
+        assert!(
+            saw_surface_detached,
+            "expected native surface detachment event after fallback"
+        );
+        assert!(
+            saw_runtime_fallback_error,
+            "expected explicit runtime fallback error event after fallback"
+        );
         unsafe {
             std::env::remove_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE");
         }
@@ -3160,8 +3159,6 @@ mod tests {
         unsafe {
             player_macos_test_release_object(layer_handle);
         }
-
-        result
     }
 
     #[test]

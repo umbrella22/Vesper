@@ -58,7 +58,7 @@ enum BridgeRequest {
     },
     ExpandTemplate {
         template: String,
-        representation: DashRepresentation,
+        representation: Box<DashRepresentation>,
         number: Option<u64>,
         time: Option<u64>,
     },
@@ -187,13 +187,15 @@ pub fn execute_json(request_json: &str) -> DashHlsResult<String> {
             media_urls,
             video_decode_capabilities,
         } => {
+            let prefer_modern_video_codecs = video_decode_capabilities.is_some();
             let selected = selected_playable_response(
                 &manifest,
                 variant_policy,
                 video_decode_capabilities.as_deref(),
             )?;
             let media_urls = media_url_map(media_urls);
-            let playlist = build_master_playlist(&selected, &media_urls)?;
+            let playlist =
+                build_master_playlist(&selected, &media_urls, prefer_modern_video_codecs)?;
             to_json(&MasterPlaylistResponse { playlist, selected })
         }
         BridgeRequest::MediaSegments { segment_base, sidx } => {
@@ -250,6 +252,7 @@ fn selected_playable_response(
         }
     }
     let source_has_video = !video.is_empty();
+    let prefer_modern_video_codecs = video_decode_capabilities.is_some();
     video = filter_hardware_decodable_video(video, video_decode_capabilities)?;
     if source_has_video && video.is_empty() {
         return Err(DashHlsError::UnsupportedMpd(
@@ -268,7 +271,9 @@ fn selected_playable_response(
         if let Some(first_audio) = audio.first().cloned() {
             audio = vec![first_audio];
         }
-        if let Some(selected_video) = startup_video_representation(&video).cloned() {
+        if let Some(selected_video) =
+            startup_video_representation_for_policy(&video, prefer_modern_video_codecs).cloned()
+        {
             video = vec![selected_video];
         }
     }
@@ -393,23 +398,31 @@ fn adaptation_kind_id(kind: DashAdaptationKind) -> &'static str {
 fn startup_video_representation(
     video: &[PlayableRepresentation],
 ) -> Option<&PlayableRepresentation> {
+    startup_video_representation_for_policy(video, false)
+}
+
+fn startup_video_representation_for_policy(
+    video: &[PlayableRepresentation],
+    prefer_modern_video_codecs: bool,
+) -> Option<&PlayableRepresentation> {
     video
         .iter()
         .enumerate()
-        .min_by_key(|(index, item)| startup_video_score(item, *index))
+        .min_by_key(|(index, item)| startup_video_score(item, *index, prefer_modern_video_codecs))
         .map(|(_, item)| item)
 }
 
 fn startup_video_score(
     item: &PlayableRepresentation,
     index: usize,
+    prefer_modern_video_codecs: bool,
 ) -> (u8, u8, u8, u8, u32, u64, u32, usize) {
     const STARTUP_MAX_HEIGHT: u32 = 720;
     const STARTUP_MAX_BANDWIDTH: u64 = 800_000;
 
     let representation = &item.representation;
     let codec_family = video_codec_family(&representation.codecs);
-    let codec_rank = video_codec_startup_rank(codec_family);
+    let codec_rank = video_codec_startup_rank(codec_family, prefer_modern_video_codecs);
     let exceeds_startup_target = u8::from(
         representation
             .height
@@ -431,13 +444,21 @@ fn startup_video_score(
     )
 }
 
-fn video_codec_startup_rank(family: VideoCodecFamily) -> u8 {
-    match family {
-        VideoCodecFamily::Vvc => 0,
-        VideoCodecFamily::Av1 => 1,
-        VideoCodecFamily::Hevc => 2,
-        VideoCodecFamily::Avc => 3,
-        VideoCodecFamily::Unknown => u8::MAX,
+fn video_codec_startup_rank(family: VideoCodecFamily, prefer_modern_video_codecs: bool) -> u8 {
+    if prefer_modern_video_codecs {
+        match family {
+            VideoCodecFamily::Vvc => 0,
+            VideoCodecFamily::Av1 => 1,
+            VideoCodecFamily::Hevc => 2,
+            VideoCodecFamily::Avc => 3,
+            VideoCodecFamily::Unknown => u8::MAX,
+        }
+    } else {
+        match family {
+            VideoCodecFamily::Avc => 0,
+            VideoCodecFamily::Hevc => 1,
+            VideoCodecFamily::Vvc | VideoCodecFamily::Av1 | VideoCodecFamily::Unknown => u8::MAX,
+        }
     }
 }
 
@@ -499,6 +520,7 @@ fn media_url_map(entries: Vec<RenditionUrl>) -> HashMap<String, String> {
 fn build_master_playlist(
     selected: &SelectedPlayableResponse,
     media_urls: &HashMap<String, String>,
+    prefer_modern_video_codecs: bool,
 ) -> DashHlsResult<String> {
     let mut lines = vec![
         "#EXTM3U".to_owned(),
@@ -577,7 +599,9 @@ fn build_master_playlist(
             .max()
             .unwrap_or(0);
         let mut ordered_video = selected.video.iter().enumerate().collect::<Vec<_>>();
-        ordered_video.sort_by_key(|(index, item)| startup_video_score(item, *index));
+        ordered_video.sort_by_key(|(index, item)| {
+            startup_video_score(item, *index, prefer_modern_video_codecs)
+        });
         for (_, item) in ordered_video {
             append_variant_lines(
                 &mut lines,
@@ -955,7 +979,7 @@ fn ceil_div(value: u64, divisor: u64) -> u64 {
         return 0;
     }
     let quotient = value / divisor;
-    if value % divisor == 0 {
+    if value.is_multiple_of(divisor) {
         quotient
     } else {
         quotient + 1
@@ -1252,6 +1276,30 @@ mod tests {
     }
 
     #[test]
+    fn startup_video_keeps_avc_first_without_decode_capabilities() {
+        let video = vec![
+            playable_video(
+                "av1-720",
+                "av01.0.05M.08",
+                Some(760_000),
+                Some(1280),
+                Some(720),
+            ),
+            playable_video(
+                "avc-720",
+                "avc1.4d401f",
+                Some(800_000),
+                Some(1280),
+                Some(720),
+            ),
+        ];
+
+        let selected = startup_video_representation(&video).expect("startup video");
+
+        assert_eq!(selected.rendition_id, "avc-720");
+    }
+
+    #[test]
     fn startup_video_prefers_newer_hardware_codec_within_startup_target() {
         let video = vec![
             playable_video(
@@ -1270,7 +1318,8 @@ mod tests {
             ),
         ];
 
-        let selected = startup_video_representation(&video).expect("startup video");
+        let selected =
+            startup_video_representation_for_policy(&video, true).expect("startup video");
 
         assert_eq!(selected.rendition_id, "av1-720");
     }
@@ -1332,7 +1381,8 @@ mod tests {
 
         let filtered = filter_hardware_decodable_video(video, Some(&capabilities))
             .expect("filtered hardware video");
-        let selected = startup_video_representation(&filtered).expect("startup video");
+        let selected =
+            startup_video_representation_for_policy(&filtered, true).expect("startup video");
 
         assert_eq!(
             filtered
@@ -1426,7 +1476,8 @@ mod tests {
             ),
         ]);
 
-        let playlist = build_master_playlist(&selected, &media_urls).expect("master playlist");
+        let playlist =
+            build_master_playlist(&selected, &media_urls, false).expect("master playlist");
         let variant_urls = playlist
             .lines()
             .filter(|line| line.starts_with("vesper-dash://media/"))

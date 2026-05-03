@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="debug"
 MODE="loader"
 LIBRARY_PATH_OVERRIDE="${VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH:-}"
+SOURCE_PATH_OVERRIDE="${VESPER_DECODER_VIDEOTOOLBOX_SOURCE:-}"
 
 usage() {
   cat <<EOF >&2
@@ -107,6 +108,45 @@ build_plugin() {
   fi
 }
 
+resolve_smoke_source() {
+  local target_dir="$1"
+  local generated="$target_dir/videotoolbox-smoke-h264.mp4"
+
+  if [[ -n "$SOURCE_PATH_OVERRIDE" ]]; then
+    if [[ ! -f "$SOURCE_PATH_OVERRIDE" ]]; then
+      echo "VESPER_DECODER_VIDEOTOOLBOX_SOURCE points to a missing file: $SOURCE_PATH_OVERRIDE" >&2
+      exit 1
+    fi
+    printf '%s\n' "$SOURCE_PATH_OVERRIDE"
+    return 0
+  fi
+
+  if [[ -f "$generated" ]]; then
+    printf '%s\n' "$generated"
+    return 0
+  fi
+
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "ffmpeg is required to generate the VideoToolbox smoke source; install ffmpeg or set VESPER_DECODER_VIDEOTOOLBOX_SOURCE." >&2
+    exit 1
+  fi
+
+  mkdir -p "$target_dir"
+  ffmpeg \
+    -hide_banner \
+    -loglevel error \
+    -y \
+    -f lavfi \
+    -i testsrc2=size=320x180:rate=24:duration=2 \
+    -c:v libx264 \
+    -profile:v baseline \
+    -level:v 3.1 \
+    -pix_fmt yuv420p \
+    -movflags +faststart \
+    "$generated"
+  printf '%s\n' "$generated"
+}
+
 run_loader_test() {
   cargo test \
     -p player-plugin-loader \
@@ -147,6 +187,7 @@ main() {
   local library_name
   local target_dir
   local plugin_path
+  local smoke_source
 
   if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "VideoToolbox decoder verification only runs on macOS." >&2
@@ -161,6 +202,12 @@ main() {
   export VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH="$plugin_path"
 
   echo "Using VideoToolbox decoder plugin: $VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH"
+
+  if [[ "$MODE" == "loader" || "$MODE" == "all" ]]; then
+    smoke_source="$(resolve_smoke_source "$target_dir")"
+    export VESPER_DECODER_VIDEOTOOLBOX_SOURCE="$smoke_source"
+    echo "Using VideoToolbox smoke source: $VESPER_DECODER_VIDEOTOOLBOX_SOURCE"
+  fi
 
   case "$MODE" in
     loader)

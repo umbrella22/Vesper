@@ -16,10 +16,11 @@ on:
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
+      - "crates/extension/**"
       - "crates/platform/common/**"
       - "crates/platform/mobile/**"
       - "crates/platform/jni/**"
-      - "lib/android/vesper-player-kit/**"
+      - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
       - "lib/flutter/**"
       - "examples/flutter-host/**"
@@ -40,10 +41,11 @@ on:
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
+      - "crates/extension/**"
       - "crates/platform/common/**"
       - "crates/platform/mobile/**"
       - "crates/platform/jni/**"
-      - "lib/android/vesper-player-kit/**"
+      - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
       - "lib/flutter/**"
       - "examples/flutter-host/**"
@@ -87,6 +89,27 @@ jobs:
         working-directory: examples/flutter-host
         run: flutter test
 
+      - name: Analyze and test Flutter packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for pubspec in lib/flutter/*/pubspec.yaml; do
+            pkg_dir="$(dirname "$pubspec")"
+            echo "::group::$pkg_dir"
+            (
+              cd "$pkg_dir"
+              flutter pub get
+              flutter analyze
+              if [[ -d test ]]; then
+                flutter test
+              else
+                echo "No test/ directory; skipping flutter test."
+              fi
+            )
+            echo "::endgroup::"
+          done
+
   flutter-android:
     name: Flutter Android Host ${{ matrix.abi }}
     runs-on: ubuntu-latest
@@ -109,6 +132,12 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --locked
+
+      - name: Verify generated FFI header
+        run: ./scripts/verify-player-ffi-header.sh
 
       - name: Set up Java
         uses: actions/setup-java@v4

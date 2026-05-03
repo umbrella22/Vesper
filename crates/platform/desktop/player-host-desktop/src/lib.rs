@@ -180,12 +180,12 @@ pub fn probe_desktop_host_runtime_uri_with_options(
     #[cfg(target_os = "macos")]
     {
         let probe = probe_macos_host_runtime_uri_with_options(source, options)?;
-        return Ok(DesktopHostRuntimeProbe {
+        Ok(DesktopHostRuntimeProbe {
             adapter_id: probe.adapter_id,
             capabilities: probe.capabilities,
             media_info: probe.media_info,
             startup: probe.startup,
-        });
+        })
     }
 
     #[cfg(target_os = "linux")]
@@ -260,21 +260,21 @@ pub fn open_desktop_host_runtime_uri_for_winit_window_with_options(
     {
         let bootstrap = open_macos_host_runtime_uri_with_options(source, options)?;
         let capabilities = bootstrap.runtime.capabilities();
-        return Ok((bootstrap, capabilities));
+        Ok((bootstrap, capabilities))
     }
 
     #[cfg(target_os = "linux")]
     {
         let bootstrap = open_linux_host_runtime_uri_with_options(source, options)?;
         let capabilities = bootstrap.runtime.capabilities();
-        return Ok((bootstrap, capabilities));
+        Ok((bootstrap, capabilities))
     }
 
     #[cfg(target_os = "windows")]
     {
         let bootstrap = open_windows_host_runtime_uri_with_options(source, options)?;
         let capabilities = bootstrap.runtime.capabilities();
-        return Ok((bootstrap, capabilities));
+        Ok((bootstrap, capabilities))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -295,7 +295,7 @@ pub fn runtime_options_for_winit_window(
             options = options.with_video_surface(macos_video_surface_target(window)?);
         }
 
-        return Ok(options);
+        Ok(options)
     }
 
     #[cfg(target_os = "windows")]
@@ -305,7 +305,7 @@ pub fn runtime_options_for_winit_window(
             options = options.with_video_surface(windows_video_surface_target(window)?);
         }
 
-        return Ok(options);
+        Ok(options)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

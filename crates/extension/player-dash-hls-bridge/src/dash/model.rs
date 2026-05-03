@@ -15,6 +15,10 @@ impl ByteRange {
     pub fn len(&self) -> Option<u64> {
         self.end.checked_sub(self.start)?.checked_add(1)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.end < self.start
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

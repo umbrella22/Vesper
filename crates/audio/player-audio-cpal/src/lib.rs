@@ -236,7 +236,7 @@ impl AudioSinkController {
         }
 
         let channels = usize::from(self.channels.max(1));
-        if samples.len() % channels != 0 {
+        if !samples.len().is_multiple_of(channels) {
             anyhow::bail!(
                 "audio sample buffer length {} is not divisible by channel count {}",
                 samples.len(),
@@ -383,13 +383,13 @@ impl SharedPlaybackState {
     }
 
     fn finish_generation(&self, generation: u64) {
-        if let Ok(mut timeline) = self.timeline.lock() {
-            if timeline.generation == generation {
-                timeline.generation_complete = true;
-                let end_sample = timeline.end_sample_offset();
-                if timeline.cursor >= end_sample && timeline.played_cursor >= end_sample {
-                    self.finished.store(true, Ordering::SeqCst);
-                }
+        if let Ok(mut timeline) = self.timeline.lock()
+            && timeline.generation == generation
+        {
+            timeline.generation_complete = true;
+            let end_sample = timeline.end_sample_offset();
+            if timeline.cursor >= end_sample && timeline.played_cursor >= end_sample {
+                self.finished.store(true, Ordering::SeqCst);
             }
         }
     }

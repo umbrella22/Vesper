@@ -19,17 +19,12 @@ impl Default for RenderSurfaceConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
+    #[default]
     Fit,
     Fill,
     Stretch,
-}
-
-impl Default for RenderMode {
-    fn default() -> Self {
-        Self::Fit
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,17 +71,17 @@ pub fn default_window_attributes(config: RenderSurfaceConfig) -> WindowAttribute
 pub fn preferred_backends() -> wgpu::Backends {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        return wgpu::Backends::METAL;
+        wgpu::Backends::METAL
     }
 
     #[cfg(target_os = "windows")]
     {
-        return wgpu::Backends::DX12 | wgpu::Backends::VULKAN;
+        wgpu::Backends::DX12 | wgpu::Backends::VULKAN
     }
 
     #[cfg(target_os = "linux")]
     {
-        return wgpu::Backends::VULKAN | wgpu::Backends::GL;
+        wgpu::Backends::VULKAN | wgpu::Backends::GL
     }
 
     #[cfg(not(any(
@@ -103,12 +98,12 @@ pub fn preferred_backends() -> wgpu::Backends {
 fn preferred_backend_label() -> &'static str {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        return "Metal";
+        "Metal"
     }
 
     #[cfg(target_os = "windows")]
     {
-        return "DirectX 12 / Vulkan";
+        "DirectX 12 / Vulkan"
     }
 
     #[cfg(target_os = "linux")]

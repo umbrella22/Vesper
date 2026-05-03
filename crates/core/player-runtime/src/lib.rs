@@ -278,6 +278,10 @@ pub enum PlayerRuntimeAdapterBackendFamily {
     NativeMacos,
     NativeAndroid,
     NativeIos,
+    #[deprecated(
+        since = "0.1.0",
+        note = "HarmonyOS backend is not implemented in this workspace."
+    )]
     NativeHarmony,
     Unknown,
 }

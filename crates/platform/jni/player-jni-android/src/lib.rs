@@ -171,7 +171,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 }
 
 fn throw_panic_exception(unowned_env: &mut EnvUnowned<'_>, message: &str) {
-    let _ = unowned_env
+    unowned_env
         .with_env(|env| -> JniResult<()> {
             env.throw_new(jni_name("java/lang/RuntimeException"), jni_name(message))?;
             Ok(())
@@ -248,7 +248,7 @@ fn with_session_mut<R>(
 ) -> Option<R> {
     let session = {
         let guard = lock_or_recover(sessions());
-        let Some(session) = guard.get(&handle).cloned() else {
+        let Some(session) = guard.get(handle).cloned() else {
             let _ = env.throw_new(
                 jni_name("java/lang/IllegalArgumentException"),
                 jni_name(invalid_handle_error()),
@@ -291,7 +291,7 @@ fn with_benchmark_sink_session<R>(
     f: impl FnOnce(&BenchmarkSinkPluginSession) -> Result<R, String>,
 ) -> Option<R> {
     let guard = lock_or_recover(benchmark_sink_sessions());
-    let Some(session) = guard.get(&handle) else {
+    let Some(session) = guard.get(handle) else {
         let _ = env.throw_new(
             jni_name("java/lang/IllegalArgumentException"),
             jni_name(invalid_benchmark_sink_handle_error()),
@@ -1352,7 +1352,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 ) {
     run_jni_entry(&mut unowned_env, |_unowned_env| {
         let mut guard = lock_or_recover(benchmark_sink_sessions());
-        guard.remove(&handle);
+        guard.remove(handle);
     })
 }
 
@@ -1454,7 +1454,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|_env| -> JniResult<()> {
                 let mut guard = lock_or_recover(sessions());
-                guard.remove(&session_handle);
+                guard.remove(session_handle);
                 Ok(())
             })
             .resolve::<ThrowRuntimeExAndDefault>()

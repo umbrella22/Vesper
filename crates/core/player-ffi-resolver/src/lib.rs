@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 use std::borrow::Borrow;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
@@ -723,7 +725,7 @@ pub struct PlayerFfiDownloadEventList {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_resolve_resilience_policy(
+pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
     source_kind: PlayerFfiMediaSourceKind,
     source_protocol: PlayerFfiMediaSourceProtocol,
     buffering_policy: *const PlayerFfiBufferingPolicy,
@@ -777,7 +779,7 @@ pub extern "C" fn player_ffi_resolve_resilience_policy(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_resolve_preload_budget(
+pub unsafe extern "C" fn player_ffi_resolve_preload_budget(
     preload_budget: *const PlayerFfiPreloadBudgetPolicy,
     out_budget: *mut PlayerFfiResolvedPreloadBudgetPolicy,
     out_error: *mut PlayerFfiError,
@@ -806,7 +808,7 @@ pub extern "C" fn player_ffi_resolve_preload_budget(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_preload_session_create(
+pub unsafe extern "C" fn player_ffi_preload_session_create(
     preload_budget: *const PlayerFfiResolvedPreloadBudgetPolicy,
     out_handle: *mut u64,
     out_error: *mut PlayerFfiError,
@@ -853,14 +855,14 @@ pub extern "C" fn player_ffi_preload_session_create(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_preload_session_dispose(handle: u64) {
+pub unsafe extern "C" fn player_ffi_preload_session_dispose(handle: u64) {
     if let Ok(mut sessions) = preload_sessions().lock() {
-        sessions.remove(&handle);
+        sessions.remove(handle);
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_preload_session_plan(
+pub unsafe extern "C" fn player_ffi_preload_session_plan(
     handle: u64,
     candidates: *const PlayerFfiPreloadCandidate,
     candidates_len: usize,
@@ -876,7 +878,7 @@ pub extern "C" fn player_ffi_preload_session_plan(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -917,7 +919,7 @@ pub extern "C" fn player_ffi_preload_session_plan(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_preload_session_drain_commands(
+pub unsafe extern "C" fn player_ffi_preload_session_drain_commands(
     handle: u64,
     out_commands: *mut PlayerFfiPreloadCommandList,
     out_error: *mut PlayerFfiError,
@@ -940,7 +942,7 @@ pub extern "C" fn player_ffi_preload_session_drain_commands(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -972,7 +974,7 @@ pub extern "C" fn player_ffi_preload_session_drain_commands(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_preload_session_complete(
+pub unsafe extern "C" fn player_ffi_preload_session_complete(
     handle: u64,
     task_id: u64,
     out_error: *mut PlayerFfiError,
@@ -987,7 +989,7 @@ pub extern "C" fn player_ffi_preload_session_complete(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1005,7 +1007,7 @@ pub extern "C" fn player_ffi_preload_session_complete(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_preload_session_fail(
+pub unsafe extern "C" fn player_ffi_preload_session_fail(
     handle: u64,
     task_id: u64,
     code: u32,
@@ -1033,7 +1035,7 @@ pub extern "C" fn player_ffi_preload_session_fail(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1058,7 +1060,9 @@ pub extern "C" fn player_ffi_preload_session_fail(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_preload_command_list_free(list: *mut PlayerFfiPreloadCommandList) {
+pub unsafe extern "C" fn player_ffi_preload_command_list_free(
+    list: *mut PlayerFfiPreloadCommandList,
+) {
     let Some(list) = (unsafe { list.as_mut() }) else {
         return;
     };
@@ -1072,7 +1076,7 @@ pub extern "C" fn player_ffi_preload_command_list_free(list: *mut PlayerFfiPrelo
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_create(
+pub unsafe extern "C" fn player_ffi_download_session_create(
     config: *const PlayerFfiDownloadConfig,
     out_handle: *mut u64,
     out_error: *mut PlayerFfiError,
@@ -1123,9 +1127,9 @@ pub extern "C" fn player_ffi_download_session_create(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_dispose(handle: u64) {
+pub unsafe extern "C" fn player_ffi_download_session_dispose(handle: u64) {
     if let Ok(mut sessions) = download_sessions().lock() {
-        sessions.remove(&handle);
+        sessions.remove(handle);
     }
 }
 
@@ -1157,7 +1161,7 @@ impl ProcessorProgress for FfiDownloadExportProgress {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_create_task(
+pub unsafe extern "C" fn player_ffi_download_session_create_task(
     handle: u64,
     asset_id: *const c_char,
     source: *const PlayerFfiDownloadSource,
@@ -1220,7 +1224,7 @@ pub extern "C" fn player_ffi_download_session_create_task(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1270,7 +1274,7 @@ fn with_download_session_task_mutation(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1293,7 +1297,7 @@ fn with_download_session_task_mutation(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_start_task(
+pub unsafe extern "C" fn player_ffi_download_session_start_task(
     handle: u64,
     task_id: u64,
     out_error: *mut PlayerFfiError,
@@ -1304,7 +1308,7 @@ pub extern "C" fn player_ffi_download_session_start_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_pause_task(
+pub unsafe extern "C" fn player_ffi_download_session_pause_task(
     handle: u64,
     task_id: u64,
     out_error: *mut PlayerFfiError,
@@ -1315,7 +1319,7 @@ pub extern "C" fn player_ffi_download_session_pause_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_resume_task(
+pub unsafe extern "C" fn player_ffi_download_session_resume_task(
     handle: u64,
     task_id: u64,
     out_error: *mut PlayerFfiError,
@@ -1326,7 +1330,7 @@ pub extern "C" fn player_ffi_download_session_resume_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_update_progress(
+pub unsafe extern "C" fn player_ffi_download_session_update_progress(
     handle: u64,
     task_id: u64,
     received_bytes: u64,
@@ -1343,7 +1347,7 @@ pub extern "C" fn player_ffi_download_session_update_progress(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1367,7 +1371,7 @@ pub extern "C" fn player_ffi_download_session_update_progress(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_complete_task(
+pub unsafe extern "C" fn player_ffi_download_session_complete_task(
     handle: u64,
     task_id: u64,
     completed_path: *const c_char,
@@ -1391,7 +1395,7 @@ pub extern "C" fn player_ffi_download_session_complete_task(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1414,7 +1418,7 @@ pub extern "C" fn player_ffi_download_session_complete_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_export_task(
+pub unsafe extern "C" fn player_ffi_download_session_export_task(
     handle: u64,
     task_id: u64,
     output_path: *const c_char,
@@ -1447,7 +1451,7 @@ pub extern "C" fn player_ffi_download_session_export_task(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1471,7 +1475,7 @@ pub extern "C" fn player_ffi_download_session_export_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_fail_task(
+pub unsafe extern "C" fn player_ffi_download_session_fail_task(
     handle: u64,
     task_id: u64,
     code: u32,
@@ -1499,7 +1503,7 @@ pub extern "C" fn player_ffi_download_session_fail_task(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1528,7 +1532,7 @@ pub extern "C" fn player_ffi_download_session_fail_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_remove_task(
+pub unsafe extern "C" fn player_ffi_download_session_remove_task(
     handle: u64,
     task_id: u64,
     out_error: *mut PlayerFfiError,
@@ -1539,7 +1543,7 @@ pub extern "C" fn player_ffi_download_session_remove_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_snapshot(
+pub unsafe extern "C" fn player_ffi_download_session_snapshot(
     handle: u64,
     out_snapshot: *mut PlayerFfiDownloadSnapshot,
     out_error: *mut PlayerFfiError,
@@ -1562,7 +1566,7 @@ pub extern "C" fn player_ffi_download_session_snapshot(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get(&handle) else {
+    let Some(session) = sessions.get(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1592,7 +1596,7 @@ pub extern "C" fn player_ffi_download_session_snapshot(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_drain_commands(
+pub unsafe extern "C" fn player_ffi_download_session_drain_commands(
     handle: u64,
     out_commands: *mut PlayerFfiDownloadCommandList,
     out_error: *mut PlayerFfiError,
@@ -1615,7 +1619,7 @@ pub extern "C" fn player_ffi_download_session_drain_commands(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1647,7 +1651,7 @@ pub extern "C" fn player_ffi_download_session_drain_commands(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_session_drain_events(
+pub unsafe extern "C" fn player_ffi_download_session_drain_events(
     handle: u64,
     out_events: *mut PlayerFfiDownloadEventList,
     out_error: *mut PlayerFfiError,
@@ -1670,7 +1674,7 @@ pub extern "C" fn player_ffi_download_session_drain_events(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1699,7 +1703,9 @@ pub extern "C" fn player_ffi_download_session_drain_events(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_snapshot_free(snapshot: *mut PlayerFfiDownloadSnapshot) {
+pub unsafe extern "C" fn player_ffi_download_snapshot_free(
+    snapshot: *mut PlayerFfiDownloadSnapshot,
+) {
     let Some(snapshot) = (unsafe { snapshot.as_mut() }) else {
         return;
     };
@@ -1713,7 +1719,9 @@ pub extern "C" fn player_ffi_download_snapshot_free(snapshot: *mut PlayerFfiDown
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_command_list_free(list: *mut PlayerFfiDownloadCommandList) {
+pub unsafe extern "C" fn player_ffi_download_command_list_free(
+    list: *mut PlayerFfiDownloadCommandList,
+) {
     let Some(list) = (unsafe { list.as_mut() }) else {
         return;
     };
@@ -1727,7 +1735,9 @@ pub extern "C" fn player_ffi_download_command_list_free(list: *mut PlayerFfiDown
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_download_event_list_free(list: *mut PlayerFfiDownloadEventList) {
+pub unsafe extern "C" fn player_ffi_download_event_list_free(
+    list: *mut PlayerFfiDownloadEventList,
+) {
     let Some(list) = (unsafe { list.as_mut() }) else {
         return;
     };
@@ -1741,7 +1751,7 @@ pub extern "C" fn player_ffi_download_event_list_free(list: *mut PlayerFfiDownlo
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_create(
+pub unsafe extern "C" fn player_ffi_playlist_session_create(
     config: *const PlayerFfiPlaylistConfig,
     preload_budget: *const PlayerFfiResolvedPreloadBudgetPolicy,
     out_handle: *mut u64,
@@ -1800,14 +1810,14 @@ pub extern "C" fn player_ffi_playlist_session_create(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_dispose(handle: u64) {
+pub unsafe extern "C" fn player_ffi_playlist_session_dispose(handle: u64) {
     if let Ok(mut sessions) = playlist_sessions().lock() {
-        sessions.remove(&handle);
+        sessions.remove(handle);
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_replace_queue(
+pub unsafe extern "C" fn player_ffi_playlist_session_replace_queue(
     handle: u64,
     queue: *const PlayerFfiPlaylistQueueItem,
     queue_len: usize,
@@ -1823,7 +1833,7 @@ pub extern "C" fn player_ffi_playlist_session_replace_queue(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1864,7 +1874,7 @@ pub extern "C" fn player_ffi_playlist_session_replace_queue(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_update_viewport_hints(
+pub unsafe extern "C" fn player_ffi_playlist_session_update_viewport_hints(
     handle: u64,
     hints: *const PlayerFfiPlaylistViewportHint,
     hints_len: usize,
@@ -1880,7 +1890,7 @@ pub extern "C" fn player_ffi_playlist_session_update_viewport_hints(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1921,7 +1931,7 @@ pub extern "C" fn player_ffi_playlist_session_update_viewport_hints(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_clear_viewport_hints(
+pub unsafe extern "C" fn player_ffi_playlist_session_clear_viewport_hints(
     handle: u64,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -1935,7 +1945,7 @@ pub extern "C" fn player_ffi_playlist_session_clear_viewport_hints(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1965,7 +1975,7 @@ fn with_playlist_session_advance(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -1981,7 +1991,7 @@ fn with_playlist_session_advance(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_advance_to_next(
+pub unsafe extern "C" fn player_ffi_playlist_session_advance_to_next(
     handle: u64,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -1991,7 +2001,7 @@ pub extern "C" fn player_ffi_playlist_session_advance_to_next(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_advance_to_previous(
+pub unsafe extern "C" fn player_ffi_playlist_session_advance_to_previous(
     handle: u64,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -2001,7 +2011,7 @@ pub extern "C" fn player_ffi_playlist_session_advance_to_previous(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_handle_playback_completed(
+pub unsafe extern "C" fn player_ffi_playlist_session_handle_playback_completed(
     handle: u64,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -2011,7 +2021,7 @@ pub extern "C" fn player_ffi_playlist_session_handle_playback_completed(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_handle_playback_failed(
+pub unsafe extern "C" fn player_ffi_playlist_session_handle_playback_failed(
     handle: u64,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -2021,7 +2031,7 @@ pub extern "C" fn player_ffi_playlist_session_handle_playback_failed(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_current_active_item(
+pub unsafe extern "C" fn player_ffi_playlist_session_current_active_item(
     handle: u64,
     out_active_item: *mut PlayerFfiPlaylistActiveItem,
     out_error: *mut PlayerFfiError,
@@ -2044,7 +2054,7 @@ pub extern "C" fn player_ffi_playlist_session_current_active_item(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get(&handle) else {
+    let Some(session) = sessions.get(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -2066,7 +2076,9 @@ pub extern "C" fn player_ffi_playlist_session_current_active_item(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_active_item_free(item: *mut PlayerFfiPlaylistActiveItem) {
+pub unsafe extern "C" fn player_ffi_playlist_active_item_free(
+    item: *mut PlayerFfiPlaylistActiveItem,
+) {
     let Some(item) = (unsafe { item.as_mut() }) else {
         return;
     };
@@ -2075,7 +2087,7 @@ pub extern "C" fn player_ffi_playlist_active_item_free(item: *mut PlayerFfiPlayl
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_drain_preload_commands(
+pub unsafe extern "C" fn player_ffi_playlist_session_drain_preload_commands(
     handle: u64,
     out_commands: *mut PlayerFfiPreloadCommandList,
     out_error: *mut PlayerFfiError,
@@ -2098,7 +2110,7 @@ pub extern "C" fn player_ffi_playlist_session_drain_preload_commands(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -2130,7 +2142,7 @@ pub extern "C" fn player_ffi_playlist_session_drain_preload_commands(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_complete_preload_task(
+pub unsafe extern "C" fn player_ffi_playlist_session_complete_preload_task(
     handle: u64,
     task_id: u64,
     out_error: *mut PlayerFfiError,
@@ -2145,7 +2157,7 @@ pub extern "C" fn player_ffi_playlist_session_complete_preload_task(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -2166,7 +2178,7 @@ pub extern "C" fn player_ffi_playlist_session_complete_preload_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_playlist_session_fail_preload_task(
+pub unsafe extern "C" fn player_ffi_playlist_session_fail_preload_task(
     handle: u64,
     task_id: u64,
     code: u32,
@@ -2194,7 +2206,7 @@ pub extern "C" fn player_ffi_playlist_session_fail_preload_task(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get_mut(&handle) else {
+    let Some(session) = sessions.get_mut(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -2221,7 +2233,7 @@ pub extern "C" fn player_ffi_playlist_session_fail_preload_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_resolve_track_preferences(
+pub unsafe extern "C" fn player_ffi_resolve_track_preferences(
     track_preferences: *const PlayerFfiTrackPreferences,
     out_preferences: *mut PlayerFfiTrackPreferences,
     out_error: *mut PlayerFfiError,
@@ -2250,7 +2262,7 @@ pub extern "C" fn player_ffi_resolve_track_preferences(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_benchmark_session_create(
+pub unsafe extern "C" fn player_ffi_benchmark_session_create(
     plugin_library_paths: *mut *mut c_char,
     plugin_library_paths_len: usize,
     out_handle: *mut u64,
@@ -2305,14 +2317,14 @@ pub extern "C" fn player_ffi_benchmark_session_create(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_benchmark_session_dispose(handle: u64) {
+pub unsafe extern "C" fn player_ffi_benchmark_session_dispose(handle: u64) {
     if let Ok(mut sessions) = benchmark_sessions().lock() {
-        sessions.remove(&handle);
+        sessions.remove(handle);
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
+pub unsafe extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
     handle: u64,
     batch_json: *const c_char,
     out_report_json: *mut *mut c_char,
@@ -2357,7 +2369,7 @@ pub extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get(&handle) else {
+    let Some(session) = sessions.get(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -2386,7 +2398,7 @@ pub extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_benchmark_session_flush_json(
+pub unsafe extern "C" fn player_ffi_benchmark_session_flush_json(
     handle: u64,
     out_report_json: *mut *mut c_char,
     out_error: *mut PlayerFfiError,
@@ -2409,7 +2421,7 @@ pub extern "C" fn player_ffi_benchmark_session_flush_json(
         );
         return PlayerFfiCallStatus::Error;
     };
-    let Some(session) = sessions.get(&handle) else {
+    let Some(session) = sessions.get(handle) else {
         write_error(
             out_error,
             owned_api_error(
@@ -2438,13 +2450,13 @@ pub extern "C" fn player_ffi_benchmark_session_flush_json(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_char) {
+pub unsafe extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_char) {
     let mut value = value;
     free_c_string(&mut value);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_dash_bridge_execute_json(
+pub unsafe extern "C" fn player_ffi_dash_bridge_execute_json(
     request_json: *const c_char,
     out_json: *mut *mut c_char,
     out_error: *mut PlayerFfiError,
@@ -2496,13 +2508,13 @@ pub extern "C" fn player_ffi_dash_bridge_execute_json(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_dash_bridge_string_free(value: *mut c_char) {
+pub unsafe extern "C" fn player_ffi_dash_bridge_string_free(value: *mut c_char) {
     let mut value = value;
     free_c_string(&mut value);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
+pub unsafe extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
     let Some(error) = (unsafe { error.as_mut() }) else {
         return;
     };
@@ -2512,7 +2524,7 @@ pub extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn player_ffi_track_preferences_free(
+pub unsafe extern "C" fn player_ffi_track_preferences_free(
     track_preferences: *mut PlayerFfiTrackPreferences,
 ) {
     let Some(track_preferences) = (unsafe { track_preferences.as_mut() }) else {
@@ -2671,10 +2683,9 @@ fn read_download_source(
     let mut download_source =
         DownloadSource::new(MediaSource::new(source_uri), source.content_format.into());
     if let Some(manifest_uri) = read_optional_c_string(source.manifest_uri, "source.manifest_uri")?
+        && !manifest_uri.is_empty()
     {
-        if !manifest_uri.is_empty() {
-            download_source = download_source.with_manifest_uri(manifest_uri);
-        }
+        download_source = download_source.with_manifest_uri(manifest_uri);
     }
     Ok(download_source)
 }

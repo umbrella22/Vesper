@@ -86,7 +86,7 @@ fn with_download_session_mut<R>(
 ) -> Option<R> {
     let session = {
         let guard = lock_or_recover(download_sessions());
-        let Some(session) = guard.get(&handle).cloned() else {
+        let Some(session) = guard.get(handle).cloned() else {
             let _ = env.throw_new(
                 jni_name("java/lang/IllegalArgumentException"),
                 jni_name(invalid_download_handle_error()),
@@ -108,7 +108,7 @@ fn with_download_session<R>(
 ) -> Option<R> {
     let session = {
         let guard = lock_or_recover(download_sessions());
-        let Some(session) = guard.get(&handle).cloned() else {
+        let Some(session) = guard.get(handle).cloned() else {
             let _ = env.throw_new(
                 jni_name("java/lang/IllegalArgumentException"),
                 jni_name(invalid_download_handle_error()),
@@ -215,7 +215,7 @@ fn string_array_field(
     let array =
         unsafe { JObjectArray::<JString<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
     let len = array.len(env)?;
-    let mut values = Vec::with_capacity(len as usize);
+    let mut values = Vec::with_capacity(len);
     for index in 0..len {
         let value = array.get_element(env, index)?;
         if !value.is_null() {
@@ -252,10 +252,10 @@ fn download_source_from_java(env: &mut Env<'_>, source: JObject<'_>) -> JniResul
         _ => DownloadContentFormat::Unknown,
     };
     let mut download_source = DownloadSource::new(MediaSource::new(source_uri), content_format);
-    if let Some(manifest_uri) = string_field(env, &source, "manifestUri")? {
-        if !manifest_uri.is_empty() {
-            download_source = download_source.with_manifest_uri(manifest_uri);
-        }
+    if let Some(manifest_uri) = string_field(env, &source, "manifestUri")?
+        && !manifest_uri.is_empty()
+    {
+        download_source = download_source.with_manifest_uri(manifest_uri);
     }
     Ok(download_source)
 }
@@ -323,7 +323,7 @@ fn download_resource_records_from_java(
     let array =
         unsafe { JObjectArray::<JObject<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
     let len = array.len(env)?;
-    let mut resources = Vec::with_capacity(len as usize);
+    let mut resources = Vec::with_capacity(len);
     for index in 0..len {
         let resource = array.get_element(env, index)?;
         if !resource.is_null() {
@@ -351,7 +351,7 @@ fn download_segment_records_from_java(
     let array =
         unsafe { JObjectArray::<JObject<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
     let len = array.len(env)?;
-    let mut segments = Vec::with_capacity(len as usize);
+    let mut segments = Vec::with_capacity(len);
     for index in 0..len {
         let segment = array.get_element(env, index)?;
         if !segment.is_null() {
@@ -796,7 +796,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|_env| -> JniResult<()> {
                 let mut guard = lock_or_recover(download_sessions());
-                guard.remove(&session_handle);
+                guard.remove(session_handle);
                 Ok(())
             })
             .resolve::<ThrowRuntimeExAndDefault>()

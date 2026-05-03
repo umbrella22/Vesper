@@ -1991,6 +1991,7 @@ fn draw_downloads_section(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_action_button(
     frame: &mut [u8],
     frame_width: u32,
@@ -2381,6 +2382,7 @@ fn draw_badge(
     draw_centered_text(frame, frame_width, frame_height, rect, &label, scale, text);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_badge_with_symbol(
     frame: &mut [u8],
     frame_width: u32,
@@ -2413,6 +2415,7 @@ fn draw_badge_with_symbol(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_centered_symbol_label_tones(
     frame: &mut [u8],
     frame_width: u32,
@@ -2629,6 +2632,7 @@ fn scale_alpha(color: [u8; 4], opacity: f32) -> [u8; 4] {
     [color[0], color[1], color[2], scaled_alpha]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_text(
     frame: &mut [u8],
     frame_width: u32,

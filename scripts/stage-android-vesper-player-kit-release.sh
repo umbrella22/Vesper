@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$ROOT_DIR/lib/android"
 CORE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit"
 COMPOSE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose"
+GRADLEW="$ROOT_DIR/examples/android-compose-host/gradlew"
 OUTPUT_DIR="${1:-$ROOT_DIR/dist/release/android}"
 shift || true
 
@@ -24,20 +25,14 @@ sdk.dir=${ANDROID_SDK_ROOT}
 EOF
 fi
 
-if [[ -x "$PROJECT_DIR/gradlew" ]]; then
-  GRADLE_CMD=("$PROJECT_DIR/gradlew" -p "$PROJECT_DIR")
-elif command -v gradle >/dev/null 2>&1; then
-  GRADLE_CMD=(gradle -p "$PROJECT_DIR")
+if [[ -x "$GRADLEW" ]]; then
+  GRADLE_CMD=("$GRADLEW" -p "$PROJECT_DIR")
 else
   cat <<EOF >&2
-No Gradle CLI was found for building Android release artifacts.
+No Gradle wrapper was found for building Android release artifacts.
 
-Use one of these options:
-  1. Open $PROJECT_DIR in Android Studio and run:
-       :vesper-player-kit:assembleRelease
-       :vesper-player-kit-compose:assembleRelease
-  2. Add a Gradle wrapper to $PROJECT_DIR
-  3. Install a global 'gradle' command and rerun this script
+Expected executable wrapper:
+  $GRADLEW
 EOF
   exit 1
 fi

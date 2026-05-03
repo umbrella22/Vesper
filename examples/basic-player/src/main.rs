@@ -104,6 +104,7 @@ enum SourceLaunchStatus {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum PlannerEvent {
     Prepared {
         asset_id: String,
@@ -115,6 +116,7 @@ enum PlannerEvent {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 enum LaunchEvent {
     Prepared {
         request_id: u64,
@@ -2089,40 +2091,36 @@ impl ApplicationHandler for DesktopPlayerApp {
                 Key::Character(text) if text.eq_ignore_ascii_case("s") => {
                     self.perform_keyboard_control_action(event_loop, "stop", ControlAction::Stop)
                 }
-                Key::Character(text) if text == "[" => {
-                    if self.runtime.is_some() {
-                        log_keyboard_action("rate_down");
-                        if let Err(error) = self.step_playback_rate(-1) {
-                            error!(?error, "failed to step playback rate backward");
-                            event_loop.exit();
-                        }
+                Key::Character("[") if self.runtime.is_some() => {
+                    log_keyboard_action("rate_down");
+                    if let Err(error) = self.step_playback_rate(-1) {
+                        error!(?error, "failed to step playback rate backward");
+                        event_loop.exit();
                     }
                 }
-                Key::Character(text) if text == "]" => {
-                    if self.runtime.is_some() {
-                        log_keyboard_action("rate_up");
-                        if let Err(error) = self.step_playback_rate(1) {
-                            error!(?error, "failed to step playback rate forward");
-                            event_loop.exit();
-                        }
+                Key::Character("]") if self.runtime.is_some() => {
+                    log_keyboard_action("rate_up");
+                    if let Err(error) = self.step_playback_rate(1) {
+                        error!(?error, "failed to step playback rate forward");
+                        event_loop.exit();
                     }
                 }
-                Key::Character(text) if text == "0" => self.perform_keyboard_control_action(
+                Key::Character("0") => self.perform_keyboard_control_action(
                     event_loop,
                     "set_rate_0_5x",
                     ControlAction::SetRate(0.5),
                 ),
-                Key::Character(text) if text == "1" => self.perform_keyboard_control_action(
+                Key::Character("1") => self.perform_keyboard_control_action(
                     event_loop,
                     "set_rate_1x",
                     ControlAction::SetRate(1.0),
                 ),
-                Key::Character(text) if text == "2" => self.perform_keyboard_control_action(
+                Key::Character("2") => self.perform_keyboard_control_action(
                     event_loop,
                     "set_rate_2x",
                     ControlAction::SetRate(2.0),
                 ),
-                Key::Character(text) if text == "3" => self.perform_keyboard_control_action(
+                Key::Character("3") => self.perform_keyboard_control_action(
                     event_loop,
                     "set_rate_3x",
                     ControlAction::SetRate(3.0),
@@ -2519,6 +2517,7 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         ControlAction, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL,

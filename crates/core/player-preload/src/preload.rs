@@ -580,13 +580,12 @@ where
         if current
             .expires_at
             .is_some_and(|expires_at| expires_at <= now)
+            && let Some(record) = self.tasks.get_mut(&task_id)
         {
-            if let Some(record) = self.tasks.get_mut(&task_id) {
-                record.status = PreloadTaskStatus::Expired;
-                let snapshot = record.snapshot();
-                self.events.push(PreloadEvent::Expired(snapshot.clone()));
-                return Ok(Some(snapshot));
-            }
+            record.status = PreloadTaskStatus::Expired;
+            let snapshot = record.snapshot();
+            self.events.push(PreloadEvent::Expired(snapshot.clone()));
+            return Ok(Some(snapshot));
         }
 
         let budget = self.budget_provider.budget_for_scope(&current.scope);

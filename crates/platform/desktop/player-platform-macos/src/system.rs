@@ -301,17 +301,17 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
             };
 
             if succeeded {
-                return Ok(());
+                Ok(())
+            } else {
+                Err(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    if error_message.is_empty() {
+                        "AVFoundation session command failed".to_owned()
+                    } else {
+                        error_message
+                    },
+                ))
             }
-
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                if error_message.is_empty() {
-                    "AVFoundation session command failed".to_owned()
-                } else {
-                    error_message
-                },
-            ));
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -341,17 +341,17 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
             });
 
             if succeeded {
-                return Ok(());
+                Ok(())
+            } else {
+                Err(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    if error_message.is_empty() {
+                        "AVFoundation failed to attach the requested video surface".to_owned()
+                    } else {
+                        error_message
+                    },
+                ))
             }
-
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                if error_message.is_empty() {
-                    "AVFoundation failed to attach the requested video surface".to_owned()
-                } else {
-                    error_message
-                },
-            ));
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -372,17 +372,17 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
             });
 
             if succeeded {
-                return Ok(());
+                Ok(())
+            } else {
+                Err(PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    if error_message.is_empty() {
+                        "AVFoundation failed to detach the current video surface".to_owned()
+                    } else {
+                        error_message
+                    },
+                ))
             }
-
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                if error_message.is_empty() {
-                    "AVFoundation failed to detach the current video surface".to_owned()
-                } else {
-                    error_message
-                },
-            ));
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -475,10 +475,10 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                 ));
             }
 
-            return Ok(Box::new(MacosSystemNativeCommandSink {
+            Ok(Box::new(MacosSystemNativeCommandSink {
                 session_handle,
                 callback_context,
-            }));
+            }))
         }
 
         #[cfg(not(target_os = "macos"))]

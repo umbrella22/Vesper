@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -363,88 +363,78 @@ impl DesktopDownloadController {
     pub fn poll(&mut self) -> DesktopDownloadPollResult {
         let mut result = DesktopDownloadPollResult::default();
 
-        loop {
-            match self.worker_rx.try_recv() {
-                Ok(event) => {
-                    result.changed = true;
-                    match event {
-                        WorkerEvent::Progress {
-                            task_id,
-                            received_bytes,
-                            received_segments,
-                        } => {
-                            let _ = self.manager.update_progress(
-                                task_id,
-                                received_bytes,
-                                received_segments,
-                                Instant::now(),
-                            );
-                        }
-                        WorkerEvent::Completed {
-                            task_id,
-                            completed_path,
-                        } => {
-                            let _ =
-                                self.manager
-                                    .complete_task(task_id, completed_path, Instant::now());
-                        }
-                        WorkerEvent::Failed { task_id, error } => {
-                            let _ = self
-                                .manager
-                                .fail_task(task_id, error.clone(), Instant::now());
-                            result.messages.push(error.to_string());
-                        }
-                    }
+        while let Ok(event) = self.worker_rx.try_recv() {
+            result.changed = true;
+            match event {
+                WorkerEvent::Progress {
+                    task_id,
+                    received_bytes,
+                    received_segments,
+                } => {
+                    let _ = self.manager.update_progress(
+                        task_id,
+                        received_bytes,
+                        received_segments,
+                        Instant::now(),
+                    );
                 }
-                Err(TryRecvError::Disconnected) | Err(TryRecvError::Empty) => break,
+                WorkerEvent::Completed {
+                    task_id,
+                    completed_path,
+                } => {
+                    let _ = self
+                        .manager
+                        .complete_task(task_id, completed_path, Instant::now());
+                }
+                WorkerEvent::Failed { task_id, error } => {
+                    let _ = self
+                        .manager
+                        .fail_task(task_id, error.clone(), Instant::now());
+                    result.messages.push(error.to_string());
+                }
             }
         }
 
-        loop {
-            match self.export_rx.try_recv() {
-                Ok(event) => {
-                    result.changed = true;
-                    match event {
-                        ExportEvent::Progress { task_id, ratio } => {
-                            self.export_state.insert(
-                                task_id,
-                                ExportState {
-                                    in_progress: true,
-                                    ratio: Some(ratio),
-                                },
-                            );
-                        }
-                        ExportEvent::Completed {
-                            task_id,
-                            output_path,
-                        } => {
-                            self.export_state.insert(
-                                task_id,
-                                ExportState {
-                                    in_progress: false,
-                                    ratio: Some(1.0),
-                                },
-                            );
-                            self.exported_paths.insert(task_id, output_path.clone());
-                            result.messages.push(format!(
-                                "exported task {} to {}",
-                                task_id.get(),
-                                output_path.display()
-                            ));
-                        }
-                        ExportEvent::Failed { task_id, error } => {
-                            self.export_state.insert(
-                                task_id,
-                                ExportState {
-                                    in_progress: false,
-                                    ratio: None,
-                                },
-                            );
-                            result.messages.push(error);
-                        }
-                    }
+        while let Ok(event) = self.export_rx.try_recv() {
+            result.changed = true;
+            match event {
+                ExportEvent::Progress { task_id, ratio } => {
+                    self.export_state.insert(
+                        task_id,
+                        ExportState {
+                            in_progress: true,
+                            ratio: Some(ratio),
+                        },
+                    );
                 }
-                Err(TryRecvError::Disconnected) | Err(TryRecvError::Empty) => break,
+                ExportEvent::Completed {
+                    task_id,
+                    output_path,
+                } => {
+                    self.export_state.insert(
+                        task_id,
+                        ExportState {
+                            in_progress: false,
+                            ratio: Some(1.0),
+                        },
+                    );
+                    self.exported_paths.insert(task_id, output_path.clone());
+                    result.messages.push(format!(
+                        "exported task {} to {}",
+                        task_id.get(),
+                        output_path.display()
+                    ));
+                }
+                ExportEvent::Failed { task_id, error } => {
+                    self.export_state.insert(
+                        task_id,
+                        ExportState {
+                            in_progress: false,
+                            ratio: None,
+                        },
+                    );
+                    result.messages.push(error);
+                }
             }
         }
 
@@ -1152,18 +1142,18 @@ fn collect_hls_media_playlist_entries(
             continue;
         }
         if line.starts_with("#EXT-X-KEY:") {
-            if let Some(uri) = parse_hls_attribute(line, "URI") {
-                if let Ok(resolved) = manifest_uri_resolve(manifest_uri, &uri) {
-                    add_resource_record(resources, resource_ids, &resolved);
-                }
+            if let Some(uri) = parse_hls_attribute(line, "URI")
+                && let Ok(resolved) = manifest_uri_resolve(manifest_uri, &uri)
+            {
+                add_resource_record(resources, resource_ids, &resolved);
             }
             continue;
         }
         if line.starts_with("#EXT-X-MAP:") {
-            if let Some(uri) = parse_hls_attribute(line, "URI") {
-                if let Ok(resolved) = manifest_uri_resolve(manifest_uri, &uri) {
-                    add_resource_record(resources, resource_ids, &resolved);
-                }
+            if let Some(uri) = parse_hls_attribute(line, "URI")
+                && let Ok(resolved) = manifest_uri_resolve(manifest_uri, &uri)
+            {
+                add_resource_record(resources, resource_ids, &resolved);
             }
             continue;
         }

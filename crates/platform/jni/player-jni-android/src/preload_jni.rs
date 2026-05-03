@@ -39,7 +39,7 @@ fn with_preload_session_mut<R>(
 ) -> Option<R> {
     let session = {
         let guard = lock_or_recover(preload_sessions());
-        let Some(session) = guard.get(&handle).cloned() else {
+        let Some(session) = guard.get(handle).cloned() else {
             let _ = env.throw_new(
                 jni_name("java/lang/IllegalArgumentException"),
                 jni_name(invalid_preload_handle_error()),
@@ -385,7 +385,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|_env| -> JniResult<()> {
                 let mut guard = lock_or_recover(preload_sessions());
-                guard.remove(&session_handle);
+                guard.remove(session_handle);
                 Ok(())
             })
             .resolve::<ThrowRuntimeExAndDefault>()
@@ -407,7 +407,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                     JObjectArray::<JObject<'_>>::from_raw(env, candidates as jobjectArray)
                 };
                 let len = candidates_array.len(env)?;
-                let mut rust_candidates = Vec::with_capacity(len as usize);
+                let mut rust_candidates = Vec::with_capacity(len);
                 for index in 0..len {
                     let candidate = candidates_array.get_element(env, index)?;
                     if !candidate.is_null() {

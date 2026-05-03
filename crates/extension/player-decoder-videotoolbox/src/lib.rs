@@ -1103,7 +1103,7 @@ mod platform {
     fn is_parameter_set(codec: VideoCodecKind, nal: &[u8]) -> bool {
         matches!(
             (codec, nal_unit_type(codec, nal)),
-            (VideoCodecKind::H264, Some(7 | 8)) | (VideoCodecKind::Hevc, Some(32 | 33 | 34))
+            (VideoCodecKind::H264, Some(7 | 8)) | (VideoCodecKind::Hevc, Some(32..=34))
         )
     }
 

@@ -1528,6 +1528,7 @@ fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
         VesperPluginKind::PostDownloadProcessor => "post_download_processor",
         VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
         VesperPluginKind::Decoder => "decoder",
+        VesperPluginKind::BenchmarkSink => "benchmark_sink",
     }
 }
 

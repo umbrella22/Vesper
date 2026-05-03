@@ -1558,10 +1558,18 @@ fn player_timeline_from_android_live_metadata(
 ) -> PlayerTimelineSnapshot {
     match metadata.kind {
         PlayerTimelineKind::LiveDvr => {
-            let seekable_range = metadata
-                .seekable_range
-                .expect("LiveDvr metadata should carry a seekable range");
-            PlayerTimelineSnapshot::live_dvr(progress, seekable_range, metadata.live_edge)
+            if let Some(seekable_range) = metadata.seekable_range {
+                PlayerTimelineSnapshot::live_dvr(progress, seekable_range, metadata.live_edge)
+            } else {
+                PlayerTimelineSnapshot {
+                    kind: PlayerTimelineKind::Live,
+                    is_seekable: false,
+                    seekable_range: None,
+                    live_edge: metadata.live_edge,
+                    position: progress.position(),
+                    duration: None,
+                }
+            }
         }
         PlayerTimelineKind::Live => PlayerTimelineSnapshot {
             kind: PlayerTimelineKind::Live,

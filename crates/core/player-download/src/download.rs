@@ -297,14 +297,14 @@ impl DownloadStore for InMemoryDownloadStore {
         let task_id = task.task_id;
         let asset_id = task.asset_id.clone();
 
-        if let Some(previous) = self.tasks.insert(task_id, task.clone()) {
-            if previous.asset_id != asset_id {
-                self.remove_from_asset_index(&previous.asset_id, task_id);
-            }
+        if let Some(previous) = self.tasks.insert(task_id, task.clone())
+            && previous.asset_id != asset_id
+        {
+            self.remove_from_asset_index(&previous.asset_id, task_id);
         }
 
         let entry = self.asset_index.entry(asset_id).or_default();
-        if !entry.iter().any(|existing| *existing == task_id) {
+        if !entry.contains(&task_id) {
             entry.push(task_id);
         }
         entry.sort_by_key(|task_id| task_id.get());
@@ -814,11 +814,7 @@ where
 
         for processor in &self.config.post_processors {
             let input_kind = current_input.content_format.kind();
-            if !processor
-                .supported_input_formats()
-                .iter()
-                .any(|supported| *supported == input_kind)
-            {
+            if !processor.supported_input_formats().contains(&input_kind) {
                 continue;
             }
 
@@ -872,11 +868,7 @@ where
 
         for processor in &self.config.post_processors {
             let input_kind = current_input.content_format.kind();
-            if !processor
-                .supported_input_formats()
-                .iter()
-                .any(|supported| *supported == input_kind)
-            {
+            if !processor.supported_input_formats().contains(&input_kind) {
                 continue;
             }
 
@@ -927,10 +919,8 @@ where
             }
         }
 
-        if ran_processor {
-            if let Some(path) = current_completed_path {
-                return Ok(path);
-            }
+        if ran_processor && let Some(path) = current_completed_path {
+            return Ok(path);
         }
 
         Err(PlayerRuntimeError::with_category(
@@ -1068,13 +1058,13 @@ fn sanitize_asset_id(asset_id: &str) -> String {
 }
 
 fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult<PathBuf> {
-    if let Some(path) = snapshot.asset_index.completed_path.as_ref() {
-        if matches!(
+    if let Some(path) = snapshot.asset_index.completed_path.as_ref()
+        && matches!(
             path.extension().and_then(|extension| extension.to_str()),
             Some("m3u8" | "mpd")
-        ) {
-            return Ok(path.clone());
-        }
+        )
+    {
+        return Ok(path.clone());
     }
 
     if let Some(path) = snapshot
@@ -1578,10 +1568,9 @@ mod tests {
             PipelineEvent::DownloadTaskCreated { asset_id, .. } if asset_id == "asset-a"
         )));
         assert!(
-            events
+            !events
                 .iter()
                 .any(|event| matches!(event, PipelineEvent::DownloadTaskCompleted { .. }))
-                == false
         );
         assert!(events.iter().any(|event| matches!(
             event,

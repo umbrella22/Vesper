@@ -11,6 +11,7 @@ on:
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
+      - "crates/extension/**"
       - "crates/platform/common/**"
       - "crates/platform/desktop/**"
       - "examples/basic-player/**"
@@ -27,6 +28,7 @@ on:
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
+      - "crates/extension/**"
       - "crates/platform/common/**"
       - "crates/platform/desktop/**"
       - "examples/basic-player/**"
@@ -37,9 +39,108 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-lint:
+    name: Rust Format and Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libasound2-dev \
+            libudev-dev \
+            libegl1-mesa-dev \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets
+
+  msrv-check:
+    name: Rust MSRV Check
+    runs-on: ubuntu-latest
+    needs: rust-lint
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.94
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libasound2-dev \
+            libudev-dev \
+            libegl1-mesa-dev \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev
+
+      - name: Workspace check
+        run: cargo check --workspace
+
   desktop-matrix:
     name: Vesper Desktop ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    needs: rust-lint
     strategy:
       fail-fast: false
       matrix:
@@ -199,11 +300,25 @@ jobs:
       - name: Workspace check
         run: cargo check --workspace
 
+      - name: Workspace tests
+        run: cargo test --workspace --no-fail-fast --exclude basic-player
+
       - name: Desktop platform tests
         run: cargo test -p player-platform-desktop -p ${{ matrix.platform_crate }}
 
+      - name: Verify decoder fixture diagnostics
+        run: bash ./scripts/verify-desktop-decoder-plugin-diagnostics.sh
+
+      - name: Verify VideoToolbox decoder plugin
+        if: runner.os == 'macOS'
+        run: bash ./scripts/verify-desktop-decoder-plugin-v2-videotoolbox.sh loader
+
       - name: Example host check
         run: cargo check -p basic-player -p player-ffi
+
+      - name: Build C host smoke example
+        if: runner.os == 'macOS'
+        run: bash ./scripts/run-c-host-smoke.sh --build-only
 
       - name: Verify desktop player-remux-ffmpeg remux path
         shell: bash

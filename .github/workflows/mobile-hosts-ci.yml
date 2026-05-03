@@ -11,9 +11,12 @@ on:
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
+      - "crates/extension/**"
       - "crates/platform/common/**"
       - "crates/platform/mobile/**"
       - "crates/platform/jni/**"
+      - "lib/android/**"
+      - "lib/ios/VesperPlayerKit/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
   push:
@@ -28,9 +31,12 @@ on:
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
+      - "crates/extension/**"
       - "crates/platform/common/**"
       - "crates/platform/mobile/**"
       - "crates/platform/jni/**"
+      - "lib/android/**"
+      - "lib/ios/VesperPlayerKit/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
   workflow_dispatch:
@@ -60,6 +66,12 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --locked
+
+      - name: Verify generated FFI header
+        run: ./scripts/verify-player-ffi-header.sh
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -178,8 +190,24 @@ jobs:
         working-directory: examples/ios-swift-host
         run: xcodegen generate
 
+      - name: Generate VesperPlayerKit Xcode project
+        working-directory: lib/ios/VesperPlayerKit
+        run: xcodegen generate
+
       - name: Refresh Rust iOS resolver bundle for Swift package resolution
         run: ./scripts/build-ios-player-ffi-xcframework.sh release
+
+      - name: Run VesperPlayerKit iOS regression tests
+        run: |
+          xcodebuild \
+            -project lib/ios/VesperPlayerKit/VesperPlayerKit.xcodeproj \
+            -scheme VesperPlayerKit \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath lib/ios/VesperPlayerKit/build/TestDerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test
 
       - name: Run Vesper iOS host regression tests
         run: |
