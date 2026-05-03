@@ -395,6 +395,7 @@ fn adaptation_kind_id(kind: DashAdaptationKind) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn startup_video_representation(
     video: &[PlayableRepresentation],
 ) -> Option<&PlayableRepresentation> {

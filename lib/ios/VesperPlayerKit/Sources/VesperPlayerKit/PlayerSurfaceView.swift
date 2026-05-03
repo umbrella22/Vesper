@@ -69,7 +69,7 @@ public final class PlayerSurfaceView: UIView {
         }
     }
 
-    func detachBridgeIfNeeded() {
+    public func detachBridgeIfNeeded() {
         attachedPlayer = nil
         clearReadyCallback()
         readyForDisplayObservation = nil

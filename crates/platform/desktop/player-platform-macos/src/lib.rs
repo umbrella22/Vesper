@@ -1877,6 +1877,7 @@ fn open_software_fallback_adapter_with_factory(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    #[cfg(target_os = "macos")]
     use std::os::raw::c_void;
     use std::path::{Path, PathBuf};
     use std::sync::{
@@ -2019,11 +2020,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn macos_host_factory_with_surface_prefers_native_path() {
-        if !cfg!(target_os = "macos") {
-            return;
-        }
-
         let Some(test_video_path) = test_video_path() else {
             eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
             return;
@@ -2983,10 +2981,8 @@ mod tests {
 
     #[test]
     #[ignore = "requires a built player-decoder-videotoolbox shared library and a local H264/HEVC source"]
+    #[cfg(target_os = "macos")]
     fn macos_native_frame_decoder_plugin_runtime_probes_with_surface() {
-        if !cfg!(target_os = "macos") {
-            return;
-        }
         let Some(plugin_path) =
             std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
         else {
@@ -3046,10 +3042,8 @@ mod tests {
 
     #[test]
     #[ignore = "requires a built player-decoder-videotoolbox shared library and a local H264/HEVC source"]
+    #[cfg(target_os = "macos")]
     fn macos_native_frame_runtime_reopens_as_software_after_presenter_failure() {
-        if !cfg!(target_os = "macos") {
-            return;
-        }
         let Some(plugin_path) =
             std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
         else {
@@ -3318,11 +3312,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn macos_host_runtime_with_surface_prefers_native() {
-        if !cfg!(target_os = "macos") {
-            return;
-        }
-
         let Some(test_video_path) = test_video_path() else {
             eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
             return;

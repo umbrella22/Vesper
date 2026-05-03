@@ -967,6 +967,7 @@ fn c_string_buffer_to_string(_buffer: &[c_char]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use std::os::raw::c_void;
     use std::path::Path;
 
@@ -1066,11 +1067,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn system_bindings_create_native_session_with_player_layer_surface() {
-        if !cfg!(target_os = "macos") {
-            return;
-        }
-
         let Some(test_video_path) = test_video_path() else {
             eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
             return;
@@ -1122,11 +1120,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn system_metal_presenter_creates_with_layer_surface() {
-        if !cfg!(target_os = "macos") {
-            return;
-        }
-
         let layer_handle = unsafe { player_macos_test_create_player_layer() };
         assert!(
             !layer_handle.is_null(),
