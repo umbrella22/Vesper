@@ -17,4 +17,6 @@ serde_json.workspace = true
 windows = { version = "0.62.2", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
 ] }

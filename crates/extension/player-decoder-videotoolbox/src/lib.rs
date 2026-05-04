@@ -3,10 +3,11 @@
 use std::ffi::{c_char, c_void};
 
 use player_plugin::{
-    DecoderCapabilities, DecoderCodecCapability, DecoderError, DecoderFrameFormat,
-    DecoderMediaKind, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
-    DecoderReceiveNativeFrameMetadata, DecoderSessionConfig, DecoderSessionInfo,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
+    DecoderFrameFormat, DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements,
+    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
+    DecoderSessionConfig, DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
@@ -26,6 +27,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
             destroy: None,
             name: Some(decoder_name),
             capabilities_json: Some(decoder_capabilities_json),
+            native_requirements_json: Some(decoder_native_requirements_json),
             free_bytes: Some(free_plugin_bytes),
             open_session_json: Some(decoder_open_session_json),
             send_packet: Some(decoder_send_packet),
@@ -52,6 +54,10 @@ unsafe extern "C" fn decoder_name(_context: *mut c_void) -> *const c_char {
 
 unsafe extern "C" fn decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
     serialize_payload(&decoder_capabilities())
+}
+
+unsafe extern "C" fn decoder_native_requirements_json(_context: *mut c_void) -> VesperPluginBytes {
+    serialize_payload(&decoder_native_requirements())
 }
 
 unsafe extern "C" fn decoder_open_session_json(
@@ -150,6 +156,18 @@ fn decoder_capabilities() -> DecoderCapabilities {
         supports_flush: true,
         supports_drain: true,
         max_sessions: None,
+    }
+}
+
+fn decoder_native_requirements() -> DecoderNativeRequirements {
+    DecoderNativeRequirements {
+        required_device_context_kinds: Vec::new(),
+        output_handle_kinds: vec![DecoderNativeHandleKind::CvPixelBuffer],
+        requires_native_device_context: false,
+        accepted_bitstream_formats: vec![
+            DecoderBitstreamFormat::Avcc,
+            DecoderBitstreamFormat::Hvcc,
+        ],
     }
 }
 
@@ -276,9 +294,9 @@ mod platform {
 
     use player_plugin::{
         DecoderError, DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrameMetadata,
-        DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
-        DecoderReceiveNativeFrameMetadata, DecoderSessionConfig, DecoderSessionInfo,
-        VesperDecoderOpenSessionResult, VesperDecoderReceiveNativeFrameResult,
+        DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderPacket,
+        DecoderPacketResult, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
+        DecoderSessionInfo, VesperDecoderOpenSessionResult, VesperDecoderReceiveNativeFrameResult,
         VesperPluginProcessResult,
     };
 
@@ -729,7 +747,15 @@ mod platform {
                     } else {
                         frame.height
                     },
+                    coded_width: None,
+                    coded_height: None,
+                    visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+                    frame_id: Some(frame.pixel_buffer as u64),
+                    release_tracking: Some(DecoderNativeFrameReleaseTracking {
+                        frame_id: Some(frame.pixel_buffer as u64),
+                        requires_release: true,
+                    }),
                 },
                 handle: frame.pixel_buffer as usize,
             }))

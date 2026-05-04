@@ -58,8 +58,14 @@ pub struct DecoderSessionConfig {
     pub codec: String,
     pub media_kind: DecoderMediaKind,
     pub extradata: Vec<u8>,
+    #[serde(default)]
+    pub bitstream_format: Option<DecoderBitstreamFormat>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    #[serde(default)]
+    pub coded_width: Option<u32>,
+    #[serde(default)]
+    pub coded_height: Option<u32>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
     pub prefer_hardware: bool,
@@ -197,11 +203,45 @@ pub enum DecoderNativeDeviceContextKind {
     Unknown(String),
 }
 
+/// Compressed video bitstream representation expected by a native decoder.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DecoderBitstreamFormat {
+    AnnexB,
+    Avcc,
+    Hvcc,
+    Unknown(String),
+}
+
 /// Borrowed native device/context pointer passed from host to decoder plugin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecoderNativeDeviceContext {
     pub kind: DecoderNativeDeviceContextKind,
     pub handle: usize,
+}
+
+/// Native-frame decoder requirements advertised through ABI v2.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DecoderNativeRequirements {
+    pub required_device_context_kinds: Vec<DecoderNativeDeviceContextKind>,
+    pub output_handle_kinds: Vec<DecoderNativeHandleKind>,
+    pub requires_native_device_context: bool,
+    pub accepted_bitstream_formats: Vec<DecoderBitstreamFormat>,
+}
+
+/// Visible content rectangle within a coded native frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderVisibleRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Release tracking diagnostics attached to a native frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderNativeFrameReleaseTracking {
+    pub frame_id: Option<u64>,
+    pub requires_release: bool,
 }
 
 /// Metadata for a decoded native frame. The native handle is transferred separately.
@@ -214,7 +254,17 @@ pub struct DecoderNativeFrameMetadata {
     pub duration_us: Option<i64>,
     pub width: u32,
     pub height: u32,
+    #[serde(default)]
+    pub coded_width: Option<u32>,
+    #[serde(default)]
+    pub coded_height: Option<u32>,
+    #[serde(default)]
+    pub visible_rect: Option<DecoderVisibleRect>,
     pub handle_kind: DecoderNativeHandleKind,
+    #[serde(default)]
+    pub frame_id: Option<u64>,
+    #[serde(default)]
+    pub release_tracking: Option<DecoderNativeFrameReleaseTracking>,
 }
 
 /// A decoded native frame returned by the Rust-side decoder session trait.
@@ -326,6 +376,10 @@ pub trait NativeDecoderPluginFactory: Send + Sync {
     fn name(&self) -> &str;
 
     fn capabilities(&self) -> DecoderCapabilities;
+
+    fn native_requirements(&self) -> DecoderNativeRequirements {
+        DecoderNativeRequirements::default()
+    }
 
     fn open_native_session(
         &self,

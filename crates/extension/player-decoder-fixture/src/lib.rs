@@ -1,9 +1,10 @@
 use std::ffi::{c_char, c_void};
 
 use player_plugin::{
-    DecoderCapabilities, DecoderCodecCapability, DecoderError, DecoderFrameFormat,
-    DecoderFrameMetadata, DecoderFramePlane, DecoderMediaKind, DecoderNativeFrameMetadata,
-    DecoderNativeHandleKind, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
+    DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
+    DecoderFrameFormat, DecoderFrameMetadata, DecoderFramePlane, DecoderMediaKind,
+    DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
+    DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
     DecoderReceiveFrameMetadata, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
     DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ABI_VERSION,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApi, VesperDecoderPluginApiV2,
@@ -70,6 +71,7 @@ fn vesper_native_plugin_entry() -> *const VesperPluginDescriptor {
             destroy: None,
             name: Some(decoder_name),
             capabilities_json: Some(native_decoder_capabilities_json),
+            native_requirements_json: Some(native_decoder_requirements_json),
             free_bytes: Some(free_plugin_bytes),
             open_session_json: Some(native_decoder_open_session_json),
             send_packet: Some(decoder_send_packet),
@@ -108,6 +110,15 @@ unsafe extern "C" fn native_decoder_capabilities_json(_context: *mut c_void) -> 
         codec.output_formats = vec![DecoderFrameFormat::Nv12];
     }
     serialize_payload(&capabilities)
+}
+
+unsafe extern "C" fn native_decoder_requirements_json(_context: *mut c_void) -> VesperPluginBytes {
+    serialize_payload(&DecoderNativeRequirements {
+        required_device_context_kinds: Vec::new(),
+        output_handle_kinds: vec![DecoderNativeHandleKind::IoSurface],
+        requires_native_device_context: false,
+        accepted_bitstream_formats: vec![DecoderBitstreamFormat::Unknown("fixture".to_owned())],
+    })
 }
 
 unsafe extern "C" fn decoder_open_session_json(
@@ -241,7 +252,15 @@ unsafe extern "C" fn decoder_receive_native_frame(
         duration_us: Some(33_333),
         width: 2,
         height: 2,
+        coded_width: Some(2),
+        coded_height: Some(2),
+        visible_rect: None,
         handle_kind: DecoderNativeHandleKind::IoSurface,
+        frame_id: Some(handle as u64),
+        release_tracking: Some(DecoderNativeFrameReleaseTracking {
+            frame_id: Some(handle as u64),
+            requires_release: true,
+        }),
     };
     native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), handle)
 }

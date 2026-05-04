@@ -62,6 +62,14 @@ pub struct RgbaOverlayFrame {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderFrameOutcome {
+    Presented,
+    Timeout,
+    Occluded,
+    SurfaceReconfigured,
+}
+
 pub fn default_window_attributes(config: RenderSurfaceConfig) -> WindowAttributes {
     Window::default_attributes()
         .with_title("Vesper basic player")
@@ -572,15 +580,22 @@ impl VideoRenderer {
     }
 
     pub fn render(&mut self) -> Result<()> {
+        self.render_with_outcome().map(|_| ())
+    }
+
+    pub fn render_with_outcome(&mut self) -> Result<RenderFrameOutcome> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                return Ok(RenderFrameOutcome::Timeout);
+            }
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(RenderFrameOutcome::Occluded);
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
-                return Ok(());
+                return Ok(RenderFrameOutcome::SurfaceReconfigured);
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 anyhow::bail!("surface texture acquisition failed with validation error");
@@ -662,7 +677,7 @@ impl VideoRenderer {
 
         self.queue.submit([encoder.finish()]);
         frame.present();
-        Ok(())
+        Ok(RenderFrameOutcome::Presented)
     }
 }
 

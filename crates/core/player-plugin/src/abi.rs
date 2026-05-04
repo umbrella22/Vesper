@@ -353,6 +353,8 @@ pub struct VesperDecoderPluginApiV2 {
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
     pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
     pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub native_requirements_json:
+        Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
     pub open_session_json: Option<
         unsafe extern "C" fn(
             context: *mut c_void,
@@ -426,6 +428,6 @@ pub type VesperPluginEntryPoint = unsafe extern "C" fn() -> *const VesperPluginD
 /// Current ABI version shared by the host and plugin crates.
 pub const VESPER_PLUGIN_ABI_VERSION: u32 = 1;
 /// Native-frame decoder plugin ABI version.
-pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = 2;
+pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = 3;
 /// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

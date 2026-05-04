@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -19,15 +20,21 @@ use player_runtime::{PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget};
 
 #[cfg(target_os = "linux")]
 use player_platform_linux::{
-    open_linux_host_runtime_uri_with_options, probe_linux_host_runtime_uri_with_options,
+    open_linux_host_runtime_uri_with_options,
+    open_linux_host_runtime_uri_with_options_and_interrupt,
+    probe_linux_host_runtime_uri_with_options,
 };
 #[cfg(target_os = "macos")]
 use player_platform_macos::{
-    open_macos_host_runtime_uri_with_options, probe_macos_host_runtime_uri_with_options,
+    open_macos_host_runtime_uri_with_options,
+    open_macos_host_runtime_uri_with_options_and_interrupt,
+    probe_macos_host_runtime_uri_with_options,
 };
 #[cfg(target_os = "windows")]
 use player_platform_windows::{
-    open_windows_host_runtime_uri_with_options, probe_windows_host_runtime_uri_with_options,
+    open_windows_host_runtime_uri_with_options,
+    open_windows_host_runtime_uri_with_options_and_interrupt,
+    probe_windows_host_runtime_uri_with_options,
 };
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -243,6 +250,54 @@ pub fn open_desktop_host_runtime_uri_for_winit_window(
         window,
         PlayerRuntimeOptions::default(),
     )
+}
+
+pub fn open_desktop_host_runtime_uri_with_options_and_interrupt(
+    uri: impl Into<String>,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> Result<(PlayerRuntimeBootstrap, PlayerRuntimeAdapterCapabilities)> {
+    let source = normalize_desktop_host_source_uri(uri.into())?;
+    let options = desktop_runtime_options_for_source(&source, options);
+
+    #[cfg(target_os = "macos")]
+    {
+        let bootstrap = open_macos_host_runtime_uri_with_options_and_interrupt(
+            source,
+            options,
+            interrupt_flag,
+        )?;
+        let capabilities = bootstrap.runtime.capabilities();
+        Ok((bootstrap, capabilities))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let bootstrap = open_linux_host_runtime_uri_with_options_and_interrupt(
+            source,
+            options,
+            interrupt_flag,
+        )?;
+        let capabilities = bootstrap.runtime.capabilities();
+        Ok((bootstrap, capabilities))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let bootstrap = open_windows_host_runtime_uri_with_options_and_interrupt(
+            source,
+            options,
+            interrupt_flag,
+        )?;
+        let capabilities = bootstrap.runtime.capabilities();
+        Ok((bootstrap, capabilities))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = (source, options, interrupt_flag);
+        anyhow::bail!("desktop host helper only supports macOS, Linux, and Windows targets")
+    }
 }
 
 pub fn open_desktop_host_runtime_uri_for_winit_window_with_options(

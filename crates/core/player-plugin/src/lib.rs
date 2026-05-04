@@ -21,14 +21,15 @@ pub use benchmark::{
 };
 pub use capability::ProcessorCapabilities;
 pub use decoder::{
-    DecoderCapabilities, DecoderCodecCapability, DecoderError, DecoderFrame, DecoderFrameFormat,
-    DecoderFrameMetadata, DecoderFramePlane, DecoderMediaKind, DecoderNativeDeviceContext,
-    DecoderNativeDeviceContextKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
-    DecoderNativeHandleKind, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
+    DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
+    DecoderFrame, DecoderFrameFormat, DecoderFrameMetadata, DecoderFramePlane, DecoderMediaKind,
+    DecoderNativeDeviceContext, DecoderNativeDeviceContextKind, DecoderNativeFrame,
+    DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
+    DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
     DecoderPluginFactory, DecoderReceiveFrameMetadata, DecoderReceiveFrameOutput,
     DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput,
-    DecoderSession, DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory,
-    NativeDecoderSession,
+    DecoderSession, DecoderSessionConfig, DecoderSessionInfo, DecoderVisibleRect,
+    NativeDecoderPluginFactory, NativeDecoderSession,
 };
 pub use hook::{PipelineEvent, PipelineEventHook};
 pub use processor::{

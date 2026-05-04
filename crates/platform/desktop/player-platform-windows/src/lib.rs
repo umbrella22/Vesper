@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
 use player_backend_ffmpeg::{
@@ -9,11 +10,13 @@ use player_core::MediaSource;
 use player_platform_desktop::{
     DesktopVideoFrame, DesktopVideoFramePoll, DesktopVideoSource, DesktopVideoSourceBootstrap,
     DesktopVideoSourceFactory, merge_runtime_fallback_reason,
+    open_platform_desktop_source_with_options_and_interrupt,
     probe_platform_desktop_source_with_options,
     probe_platform_desktop_source_with_video_source_factory_and_options,
 };
 use player_plugin::{
-    DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeHandleKind, DecoderPacket,
+    DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeDeviceContext,
+    DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderPacket,
     DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession, VesperPluginKind,
 };
 use player_plugin_loader::{
@@ -106,6 +109,7 @@ struct WindowsNativeFrameVideoSource {
     session: Box<dyn NativeDecoderSession>,
     presenter: Box<dyn WindowsNativeFramePresenter>,
     surface_target: WindowsSurfaceAttachTarget,
+    pending_packet: Option<CompressedVideoPacket>,
     end_of_input_sent: bool,
 }
 
@@ -696,6 +700,18 @@ pub fn open_windows_host_runtime_uri_with_options(
     open_windows_host_runtime_source_with_options(MediaSource::new(uri), options)
 }
 
+pub fn open_windows_host_runtime_uri_with_options_and_interrupt(
+    uri: impl Into<String>,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    open_windows_host_runtime_source_with_options_and_interrupt(
+        MediaSource::new(uri),
+        options,
+        interrupt_flag,
+    )
+}
+
 pub fn probe_windows_host_runtime_uri_with_options(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
@@ -740,6 +756,34 @@ pub fn open_windows_host_runtime_source_with_options(
     }
 
     PlayerRuntime::open_source_with_factory(source, options, windows_runtime_adapter_factory())
+}
+
+pub fn open_windows_host_runtime_source_with_options_and_interrupt(
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    if !cfg!(target_os = "windows") {
+        return Err(PlayerRuntimeError::new(
+            PlayerRuntimeErrorCode::Unsupported,
+            "windows host runtime strategy can only be initialized on Windows targets",
+        ));
+    }
+
+    if options.decoder_plugin_video_mode == PlayerDecoderPluginVideoMode::PreferNativeFrame {
+        return open_windows_host_runtime_source_with_options(source, options);
+    }
+
+    let bootstrap = open_platform_desktop_source_with_options_and_interrupt(
+        WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        source,
+        options,
+        interrupt_flag,
+    )?;
+    Ok(PlayerRuntime::from_adapter_bootstrap(
+        WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        bootstrap,
+    ))
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -912,8 +956,11 @@ impl DesktopVideoSourceFactory for WindowsNativeFrameVideoSourceFactory {
                 codec: stream_info.codec.clone(),
                 media_kind: DecoderMediaKind::Video,
                 extradata: stream_info.extradata.clone(),
+                bitstream_format: Some(windows_decoder_bitstream_format(&stream_info.codec)),
                 width: stream_info.width,
                 height: stream_info.height,
+                coded_width: stream_info.width,
+                coded_height: stream_info.height,
                 prefer_hardware: true,
                 require_cpu_output: false,
                 native_device_context: presenter.decoder_device_context(),
@@ -940,6 +987,7 @@ impl DesktopVideoSourceFactory for WindowsNativeFrameVideoSourceFactory {
                 session,
                 presenter,
                 surface_target,
+                pending_packet: None,
                 end_of_input_sent: false,
             }),
             decode_info,
@@ -973,6 +1021,7 @@ impl DesktopVideoSource for WindowsNativeFrameVideoSource {
         self.presenter.reset()?;
         self.presenter.attach(self.surface_target)?;
         self.packet_source.seek_to(position)?;
+        self.pending_packet = None;
         self.end_of_input_sent = false;
         self.recv_frame()
     }
@@ -1011,10 +1060,15 @@ impl WindowsNativeFrameVideoSource {
                 return Ok(DesktopVideoFramePoll::Pending);
             }
 
-            match self.packet_source.next_packet()? {
+            match self.next_input_packet()? {
                 Some(packet) => {
-                    self.send_packet(packet)?;
+                    let accepted = self.send_packet(&packet)?;
                     packets_submitted = packets_submitted.saturating_add(1);
+                    if accepted {
+                        self.pending_packet = None;
+                    } else {
+                        self.pending_packet = Some(packet);
+                    }
                     if !blocking && packets_submitted >= 4 {
                         return Ok(DesktopVideoFramePoll::Pending);
                     }
@@ -1027,22 +1081,15 @@ impl WindowsNativeFrameVideoSource {
         }
     }
 
-    fn send_packet(&mut self, packet: CompressedVideoPacket) -> anyhow::Result<()> {
-        self.session
-            .send_packet(
-                &DecoderPacket {
-                    pts_us: packet.pts_us,
-                    dts_us: packet.dts_us,
-                    duration_us: packet.duration_us,
-                    stream_index: packet.stream_index,
-                    key_frame: packet.key_frame,
-                    discontinuity: packet.discontinuity,
-                    end_of_stream: false,
-                },
-                &packet.data,
-            )
-            .map(|_| ())
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    fn next_input_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>> {
+        if let Some(packet) = self.pending_packet.take() {
+            return Ok(Some(packet));
+        }
+        self.packet_source.next_packet()
+    }
+
+    fn send_packet(&mut self, packet: &CompressedVideoPacket) -> anyhow::Result<bool> {
+        send_windows_native_packet(self.session.as_mut(), packet)
     }
 
     fn send_end_of_stream(&mut self) -> anyhow::Result<()> {
@@ -1057,6 +1104,28 @@ impl WindowsNativeFrameVideoSource {
             )
             .map(|_| ())
             .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+}
+
+fn send_windows_native_packet(
+    session: &mut dyn NativeDecoderSession,
+    packet: &CompressedVideoPacket,
+) -> anyhow::Result<bool> {
+    session
+        .send_packet(&decoder_packet_from_compressed_packet(packet), &packet.data)
+        .map(|result| result.accepted)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn decoder_packet_from_compressed_packet(packet: &CompressedVideoPacket) -> DecoderPacket {
+    DecoderPacket {
+        pts_us: packet.pts_us,
+        dts_us: packet.dts_us,
+        duration_us: packet.duration_us,
+        stream_index: packet.stream_index,
+        key_frame: packet.key_frame,
+        discontinuity: packet.discontinuity,
+        end_of_stream: false,
     }
 }
 
@@ -1267,10 +1336,33 @@ fn select_windows_native_frame_candidate_from_registry(
     let best_video = media_info.best_video.as_ref()?;
     let request = DecoderPluginMatchRequest::video(best_video.codec.clone());
     let record = registry.best_native_decoder_for(&request)?;
+    let requirements = record
+        .decoder_capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.native_requirements.as_ref());
+    if requirements.is_some_and(|requirements| {
+        (!requirements.required_device_context_kinds.is_empty()
+            && !requirements
+                .required_device_context_kinds
+                .contains(&DecoderNativeDeviceContextKind::D3D11Device))
+            || (!requirements.output_handle_kinds.is_empty()
+                && !requirements
+                    .output_handle_kinds
+                    .contains(&DecoderNativeHandleKind::D3D11Texture2D))
+    }) {
+        return None;
+    }
     Some(WindowsNativeFrameSelection {
         preferred_backend: windows_native_frame_roadmap().preferred_backend,
         plugin_path: record.path.clone(),
     })
+}
+
+fn windows_decoder_bitstream_format(codec: &str) -> DecoderBitstreamFormat {
+    match codec.to_ascii_uppercase().as_str() {
+        "HEVC" | "H265" | "HVC1" | "HEV1" => DecoderBitstreamFormat::Hvcc,
+        _ => DecoderBitstreamFormat::Avcc,
+    }
 }
 
 fn windows_runtime_diagnostics(
@@ -1625,11 +1717,11 @@ mod tests {
         WindowsRuntimeAdapter, WindowsSoftwarePlayerRuntimeAdapterFactory,
         WindowsSurfaceAttachTarget, open_windows_host_runtime_source_with_options,
         probe_windows_host_runtime_source_with_options,
-        select_windows_native_frame_candidate_from_registry,
+        select_windows_native_frame_candidate_from_registry, send_windows_native_packet,
         windows_native_frame_poll_with_presenter, windows_native_frame_presenter_for_backend,
         windows_native_frame_roadmap, windows_runtime_diagnostics,
     };
-    use player_backend_ffmpeg::VideoPacketStreamInfo;
+    use player_backend_ffmpeg::{CompressedVideoPacket, VideoPacketStreamInfo};
     use player_core::MediaSource;
     use player_platform_desktop::merge_runtime_fallback_reason;
     use player_plugin::{
@@ -2181,7 +2273,12 @@ mod tests {
                     duration_us: Some(33_000),
                     width: 1920,
                     height: 1080,
+                    coded_width: Some(1920),
+                    coded_height: Some(1080),
+                    visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::DxgiSurface,
+                    frame_id: Some(7),
+                    release_tracking: None,
                 },
                 handle: 7,
             },
@@ -2222,7 +2319,12 @@ mod tests {
                     duration_us: Some(33_000),
                     width: 1920,
                     height: 1080,
+                    coded_width: Some(1920),
+                    coded_height: Some(1080),
+                    visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::D3D11Texture2D,
+                    frame_id: Some(9),
+                    release_tracking: None,
                 },
                 handle: 9,
             },
@@ -2244,6 +2346,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn windows_native_packet_send_preserves_decoder_backpressure() {
+        let mut session = BackpressureWindowsNativeSession {
+            accepted: false,
+            sent_packets: Vec::new(),
+        };
+        let accepted = send_windows_native_packet(
+            &mut session,
+            &CompressedVideoPacket {
+                pts_us: Some(12),
+                dts_us: Some(9),
+                duration_us: Some(3),
+                stream_index: 4,
+                key_frame: true,
+                discontinuity: true,
+                data: vec![1, 2, 3],
+            },
+        )
+        .expect("packet send should surface decoder backpressure");
+
+        assert!(!accepted);
+        assert_eq!(session.sent_packets.len(), 1);
+        let (packet, data) = &session.sent_packets[0];
+        assert_eq!(packet.pts_us, Some(12));
+        assert_eq!(packet.dts_us, Some(9));
+        assert_eq!(packet.duration_us, Some(3));
+        assert_eq!(packet.stream_index, 4);
+        assert!(packet.key_frame);
+        assert!(packet.discontinuity);
+        assert!(!packet.end_of_stream);
+        assert_eq!(data, &[1, 2, 3]);
+    }
+
     struct FakeWindowsRuntime {
         capabilities: PlayerRuntimeAdapterCapabilities,
         media_info: player_runtime::PlayerMediaInfo,
@@ -2258,6 +2393,11 @@ mod tests {
     struct FakeWindowsPresenter {
         accepted_handle_kind: DecoderNativeHandleKind,
         presented_handles: Arc<Mutex<Vec<usize>>>,
+    }
+
+    struct BackpressureWindowsNativeSession {
+        accepted: bool,
+        sent_packets: Vec<(player_plugin::DecoderPacket, Vec<u8>)>,
     }
 
     impl NativeDecoderSession for FakeWindowsNativeSession {
@@ -2339,6 +2479,44 @@ mod tests {
         }
     }
 
+    impl NativeDecoderSession for BackpressureWindowsNativeSession {
+        fn session_info(&self) -> DecoderSessionInfo {
+            DecoderSessionInfo::default()
+        }
+
+        fn send_packet(
+            &mut self,
+            packet: &player_plugin::DecoderPacket,
+            data: &[u8],
+        ) -> Result<player_plugin::DecoderPacketResult, player_plugin::DecoderError> {
+            self.sent_packets.push((packet.clone(), data.to_vec()));
+            Ok(player_plugin::DecoderPacketResult {
+                accepted: self.accepted,
+            })
+        }
+
+        fn receive_native_frame(
+            &mut self,
+        ) -> Result<DecoderReceiveNativeFrameOutput, player_plugin::DecoderError> {
+            Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
+        }
+
+        fn release_native_frame(
+            &mut self,
+            _frame: DecoderNativeFrame,
+        ) -> Result<(), player_plugin::DecoderError> {
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), player_plugin::DecoderError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), player_plugin::DecoderError> {
+            Ok(())
+        }
+    }
+
     fn fake_video_stream_info() -> VideoPacketStreamInfo {
         VideoPacketStreamInfo {
             stream_index: 0,
@@ -2384,6 +2562,7 @@ mod tests {
                 }],
                 codecs: vec![format!("Video:{codec}")],
                 supports_native_frame_output: true,
+                native_requirements: None,
                 supports_hardware_decode: true,
                 supports_cpu_video_frames: false,
                 supports_audio_frames: false,

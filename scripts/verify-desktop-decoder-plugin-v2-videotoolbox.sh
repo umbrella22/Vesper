@@ -174,10 +174,28 @@ run_headless_decode_test() {
     --exact
 }
 
+run_headless_lifecycle_test() {
+  cargo test \
+    -p player-platform-macos \
+    tests::macos_videotoolbox_decoder_flush_seek_and_eof_headless \
+    -- \
+    --ignored \
+    --exact
+}
+
 run_playback_test() {
-    cargo test \
+  cargo test \
     -p player-platform-macos \
     tests::macos_native_frame_decoder_plugin_runtime_probes_with_surface \
+    -- \
+    --ignored \
+    --exact
+}
+
+run_playback_fallback_test() {
+  cargo test \
+    -p player-platform-macos \
+    tests::macos_native_frame_runtime_reopens_as_software_after_presenter_failure \
     -- \
     --ignored \
     --exact
@@ -203,26 +221,28 @@ main() {
 
   echo "Using VideoToolbox decoder plugin: $VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH"
 
-  if [[ "$MODE" == "loader" || "$MODE" == "all" ]]; then
-    smoke_source="$(resolve_smoke_source "$target_dir")"
-    export VESPER_DECODER_VIDEOTOOLBOX_SOURCE="$smoke_source"
-    echo "Using VideoToolbox smoke source: $VESPER_DECODER_VIDEOTOOLBOX_SOURCE"
-  fi
+  smoke_source="$(resolve_smoke_source "$target_dir")"
+  export VESPER_DECODER_VIDEOTOOLBOX_SOURCE="$smoke_source"
+  echo "Using VideoToolbox smoke source: $VESPER_DECODER_VIDEOTOOLBOX_SOURCE"
 
   case "$MODE" in
     loader)
       run_loader_test
       run_macos_runtime_test
       run_headless_decode_test
+      run_headless_lifecycle_test
       ;;
     playback)
       run_playback_test
+      run_playback_fallback_test
       ;;
     all)
       run_loader_test
       run_macos_runtime_test
       run_headless_decode_test
+      run_headless_lifecycle_test
       run_playback_test
+      run_playback_fallback_test
       ;;
   esac
 }

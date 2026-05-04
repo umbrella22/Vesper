@@ -1,5 +1,11 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use player_core::MediaSource;
-use player_platform_desktop::probe_platform_desktop_source_with_options;
+use player_platform_desktop::{
+    open_platform_desktop_source_with_options_and_interrupt,
+    probe_platform_desktop_source_with_options,
+};
 use player_runtime::{
     PlayerMediaInfo, PlayerRuntime, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeError,
@@ -32,6 +38,18 @@ pub fn open_linux_host_runtime_uri_with_options(
     options: PlayerRuntimeOptions,
 ) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
     open_linux_host_runtime_source_with_options(MediaSource::new(uri), options)
+}
+
+pub fn open_linux_host_runtime_uri_with_options_and_interrupt(
+    uri: impl Into<String>,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    open_linux_host_runtime_source_with_options_and_interrupt(
+        MediaSource::new(uri),
+        options,
+        interrupt_flag,
+    )
 }
 
 pub fn probe_linux_host_runtime_uri_with_options(
@@ -78,6 +96,30 @@ pub fn open_linux_host_runtime_source_with_options(
     }
 
     PlayerRuntime::open_source_with_factory(source, options, linux_runtime_adapter_factory())
+}
+
+pub fn open_linux_host_runtime_source_with_options_and_interrupt(
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    if !cfg!(target_os = "linux") {
+        return Err(PlayerRuntimeError::new(
+            PlayerRuntimeErrorCode::Unsupported,
+            "linux host runtime strategy can only be initialized on Linux targets",
+        ));
+    }
+
+    let bootstrap = open_platform_desktop_source_with_options_and_interrupt(
+        LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        source,
+        options,
+        interrupt_flag,
+    )?;
+    Ok(PlayerRuntime::from_adapter_bootstrap(
+        LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        bootstrap,
+    ))
 }
 
 #[derive(Debug, Default, Clone, Copy)]

@@ -29,25 +29,20 @@ use desktop_ui::{
 };
 use player_core::MediaSource;
 #[cfg(not(target_os = "macos"))]
-use player_host_desktop::open_desktop_host_runtime_uri_for_winit_window_with_options;
-#[cfg(not(target_os = "macos"))]
-use player_host_desktop::probe_desktop_host_launch_plan_uri_with_options;
+use player_host_desktop::open_desktop_host_runtime_uri_with_options_and_interrupt;
 use player_host_desktop::{
     DesktopHostLaunchPlan as RuntimeLaunchPlan, canonical_desktop_host_local_path,
-    normalize_desktop_host_source_uri,
+    normalize_desktop_host_source_uri, render_config_from_media_info,
+    runtime_options_for_winit_window,
 };
-#[cfg(target_os = "macos")]
-use player_host_desktop::{render_config_from_media_info, runtime_options_for_winit_window};
 #[cfg(target_os = "macos")]
 use player_platform_macos::{
     MacosVideoLayerFrame, MacosVideoLayerSurface,
-    open_macos_software_runtime_uri_with_options_and_interrupt,
+    open_macos_host_runtime_uri_with_options_and_interrupt,
 };
-#[cfg(not(target_os = "macos"))]
-use player_render_wgpu::preferred_backends;
 use player_render_wgpu::{
-    DisplayRect, RenderMode, RenderSurfaceConfig, RgbaVideoFrame, VideoFrameTexture, VideoRenderer,
-    Yuv420pVideoFrame, default_window_attributes,
+    DisplayRect, RenderFrameOutcome, RenderMode, RenderSurfaceConfig, RgbaVideoFrame,
+    VideoFrameTexture, VideoRenderer, Yuv420pVideoFrame, default_window_attributes,
 };
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
@@ -57,7 +52,7 @@ use player_runtime::{
     PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
     PresentationState, VideoPixelFormat,
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -72,6 +67,7 @@ const CONTROL_HIDE_DELAY: Duration = Duration::from_secs(2);
 const CONTROL_FADE_DURATION: Duration = Duration::from_millis(220);
 const CONTROL_FADE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const PLAYBACK_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(125);
+const POST_LAUNCH_PLAY_PAINT_FALLBACK: Duration = Duration::from_millis(120);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DECODER_PLUGIN_PATHS_ENV: &str = "VESPER_DECODER_PLUGIN_PATHS";
@@ -93,7 +89,6 @@ struct PendingLaunchActivation {
     label: String,
     prepare_duration: Duration,
     launch_plan: RuntimeLaunchPlan,
-    #[cfg(target_os = "macos")]
     prepared_bootstrap: PlayerRuntimeBootstrap,
 }
 
@@ -124,7 +119,6 @@ enum LaunchEvent {
         label: String,
         prepare_duration: Duration,
         launch_plan: RuntimeLaunchPlan,
-        #[cfg(target_os = "macos")]
         prepared_bootstrap: PlayerRuntimeBootstrap,
     },
     Failed {
@@ -196,6 +190,7 @@ struct DesktopPlayerApp {
     pending_launch_activation_needs_paint: bool,
     pending_post_launch_play: bool,
     pending_post_launch_play_needs_paint: bool,
+    pending_post_launch_play_paint_deadline: Option<Instant>,
     file_dialog_tx: Sender<FileDialogEvent>,
     file_dialog_rx: Receiver<FileDialogEvent>,
     next_launch_request_id: u64,
@@ -208,6 +203,11 @@ struct DesktopPlayerApp {
     last_plugin_diagnostics_summary: Option<String>,
     overlay_dirty: bool,
     last_overlay_refresh_at: Option<Instant>,
+    source_generation: u64,
+    frame_sequence: u64,
+    first_frame_upload_logged: bool,
+    first_frame_present_logged: bool,
+    last_uploaded_frame_sequence: Option<u64>,
 }
 
 impl DesktopPlayerApp {
@@ -255,6 +255,7 @@ impl DesktopPlayerApp {
             pending_launch_activation_needs_paint: false,
             pending_post_launch_play: false,
             pending_post_launch_play_needs_paint: false,
+            pending_post_launch_play_paint_deadline: None,
             file_dialog_tx,
             file_dialog_rx,
             next_launch_request_id: 1,
@@ -267,6 +268,11 @@ impl DesktopPlayerApp {
             last_plugin_diagnostics_summary: None,
             overlay_dirty: false,
             last_overlay_refresh_at: None,
+            source_generation: 0,
+            frame_sequence: 0,
+            first_frame_upload_logged: false,
+            first_frame_present_logged: false,
+            last_uploaded_frame_sequence: None,
         }
     }
 
@@ -466,6 +472,11 @@ impl DesktopPlayerApp {
             self.native_video_surface = None;
         }
         self.seek_preview = None;
+        self.frame_sequence = 0;
+        self.first_frame_upload_logged = false;
+        self.first_frame_present_logged = false;
+        self.last_uploaded_frame_sequence = None;
+        self.pending_post_launch_play_paint_deadline = None;
     }
 
     fn replace_active_launch_cancel_flag(&mut self) -> Arc<AtomicBool> {
@@ -581,6 +592,9 @@ impl DesktopPlayerApp {
         let label = label.unwrap_or_else(|| source_display_label(&source));
         let request_id = self.next_launch_request_id;
         self.next_launch_request_id = self.next_launch_request_id.saturating_add(1);
+        self.source_generation = self.source_generation.wrapping_add(1);
+        let source_generation = self.source_generation;
+        let cancel_flag = self.replace_active_launch_cancel_flag();
         self.source = Some(source.clone());
         self.register_playlist_source(&source, Some(label.clone()));
         self.active_launch_request_id = Some(request_id);
@@ -588,6 +602,7 @@ impl DesktopPlayerApp {
         self.pending_launch_activation_needs_paint = false;
         self.pending_post_launch_play = false;
         self.pending_post_launch_play_needs_paint = false;
+        self.pending_post_launch_play_paint_deadline = None;
         self.launch_status = Some(SourceLaunchStatus::Loading);
         self.reset_active_playback_for_launch();
         self.host_message = Some(format!("LOADING {label}"));
@@ -597,111 +612,56 @@ impl DesktopPlayerApp {
         self.sync_ui_presenter();
         self.refresh_overlay()?;
 
+        let window = self
+            .window
+            .as_ref()
+            .cloned()
+            .context("window missing while preparing desktop source launch")?;
+
         #[cfg(target_os = "macos")]
-        let native_frame_options = if decoder_plugin_video_mode_from_env()
-            == PlayerDecoderPluginVideoMode::PreferNativeFrame
-        {
-            let window = self
-                .window
-                .as_ref()
-                .cloned()
-                .context("window missing while preparing macOS native-frame launch")?;
+        let runtime_options = {
             let video_surface = self.ensure_native_video_surface(window.as_ref())?;
             let options = basic_player_runtime_options().with_video_surface(video_surface);
-            Some(runtime_options_for_winit_window(window.as_ref(), options)?)
-        } else {
-            None
+            runtime_options_for_winit_window(window.as_ref(), options)?
         };
+        #[cfg(not(target_os = "macos"))]
+        let runtime_options =
+            runtime_options_for_winit_window(window.as_ref(), basic_player_runtime_options())?;
 
-        let cancel_flag = self.replace_active_launch_cancel_flag();
         let launch_tx = self.launch_tx.clone();
         thread::spawn(move || {
             let prepare_started_at = Instant::now();
-            #[cfg(target_os = "macos")]
-            let event = if let Some(options) = native_frame_options {
-                match open_macos_software_runtime_uri_with_options_and_interrupt(
-                    source.clone(),
-                    options,
-                    cancel_flag.clone(),
-                ) {
-                    Ok(prepared_bootstrap) => {
-                        let capabilities = prepared_bootstrap.runtime.capabilities();
-                        let launch_plan = RuntimeLaunchPlan {
-                            source: source.clone(),
-                            render_config: render_config_from_media_info(
-                                prepared_bootstrap.runtime.media_info(),
-                            ),
-                        };
-                        info!(
-                            source = source.as_str(),
-                            adapter_id = prepared_bootstrap.runtime.adapter_id(),
-                            prepare_ms = prepare_started_at.elapsed().as_millis(),
-                            supports_frame_output = capabilities.supports_frame_output,
-                            supports_external_video_surface =
-                                capabilities.supports_external_video_surface,
-                            "prepared macOS native-frame runtime off the main thread"
-                        );
-                        LaunchEvent::Prepared {
-                            request_id,
-                            source,
-                            label,
-                            prepare_duration: prepare_started_at.elapsed(),
-                            launch_plan,
-                            prepared_bootstrap,
-                        }
-                    }
-                    Err(error) => LaunchEvent::Failed {
+            let event = match open_basic_player_runtime_for_source(
+                &source,
+                runtime_options,
+                cancel_flag.clone(),
+            ) {
+                Ok((prepared_bootstrap, capabilities)) => {
+                    let launch_plan = RuntimeLaunchPlan {
+                        source: source.clone(),
+                        render_config: render_config_from_media_info(
+                            prepared_bootstrap.runtime.media_info(),
+                        ),
+                    };
+                    info!(
+                        source = source.as_str(),
+                        source_generation,
+                        adapter_id = prepared_bootstrap.runtime.adapter_id(),
+                        prepare_ms = prepare_started_at.elapsed().as_millis(),
+                        supports_frame_output = capabilities.supports_frame_output,
+                        supports_external_video_surface =
+                            capabilities.supports_external_video_surface,
+                        "prepared desktop runtime off the main thread"
+                    );
+                    LaunchEvent::Prepared {
                         request_id,
+                        source,
                         label,
                         prepare_duration: prepare_started_at.elapsed(),
-                        error: error.to_string(),
-                    },
-                }
-            } else {
-                match open_basic_player_runtime_for_source(&source, cancel_flag.clone()) {
-                    Ok((prepared_bootstrap, capabilities)) => {
-                        let launch_plan = RuntimeLaunchPlan {
-                            source: source.clone(),
-                            render_config: render_config_from_media_info(
-                                prepared_bootstrap.runtime.media_info(),
-                            ),
-                        };
-                        info!(
-                            source = source.as_str(),
-                            adapter_id = prepared_bootstrap.runtime.adapter_id(),
-                            prepare_ms = prepare_started_at.elapsed().as_millis(),
-                            supports_frame_output = capabilities.supports_frame_output,
-                            supports_external_video_surface =
-                                capabilities.supports_external_video_surface,
-                            "prepared desktop runtime off the main thread"
-                        );
-                        LaunchEvent::Prepared {
-                            request_id,
-                            source,
-                            label,
-                            prepare_duration: prepare_started_at.elapsed(),
-                            launch_plan,
-                            prepared_bootstrap,
-                        }
+                        launch_plan,
+                        prepared_bootstrap,
                     }
-                    Err(error) => LaunchEvent::Failed {
-                        request_id,
-                        label,
-                        prepare_duration: prepare_started_at.elapsed(),
-                        error: error.to_string(),
-                    },
                 }
-            };
-
-            #[cfg(not(target_os = "macos"))]
-            let event = match build_launch_plan(source.clone()) {
-                Ok(launch_plan) => LaunchEvent::Prepared {
-                    request_id,
-                    source,
-                    label,
-                    prepare_duration: prepare_started_at.elapsed(),
-                    launch_plan,
-                },
                 Err(error) => LaunchEvent::Failed {
                     request_id,
                     label,
@@ -786,7 +746,6 @@ impl DesktopPlayerApp {
                     label,
                     prepare_duration,
                     launch_plan,
-                    #[cfg(target_os = "macos")]
                     prepared_bootstrap,
                 }) => {
                     if self.active_launch_request_id != Some(request_id) {
@@ -798,7 +757,6 @@ impl DesktopPlayerApp {
                         label,
                         prepare_duration,
                         launch_plan,
-                        #[cfg(target_os = "macos")]
                         prepared_bootstrap,
                     });
                     self.pending_launch_activation_needs_paint = true;
@@ -863,15 +821,12 @@ impl DesktopPlayerApp {
             "desktop launch plan prepared"
         );
 
-        #[cfg(target_os = "macos")]
         let activation_result = self.commit_launch_bootstrap(
             pending.launch_plan,
             pending.prepared_bootstrap,
             pending.prepare_duration,
             window.clone(),
         );
-        #[cfg(not(target_os = "macos"))]
-        let activation_result = self.activate_launch_plan(pending.launch_plan, window.clone());
 
         match activation_result {
             Ok(()) => {
@@ -976,23 +931,6 @@ impl DesktopPlayerApp {
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    fn activate_launch_plan(
-        &mut self,
-        launch_plan: RuntimeLaunchPlan,
-        window: Arc<Window>,
-    ) -> Result<()> {
-        let runtime_open_started_at = Instant::now();
-        let (bootstrap, _) =
-            open_basic_player_runtime_for_window(&launch_plan.source, window.as_ref())?;
-        self.commit_launch_bootstrap(
-            launch_plan,
-            bootstrap,
-            runtime_open_started_at.elapsed(),
-            window,
-        )
-    }
-
     fn commit_launch_bootstrap(
         &mut self,
         launch_plan: RuntimeLaunchPlan,
@@ -1069,6 +1007,8 @@ impl DesktopPlayerApp {
         self.sync_ui_presenter();
         self.pending_post_launch_play = true;
         self.pending_post_launch_play_needs_paint = true;
+        self.pending_post_launch_play_paint_deadline =
+            Some(Instant::now() + POST_LAUNCH_PLAY_PAINT_FALLBACK);
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }
@@ -1100,12 +1040,64 @@ impl DesktopPlayerApp {
         let Some(window) = self.window.as_ref() else {
             return Ok(());
         };
-        let Some(renderer) = self.renderer.as_mut() else {
+        if self.renderer.is_none() {
             return Ok(());
         };
 
         window.pre_present_notify();
-        renderer.render()
+        let outcome = self
+            .renderer
+            .as_mut()
+            .context("renderer missing during redraw")?
+            .render_with_outcome()?;
+        self.observe_render_outcome(outcome);
+        Ok(())
+    }
+
+    fn observe_render_outcome(&mut self, outcome: RenderFrameOutcome) {
+        match outcome {
+            RenderFrameOutcome::Presented => {
+                if self.pending_post_launch_play_needs_paint {
+                    self.pending_post_launch_play_needs_paint = false;
+                    self.pending_post_launch_play_paint_deadline = None;
+                    info!(
+                        source_generation = self.source_generation,
+                        "desktop deferred play paint barrier satisfied"
+                    );
+                }
+                if self.last_uploaded_frame_sequence.is_some() && !self.first_frame_present_logged {
+                    self.first_frame_present_logged = true;
+                    info!(
+                        source_generation = self.source_generation,
+                        frame_sequence = ?self.last_uploaded_frame_sequence,
+                        "desktop renderer presented first playback frame"
+                    );
+                } else {
+                    debug!(
+                        source_generation = self.source_generation,
+                        frame_sequence = ?self.last_uploaded_frame_sequence,
+                        "desktop renderer presented frame"
+                    );
+                }
+            }
+            RenderFrameOutcome::Timeout
+            | RenderFrameOutcome::Occluded
+            | RenderFrameOutcome::SurfaceReconfigured => {
+                if self.pending_post_launch_play_needs_paint {
+                    info!(
+                        source_generation = self.source_generation,
+                        outcome = ?outcome,
+                        "desktop renderer skipped while waiting to start playback"
+                    );
+                } else {
+                    debug!(
+                        source_generation = self.source_generation,
+                        outcome = ?outcome,
+                        "desktop renderer skipped frame"
+                    );
+                }
+            }
+        }
     }
 
     fn advance_playback(&mut self) -> Result<bool> {
@@ -1121,6 +1113,17 @@ impl DesktopPlayerApp {
     }
 
     fn apply_frame(&mut self, frame: DecodedVideoFrame) -> Result<()> {
+        self.frame_sequence = self.frame_sequence.wrapping_add(1);
+        let frame_sequence = self.frame_sequence;
+        debug!(
+            source_generation = self.source_generation,
+            frame_sequence,
+            presentation_time_secs = frame.presentation_time.as_secs_f64(),
+            width = frame.width,
+            height = frame.height,
+            pixel_format = video_pixel_format_label(&frame),
+            "desktop playback frame ready for upload"
+        );
         self.last_frame = Some(frame);
         self.refresh_playback_frame()
     }
@@ -1201,6 +1204,21 @@ impl DesktopPlayerApp {
 
         if let Some(frame_texture) = frame_texture.as_ref() {
             renderer.upload_frame(frame_texture);
+            self.last_uploaded_frame_sequence = Some(self.frame_sequence);
+            if !self.first_frame_upload_logged {
+                self.first_frame_upload_logged = true;
+                info!(
+                    source_generation = self.source_generation,
+                    frame_sequence = self.frame_sequence,
+                    "desktop renderer uploaded first playback frame"
+                );
+            } else {
+                debug!(
+                    source_generation = self.source_generation,
+                    frame_sequence = self.frame_sequence,
+                    "desktop renderer uploaded playback frame"
+                );
+            }
         }
         if upload_overlay {
             if let Some(overlay) = overlay {
@@ -1786,7 +1804,24 @@ impl DesktopPlayerApp {
             return Ok(false);
         }
         if self.pending_post_launch_play_needs_paint {
+            let now = Instant::now();
+            let deadline = self
+                .pending_post_launch_play_paint_deadline
+                .get_or_insert(now + POST_LAUNCH_PLAY_PAINT_FALLBACK);
+            if now < *deadline {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                return Ok(false);
+            }
+
             self.pending_post_launch_play_needs_paint = false;
+            self.pending_post_launch_play_paint_deadline = None;
+            info!(
+                source_generation = self.source_generation,
+                fallback_wait_ms = POST_LAUNCH_PLAY_PAINT_FALLBACK.as_millis(),
+                "desktop deferred play paint barrier timed out"
+            );
             return Ok(false);
         }
 
@@ -1866,18 +1901,15 @@ impl DesktopPlayerApp {
 #[cfg(target_os = "macos")]
 fn open_basic_player_runtime_for_source(
     source: &str,
+    options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
 ) -> Result<(
     PlayerRuntimeBootstrap,
     player_runtime::PlayerRuntimeAdapterCapabilities,
 )> {
-    // basic-player 的桌面控制层现在统一依赖 Rust overlay，因此在 macOS 上
-    // 显式锁定 software desktop runtime。对于 HLS / DASH master manifest，
-    // host strategy 在探测阶段可能暂时拿不到 best_video，随后误判成 native path，
-    // 导致 overlay 失效、旧 frame 残留，并让切源看起来像“没有生效”。
-    let bootstrap = open_macos_software_runtime_uri_with_options_and_interrupt(
+    let bootstrap = open_macos_host_runtime_uri_with_options_and_interrupt(
         source.to_owned(),
-        basic_player_runtime_options(),
+        options,
         interrupt_flag,
     )?;
     let capabilities = bootstrap.runtime.capabilities();
@@ -1885,17 +1917,18 @@ fn open_basic_player_runtime_for_source(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn open_basic_player_runtime_for_window(
+fn open_basic_player_runtime_for_source(
     source: &str,
-    window: &Window,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
 ) -> Result<(
     PlayerRuntimeBootstrap,
     player_runtime::PlayerRuntimeAdapterCapabilities,
 )> {
-    open_desktop_host_runtime_uri_for_winit_window_with_options(
+    open_desktop_host_runtime_uri_with_options_and_interrupt(
         source.to_owned(),
-        window,
-        basic_player_runtime_options(),
+        options,
+        interrupt_flag,
     )
 }
 
@@ -2336,29 +2369,6 @@ impl ApplicationHandler for DesktopPlayerApp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn build_launch_plan(source: String) -> Result<RuntimeLaunchPlan> {
-    let launch_probe =
-        probe_desktop_host_launch_plan_uri_with_options(source, basic_player_runtime_options())?;
-    let probe = &launch_probe.runtime_probe;
-
-    info!(
-        source = launch_probe.launch_plan.source.as_str(),
-        adapter_id = probe.adapter_id,
-        ffmpeg_initialized = probe.startup.ffmpeg_initialized,
-        audio_output = ?probe.startup.audio_output,
-        video_decode = probe.startup.video_decode.as_ref().map(video_decode_summary),
-        plugin_diagnostics = plugin_diagnostics_summary(&probe.startup.plugin_diagnostics).as_deref(),
-        preferred_backends = ?preferred_backends(),
-        media_info = ?probe.media_info,
-        supports_frame_output = probe.capabilities.supports_frame_output,
-        supports_external_video_surface = probe.capabilities.supports_external_video_surface,
-        "probed media runtime"
-    );
-
-    Ok(launch_probe.launch_plan)
-}
-
 fn resolve_initial_media_source_uri() -> Result<Option<String>> {
     if let Some(source) = std::env::args().nth(1) {
         return resolve_media_source_argument(source).map(Some);
@@ -2524,7 +2534,9 @@ mod tests {
         DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus,
         decoder_plugin_video_mode_from_value, resolve_media_source_argument,
     };
+    use player_render_wgpu::RenderFrameOutcome;
     use player_runtime::PlayerDecoderPluginVideoMode;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn resolve_media_source_argument_maps_demo_flags() {
@@ -2615,6 +2627,29 @@ mod tests {
         let second = app.replace_active_launch_cancel_flag();
         assert!(first.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!second.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn deferred_post_launch_play_waits_for_present_or_short_timeout() {
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
+        app.pending_post_launch_play = true;
+        app.pending_post_launch_play_needs_paint = true;
+        app.pending_post_launch_play_paint_deadline = Some(Instant::now() + Duration::from_secs(1));
+
+        assert!(!app.dispatch_pending_post_launch_play_if_needed().unwrap());
+        assert!(app.pending_post_launch_play);
+        assert!(app.pending_post_launch_play_needs_paint);
+
+        app.observe_render_outcome(RenderFrameOutcome::Presented);
+        assert!(!app.pending_post_launch_play_needs_paint);
+        assert!(app.pending_post_launch_play_paint_deadline.is_none());
+
+        app.pending_post_launch_play_needs_paint = true;
+        app.pending_post_launch_play_paint_deadline =
+            Some(Instant::now() - Duration::from_millis(1));
+        assert!(!app.dispatch_pending_post_launch_play_if_needed().unwrap());
+        assert!(!app.pending_post_launch_play_needs_paint);
+        assert!(app.pending_post_launch_play);
     }
 }
 

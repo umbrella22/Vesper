@@ -3,9 +3,9 @@
 mod buffered;
 
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CString, c_int, c_void};
 use std::mem::size_of;
-use std::ops::Range;
+use std::ops::{Deref, DerefMut, Range};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +20,6 @@ use ffmpeg::format::sample::{Sample, Type as SampleType};
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 use ffmpeg::util::frame::audio::Audio;
 use ffmpeg::util::frame::video::Video;
-use ffmpeg::util::interrupt;
 use ffmpeg_next as ffmpeg;
 use player_core::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use tracing::{info, warn};
@@ -88,7 +87,7 @@ pub struct DecodedAudioTrack {
 }
 
 pub struct VideoFrameSource {
-    input: ffmpeg::format::context::Input,
+    input: FfmpegInput,
     stream_index: usize,
     time_base: ffmpeg::Rational,
     fallback_frame_interval: Duration,
@@ -122,7 +121,7 @@ pub struct CompressedVideoPacket {
 }
 
 pub struct VideoPacketSource {
-    input: ffmpeg::format::context::Input,
+    input: FfmpegInput,
     stream_index: usize,
     time_base: ffmpeg::Rational,
     stream_info: VideoPacketStreamInfo,
@@ -144,6 +143,70 @@ enum InputOpenPurpose {
 enum InputOpenProfile {
     Default,
     RemoteHls,
+}
+
+struct FfmpegInput {
+    inner: ffmpeg::format::context::Input,
+    _interrupt: Option<FfmpegInputInterrupt>,
+}
+
+impl FfmpegInput {
+    fn new(inner: ffmpeg::format::context::Input) -> Self {
+        Self {
+            inner,
+            _interrupt: None,
+        }
+    }
+
+    fn with_interrupt(
+        inner: ffmpeg::format::context::Input,
+        interrupt: FfmpegInputInterrupt,
+    ) -> Self {
+        Self {
+            inner,
+            _interrupt: Some(interrupt),
+        }
+    }
+}
+
+impl Deref for FfmpegInput {
+    type Target = ffmpeg::format::context::Input;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for FfmpegInput {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+struct FfmpegInputInterrupt {
+    flag: Arc<AtomicBool>,
+}
+
+impl FfmpegInputInterrupt {
+    fn new(flag: Arc<AtomicBool>) -> Self {
+        Self { flag }
+    }
+
+    fn callback(&self) -> ffmpeg::ffi::AVIOInterruptCB {
+        ffmpeg::ffi::AVIOInterruptCB {
+            callback: Some(ffmpeg_interrupt_callback),
+            opaque: Arc::as_ptr(&self.flag).cast_mut().cast::<c_void>(),
+        }
+    }
+}
+
+extern "C" fn ffmpeg_interrupt_callback(opaque: *mut c_void) -> c_int {
+    if opaque.is_null() {
+        return 0;
+    }
+
+    let flag = unsafe { &*(opaque.cast::<AtomicBool>()) };
+    i32::from(flag.load(Ordering::SeqCst))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -840,11 +903,11 @@ fn fetch_text_resource_via_ffmpeg(
     interrupt_flag: Option<Arc<AtomicBool>>,
 ) -> Result<String> {
     let uri_cstr = CString::new(uri).context("resource URI contained an interior NUL byte")?;
-    let interrupt =
-        interrupt_flag.map(|flag| interrupt::new(Box::new(move || flag.load(Ordering::SeqCst))));
-    let interrupt_ptr = interrupt
+    let interrupt = interrupt_flag.map(FfmpegInputInterrupt::new);
+    let interrupt_callback = interrupt.as_ref().map(FfmpegInputInterrupt::callback);
+    let interrupt_ptr = interrupt_callback
         .as_ref()
-        .map(|callback| &callback.interrupt as *const _)
+        .map(|callback| callback as *const _)
         .unwrap_or(ptr::null());
     let mut io_context = ptr::null_mut();
     let mut options = ffmpeg::Dictionary::new();
@@ -1092,10 +1155,11 @@ fn open_media_input(
     source: &MediaSource,
     purpose: InputOpenPurpose,
     interrupt_flag: Option<Arc<AtomicBool>>,
-) -> Result<ffmpeg::format::context::Input> {
+) -> Result<FfmpegInput> {
     let profile = input_open_profile_for_source(source);
     if profile == InputOpenProfile::Default && interrupt_flag.is_none() {
         return ffmpeg::format::input(&source.uri())
+            .map(FfmpegInput::new)
             .with_context(|| format!("failed to open media source: {}", source.uri()));
     }
 
@@ -1107,27 +1171,27 @@ fn open_media_input_with_profile(
     purpose: InputOpenPurpose,
     profile: InputOpenProfile,
     interrupt_flag: Option<Arc<AtomicBool>>,
-) -> Result<ffmpeg::format::context::Input> {
+) -> Result<FfmpegInput> {
     let source_uri = source.uri();
     let source_uri_cstr =
         CString::new(source_uri).context("media source URI contained an interior NUL byte")?;
-    let interrupt_state = interrupt_flag.clone();
+    let interrupt = interrupt_flag.map(FfmpegInputInterrupt::new);
+    let interrupt_state = interrupt.as_ref().map(|interrupt| interrupt.flag.clone());
     let options = input_open_dictionary(profile, purpose);
 
     unsafe {
-        let mut format_context = if interrupt_flag.is_some() {
+        let mut format_context = if interrupt.is_some() {
             ffmpeg::ffi::avformat_alloc_context()
         } else {
             ptr::null_mut()
         };
 
-        if interrupt_flag.is_some() && format_context.is_null() {
+        if interrupt.is_some() && format_context.is_null() {
             anyhow::bail!("failed to allocate FFmpeg format context");
         }
 
-        if let Some(interrupt_flag) = interrupt_flag {
-            (*format_context).interrupt_callback =
-                interrupt::new(Box::new(move || interrupt_flag.load(Ordering::SeqCst))).interrupt;
+        if let Some(interrupt) = interrupt.as_ref() {
+            (*format_context).interrupt_callback = interrupt.callback();
         }
 
         let mut raw_options = options.disown();
@@ -1188,7 +1252,11 @@ fn open_media_input_with_profile(
             stream_info_duration,
             interrupt_state.as_deref(),
         );
-        Ok(ffmpeg::format::context::Input::wrap(format_context))
+        let input = ffmpeg::format::context::Input::wrap(format_context);
+        Ok(match interrupt {
+            Some(interrupt) => FfmpegInput::with_interrupt(input, interrupt),
+            None => FfmpegInput::new(input),
+        })
     }
 }
 
@@ -1206,21 +1274,37 @@ fn input_open_dictionary(
 ) -> ffmpeg::Dictionary<'static> {
     let mut options = ffmpeg::Dictionary::new();
 
-    if profile == InputOpenProfile::RemoteHls {
-        // 控制 HLS 变体探测与 stream info 扫描成本，优先让首帧更快落地。
-        options.set("http_multiple", "0");
-        options.set("probesize", "524288");
-        options.set("formatprobesize", "524288");
-        options.set("analyzeduration", "2000000");
-        options.set("fpsprobesize", "4");
-        options.set("rw_timeout", "15000000");
-        if purpose == InputOpenPurpose::AudioDecode {
-            // 后台音频整轨预解不需要把视频变体也扫一遍，避免和视频播放抢网络。
-            options.set("allowed_media_types", "audio");
-        }
+    for (key, value) in input_open_tuning_options(profile, purpose) {
+        options.set(key, value);
     }
 
     options
+}
+
+fn input_open_tuning_options(
+    profile: InputOpenProfile,
+    purpose: InputOpenPurpose,
+) -> &'static [(&'static str, &'static str)] {
+    match (profile, purpose) {
+        (InputOpenProfile::Default, _) => &[],
+        (InputOpenProfile::RemoteHls, InputOpenPurpose::AudioDecode) => &[
+            ("http_multiple", "0"),
+            ("probesize", "524288"),
+            ("formatprobesize", "524288"),
+            ("analyzeduration", "2000000"),
+            ("fpsprobesize", "4"),
+            ("rw_timeout", "15000000"),
+            ("allowed_media_types", "audio"),
+        ],
+        (InputOpenProfile::RemoteHls, _) => &[
+            ("http_multiple", "0"),
+            ("probesize", "524288"),
+            ("formatprobesize", "524288"),
+            ("analyzeduration", "2000000"),
+            ("fpsprobesize", "4"),
+            ("rw_timeout", "15000000"),
+        ],
+    }
 }
 
 fn log_input_open_success(
@@ -2073,13 +2157,15 @@ fn playback_rate_filter_chain(playback_rate: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecodedAudioTrack, InputOpenProfile, InputOpenPurpose, input_open_profile_for_source,
+        DecodedAudioTrack, FfmpegInputInterrupt, InputOpenProfile, InputOpenPurpose,
+        ffmpeg_interrupt_callback, input_open_profile_for_source, input_open_tuning_options,
         input_open_tuning_summary, parse_hls_master_manifest, playback_rate_filter_chain,
         resolve_hls_master_manifest_sources, resolve_uri_relative_to,
         select_hls_audio_rendition_uri, select_hls_video_variant_uri, supports_input_format,
     };
     use player_core::MediaSource;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     #[test]
@@ -2142,6 +2228,34 @@ mod tests {
             !input_open_tuning_summary(InputOpenProfile::RemoteHls, InputOpenPurpose::VideoDecode,)
                 .contains("allowed_media_types=audio")
         );
+    }
+
+    #[test]
+    fn remote_hls_tuning_options_keep_audio_only_on_audio_decode() {
+        let audio_options =
+            input_open_tuning_options(InputOpenProfile::RemoteHls, InputOpenPurpose::AudioDecode);
+        let video_options =
+            input_open_tuning_options(InputOpenProfile::RemoteHls, InputOpenPurpose::VideoDecode);
+
+        assert!(audio_options.contains(&("allowed_media_types", "audio")));
+        assert!(!video_options.contains(&("allowed_media_types", "audio")));
+        assert!(video_options.contains(&("rw_timeout", "15000000")));
+        assert!(
+            input_open_tuning_options(InputOpenProfile::Default, InputOpenPurpose::Probe)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ffmpeg_interrupt_callback_observes_shared_cancel_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let interrupt = FfmpegInputInterrupt::new(flag.clone());
+        let callback = interrupt.callback();
+        let opaque = callback.opaque;
+
+        assert_eq!(ffmpeg_interrupt_callback(opaque), 0);
+        flag.store(true, Ordering::SeqCst);
+        assert_eq!(ffmpeg_interrupt_callback(opaque), 1);
     }
 
     #[test]

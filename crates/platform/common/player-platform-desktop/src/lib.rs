@@ -316,6 +316,7 @@ pub struct SoftwarePlayerRuntime {
     video_source: Box<dyn DesktopVideoSource>,
     video_end_of_stream: bool,
     next_frame: Option<DesktopVideoFrame>,
+    video_prefetch_limit: usize,
     audio_sink: Option<AudioSink>,
     audio_sink_controller: Option<AudioSinkController>,
     playback_clock: Option<PlaybackClock>,
@@ -949,6 +950,14 @@ impl SoftwarePlayerRuntime {
             &config.buffering_policy,
             DEFAULT_PLAYBACK_RATE,
         );
+        info!(
+            source = config.source.uri(),
+            playback_rate = DEFAULT_PLAYBACK_RATE,
+            video_prefetch_limit,
+            video_start_threshold_frames = video_playback_start_buffer_frames,
+            video_rebuffer_threshold_frames = video_rebuffer_frames,
+            "desktop software video buffering configured"
+        );
         let audio_playback_start_buffer_duration =
             resolved_audio_playback_start_buffer_duration(&config.buffering_policy);
         let audio_stream_target_buffer_duration =
@@ -971,6 +980,7 @@ impl SoftwarePlayerRuntime {
             video_source,
             video_end_of_stream: false,
             next_frame: None,
+            video_prefetch_limit,
             audio_sink: None,
             audio_sink_controller: None,
             playback_clock: None,
@@ -1583,6 +1593,7 @@ impl SoftwarePlayerRuntime {
             self.playback_rate,
         );
         self.video_source.set_prefetch_limit(video_prefetch_limit);
+        self.video_prefetch_limit = video_prefetch_limit;
         self.video_playback_start_buffer_frames = resolved_video_playback_start_buffer_frames(
             &self.media_info,
             video_prefetch_limit,
@@ -1594,6 +1605,14 @@ impl SoftwarePlayerRuntime {
             video_prefetch_limit,
             &self.buffering_policy,
             self.playback_rate,
+        );
+        info!(
+            source = self.source.uri(),
+            playback_rate = self.playback_rate,
+            video_prefetch_limit = self.video_prefetch_limit,
+            video_start_threshold_frames = self.video_playback_start_buffer_frames,
+            video_rebuffer_threshold_frames = self.video_rebuffer_frames,
+            "desktop software video buffering refreshed for playback rate"
         );
     }
 
@@ -2099,6 +2118,7 @@ impl SoftwarePlayerRuntime {
             position_secs = playback_position.as_secs_f64(),
             next_frame_pts_secs = next_frame_pts.map(|pts| pts.as_secs_f64()),
             video_buffered_frames = self.buffered_video_frame_count(),
+            video_prefetch_limit = self.video_prefetch_limit,
             video_buffering_window = ?self.video_buffering_window,
             video_start_threshold_frames = self.video_playback_start_buffer_frames,
             video_rebuffer_threshold_frames = self.video_rebuffer_frames,
@@ -2293,7 +2313,7 @@ fn resolved_video_playback_start_buffer_frames(
         (target_duration.as_secs_f64() * frame_rate * f64::from(playback_rate.max(1.0))).ceil()
             as usize;
 
-    required_frames.clamp(1, video_prefetch_capacity.max(1))
+    required_frames.clamp(1, video_buffering_low_water_limit(video_prefetch_capacity))
 }
 
 fn resolved_video_rebuffer_frames(
@@ -2316,7 +2336,7 @@ fn resolved_video_rebuffer_frames(
         (target_duration.as_secs_f64() * frame_rate * f64::from(playback_rate.max(1.0))).ceil()
             as usize;
 
-    required_frames.clamp(1, video_prefetch_capacity.max(1))
+    required_frames.clamp(1, video_buffering_low_water_limit(video_prefetch_capacity))
 }
 
 fn playback_rate_buffer_scale(playback_rate: f32) -> usize {
@@ -2325,6 +2345,15 @@ fn playback_rate_buffer_scale(playback_rate: f32) -> usize {
     }
 
     playback_rate.max(1.0).ceil() as usize
+}
+
+fn video_buffering_low_water_limit(video_prefetch_capacity: usize) -> usize {
+    let capacity = video_prefetch_capacity.max(1);
+    if capacity == 1 {
+        return 1;
+    }
+
+    capacity.saturating_sub((capacity / 4).max(1)).max(1)
 }
 
 fn estimated_video_frame_memory_bytes(media_info: &PlayerMediaInfo) -> usize {
@@ -2868,7 +2897,8 @@ mod tests {
             DEFAULT_PLAYBACK_RATE,
         );
 
-        assert_eq!(startup_frames, 48);
+        assert_eq!(startup_frames, 36);
+        assert!(startup_frames < 48);
     }
 
     #[test]
@@ -2899,7 +2929,8 @@ mod tests {
             DEFAULT_PLAYBACK_RATE,
         );
 
-        assert_eq!(rebuffer_frames, 48);
+        assert_eq!(rebuffer_frames, 36);
+        assert!(rebuffer_frames < 48);
     }
 
     #[test]
@@ -2969,6 +3000,13 @@ mod tests {
 
         assert!(fast > normal);
         assert_eq!(fast, 129);
+    }
+
+    #[test]
+    fn video_buffering_low_water_keeps_headroom_below_prefetch_capacity() {
+        assert_eq!(video_buffering_low_water_limit(1), 1);
+        assert_eq!(video_buffering_low_water_limit(4), 3);
+        assert_eq!(video_buffering_low_water_limit(86), 65);
     }
 
     #[test]
@@ -3253,6 +3291,7 @@ mod tests {
             video_source,
             video_end_of_stream: false,
             next_frame: None,
+            video_prefetch_limit: 1,
             audio_sink: None,
             audio_sink_controller: None,
             playback_clock: None,

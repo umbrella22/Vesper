@@ -26,8 +26,9 @@ use player_platform_desktop::{
     probe_platform_desktop_source_with_video_source_factory_and_options, runtime_fallback_events,
 };
 use player_plugin::{
-    DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind, DecoderPacket,
-    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession, VesperPluginKind,
+    DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind,
+    DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession,
+    VesperPluginKind,
 };
 use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
@@ -103,6 +104,18 @@ pub fn open_macos_host_runtime_uri_with_options(
     options: PlayerRuntimeOptions,
 ) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
     open_macos_host_runtime_source_with_options(MediaSource::new(uri), options)
+}
+
+pub fn open_macos_host_runtime_uri_with_options_and_interrupt(
+    uri: impl Into<String>,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    open_macos_host_runtime_source_with_options_and_interrupt(
+        MediaSource::new(uri),
+        options,
+        interrupt_flag,
+    )
 }
 
 pub fn open_macos_software_runtime_uri_with_options_and_interrupt(
@@ -237,6 +250,69 @@ pub fn open_macos_host_runtime_source_with_options(
     }
 }
 
+pub fn open_macos_host_runtime_source_with_options_and_interrupt(
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    if !cfg!(target_os = "macos") {
+        return Err(PlayerRuntimeError::new(
+            PlayerRuntimeErrorCode::Unsupported,
+            "macos host runtime strategy can only be initialized on macOS targets",
+        ));
+    }
+
+    let native_factory = macos_system_native_runtime_adapter_factory();
+
+    let native_initializer = PlayerRuntimeInitializer::probe_source_with_factory(
+        source.clone(),
+        options.clone(),
+        native_factory,
+    );
+
+    match native_initializer {
+        Ok(initializer) if should_prefer_native_host_runtime(&initializer.media_info(), &options) => {
+            let media_info = initializer.media_info();
+            match initializer.initialize() {
+                Ok(mut bootstrap) => {
+                    bootstrap.startup =
+                        apply_decoder_plugin_diagnostics(bootstrap.startup, &media_info, &options);
+                    Ok(bootstrap)
+                }
+                Err(native_error) => open_software_fallback_runtime_with_interrupt(
+                    source,
+                    options,
+                    interrupt_flag,
+                    Some(format!(
+                        "macos native host runtime failed to initialize; falling back to software desktop path: {}",
+                        native_error.message()
+                    )),
+                ),
+            }
+        }
+        Ok(initializer) => open_software_fallback_runtime_with_interrupt(
+            source,
+            options,
+            interrupt_flag,
+            initializer.media_info().best_video.as_ref().map(|video| {
+                format!(
+                    "macos native host runtime requires an external video surface for {} playback; selected software desktop path",
+                    video.codec
+                )
+            }),
+        ),
+        Err(native_error) => open_software_fallback_runtime_with_interrupt(
+            source,
+            options,
+            interrupt_flag,
+            Some(format!(
+                "macos native host runtime probe failed; selected software desktop path: {}",
+                native_error.message()
+            )),
+        ),
+    }
+}
+
 pub fn open_macos_software_runtime_source_with_options_and_interrupt(
     source: MediaSource,
     options: PlayerRuntimeOptions,
@@ -291,16 +367,17 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
         (Err(native_error), Some(_)) => {
             let mut bootstrap = open_platform_desktop_source_with_options_and_interrupt(
                 MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-                source,
+                source.clone(),
                 options.clone(),
                 interrupt_flag,
             )?;
-            if let Some(video_decode) = bootstrap.startup.video_decode.as_mut() {
-                video_decode.fallback_reason = Some(format!(
+            apply_video_decode_fallback_reason(
+                &mut bootstrap.startup,
+                Some(format!(
                     "native-frame decoder plugin initialization failed; selected FFmpeg software path: {}",
                     native_error.message()
-                ));
-            }
+                )),
+            );
             bootstrap
         }
         (Err(error), None) => return Err(error),
@@ -313,6 +390,15 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
             macos_native_frame_decoder_video_decode_info(selected_plugin_name.as_deref());
         diagnostics.has_video_surface = true;
     }
+    let runtime_fallback = diagnostics
+        .has_video_surface
+        .then(|| MacosRuntimeActiveFallback {
+            source,
+            options: options.clone(),
+            fallback_reason:
+                "native-frame runtime failed during playback; selected FFmpeg software path"
+                    .to_owned(),
+        });
 
     Ok(PlayerRuntime::from_adapter_bootstrap(
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
@@ -321,7 +407,7 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
                 inner: runtime,
                 video_decode: diagnostics.video_decode.clone(),
                 has_video_surface: diagnostics.has_video_surface,
-                runtime_fallback: None,
+                runtime_fallback,
                 pending_runtime_fallback_events: VecDeque::new(),
             }),
             initial_frame,
@@ -835,15 +921,16 @@ struct MacosNativeFrameVideoSourceFactory {
 }
 
 struct MacosNativeFrameVideoSource {
-    packet_source: VideoPacketSource,
+    packet_source: Box<dyn MacosNativeFramePacketSource>,
     stream_info: VideoPacketStreamInfo,
     shared: Arc<Mutex<MacosNativeFrameDecoderState>>,
     end_of_input_sent: bool,
+    end_of_stream_received: bool,
 }
 
 struct MacosNativeFrameDecoderState {
     session: Box<dyn NativeDecoderSession>,
-    presenter: MacosMetalLayerPresenter,
+    presenter: Option<MacosMetalLayerPresenter>,
     outstanding_frames: Arc<AtomicUsize>,
     presentation_epoch: u64,
 }
@@ -878,6 +965,21 @@ impl Drop for MacosNativeFrameDecoderState {
                 "dropping macOS native-frame decoder state with unreleased frames: {outstanding}"
             );
         }
+    }
+}
+
+trait MacosNativeFramePacketSource: Send {
+    fn next_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>>;
+    fn seek_to(&mut self, position: Duration) -> anyhow::Result<()>;
+}
+
+impl MacosNativeFramePacketSource for VideoPacketSource {
+    fn next_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>> {
+        VideoPacketSource::next_packet(self)
+    }
+
+    fn seek_to(&mut self, position: Duration) -> anyhow::Result<()> {
+        VideoPacketSource::seek_to(self, position)
     }
 }
 
@@ -921,8 +1023,11 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
                 codec: stream_info.codec.clone(),
                 media_kind: DecoderMediaKind::Video,
                 extradata: stream_info.extradata.clone(),
+                bitstream_format: Some(macos_decoder_bitstream_format(&stream_info.codec)),
                 width: stream_info.width,
                 height: stream_info.height,
+                coded_width: stream_info.width,
+                coded_height: stream_info.height,
                 prefer_hardware: true,
                 require_cpu_output: false,
                 ..DecoderSessionConfig::default()
@@ -944,17 +1049,18 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
         };
         let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
             session,
-            presenter,
+            presenter: Some(presenter),
             outstanding_frames: Arc::new(AtomicUsize::new(0)),
             presentation_epoch: 0,
         }));
 
         Ok(DesktopVideoSourceBootstrap {
             source: Box::new(MacosNativeFrameVideoSource {
-                packet_source,
+                packet_source: Box::new(packet_source),
                 stream_info,
                 shared,
                 end_of_input_sent: false,
+                end_of_stream_received: false,
             }),
             decode_info,
             probe,
@@ -991,6 +1097,7 @@ impl DesktopVideoSource for MacosNativeFrameVideoSource {
         }
         self.packet_source.seek_to(position)?;
         self.end_of_input_sent = false;
+        self.end_of_stream_received = false;
         self.recv_frame()
     }
 
@@ -1003,6 +1110,10 @@ impl DesktopVideoSource for MacosNativeFrameVideoSource {
 
 impl MacosNativeFrameVideoSource {
     fn poll_frame(&mut self, blocking: bool) -> anyhow::Result<DesktopVideoFramePoll> {
+        if self.end_of_stream_received {
+            return Ok(DesktopVideoFramePoll::EndOfStream);
+        }
+
         let mut packets_submitted = 0usize;
         loop {
             match self.receive_native_frame()? {
@@ -1012,6 +1123,7 @@ impl MacosNativeFrameVideoSource {
                         .map(DesktopVideoFramePoll::Ready);
                 }
                 DecoderReceiveNativeFrameOutput::Eof => {
+                    self.end_of_stream_received = true;
                     return Ok(DesktopVideoFramePoll::EndOfStream);
                 }
                 DecoderReceiveNativeFrameOutput::NeedMoreInput => {}
@@ -1191,6 +1303,9 @@ fn present_and_release_native_frame(
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()));
     }
+    let presenter = presenter
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("macOS native-frame presenter is not configured"))?;
     present_and_release_native_frame_with(
         session.as_mut(),
         presenter,
@@ -1280,6 +1395,19 @@ fn select_macos_native_frame_decoder(
         request.clone(),
     );
     let record = registry.best_native_decoder_for(&request)?;
+    let requirements = record
+        .decoder_capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.native_requirements.as_ref());
+    if requirements.is_some_and(|requirements| {
+        requirements.requires_native_device_context
+            || (!requirements.output_handle_kinds.is_empty()
+                && !requirements
+                    .output_handle_kinds
+                    .contains(&DecoderNativeHandleKind::CvPixelBuffer))
+    }) {
+        return None;
+    }
     Some(MacosNativeFrameDecoderSelection {
         plugin_path: record.path.clone(),
         plugin_name: record.plugin_name.clone(),
@@ -1304,6 +1432,13 @@ fn native_frame_decoder_codec(
         .open_video_packet_source_with_interrupt(source.clone(), interrupt_flag)
         .ok()
         .map(|packet_source| packet_source.stream_info().codec.clone())
+}
+
+fn macos_decoder_bitstream_format(codec: &str) -> DecoderBitstreamFormat {
+    match codec.to_ascii_uppercase().as_str() {
+        "HEVC" | "H265" | "HVC1" | "HEV1" => DecoderBitstreamFormat::Hvcc,
+        _ => DecoderBitstreamFormat::Avcc,
+    }
 }
 
 fn macos_native_frame_decoder_video_decode_info(
@@ -1860,6 +1995,35 @@ fn open_software_fallback_runtime(
     }
 }
 
+fn open_software_fallback_runtime_with_interrupt(
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+    fallback_reason: Option<String>,
+) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    match open_macos_software_runtime_source_with_options_and_interrupt(
+        source,
+        options,
+        interrupt_flag,
+    ) {
+        Ok(mut bootstrap) => {
+            apply_video_decode_fallback_reason(&mut bootstrap.startup, fallback_reason);
+            Ok(bootstrap)
+        }
+        Err(software_error) => match fallback_reason {
+            Some(fallback_reason) => Err(PlayerRuntimeError::new(
+                PlayerRuntimeErrorCode::BackendFailure,
+                format!(
+                    "macos native host playback failed and software fallback also failed: native={}, software={}",
+                    fallback_reason,
+                    software_error.message()
+                ),
+            )),
+            None => Err(software_error),
+        },
+    }
+}
+
 fn open_software_fallback_adapter_with_factory(
     source: MediaSource,
     options: PlayerRuntimeOptions,
@@ -1889,6 +2053,7 @@ mod tests {
     use super::{
         MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
+        MacosNativeFrameDecoderState, MacosNativeFramePacketSource, MacosNativeFrameVideoSource,
         MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
         MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
         MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics,
@@ -1903,9 +2068,12 @@ mod tests {
         probe_macos_host_runtime_source_with_options, release_native_frame_with_counter,
         should_trigger_runtime_fallback_for_advance, should_trigger_runtime_fallback_for_command,
     };
-    use player_backend_ffmpeg::FfmpegBackend;
+    use player_backend_ffmpeg::{
+        CompressedVideoPacket, FfmpegBackend, VideoPacketSource, VideoPacketStreamInfo,
+    };
     use player_core::MediaSource;
     use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
+    use player_platform_desktop::{DesktopVideoFramePoll, DesktopVideoSource};
     use player_plugin::{
         DecoderError, DecoderMediaKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
         DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
@@ -2981,6 +3149,57 @@ mod tests {
 
     #[test]
     #[ignore = "requires a built player-decoder-videotoolbox shared library and a local H264/HEVC source"]
+    fn macos_videotoolbox_decoder_flush_seek_and_eof_headless() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let Some(plugin_path) =
+            std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping VideoToolbox lifecycle test: VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH is not set"
+            );
+            return;
+        };
+        if !plugin_path.is_file() {
+            eprintln!(
+                "skipping VideoToolbox lifecycle test: plugin path is missing: {}",
+                plugin_path.display()
+            );
+            return;
+        }
+        let Some(source) = videotoolbox_smoke_source_path() else {
+            eprintln!(
+                "skipping VideoToolbox lifecycle test: no local H264/HEVC smoke source found"
+            );
+            return;
+        };
+
+        let (mut packet_source, mut session) =
+            open_videotoolbox_smoke_packet_source_and_session(&plugin_path, &source);
+        assert!(
+            decode_one_videotoolbox_frame(packet_source.as_mut(), session.as_mut(), 120),
+            "VideoToolbox should decode a frame before flush/seek"
+        );
+
+        session.flush().expect("VideoToolbox flush should succeed");
+        packet_source
+            .seek_to(Duration::from_millis(0))
+            .expect("packet source seek should succeed after flush");
+        assert!(
+            decode_one_videotoolbox_frame(packet_source.as_mut(), session.as_mut(), 120),
+            "VideoToolbox should decode a frame after flush/seek"
+        );
+
+        assert!(
+            drain_videotoolbox_session_to_eof(packet_source.as_mut(), session.as_mut(), 600),
+            "VideoToolbox should report EOF after packet drain"
+        );
+        session.close().expect("VideoToolbox session should close");
+    }
+
+    #[test]
+    #[ignore = "requires a built player-decoder-videotoolbox shared library and a local H264/HEVC source"]
     #[cfg(target_os = "macos")]
     fn macos_native_frame_decoder_plugin_runtime_probes_with_surface() {
         let Some(plugin_path) =
@@ -3070,9 +3289,6 @@ mod tests {
             "test player layer handle should be created"
         );
 
-        unsafe {
-            std::env::set_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE", "1");
-        }
         let options = PlayerRuntimeOptions::default()
             .with_video_surface(PlayerVideoSurfaceTarget {
                 kind: PlayerVideoSurfaceKind::PlayerLayer,
@@ -3086,26 +3302,44 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .expect("native-frame runtime open should succeed before presenter failure fallback");
+        if bootstrap.runtime.capabilities().supports_frame_output
+            && !bootstrap
+                .runtime
+                .capabilities()
+                .supports_external_video_surface
+        {
+            assert!(
+                bootstrap
+                    .startup
+                    .video_decode
+                    .as_ref()
+                    .and_then(|info| info.fallback_reason.as_deref())
+                    .unwrap_or_default()
+                    .contains("native-frame decoder plugin initialization failed"),
+                "expected initialization fallback diagnostics when native-frame open falls back before presenter failure"
+            );
+            unsafe {
+                player_macos_test_release_object(layer_handle);
+            }
+            return;
+        }
         let mut runtime = bootstrap.runtime;
         let initial_rate = runtime.playback_rate();
 
+        unsafe {
+            std::env::set_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE", "1");
+        }
         let _ = runtime
             .dispatch(PlayerRuntimeCommand::Play)
             .expect("play should succeed");
         let _ = runtime
             .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 1.25 })
             .expect("set playback rate should succeed before fallback");
-
-        for _ in 0..240 {
-            let _ = runtime
-                .advance()
-                .expect("advance should fallback instead of failing");
-            if runtime.capabilities().supports_frame_output
-                && !runtime.capabilities().supports_external_video_surface
-            {
-                break;
-            }
-        }
+        let _ = runtime
+            .dispatch(PlayerRuntimeCommand::SeekTo {
+                position: Duration::ZERO,
+            })
+            .expect("seek should trigger presenter failure fallback instead of failing");
 
         assert!(runtime.capabilities().supports_frame_output);
         assert!(!runtime.capabilities().supports_external_video_surface);
@@ -3125,7 +3359,8 @@ mod tests {
             .expect("play should remain valid after fallback");
         let mut saw_surface_detached = false;
         let mut saw_runtime_fallback_error = false;
-        for event in runtime.drain_events() {
+        let events = runtime.drain_events();
+        for event in &events {
             if matches!(
                 event,
                 PlayerRuntimeEvent::VideoSurfaceChanged { attached: false }
@@ -3140,11 +3375,11 @@ mod tests {
         }
         assert!(
             saw_surface_detached,
-            "expected native surface detachment event after fallback"
+            "expected native surface detachment event after fallback, got {events:?}"
         );
         assert!(
             saw_runtime_fallback_error,
-            "expected explicit runtime fallback error event after fallback"
+            "expected explicit runtime fallback error event after fallback, got {events:?}"
         );
         unsafe {
             std::env::remove_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE");
@@ -3379,7 +3614,12 @@ mod tests {
                 duration_us: Some(33_000),
                 width: 1920,
                 height: 1080,
+                coded_width: Some(1920),
+                coded_height: Some(1080),
+                visible_rect: None,
                 handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+                frame_id: Some(7),
+                release_tracking: None,
             },
             handle: 7,
         };
@@ -3404,7 +3644,12 @@ mod tests {
                 duration_us: Some(33_000),
                 width: 1280,
                 height: 720,
+                coded_width: Some(1280),
+                coded_height: Some(720),
+                visible_rect: None,
                 handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+                frame_id: Some(11),
+                release_tracking: None,
             },
             handle: 11,
         };
@@ -3436,7 +3681,12 @@ mod tests {
                 duration_us: Some(33_000),
                 width: 640,
                 height: 360,
+                coded_width: Some(640),
+                coded_height: Some(360),
+                visible_rect: None,
                 handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+                frame_id: Some(13),
+                release_tracking: None,
             },
             handle: 13,
         };
@@ -3459,6 +3709,161 @@ mod tests {
         assert_eq!(
             session.session_info().decoder_name.as_deref(),
             Some("released=1")
+        );
+    }
+
+    #[test]
+    fn native_frame_source_seek_flushes_before_packet_seek_and_resets_eof() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_state = RecordingNativeDecoderState::shared(events.clone());
+        let packet_source = FakeNativeFramePacketSource::with_seek_packets(
+            Vec::new(),
+            vec![test_compressed_packet(250_000)],
+            events.clone(),
+        );
+        let outstanding_frames = Arc::new(AtomicUsize::new(0));
+        let mut source = native_frame_source_for_test(
+            packet_source,
+            session_state.clone(),
+            outstanding_frames.clone(),
+            true,
+            true,
+        );
+
+        let frame = source
+            .seek_to(Duration::from_millis(250))
+            .expect("seek should succeed")
+            .expect("seek should decode a frame");
+
+        assert_eq!(
+            events
+                .lock()
+                .map(|events| events.clone())
+                .unwrap_or_default(),
+            vec!["flush", "packet_seek", "send_packet"]
+        );
+        assert_eq!(
+            session_state
+                .lock()
+                .map(|state| state.flush_count)
+                .unwrap_or_default(),
+            1
+        );
+        assert_eq!(frame.presentation_time, Duration::from_micros(250_000));
+        drop(frame);
+        assert_eq!(outstanding_frames.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn native_frame_source_sends_eof_once_and_keeps_terminal_eof() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_state = RecordingNativeDecoderState::shared(events.clone());
+        let packet_source =
+            FakeNativeFramePacketSource::with_seek_packets(Vec::new(), Vec::new(), events);
+        let mut source = native_frame_source_for_test(
+            packet_source,
+            session_state.clone(),
+            Arc::new(AtomicUsize::new(0)),
+            false,
+            false,
+        );
+
+        assert!(matches!(
+            source.try_recv_frame().expect("first poll should succeed"),
+            DesktopVideoFramePoll::EndOfStream
+        ));
+        assert!(matches!(
+            source
+                .try_recv_frame()
+                .expect("second poll should stay terminal"),
+            DesktopVideoFramePoll::EndOfStream
+        ));
+
+        let sent_packets = session_state
+            .lock()
+            .map(|state| state.sent_packets.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            sent_packets
+                .iter()
+                .filter(|packet| packet.end_of_stream)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn native_frame_source_seek_after_eof_allows_packets_again() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_state = RecordingNativeDecoderState::shared(events.clone());
+        let packet_source = FakeNativeFramePacketSource::with_seek_packets(
+            Vec::new(),
+            vec![test_compressed_packet(500_000)],
+            events.clone(),
+        );
+        let outstanding_frames = Arc::new(AtomicUsize::new(0));
+        let mut source = native_frame_source_for_test(
+            packet_source,
+            session_state.clone(),
+            outstanding_frames.clone(),
+            false,
+            false,
+        );
+
+        assert!(matches!(
+            source.try_recv_frame().expect("initial eof should succeed"),
+            DesktopVideoFramePoll::EndOfStream
+        ));
+        let frame = source
+            .seek_to(Duration::from_millis(500))
+            .expect("seek after eof should succeed")
+            .expect("seek after eof should decode a frame");
+
+        assert_eq!(
+            events
+                .lock()
+                .map(|events| events.clone())
+                .unwrap_or_default(),
+            vec!["send_eos", "flush", "packet_seek", "send_packet"]
+        );
+        assert_eq!(frame.presentation_time, Duration::from_micros(500_000));
+        drop(frame);
+        assert_eq!(outstanding_frames.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn dropping_deferred_native_frame_releases_without_presenting() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_state = RecordingNativeDecoderState::shared(events.clone());
+        let packet_source = FakeNativeFramePacketSource::with_seek_packets(
+            vec![test_compressed_packet(1_000)],
+            Vec::new(),
+            events,
+        );
+        let outstanding_frames = Arc::new(AtomicUsize::new(0));
+        let mut source = native_frame_source_for_test(
+            packet_source,
+            session_state.clone(),
+            outstanding_frames.clone(),
+            false,
+            false,
+        );
+
+        let frame = match source.try_recv_frame().expect("frame poll should succeed") {
+            DesktopVideoFramePoll::Ready(frame) => frame,
+            other => panic!("expected a deferred native frame, got {other:?}"),
+        };
+        assert_eq!(outstanding_frames.load(Ordering::SeqCst), 1);
+
+        drop(frame);
+
+        assert_eq!(outstanding_frames.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            session_state
+                .lock()
+                .map(|state| state.released_handles)
+                .unwrap_or_default(),
+            1
         );
     }
 
@@ -3535,6 +3940,7 @@ mod tests {
                 }],
                 codecs: vec![format!("Video:{codec}")],
                 supports_native_frame_output,
+                native_requirements: None,
                 supports_hardware_decode: false,
                 supports_cpu_video_frames: !supports_native_frame_output,
                 supports_audio_frames: false,
@@ -3567,6 +3973,151 @@ mod tests {
             .find(|path| path.is_file())
             .map(|path| path.to_string_lossy().into_owned())
             .or_else(test_video_path)
+    }
+
+    fn open_videotoolbox_smoke_packet_source_and_session(
+        plugin_path: &Path,
+        source: &str,
+    ) -> (Box<VideoPacketSource>, Box<dyn NativeDecoderSession>) {
+        let backend = FfmpegBackend::new().expect("FFmpeg should initialize");
+        let packet_source = backend
+            .open_video_packet_source(MediaSource::new(source.to_owned()))
+            .unwrap_or_else(|error| panic!("failed to open packet source `{source}`: {error}"));
+        let stream_info = packet_source.stream_info().clone();
+        let plugin = LoadedDynamicPlugin::load(plugin_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to load VideoToolbox decoder plugin `{}`: {error}",
+                plugin_path.display()
+            )
+        });
+        let factory = plugin
+            .native_decoder_plugin_factory()
+            .expect("VideoToolbox plugin should export a native decoder factory");
+        if !factory
+            .capabilities()
+            .supports_codec(&stream_info.codec, DecoderMediaKind::Video)
+        {
+            panic!(
+                "VideoToolbox plugin does not support smoke source codec {}",
+                stream_info.codec
+            );
+        }
+        let session = factory
+            .open_native_session(&DecoderSessionConfig {
+                codec: stream_info.codec.clone(),
+                media_kind: DecoderMediaKind::Video,
+                extradata: stream_info.extradata.clone(),
+                width: stream_info.width,
+                height: stream_info.height,
+                prefer_hardware: true,
+                require_cpu_output: false,
+                ..DecoderSessionConfig::default()
+            })
+            .expect("VideoToolbox native session should open");
+        (Box::new(packet_source), session)
+    }
+
+    fn decode_one_videotoolbox_frame(
+        packet_source: &mut VideoPacketSource,
+        session: &mut dyn NativeDecoderSession,
+        max_packets: usize,
+    ) -> bool {
+        let mut submitted_packets = 0usize;
+        while submitted_packets < max_packets {
+            let Some(packet) = packet_source
+                .next_packet()
+                .expect("packet demux should succeed")
+            else {
+                return false;
+            };
+            submitted_packets = submitted_packets.saturating_add(1);
+            let accepted = send_videotoolbox_packet(session, packet)
+                .expect("VideoToolbox should accept compressed packet")
+                .accepted;
+            if !accepted {
+                continue;
+            }
+            if receive_and_release_videotoolbox_frames(session).0 > 0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn drain_videotoolbox_session_to_eof(
+        packet_source: &mut VideoPacketSource,
+        session: &mut dyn NativeDecoderSession,
+        max_packets: usize,
+    ) -> bool {
+        for _ in 0..max_packets {
+            let Some(packet) = packet_source
+                .next_packet()
+                .expect("packet demux should succeed")
+            else {
+                session
+                    .send_packet(
+                        &DecoderPacket {
+                            end_of_stream: true,
+                            ..DecoderPacket::default()
+                        },
+                        &[],
+                    )
+                    .expect("VideoToolbox should accept EOF packet");
+                return receive_and_release_videotoolbox_frames(session).1;
+            };
+            let _ = send_videotoolbox_packet(session, packet)
+                .expect("VideoToolbox should accept compressed packet");
+            if receive_and_release_videotoolbox_frames(session).1 {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn send_videotoolbox_packet(
+        session: &mut dyn NativeDecoderSession,
+        packet: CompressedVideoPacket,
+    ) -> Result<DecoderPacketResult, DecoderError> {
+        session.send_packet(
+            &DecoderPacket {
+                pts_us: packet.pts_us,
+                dts_us: packet.dts_us,
+                duration_us: packet.duration_us,
+                stream_index: packet.stream_index,
+                key_frame: packet.key_frame,
+                discontinuity: packet.discontinuity,
+                end_of_stream: false,
+            },
+            &packet.data,
+        )
+    }
+
+    fn receive_and_release_videotoolbox_frames(
+        session: &mut dyn NativeDecoderSession,
+    ) -> (usize, bool) {
+        let mut decoded_frames = 0usize;
+        loop {
+            match session
+                .receive_native_frame()
+                .expect("VideoToolbox frame receive should succeed")
+            {
+                DecoderReceiveNativeFrameOutput::Frame(frame) => {
+                    assert_eq!(
+                        frame.metadata.handle_kind,
+                        DecoderNativeHandleKind::CvPixelBuffer
+                    );
+                    assert!(frame.handle != 0);
+                    assert!(frame.metadata.width > 0);
+                    assert!(frame.metadata.height > 0);
+                    session
+                        .release_native_frame(frame)
+                        .expect("native frame release should succeed");
+                    decoded_frames = decoded_frames.saturating_add(1);
+                }
+                DecoderReceiveNativeFrameOutput::NeedMoreInput => return (decoded_frames, false),
+                DecoderReceiveNativeFrameOutput::Eof => return (decoded_frames, true),
+            }
+        }
     }
 
     fn test_fallback_bootstrap() -> PlayerRuntimeAdapterBootstrap {
@@ -3771,6 +4322,219 @@ mod tests {
 
         fn next_deadline(&self) -> Option<Instant> {
             None
+        }
+    }
+
+    #[derive(Debug)]
+    struct FakeNativeFramePacketSource {
+        stream_info: VideoPacketStreamInfo,
+        packets: VecDeque<CompressedVideoPacket>,
+        seek_packets: Vec<CompressedVideoPacket>,
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl FakeNativeFramePacketSource {
+        fn with_seek_packets(
+            packets: Vec<CompressedVideoPacket>,
+            seek_packets: Vec<CompressedVideoPacket>,
+            events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        ) -> Self {
+            Self {
+                stream_info: test_video_packet_stream_info(),
+                packets: packets.into(),
+                seek_packets,
+                events,
+            }
+        }
+    }
+
+    impl MacosNativeFramePacketSource for FakeNativeFramePacketSource {
+        fn next_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>> {
+            Ok(self.packets.pop_front())
+        }
+
+        fn seek_to(&mut self, _position: Duration) -> anyhow::Result<()> {
+            if let Ok(mut events) = self.events.lock() {
+                events.push("packet_seek");
+            }
+            self.packets = self.seek_packets.clone().into();
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingNativeDecoderState {
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        sent_packets: Vec<DecoderPacket>,
+        queued_frames: VecDeque<DecoderReceiveNativeFrameOutput>,
+        next_handle: usize,
+        released_handles: usize,
+        flush_count: usize,
+    }
+
+    impl RecordingNativeDecoderState {
+        fn shared(events: Arc<std::sync::Mutex<Vec<&'static str>>>) -> Arc<std::sync::Mutex<Self>> {
+            Arc::new(std::sync::Mutex::new(Self {
+                events,
+                next_handle: 100,
+                ..Self::default()
+            }))
+        }
+    }
+
+    struct RecordingNativeDecoderSession {
+        state: Arc<std::sync::Mutex<RecordingNativeDecoderState>>,
+    }
+
+    impl NativeDecoderSession for RecordingNativeDecoderSession {
+        fn session_info(&self) -> DecoderSessionInfo {
+            DecoderSessionInfo {
+                decoder_name: Some("recording-native-decoder".to_owned()),
+                selected_hardware_backend: Some("fixture-native".to_owned()),
+                output_format: Some(player_plugin::DecoderFrameFormat::Nv12),
+            }
+        }
+
+        fn send_packet(
+            &mut self,
+            packet: &DecoderPacket,
+            _data: &[u8],
+        ) -> Result<DecoderPacketResult, DecoderError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| DecoderError::internal("recording session state is poisoned"))?;
+            if let Ok(mut events) = state.events.lock() {
+                events.push(if packet.end_of_stream {
+                    "send_eos"
+                } else {
+                    "send_packet"
+                });
+            }
+            state.sent_packets.push(packet.clone());
+            if packet.end_of_stream {
+                state
+                    .queued_frames
+                    .push_back(DecoderReceiveNativeFrameOutput::Eof);
+            } else {
+                let handle = state.next_handle;
+                state.next_handle = state.next_handle.saturating_add(1);
+                state
+                    .queued_frames
+                    .push_back(DecoderReceiveNativeFrameOutput::Frame(test_native_frame(
+                        handle,
+                        packet.pts_us,
+                    )));
+            }
+            Ok(DecoderPacketResult { accepted: true })
+        }
+
+        fn receive_native_frame(
+            &mut self,
+        ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+            self.state
+                .lock()
+                .map_err(|_| DecoderError::internal("recording session state is poisoned"))
+                .map(|mut state| {
+                    state
+                        .queued_frames
+                        .pop_front()
+                        .unwrap_or(DecoderReceiveNativeFrameOutput::NeedMoreInput)
+                })
+        }
+
+        fn release_native_frame(&mut self, _frame: DecoderNativeFrame) -> Result<(), DecoderError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| DecoderError::internal("recording session state is poisoned"))?;
+            state.released_handles = state.released_handles.saturating_add(1);
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), DecoderError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| DecoderError::internal("recording session state is poisoned"))?;
+            if let Ok(mut events) = state.events.lock() {
+                events.push("flush");
+            }
+            state.flush_count = state.flush_count.saturating_add(1);
+            state.queued_frames.clear();
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DecoderError> {
+            Ok(())
+        }
+    }
+
+    fn native_frame_source_for_test(
+        packet_source: FakeNativeFramePacketSource,
+        session_state: Arc<std::sync::Mutex<RecordingNativeDecoderState>>,
+        outstanding_frames: Arc<AtomicUsize>,
+        end_of_input_sent: bool,
+        end_of_stream_received: bool,
+    ) -> MacosNativeFrameVideoSource {
+        let stream_info = packet_source.stream_info.clone();
+        MacosNativeFrameVideoSource {
+            packet_source: Box::new(packet_source),
+            stream_info,
+            shared: Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
+                session: Box::new(RecordingNativeDecoderSession {
+                    state: session_state,
+                }),
+                presenter: None,
+                outstanding_frames,
+                presentation_epoch: 0,
+            })),
+            end_of_input_sent,
+            end_of_stream_received,
+        }
+    }
+
+    fn test_video_packet_stream_info() -> VideoPacketStreamInfo {
+        VideoPacketStreamInfo {
+            stream_index: 0,
+            codec: "H264".to_owned(),
+            extradata: Vec::new(),
+            width: Some(320),
+            height: Some(180),
+            frame_rate: Some(24.0),
+        }
+    }
+
+    fn test_compressed_packet(pts_us: i64) -> CompressedVideoPacket {
+        CompressedVideoPacket {
+            pts_us: Some(pts_us),
+            dts_us: Some(pts_us),
+            duration_us: Some(41_667),
+            stream_index: 0,
+            key_frame: true,
+            discontinuity: false,
+            data: vec![0, 0, 1, 9],
+        }
+    }
+
+    fn test_native_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {
+        DecoderNativeFrame {
+            metadata: DecoderNativeFrameMetadata {
+                media_kind: DecoderMediaKind::Video,
+                format: player_plugin::DecoderFrameFormat::Nv12,
+                codec: "H264".to_owned(),
+                pts_us,
+                duration_us: Some(41_667),
+                width: 320,
+                height: 180,
+                coded_width: Some(320),
+                coded_height: Some(180),
+                visible_rect: None,
+                handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+                frame_id: Some(handle as u64),
+                release_tracking: None,
+            },
+            handle,
         }
     }
 
