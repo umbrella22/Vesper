@@ -104,6 +104,7 @@ The primary control surface for playback.
 ```dart
 final controller = await VesperPlayerController.create(
   initialSource: VesperPlayerSource.hls(uri: 'https://example.com/stream.m3u8'),
+  renderSurfaceKind: VesperPlayerRenderSurfaceKind.auto,
   resiliencePolicy: const VesperPlaybackResiliencePolicy.resilient(),
   trackPreferencePolicy: const VesperTrackPreferencePolicy(
     preferredAudioLanguage: 'en',
@@ -129,6 +130,13 @@ await controller.setPlaybackRate(1.5);
 ### `VesperPlayerView`
 
 Embeds the native video surface into Flutter UI.
+
+On Android, `VesperPlayerController.create(renderSurfaceKind: ...)` controls
+the native surface used by `VesperPlayerView`. The default `auto` mode uses
+`TextureView` for Flutter overlay and gesture compatibility. Select
+`surfaceView` explicitly for fullscreen HDR or high-frame-rate scenarios where
+host UI composition allows it. iOS accepts the option for API symmetry but
+always uses the platform's AVPlayer-backed surface.
 
 ```dart
 VesperPlayerView(

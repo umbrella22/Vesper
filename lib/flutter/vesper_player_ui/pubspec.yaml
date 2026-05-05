@@ -14,5 +14,9 @@ dependencies:
   vesper_player:
     path: ../vesper_player
 
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
 flutter:
   uses-material-design: true

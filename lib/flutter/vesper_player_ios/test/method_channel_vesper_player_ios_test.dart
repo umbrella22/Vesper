@@ -57,6 +57,7 @@ void main() {
       Map<Object?, Object?>.from(calls.single.arguments as Map),
       <Object?, Object?>{
         'initialSource': source.toMap(),
+        'renderSurfaceKind': VesperPlayerRenderSurfaceKind.auto.name,
         'resiliencePolicy': policy.toMap(),
         'trackPreferencePolicy': trackPreferencePolicy.toMap(),
         'preloadBudgetPolicy': preloadBudgetPolicy.toMap(),
@@ -84,8 +85,28 @@ void main() {
       Map<Object?, Object?>.from(calls.single.arguments as Map),
       <Object?, Object?>{
         'initialSource': null,
+        'renderSurfaceKind': VesperPlayerRenderSurfaceKind.auto.name,
         'resiliencePolicy': const VesperPlaybackResiliencePolicy().toMap(),
         'benchmarkConfiguration': benchmarkConfiguration.toMap(),
+      },
+    );
+  });
+
+  test('createPlayer accepts explicit render surface kind', () async {
+    final platform = MethodChannelVesperPlayerIos();
+
+    await platform.createPlayer(
+      renderSurfaceKind: VesperPlayerRenderSurfaceKind.surfaceView,
+    );
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'createPlayer');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{
+        'initialSource': null,
+        'renderSurfaceKind': VesperPlayerRenderSurfaceKind.surfaceView.name,
+        'resiliencePolicy': const VesperPlaybackResiliencePolicy().toMap(),
       },
     );
   });

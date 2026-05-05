@@ -352,6 +352,7 @@ class VesperPlayerAndroidPlugin :
                     ?.stringMap()
                     ?.toBenchmarkConfiguration()
                     ?: VesperBenchmarkConfiguration.Disabled
+            val surfaceKind = arguments["renderSurfaceKind"].toNativeVideoSurfaceKind()
 
             val session = PlayerSession(
                 id = UUID.randomUUID().toString(),
@@ -367,7 +368,7 @@ class VesperPlayerAndroidPlugin :
                         preloadBudgetPolicyMap?.stringMap()?.toPreloadBudgetPolicy()
                             ?: VesperPreloadBudgetPolicy(),
                     benchmarkConfiguration = benchmarkConfiguration,
-                    surfaceKind = NativeVideoSurfaceKind.SurfaceView,
+                    surfaceKind = surfaceKind,
                 ),
                 benchmarkConsoleLogging = benchmarkConfiguration.consoleLogging,
             )
@@ -989,6 +990,13 @@ private fun Map<String, Any?>.toBenchmarkConfiguration(): VesperBenchmarkConfigu
                 ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
                 ?: emptyList(),
     )
+
+private fun Any?.toNativeVideoSurfaceKind(): NativeVideoSurfaceKind =
+    when (this as? String ?: "auto") {
+        "auto", "textureView" -> NativeVideoSurfaceKind.TextureView
+        "surfaceView" -> NativeVideoSurfaceKind.SurfaceView
+        else -> throw IllegalArgumentException("Unknown renderSurfaceKind: $this.")
+    }
 
 private fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
     val uri = this["uri"] as? String ?: throw IllegalArgumentException("Missing source uri.")

@@ -2,6 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('render surface kind wire names stay stable', () {
+    expect(VesperPlayerRenderSurfaceKind.auto.name, 'auto');
+    expect(VesperPlayerRenderSurfaceKind.textureView.name, 'textureView');
+    expect(VesperPlayerRenderSurfaceKind.surfaceView.name, 'surfaceView');
+  });
+
   test('player source preserves request headers in wire map', () {
     final source = VesperPlayerSource.dash(
       uri: 'https://example.com/video.mpd',

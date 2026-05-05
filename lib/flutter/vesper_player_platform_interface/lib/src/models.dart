@@ -24,6 +24,8 @@ enum VesperPlayerBackendFamily {
   fakeDemo,
 }
 
+enum VesperPlayerRenderSurfaceKind { auto, textureView, surfaceView }
+
 enum VesperMediaTrackKind { video, audio, subtitle }
 
 enum VesperTrackSelectionMode { auto, disabled, track }

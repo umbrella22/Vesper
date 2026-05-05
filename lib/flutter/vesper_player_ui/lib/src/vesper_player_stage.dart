@@ -83,16 +83,14 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   Widget build(BuildContext context) {
     final snapshot = widget.snapshot;
     final timeline = snapshot.timeline;
-    final displayedRatio = (_pendingSeekRatio ?? timeline.displayedRatio ?? 0.0)
-        .clamp(0.0, 1.0);
-    final showControls =
-        _controlsVisible ||
+    final displayedRatio =
+        (_pendingSeekRatio ?? timeline.displayedRatio ?? 0.0).clamp(0.0, 1.0);
+    final showControls = _controlsVisible ||
         snapshot.playbackState != VesperPlaybackState.playing ||
         widget.sheetOpen;
     final stageRadius = BorderRadius.circular(widget.isPortrait ? 20 : 0);
-    final title = snapshot.sourceLabel.isEmpty
-        ? snapshot.title
-        : snapshot.sourceLabel;
+    final title =
+        snapshot.sourceLabel.isEmpty ? snapshot.title : snapshot.sourceLabel;
 
     return ClipRRect(
       borderRadius: stageRadius,
@@ -124,7 +122,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               ),
             ),
             IgnorePointer(
-              ignoring: !showControls,
+              ignoring: true,
               child: AnimatedOpacity(
                 duration: const Duration(milliseconds: 180),
                 opacity: showControls ? 1 : 0,
@@ -141,33 +139,40 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                       ],
                     ),
                   ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: <Widget>[
-                      Positioned(
-                        top: 16,
-                        left: 18,
-                        right: 18,
-                        child: _buildTopBar(context, snapshot, title),
-                      ),
-                      Positioned(
-                        left: widget.isPortrait ? 18 : 12,
-                        right: widget.isPortrait ? 18 : 12,
-                        bottom: widget.isPortrait ? 18 : 14,
-                        child: widget.isPortrait
-                            ? _buildPortraitTimeline(
-                                context,
-                                snapshot,
-                                displayedRatio,
-                              )
-                            : _buildLandscapeTimeline(
-                                context,
-                                snapshot,
-                                displayedRatio,
-                              ),
-                      ),
-                    ],
-                  ),
+                ),
+              ),
+            ),
+            IgnorePointer(
+              ignoring: !showControls,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 180),
+                opacity: showControls ? 1 : 0,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    Positioned(
+                      top: 16,
+                      left: 18,
+                      right: 18,
+                      child: _buildTopBar(context, snapshot, title),
+                    ),
+                    Positioned(
+                      left: widget.isPortrait ? 18 : 12,
+                      right: widget.isPortrait ? 18 : 12,
+                      bottom: widget.isPortrait ? 18 : 14,
+                      child: widget.isPortrait
+                          ? _buildPortraitTimeline(
+                              context,
+                              snapshot,
+                              displayedRatio,
+                            )
+                          : _buildLandscapeTimeline(
+                              context,
+                              snapshot,
+                              displayedRatio,
+                            ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -213,9 +218,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
                     ),
                   ),
                   if (snapshot.isBuffering) ...<Widget>[
@@ -458,13 +463,13 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         }
         _stageGestureKind = _StageAreaGestureKind.seek;
       } else if (verticalDistance >= horizontalDistance * 1.15) {
-        final width = (context.size?.width ?? 1.0)
-            .clamp(1.0, double.infinity)
-            .toDouble();
+        final width =
+            (context.size?.width ?? 1.0).clamp(1.0, double.infinity).toDouble();
         final kind = _stageGestureStartX < width / 2
             ? _StageAreaGestureKind.brightness
             : _StageAreaGestureKind.volume;
         if (widget.deviceControls == null) {
+          _debugLogDeviceGestureUnavailable(kind, 'deviceControls is null');
           _stageGestureKind = _StageAreaGestureKind.ignored;
           return;
         }
@@ -518,7 +523,11 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       _StageAreaGestureKind.volume => await controls.currentVolumeRatio(),
       _StageAreaGestureKind.seek || _StageAreaGestureKind.ignored => null,
     };
-    if (!mounted || _stageGestureKind != kind || ratio == null) {
+    if (!mounted || _stageGestureKind != kind) {
+      return;
+    }
+    if (ratio == null) {
+      _debugLogDeviceGestureUnavailable(kind, 'current ratio returned null');
       return;
     }
     _deviceGestureBaseRatio = ratio.clamp(0.0, 1.0).toDouble();
@@ -567,14 +576,18 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                 .toDouble();
         final actualRatio = switch (kind) {
           _StageAreaGestureKind.brightness => await controls.setBrightnessRatio(
-            requestedRatio,
-          ),
+              requestedRatio,
+            ),
           _StageAreaGestureKind.volume => await controls.setVolumeRatio(
-            requestedRatio,
-          ),
+              requestedRatio,
+            ),
           _StageAreaGestureKind.seek || _StageAreaGestureKind.ignored => null,
         };
-        if (!mounted || _stageGestureKind != kind || actualRatio == null) {
+        if (!mounted || _stageGestureKind != kind) {
+          continue;
+        }
+        if (actualRatio == null) {
+          _debugLogDeviceGestureUnavailable(kind, 'set ratio returned null');
           continue;
         }
         final value = actualRatio.clamp(0.0, 1.0).toDouble();
@@ -584,7 +597,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               _StageAreaGestureKind.brightness => _StageGestureKind.brightness,
               _StageAreaGestureKind.volume => _StageGestureKind.volume,
               _StageAreaGestureKind.seek ||
-              _StageAreaGestureKind.ignored => _StageGestureKind.speed,
+              _StageAreaGestureKind.ignored =>
+                _StageGestureKind.speed,
             },
             progress: value,
             label: _percentLabel(value),
@@ -643,10 +657,19 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     _stageSeekRatio = null;
   }
 
+  void _debugLogDeviceGestureUnavailable(
+    _StageAreaGestureKind kind,
+    String reason,
+  ) {
+    assert(() {
+      debugPrint('VesperPlayerStage ${kind.name} gesture ignored: $reason.');
+      return true;
+    }());
+  }
+
   void _updateStageSeekRatio(double dx) {
-    final width = (context.size?.width ?? 1.0)
-        .clamp(1.0, double.infinity)
-        .toDouble();
+    final width =
+        (context.size?.width ?? 1.0).clamp(1.0, double.infinity).toDouble();
     final targetRatio = (dx / width).clamp(0.0, 1.0).toDouble();
     _stageSeekRatio = targetRatio;
     setState(() {
@@ -669,10 +692,10 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     final snapshot = widget.snapshot;
     final shouldAutoHide =
         snapshot.playbackState == VesperPlaybackState.playing &&
-        !snapshot.isBuffering &&
-        _controlsVisible &&
-        !widget.sheetOpen &&
-        _pendingSeekRatio == null;
+            !snapshot.isBuffering &&
+            _controlsVisible &&
+            !widget.sheetOpen &&
+            _pendingSeekRatio == null;
 
     if (!shouldAutoHide) {
       return;
@@ -1071,9 +1094,9 @@ class VesperStageChip extends StatelessWidget {
           Text(
             label,
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: Colors.white,
-              fontSize: compact ? 11 : null,
-            ),
+                  color: Colors.white,
+                  fontSize: compact ? 11 : null,
+                ),
           ),
         ],
       ),

@@ -107,6 +107,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     VesperPlayerController? nextController;
     try {
       nextController = await VesperPlayerController.create(
+        renderSurfaceKind: VesperPlayerRenderSurfaceKind.surfaceView,
         resiliencePolicy: _selectedResilienceProfile.policy,
       );
       await nextController.initialize();

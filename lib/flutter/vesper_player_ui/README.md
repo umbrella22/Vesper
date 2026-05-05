@@ -39,6 +39,10 @@ dependencies:
 `vesper_player_ui` depends on `vesper_player`. Apps that build their own UI
 can depend on `vesper_player` directly and skip this package.
 
+`VesperPlayerStage` keeps decorative full-stage overlays non-interactive, so
+empty video-space gestures continue to work while controls are visible. Only
+the actual buttons, sheet entries, and timeline receive pointer events.
+
 ## Minimum Requirements
 
 - Dart SDK 3.6.0+

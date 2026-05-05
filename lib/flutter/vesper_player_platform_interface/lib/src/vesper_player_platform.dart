@@ -64,6 +64,8 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
 
   Future<VesperPlatformCreateResult> createPlayer({
     VesperPlayerSource? initialSource,
+    VesperPlayerRenderSurfaceKind renderSurfaceKind =
+        VesperPlayerRenderSurfaceKind.auto,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
     VesperTrackPreferencePolicy trackPreferencePolicy =
@@ -166,6 +168,8 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
   @override
   Future<VesperPlatformCreateResult> createPlayer({
     VesperPlayerSource? initialSource,
+    VesperPlayerRenderSurfaceKind renderSurfaceKind =
+        VesperPlayerRenderSurfaceKind.auto,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
     VesperTrackPreferencePolicy trackPreferencePolicy =

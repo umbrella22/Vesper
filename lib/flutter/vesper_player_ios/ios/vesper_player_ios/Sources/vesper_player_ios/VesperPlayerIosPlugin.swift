@@ -868,6 +868,7 @@ private final class PlayerViewFactory: NSObject, FlutterPlatformViewFactory {
         let arguments = args as? [String: Any] ?? [:]
         let playerId = arguments["playerId"] as? String
         let hostView = PlayerSurfaceView(frame: frame)
+        hostView.isUserInteractionEnabled = false
 
         if let playerId {
             Task { @MainActor [weak plugin, weak hostView] in

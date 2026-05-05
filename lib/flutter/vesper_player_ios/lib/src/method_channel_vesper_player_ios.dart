@@ -36,6 +36,8 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
   @override
   Future<VesperPlatformCreateResult> createPlayer({
     VesperPlayerSource? initialSource,
+    VesperPlayerRenderSurfaceKind renderSurfaceKind =
+        VesperPlayerRenderSurfaceKind.auto,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
     VesperTrackPreferencePolicy trackPreferencePolicy =
@@ -50,6 +52,7 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
     final result =
         await _invokeMethod<Object?>('createPlayer', <String, Object?>{
       'initialSource': initialSource?.toMap(),
+      'renderSurfaceKind': renderSurfaceKind.name,
       'resiliencePolicy': resiliencePolicy.toMap(),
       if (trackPreferenceMap.isNotEmpty)
         'trackPreferencePolicy': trackPreferenceMap,

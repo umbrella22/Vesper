@@ -28,7 +28,7 @@ directly.
 - Playback backend: Media3 ExoPlayer behind the `VesperPlayerController` Kotlin facade
 - Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
 - View embedding: `AndroidView` with view type `io.github.ikaros.vesper_player/platform_view`
-- Render path: selected automatically by scenario, preferring `SurfaceView` for fullscreen or fixed-stage playback and `TextureView` for scrolling or complex composition
+- Render path: `VesperPlayerController.create(renderSurfaceKind: ...)` selects the Android surface for Flutter playback. `auto` maps to `TextureView` for overlay and gesture compatibility. Use `surfaceView` only when the host explicitly wants the native Android HDR / high-frame-rate fullscreen path and can keep Flutter overlays safe.
 - Runtime snapshot: exposes the currently active adaptive video variant through `controller.snapshot.effectiveVideoTrackId`
 - Runtime observation: also exposes `controller.snapshot.videoVariantObservation`, derived from ExoPlayer's active `videoFormat` bitrate and rendered size
 - Rust runtime: bridged through JNI so defaults, timeline, resilience, and playlist semantics stay aligned with the rest of the SDK

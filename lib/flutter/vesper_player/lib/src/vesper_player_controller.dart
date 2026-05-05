@@ -21,6 +21,8 @@ class VesperPlayerController {
 
   static Future<VesperPlayerController> create({
     VesperPlayerSource? initialSource,
+    VesperPlayerRenderSurfaceKind renderSurfaceKind =
+        VesperPlayerRenderSurfaceKind.auto,
     VesperPlaybackResiliencePolicy resiliencePolicy =
         const VesperPlaybackResiliencePolicy(),
     VesperTrackPreferencePolicy trackPreferencePolicy =
@@ -33,6 +35,7 @@ class VesperPlayerController {
     final platform = VesperPlayerPlatform.instance;
     final result = await platform.createPlayer(
       initialSource: initialSource,
+      renderSurfaceKind: renderSurfaceKind,
       resiliencePolicy: resiliencePolicy,
       trackPreferencePolicy: trackPreferencePolicy,
       preloadBudgetPolicy: preloadBudgetPolicy,
