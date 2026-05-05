@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod adapter;
 
 use std::path::PathBuf;

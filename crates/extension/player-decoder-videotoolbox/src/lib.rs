@@ -90,6 +90,12 @@ unsafe extern "C" fn decoder_send_packet(
         Ok(packet) => packet,
         Err(error) => return process_error(error),
     };
+    if packet_data.is_null() && packet_data_len > 0 {
+        return process_error(DecoderError::abi_violation(
+            "packet data pointer was null with non-zero len",
+        ));
+    }
+
     let data = if packet_data.is_null() || packet_data_len == 0 {
         &[]
     } else {
@@ -1515,7 +1521,8 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::{decoder_capabilities, video_codec_kind};
+    use super::{decoder_capabilities, decoder_send_packet, video_codec_kind};
+    use player_plugin::{DecoderError, DecoderPacket, VesperPluginResultStatus};
 
     #[test]
     fn capabilities_advertise_video_hardware_native_frames() {
@@ -1535,5 +1542,28 @@ mod tests {
         assert!(video_codec_kind("hvc1").is_some());
         assert!(video_codec_kind("H265").is_some());
         assert!(video_codec_kind("vp9").is_none());
+    }
+
+    #[test]
+    fn send_packet_rejects_null_packet_data_with_non_zero_len() {
+        let packet_json = serde_json::to_vec(&DecoderPacket::default()).expect("packet json");
+
+        let result = unsafe {
+            decoder_send_packet(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                packet_json.as_ptr(),
+                packet_json.len(),
+                std::ptr::null(),
+                1,
+            )
+        };
+
+        assert_eq!(result.status, VesperPluginResultStatus::Failure);
+        // SAFETY: the plugin produced this payload in the current dynamic
+        // library and the test has not reclaimed it yet.
+        let payload = unsafe { result.payload.into_vec() };
+        let error = serde_json::from_slice::<DecoderError>(&payload).expect("decoder error");
+        assert!(matches!(error, DecoderError::AbiViolation { .. }));
     }
 }

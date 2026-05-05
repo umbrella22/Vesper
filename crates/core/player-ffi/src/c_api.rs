@@ -2577,8 +2577,9 @@ fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
     "unknown panic payload".to_owned()
 }
 
-fn write_error(out_error: *mut PlayerFfiError, error: PlayerFfiError) {
+fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiError) {
     if out_error.is_null() {
+        free_c_string(&mut error.message);
         return;
     }
 
@@ -2916,6 +2917,18 @@ mod tests {
             assert_eq!(error.code, PlayerFfiErrorCode::NullPointer);
             assert_eq!(copy_c_string(error.message), "out_initializer was null");
             super::player_ffi_error_free(&mut error);
+        }
+    }
+
+    #[test]
+    fn initializer_probe_uri_rejects_null_output_without_error_pointer() {
+        unsafe {
+            let uri = CString::new("https://example.com/master.m3u8").expect("valid uri");
+
+            let status =
+                player_ffi_initializer_probe_uri(uri.as_ptr(), ptr::null_mut(), ptr::null_mut());
+
+            assert_eq!(status, PlayerFfiCallStatus::Error);
         }
     }
 

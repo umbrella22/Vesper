@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use player_runtime::{
     MediaSourceKind, MediaSourceProtocol, PlayerBufferingPolicy, PlayerCachePolicy,
     PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy,

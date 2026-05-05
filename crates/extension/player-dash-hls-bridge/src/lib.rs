@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 //! Shared DASH-to-HLS bridge primitives.
 //!
 //! This crate owns platform-neutral DASH MPD parsing, SIDX/MP4 byte-range handling,

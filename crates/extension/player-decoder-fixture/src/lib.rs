@@ -194,9 +194,17 @@ unsafe extern "C" fn decoder_send_packet(
         Ok(packet) => packet,
         Err(error) => return process_error(error),
     };
+    if packet_data.is_null() && packet_data_len > 0 {
+        return process_error(DecoderError::abi_violation(
+            "packet data pointer was null with non-zero len",
+        ));
+    }
+
     let data = if packet_data.is_null() || packet_data_len == 0 {
         Vec::new()
     } else {
+        // SAFETY: the ABI caller provides a valid packet byte slice for the
+        // duration of this synchronous call.
         let slice = unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) };
         slice.to_vec()
     };
@@ -442,13 +450,31 @@ fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameRes
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_VIDEO_CODEC, vesper_plugin_entry, video_codecs_from_configured_list};
-    use player_plugin::{
-        VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ABI_VERSION, VesperPluginKind,
+    use super::{
+        DEFAULT_VIDEO_CODEC, FixtureDecoderSession, decoder_send_packet, vesper_plugin_entry,
+        video_codecs_from_configured_list,
     };
+    use player_plugin::{
+        DecoderError, DecoderPacket, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+        VESPER_PLUGIN_ABI_VERSION, VesperPluginKind, VesperPluginResultStatus,
+    };
+    use std::ffi::c_void;
+    use std::sync::{Mutex, OnceLock};
+
+    fn abi_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn exported_descriptor_matches_decoder_plugin_metadata() {
+        let _guard = abi_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // SAFETY: this test holds the fixture ABI environment lock, so no
+        // sibling test in this module can concurrently read or write the
+        // process-wide fixture switch.
+        unsafe { std::env::remove_var("VESPER_DECODER_FIXTURE_ABI") };
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
         assert_eq!(descriptor.abi_version, VESPER_PLUGIN_ABI_VERSION);
@@ -459,7 +485,11 @@ mod tests {
 
     #[test]
     fn exported_descriptor_can_switch_to_native_decoder_plugin_metadata() {
-        // SAFETY: tests in this crate do not concurrently depend on this
+        let _guard = abi_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // SAFETY: this test holds the fixture ABI environment lock, so no
+        // sibling test in this module can concurrently read or write the
         // process-wide fixture switch.
         unsafe { std::env::set_var("VESPER_DECODER_FIXTURE_ABI", "v2") };
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
@@ -468,7 +498,7 @@ mod tests {
         assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
         assert!(!descriptor.api.is_null());
 
-        // SAFETY: restore the process environment for later tests.
+        // SAFETY: this test still holds the fixture ABI environment lock.
         unsafe { std::env::remove_var("VESPER_DECODER_FIXTURE_ABI") };
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
         assert_eq!(descriptor.abi_version, VESPER_PLUGIN_ABI_VERSION);
@@ -491,5 +521,29 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["H264", "HEVC"]);
+    }
+
+    #[test]
+    fn send_packet_rejects_null_packet_data_with_non_zero_len() {
+        let packet_json = serde_json::to_vec(&DecoderPacket::default()).expect("packet json");
+        let mut session = FixtureDecoderSession::default();
+
+        let result = unsafe {
+            decoder_send_packet(
+                std::ptr::null_mut(),
+                (&mut session as *mut FixtureDecoderSession).cast::<c_void>(),
+                packet_json.as_ptr(),
+                packet_json.len(),
+                std::ptr::null(),
+                1,
+            )
+        };
+
+        assert_eq!(result.status, VesperPluginResultStatus::Failure);
+        // SAFETY: the fixture plugin produced this payload in the current
+        // dynamic library and the test has not reclaimed it yet.
+        let payload = unsafe { result.payload.into_vec() };
+        let error = serde_json::from_slice::<DecoderError>(&payload).expect("decoder error");
+        assert!(matches!(error, DecoderError::AbiViolation { .. }));
     }
 }

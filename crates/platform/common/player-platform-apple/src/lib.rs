@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 pub const VIDEOTOOLBOX_BACKEND_NAME: &str = "VideoToolbox";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +111,9 @@ const fn fourcc(bytes: [u8; 4]) -> u32 {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn videotoolbox_is_hardware_decode_supported(codec_type: u32) -> bool {
+    // SAFETY: `VTIsHardwareDecodeSupported` is a pure VideoToolbox query for a
+    // FourCC codec value and does not retain pointers or require additional
+    // object lifetime guarantees.
     unsafe { VTIsHardwareDecodeSupported(codec_type) }
 }
 

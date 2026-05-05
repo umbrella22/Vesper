@@ -42,12 +42,17 @@ impl VesperPluginBytes {
         }
     }
 
-    pub fn from_vec(mut bytes: Vec<u8>) -> Self {
+    pub fn from_vec(bytes: Vec<u8>) -> Self {
+        if bytes.is_empty() {
+            return Self::null();
+        }
+
+        let mut boxed = bytes.into_boxed_slice();
         let result = Self {
-            data: bytes.as_mut_ptr(),
-            len: bytes.len(),
+            data: boxed.as_mut_ptr(),
+            len: boxed.len(),
         };
-        std::mem::forget(bytes);
+        std::mem::forget(boxed);
         result
     }
 
@@ -60,8 +65,32 @@ impl VesperPluginBytes {
             return Vec::new();
         }
 
-        // SAFETY: guaranteed by the caller contract above.
-        unsafe { Vec::from_raw_parts(self.data, self.len, self.len) }
+        // SAFETY: guaranteed by the caller contract above. `from_vec` transfers
+        // ownership as a boxed slice, so the allocation layout is exactly the
+        // slice length recorded in the ABI payload.
+        unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(self.data, self.len)).into_vec() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VesperPluginBytes;
+
+    #[test]
+    fn plugin_bytes_round_trip_vec_with_extra_capacity() {
+        let mut bytes = Vec::with_capacity(64);
+        bytes.extend_from_slice(b"decoder payload");
+        assert!(bytes.capacity() > bytes.len());
+
+        let payload = VesperPluginBytes::from_vec(bytes);
+        assert!(!payload.data.is_null());
+        assert_eq!(payload.len, b"decoder payload".len());
+
+        // SAFETY: the payload was produced by `VesperPluginBytes::from_vec`
+        // above and has not been reclaimed yet.
+        let recovered = unsafe { payload.into_vec() };
+
+        assert_eq!(recovered, b"decoder payload");
     }
 }
 
