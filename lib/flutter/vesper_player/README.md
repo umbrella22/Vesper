@@ -17,7 +17,7 @@ across platforms.
 | Local files              | ✅      | ✅                                                  | ❌ Backend not wired |
 | Progressive HTTP         | ✅      | ✅                                                  | ❌ Backend not wired |
 | HLS                      | ✅      | ✅                                                  | ❌ Backend not wired |
-| DASH                     | ✅      | ⚠️ Static fMP4 VOD through DASH→HLS bridge          | ❌ Backend not wired |
+| DASH                     | ✅      | ✅ DASH-to-HLS bridge for VOD / live fMP4           | ❌ Backend not wired |
 | Live streams             | ✅      | ✅                                                  | ❌ Backend not wired |
 | Live DVR                 | ✅      | ✅                                                  | ❌ Backend not wired |
 | Track selection          | ✅      | ✅                                                  | ❌ Backend not wired |
@@ -427,6 +427,11 @@ Key points:
 - FFmpeg prebuilt support is still coarse-grained. The current scripts support
   on-demand builds and environment-level feature gates such as disabling DASH,
   but not fine-grained whitelisting by demuxer, muxer, protocol, or codec.
+- If the host bundles the remux plugin, treat it as an FFmpeg redistribution:
+  include FFmpeg license text and notices, provide corresponding FFmpeg source
+  and configure flags, preserve LGPL relinking rights, and track OpenSSL /
+  libxml2 notices when those libraries are included. See
+  [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
 Download task states:
 

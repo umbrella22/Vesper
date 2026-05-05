@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/ios/VesperPlayerKit"
 PROJECT_FILE="$PROJECT_DIR/VesperPlayerKit.xcodeproj"
 BUILD_DIR="$PROJECT_DIR/.build/xcframework"
 IOS_ARCHIVE="$BUILD_DIR/VesperPlayerKit-iOS.xcarchive"
 SIM_ARCHIVE="$BUILD_DIR/VesperPlayerKit-iOS-Simulator.xcarchive"
 OUTPUT_PATH="$BUILD_DIR/VesperPlayerKit.xcframework"
-# Apple 侧 iOS binary packaging 统一收敛为 arm64-only，不再开放 x86_64
-# simulator slice。
+# Apple iOS binary packaging is arm64-only; do not reintroduce an x86_64
+# simulator slice.
 SIMULATOR_ARCHS_ENV="${VESPER_IOS_SIMULATOR_ARCHS:-arm64}"
 SIMULATOR_ARCHS=()
 SIMULATOR_BUILD_ARCHIVES=()
@@ -116,7 +118,7 @@ merge_simulator_archives() {
 
 mkdir -p "$BUILD_DIR"
 
-"$ROOT_DIR/scripts/build-ios-player-ffi-xcframework.sh"
+"$ROOT_DIR/scripts/ios/build-player-ffi-xcframework.sh"
 
 (cd "$PROJECT_DIR" && xcodegen generate)
 

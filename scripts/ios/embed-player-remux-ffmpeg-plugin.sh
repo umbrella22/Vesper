@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 FRAMEWORK_BUNDLE_NAME="${1:-}"
 
 if [[ -z "$FRAMEWORK_BUNDLE_NAME" ]]; then
@@ -52,7 +54,7 @@ case "${PLATFORM_NAME:-}" in
     ;;
   iphonesimulator)
     source_subdir="iphonesimulator"
-    # Apple 侧 iOS Simulator 分发固定为 arm64-only，不再跟随 x86_64。
+    # iOS Simulator distribution is arm64-only; do not follow x86_64.
     arch_tokens="${ARCHS:-${CURRENT_ARCH:-${NATIVE_ARCH_ACTUAL:-arm64}}}"
     for arch in $arch_tokens; do
       case "$arch" in
@@ -74,7 +76,7 @@ case "${PLATFORM_NAME:-}" in
 esac
 
 OUTPUT_DIR="${DERIVED_FILE_DIR:-${TARGET_TEMP_DIR:-/tmp}}/vesper-ios-player-remux-ffmpeg"
-"$ROOT_DIR/scripts/build-ios-player-remux-ffmpeg-plugin.sh" "$OUTPUT_DIR" "$PROFILE" "${selected_slices[@]}"
+"$ROOT_DIR/scripts/ios/build-player-remux-ffmpeg-plugin.sh" "$OUTPUT_DIR" "$PROFILE" "${selected_slices[@]}"
 
 SOURCE_DIR="$OUTPUT_DIR/$source_subdir"
 if [[ ! -d "$SOURCE_DIR" ]]; then
@@ -144,7 +146,7 @@ if [[ "${CODE_SIGNING_ALLOWED:-NO}" != "NO" ]]; then
     app_codesign_args=(--force --sign "$signing_identity" --timestamp=none)
     app_entitlements="$(resolve_codesign_entitlements || true)"
     if [[ -n "$app_entitlements" ]]; then
-      # 重新签名 app 时必须保留 Xcode 注入的 base entitlements，否则真机会拒绝安装。
+      # Preserve Xcode-injected base entitlements when resigning the app; otherwise devices reject the install.
       app_codesign_args+=(--entitlements "$app_entitlements" --generate-entitlement-der)
     fi
     codesign "${app_codesign_args[@]}" "$CODESIGNING_FOLDER_PATH"

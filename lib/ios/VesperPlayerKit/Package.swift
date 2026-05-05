@@ -12,7 +12,7 @@ if !FileManager.default.fileExists(atPath: rustResolverPath) {
     fatalError(
         """
         Missing Rust iOS resolver bundle at \(rustResolverRelativePath).
-        Run scripts/build-ios-player-ffi-xcframework.sh before building VesperPlayerKit as a Swift package.
+        Run scripts/vesper ios ffi before building VesperPlayerKit as a Swift package.
         """
     )
 }

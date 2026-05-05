@@ -98,7 +98,7 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
     description = "Builds the Android player-remux-ffmpeg plugin libraries used by the Flutter host."
     group = "vesper"
 
-    val scriptFile = workspaceRootDir.file("scripts/build-android-player-remux-ffmpeg-plugin.sh")
+    val scriptFile = workspaceRootDir.file("scripts/android/build-player-remux-ffmpeg-plugin.sh")
 
     inputs.file(scriptFile)
     inputs.file(workspaceRootDir.file("Cargo.toml"))

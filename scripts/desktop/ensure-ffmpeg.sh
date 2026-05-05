@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 这里只负责“兜底补齐”仓库约定路径，不覆盖系统优先级判断。
-# 版本默认跟随 workspace 里的 ffmpeg-next 主次版本，避免把脚本锁死在某个固定发行号。
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# This script only fills the repository-local fallback path and does not change
+# the system-first resolution order.
+# The default version follows the workspace ffmpeg-next major/minor version so
+# the helper is not pinned to a fixed FFmpeg release.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 INSTALL_DIR="${VESPER_DESKTOP_FFMPEG_DIR:-$ROOT_DIR/third_party/ffmpeg/desktop}"
 PKGCONFIG_DIR="$INSTALL_DIR/lib/pkgconfig"
 PKGCONFIG_FILE="$PKGCONFIG_DIR/libavutil.pc"
@@ -31,22 +35,9 @@ resolve_ffmpeg_version() {
 }
 
 FFMPEG_VERSION="$(resolve_ffmpeg_version)"
-FFMPEG_ARCHIVE_NAME="ffmpeg-${FFMPEG_VERSION}.tar.xz"
+FFMPEG_ARCHIVE_NAME="$(vesper_ffmpeg_archive_name "$FFMPEG_VERSION")"
 FFMPEG_SOURCE_ARCHIVE="${VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/$FFMPEG_ARCHIVE_NAME}"
-FFMPEG_SOURCE_URL="${VESPER_DESKTOP_FFMPEG_SOURCE_URL:-https://ffmpeg.org/releases/${FFMPEG_ARCHIVE_NAME}}"
-
-download_if_missing() {
-  local archive_path="$1"
-  local archive_url="$2"
-
-  if [[ -f "$archive_path" ]]; then
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$archive_path")"
-  echo "Downloading desktop FFmpeg source archive: $archive_url" >&2
-  curl -fsSL "$archive_url" -o "$archive_path"
-}
+FFMPEG_SOURCE_URL="${VESPER_DESKTOP_FFMPEG_SOURCE_URL:-$(vesper_ffmpeg_release_url "$FFMPEG_ARCHIVE_NAME")}"
 
 build_ffmpeg() {
   local source_archive="$1"
@@ -70,7 +61,7 @@ build_ffmpeg() {
   mkdir -p "$install_dir"
   sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
   clang_path="$(xcrun --sdk macosx -f clang)"
-  make_jobs="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 8)"
+  make_jobs="$(vesper_make_jobs)"
 
   (
     cd "$source_dir"
@@ -94,7 +85,7 @@ build_ffmpeg() {
   )
 }
 
-download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
+vesper_download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
 build_ffmpeg "$FFMPEG_SOURCE_ARCHIVE" "$INSTALL_DIR"
 
 if [[ ! -f "$PKGCONFIG_FILE" ]]; then

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/android.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/android"
 CORE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit"
 COMPOSE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose"
@@ -9,14 +11,9 @@ GRADLEW="$ROOT_DIR/examples/android-compose-host/gradlew"
 OUTPUT_DIR="${1:-$ROOT_DIR/dist/release/android}"
 shift || true
 
-# Android 侧二进制分发固定为 arm64-only；不要重新引入 x86 / x86_64 ABI。
-DEFAULT_ABIS=(
-  "arm64-v8a"
-)
-
 selected_abis=("$@")
 if [[ ${#selected_abis[@]} -eq 0 ]]; then
-  selected_abis=("${DEFAULT_ABIS[@]}")
+  selected_abis=("${VESPER_ANDROID_DEFAULT_ABIS[@]}")
 fi
 
 if [[ -n "${ANDROID_SDK_ROOT:-}" ]]; then

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/android"
 MODULE_TASK="${1:-assembleRelease}"
 GRADLEW="$ROOT_DIR/examples/android-compose-host/gradlew"

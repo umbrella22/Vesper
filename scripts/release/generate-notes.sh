@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 CURRENT_TAG="${1:-${GITHUB_REF_NAME:-}}"
 OUTPUT_PATH="${2:-$ROOT_DIR/dist/release/RELEASE_NOTES.md}"
 

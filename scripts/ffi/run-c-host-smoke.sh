@@ -2,7 +2,9 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 CC_BIN="${CC:-cc}"
 BUILD_ONLY=0
 SOURCE_PATH="$ROOT_DIR/test-video.mp4"

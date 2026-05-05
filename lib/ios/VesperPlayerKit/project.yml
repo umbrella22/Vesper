@@ -46,7 +46,7 @@ targets:
       - name: Build Rust iOS Resolver
         script: |
           export VESPER_BUILD_IOS_PLAYER_FFI_MODE=platform
-          "${SRCROOT}/../../../scripts/build-ios-player-ffi-xcframework.sh"
+          "${SRCROOT}/../../../scripts/ios/build-player-ffi-xcframework.sh"
         outputFiles:
           - $(SRCROOT)/Artifacts/rust-player-ffi/$(PLATFORM_NAME)/libplayer_ffi_resolver.a
     sources:

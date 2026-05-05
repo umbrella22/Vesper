@@ -20,19 +20,19 @@ FFI surface, not a production host shell.
 From the project root:
 
 ```sh
-scripts/run-c-host-smoke.sh
+scripts/vesper ffi c-host-smoke
 ```
 
 With a custom source:
 
 ```sh
-scripts/run-c-host-smoke.sh /absolute/or/relative/path/to/video.mp4
+scripts/vesper ffi c-host-smoke /absolute/or/relative/path/to/video.mp4
 ```
 
 Build without running:
 
 ```sh
-scripts/run-c-host-smoke.sh --build-only
+scripts/vesper ffi c-host-smoke --build-only
 ```
 
 ## FFI Header
@@ -41,8 +41,8 @@ The public C header is checked in at
 [`include/player_ffi.h`](../../include/player_ffi.h) and is generated from
 `crates/core/player-ffi` via `cbindgen`.
 
-- Regenerate: `scripts/generate-player-ffi-header.sh`
-- Verify it is up to date: `scripts/verify-player-ffi-header.sh`
+- Regenerate: `scripts/vesper ffi generate`
+- Verify it is up to date: `scripts/vesper ffi verify`
 
 ## Handle Semantics
 

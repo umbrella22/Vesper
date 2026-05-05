@@ -45,7 +45,7 @@ Typical setup:
 1. Build the Android plugin artifact:
 
    ```sh
-   ./scripts/build-android-player-remux-ffmpeg-plugin.sh <output-dir> [debug|release] [abi...]
+   ./scripts/vesper android remux-plugin <output-dir> [debug|release] [abi...]
    ```
 
 2. Add the output directory to `sourceSets.main.jniLibs` in the host app
@@ -65,6 +65,13 @@ Both Android examples in this repository already demonstrate the full setup:
 
 This also means that depending on `vesper_player_android` alone does not pull
 FFmpeg into your app. The plugin is bundled only when the host chooses to do so.
+
+When the host bundles the plugin, treat the shipped `.so` files as FFmpeg
+redistribution. Include FFmpeg license text and notices, provide the exact
+corresponding FFmpeg source and configure flags, preserve LGPL relinking
+rights, and track OpenSSL / libxml2 notices when those libraries are included.
+The repository-level release checklist is in
+[THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
 ## Minimum Requirements
 

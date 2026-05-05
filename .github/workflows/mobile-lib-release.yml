@@ -76,7 +76,7 @@ jobs:
           gradle-version: "9.4.0"
 
       - name: Build VesperPlayerKit Android release asset
-        run: bash ./scripts/stage-android-vesper-player-kit-release.sh release-assets/android ${{ matrix.abi }}
+        run: ./scripts/vesper android stage-release release-assets/android ${{ matrix.abi }}
 
       - name: Verify VesperPlayerKit Android assets are arm64-only
         shell: bash
@@ -131,7 +131,7 @@ jobs:
         run: xcodebuild -version
 
       - name: Build VesperPlayerKit iOS release assets
-        run: bash ./scripts/stage-ios-vesper-player-kit-release.sh release-assets/ios
+        run: ./scripts/vesper ios stage-release release-assets/ios
 
       - name: Verify VesperPlayerKit iOS assets are arm64-only
         shell: bash
@@ -185,7 +185,7 @@ jobs:
           merge-multiple: true
 
       - name: Generate VesperPlayerKit release notes
-        run: bash ./scripts/generate-release-notes.sh "${RELEASE_TAG}" release-assets/RELEASE_NOTES.md
+        run: ./scripts/vesper release notes "${RELEASE_TAG}" release-assets/RELEASE_NOTES.md
 
       - name: Resolve release channel
         id: release-meta

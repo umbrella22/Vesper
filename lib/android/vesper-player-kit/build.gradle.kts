@@ -12,7 +12,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 }
 
 val repoRoot = projectDir.resolve("../../..").canonicalFile
-val rustAndroidBuildScript = repoRoot.resolve("scripts/build-android-vesper-player-kit-jni.sh")
+val rustAndroidBuildScript = repoRoot.resolve("scripts/android/build-vesper-player-kit-jni.sh")
 val rustAndroidAbis = providers.gradleProperty("vesper.player.android.abis").orNull
 
 require(rustAndroidBuildScript.isFile) {

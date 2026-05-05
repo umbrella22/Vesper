@@ -38,8 +38,8 @@ and only accepts generic `VesperPlayerSource` values.
 1. Build the Android JNI libraries:
 
    ```sh
-   ./scripts/build-android-vesper-player-kit-jni.sh
-   # or for release: ./scripts/build-android-vesper-player-kit-jni.sh release
+   ./scripts/vesper android jni
+   # or for release: ./scripts/vesper android jni release
    ```
 
    Output is written to
@@ -68,7 +68,7 @@ examples/android-compose-host/gradlew -p examples/android-compose-host \
 ## Test
 
 ```sh
-./scripts/build-android-vesper-player-kit-jni.sh release arm64-v8a
+./scripts/vesper android jni release arm64-v8a
 examples/android-compose-host/gradlew -p examples/android-compose-host \
   -Pvesper.player.android.abis=arm64-v8a \
   :app:testDebugUnitTest

@@ -36,7 +36,7 @@ local Swift Package. Build the Rust resolver bundle once before resolving the
 package:
 
 ```sh
-./scripts/build-ios-player-ffi-xcframework.sh
+./scripts/vesper ios ffi
 ```
 
 ### XCFramework
@@ -44,8 +44,8 @@ package:
 For distribution, build a self-contained framework:
 
 ```sh
-./scripts/build-ios-vesper-player-kit-xcframework.sh
-./scripts/stage-ios-vesper-player-kit-release.sh
+./scripts/vesper ios kit-xcframework
+./scripts/vesper ios stage-release
 ```
 
 The build script:
@@ -123,15 +123,15 @@ VideoToolbox support. Unknown codec names return `false`.
 
 iOS-specific semantics:
 
-- `fixedTrack` is best-effort HLS variant pinning on iOS 15+, not exact
+- `fixedTrack` is best-effort HLS / DASH variant pinning on iOS 15+, not exact
   AVPlayer video-track switching. `supportsVideoTrackSelection` reports
   unsupported on iOS while `supportsAbrFixedTrack` reports supported as
   best-effort pinning.
 - Single-axis constraints such as `constrained(maxHeight: 720)` are supported
-  for HLS but apply only after the variant catalog is available, so the
-  missing axis can be inferred safely.
-- `effectiveVideoTrackId` is best-effort: derived from the current HLS variant
-  ladder, access-log bitrate, and presentation size.
+  for HLS and the DASH bridge but apply only after the variant catalog is
+  available, so the missing axis can be inferred safely.
+- `effectiveVideoTrackId` is best-effort: derived from the current HLS / DASH
+  variant ladder, access-log bitrate, and presentation size.
 - `videoVariantObservation` exposes the raw runtime evidence (access-log
   bitrate, latest rendered presentation size).
 - `fixedTrackStatus` reports best-effort convergence: `.pending` while
@@ -150,9 +150,10 @@ iOS-specific semantics:
 ## DASH Support
 
 DASH playback uses a Rust core (`crates/extension/player-dash-hls-bridge`)
-plus a thin Swift transport layer. It currently supports static single-period
-fMP4 VOD manifests that use either `SegmentBase + sidx` or
-`SegmentTemplate` / `SegmentTimeline` addressing.
+plus a thin Swift transport layer. It supports single-period fMP4 manifests for
+static VOD and dynamic live / DVR when they use either `SegmentBase + sidx` or
+`SegmentTemplate` / `SegmentTimeline` addressing. The bridge rejects DRM
+`ContentProtection`, `SegmentList`, and multi-period manifests.
 
 Responsibility split:
 
@@ -176,8 +177,13 @@ Segment caching:
 
 ABR behavior:
 
-- The synthesized HLS master playlist exposes the full DASH variant ladder so
-  AVPlayer can perform ABR
+- The synthesized HLS master playlist exposes the playable DASH audio, video,
+  and WebVTT subtitle renditions. Unsupported video codecs are filtered through
+  `VesperCodecSupport` before the bridge exposes the HLS ladder.
+- The DASH manifest track catalog exposes playable audio, video, and subtitle
+  tracks so host UI can render a complete source-specific catalog.
+- The synthesized HLS master playlist exposes the playable DASH variant ladder
+  so AVPlayer can perform ABR.
 - Startup prefetch targets a single variant; oversized media segments are
   skipped
 - `VesperAbrPolicy` applies to both HLS and the DASH bridge
@@ -202,6 +208,18 @@ Notes:
   host UI state.
 - The bundled iOS example wires this segmented flow for HLS only. DASH
   download is not supported on the AVPlayer backend.
+
+## Optional FFmpeg Remux Plugin
+
+`exportTaskOutput(...)` uses an optional `player-remux-ffmpeg` dynamic plugin
+when the host wants to export downloaded HLS or DASH assets to `.mp4`. The
+host must embed a signed `libplayer_remux_ffmpeg.dylib` in the app bundle and
+pass its absolute path through `VesperDownloadConfiguration.pluginLibraryPaths`.
+
+Bundling that plugin makes the host responsible for FFmpeg notices,
+corresponding source, configure flags, and LGPL relinking rights. See
+[THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md) before publishing
+such an artifact.
 
 ## Testing The Package
 
@@ -248,7 +266,7 @@ DASH bridge tests:
 
 ```sh
 cargo test -p player-dash-hls-bridge -p player-ffi-resolver --lib
-./scripts/build-ios-player-ffi-xcframework.sh debug
+./scripts/vesper ios ffi debug
 cd lib/ios/VesperPlayerKit
 xcodegen generate
 xcodebuild test \

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 MODE="${1:-all}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vesper-player-remux-ffmpeg-verify.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -43,7 +45,7 @@ has_ffmpeg_payload() {
 }
 
 verify_android() {
-  "$ROOT_DIR/scripts/build-android-vesper-player-kit-aar.sh" assembleRelease
+  "$ROOT_DIR/scripts/android/build-vesper-player-kit-aar.sh" assembleRelease
 
   for aar_path in "${ANDROID_AARS[@]}"; do
     if [[ ! -f "$aar_path" ]]; then
@@ -70,7 +72,7 @@ verify_android() {
 }
 
 verify_ios() {
-  "$ROOT_DIR/scripts/build-ios-vesper-player-kit-xcframework.sh"
+  "$ROOT_DIR/scripts/ios/build-vesper-player-kit-xcframework.sh"
 
   if [[ ! -d "$IOS_XCFRAMEWORK" ]]; then
     echo "Expected iOS XCFramework was not found: $IOS_XCFRAMEWORK" >&2

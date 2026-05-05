@@ -187,13 +187,15 @@ enum VesperDashMp4BoxFilter {
 }
 
 enum VesperDashHlsBuilder {
-    /// 构造 HLS master playlist。
+    /// Builds an HLS master playlist.
     ///
-    /// 实现注意：所有 playlist 文本生成都使用 `[String]` lines + `joined("\n")` 模式，
-    /// 不再使用多行字符串字面量直接 `+=` 拼接。原因：Swift 多行字面量结尾的 `"""`
-    /// 会吞掉前一个换行，曾经导致 `#EXT-X-PLAYLIST-TYPE:VOD` 与后面 `#EXT-X-MAP`
-    /// 粘到同一行，HLS 解析器静默忽略未知整行 → AVPlayer 拿不到 init segment
-    /// → 报 `'frmt'`。逐行 append 在物理上不可能粘行。
+    /// Playlist text generation should keep using line arrays plus
+    /// `joined("\n")`, not direct multiline string concatenation. Swift
+    /// multiline literals can swallow the newline before the closing `"""`;
+    /// that previously glued `#EXT-X-PLAYLIST-TYPE:VOD` and `#EXT-X-MAP`
+    /// onto one line, causing the HLS parser to ignore the init segment and
+    /// surface `'frmt'`. Appending complete lines makes that regression
+    /// structurally impossible.
     static func buildMasterPlaylist(
         manifest: VesperDashManifest,
         variantPolicy: VesperDashMasterPlaylistVariantPolicy = .all,

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/desktop.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 PROFILE="debug"
 MODE="loader"
 LIBRARY_PATH_OVERRIDE="${VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH:-}"
@@ -33,68 +35,6 @@ for token in "$@"; do
       ;;
   esac
 done
-
-shared_library_name() {
-  case "$(uname -s)" in
-    Darwin)
-      echo "libplayer_decoder_videotoolbox.dylib"
-      ;;
-    Linux)
-      echo "libplayer_decoder_videotoolbox.so"
-      ;;
-    MINGW*|MSYS*|CYGWIN*)
-      echo "player_decoder_videotoolbox.dll"
-      ;;
-    *)
-      echo "Unsupported platform: $(uname -s)" >&2
-      exit 1
-      ;;
-  esac
-}
-
-resolve_target_dir() {
-  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
-    if [[ "$CARGO_TARGET_DIR" = /* ]]; then
-      printf '%s\n' "$CARGO_TARGET_DIR"
-    else
-      printf '%s\n' "$ROOT_DIR/$CARGO_TARGET_DIR"
-    fi
-    return 0
-  fi
-
-  printf '%s\n' "$ROOT_DIR/target"
-}
-
-resolve_plugin_path() {
-  local library_name="$1"
-  local target_dir="$2"
-  local candidate
-
-  if [[ -n "$LIBRARY_PATH_OVERRIDE" ]]; then
-    if [[ ! -f "$LIBRARY_PATH_OVERRIDE" ]]; then
-      echo "VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH points to a missing file: $LIBRARY_PATH_OVERRIDE" >&2
-      exit 1
-    fi
-    printf '%s\n' "$LIBRARY_PATH_OVERRIDE"
-    return 0
-  fi
-
-  for candidate in \
-    "$target_dir/$PROFILE/$library_name" \
-    "$target_dir/$PROFILE/deps/$library_name" \
-    "$target_dir/debug/$library_name" \
-    "$target_dir/debug/deps/$library_name" \
-    "$target_dir/release/$library_name" \
-    "$target_dir/release/deps/$library_name"; do
-    if [[ -f "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-
-  echo "Could not find $library_name under $target_dir; build player-decoder-videotoolbox first or set VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH." >&2
-  exit 1
-}
 
 build_plugin() {
   if [[ -n "$LIBRARY_PATH_OVERRIDE" ]]; then
@@ -212,11 +152,11 @@ main() {
     exit 1
   fi
 
-  library_name="$(shared_library_name)"
-  target_dir="$(resolve_target_dir)"
+  library_name="$(vesper_desktop_shared_library_name player_decoder_videotoolbox)"
+  target_dir="$(vesper_desktop_target_dir)"
 
   build_plugin
-  plugin_path="$(resolve_plugin_path "$library_name" "$target_dir")"
+  plugin_path="$(vesper_desktop_resolve_plugin_path "$library_name" "$target_dir" "$PROFILE" "$LIBRARY_PATH_OVERRIDE" VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH player-decoder-videotoolbox)"
   export VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH="$plugin_path"
 
   echo "Using VideoToolbox decoder plugin: $VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH"

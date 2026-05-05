@@ -6,3 +6,8 @@ See the LICENSE file for the full license text.
 
 Repository-level source code notices and future bundled-binary notices are
 tracked in THIRD_PARTY_NOTICES.md.
+
+Optional FFmpeg builds and remux-plugin artifacts are third-party runtime
+redistributions when bundled by a release or host application. They are not
+covered by Vesper's Apache-2.0 license; see THIRD_PARTY_NOTICES.md for the
+FFmpeg LGPL compliance checklist and release entry template.

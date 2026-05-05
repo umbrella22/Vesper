@@ -6,12 +6,7 @@ on:
       - ".github/workflows/flutter-ci.yml"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "scripts/build-android-vesper-player-kit-jni.sh"
-      - "scripts/build-android-player-remux-ffmpeg-plugin.sh"
-      - "scripts/build-android-ffmpeg-prebuilts.sh"
-      - "scripts/build-apple-ffmpeg-prebuilts.sh"
-      - "scripts/build-ios-player-ffi-xcframework.sh"
-      - "scripts/build-ios-player-remux-ffmpeg-plugin.sh"
+      - "scripts/**"
       - "crates/core/**"
       - "crates/audio/**"
       - "crates/render/**"
@@ -31,12 +26,7 @@ on:
       - ".github/workflows/flutter-ci.yml"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "scripts/build-android-vesper-player-kit-jni.sh"
-      - "scripts/build-android-player-remux-ffmpeg-plugin.sh"
-      - "scripts/build-android-ffmpeg-prebuilts.sh"
-      - "scripts/build-apple-ffmpeg-prebuilts.sh"
-      - "scripts/build-ios-player-ffi-xcframework.sh"
-      - "scripts/build-ios-player-remux-ffmpeg-plugin.sh"
+      - "scripts/**"
       - "crates/core/**"
       - "crates/audio/**"
       - "crates/render/**"
@@ -137,7 +127,7 @@ jobs:
         run: cargo install cbindgen --locked
 
       - name: Verify generated FFI header
-        run: ./scripts/verify-player-ffi-header.sh
+        run: ./scripts/vesper ffi verify
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -164,7 +154,7 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       - name: Build Android FFmpeg prebuilts
-        run: bash ./scripts/build-android-ffmpeg-prebuilts.sh ${{ matrix.abi }}
+        run: ./scripts/vesper android ffmpeg ${{ matrix.abi }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -264,7 +254,7 @@ jobs:
         run: flutter pub get
 
       - name: Build Rust iOS resolver bundle
-        run: ./scripts/build-ios-player-ffi-xcframework.sh release
+        run: ./scripts/vesper ios ffi release
 
       - name: Build Flutter iOS host release
         working-directory: examples/flutter-host

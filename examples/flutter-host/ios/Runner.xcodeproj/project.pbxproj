@@ -288,7 +288,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/bin/bash \"$SRCROOT/../../../scripts/embed-ios-player-remux-ffmpeg-plugin.sh\" \"vesper_player_ios.framework\"";
+			shellScript = "/bin/bash \"$SRCROOT/../../../scripts/ios/embed-player-remux-ffmpeg-plugin.sh\" \"vesper_player_ios.framework\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 

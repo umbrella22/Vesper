@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# macOS 桌面 FFmpeg 发现顺序固定为：
-# 1. 仓库约定路径 third_party/ffmpeg/desktop
-# 2. 系统当前最新的 Homebrew / pkg-config FFmpeg
-# 3. 仍不存在时再触发本地安装脚本补齐约定路径
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# macOS desktop FFmpeg resolution order:
+# 1. Repository-local install under third_party/ffmpeg/desktop.
+# 2. The current system Homebrew / pkg-config FFmpeg.
+# 3. If neither exists, run the local install helper to fill the repository path.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 LOCAL_FFMPEG_DIR="${VESPER_DESKTOP_FFMPEG_DIR:-$ROOT_DIR/third_party/ffmpeg/desktop}"
 LOCAL_PKGCONFIG_DIR="$LOCAL_FFMPEG_DIR/lib/pkgconfig"
 
@@ -77,7 +79,7 @@ if [[ "${CARGO_CFG_TARGET_OS:-}" == "macos" ]] && contains_ffmpeg_package "$@"; 
     exec "$REAL_PKG_CONFIG" "$@"
   fi
 
-  "$ROOT_DIR/scripts/ensure-desktop-ffmpeg.sh" >/dev/null
+  "$ROOT_DIR/scripts/desktop/ensure-ffmpeg.sh" >/dev/null
   exec_with_pkg_config_path "$REAL_PKG_CONFIG" "$LOCAL_PKGCONFIG_DIR" "$@"
 fi
 

@@ -49,8 +49,8 @@ project. It does not currently have a separate release download artifact.
 From the repository root:
 
 ```sh
-./scripts/build-android-vesper-player-kit-aar.sh
-./scripts/stage-android-vesper-player-kit-release.sh
+./scripts/vesper android aar
+./scripts/vesper android stage-release
 ```
 
 Without a Gradle CLI, open `lib/android` in Android Studio and run:
@@ -139,12 +139,18 @@ so the baseline AAR size stays unchanged when the FFmpeg extension is not
 needed. Apps that want `SystemPreferred` or `ExtensionPreferred` with the FFmpeg
 extension must add the Media3 FFmpeg dependency themselves.
 
+Adding a Media3 FFmpeg extension or bundling Vesper's optional
+`player-remux-ffmpeg` plugin makes the host responsible for FFmpeg notices,
+corresponding source, configure flags, and LGPL relinking rights. See
+[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) before publishing such
+an artifact.
+
 ## JNI Artifacts
 
 When building from source, the native library is produced by:
 
 ```sh
-./scripts/build-android-vesper-player-kit-jni.sh
+./scripts/vesper android jni
 ```
 
 Output is written to

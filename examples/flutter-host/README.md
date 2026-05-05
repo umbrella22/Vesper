@@ -37,7 +37,7 @@ flutter build apk --release
 iOS release (no codesign):
 
 ```sh
-./scripts/build-ios-player-ffi-xcframework.sh release
+./scripts/vesper ios ffi release
 cd examples/flutter-host
 flutter build ios --release --no-codesign
 ```

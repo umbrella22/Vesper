@@ -19,7 +19,7 @@
 "example.sources.use_hls_demo" = "Use HLS Demo";
 "example.sources.use_live_dvr_acceptance" = "Live DVR Check";
 "example.sources.use_dash_demo" = "DASH Demo";
-"example.sources.dash_demo_unavailable_note" = "DASH demo is shown for parity, but the current iOS AVPlayer backend does not support DASH playback.";
+"example.sources.dash_demo_unavailable_note" = "DASH playback uses the iOS DASH-to-HLS bridge.";
 "example.sources.theme_title" = "Theme";
 "example.sources.remote_url_placeholder" = "Remote URL (HLS / progressive)";
 "example.sources.open_remote_url" = "Open Remote URL";
@@ -105,7 +105,7 @@
 "example.message.preparing_selected_video" = "Preparing selected video...";
 "example.message.preparing_video_from_photos" = "Preparing video from Photos...";
 "example.message.invalid_remote_url" = "Please enter a valid remote URL.";
-"example.message.dash_not_supported_on_ios" = "The current iOS AVPlayer backend does not support DASH streams.";
+"example.message.dash_not_supported_on_ios" = "DASH download is not supported by the iOS example host.";
 "example.message.photo_library_required" = "Photo Library access is required to pick videos from Photos.";
 "example.message.photo_library_add_required" = "Photo Library add access is required to save videos.";
 "example.message.unknown_photo_authorization_state" = "Unknown Photo Library authorization state.";

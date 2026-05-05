@@ -19,7 +19,7 @@
 "example.sources.use_hls_demo" = "使用 HLS 演示";
 "example.sources.use_live_dvr_acceptance" = "Live DVR 验收";
 "example.sources.use_dash_demo" = "DASH 演示";
-"example.sources.dash_demo_unavailable_note" = "这里保留 DASH 演示入口用于结构对齐，但当前 iOS AVPlayer 后端暂不支持 DASH 播放。";
+"example.sources.dash_demo_unavailable_note" = "DASH 播放会通过 iOS DASH-to-HLS bridge。";
 "example.sources.theme_title" = "主题";
 "example.sources.remote_url_placeholder" = "远程 URL（HLS / progressive）";
 "example.sources.open_remote_url" = "打开远程 URL";
@@ -105,7 +105,7 @@
 "example.message.preparing_selected_video" = "正在准备所选视频...";
 "example.message.preparing_video_from_photos" = "正在准备来自相册的视频...";
 "example.message.invalid_remote_url" = "请输入有效的远程 URL。";
-"example.message.dash_not_supported_on_ios" = "当前 iOS AVPlayer 后端暂不支持 DASH 流。";
+"example.message.dash_not_supported_on_ios" = "iOS 示例宿主暂不支持 DASH 下载。";
 "example.message.photo_library_required" = "需要相册访问权限才能从“照片”中选择视频。";
 "example.message.photo_library_add_required" = "需要相册写入权限才能保存下载视频。";
 "example.message.unknown_photo_authorization_state" = "未知的相册授权状态。";

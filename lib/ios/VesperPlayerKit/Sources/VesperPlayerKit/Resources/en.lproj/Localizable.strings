@@ -4,7 +4,7 @@
 "vesper.bridge.no_source_selected" = "No source selected";
 "vesper.bridge.select_source_prompt" = "Select a media source to begin playback";
 "vesper.bridge.invalid_media_url" = "invalid media URL";
-"vesper.bridge.dash_unsupported_ios" = "DASH streams are not supported by the iOS AVPlayer backend.";
+"vesper.bridge.dash_unsupported_ios" = "DASH playback uses the iOS DASH-to-HLS bridge.";
 "vesper.bridge.native.local_source" = "iOS AVPlayer native bridge (local source)";
 "vesper.bridge.native.remote_source" = "iOS AVPlayer native bridge (%@ remote source)";
 "vesper.bridge.preview.local_source" = "iOS host preview bridge (local source)";

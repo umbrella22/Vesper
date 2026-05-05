@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat <<EOF >&2
+Usage: scripts/vesper <group> <command> [args...]
+
+Groups:
+  ffi      generate | verify | c-host-smoke
+  android  ffmpeg | jni | aar | remux-plugin | stage-release
+  apple    ffmpeg
+  ios      ffi | remux-plugin | kit-xcframework | embed-remux-plugin | stage-release
+  desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
+  mobile   verify-no-remux
+  release  notes
+EOF
+}
+
+if [[ $# -lt 2 ]]; then
+  usage
+  exit 1
+fi
+
+group="$1"
+command="$2"
+shift 2
+
+case "$group:$command" in
+  ffi:generate)
+    exec "$SCRIPT_DIR/ffi/generate-player-ffi-header.sh" "$@"
+    ;;
+  ffi:verify)
+    exec "$SCRIPT_DIR/ffi/verify-player-ffi-header.sh" "$@"
+    ;;
+  ffi:c-host-smoke)
+    exec "$SCRIPT_DIR/ffi/run-c-host-smoke.sh" "$@"
+    ;;
+  android:ffmpeg)
+    exec "$SCRIPT_DIR/android/build-ffmpeg-prebuilts.sh" "$@"
+    ;;
+  android:jni)
+    exec "$SCRIPT_DIR/android/build-vesper-player-kit-jni.sh" "$@"
+    ;;
+  android:aar)
+    exec "$SCRIPT_DIR/android/build-vesper-player-kit-aar.sh" "$@"
+    ;;
+  android:remux-plugin)
+    exec "$SCRIPT_DIR/android/build-player-remux-ffmpeg-plugin.sh" "$@"
+    ;;
+  android:stage-release)
+    exec "$SCRIPT_DIR/android/stage-vesper-player-kit-release.sh" "$@"
+    ;;
+  apple:ffmpeg)
+    exec "$SCRIPT_DIR/apple/build-ffmpeg-prebuilts.sh" "$@"
+    ;;
+  ios:ffi)
+    exec "$SCRIPT_DIR/ios/build-player-ffi-xcframework.sh" "$@"
+    ;;
+  ios:remux-plugin)
+    exec "$SCRIPT_DIR/ios/build-player-remux-ffmpeg-plugin.sh" "$@"
+    ;;
+  ios:kit-xcframework)
+    exec "$SCRIPT_DIR/ios/build-vesper-player-kit-xcframework.sh" "$@"
+    ;;
+  ios:embed-remux-plugin)
+    exec "$SCRIPT_DIR/ios/embed-player-remux-ffmpeg-plugin.sh" "$@"
+    ;;
+  ios:stage-release)
+    exec "$SCRIPT_DIR/ios/stage-vesper-player-kit-release.sh" "$@"
+    ;;
+  desktop:ensure-ffmpeg)
+    exec "$SCRIPT_DIR/desktop/ensure-ffmpeg.sh" "$@"
+    ;;
+  desktop:verify-remux)
+    exec "$SCRIPT_DIR/desktop/verify-player-remux-ffmpeg.sh" "$@"
+    ;;
+  desktop:verify-decoder-diagnostics)
+    exec "$SCRIPT_DIR/desktop/verify-decoder-plugin-diagnostics.sh" "$@"
+    ;;
+  desktop:verify-decoder-d3d11)
+    exec "$SCRIPT_DIR/desktop/verify-decoder-plugin-v2-d3d11.sh" "$@"
+    ;;
+  desktop:verify-decoder-videotoolbox)
+    exec "$SCRIPT_DIR/desktop/verify-decoder-plugin-v2-videotoolbox.sh" "$@"
+    ;;
+  mobile:verify-no-remux)
+    exec "$SCRIPT_DIR/mobile/verify-host-kit-without-player-remux-ffmpeg.sh" "$@"
+    ;;
+  release:notes)
+    exec "$SCRIPT_DIR/release/generate-notes.sh" "$@"
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

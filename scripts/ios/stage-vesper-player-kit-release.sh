@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/ios/VesperPlayerKit"
 BUILD_DIR="$PROJECT_DIR/.build/xcframework"
 IOS_ARCHIVE="$BUILD_DIR/VesperPlayerKit-iOS.xcarchive"
@@ -13,7 +15,7 @@ BINARY_NAME="VesperPlayerKit"
 
 mkdir -p "$OUTPUT_DIR"
 
-"$ROOT_DIR/scripts/build-ios-vesper-player-kit-xcframework.sh"
+"$ROOT_DIR/scripts/ios/build-vesper-player-kit-xcframework.sh"
 
 DEVICE_FRAMEWORK="$IOS_ARCHIVE/Products/Library/Frameworks/$FRAMEWORK_NAME"
 SIMULATOR_FRAMEWORK="$SIM_ARCHIVE/Products/Library/Frameworks/$FRAMEWORK_NAME"

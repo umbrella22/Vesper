@@ -37,7 +37,7 @@ generic `VesperPlayerSource` APIs.
    package):
 
    ```sh
-   ./scripts/build-ios-player-ffi-xcframework.sh
+   ./scripts/vesper ios ffi
    ```
 
 2. Generate the Xcode project:
@@ -81,7 +81,7 @@ xcodebuild \
 ## Test
 
 ```sh
-./scripts/build-ios-player-ffi-xcframework.sh release
+./scripts/vesper ios ffi release
 cd examples/ios-swift-host
 xcodegen generate
 xcodebuild test \

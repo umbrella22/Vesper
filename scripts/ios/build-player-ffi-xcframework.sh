@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/apple.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/ios/VesperPlayerKit"
 OUTPUT_DIR="$PROJECT_DIR/Artifacts/rust-player-ffi"
 XCFRAMEWORK_PATH="$OUTPUT_DIR/VesperPlayerFFI.xcframework"
@@ -10,25 +12,7 @@ PROFILE="${1:-release}"
 BUILD_MODE="${VESPER_BUILD_IOS_PLAYER_FFI_MODE:-full}"
 PLATFORM_FILTER="${PLATFORM_NAME:-}"
 
-if [[ -f "${HOME:-}/.cargo/env" ]]; then
-  # Xcode 的 Run Script phase 不是登录 shell，需要显式补齐 Rust 工具链路径。
-  # shellcheck disable=SC1090
-  source "$HOME/.cargo/env"
-fi
-
-export PATH="${HOME:-}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-if ! command -v rustup >/dev/null 2>&1; then
-  echo "rustup was not found in PATH. Install Rust or expose rustup to Xcode script phases." >&2
-  echo "Current PATH: $PATH" >&2
-  exit 1
-fi
-
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "cargo was not found in PATH. Install Rust or expose cargo to Xcode script phases." >&2
-  echo "Current PATH: $PATH" >&2
-  exit 1
-fi
+vesper_require_rust_tools_for_xcode
 
 if [[ "$PROFILE" != "debug" && "$PROFILE" != "release" ]]; then
   echo "Unsupported profile: $PROFILE" >&2
@@ -48,8 +32,8 @@ if [[ "$PROFILE" == "release" ]]; then
   BUILD_FLAGS+=(--release)
 fi
 
-# Apple 侧二进制分发固定为 arm64-only；不要重新引入任何 x86_64
-# iOS Simulator / Mac Catalyst slice。
+# Apple binary distribution is arm64-only; do not reintroduce x86_64
+# iOS Simulator or Mac Catalyst slices.
 DEVICE_TARGET="aarch64-apple-ios"
 SIMULATOR_TARGETS=(
   "aarch64-apple-ios-sim"
@@ -59,19 +43,7 @@ CATALYST_TARGETS=(
 )
 installed_targets="$(rustup target list --installed)"
 
-require_target() {
-  local target="$1"
-  if [[ "$installed_targets" != *"$target"* ]]; then
-    echo "Missing Rust Apple target: $target" >&2
-    echo "Install it with: rustup target add $target" >&2
-    exit 1
-  fi
-}
-
-require_target "$DEVICE_TARGET"
-for target in "${SIMULATOR_TARGETS[@]}"; do
-  require_target "$target"
-done
+vesper_apple_require_rust_targets "$DEVICE_TARGET" "${SIMULATOR_TARGETS[@]}"
 
 target_is_installed() {
   local target="$1"

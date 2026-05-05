@@ -13,18 +13,20 @@ does not need to depend on it directly.
 | Local files                         | ✅                                                                                                 |
 | Progressive HTTP                    | ✅                                                                                                 |
 | HLS                                 | ✅                                                                                                 |
-| DASH                                | ⚠️ Experimental DASH-to-HLS bridge for static fMP4 VOD                                             |
+| DASH                                | ✅ DASH-to-HLS bridge for single-period fMP4 VOD / live                                            |
 | Live streams                        | ✅                                                                                                 |
 | Live DVR                            | ✅                                                                                                 |
 | Track selection (audio / subtitles) | ✅                                                                                                 |
-| Track selection (video)             | ⚠️ Not exposed on the current AVPlayer route                                                       |
-| Adaptive bitrate (ABR)              | ⚠️ `constrained` is supported; `fixedTrack` is available as best-effort variant pinning on iOS 15+ |
+| Track selection (video)             | ⚠️ Not exact AVPlayer track switching; use ABR variant pinning and the track catalog               |
+| Adaptive bitrate (ABR)              | ✅ `constrained`; `fixedTrack` is best-effort variant pinning on iOS 15+                           |
 | Buffering / retry / cache policy    | ✅                                                                                                 |
 | Download management                 | ✅                                                                                                 |
 | Preload                             | ✅                                                                                                 |
 
-> The iOS DASH path currently supports static single-period fMP4 VOD manifests
-> using either `SegmentBase + sidx` or `SegmentTemplate` / `SegmentTimeline`.
+> The iOS DASH path supports single-period fMP4 manifests for static VOD and
+> dynamic live / DVR when they use either `SegmentBase + sidx` or
+> `SegmentTemplate` / `SegmentTimeline`. It also exposes DASH manifest audio,
+> video, and WebVTT subtitle catalogs for host UI.
 > Source headers are forwarded to MPD, SIDX,
 > init segment, and media segment requests; media bytes are served through the
 > SDK resource-loader proxy so protected origins do not depend on AVPlayer
@@ -66,8 +68,8 @@ Recommended flow:
    fetches both manifest resources and media segments
 
 The native iOS example and the Flutter example in this repository already
-follow that flow. The iOS example also continues to skip DASH download entry
-points instead of pretending that DASH is supported.
+follow that flow. DASH playback is supported through the iOS DASH-to-HLS
+bridge, but DASH download entry points remain disabled in the iOS example host.
 
 ## Technical Notes
 
@@ -88,7 +90,7 @@ Typical setup:
 1. Add an Xcode Run Script phase to the app target:
 
    ```sh
-   /bin/bash "$SRCROOT/../../../scripts/embed-ios-player-remux-ffmpeg-plugin.sh" "vesper_player_ios.framework"
+   /bin/bash "$SRCROOT/../../../scripts/ios/embed-player-remux-ffmpeg-plugin.sh" "vesper_player_ios.framework"
    ```
 
    For the native iOS host kit, replace the argument with `VesperPlayerKit.framework`.
@@ -108,6 +110,12 @@ Both iOS examples in this repository already embed the plugin that way:
 
 Note that iOS only allows signed dynamic libraries that are already inside the
 app bundle. Loading unsigned or remotely downloaded plugins is not supported.
+
+When the host bundles the plugin, treat the shipped `.dylib` files as FFmpeg
+redistribution. Include FFmpeg license text and notices, provide the exact
+corresponding FFmpeg source and configure flags, and preserve LGPL relinking
+rights. The repository-level release checklist is in
+[THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
 ## Minimum Requirements
 

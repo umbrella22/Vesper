@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+repo_root="$VESPER_REPO_ROOT"
 crate_dir="${repo_root}/crates/core/player-ffi"
 config_path="${crate_dir}/cbindgen.toml"
 lockfile_path="${repo_root}/Cargo.lock"
@@ -29,7 +31,7 @@ cbindgen "${crate_dir}" \
 
 if ! diff -u "${header_path}" "${tmp_header}"; then
   echo "" >&2
-  echo "include/player_ffi.h is out of date. Run scripts/generate-player-ffi-header.sh." >&2
+  echo "include/player_ffi.h is out of date. Run scripts/vesper ffi generate." >&2
   exit 1
 fi
 

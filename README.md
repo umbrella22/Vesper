@@ -1,6 +1,6 @@
 # Vesper Player SDK
 
-Language: [简体中文](README.zh-CN.md)
+Language: [Simplified Chinese](README.zh-CN.md)
 
 Vesper is a native-first, multi-platform player SDK for applications that need
 real platform playback behavior without rebuilding every product feature from
@@ -53,11 +53,11 @@ check before exposing advanced controls.
 | Local file               | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
 | Progressive HTTP/HTTPS   | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
 | HLS (`.m3u8`)            | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| DASH (`.mpd`)            | ✅ native                    | ⚠️ static fMP4 VOD via DASH-to-HLS bridge     | ⚠️ backend-dependent FFmpeg demuxer       | ✅ Android; ⚠️ iOS bridge             |
+| DASH (`.mpd`)            | ✅ native                    | ✅ DASH-to-HLS bridge for VOD / live fMP4     | ⚠️ backend-dependent FFmpeg demuxer       | ✅ Android native / iOS bridge        |
 | Live / DVR               | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
 | Track selection          | ✅ video / audio / subtitles | ✅ audio / subtitles                          | ✅                                        | ✅ per-platform semantics             |
-| ABR `constrained` policy | ✅                           | ✅ after variant catalog                      | ✅                                        | ✅ per-platform semantics             |
-| ABR `fixedTrack` policy  | ✅ exact                     | ✅ best-effort HLS variant pinning on iOS 15+ | ✅                                        | ✅ per-platform semantics             |
+| ABR `constrained` policy | ✅                           | ✅ HLS + DASH bridge variant catalogs         | ✅                                        | ✅ per-platform semantics             |
+| ABR `fixedTrack` policy  | ✅ exact                     | ✅ best-effort HLS/DASH pinning on iOS 15+    | ✅                                        | ✅ per-platform semantics             |
 | Resilience policy        | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
 | Preload budget           | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
 | Download manager         | ✅                           | ✅                                            | ✅ planner / executor in the desktop demo | ✅ Android / iOS                      |
@@ -156,7 +156,7 @@ Start with the generated header at [include/player_ffi.h](include/player_ffi.h),
 then run the smoke example described in [examples/c-host/README.md](examples/c-host/README.md).
 
 ```sh
-scripts/run-c-host-smoke.sh
+scripts/vesper ffi c-host-smoke
 ```
 
 ## Platform Packages
@@ -208,17 +208,17 @@ toolchain notes live in the platform READMEs linked from [Start Here](#start-her
 cargo check --workspace
 
 # Generate / verify the C header
-./scripts/generate-player-ffi-header.sh
-./scripts/verify-player-ffi-header.sh
+./scripts/vesper ffi generate
+./scripts/vesper ffi verify
 
 # Android AAR build
-./scripts/build-android-vesper-player-kit-aar.sh
+./scripts/vesper android aar
 
 # iOS XCFramework build
-./scripts/build-ios-vesper-player-kit-xcframework.sh
+./scripts/vesper ios kit-xcframework
 
 # Desktop end-to-end remux integration test
-./scripts/verify-desktop-player-remux-ffmpeg.sh
+./scripts/vesper desktop verify-remux
 ```
 
 Android and Flutter Android builds use the Gradle wrappers checked into the
@@ -253,6 +253,27 @@ Useful overrides:
 | `VESPER_DESKTOP_FFMPEG_SOURCE_URL`     | Override the source download URL.                               |
 | `VESPER_REAL_PKG_CONFIG`               | Force the wrapper to use a specific `pkg-config` binary.        |
 
+### FFmpeg License Compliance
+
+Vesper is Apache-2.0 licensed, but FFmpeg remains under its own FFmpeg
+license terms. The repository does not commit generated FFmpeg binaries by
+default; optional Android, iOS, and desktop workflows can build or bundle
+FFmpeg-backed artifacts when a host application explicitly opts in.
+
+The default Vesper FFmpeg scripts avoid `--enable-gpl` and
+`--enable-nonfree`. Android FFmpeg prebuilts currently use OpenSSL and pass
+`--enable-version3`, so Android remux-plugin releases should be handled as
+LGPLv3-or-later FFmpeg redistributions unless the release build is changed and
+re-reviewed. Apple prebuilts and the desktop fallback are LGPL-oriented by
+default, but static desktop redistribution still requires relinking materials
+or an equivalent LGPL-compliant mechanism.
+
+Before publishing an app or SDK artifact that includes FFmpeg, include FFmpeg
+notices and license text, provide the exact corresponding FFmpeg source and
+configure flags, preserve user relinking rights, and track OpenSSL / libxml2
+notices when those libraries are bundled. The release checklist and entry
+template live in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## C ABI Notes
 
 - `player-ffi` exposes generation-checked value handles in
@@ -272,8 +293,8 @@ Useful overrides:
   header.
 
 ```sh
-./scripts/generate-player-ffi-header.sh
-./scripts/verify-player-ffi-header.sh
+./scripts/vesper ffi generate
+./scripts/vesper ffi verify
 ```
 
 ## Release Downloads
@@ -302,6 +323,8 @@ software fallback is the default desktop route.
 ## License
 
 Vesper is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+FFmpeg-backed optional artifacts are governed by FFmpeg's own LGPL/GPL terms,
+depending on the exact build configuration, and are tracked separately.
 
 Additional attribution and bundled-binary notes live in:
 

@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
-ANDROID_NDK_VERSION="29.0.14206865"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/android.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
+
+ROOT_DIR="$VESPER_REPO_ROOT"
+ANDROID_SDK_ROOT="$(vesper_android_sdk_root)"
+ANDROID_NDK_VERSION="$(vesper_android_ndk_version)"
 ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
 ANDROID_API_LEVEL="${VESPER_ANDROID_FFMPEG_ANDROID_API:-26}"
 FFMPEG_VERSION="${VESPER_ANDROID_FFMPEG_VERSION:-8.1}"
-FFMPEG_ARCHIVE_NAME="ffmpeg-${FFMPEG_VERSION}.tar.xz"
-FFMPEG_SOURCE_URL="${VESPER_ANDROID_FFMPEG_SOURCE_URL:-https://ffmpeg.org/releases/${FFMPEG_ARCHIVE_NAME}}"
+FFMPEG_ARCHIVE_NAME="$(vesper_ffmpeg_archive_name "$FFMPEG_VERSION")"
+FFMPEG_SOURCE_URL="${VESPER_ANDROID_FFMPEG_SOURCE_URL:-$(vesper_ffmpeg_release_url "$FFMPEG_ARCHIVE_NAME")}"
 FFMPEG_SOURCE_ARCHIVE="${VESPER_ANDROID_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/${FFMPEG_ARCHIVE_NAME}}"
 FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/android}"
 OPENSSL_VERSION="${VESPER_ANDROID_OPENSSL_VERSION:-3.6.2}"
@@ -25,199 +28,6 @@ TLS_BACKEND="${VESPER_ANDROID_FFMPEG_TLS_BACKEND:-openssl}"
 ENABLE_DASH="${VESPER_ANDROID_FFMPEG_ENABLE_DASH:-1}"
 OPENSSL_ANDROID_DIR="${VESPER_ANDROID_OPENSSL_OUTPUT_DIR:-$ROOT_DIR/third_party/openssl/android}"
 LIBXML2_ANDROID_DIR="${VESPER_ANDROID_LIBXML2_OUTPUT_DIR:-$ROOT_DIR/third_party/libxml2/android}"
-# Android 侧预编译 FFmpeg / OpenSSL / libxml2 slice 统一收敛为 arm64-only。
-DEFAULT_ABIS=(
-  "arm64-v8a"
-)
-
-resolve_selected_abis() {
-  local -a resolved=()
-  local token
-
-  if [[ $# -gt 0 ]]; then
-    resolved=("$@")
-  elif [[ -n "${RUST_ANDROID_ABIS:-}" ]]; then
-    read -r -a resolved <<<"${RUST_ANDROID_ABIS//,/ }"
-  else
-    resolved=("${DEFAULT_ABIS[@]}")
-  fi
-
-  if [[ ${#resolved[@]} -eq 0 ]]; then
-    echo "No Android ABIs were selected." >&2
-    exit 1
-  fi
-
-  for token in "${resolved[@]}"; do
-    case "$token" in
-      arm64-v8a)
-        ;;
-      *)
-        echo "Unsupported Android ABI: $token" >&2
-        echo "Supported ABIs: arm64-v8a" >&2
-        exit 1
-        ;;
-    esac
-  done
-
-  printf '%s\n' "${resolved[@]}"
-}
-
-map_abi_to_rust_target() {
-  case "$1" in
-    arm64-v8a)
-      echo "aarch64-linux-android"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-map_abi_to_ffmpeg_arch() {
-  case "$1" in
-    arm64-v8a)
-      echo "aarch64"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-map_abi_to_ffmpeg_cpu() {
-  case "$1" in
-    arm64-v8a)
-      echo "armv8-a"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-map_abi_to_openssl_target() {
-  case "$1" in
-    arm64-v8a)
-      echo "android-arm64"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-resolve_ndk_root() {
-  local candidate
-
-  if [[ -n "$ANDROID_NDK_ROOT" ]]; then
-    echo "$ANDROID_NDK_ROOT"
-    return 0
-  fi
-
-  candidate="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
-  if [[ -f "$candidate/source.properties" ]]; then
-    echo "$candidate"
-    return 0
-  fi
-
-  if [[ -d "$ANDROID_SDK_ROOT/ndk" ]]; then
-    while IFS= read -r candidate; do
-      if [[ -f "$candidate/source.properties" ]]; then
-        echo "$candidate"
-        return 0
-      fi
-    done < <(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -Vr)
-  fi
-
-  return 1
-}
-
-resolve_host_tag() {
-  local os
-  local arch
-
-  os="$(uname -s)"
-  arch="$(uname -m)"
-
-  case "$os" in
-    Darwin)
-      if [[ "$arch" == "arm64" ]]; then
-        if [[ -d "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/darwin-arm64" ]]; then
-          echo "darwin-arm64"
-          return 0
-        fi
-      fi
-      echo "darwin-x86_64"
-      ;;
-    Linux)
-      echo "linux-x86_64"
-      ;;
-    *)
-      echo "Unsupported host OS: $os" >&2
-      return 1
-      ;;
-  esac
-}
-
-download_if_missing() {
-  local archive_path="$1"
-  shift
-  local archive_url
-  local download_succeeded=0
-  local curl_output
-  local -a curl_failures=()
-
-  if [[ -f "$archive_path" ]]; then
-    return 0
-  fi
-
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "curl is required to download source archives." >&2
-    exit 1
-  fi
-
-  mkdir -p "$(dirname "$archive_path")"
-
-  for archive_url in "$@"; do
-    echo "Downloading source archive:"
-    echo "  $archive_url"
-    if curl_output="$(curl --fail --location --silent --show-error --output "$archive_path" "$archive_url" 2>&1)"; then
-      download_succeeded=1
-      break
-    fi
-
-    rm -f "$archive_path"
-    if [[ -n "$curl_output" ]]; then
-      curl_failures+=("$archive_url"$'\n'"$curl_output")
-    fi
-    echo "Source download failed for $archive_url, trying next mirror if available." >&2
-  done
-
-  if [[ "$download_succeeded" != "1" ]]; then
-    echo "Unable to download source archive into:" >&2
-    echo "  $archive_path" >&2
-    echo "Tried source URLs:" >&2
-    for archive_url in "$@"; do
-      echo "  $archive_url" >&2
-    done
-    if [[ ${#curl_failures[@]} -gt 0 ]]; then
-      echo "curl failure details:" >&2
-      for curl_output in "${curl_failures[@]}"; do
-        printf '%s\n' "$curl_output" >&2
-      done
-    fi
-    exit 1
-  fi
-}
-
-ensure_command() {
-  local command_name="$1"
-
-  if ! command -v "$command_name" >/dev/null 2>&1; then
-    echo "Missing required command: $command_name" >&2
-    exit 1
-  fi
-}
 
 ensure_dependency_dir() {
   local path="$1"
@@ -229,29 +39,6 @@ ensure_dependency_dir() {
   fi
 }
 
-extract_source_tree() {
-  local archive_path="$1"
-  local destination_dir="$2"
-
-  rm -rf "$destination_dir"
-  mkdir -p "$destination_dir"
-  tar -xf "$archive_path" -C "$destination_dir" --strip-components=1
-}
-
-resolve_make_jobs() {
-  if command -v getconf >/dev/null 2>&1; then
-    getconf _NPROCESSORS_ONLN
-    return 0
-  fi
-
-  if command -v sysctl >/dev/null 2>&1; then
-    sysctl -n hw.ncpu
-    return 0
-  fi
-
-  echo 4
-}
-
 build_android_openssl_prebuilt() {
   local abi="$1"
   local openssl_target="$2"
@@ -261,15 +48,15 @@ build_android_openssl_prebuilt() {
   local cc="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang"
   local cxx="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang++"
 
-  ensure_command perl
-  ensure_command make
-  download_if_missing \
+  vesper_require_command perl
+  vesper_require_command make
+  vesper_download_if_missing \
     "$OPENSSL_SOURCE_ARCHIVE" \
     "$OPENSSL_SOURCE_URL" \
     "https://www.openssl.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}" \
     "https://www.openssl-library.org/source/${OPENSSL_ARCHIVE_NAME}" \
     "https://www.openssl-library.org/source/old/${OPENSSL_SERIES}/${OPENSSL_ARCHIVE_NAME}"
-  extract_source_tree "$OPENSSL_SOURCE_ARCHIVE" "$source_dir"
+  vesper_extract_source_tree "$OPENSSL_SOURCE_ARCHIVE" "$source_dir"
 
   rm -rf "$install_dir"
   mkdir -p "$install_dir"
@@ -310,9 +97,9 @@ build_android_libxml2_prebuilt() {
   local cc="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang"
   local cxx="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang++"
 
-  ensure_command make
-  download_if_missing "$LIBXML2_SOURCE_ARCHIVE" "$LIBXML2_SOURCE_URL"
-  extract_source_tree "$LIBXML2_SOURCE_ARCHIVE" "$source_dir"
+  vesper_require_command make
+  vesper_download_if_missing "$LIBXML2_SOURCE_ARCHIVE" "$LIBXML2_SOURCE_URL"
+  vesper_extract_source_tree "$LIBXML2_SOURCE_ARCHIVE" "$source_dir"
 
   rm -rf "$install_dir" "$build_dir"
   mkdir -p "$install_dir" "$build_dir"
@@ -380,46 +167,25 @@ ensure_android_libxml2_prebuilt() {
 selected_abis=()
 while IFS= read -r abi; do
   selected_abis+=("$abi")
-done < <(resolve_selected_abis "$@")
+done < <(vesper_android_resolve_selected_abis "$@")
 
 required_targets=()
 for abi in "${selected_abis[@]}"; do
-  required_targets+=("$(map_abi_to_rust_target "$abi")")
+  required_targets+=("$(vesper_android_abi_to_rust_target "$abi")")
 done
 
-installed_targets="$(rustup target list --installed)"
+vesper_android_require_rust_targets "${required_targets[@]}"
 
-missing_targets=()
-for target in "${required_targets[@]}"; do
-  if [[ "$installed_targets" != *"$target"* ]]; then
-    missing_targets+=("$target")
-  fi
-done
-
-if [[ ${#missing_targets[@]} -gt 0 ]]; then
-  echo "Required Rust Android targets are missing:" >&2
-  for target in "${missing_targets[@]}"; do
-    echo "  $target" >&2
-  done
-  echo >&2
-  echo "Install them with:" >&2
-  echo "  rustup target add ${missing_targets[*]}" >&2
+if ! ANDROID_NDK_ROOT="$(vesper_android_resolve_ndk_root "$ANDROID_SDK_ROOT" "$ANDROID_NDK_ROOT" "$ANDROID_NDK_VERSION")"; then
+  vesper_android_report_missing_ndk "$ANDROID_SDK_ROOT" "$ANDROID_NDK_VERSION"
   exit 1
 fi
 
-if ! ANDROID_NDK_ROOT="$(resolve_ndk_root)"; then
-  echo "Android NDK is missing or incomplete at:" >&2
-  echo "  $ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >&2
-  echo >&2
-  echo "Install Android NDK $ANDROID_NDK_VERSION from Android Studio." >&2
-  exit 1
-fi
-
-HOST_TAG="$(resolve_host_tag)"
+HOST_TAG="$(vesper_android_resolve_host_tag "$ANDROID_NDK_ROOT")"
 TOOLCHAIN_ROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG"
 TOOLCHAIN_BIN_DIR="$TOOLCHAIN_ROOT/bin"
 SYSROOT="$TOOLCHAIN_ROOT/sysroot"
-MAKE_JOBS="$(resolve_make_jobs)"
+MAKE_JOBS="$(vesper_make_jobs)"
 
 if [[ ! -d "$TOOLCHAIN_BIN_DIR" ]]; then
   echo "Android LLVM toolchain is missing at:" >&2
@@ -437,7 +203,7 @@ case "$TLS_BACKEND" in
     ;;
 esac
 
-download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
+vesper_download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT
@@ -454,10 +220,10 @@ fi
 mkdir -p "$FFMPEG_OUTPUT_DIR"
 
 for abi in "${selected_abis[@]}"; do
-  ffmpeg_arch="$(map_abi_to_ffmpeg_arch "$abi")"
-  ffmpeg_cpu="$(map_abi_to_ffmpeg_cpu "$abi")"
-  toolchain_target="$(map_abi_to_rust_target "$abi")"
-  openssl_target="$(map_abi_to_openssl_target "$abi")"
+  ffmpeg_arch="$(vesper_android_abi_to_ffmpeg_arch "$abi")"
+  ffmpeg_cpu="$(vesper_android_abi_to_ffmpeg_cpu "$abi")"
+  toolchain_target="$(vesper_android_abi_to_rust_target "$abi")"
+  openssl_target="$(vesper_android_abi_to_openssl_target "$abi")"
   cc="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang"
   cxx="$TOOLCHAIN_BIN_DIR/${toolchain_target}${ANDROID_API_LEVEL}-clang++"
   install_dir="$FFMPEG_OUTPUT_DIR/$abi"

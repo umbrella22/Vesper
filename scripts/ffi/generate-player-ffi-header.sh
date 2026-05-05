@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+repo_root="$VESPER_REPO_ROOT"
 crate_dir="${repo_root}/crates/core/player-ffi"
 config_path="${crate_dir}/cbindgen.toml"
 lockfile_path="${repo_root}/Cargo.lock"
@@ -22,4 +24,3 @@ cbindgen "${crate_dir}" \
   --output "${output_path}"
 
 echo "Generated ${output_path}"
-

@@ -173,10 +173,11 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                 case let .segment(renditionId, segment):
                     switch segment {
                     case .initialization:
-                        // Init 段体积很小（~1KB）且 AVPlayer 只取一次，直接以
-                        // 原始字节返回，不走 loopback。这使得可以准确记录“AVPlayer 是
-                        // 否拉取了 init”这个关键事实（loopback 路径中 AVPlayer
-                        // 不会请求 EXT-X-MAP 指向的走 http 的 URL，原因未明）。
+                        // Init segments are small and AVPlayer normally fetches them once, so
+                        // return the raw bytes through the resource loader instead of the
+                        // loopback server. This lets benchmark events record whether AVPlayer
+                        // requested the init segment; AVPlayer has been observed to skip
+                        // loopback HTTP URLs referenced from EXT-X-MAP.
                         let initData = try await session.segmentData(
                             renditionId: renditionId,
                             segment: .initialization
@@ -186,7 +187,7 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                             "dashResourceInit rendition=\(renditionId) bytes=\(initData.count)"
                         )
 #endif
-                        // contentType 必须是 UTI，不是 MIME。fMP4/ISO BMFF 对应 public.mpeg-4。
+                        // contentType must be a UTI, not a MIME type. fMP4 / ISO BMFF maps to public.mpeg-4.
                         response = .data(initData, contentType: "public.mpeg-4")
                     case .media:
                         response = .redirect(
@@ -388,8 +389,9 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
         receiveRequest(on: connection, accumulated: Data())
     }
 
-    /// AVPlayer 发送的 HTTP 请求可能分成多个 TCP 包，或一个包里附带了到头部后的多余字节。这里
-    /// 不停读取直到看见 "\r\n\r\n" 才手动解析请求。
+    /// AVPlayer HTTP requests may arrive split across TCP packets, or with
+    /// extra bytes after the header block. Keep reading until "\r\n\r\n" is
+    /// visible, then parse the request manually.
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 32_768) { [weak self] data, _, isComplete, error in
             guard let self else {
@@ -492,7 +494,8 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
         return ParsedRequest(method: method, renditionId: renditionId, segment: segment, range: range)
     }
 
-    /// 仅支持 `bytes=start-end` 单区间格式（AVPlayer 只会请求这一种）。end 可选。
+    /// Supports the single-range `bytes=start-end` form used by AVPlayer.
+    /// The end offset is optional.
     private func parseRangeHeader(_ value: String) -> ClosedRange<UInt64>? {
         guard let equals = value.firstIndex(of: "=") else { return nil }
         let unit = value[..<equals].trimmingCharacters(in: .whitespaces).lowercased()
@@ -591,7 +594,8 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
             )
         }
 #endif
-        // HEAD 不可以附带 body，否则 AVPlayer 会把 body 字节误当下一个响应的一部分。
+        // HEAD responses must not include a body; AVPlayer can otherwise
+        // treat body bytes as part of the next response.
         guard request.method == .get, bodyLength > 0 else {
             payload.cleanupIfTemporary()
             connection.send(
@@ -747,12 +751,12 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
         )
     }
 
-    /// 发完 HTTP 响应后不要立即 cancel，否则 NWConnection 会发 RST，导致 AVPlayer
-    /// 在读尾部字节时偶发 truncate 错误。这里选择：
-    /// 1. 从 socket 继续 receive，等对端 FIN 主动关闭；
-    /// 2. 同时设一个超时兑底 cancel，避免连接泄漏。
-    /// 用一个 box 标志位避免两条路径都触发 cancel 后输出
-    /// `is already cancelled, ignoring cancel` 噪音。
+    /// Do not cancel immediately after sending the HTTP response: NWConnection
+    /// would send RST and AVPlayer can occasionally report truncated tail
+    /// bytes. Instead, keep receiving until the peer closes with FIN, and keep
+    /// a timeout fallback to avoid leaking connections. A boxed flag prevents
+    /// both paths from calling cancel and logging `is already cancelled,
+    /// ignoring cancel`.
     private func scheduleGracefulClose(_ connection: NWConnection) {
         let cancelled = VesperDashAtomicBool()
         let cancelOnce: () -> Void = {
@@ -768,12 +772,12 @@ fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
     }
 }
 
-/// 单 bit 原子标志位，专供 loopback 连接关闭去重使用。
+/// Single-bit atomic flag used to deduplicate loopback connection shutdown.
 private final class VesperDashAtomicBool: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
 
-    /// 把 value 设为 true，返回 *swap 之前* 的值。
+    /// Sets the value to true and returns the value before the swap.
     func swapTrue() -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -1130,12 +1134,12 @@ actor VesperDashSession {
                 segments: segments
             )
         )
-        // EXT-X-MAP 指向 vesper-dash:// scheme，走 AVAssetResourceLoaderDelegate
-        // 主路径。实验表明当 EXT-X-MAP 使用 loopback http URL 时，AVPlayer
-        // 可能不会发起该请求（潜在原因是 AVPlayer 在验证同一 origin
-        // 路径才会复用 loopback http），导致 init 段未交付 → 'frmt'。
-        // 走 vesper-dash:// scheme 可以保证 AVPlayer 调用 resource loader
-        // delegate，从而能记录 init 段是否被请求。
+        // Point EXT-X-MAP at the vesper-dash:// scheme so it goes through
+        // AVAssetResourceLoaderDelegate. When EXT-X-MAP used a loopback HTTP
+        // URL, AVPlayer sometimes skipped that request, likely because it did
+        // not reuse loopback HTTP for a different origin path. Missing init
+        // bytes surface as 'frmt'. The custom scheme guarantees resource
+        // loader delivery and benchmark visibility.
         let initializationURL = segmentTemplate.initialization.map { _ in
             self.segmentURL(for: playable.renditionId, segment: .initialization).absoluteString
         }
@@ -1166,8 +1170,9 @@ actor VesperDashSession {
         iosHostLog(
             "dashMediaPlaylist rendition=\(playable.renditionId) loopbackSegments=true count=\(segments.count) init=\(initializationURL ?? "none")"
         )
-        // 打印 playlist 头部 7 行，便于排查 HLS 标签拼接错误（曾因 multiline
-        // 字符串末尾缺换行导致 EXT-X-PLAYLIST-TYPE 与 EXT-X-MAP 粘到一行）。
+        // Log the first playlist lines to diagnose HLS tag concatenation
+        // regressions, such as EXT-X-PLAYLIST-TYPE and EXT-X-MAP being glued
+        // onto one line by a missing trailing newline in a multiline string.
         let head = playlist
             .split(separator: "\n", omittingEmptySubsequences: false)
             .prefix(7)
@@ -1720,10 +1725,12 @@ actor VesperDashSession {
             segment: segment
         )
         let data = try await networkClient.data(for: url)
-        // 保留原始 fMP4 segment 字节。以前这里对 media 段调用 removingTopLevelSidxBoxes 剔掉顺序 sidx box，但许多
-        // DASH 编码器生成的 tfhd.base_data_offset 是相对 segment 起点的绝对偏移，删掉 sidx 后 mdat 位置
-        // 前移会让 AVPlayer 读出垃圾字节并报 CoreMediaErrorDomain 1718449215 ('frmt')。HLS fMP4 允许
-        // segment 中保留 sidx，AVPlayer 会忽略。
+        // Preserve the original fMP4 segment bytes. This used to strip
+        // top-level sidx boxes from media segments, but many DASH encoders
+        // write tfhd.base_data_offset as an absolute offset from the segment
+        // start. Removing sidx shifts mdat forward, causing AVPlayer to read
+        // garbage bytes and report CoreMediaErrorDomain 1718449215 ('frmt').
+        // HLS fMP4 allows sidx to remain in segments, and AVPlayer ignores it.
 #if DEBUG
         logTopLevelBoxes(
             data: data,

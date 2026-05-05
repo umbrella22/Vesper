@@ -71,7 +71,7 @@ jobs:
         run: cargo install cbindgen --locked
 
       - name: Verify generated FFI header
-        run: ./scripts/verify-player-ffi-header.sh
+        run: ./scripts/vesper ffi verify
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -98,7 +98,7 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       - name: Build Android FFmpeg prebuilts
-        run: bash ./scripts/build-android-ffmpeg-prebuilts.sh ${{ matrix.abi }}
+        run: ./scripts/vesper android ffmpeg ${{ matrix.abi }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -115,10 +115,10 @@ jobs:
         run: cargo check -p player-platform-android -p player-jni-android
 
       - name: Build Android JNI libraries
-        run: ./scripts/build-android-vesper-player-kit-jni.sh release ${{ matrix.abi }}
+        run: ./scripts/vesper android jni release ${{ matrix.abi }}
 
       - name: Verify Android host kits do not bundle player-remux-ffmpeg by default
-        run: bash ./scripts/verify-mobile-host-kit-without-player-remux-ffmpeg.sh android
+        run: ./scripts/vesper mobile verify-no-remux android
 
       - name: Run Android host regression tests
         run: examples/android-compose-host/gradlew -p examples/android-compose-host -Pvesper.player.android.abis=${{ matrix.abi }} :app:testDebugUnitTest
@@ -172,19 +172,19 @@ jobs:
         run: xcodebuild -version
 
       - name: Build Apple FFmpeg prebuilts
-        run: ./scripts/build-apple-ffmpeg-prebuilts.sh ios-arm64 ios-simulator-arm64
+        run: ./scripts/vesper apple ffmpeg ios-arm64 ios-simulator-arm64
 
       - name: Build iOS player-remux-ffmpeg plugin libraries
-        run: ./scripts/build-ios-player-remux-ffmpeg-plugin.sh /tmp/vesper-ios-player-remux-ffmpeg release ios-arm64 ios-simulator-arm64
+        run: ./scripts/vesper ios remux-plugin /tmp/vesper-ios-player-remux-ffmpeg release ios-arm64 ios-simulator-arm64
 
       - name: Check iOS Rust adapter crate
         run: cargo check -p player-platform-ios
 
       - name: Build Rust iOS resolver bundle
-        run: ./scripts/build-ios-player-ffi-xcframework.sh release
+        run: ./scripts/vesper ios ffi release
 
       - name: Verify iOS host kit does not bundle player-remux-ffmpeg by default
-        run: bash ./scripts/verify-mobile-host-kit-without-player-remux-ffmpeg.sh ios
+        run: ./scripts/vesper mobile verify-no-remux ios
 
       - name: Generate Xcode project
         working-directory: examples/ios-swift-host
@@ -195,7 +195,7 @@ jobs:
         run: xcodegen generate
 
       - name: Refresh Rust iOS resolver bundle for Swift package resolution
-        run: ./scripts/build-ios-player-ffi-xcframework.sh release
+        run: ./scripts/vesper ios ffi release
 
       - name: Run VesperPlayerKit iOS regression tests
         run: |
