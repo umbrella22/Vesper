@@ -12,19 +12,21 @@ across platforms.
 
 ## Platform Support
 
-| Feature                  | Android | iOS                                                 | macOS package        |
-| ------------------------ | ------- | --------------------------------------------------- | -------------------- |
-| Local files              | ✅      | ✅                                                  | ❌ Backend not wired |
-| Progressive HTTP         | ✅      | ✅                                                  | ❌ Backend not wired |
-| HLS                      | ✅      | ✅                                                  | ❌ Backend not wired |
-| DASH                     | ✅      | ✅ DASH-to-HLS bridge for VOD / live fMP4           | ❌ Backend not wired |
-| Live streams             | ✅      | ✅                                                  | ❌ Backend not wired |
-| Live DVR                 | ✅      | ✅                                                  | ❌ Backend not wired |
-| Track selection          | ✅      | ✅                                                  | ❌ Backend not wired |
-| Adaptive bitrate (ABR)   | ✅      | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ❌ Backend not wired |
-| Buffering / retry policy | ✅      | ✅                                                  | ❌ Backend not wired |
-| Download management      | ✅      | ✅                                                  | ❌                   |
-| Preload                  | ✅      | ✅                                                  | ❌                   |
+| Feature                  | Android                                      | iOS                                                 | macOS package        |
+| ------------------------ | -------------------------------------------- | --------------------------------------------------- | -------------------- |
+| Local files              | ✅                                           | ✅                                                  | ❌ Backend not wired |
+| Progressive HTTP         | ✅                                           | ✅                                                  | ❌ Backend not wired |
+| HLS                      | ✅                                           | ✅                                                  | ❌ Backend not wired |
+| DASH                     | ✅                                           | ✅ DASH-to-HLS bridge for VOD / live fMP4           | ❌ Backend not wired |
+| Live streams             | ✅                                           | ✅                                                  | ❌ Backend not wired |
+| Live DVR                 | ✅                                           | ✅                                                  | ❌ Backend not wired |
+| Track selection          | ✅                                           | ✅                                                  | ❌ Backend not wired |
+| Adaptive bitrate (ABR)   | ✅                                           | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ❌ Backend not wired |
+| Buffering / retry policy | ✅                                           | ✅                                                  | ❌ Backend not wired |
+| Download management      | ✅                                           | ✅                                                  | ❌                   |
+| Preload                  | ✅                                           | ✅                                                  | ❌                   |
+| System playback controls | ✅ MediaSession notification + FGS           | ✅ Now Playing / RemoteCommand                      | ❌                   |
+| External playback        | ✅ Optional `vesper_player_cast` package     | ✅ AirPlay route picker via `vesper_player_ui`      | ❌                   |
 
 > `vesper_player_macos` exists as an experimental federated package stub. The
 > main package currently registers Android and iOS implementations only.
@@ -39,6 +41,12 @@ package family is published:
 dependencies:
   vesper_player:
     path: path/to/rust-player-sdk/lib/flutter/vesper_player
+  # Optional Android Cast sender integration.
+  vesper_player_cast:
+    path: path/to/rust-player-sdk/lib/flutter/vesper_player_cast
+  # Optional stage controls and AirPlay route button.
+  vesper_player_ui:
+    path: path/to/rust-player-sdk/lib/flutter/vesper_player_ui
 ```
 
 ## Quick Start
@@ -149,6 +157,78 @@ VesperPlayerView(
   ),
 )
 ```
+
+### System Playback
+
+System playback integration is optional and controlled from the Flutter
+controller. It enables the platform media session, lock-screen / notification
+controls, and background audio continuation for the active player.
+
+```dart
+final status = await controller.getSystemPlaybackPermissionStatus();
+if (status == VesperSystemPlaybackPermissionStatus.denied) {
+  await controller.requestSystemPlaybackPermissions();
+}
+await controller.configureSystemPlayback(
+  const VesperSystemPlaybackConfiguration(
+    metadata: VesperSystemPlaybackMetadata(
+      title: 'Sample video',
+      artist: 'Vesper Player SDK',
+      contentUri: 'https://example.com/stream.m3u8',
+    ),
+  ),
+);
+
+await controller.updateSystemPlaybackMetadata(
+  const VesperSystemPlaybackMetadata(title: 'Next episode'),
+);
+await controller.clearSystemPlayback();
+```
+
+The default configuration is enabled, continues audio in the background, shows
+system controls, and enables seek actions. The SDK supports one active system media
+session: the most recently configured controller owns system controls.
+
+Host apps still own platform declarations. iOS apps must include
+`UIBackgroundModes = audio` when background playback is intended. Android apps
+must merge or declare foreground-service media playback permissions. Android
+13+ exempts media-session playback notifications from the runtime notification
+permission, so a denied `POST_NOTIFICATIONS` result must not stop playback; use
+the permission API only for app-controlled notification UX.
+
+### AirPlay and Cast
+
+For iOS route selection, depend on `vesper_player_ui` and place
+`VesperAirPlayRouteButton` near your player controls:
+
+```dart
+VesperAirPlayRouteButton(controller: controller)
+```
+
+The button is backed by `AVRoutePickerView` and prioritizes video-capable
+routes by default. Users can also continue to route from Control Center.
+AirDrop is file sharing, not media playback routing.
+
+For Android Cast, depend on the optional `vesper_player_cast` package. It keeps
+Google Play Services and Cast Framework dependencies out of the default player
+package:
+
+```dart
+final cast = VesperCastController();
+final result = await cast.loadFromPlayer(
+  player: controller,
+  source: VesperPlayerSource.hls(
+    uri: 'https://example.com/stream.m3u8',
+    label: 'Sample video',
+  ),
+  metadata: const VesperSystemPlaybackMetadata(title: 'Sample video'),
+);
+```
+
+Cast V2 supports remote `http` / `https` HLS, DASH, and progressive sources
+with the default Google receiver. Local files, `content://` sources, DRM,
+custom request headers, offline assets, and custom receiver flows are outside
+the V2 scope and return an unsupported result without changing local playback.
 
 ### `VesperPlayerSource`
 

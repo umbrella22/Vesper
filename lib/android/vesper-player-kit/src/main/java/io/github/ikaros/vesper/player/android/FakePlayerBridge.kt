@@ -184,6 +184,12 @@ class FakePlayerBridge(
         _resiliencePolicy.value = policy
     }
 
+    override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) = Unit
+
+    override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) = Unit
+
+    override fun clearSystemPlayback() = Unit
+
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
         benchmarkRecorder.drainEvents()
 

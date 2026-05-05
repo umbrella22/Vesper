@@ -8,16 +8,18 @@ artifacts and consumable from any Android app or library.
 | Module                         | Purpose                                                                                                                                                                             |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `vesper-player-kit`            | Core Android library: `VesperPlayerController`, `VesperPlayerSource`, `VesperTrackSelection`, `VesperDownloadManager`, JNI-backed `ExoPlayer` bridge, `libvesper_player_android.so` |
+| `vesper-player-kit-cast`       | Optional Google Cast sender integration, media route button support, and default Cast options provider                                                                               |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
-The Compose adapter and the higher-level Compose UI are both optional.
-View-based or non-Compose hosts can depend on `vesper-player-kit` alone
-without pulling in Compose or Material3.
+The Cast module, Compose adapter, and higher-level Compose UI are optional.
+View-based or non-Compose hosts can depend on `vesper-player-kit` alone without
+pulling in Google Play Services, Cast Framework, Compose, or Material3.
 
 Kotlin namespaces:
 
 - `io.github.ikaros.vesper.player.android`
+- `io.github.ikaros.vesper.player.android.cast`
 - `io.github.ikaros.vesper.player.android.compose`
 - `io.github.ikaros.vesper.player.android.compose.ui`
 
@@ -76,6 +78,11 @@ Core (`vesper-player-kit`):
 - `VesperDecoderBackend` — `SystemOnly` / `SystemPreferred` / `ExtensionPreferred`
 - `NativeVideoSurfaceKind` — `SurfaceView` (default, HDR / high frame rate) or `TextureView` (scrolling / animated stages)
 - `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput`
+
+Cast (`vesper-player-kit-cast`):
+
+- `VesperCastController` — load, play, pause, stop, and seek the active Cast session
+- `VesperCastOptionsProvider` — default Cast options provider using Google's Default Media Receiver unless the host overrides the receiver application ID in manifest meta-data
 
 Compose adapter (`vesper-player-kit-compose`):
 

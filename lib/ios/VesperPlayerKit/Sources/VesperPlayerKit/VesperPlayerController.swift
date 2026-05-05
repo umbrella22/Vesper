@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import Foundation
 import UIKit
@@ -86,6 +87,8 @@ public final class VesperPlayerController: ObservableObject {
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
     private let drainBenchmarkEventsImpl: () -> [VesperBenchmarkEvent]
     private let benchmarkSummaryImpl: () -> VesperBenchmarkSummary
+    private let routePickerPlayerImpl: () -> AVPlayer?
+    private lazy var systemPlaybackCoordinator = VesperSystemPlaybackCoordinator(controller: self)
 
     init<Bridge: ObservablePlayerBridge>(_ bridge: Bridge) {
         backend = bridge.backend
@@ -124,6 +127,7 @@ public final class VesperPlayerController: ObservableObject {
         setResiliencePolicyImpl = bridge.setResiliencePolicy
         drainBenchmarkEventsImpl = bridge.drainBenchmarkEvents
         benchmarkSummaryImpl = bridge.benchmarkSummary
+        routePickerPlayerImpl = { bridge.routePickerPlayer }
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
@@ -135,6 +139,7 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
                 self.publishedResiliencePolicy = bridge.publishedResiliencePolicy
                 self.publishedLastError = bridge.publishedLastError
+                self.systemPlaybackCoordinator.updatePlaybackState(self.publishedUiState)
             }
         }
     }
@@ -144,6 +149,7 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func dispose() {
+        systemPlaybackCoordinator.clear()
         disposeImpl()
     }
 
@@ -218,6 +224,30 @@ public final class VesperPlayerController: ObservableObject {
 
     public func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
         setResiliencePolicyImpl(policy)
+    }
+
+    public func configureSystemPlayback(_ configuration: VesperSystemPlaybackConfiguration) {
+        systemPlaybackCoordinator.configure(configuration)
+    }
+
+    public func updateSystemPlaybackMetadata(_ metadata: VesperSystemPlaybackMetadata) {
+        systemPlaybackCoordinator.updateMetadata(metadata)
+    }
+
+    public func clearSystemPlayback() {
+        systemPlaybackCoordinator.clear()
+    }
+
+    public var routePickerPlayer: AVPlayer? {
+        routePickerPlayerImpl()
+    }
+
+    public static func requestSystemPlaybackPermissions() -> VesperSystemPlaybackPermissionStatus {
+        .notRequired
+    }
+
+    public static func getSystemPlaybackPermissionStatus() -> VesperSystemPlaybackPermissionStatus {
+        .notRequired
     }
 
     public func drainBenchmarkEvents() -> [VesperBenchmarkEvent] {

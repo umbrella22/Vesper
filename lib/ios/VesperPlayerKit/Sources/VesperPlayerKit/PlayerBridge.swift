@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import Foundation
 import SwiftUI
@@ -122,6 +123,17 @@ public enum PlaybackStateUi: String {
     case finished = "Finished"
 }
 
+public enum VesperBackgroundPlaybackMode: String, Equatable {
+    case disabled
+    case continueAudio
+}
+
+public enum VesperSystemPlaybackPermissionStatus: String, Equatable {
+    case notRequired
+    case granted
+    case denied
+}
+
 public struct PlayerHostUiState {
     public let title: String
     public let subtitle: String
@@ -150,6 +162,56 @@ public struct PlayerHostUiState {
         self.isBuffering = isBuffering
         self.isInterrupted = isInterrupted
         self.timeline = timeline
+    }
+}
+
+public struct VesperSystemPlaybackMetadata: Equatable {
+    public let title: String
+    public let artist: String?
+    public let albumTitle: String?
+    public let artworkUri: String?
+    public let contentUri: String?
+    public let durationMs: Int64?
+    public let isLive: Bool
+
+    public init(
+        title: String,
+        artist: String? = nil,
+        albumTitle: String? = nil,
+        artworkUri: String? = nil,
+        contentUri: String? = nil,
+        durationMs: Int64? = nil,
+        isLive: Bool = false
+    ) {
+        self.title = title
+        self.artist = artist
+        self.albumTitle = albumTitle
+        self.artworkUri = artworkUri
+        self.contentUri = contentUri
+        self.durationMs = durationMs
+        self.isLive = isLive
+    }
+}
+
+public struct VesperSystemPlaybackConfiguration: Equatable {
+    public let enabled: Bool
+    public let backgroundMode: VesperBackgroundPlaybackMode
+    public let showSystemControls: Bool
+    public let showSeekActions: Bool
+    public let metadata: VesperSystemPlaybackMetadata?
+
+    public init(
+        enabled: Bool = true,
+        backgroundMode: VesperBackgroundPlaybackMode = .continueAudio,
+        showSystemControls: Bool = true,
+        showSeekActions: Bool = true,
+        metadata: VesperSystemPlaybackMetadata? = nil
+    ) {
+        self.enabled = enabled
+        self.backgroundMode = backgroundMode
+        self.showSystemControls = showSystemControls
+        self.showSeekActions = showSeekActions
+        self.metadata = metadata
     }
 }
 
@@ -206,6 +268,7 @@ protocol PlayerBridge: AnyObject {
     var fixedTrackStatus: VesperFixedTrackStatus? { get }
     var resiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var lastError: VesperPlayerError? { get }
+    var routePickerPlayer: AVPlayer? { get }
 
     func initialize()
     func dispose()
@@ -242,6 +305,12 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
     var publishedFixedTrackStatus: VesperFixedTrackStatus? { get }
     var publishedResiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var publishedLastError: VesperPlayerError? { get }
+}
+
+extension PlayerBridge {
+    var routePickerPlayer: AVPlayer? {
+        nil
+    }
 }
 
 extension PlayerBridge {

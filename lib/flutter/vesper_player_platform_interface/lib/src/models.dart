@@ -26,6 +26,12 @@ enum VesperPlayerBackendFamily {
 
 enum VesperPlayerRenderSurfaceKind { auto, textureView, surfaceView }
 
+enum VesperBackgroundPlaybackMode { disabled, continueAudio }
+
+enum VesperSystemPlaybackPermissionStatus { notRequired, granted, denied }
+
+enum VesperExternalPlaybackRouteKind { none, airPlay, cast }
+
 enum VesperMediaTrackKind { video, audio, subtitle }
 
 enum VesperTrackSelectionMode { auto, disabled, track }
@@ -60,6 +66,200 @@ final class VesperVideoVariantObservation {
       'bitRate': bitRate,
       'width': width,
       'height': height,
+    };
+  }
+}
+
+final class VesperSystemPlaybackMetadata {
+  const VesperSystemPlaybackMetadata({
+    required this.title,
+    this.artist,
+    this.albumTitle,
+    this.artworkUri,
+    this.contentUri,
+    this.durationMs,
+    this.isLive = false,
+  });
+
+  factory VesperSystemPlaybackMetadata.fromMap(Map<Object?, Object?> map) {
+    return VesperSystemPlaybackMetadata(
+      title: map['title'] as String? ?? '',
+      artist: map['artist'] as String?,
+      albumTitle: map['albumTitle'] as String?,
+      artworkUri: map['artworkUri'] as String?,
+      contentUri: map['contentUri'] as String?,
+      durationMs: _decodeInt(map, 'durationMs'),
+      isLive: _decodeBool(map, 'isLive'),
+    );
+  }
+
+  final String title;
+  final String? artist;
+  final String? albumTitle;
+  final String? artworkUri;
+  final String? contentUri;
+  final int? durationMs;
+  final bool isLive;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'title': title,
+      'artist': artist,
+      'albumTitle': albumTitle,
+      'artworkUri': artworkUri,
+      'contentUri': contentUri,
+      'durationMs': durationMs,
+      'isLive': isLive,
+    };
+  }
+}
+
+final class VesperSystemPlaybackConfiguration {
+  const VesperSystemPlaybackConfiguration({
+    this.enabled = true,
+    this.backgroundMode = VesperBackgroundPlaybackMode.continueAudio,
+    this.showSystemControls = true,
+    this.showSeekActions = true,
+    this.metadata,
+  });
+
+  factory VesperSystemPlaybackConfiguration.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    final rawMetadata = _rawMap(map['metadata']);
+    return VesperSystemPlaybackConfiguration(
+      enabled: _decodeBool(map, 'enabled', fallback: true),
+      backgroundMode: _decodeEnum(
+        VesperBackgroundPlaybackMode.values,
+        map['backgroundMode'],
+        VesperBackgroundPlaybackMode.continueAudio,
+      ),
+      showSystemControls: _decodeBool(
+        map,
+        'showSystemControls',
+        fallback: true,
+      ),
+      showSeekActions: _decodeBool(map, 'showSeekActions', fallback: true),
+      metadata: rawMetadata == null
+          ? null
+          : VesperSystemPlaybackMetadata.fromMap(rawMetadata),
+    );
+  }
+
+  final bool enabled;
+  final VesperBackgroundPlaybackMode backgroundMode;
+  final bool showSystemControls;
+  final bool showSeekActions;
+  final VesperSystemPlaybackMetadata? metadata;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'enabled': enabled,
+      'backgroundMode': backgroundMode.name,
+      'showSystemControls': showSystemControls,
+      'showSeekActions': showSeekActions,
+      'metadata': metadata?.toMap(),
+    };
+  }
+}
+
+final class VesperExternalPlaybackRouteSnapshot {
+  const VesperExternalPlaybackRouteSnapshot({
+    this.kind = VesperExternalPlaybackRouteKind.none,
+    this.routeId,
+    this.routeName,
+    this.active = false,
+    this.available = false,
+  });
+
+  factory VesperExternalPlaybackRouteSnapshot.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    return VesperExternalPlaybackRouteSnapshot(
+      kind: _decodeEnum(
+        VesperExternalPlaybackRouteKind.values,
+        map['kind'],
+        VesperExternalPlaybackRouteKind.none,
+      ),
+      routeId: map['routeId'] as String?,
+      routeName: map['routeName'] as String?,
+      active: _decodeBool(map, 'active'),
+      available: _decodeBool(map, 'available'),
+    );
+  }
+
+  final VesperExternalPlaybackRouteKind kind;
+  final String? routeId;
+  final String? routeName;
+  final bool active;
+  final bool available;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'kind': kind.name,
+      'routeId': routeId,
+      'routeName': routeName,
+      'active': active,
+      'available': available,
+    };
+  }
+}
+
+final class VesperExternalPlaybackAvailability {
+  const VesperExternalPlaybackAvailability({
+    this.airPlayAvailable = false,
+    this.castAvailable = false,
+    this.activeRoute = const VesperExternalPlaybackRouteSnapshot(),
+  });
+
+  factory VesperExternalPlaybackAvailability.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    final rawRoute = _rawMap(map['activeRoute']);
+    return VesperExternalPlaybackAvailability(
+      airPlayAvailable: _decodeBool(map, 'airPlayAvailable'),
+      castAvailable: _decodeBool(map, 'castAvailable'),
+      activeRoute: rawRoute == null
+          ? const VesperExternalPlaybackRouteSnapshot()
+          : VesperExternalPlaybackRouteSnapshot.fromMap(rawRoute),
+    );
+  }
+
+  final bool airPlayAvailable;
+  final bool castAvailable;
+  final VesperExternalPlaybackRouteSnapshot activeRoute;
+
+  bool get hasAvailableRoute => airPlayAvailable || castAvailable;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'airPlayAvailable': airPlayAvailable,
+      'castAvailable': castAvailable,
+      'activeRoute': activeRoute.toMap(),
+    };
+  }
+}
+
+final class VesperRoutePickerConfiguration {
+  const VesperRoutePickerConfiguration({
+    this.prioritizesVideoDevices = true,
+  });
+
+  factory VesperRoutePickerConfiguration.fromMap(Map<Object?, Object?> map) {
+    return VesperRoutePickerConfiguration(
+      prioritizesVideoDevices: _decodeBool(
+        map,
+        'prioritizesVideoDevices',
+        fallback: true,
+      ),
+    );
+  }
+
+  final bool prioritizesVideoDevices;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'prioritizesVideoDevices': prioritizesVideoDevices,
     };
   }
 }

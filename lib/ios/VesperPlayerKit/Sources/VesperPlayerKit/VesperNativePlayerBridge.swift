@@ -92,6 +92,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedLastError
     }
 
+    var routePickerPlayer: AVPlayer? {
+        player
+    }
+
     private func recordBenchmark(
         _ eventName: String,
         attributes: [String: String] = [:]

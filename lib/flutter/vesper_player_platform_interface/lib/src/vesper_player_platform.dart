@@ -130,6 +130,38 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
 
   Future<void> clearViewport(String playerId);
 
+  Future<void> configureSystemPlayback(
+    String playerId,
+    VesperSystemPlaybackConfiguration configuration,
+  ) async {
+    throw UnimplementedError(
+      'configureSystemPlayback() has not been implemented.',
+    );
+  }
+
+  Future<void> updateSystemPlaybackMetadata(
+    String playerId,
+    VesperSystemPlaybackMetadata metadata,
+  ) async {
+    throw UnimplementedError(
+      'updateSystemPlaybackMetadata() has not been implemented.',
+    );
+  }
+
+  Future<void> clearSystemPlayback(String playerId) async {
+    throw UnimplementedError('clearSystemPlayback() has not been implemented.');
+  }
+
+  Future<VesperSystemPlaybackPermissionStatus>
+      requestSystemPlaybackPermissions() async {
+    return VesperSystemPlaybackPermissionStatus.notRequired;
+  }
+
+  Future<VesperSystemPlaybackPermissionStatus>
+      getSystemPlaybackPermissionStatus() async {
+    return VesperSystemPlaybackPermissionStatus.notRequired;
+  }
+
   Future<VesperPlatformDownloadCreateResult> createDownloadManager({
     VesperDownloadConfiguration configuration =
         const VesperDownloadConfiguration(),
@@ -273,6 +305,34 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
   @override
   Future<void> clearViewport(String playerId) async =>
       throw VesperUnsupportedError();
+
+  @override
+  Future<void> configureSystemPlayback(
+    String playerId,
+    VesperSystemPlaybackConfiguration configuration,
+  ) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<void> updateSystemPlaybackMetadata(
+    String playerId,
+    VesperSystemPlaybackMetadata metadata,
+  ) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<void> clearSystemPlayback(String playerId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<VesperSystemPlaybackPermissionStatus>
+      requestSystemPlaybackPermissions() async =>
+          throw VesperUnsupportedError();
+
+  @override
+  Future<VesperSystemPlaybackPermissionStatus>
+      getSystemPlaybackPermissionStatus() async =>
+          throw VesperUnsupportedError();
 
   @override
   Future<VesperPlatformDownloadCreateResult> createDownloadManager({

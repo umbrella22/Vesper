@@ -67,6 +67,7 @@ class VesperNativeJniBindings(
             bindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
             preloadBudgetPolicy = preloadBudgetPolicy,
         )
+    private val systemPlaybackCoordinator = VesperAndroidSystemPlaybackCoordinator(appContext)
     private var currentBenchmarkSourceProtocol: VesperPlayerSourceProtocol? = null
     private val firstFrameGate = VesperPlaybackEpochFirstFrameGate()
 
@@ -128,6 +129,7 @@ class VesperNativeJniBindings(
         player = exoPlayer
         playerListener = listener
         analyticsListener = analytics
+        systemPlaybackCoordinator.attachPlayer(exoPlayer)
 
         pushSnapshotToRust()
         pushTrackStateToRust()
@@ -150,6 +152,7 @@ class VesperNativeJniBindings(
             player?.removeAnalyticsListener(listener)
         }
         analyticsListener = null
+        systemPlaybackCoordinator.attachPlayer(null)
         player?.release()
         player = null
         sessionHandle?.let(VesperNativeJni::disposeSession)
@@ -275,6 +278,27 @@ class VesperNativeJniBindings(
         dispatchRustCommand { handle ->
             VesperNativeJni.setAbrPolicy(handle, policy.toNativePayload())
         }
+    }
+
+    override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) {
+        Log.i(
+            TAG,
+            "configureSystemPlayback enabled=${configuration.enabled} backgroundMode=${configuration.backgroundMode} showSystemControls=${configuration.showSystemControls}",
+        )
+        systemPlaybackCoordinator.configure(configuration)
+        notifyNativeUpdate()
+    }
+
+    override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) {
+        Log.i(TAG, "updateSystemPlaybackMetadata title=${metadata.title}")
+        systemPlaybackCoordinator.updateMetadata(metadata)
+        notifyNativeUpdate()
+    }
+
+    override fun clearSystemPlayback() {
+        Log.i(TAG, "clearSystemPlayback")
+        systemPlaybackCoordinator.clear()
+        notifyNativeUpdate()
     }
 
     private fun dispatchRustCommand(action: (Long) -> Unit) {
@@ -702,6 +726,7 @@ class VesperNativeJniBindings(
     }
 
     private fun notifyNativeUpdate() {
+        systemPlaybackCoordinator.refreshFromPlayer()
         val listener = updateListener ?: return
         if (Looper.myLooper() == Looper.getMainLooper()) {
             listener.invoke()

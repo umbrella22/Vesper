@@ -160,6 +160,45 @@ class VesperPlayerController {
   Future<void> clearViewport() =>
       _runVoidOperation(() => _platform.clearViewport(playerId));
 
+  Future<void> configureSystemPlayback(
+    VesperSystemPlaybackConfiguration configuration,
+  ) =>
+      _runVoidOperation(
+        () => _platform.configureSystemPlayback(playerId, configuration),
+      );
+
+  Future<void> updateSystemPlaybackMetadata(
+    VesperSystemPlaybackMetadata metadata,
+  ) =>
+      _runVoidOperation(
+        () => _platform.updateSystemPlaybackMetadata(playerId, metadata),
+      );
+
+  Future<void> clearSystemPlayback() =>
+      _runVoidOperation(() => _platform.clearSystemPlayback(playerId));
+
+  Future<VesperSystemPlaybackPermissionStatus>
+      requestSystemPlaybackPermissions() async {
+    _ensureActive();
+    try {
+      return await _platform.requestSystemPlaybackPermissions();
+    } catch (error, stackTrace) {
+      _publishSyntheticError(error, stackTrace);
+      rethrow;
+    }
+  }
+
+  Future<VesperSystemPlaybackPermissionStatus>
+      getSystemPlaybackPermissionStatus() async {
+    _ensureActive();
+    try {
+      return await _platform.getSystemPlaybackPermissionStatus();
+    } catch (error, stackTrace) {
+      _publishSyntheticError(error, stackTrace);
+      rethrow;
+    }
+  }
+
   void _bindPlatformEvents() {
     _platformSubscription = _platform.eventsFor(playerId).listen(
       (event) {

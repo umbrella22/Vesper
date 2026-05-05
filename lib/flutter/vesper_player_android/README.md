@@ -22,6 +22,8 @@ directly.
 | Buffering / retry / cache policy            | ✅                                 |
 | Download management                         | ✅                                 |
 | Preload                                     | ✅                                 |
+| System playback / notification controls     | ✅ MediaSession + foreground service |
+| Android Cast                                | ✅ Optional `vesper_player_cast` package |
 
 ## Technical Notes
 
@@ -31,7 +33,45 @@ directly.
 - Render path: `VesperPlayerController.create(renderSurfaceKind: ...)` selects the Android surface for Flutter playback. `auto` maps to `TextureView` for overlay and gesture compatibility. Use `surfaceView` only when the host explicitly wants the native Android HDR / high-frame-rate fullscreen path and can keep Flutter overlays safe.
 - Runtime snapshot: exposes the currently active adaptive video variant through `controller.snapshot.effectiveVideoTrackId`
 - Runtime observation: also exposes `controller.snapshot.videoVariantObservation`, derived from ExoPlayer's active `videoFormat` bitrate and rendered size
+- System playback: `configureSystemPlayback` binds the active ExoPlayer to a Media3 `MediaSessionService`, starts a media playback foreground service while audio is playing, filters seek commands when `showSeekActions` is disabled, and clears the session on pause / stop / dispose
 - Rust runtime: bridged through JNI so defaults, timeline, resilience, and playlist semantics stay aligned with the rest of the SDK
+
+## System Playback Host Requirements
+
+`getSystemPlaybackPermissionStatus()` returns `notRequired`, `granted`, or
+`denied` without prompting. `requestSystemPlaybackPermissions()` requests
+`POST_NOTIFICATIONS` on Android 13+. The SDK does not request this permission
+automatically; call it only from an app-controlled moment if the app wants
+runtime notification permission for its broader notification UX.
+
+The Android library manifest contributes:
+
+- `android.permission.FOREGROUND_SERVICE`
+- `android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK`
+- `android.permission.POST_NOTIFICATIONS`
+- the SDK `MediaSessionService`
+
+Host apps may declare the same permissions explicitly for review clarity.
+Android 13+ exempts media-session playback notifications from the runtime
+notification permission, so `POST_NOTIFICATIONS` denial must not block
+background playback or foreground service startup.
+
+## Optional Android Cast
+
+Android Cast lives in the separate `vesper_player_cast` Flutter package and the
+optional `vesper-player-kit-cast` Android module. This keeps Google Play
+Services and Cast Framework dependencies out of the default player package.
+
+For local workspace builds, include `:vesper-player-kit-cast` beside
+`:vesper-player-kit` in the host Android Gradle settings. The Cast module
+contributes a default `VesperCastOptionsProvider` that uses Google's Default
+Media Receiver. Hosts that need a custom receiver can override the manifest
+meta-data key
+`io.github.ikaros.vesper.player.android.cast.RECEIVER_APPLICATION_ID`.
+
+Cast V2 supports remote `http` / `https` HLS, DASH, and progressive sources.
+Local files, `content://` sources, DRM, request headers with the default
+receiver, offline assets, and custom receiver behavior are outside this scope.
 
 ## Optional `player-remux-ffmpeg` Remux Plugin
 

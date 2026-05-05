@@ -22,6 +22,8 @@ does not need to depend on it directly.
 | Buffering / retry / cache policy    | ✅                                                                                                 |
 | Download management                 | ✅                                                                                                 |
 | Preload                             | ✅                                                                                                 |
+| System playback controls            | ✅ Now Playing + RemoteCommand                                                                     |
+| AirPlay route picker                | ✅ Via `VesperAirPlayRouteButton` in `vesper_player_ui`                                            |
 
 > The iOS DASH path supports single-period fMP4 manifests for static VOD and
 > dynamic live / DVR when they use either `SegmentBase + sidx` or
@@ -76,7 +78,27 @@ bridge, but DASH download entry points remain disabled in the iOS example host.
 - Playback backend: AVPlayer behind the `VesperPlayerController` Swift facade
 - Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
 - View embedding: `UiKitView` with view type `io.github.ikaros.vesper_player/platform_view`
+- System playback: `configureSystemPlayback` writes `MPNowPlayingInfoCenter`, registers `MPRemoteCommandCenter`, and activates an `AVAudioSession` playback category with long-form video route sharing when background audio is enabled
 - Rust runtime: bridged through the `player-ffi-resolver` XCFramework so defaults, timeline, resilience, and playlist behavior stay aligned with the shared runtime
+
+## System Playback Host Requirements
+
+`getSystemPlaybackPermissionStatus()` and `requestSystemPlaybackPermissions()`
+return `notRequired` on iOS because Now Playing, remote commands, and AirPlay
+route picking do not require a runtime permission. Apps that intend to continue
+audio while locked or in the background must still declare `UIBackgroundModes`
+with the `audio` value in the app `Info.plist`.
+
+The SDK registers play, pause, toggle, stop, skip, and playback-position remote
+commands for the most recently configured controller. `clearSystemPlayback()` or
+controller disposal removes Now Playing metadata and remote command handlers.
+
+Use `VesperAirPlayRouteButton` from `vesper_player_ui` for an in-app AirPlay
+picker backed by `AVRoutePickerView`. The SDK keeps the audio session and Now
+Playing state aligned with the active controller, and the route picker
+prioritizes video-capable devices by default. Users can still choose AirPlay
+targets from Control Center. AirDrop is file sharing, not media playback
+routing.
 
 ## Optional `player-remux-ffmpeg` Remux Plugin
 

@@ -14,6 +14,8 @@ authors. Application code should usually depend on `vesper_player` directly.
 - `VesperPlatformCreateResult`: the result type returned by `createPlayer`
 - `VesperBenchmarkConfiguration`: opt-in benchmark capture and console logging settings forwarded by `createPlayer`
 - `VesperPlayerRenderSurfaceKind`: Flutter-facing Android render surface preference forwarded by `createPlayer`
+- `VesperSystemPlaybackConfiguration`: optional system media session and background audio integration
+- `VesperExternalPlaybackAvailability`: AirPlay / Cast route availability DTOs for optional UI and platform packages
 
 ### Player data models
 
@@ -37,6 +39,11 @@ authors. Application code should usually depend on `vesper_player` directly.
 | `VesperPreloadBudgetPolicy`      | Preload budget for concurrency, memory, disk, and warm windows                                                                                                                                                 |
 | `VesperBenchmarkConfiguration`   | Opt-in benchmark collection, raw-event buffering, and console logging settings                                                                                                                                |
 | `VesperPlayerRenderSurfaceKind`  | Render surface preference: auto, texture view, or surface view                                                                                                                                                |
+| `VesperSystemPlaybackConfiguration` | System media session configuration for background audio and platform controls                                                                                                                               |
+| `VesperSystemPlaybackMetadata`   | Now Playing / notification metadata such as title, artist, artwork, content URI, duration, and live flag                                                                                                      |
+| `VesperExternalPlaybackAvailability` | External route availability for AirPlay and Cast                                                                                                                                                          |
+| `VesperExternalPlaybackRouteSnapshot` | Active external route identity and state                                                                                                                                                                  |
+| `VesperRoutePickerConfiguration`  | Route picker preferences shared by optional UI packages                                                                                                                                                      |
 | `VesperPlayerViewport`           | Normalized viewport rectangle used for viewport hints                                                                                                                                                          |
 | `VesperViewportHint`             | Visibility hint: visible, near visible, prefetch only, or hidden                                                                                                                                               |
 | `VesperPlayerError`              | Playback error with category and retryability metadata                                                                                                                                                         |
@@ -79,6 +86,9 @@ VesperPlaybackState
 VesperTimelineKind
 VesperPlayerBackendFamily
 VesperPlayerRenderSurfaceKind
+VesperBackgroundPlaybackMode
+VesperSystemPlaybackPermissionStatus
+VesperExternalPlaybackRouteKind
 VesperMediaTrackKind
 VesperTrackSelectionMode
 VesperAbrMode

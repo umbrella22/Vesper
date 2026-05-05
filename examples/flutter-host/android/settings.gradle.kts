@@ -39,5 +39,7 @@ plugins {
 
 include(":app")
 include(":vesper-player-kit")
+include(":vesper-player-kit-cast")
 
 project(":vesper-player-kit").projectDir = file("../../../lib/android/vesper-player-kit")
+project(":vesper-player-kit-cast").projectDir = file("../../../lib/android/vesper-player-kit-cast")

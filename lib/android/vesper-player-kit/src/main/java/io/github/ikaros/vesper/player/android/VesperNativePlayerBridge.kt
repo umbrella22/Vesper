@@ -139,6 +139,7 @@ class VesperNativePlayerBridge(
         advanceNativeUpdateEpoch(clearListener = true)
         hasInitializedSource = false
         clearTrackState()
+        bindings.clearSystemPlayback()
         surfaceHost.detach()
         bindings.dispose()
         recordBenchmark("dispose_command")
@@ -312,6 +313,26 @@ class VesperNativePlayerBridge(
         updateState { copy(isBuffering = true) }
         initialize()
         restorePlaybackState(source, preservedState)
+    }
+
+    override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) {
+        if (isDisposed) {
+            return
+        }
+        bindings.configureSystemPlayback(configuration)
+        refreshFromNative()
+    }
+
+    override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) {
+        if (isDisposed) {
+            return
+        }
+        bindings.updateSystemPlaybackMetadata(metadata)
+        refreshFromNative()
+    }
+
+    override fun clearSystemPlayback() {
+        bindings.clearSystemPlayback()
     }
 
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
@@ -595,6 +616,9 @@ interface VesperNativeBindings {
     fun setAudioTrackSelection(selection: VesperTrackSelection)
     fun setSubtitleTrackSelection(selection: VesperTrackSelection)
     fun setAbrPolicy(policy: VesperAbrPolicy)
+    fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration)
+    fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata)
+    fun clearSystemPlayback()
 }
 
 private class MissingVesperNativeBindings : VesperNativeBindings {
@@ -628,4 +652,7 @@ private class MissingVesperNativeBindings : VesperNativeBindings {
     override fun setAudioTrackSelection(selection: VesperTrackSelection) = Unit
     override fun setSubtitleTrackSelection(selection: VesperTrackSelection) = Unit
     override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
+    override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) = Unit
+    override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) = Unit
+    override fun clearSystemPlayback() = Unit
 }

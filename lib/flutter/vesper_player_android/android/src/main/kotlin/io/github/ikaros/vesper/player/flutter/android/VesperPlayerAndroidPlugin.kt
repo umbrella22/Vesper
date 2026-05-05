@@ -1,17 +1,24 @@
 package io.github.ikaros.vesper.player.flutter.android
 
+import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.PluginRegistry
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
@@ -20,6 +27,7 @@ import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.PlayerBridgeBackend
 import io.github.ikaros.vesper.player.android.TimelineUiState
 import io.github.ikaros.vesper.player.android.TimelineKind
+import io.github.ikaros.vesper.player.android.VesperBackgroundPlaybackMode
 import io.github.ikaros.vesper.player.android.VesperAbrMode
 import io.github.ikaros.vesper.player.android.VesperAbrPolicy
 import io.github.ikaros.vesper.player.android.VesperBenchmarkConfiguration
@@ -52,6 +60,8 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
 import io.github.ikaros.vesper.player.android.VesperTrackPreferencePolicy
 import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
@@ -76,7 +86,8 @@ class VesperPlayerAndroidPlugin :
     FlutterPlugin,
     MethodChannel.MethodCallHandler,
     EventChannel.StreamHandler,
-    ActivityAware {
+    ActivityAware,
+    PluginRegistry.RequestPermissionsResultListener {
     private lateinit var methodChannel: MethodChannel
     private lateinit var eventChannel: EventChannel
     private lateinit var downloadEventChannel: EventChannel
@@ -84,6 +95,9 @@ class VesperPlayerAndroidPlugin :
 
     private var eventSink: EventChannel.EventSink? = null
     private var downloadEventSink: EventChannel.EventSink? = null
+    private var activityBinding: ActivityPluginBinding? = null
+    private var activity: Activity? = null
+    private var pendingSystemPlaybackPermissionResult: MethodChannel.Result? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = linkedMapOf<String, PlayerSession>()
@@ -123,13 +137,46 @@ class VesperPlayerAndroidPlugin :
         scope.cancel()
     }
 
-    override fun onAttachedToActivity(binding: ActivityPluginBinding) = Unit
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activityBinding = binding
+        activity = binding.activity
+        binding.addRequestPermissionsResultListener(this)
+    }
 
-    override fun onDetachedFromActivityForConfigChanges() = Unit
+    override fun onDetachedFromActivityForConfigChanges() {
+        activityBinding?.removeRequestPermissionsResultListener(this)
+        activityBinding = null
+        activity = null
+        pendingSystemPlaybackPermissionResult?.success("denied")
+        pendingSystemPlaybackPermissionResult = null
+    }
 
-    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) = Unit
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        onAttachedToActivity(binding)
+    }
 
-    override fun onDetachedFromActivity() = Unit
+    override fun onDetachedFromActivity() {
+        activityBinding?.removeRequestPermissionsResultListener(this)
+        activityBinding = null
+        activity = null
+        pendingSystemPlaybackPermissionResult?.success("denied")
+        pendingSystemPlaybackPermissionResult = null
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ): Boolean {
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST_CODE) {
+            return false
+        }
+        val pending = pendingSystemPlaybackPermissionResult ?: return true
+        pendingSystemPlaybackPermissionResult = null
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        pending.success(if (granted) "granted" else "denied")
+        return true
+    }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
@@ -275,6 +322,33 @@ class VesperPlayerAndroidPlugin :
                 emitSnapshot(session)
                 null
             }
+            "configureSystemPlayback" -> handleSessionCommand(call, result) { session ->
+                val configurationMap = requireNestedMap(call.argumentMap(), "configuration")
+                session.lastError = null
+                session.controller.configureSystemPlayback(
+                    configurationMap.toSystemPlaybackConfiguration(),
+                )
+                emitSnapshot(session)
+                null
+            }
+            "updateSystemPlaybackMetadata" -> handleSessionCommand(call, result) { session ->
+                val metadataMap = requireNestedMap(call.argumentMap(), "metadata")
+                session.lastError = null
+                session.controller.updateSystemPlaybackMetadata(
+                    metadataMap.toSystemPlaybackMetadata(),
+                )
+                emitSnapshot(session)
+                null
+            }
+            "clearSystemPlayback" -> handleSessionCommand(call, result) { session ->
+                session.lastError = null
+                session.controller.clearSystemPlayback()
+                emitSnapshot(session)
+                null
+            }
+            "requestSystemPlaybackPermissions" -> handleRequestSystemPlaybackPermissions(result)
+            "getSystemPlaybackPermissionStatus" ->
+                result.success(currentSystemPlaybackPermissionStatus())
             "createDownloadTask" -> handleDownloadSessionCommand(call, result) { session ->
                 val arguments = call.argumentMap()
                 val assetId = arguments["assetId"] as? String
@@ -338,6 +412,61 @@ class VesperPlayerAndroidPlugin :
 
     override fun onCancel(arguments: Any?) {
         eventSink = null
+    }
+
+    private fun handleRequestSystemPlaybackPermissions(result: MethodChannel.Result) {
+        when (val status = currentSystemPlaybackPermissionStatus()) {
+            "notRequired", "granted" -> {
+                result.success(status)
+                return
+            }
+        }
+
+        if (Build.VERSION.SDK_INT < 33) {
+            result.success("notRequired")
+            return
+        }
+
+        val currentActivity = activity
+        if (currentActivity == null) {
+            result.success("denied")
+            return
+        }
+        if (pendingSystemPlaybackPermissionResult != null) {
+            result.error(
+                "vesper_permission_request_pending",
+                "A system playback permission request is already in progress.",
+                mapOf(
+                    "message" to "A system playback permission request is already in progress.",
+                    "category" to "platform",
+                    "retriable" to false,
+                ),
+            )
+            return
+        }
+
+        pendingSystemPlaybackPermissionResult = result
+        ActivityCompat.requestPermissions(
+            currentActivity,
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            NOTIFICATION_PERMISSION_REQUEST_CODE,
+        )
+    }
+
+    private fun currentSystemPlaybackPermissionStatus(): String {
+        if (Build.VERSION.SDK_INT < 33) {
+            return "notRequired"
+        }
+        return if (
+            ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            "granted"
+        } else {
+            "denied"
+        }
     }
 
     private fun handleCreatePlayer(call: MethodCall, result: MethodChannel.Result) {
@@ -1020,6 +1149,33 @@ private fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
     )
 }
 
+private fun Map<String, Any?>.toSystemPlaybackConfiguration(): VesperSystemPlaybackConfiguration =
+    VesperSystemPlaybackConfiguration(
+        enabled = this["enabled"] as? Boolean ?: true,
+        backgroundMode =
+            when (this["backgroundMode"] as? String) {
+                "disabled" -> VesperBackgroundPlaybackMode.Disabled
+                else -> VesperBackgroundPlaybackMode.ContinueAudio
+            },
+        showSystemControls = this["showSystemControls"] as? Boolean ?: true,
+        showSeekActions = this["showSeekActions"] as? Boolean ?: true,
+        metadata =
+            (this["metadata"] as? Map<*, *>)
+                ?.stringMap()
+                ?.toSystemPlaybackMetadata(),
+    )
+
+private fun Map<String, Any?>.toSystemPlaybackMetadata(): VesperSystemPlaybackMetadata =
+    VesperSystemPlaybackMetadata(
+        title = this["title"] as? String ?: "",
+        artist = this["artist"] as? String,
+        albumTitle = this["albumTitle"] as? String,
+        artworkUri = this["artworkUri"] as? String,
+        contentUri = this["contentUri"] as? String,
+        durationMs = (this["durationMs"] as? Number)?.toLong(),
+        isLive = this["isLive"] as? Boolean ?: false,
+    )
+
 private fun Map<String, Any?>.toDownloadConfiguration(): VesperDownloadConfiguration =
     VesperDownloadConfiguration(
         autoStart = this["autoStart"] as? Boolean ?: true,
@@ -1611,3 +1767,4 @@ private const val PLAYER_VIEW_TYPE = "io.github.ikaros.vesper_player/platform_vi
 private const val BENCHMARK_LOG_TAG = "VesperBenchmark"
 private const val BENCHMARK_LOG_CHUNK_SIZE = 3500
 private const val HOST_DETACH_GRACE_DELAY_MS = 250L
+private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 8301

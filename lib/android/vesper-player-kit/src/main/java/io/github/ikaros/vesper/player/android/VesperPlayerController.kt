@@ -70,6 +70,14 @@ class VesperPlayerController internal constructor(
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) =
         bridge.setResiliencePolicy(policy)
 
+    fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) =
+        bridge.configureSystemPlayback(configuration)
+
+    fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) =
+        bridge.updateSystemPlaybackMetadata(metadata)
+
+    fun clearSystemPlayback() = bridge.clearSystemPlayback()
+
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> = bridge.drainBenchmarkEvents()
 
     fun benchmarkSummary(): VesperBenchmarkSummary = bridge.benchmarkSummary()

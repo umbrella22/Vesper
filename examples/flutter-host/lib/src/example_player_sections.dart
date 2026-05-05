@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vesper_player/vesper_player.dart';
+import 'package:vesper_player_cast/vesper_player_cast.dart';
+import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
 import 'example_player_helpers.dart';
 import 'example_player_models.dart';
@@ -282,6 +284,88 @@ class ExampleResilienceSection extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class ExampleSystemPlaybackSection extends StatelessWidget {
+  const ExampleSystemPlaybackSection({
+    super.key,
+    required this.palette,
+    required this.controller,
+    required this.permissionStatus,
+    required this.onRequestPermission,
+    this.castMessage,
+  });
+
+  final ExampleHostPalette palette;
+  final VesperPlayerController controller;
+  final VesperSystemPlaybackPermissionStatus permissionStatus;
+  final VoidCallback onRequestPermission;
+  final String? castMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    return ExampleSectionShell(
+      palette: palette,
+      title: '系统播放',
+      subtitle: '后台音频、锁屏控制、AirPlay 和 Android Cast 的宿主集成入口。',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              _RouteButtonFrame(
+                palette: palette,
+                child: ui.VesperAirPlayRouteButton(
+                  controller: controller,
+                  tintColor: palette.title,
+                  activeTintColor: palette.primaryAction,
+                ),
+              ),
+              _RouteButtonFrame(
+                palette: palette,
+                child: const VesperCastButton(),
+              ),
+              OutlinedButton(
+                onPressed: onRequestPermission,
+                child: Text('通知权限：${permissionStatus.name}'),
+              ),
+            ],
+          ),
+          if (castMessage != null) ...<Widget>[
+            const SizedBox(height: 12),
+            Text(
+              castMessage!,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.body),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteButtonFrame extends StatelessWidget {
+  const _RouteButtonFrame({required this.palette, required this.child});
+
+  final ExampleHostPalette palette;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: palette.sectionBackground,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: palette.sectionStroke),
+      ),
+      child: Padding(padding: const EdgeInsets.all(4), child: child),
     );
   }
 }

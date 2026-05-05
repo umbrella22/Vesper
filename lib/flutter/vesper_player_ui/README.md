@@ -21,6 +21,8 @@ Exported from `package:vesper_player_ui/vesper_player_ui.dart`:
 - Stage helpers: bottom-sheet entry types, formatting helpers
 - Stage models: presentation-layer DTOs consumed by `VesperPlayerStage`
 - Stage device controls: brightness / volume gesture wiring helpers
+- `VesperAirPlayRouteButton` — iOS `AVRoutePickerView` wrapper bound to the
+  active `VesperPlayerController`
 
 ## Installation
 
@@ -42,6 +44,9 @@ can depend on `vesper_player` directly and skip this package.
 `VesperPlayerStage` keeps decorative full-stage overlays non-interactive, so
 empty video-space gestures continue to work while controls are visible. Only
 the actual buttons, sheet entries, and timeline receive pointer events.
+
+`VesperAirPlayRouteButton` is an iOS-only route picker. It renders an empty box
+on non-iOS platforms so shared control rows can keep a stable layout.
 
 ## Minimum Requirements
 

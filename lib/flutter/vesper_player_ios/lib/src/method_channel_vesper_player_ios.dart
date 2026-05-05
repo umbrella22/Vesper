@@ -219,6 +219,53 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
   }
 
   @override
+  Future<void> configureSystemPlayback(
+    String playerId,
+    VesperSystemPlaybackConfiguration configuration,
+  ) {
+    return _invokeVoid('configureSystemPlayback', <String, Object?>{
+      'playerId': playerId,
+      'configuration': configuration.toMap(),
+    });
+  }
+
+  @override
+  Future<void> updateSystemPlaybackMetadata(
+    String playerId,
+    VesperSystemPlaybackMetadata metadata,
+  ) {
+    return _invokeVoid('updateSystemPlaybackMetadata', <String, Object?>{
+      'playerId': playerId,
+      'metadata': metadata.toMap(),
+    });
+  }
+
+  @override
+  Future<void> clearSystemPlayback(String playerId) {
+    return _invokeVoid('clearSystemPlayback', <String, Object?>{
+      'playerId': playerId,
+    });
+  }
+
+  @override
+  Future<VesperSystemPlaybackPermissionStatus>
+      requestSystemPlaybackPermissions() async {
+    final result = await _invokeMethod<Object?>(
+      'requestSystemPlaybackPermissions',
+    );
+    return _decodePermissionStatus(result);
+  }
+
+  @override
+  Future<VesperSystemPlaybackPermissionStatus>
+      getSystemPlaybackPermissionStatus() async {
+    final result = await _invokeMethod<Object?>(
+      'getSystemPlaybackPermissionStatus',
+    );
+    return _decodePermissionStatus(result);
+  }
+
+  @override
   Future<VesperPlatformDownloadCreateResult> createDownloadManager({
     VesperDownloadConfiguration configuration =
         const VesperDownloadConfiguration(),
@@ -342,6 +389,17 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
       rethrow;
     }
   }
+}
+
+VesperSystemPlaybackPermissionStatus _decodePermissionStatus(Object? raw) {
+  if (raw is String) {
+    for (final value in VesperSystemPlaybackPermissionStatus.values) {
+      if (value.name == raw) {
+        return value;
+      }
+    }
+  }
+  return VesperSystemPlaybackPermissionStatus.denied;
 }
 
 VesperViewportHint _deriveViewportHint(VesperPlayerViewport viewport) {

@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import Combine
 import Flutter
 import UIKit
@@ -44,6 +45,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         eventChannel.setStreamHandler(instance)
         downloadEventChannel.setStreamHandler(DownloadEventStreamHandler(plugin: instance))
         registrar.register(PlayerViewFactory(plugin: instance), withId: playerViewType)
+        registrar.register(AirPlayRouteButtonFactory(plugin: instance), withId: airPlayRouteButtonViewType)
     }
 
     public func onListen(
@@ -243,6 +245,40 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 emitSnapshot(for: session)
                 return nil
             }
+        case "configureSystemPlayback":
+            handleSessionCommand(call, result: result) { session in
+                let configurationMap = try requireNestedMap(
+                    arguments: arguments(of: call),
+                    key: "configuration"
+                )
+                session.lastError = nil
+                session.controller.configureSystemPlayback(
+                    configurationMap.toSystemPlaybackConfiguration()
+                )
+                emitSnapshot(for: session)
+                return nil
+            }
+        case "updateSystemPlaybackMetadata":
+            handleSessionCommand(call, result: result) { session in
+                let metadataMap = try requireNestedMap(arguments: arguments(of: call), key: "metadata")
+                session.lastError = nil
+                session.controller.updateSystemPlaybackMetadata(
+                    metadataMap.toSystemPlaybackMetadata()
+                )
+                emitSnapshot(for: session)
+                return nil
+            }
+        case "clearSystemPlayback":
+            handleSessionCommand(call, result: result) { session in
+                session.lastError = nil
+                session.controller.clearSystemPlayback()
+                emitSnapshot(for: session)
+                return nil
+            }
+        case "requestSystemPlaybackPermissions":
+            result(VesperPlayerController.requestSystemPlaybackPermissions().toWireName())
+        case "getSystemPlaybackPermissionStatus":
+            result(VesperPlayerController.getSystemPlaybackPermissionStatus().toWireName())
         case "createDownloadTask":
             handleDownloadSessionCommand(call, result: result) { session in
                 let arguments = arguments(of: call)
@@ -887,6 +923,63 @@ private final class PlayerViewFactory: NSObject, FlutterPlatformViewFactory {
     }
 }
 
+private final class AirPlayRouteButtonFactory: NSObject, FlutterPlatformViewFactory {
+    private weak var plugin: VesperPlayerIosPlugin?
+
+    init(plugin: VesperPlayerIosPlugin) {
+        self.plugin = plugin
+    }
+
+    func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
+        FlutterStandardMessageCodec.sharedInstance()
+    }
+
+    func create(
+        withFrame frame: CGRect,
+        viewIdentifier viewId: Int64,
+        arguments args: Any?
+    ) -> FlutterPlatformView {
+        let arguments = args as? [String: Any] ?? [:]
+        let view = AVRoutePickerView(frame: frame)
+        view.backgroundColor = .clear
+        view.prioritizesVideoDevices = arguments["prioritizesVideoDevices"] as? Bool ?? true
+        if let tintColor = (arguments["tintColor"] as? NSNumber)?.uint32Value {
+            view.tintColor = UIColor(argb: tintColor)
+        }
+        if let activeTintColor = (arguments["activeTintColor"] as? NSNumber)?.uint32Value {
+            view.activeTintColor = UIColor(argb: activeTintColor)
+        }
+
+        let routeView = AirPlayRoutePlatformView(routePickerView: view)
+        if let playerId = arguments["playerId"] as? String {
+            Task { @MainActor [weak plugin, weak routeView] in
+                guard let plugin, let routeView, let session = plugin.sessions[playerId] else { return }
+                routeView.bind(controller: session.controller)
+            }
+        }
+        return routeView
+    }
+}
+
+private final class AirPlayRoutePlatformView: NSObject, FlutterPlatformView {
+    private let routePickerView: AVRoutePickerView
+
+    init(routePickerView: AVRoutePickerView) {
+        self.routePickerView = routePickerView
+    }
+
+    @MainActor
+    func bind(controller: VesperPlayerController) {
+        _ = controller.routePickerPlayer
+    }
+
+    func view() -> UIView {
+        routePickerView
+    }
+
+    func dispose() {}
+}
+
 private final class PlayerPlatformView: NSObject, FlutterPlatformView {
     private let hostView: PlayerSurfaceView
     private let onDispose: () -> Void
@@ -1096,6 +1189,30 @@ private extension Dictionary where Key == String, Value == Any {
             kind: kind,
             protocol: `protocol`,
             headers: headers
+        )
+    }
+
+    func toSystemPlaybackConfiguration() -> VesperSystemPlaybackConfiguration {
+        let backgroundMode: VesperBackgroundPlaybackMode =
+            (self["backgroundMode"] as? String) == "disabled" ? .disabled : .continueAudio
+        return VesperSystemPlaybackConfiguration(
+            enabled: self["enabled"] as? Bool ?? true,
+            backgroundMode: backgroundMode,
+            showSystemControls: self["showSystemControls"] as? Bool ?? true,
+            showSeekActions: self["showSeekActions"] as? Bool ?? true,
+            metadata: (try? nestedMap(self["metadata"]))?.toSystemPlaybackMetadata()
+        )
+    }
+
+    func toSystemPlaybackMetadata() -> VesperSystemPlaybackMetadata {
+        VesperSystemPlaybackMetadata(
+            title: self["title"] as? String ?? "",
+            artist: self["artist"] as? String,
+            albumTitle: self["albumTitle"] as? String,
+            artworkUri: self["artworkUri"] as? String,
+            contentUri: self["contentUri"] as? String,
+            durationMs: (self["durationMs"] as? NSNumber)?.int64Value,
+            isLive: self["isLive"] as? Bool ?? false
         )
     }
 
@@ -1699,6 +1816,19 @@ private extension PlaybackStateUi {
     }
 }
 
+private extension VesperSystemPlaybackPermissionStatus {
+    func toWireName() -> String {
+        switch self {
+        case .notRequired:
+            "notRequired"
+        case .granted:
+            "granted"
+        case .denied:
+            "denied"
+        }
+    }
+}
+
 private extension TimelineKindUi {
     func toWireName() -> String {
         switch self {
@@ -1862,7 +1992,18 @@ private extension VesperDownloadContentFormat {
     }
 }
 
+private extension UIColor {
+    convenience init(argb: UInt32) {
+        let alpha = CGFloat((argb >> 24) & 0xff) / 255.0
+        let red = CGFloat((argb >> 16) & 0xff) / 255.0
+        let green = CGFloat((argb >> 8) & 0xff) / 255.0
+        let blue = CGFloat(argb & 0xff) / 255.0
+        self.init(red: red, green: green, blue: blue, alpha: alpha)
+    }
+}
+
 private let methodChannelName = "io.github.ikaros.vesper_player"
 private let eventChannelName = "io.github.ikaros.vesper_player/events"
 private let downloadEventChannelName = "io.github.ikaros.vesper_player/download_events"
 private let playerViewType = "io.github.ikaros.vesper_player/platform_view"
+private let airPlayRouteButtonViewType = "io.github.ikaros.vesper_player/airplay_route_button"

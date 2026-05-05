@@ -88,6 +88,17 @@ enum class PlaybackStateUi {
     Finished,
 }
 
+enum class VesperBackgroundPlaybackMode {
+    Disabled,
+    ContinueAudio,
+}
+
+enum class VesperSystemPlaybackPermissionStatus {
+    NotRequired,
+    Granted,
+    Denied,
+}
+
 data class PlayerHostUiState(
     val title: String,
     val subtitle: String,
@@ -97,6 +108,24 @@ data class PlayerHostUiState(
     val isBuffering: Boolean,
     val isInterrupted: Boolean,
     val timeline: TimelineUiState,
+)
+
+data class VesperSystemPlaybackMetadata(
+    val title: String,
+    val artist: String? = null,
+    val albumTitle: String? = null,
+    val artworkUri: String? = null,
+    val contentUri: String? = null,
+    val durationMs: Long? = null,
+    val isLive: Boolean = false,
+)
+
+data class VesperSystemPlaybackConfiguration(
+    val enabled: Boolean = true,
+    val backgroundMode: VesperBackgroundPlaybackMode = VesperBackgroundPlaybackMode.ContinueAudio,
+    val showSystemControls: Boolean = true,
+    val showSeekActions: Boolean = true,
+    val metadata: VesperSystemPlaybackMetadata? = null,
 )
 
 data class VesperVideoVariantObservation(
@@ -142,6 +171,9 @@ interface PlayerBridge {
     fun setSubtitleTrackSelection(selection: VesperTrackSelection)
     fun setAbrPolicy(policy: VesperAbrPolicy)
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy)
+    fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration)
+    fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata)
+    fun clearSystemPlayback()
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent>
     fun benchmarkSummary(): VesperBenchmarkSummary
 }

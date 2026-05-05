@@ -192,4 +192,73 @@ void main() {
       },
     );
   });
+
+  test('system playback calls forward payloads', () async {
+    final platform = MethodChannelVesperPlayerAndroid();
+    const metadata = VesperSystemPlaybackMetadata(
+      title: 'Episode',
+      artist: 'Vesper',
+      contentUri: 'https://example.com/video.m3u8',
+      durationMs: 120000,
+    );
+    const configuration = VesperSystemPlaybackConfiguration(
+      metadata: metadata,
+    );
+
+    await platform.configureSystemPlayback('android-player', configuration);
+    await platform.updateSystemPlaybackMetadata('android-player', metadata);
+    await platform.clearSystemPlayback('android-player');
+
+    expect(calls.map((call) => call.method), <String>[
+      'configureSystemPlayback',
+      'updateSystemPlaybackMetadata',
+      'clearSystemPlayback',
+    ]);
+    expect(
+      Map<Object?, Object?>.from(calls[0].arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'android-player',
+        'configuration': configuration.toMap(),
+      },
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[1].arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'android-player',
+        'metadata': metadata.toMap(),
+      },
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[2].arguments as Map),
+      <Object?, Object?>{'playerId': 'android-player'},
+    );
+  });
+
+  test('requestSystemPlaybackPermissions decodes platform status', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return 'granted';
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    final status = await platform.requestSystemPlaybackPermissions();
+
+    expect(status, VesperSystemPlaybackPermissionStatus.granted);
+    expect(calls.single.method, 'requestSystemPlaybackPermissions');
+  });
+
+  test('getSystemPlaybackPermissionStatus decodes platform status', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return 'denied';
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    final status = await platform.getSystemPlaybackPermissionStatus();
+
+    expect(status, VesperSystemPlaybackPermissionStatus.denied);
+    expect(calls.single.method, 'getSystemPlaybackPermissionStatus');
+  });
 }

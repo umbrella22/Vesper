@@ -8,6 +8,90 @@ void main() {
     expect(VesperPlayerRenderSurfaceKind.surfaceView.name, 'surfaceView');
   });
 
+  test('system playback DTOs keep stable defaults and wire names', () {
+    const metadata = VesperSystemPlaybackMetadata(
+      title: 'Episode 1',
+      artist: 'Vesper',
+      albumTitle: 'SDK Samples',
+      artworkUri: 'https://example.com/artwork.jpg',
+      contentUri: 'https://example.com/video.m3u8',
+      durationMs: 60000,
+      isLive: true,
+    );
+    const configuration = VesperSystemPlaybackConfiguration(
+      metadata: metadata,
+    );
+
+    expect(VesperBackgroundPlaybackMode.disabled.name, 'disabled');
+    expect(VesperBackgroundPlaybackMode.continueAudio.name, 'continueAudio');
+    expect(
+        VesperSystemPlaybackPermissionStatus.notRequired.name, 'notRequired');
+    expect(configuration.toMap(), <String, Object?>{
+      'enabled': true,
+      'backgroundMode': 'continueAudio',
+      'showSystemControls': true,
+      'showSeekActions': true,
+      'metadata': metadata.toMap(),
+    });
+    expect(
+      VesperSystemPlaybackConfiguration.fromMap(configuration.toMap())
+          .metadata
+          ?.title,
+      'Episode 1',
+    );
+  });
+
+  test('system playback DTOs decode legacy sparse maps', () {
+    final configuration = VesperSystemPlaybackConfiguration.fromMap(
+      <Object?, Object?>{
+        'metadata': <Object?, Object?>{'title': 'Sparse'},
+      },
+    );
+
+    expect(configuration.enabled, isTrue);
+    expect(configuration.backgroundMode,
+        VesperBackgroundPlaybackMode.continueAudio);
+    expect(configuration.showSystemControls, isTrue);
+    expect(configuration.showSeekActions, isTrue);
+    expect(configuration.metadata?.title, 'Sparse');
+    expect(configuration.metadata?.isLive, isFalse);
+  });
+
+  test('external playback DTOs keep stable defaults and wire names', () {
+    const route = VesperExternalPlaybackRouteSnapshot(
+      kind: VesperExternalPlaybackRouteKind.cast,
+      routeId: 'living-room',
+      routeName: 'Living Room TV',
+      active: true,
+      available: true,
+    );
+    const availability = VesperExternalPlaybackAvailability(
+      airPlayAvailable: true,
+      castAvailable: true,
+      activeRoute: route,
+    );
+    const picker = VesperRoutePickerConfiguration();
+
+    expect(VesperExternalPlaybackRouteKind.none.name, 'none');
+    expect(VesperExternalPlaybackRouteKind.airPlay.name, 'airPlay');
+    expect(VesperExternalPlaybackRouteKind.cast.name, 'cast');
+    expect(availability.hasAvailableRoute, isTrue);
+    expect(
+      VesperExternalPlaybackAvailability.fromMap(availability.toMap())
+          .activeRoute
+          .routeName,
+      'Living Room TV',
+    );
+    expect(picker.toMap(), <String, Object?>{
+      'prioritizesVideoDevices': true,
+    });
+    expect(
+      VesperRoutePickerConfiguration.fromMap(const <Object?, Object?>{})
+          .prioritizesVideoDevices,
+      isTrue,
+    );
+  });
+
   test('player source preserves request headers in wire map', () {
     final source = VesperPlayerSource.dash(
       uri: 'https://example.com/video.mpd',
