@@ -33,7 +33,7 @@ directly.
 - Render path: `VesperPlayerController.create(renderSurfaceKind: ...)` selects the Android surface for Flutter playback. `auto` maps to `TextureView` for overlay and gesture compatibility. Use `surfaceView` only when the host explicitly wants the native Android HDR / high-frame-rate fullscreen path and can keep Flutter overlays safe.
 - Runtime snapshot: exposes the currently active adaptive video variant through `controller.snapshot.effectiveVideoTrackId`
 - Runtime observation: also exposes `controller.snapshot.videoVariantObservation`, derived from ExoPlayer's active `videoFormat` bitrate and rendered size
-- System playback: `configureSystemPlayback` binds the active ExoPlayer to a Media3 `MediaSessionService`, starts a media playback foreground service while audio is playing, filters seek commands when `showSeekActions` is disabled, and clears the session on pause / stop / dispose
+- System playback: `configureSystemPlayback` binds the active ExoPlayer to a Media3 `MediaSessionService`, starts a media playback foreground service while audio is playing, exposes default 10-second seek back / play-pause / seek forward media actions through MediaSession button preferences, filters seek commands when `showSeekActions` is disabled, and clears the session on pause / stop / dispose
 - Rust runtime: bridged through JNI so defaults, timeline, resilience, and playlist semantics stay aligned with the rest of the SDK
 
 ## System Playback Host Requirements

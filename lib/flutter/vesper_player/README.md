@@ -176,6 +176,7 @@ await controller.configureSystemPlayback(
       artist: 'Vesper Player SDK',
       contentUri: 'https://example.com/stream.m3u8',
     ),
+    controls: VesperSystemPlaybackControls.videoDefault(),
   ),
 );
 
@@ -186,8 +187,11 @@ await controller.clearSystemPlayback();
 ```
 
 The default configuration is enabled, continues audio in the background, shows
-system controls, and enables seek actions. The SDK supports one active system media
-session: the most recently configured controller owns system controls.
+system controls, and enables 10-second seek back / play-pause / seek forward
+system media actions. Custom seek offsets are clamped to 1-60 seconds, and
+`showSeekActions: false` removes seek actions even when `controls` includes
+them. The SDK supports one active system media session: the most recently
+configured controller owns system controls.
 
 Host apps still own platform declarations. iOS apps must include
 `UIBackgroundModes = audio` when background playback is intended. Android apps

@@ -243,6 +243,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     await controller.configureSystemPlayback(
       VesperSystemPlaybackConfiguration(
         metadata: _systemPlaybackMetadataForSource(source),
+        controls: const VesperSystemPlaybackControls.videoDefault(),
       ),
     );
   }

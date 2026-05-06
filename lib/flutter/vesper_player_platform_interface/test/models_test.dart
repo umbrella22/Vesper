@@ -32,6 +32,7 @@ void main() {
       'showSystemControls': true,
       'showSeekActions': true,
       'metadata': metadata.toMap(),
+      'controls': const VesperSystemPlaybackControls.videoDefault().toMap(),
     });
     expect(
       VesperSystemPlaybackConfiguration.fromMap(configuration.toMap())
@@ -55,6 +56,69 @@ void main() {
     expect(configuration.showSeekActions, isTrue);
     expect(configuration.metadata?.title, 'Sparse');
     expect(configuration.metadata?.isLive, isFalse);
+    expect(
+      configuration.toMap()['controls'],
+      const VesperSystemPlaybackControls.videoDefault().toMap(),
+    );
+  });
+
+  test('system playback controls normalize seek offsets and disabled seek', () {
+    final decoded = VesperSystemPlaybackConfiguration.fromMap(
+      <Object?, Object?>{
+        'controls': <Object?, Object?>{
+          'compactButtons': <Object?>[
+            <Object?, Object?>{'kind': 'seekBack', 'seekOffsetMs': 5000},
+            <Object?, Object?>{'kind': 'playPause'},
+            <Object?, Object?>{'kind': 'seekForward', 'seekOffsetMs': 15000},
+          ],
+        },
+      },
+    );
+
+    expect(
+      decoded.toMap()['controls'],
+      <String, Object?>{
+        'compactButtons': <Object?>[
+          <String, Object?>{'kind': 'seekBack', 'seekOffsetMs': 5000},
+          <String, Object?>{'kind': 'playPause'},
+          <String, Object?>{'kind': 'seekForward', 'seekOffsetMs': 15000},
+        ],
+      },
+    );
+
+    const configuration = VesperSystemPlaybackConfiguration(
+      controls: VesperSystemPlaybackControls(
+        compactButtons: <VesperSystemPlaybackControlButton>[
+          VesperSystemPlaybackControlButton.seekBack(500),
+          VesperSystemPlaybackControlButton.seekForward(15000),
+          VesperSystemPlaybackControlButton.seekForward(90000),
+        ],
+      ),
+    );
+
+    expect(
+      configuration.toMap()['controls'],
+      <String, Object?>{
+        'compactButtons': <Object?>[
+          <String, Object?>{'kind': 'seekBack', 'seekOffsetMs': 1000},
+          <String, Object?>{'kind': 'playPause'},
+          <String, Object?>{'kind': 'seekForward', 'seekOffsetMs': 60000},
+        ],
+      },
+    );
+
+    const seekDisabled = VesperSystemPlaybackConfiguration(
+      showSeekActions: false,
+      controls: VesperSystemPlaybackControls.videoDefault(),
+    );
+    expect(
+      seekDisabled.toMap()['controls'],
+      <String, Object?>{
+        'compactButtons': <Object?>[
+          <String, Object?>{'kind': 'playPause'},
+        ],
+      },
+    );
   });
 
   test('external playback DTOs keep stable defaults and wire names', () {

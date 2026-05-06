@@ -62,6 +62,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControls
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
 import java.io.File
@@ -192,6 +193,7 @@ fun PlayerHostApp(
                         title = source.label.ifBlank { source.uri },
                         contentUri = source.uri,
                     ),
+                controls = VesperSystemPlaybackControls.videoDefault(),
             ),
         )
     }

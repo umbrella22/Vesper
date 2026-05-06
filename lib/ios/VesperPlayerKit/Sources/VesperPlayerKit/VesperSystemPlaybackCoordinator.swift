@@ -34,7 +34,7 @@ public final class VesperSystemPlaybackCoordinator {
         }
 
         if configuration.showSystemControls {
-            registerRemoteCommands(showSeekActions: configuration.showSeekActions)
+            registerRemoteCommands(configuration: configuration)
         } else {
             unregisterRemoteCommands()
         }
@@ -79,7 +79,7 @@ public final class VesperSystemPlaybackCoordinator {
         }
     }
 
-    private func registerRemoteCommands(showSeekActions: Bool) {
+    private func registerRemoteCommands(configuration: VesperSystemPlaybackConfiguration) {
         unregisterRemoteCommands()
 
         let commandCenter = MPRemoteCommandCenter.shared()
@@ -100,23 +100,36 @@ public final class VesperSystemPlaybackCoordinator {
             return .success
         }
 
-        commandCenter.changePlaybackPositionCommand.isEnabled = showSeekActions
-        commandCenter.skipForwardCommand.isEnabled = showSeekActions
-        commandCenter.skipBackwardCommand.isEnabled = showSeekActions
+        let controls = configuration.controls.normalized(
+            showSeekActions: configuration.showSeekActions
+        )
+        let seekBackOffsetMs = controls.seekOffsetMs(for: .seekBack)
+        let seekForwardOffsetMs = controls.seekOffsetMs(for: .seekForward)
+        let enablesSeek = configuration.showSeekActions
 
-        guard showSeekActions else { return }
+        commandCenter.changePlaybackPositionCommand.isEnabled = enablesSeek
+        commandCenter.skipForwardCommand.isEnabled = enablesSeek && seekForwardOffsetMs != nil
+        commandCenter.skipBackwardCommand.isEnabled = enablesSeek && seekBackOffsetMs != nil
 
-        commandCenter.skipForwardCommand.preferredIntervals = [15]
-        commandCenter.skipBackwardCommand.preferredIntervals = [15]
-        addTarget(commandCenter.skipForwardCommand) { [weak self] event in
-            let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? 15
-            self?.controller?.seek(by: Int64(interval * 1000))
-            return .success
+        guard enablesSeek else { return }
+
+        if let seekForwardOffsetMs {
+            commandCenter.skipForwardCommand.preferredIntervals = [
+                NSNumber(value: Double(seekForwardOffsetMs) / 1000.0),
+            ]
+            addTarget(commandCenter.skipForwardCommand) { [weak self] _ in
+                self?.controller?.seek(by: seekForwardOffsetMs)
+                return .success
+            }
         }
-        addTarget(commandCenter.skipBackwardCommand) { [weak self] event in
-            let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? 15
-            self?.controller?.seek(by: -Int64(interval * 1000))
-            return .success
+        if let seekBackOffsetMs {
+            commandCenter.skipBackwardCommand.preferredIntervals = [
+                NSNumber(value: Double(seekBackOffsetMs) / 1000.0),
+            ]
+            addTarget(commandCenter.skipBackwardCommand) { [weak self] _ in
+                self?.controller?.seek(by: -seekBackOffsetMs)
+                return .success
+            }
         }
         addTarget(commandCenter.changePlaybackPositionCommand) { [weak self] event in
             guard
@@ -161,6 +174,8 @@ public final class VesperSystemPlaybackCoordinator {
         commandCenter.changePlaybackPositionCommand.isEnabled = false
         commandCenter.skipForwardCommand.isEnabled = false
         commandCenter.skipBackwardCommand.isEnabled = false
+        commandCenter.skipForwardCommand.preferredIntervals = []
+        commandCenter.skipBackwardCommand.preferredIntervals = []
     }
 
     private func updateNowPlayingInfo(uiState explicitUiState: PlayerHostUiState? = nil) {

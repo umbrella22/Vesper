@@ -469,7 +469,8 @@ struct PlayerHostView: View {
                 metadata: VesperSystemPlaybackMetadata(
                     title: systemPlaybackTitle(for: source),
                     contentUri: source.uri
-                )
+                ),
+                controls: .videoDefault()
             )
         )
     }

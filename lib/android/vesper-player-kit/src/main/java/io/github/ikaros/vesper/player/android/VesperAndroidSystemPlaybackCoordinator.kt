@@ -7,14 +7,20 @@ import android.os.Bundle
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 
 @OptIn(UnstableApi::class)
 class VesperSystemPlaybackService : MediaSessionService() {
@@ -101,9 +107,10 @@ internal class VesperAndroidSystemPlaybackCoordinator(
 
         releaseSession()
         this.player = player
-        if (player != null && configuration?.enabled == true) {
+        if (player != null && configuration?.shouldExposeSystemControls == true) {
             ensureSession()
             updatePlayerMetadata()
+            refreshMediaButtonPreferences()
         }
         refreshFromPlayer()
     }
@@ -111,10 +118,13 @@ internal class VesperAndroidSystemPlaybackCoordinator(
     fun configure(configuration: VesperSystemPlaybackConfiguration) {
         val shouldRebuildSession =
             this.configuration?.showSeekActions != null &&
-                this.configuration?.showSeekActions != configuration.showSeekActions
+                (
+                    this.configuration?.showSeekActions != configuration.showSeekActions ||
+                        this.configuration?.showSystemControls != configuration.showSystemControls
+                )
         this.configuration = configuration
         configuration.metadata?.let { metadata = it }
-        if (!configuration.enabled) {
+        if (!configuration.shouldExposeSystemControls) {
             releaseSession()
             stopServiceIfNeeded()
             return
@@ -125,12 +135,14 @@ internal class VesperAndroidSystemPlaybackCoordinator(
         }
         ensureSession()
         updatePlayerMetadata()
+        refreshMediaButtonPreferences()
         refreshFromPlayer()
     }
 
     fun updateMetadata(metadata: VesperSystemPlaybackMetadata) {
         this.metadata = metadata
         updatePlayerMetadata()
+        refreshMediaButtonPreferences()
         refreshFromPlayer()
     }
 
@@ -143,7 +155,7 @@ internal class VesperAndroidSystemPlaybackCoordinator(
 
     fun refreshFromPlayer() {
         val config = configuration ?: return stopServiceIfNeeded()
-        if (!config.enabled) {
+        if (!config.shouldExposeSystemControls) {
             stopServiceIfNeeded()
             return
         }
@@ -173,6 +185,7 @@ internal class VesperAndroidSystemPlaybackCoordinator(
             MediaSession.Builder(appContext, exoPlayer)
                 .setId(sessionId)
                 .setCallback(systemPlaybackSessionCallback())
+                .setMediaButtonPreferences(buildMediaButtonPreferences())
                 .build()
                 .also(VesperSystemPlaybackRegistry::claim)
     }
@@ -240,12 +253,85 @@ internal class VesperAndroidSystemPlaybackCoordinator(
         }
     }
 
+    private fun refreshMediaButtonPreferences() {
+        val currentSession = session ?: return
+        runCatching {
+            currentSession.setMediaButtonPreferences(buildMediaButtonPreferences())
+        }.onFailure { error ->
+            Log.w(TAG, "failed to update media button preferences", error)
+        }
+    }
+
+    private fun buildMediaButtonPreferences(): List<CommandButton> {
+        val config = configuration ?: return emptyList()
+        if (!config.shouldExposeSystemControls) {
+            return emptyList()
+        }
+        val controls = config.controls.normalized(showSeekActions = config.showSeekActions)
+        return controls.compactButtons.mapNotNull { button ->
+            when (button.kind) {
+                VesperSystemPlaybackControlKind.PlayPause -> null
+                VesperSystemPlaybackControlKind.SeekBack ->
+                    seekButton(
+                        button = button,
+                        command = SYSTEM_SEEK_BACK_COMMAND,
+                        slot = CommandButton.SLOT_BACK,
+                        displayPrefix = "Seek back",
+                    )
+                VesperSystemPlaybackControlKind.SeekForward ->
+                    seekButton(
+                        button = button,
+                        command = SYSTEM_SEEK_FORWARD_COMMAND,
+                        slot = CommandButton.SLOT_FORWARD,
+                        displayPrefix = "Seek forward",
+                    )
+            }
+        }
+    }
+
+    private fun seekButton(
+        button: VesperSystemPlaybackControlButton,
+        command: SessionCommand,
+        slot: Int,
+        displayPrefix: String,
+    ): CommandButton {
+        val offsetMs = button.normalizedSeekOffsetMs
+        val seconds = offsetMs / 1000L
+        val icon =
+            when (button.kind) {
+                VesperSystemPlaybackControlKind.SeekBack ->
+                    if (offsetMs == DEFAULT_SYSTEM_SEEK_BUTTON_OFFSET_MS) {
+                        CommandButton.ICON_SKIP_BACK_10
+                    } else {
+                        CommandButton.ICON_SKIP_BACK
+                    }
+                VesperSystemPlaybackControlKind.SeekForward ->
+                    if (offsetMs == DEFAULT_SYSTEM_SEEK_BUTTON_OFFSET_MS) {
+                        CommandButton.ICON_SKIP_FORWARD_10
+                    } else {
+                        CommandButton.ICON_SKIP_FORWARD
+                    }
+                VesperSystemPlaybackControlKind.PlayPause -> CommandButton.ICON_PLAY
+            }
+        return CommandButton
+            .Builder(icon)
+            .setSessionCommand(command)
+            .setDisplayName("$displayPrefix $seconds seconds")
+            .setSlots(slot)
+            .build()
+    }
+
     private fun systemPlaybackSessionCallback(): MediaSession.Callback =
         object : MediaSession.Callback {
             override fun onConnect(
                 session: MediaSession,
                 controllerInfo: MediaSession.ControllerInfo,
             ): MediaSession.ConnectionResult {
+                val sessionCommands =
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+                        .buildUpon()
+                        .addSeekCommands(configuration)
+                        .build()
                 val playerCommands =
                     MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
                         .buildUpon()
@@ -255,10 +341,12 @@ internal class VesperAndroidSystemPlaybackCoordinator(
                             }
                         }
                         .build()
-                return MediaSession.ConnectionResult.accept(
-                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
-                    playerCommands,
-                )
+                return MediaSession.ConnectionResult
+                    .AcceptedResultBuilder(session)
+                    .setAvailableSessionCommands(sessionCommands)
+                    .setAvailablePlayerCommands(playerCommands)
+                    .setMediaButtonPreferences(buildMediaButtonPreferences())
+                    .build()
             }
 
             @Suppress("OVERRIDE_DEPRECATION")
@@ -272,7 +360,74 @@ internal class VesperAndroidSystemPlaybackCoordinator(
                 }
                 return SessionResult.RESULT_SUCCESS
             }
+
+            override fun onCustomCommand(
+                session: MediaSession,
+                controllerInfo: MediaSession.ControllerInfo,
+                customCommand: SessionCommand,
+                args: Bundle,
+            ): ListenableFuture<SessionResult> {
+                val result =
+                    when (customCommand.customAction) {
+                        ACTION_SYSTEM_SEEK_BACK ->
+                            handleSystemSeek(
+                                VesperSystemPlaybackControlKind.SeekBack,
+                                direction = -1L,
+                            )
+                        ACTION_SYSTEM_SEEK_FORWARD ->
+                            handleSystemSeek(
+                                VesperSystemPlaybackControlKind.SeekForward,
+                                direction = 1L,
+                            )
+                        else -> SessionResult.RESULT_ERROR_NOT_SUPPORTED
+                    }
+                return Futures.immediateFuture(SessionResult(result))
+            }
         }
+
+    private fun handleSystemSeek(
+        kind: VesperSystemPlaybackControlKind,
+        direction: Long,
+    ): Int {
+        val exoPlayer = player ?: return SessionResult.RESULT_ERROR_INVALID_STATE
+        val config = configuration ?: return SessionResult.RESULT_ERROR_INVALID_STATE
+        if (!config.showSeekActions || !config.shouldExposeSystemControls) {
+            return SessionResult.RESULT_ERROR_PERMISSION_DENIED
+        }
+        val offsetMs =
+            config.controls
+                .normalized(showSeekActions = config.showSeekActions)
+                .seekOffsetMs(kind)
+                ?: return SessionResult.RESULT_ERROR_NOT_SUPPORTED
+        val currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+        val unclampedTarget = currentPosition + (offsetMs * direction)
+        val duration = exoPlayer.duration
+        val target =
+            if (duration != C.TIME_UNSET && duration > 0L) {
+                unclampedTarget.coerceIn(0L, duration)
+            } else {
+                unclampedTarget.coerceAtLeast(0L)
+            }
+        exoPlayer.seekTo(target)
+        return SessionResult.RESULT_SUCCESS
+    }
+}
+
+private fun SessionCommands.Builder.addSeekCommands(
+    configuration: VesperSystemPlaybackConfiguration?,
+): SessionCommands.Builder {
+    val config = configuration ?: return this
+    if (!config.shouldExposeSystemControls) {
+        return this
+    }
+    val controls = config.controls.normalized(showSeekActions = config.showSeekActions)
+    if (controls.seekOffsetMs(VesperSystemPlaybackControlKind.SeekBack) != null) {
+        add(SYSTEM_SEEK_BACK_COMMAND)
+    }
+    if (controls.seekOffsetMs(VesperSystemPlaybackControlKind.SeekForward) != null) {
+        add(SYSTEM_SEEK_FORWARD_COMMAND)
+    }
+    return this
 }
 
 private fun Player.Commands.Builder.removeSeekCommands() {
@@ -303,6 +458,9 @@ private fun Int.isSeekCommand(): Boolean =
         -> true
         else -> false
     }
+
+private val VesperSystemPlaybackConfiguration.shouldExposeSystemControls: Boolean
+    get() = enabled && showSystemControls
 
 private object VesperSystemPlaybackRegistry {
     @Volatile
@@ -348,4 +506,9 @@ private fun VesperSystemPlaybackMetadata.toMediaMetadata(): MediaMetadata {
 
 private const val ACTION_START_SYSTEM_PLAYBACK_SERVICE =
     "io.github.ikaros.vesper.player.android.action.START_SYSTEM_PLAYBACK_SERVICE"
+private const val ACTION_SYSTEM_SEEK_BACK = "io.github.ikaros.vesper.system.seek_back"
+private const val ACTION_SYSTEM_SEEK_FORWARD = "io.github.ikaros.vesper.system.seek_forward"
+private const val DEFAULT_SYSTEM_SEEK_BUTTON_OFFSET_MS = 10_000L
+private val SYSTEM_SEEK_BACK_COMMAND = SessionCommand(ACTION_SYSTEM_SEEK_BACK, Bundle.EMPTY)
+private val SYSTEM_SEEK_FORWARD_COMMAND = SessionCommand(ACTION_SYSTEM_SEEK_FORWARD, Bundle.EMPTY)
 private const val TAG = "VesperSystemPlayback"

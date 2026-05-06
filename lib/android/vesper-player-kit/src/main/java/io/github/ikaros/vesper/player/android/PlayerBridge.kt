@@ -4,6 +4,11 @@ import android.view.ViewGroup
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.absoluteValue
 
+private const val DEFAULT_SYSTEM_PLAYBACK_SEEK_OFFSET_MS = 10_000L
+private const val MIN_SYSTEM_PLAYBACK_SEEK_OFFSET_MS = 1_000L
+private const val MAX_SYSTEM_PLAYBACK_SEEK_OFFSET_MS = 60_000L
+private const val MAX_SYSTEM_PLAYBACK_COMPACT_BUTTONS = 3
+
 enum class PlayerBridgeBackend {
     FakeDemo,
     VesperNativeStub,
@@ -99,6 +104,12 @@ enum class VesperSystemPlaybackPermissionStatus {
     Denied,
 }
 
+enum class VesperSystemPlaybackControlKind {
+    PlayPause,
+    SeekBack,
+    SeekForward,
+}
+
 data class PlayerHostUiState(
     val title: String,
     val subtitle: String,
@@ -120,12 +131,97 @@ data class VesperSystemPlaybackMetadata(
     val isLive: Boolean = false,
 )
 
+data class VesperSystemPlaybackControlButton(
+    val kind: VesperSystemPlaybackControlKind,
+    val seekOffsetMs: Long? = null,
+) {
+    fun normalized(): VesperSystemPlaybackControlButton =
+        when (kind) {
+            VesperSystemPlaybackControlKind.PlayPause ->
+                copy(seekOffsetMs = null)
+            VesperSystemPlaybackControlKind.SeekBack,
+            VesperSystemPlaybackControlKind.SeekForward,
+            -> copy(seekOffsetMs = normalizedSeekOffsetMs)
+        }
+
+    val normalizedSeekOffsetMs: Long
+        get() = (seekOffsetMs ?: DEFAULT_SYSTEM_PLAYBACK_SEEK_OFFSET_MS)
+            .coerceIn(
+                MIN_SYSTEM_PLAYBACK_SEEK_OFFSET_MS,
+                MAX_SYSTEM_PLAYBACK_SEEK_OFFSET_MS,
+            )
+
+    companion object {
+        fun playPause(): VesperSystemPlaybackControlButton =
+            VesperSystemPlaybackControlButton(VesperSystemPlaybackControlKind.PlayPause)
+
+        fun seekBack(offsetMs: Long = DEFAULT_SYSTEM_PLAYBACK_SEEK_OFFSET_MS): VesperSystemPlaybackControlButton =
+            VesperSystemPlaybackControlButton(VesperSystemPlaybackControlKind.SeekBack, offsetMs)
+
+        fun seekForward(offsetMs: Long = DEFAULT_SYSTEM_PLAYBACK_SEEK_OFFSET_MS): VesperSystemPlaybackControlButton =
+            VesperSystemPlaybackControlButton(VesperSystemPlaybackControlKind.SeekForward, offsetMs)
+    }
+}
+
+data class VesperSystemPlaybackControls(
+    val compactButtons: List<VesperSystemPlaybackControlButton> = videoDefaultButtons(),
+) {
+    fun normalized(showSeekActions: Boolean = true): VesperSystemPlaybackControls {
+        var buttons =
+            compactButtons
+                .take(MAX_SYSTEM_PLAYBACK_COMPACT_BUTTONS)
+                .map { it.normalized() }
+                .toMutableList()
+
+        if (buttons.isEmpty()) {
+            buttons = videoDefaultButtons().map { it.normalized() }.toMutableList()
+        }
+        if (buttons.size == MAX_SYSTEM_PLAYBACK_COMPACT_BUTTONS &&
+            buttons[1].kind != VesperSystemPlaybackControlKind.PlayPause
+        ) {
+            buttons[1] = VesperSystemPlaybackControlButton.playPause()
+        }
+        if (buttons.none { it.kind == VesperSystemPlaybackControlKind.PlayPause }) {
+            buttons = videoDefaultButtons().map { it.normalized() }.toMutableList()
+        }
+        if (!showSeekActions) {
+            buttons.removeAll {
+                it.kind == VesperSystemPlaybackControlKind.SeekBack ||
+                    it.kind == VesperSystemPlaybackControlKind.SeekForward
+            }
+            if (buttons.isEmpty()) {
+                buttons.add(VesperSystemPlaybackControlButton.playPause())
+            }
+        }
+
+        return copy(compactButtons = buttons)
+    }
+
+    fun seekOffsetMs(kind: VesperSystemPlaybackControlKind): Long? =
+        compactButtons
+            .firstOrNull { it.kind == kind }
+            ?.normalizedSeekOffsetMs
+
+    companion object {
+        fun videoDefault(): VesperSystemPlaybackControls =
+            VesperSystemPlaybackControls(videoDefaultButtons())
+
+        private fun videoDefaultButtons(): List<VesperSystemPlaybackControlButton> =
+            listOf(
+                VesperSystemPlaybackControlButton.seekBack(),
+                VesperSystemPlaybackControlButton.playPause(),
+                VesperSystemPlaybackControlButton.seekForward(),
+            )
+    }
+}
+
 data class VesperSystemPlaybackConfiguration(
     val enabled: Boolean = true,
     val backgroundMode: VesperBackgroundPlaybackMode = VesperBackgroundPlaybackMode.ContinueAudio,
     val showSystemControls: Boolean = true,
     val showSeekActions: Boolean = true,
     val metadata: VesperSystemPlaybackMetadata? = null,
+    val controls: VesperSystemPlaybackControls = VesperSystemPlaybackControls.videoDefault(),
 )
 
 data class VesperVideoVariantObservation(

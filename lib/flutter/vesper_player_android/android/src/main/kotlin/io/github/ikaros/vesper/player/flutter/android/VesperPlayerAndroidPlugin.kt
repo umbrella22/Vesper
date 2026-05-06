@@ -60,6 +60,9 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlButton
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlKind
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControls
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
@@ -1163,6 +1166,11 @@ private fun Map<String, Any?>.toSystemPlaybackConfiguration(): VesperSystemPlayb
             (this["metadata"] as? Map<*, *>)
                 ?.stringMap()
                 ?.toSystemPlaybackMetadata(),
+        controls =
+            (this["controls"] as? Map<*, *>)
+                ?.stringMap()
+                ?.toSystemPlaybackControls()
+                ?: VesperSystemPlaybackControls.videoDefault(),
     )
 
 private fun Map<String, Any?>.toSystemPlaybackMetadata(): VesperSystemPlaybackMetadata =
@@ -1175,6 +1183,27 @@ private fun Map<String, Any?>.toSystemPlaybackMetadata(): VesperSystemPlaybackMe
         durationMs = (this["durationMs"] as? Number)?.toLong(),
         isLive = this["isLive"] as? Boolean ?: false,
     )
+
+private fun Map<String, Any?>.toSystemPlaybackControls(): VesperSystemPlaybackControls =
+    VesperSystemPlaybackControls(
+        compactButtons =
+            (this["compactButtons"] as? List<*>)
+                ?.mapNotNull { (it as? Map<*, *>)?.stringMap()?.toSystemPlaybackControlButton() }
+                ?: emptyList(),
+    )
+
+private fun Map<String, Any?>.toSystemPlaybackControlButton(): VesperSystemPlaybackControlButton {
+    val kind =
+        when (this["kind"] as? String) {
+            "seekBack" -> VesperSystemPlaybackControlKind.SeekBack
+            "seekForward" -> VesperSystemPlaybackControlKind.SeekForward
+            else -> VesperSystemPlaybackControlKind.PlayPause
+        }
+    return VesperSystemPlaybackControlButton(
+        kind = kind,
+        seekOffsetMs = (this["seekOffsetMs"] as? Number)?.toLong(),
+    )
+}
 
 private fun Map<String, Any?>.toDownloadConfiguration(): VesperDownloadConfiguration =
     VesperDownloadConfiguration(

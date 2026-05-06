@@ -669,5 +669,11 @@ private class FakeBindings(
 
     override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
 
+    override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) = Unit
+
+    override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) = Unit
+
+    override fun clearSystemPlayback() = Unit
+
     fun currentUpdateListener(): (() -> Unit)? = updateListener
 }

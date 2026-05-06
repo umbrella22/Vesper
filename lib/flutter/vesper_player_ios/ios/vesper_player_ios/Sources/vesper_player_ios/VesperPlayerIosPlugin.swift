@@ -1200,7 +1200,9 @@ private extension Dictionary where Key == String, Value == Any {
             backgroundMode: backgroundMode,
             showSystemControls: self["showSystemControls"] as? Bool ?? true,
             showSeekActions: self["showSeekActions"] as? Bool ?? true,
-            metadata: (try? nestedMap(self["metadata"]))?.toSystemPlaybackMetadata()
+            metadata: (try? nestedMap(self["metadata"]))?.toSystemPlaybackMetadata(),
+            controls: (try? nestedMap(self["controls"]))?.toSystemPlaybackControls()
+                ?? .videoDefault()
         )
     }
 
@@ -1213,6 +1215,28 @@ private extension Dictionary where Key == String, Value == Any {
             contentUri: self["contentUri"] as? String,
             durationMs: (self["durationMs"] as? NSNumber)?.int64Value,
             isLive: self["isLive"] as? Bool ?? false
+        )
+    }
+
+    func toSystemPlaybackControls() -> VesperSystemPlaybackControls {
+        let buttons = (self["compactButtons"] as? [Any])?
+            .compactMap { stringKeyedMap($0)?.toSystemPlaybackControlButton() } ?? []
+        return VesperSystemPlaybackControls(compactButtons: buttons)
+    }
+
+    func toSystemPlaybackControlButton() -> VesperSystemPlaybackControlButton {
+        let kind: VesperSystemPlaybackControlKind
+        switch self["kind"] as? String {
+        case "seekBack":
+            kind = .seekBack
+        case "seekForward":
+            kind = .seekForward
+        default:
+            kind = .playPause
+        }
+        return VesperSystemPlaybackControlButton(
+            kind: kind,
+            seekOffsetMs: (self["seekOffsetMs"] as? NSNumber)?.int64Value
         )
     }
 
