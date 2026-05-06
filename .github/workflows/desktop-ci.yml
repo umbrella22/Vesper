@@ -46,6 +46,15 @@ concurrency:
   group: desktop-ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LINUX_WORKSPACE_EXCLUDES: >-
+    --exclude player-platform-macos
+    --exclude player-platform-windows
+    --exclude player-platform-ios
+    --exclude player-ffi-ios
+    --exclude player-platform-android
+    --exclude player-jni-android
+
 jobs:
   rust-lint:
     name: Rust Format and Clippy
@@ -96,7 +105,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets ${{ env.LINUX_WORKSPACE_EXCLUDES }}
 
   msrv-check:
     name: Rust MSRV Check
@@ -143,7 +152,54 @@ jobs:
             libwayland-dev
 
       - name: Workspace check
-        run: cargo check --workspace
+        run: cargo check --workspace ${{ env.LINUX_WORKSPACE_EXCLUDES }}
+
+  rust-shared-tests:
+    name: Rust Shared Tests
+    runs-on: ubuntu-latest
+    needs: rust-lint
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libasound2-dev \
+            libudev-dev \
+            libegl1-mesa-dev \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev
+
+      - name: Workspace shared tests
+        run: cargo test --workspace --no-fail-fast --exclude basic-player ${{ env.LINUX_WORKSPACE_EXCLUDES }} --exclude player-platform-linux
 
   desktop-matrix:
     name: Vesper Desktop ${{ matrix.label }}
@@ -305,14 +361,11 @@ jobs:
         if: runner.os == 'Linux'
         run: ./scripts/vesper ffi verify
 
-      - name: Workspace check
-        run: cargo check --workspace
-
-      - name: Workspace tests
-        run: cargo test --workspace --no-fail-fast --exclude basic-player
+      - name: Desktop platform check
+        run: cargo check -p ${{ matrix.platform_crate }}
 
       - name: Desktop platform tests
-        run: cargo test -p player-platform-desktop -p ${{ matrix.platform_crate }}
+        run: cargo test -p ${{ matrix.platform_crate }} --no-fail-fast
 
       - name: Verify decoder fixture diagnostics
         run: ./scripts/vesper desktop verify-decoder-diagnostics

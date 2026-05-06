@@ -58,7 +58,7 @@ concurrency:
 
 jobs:
   flutter-quality:
-    name: Flutter Analyze and Test
+    name: Flutter Shared Analyze and Test
     runs-on: ubuntu-latest
 
     steps:
@@ -75,25 +75,16 @@ jobs:
       - name: Show Flutter version
         run: flutter --version
 
-      - name: Install Flutter dependencies
-        working-directory: examples/flutter-host
-        run: flutter pub get
-
-      - name: Analyze Flutter host
-        working-directory: examples/flutter-host
-        run: flutter analyze
-
-      - name: Test Flutter host
-        working-directory: examples/flutter-host
-        run: flutter test
-
-      - name: Analyze and test Flutter packages
+      - name: Analyze and test shared Flutter packages
         shell: bash
         run: |
           set -euo pipefail
 
-          for pubspec in lib/flutter/*/pubspec.yaml; do
-            pkg_dir="$(dirname "$pubspec")"
+          for pkg_dir in \
+            lib/flutter/vesper_player_platform_interface \
+            lib/flutter/vesper_player \
+            lib/flutter/vesper_player_ui
+          do
             echo "::group::$pkg_dir"
             (
               cd "$pkg_dir"
@@ -107,6 +98,43 @@ jobs:
             )
             echo "::endgroup::"
           done
+
+  flutter-macos-quality:
+    name: Flutter macOS Package Quality
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.6"
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      - name: Analyze and test Flutter macOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pkg_dir="lib/flutter/vesper_player_macos"
+          echo "::group::$pkg_dir"
+          (
+            cd "$pkg_dir"
+            flutter pub get
+            flutter analyze
+            if [[ -d test ]]; then
+              flutter test
+            else
+              echo "No test/ directory; skipping flutter test."
+            fi
+          )
+          echo "::endgroup::"
 
   flutter-android:
     name: Flutter Android Host ${{ matrix.abi }}
@@ -198,9 +226,43 @@ jobs:
       - name: Check Android bridge crates
         run: cargo check -p player-platform-android -p player-jni-android
 
+      - name: Test Android bridge crates
+        run: cargo test -p player-platform-android -p player-jni-android
+
+      - name: Analyze and test Flutter Android packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for pkg_dir in \
+            lib/flutter/vesper_player_android \
+            lib/flutter/vesper_player_cast
+          do
+            echo "::group::$pkg_dir"
+            (
+              cd "$pkg_dir"
+              flutter pub get
+              flutter analyze
+              if [[ -d test ]]; then
+                flutter test
+              else
+                echo "No test/ directory; skipping flutter test."
+              fi
+            )
+            echo "::endgroup::"
+          done
+
       - name: Install Flutter dependencies
         working-directory: examples/flutter-host
         run: flutter pub get
+
+      - name: Analyze Flutter Android host
+        working-directory: examples/flutter-host
+        run: flutter analyze
+
+      - name: Test Flutter Android host
+        working-directory: examples/flutter-host
+        run: flutter test
 
       - name: Build Flutter Android host release
         working-directory: examples/flutter-host
@@ -260,6 +322,39 @@ jobs:
       - name: Install Flutter dependencies
         working-directory: examples/flutter-host
         run: flutter pub get
+
+      - name: Check iOS bridge crates
+        run: cargo check -p player-platform-ios -p player-ffi-ios
+
+      - name: Test iOS bridge crates
+        run: cargo test -p player-platform-ios -p player-ffi-ios
+
+      - name: Analyze and test Flutter iOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pkg_dir="lib/flutter/vesper_player_ios"
+          echo "::group::$pkg_dir"
+          (
+            cd "$pkg_dir"
+            flutter pub get
+            flutter analyze
+            if [[ -d test ]]; then
+              flutter test
+            else
+              echo "No test/ directory; skipping flutter test."
+            fi
+          )
+          echo "::endgroup::"
+
+      - name: Analyze Flutter iOS host
+        working-directory: examples/flutter-host
+        run: flutter analyze
+
+      - name: Test Flutter iOS host
+        working-directory: examples/flutter-host
+        run: flutter test
 
       - name: Build Rust iOS resolver bundle
         run: ./scripts/vesper ios ffi release

@@ -1035,6 +1035,7 @@ impl SoftwarePlayerRuntime {
         runtime.maybe_start_audio_metadata_probe_worker()?;
         runtime.maybe_start_audio_decode_worker()?;
         runtime.ensure_audio_output(initial_media_position, runtime.playback_rate)?;
+        startup.audio_output = audio_output_info(&runtime.audio_output_descriptor);
         runtime.fill_next_frame()?;
         runtime.refresh_playback_finished();
         runtime.emit_event(PlayerRuntimeEvent::Initialized(startup.clone()));
@@ -1289,37 +1290,45 @@ impl SoftwarePlayerRuntime {
             self.disable_audio_output_path();
             return Ok(());
         };
-        let source_audio_track = self.source_audio_track.as_ref();
-        if source_audio_track.is_none() && !should_stream_audio_source_directly(&self.source) {
+        let has_source_audio_track = self.source_audio_track.is_some();
+        if !has_source_audio_track && !should_stream_audio_source_directly(&self.source) {
             self.disable_audio_output_path();
             return Ok(());
         }
 
         if self.audio_sink.is_none() {
-            let media_start = source_audio_track
+            let media_start = self
+                .source_audio_track
+                .as_ref()
                 .map(|track| {
                     let sample_offset = track.sample_offset_for_position(position);
                     track.media_time_for_sample_offset(sample_offset)
                 })
                 .unwrap_or(position);
-            let sink = AudioSink::new_default(
+            let sink = match AudioSink::new_default(
                 output_config,
                 media_start,
                 playback_rate,
                 self.session.should_hold_output(),
-            )
-            .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::AudioOutputUnavailable,
-                    "failed to open default audio output",
-                    error,
-                )
-            })?;
+            ) {
+                Ok(sink) => sink,
+                Err(error) if should_disable_audio_output_after_open_error(&error) => {
+                    self.disable_audio_output_path();
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(runtime_error(
+                        PlayerRuntimeErrorCode::AudioOutputUnavailable,
+                        "failed to open default audio output",
+                        error,
+                    ));
+                }
+            };
             self.audio_sink_controller = Some(sink.controller());
             self.audio_sink = Some(sink);
         }
 
-        if source_audio_track.is_some() {
+        if has_source_audio_track {
             self.start_audio_stream(position, playback_rate)?;
         } else if should_stream_audio_source_directly(&self.source) {
             self.start_remote_audio_stream(position, playback_rate)?;
@@ -2737,6 +2746,15 @@ fn runtime_error(
     PlayerRuntimeError::new(code, format!("{context}: {error}"))
 }
 
+fn should_disable_audio_output_after_open_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string().to_ascii_lowercase();
+        message.contains("no default audio output device available")
+            || message.contains("device not available")
+            || message.contains("devicenotavailable")
+    })
+}
+
 fn select_playback_position(
     audio_position: Option<Duration>,
     clock_position: Option<Duration>,
@@ -2780,6 +2798,28 @@ mod tests {
 
         assert!(!audio_output_descriptor_changed(&current, &next));
         assert!(audio_output_info(&current).is_none());
+    }
+
+    #[test]
+    fn audio_output_open_error_policy_disables_missing_devices_only() {
+        let missing_default = anyhow::anyhow!(
+            "failed to open default audio output: no default audio output device available"
+        );
+        let device_unavailable =
+            anyhow::anyhow!("failed to build f32 audio output stream: DeviceNotAvailable");
+        let invalid_config = anyhow::anyhow!(
+            "failed to build f32 audio output stream: unsupported stream configuration"
+        );
+
+        assert!(should_disable_audio_output_after_open_error(
+            &missing_default
+        ));
+        assert!(should_disable_audio_output_after_open_error(
+            &device_unavailable
+        ));
+        assert!(!should_disable_audio_output_after_open_error(
+            &invalid_config
+        ));
     }
 
     #[test]

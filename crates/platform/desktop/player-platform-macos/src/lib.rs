@@ -2050,6 +2050,8 @@ mod tests {
     };
     use std::time::{Duration, Instant};
 
+    #[cfg(target_os = "macos")]
+    use super::macos_runtime_adapter_factory;
     use super::{
         MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
@@ -2059,9 +2061,8 @@ mod tests {
         MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics,
         apply_decoder_plugin_diagnostics_to_video_decode,
         apply_decoder_plugin_registry_to_video_decode,
-        macos_native_frame_decoder_video_decode_info, macos_runtime_adapter_factory,
-        macos_runtime_diagnostics, macos_video_decode_info,
-        open_macos_host_runtime_source_with_options,
+        macos_native_frame_decoder_video_decode_info, macos_runtime_diagnostics,
+        macos_video_decode_info, open_macos_host_runtime_source_with_options,
         open_macos_software_runtime_source_with_options_and_interrupt,
         present_and_release_native_frame_with_presenter, present_if_current_epoch_and_release,
         probe_macos_host_runtime_initializer_with_factories,
@@ -2085,15 +2086,16 @@ mod tests {
         PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     };
     use player_runtime::{
-        DecodedVideoFrame, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo,
-        PlayerPluginDiagnosticStatus, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-        PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities,
-        PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand,
-        PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-        PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-        PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind,
-        PlayerVideoSurfaceTarget, PresentationState,
+        DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnosticStatus,
+        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+        PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
+        PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+        PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
     };
+    #[cfg(target_os = "macos")]
+    use player_runtime::{PlayerDecoderPluginVideoMode, PlayerRuntimeInitializer};
 
     #[cfg(target_os = "macos")]
     unsafe extern "C" {

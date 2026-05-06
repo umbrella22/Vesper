@@ -129,6 +129,7 @@ trait WindowsNativeFramePresenter: Send {
     fn present(&mut self, handle: usize) -> PlayerRuntimeResult<()>;
 }
 
+#[cfg(any(test, not(target_os = "windows")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum WindowsD3D11PresenterState {
     #[default]
@@ -137,12 +138,14 @@ enum WindowsD3D11PresenterState {
     AttachedNoDevice,
 }
 
+#[cfg(any(test, not(target_os = "windows")))]
 #[derive(Debug, Default)]
 struct WindowsD3D11NativeFramePresenterSkeleton {
     state: WindowsD3D11PresenterState,
     attached_target: Option<WindowsSurfaceAttachTarget>,
 }
 
+#[cfg(any(test, not(target_os = "windows")))]
 impl WindowsNativeFramePresenter for WindowsD3D11NativeFramePresenterSkeleton {
     fn backend_kind(&self) -> WindowsNativeFrameBackendKind {
         WindowsNativeFrameBackendKind::D3D11
@@ -1717,6 +1720,8 @@ fn wrap_windows_runtime_bootstrap(
 mod tests {
     use std::path::Path;
 
+    #[cfg(not(target_os = "windows"))]
+    use super::windows_native_frame_presenter_for_backend;
     use super::{
         WINDOWS_NATIVE_FRAME_PLAYER_RUNTIME_ADAPTER_ID, WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         WindowsD3D11NativeFramePresenterSkeleton, WindowsD3D11PresenterState,
@@ -1725,8 +1730,8 @@ mod tests {
         WindowsSurfaceAttachTarget, open_windows_host_runtime_source_with_options,
         probe_windows_host_runtime_source_with_options,
         select_windows_native_frame_candidate_from_registry, send_windows_native_packet,
-        windows_native_frame_poll_with_presenter, windows_native_frame_presenter_for_backend,
-        windows_native_frame_roadmap, windows_runtime_diagnostics,
+        windows_native_frame_poll_with_presenter, windows_native_frame_roadmap,
+        windows_runtime_diagnostics,
     };
     use player_backend_ffmpeg::{CompressedVideoPacket, VideoPacketStreamInfo};
     use player_model::MediaSource;
