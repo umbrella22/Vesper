@@ -3180,7 +3180,7 @@ mod tests {
         ControlAction, DesktopDownloadTaskViewData, DesktopOverlayViewModel,
         DesktopPlaylistItemViewData, DesktopSidebarTab, DesktopUiRect,
     };
-    use player_core::{MediaSourceKind, MediaSourceProtocol};
+    use player_model::{MediaSourceKind, MediaSourceProtocol};
     use player_runtime::{
         PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerSnapshot,
         PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,

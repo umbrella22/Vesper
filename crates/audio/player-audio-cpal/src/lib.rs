@@ -1,3 +1,8 @@
+//! CPAL audio output and playback clock tracking for desktop runtime paths.
+//!
+//! This crate is an internal implementation detail of the desktop adapter. It
+//! exposes audio sink primitives rather than a stable public SDK surface.
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;

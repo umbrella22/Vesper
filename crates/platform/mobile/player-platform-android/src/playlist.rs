@@ -157,7 +157,7 @@ impl AndroidPlaylistBridgeSession {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::{
         PlaylistActivationReason, PlaylistCoordinatorConfig, PlaylistFailureStrategy,
         PlaylistItemPreloadProfile, PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode,

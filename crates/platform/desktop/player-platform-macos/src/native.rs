@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PLAYBACK_RATE,
     MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress, PlayerMediaInfo,
@@ -1255,7 +1255,7 @@ mod tests {
         MacosNativePlayerSession, MacosNativePlayerSessionBootstrap, MacosPlayerItemStatus,
         MacosTimeControlStatus, macos_native_capabilities,
     };
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::{
         PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterFactory,
         PlayerRuntimeCommand, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,

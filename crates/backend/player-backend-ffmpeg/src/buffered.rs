@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use player_core::MediaSource;
+use player_model::MediaSource;
 
 use crate::{DecodedVideoFrame, FfmpegBackend, MediaProbe, VideoDecodeInfo};
 

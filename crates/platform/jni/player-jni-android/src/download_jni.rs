@@ -6,7 +6,7 @@ use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
 use jni::objects::{Global, JClass, JObject, JObjectArray, JString, JValue};
 use jni::sys::{jboolean, jint, jlong, jobject, jobjectArray};
 use jni::{Env, EnvUnowned, JavaVM};
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_platform_android::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
 use player_plugin::ProcessorProgress;
 use player_runtime::{

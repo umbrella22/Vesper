@@ -13,20 +13,19 @@ use player_backend_ffmpeg::{
     DecodedAudioTrack, FfmpegBackend, MediaProbe, VideoDecodeInfo as BackendVideoDecodeInfo,
     VideoDecoderMode as BackendVideoDecoderMode, VideoStreamProbe,
 };
-use player_core::{
-    MediaSource, MediaSourceKind, MediaSourceProtocol, PlaybackClock, PlaybackSessionModel,
-};
+use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol, PlaybackSessionModel};
 
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady,
-    MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress,
-    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy, PlayerCachePolicy,
-    PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerRetryBackoff, PlayerRetryPolicy,
-    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerVideoInfo, PresentationState, register_default_runtime_adapter_factory,
+    MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaClock, NATURAL_PLAYBACK_RATE_MAX, PlaybackClock,
+    PlaybackProgress, PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy,
+    PlayerCachePolicy, PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerRetryBackoff,
+    PlayerRetryPolicy, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
+    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoInfo, PresentationState,
+    register_default_runtime_adapter_factory,
 };
 use tracing::info;
 
@@ -44,7 +43,6 @@ const MAX_DESKTOP_VIDEO_PREFETCH_CAPACITY: usize = 96;
 const DEFAULT_VIDEO_BUFFER_HEADROOM_DURATION: Duration = Duration::from_millis(500);
 const AUDIO_STREAM_BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const AUDIO_OUTPUT_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const AUDIO_CLOCK_STALL_TOLERANCE: Duration = Duration::from_millis(250);
 const SOFTWARE_BUFFERING_GRACE_PERIOD: Duration = Duration::from_millis(120);
 
 #[derive(Debug)]
@@ -343,6 +341,14 @@ pub struct SoftwarePlayerRuntime {
     retry_policy: PlayerRetryPolicy,
     resilience_metrics: PlayerResilienceMetricsTracker,
     events: VecDeque<PlayerRuntimeEvent>,
+}
+
+struct AudioSinkClock<'a>(&'a AudioSink);
+
+impl MediaClock for AudioSinkClock<'_> {
+    fn playback_position(&self) -> Duration {
+        self.0.playback_position()
+    }
 }
 
 struct PendingAudioStreamWorker {
@@ -1421,10 +1427,12 @@ impl SoftwarePlayerRuntime {
 
     fn playback_position(&self) -> Option<Duration> {
         select_playback_position(
-            self.audio_sink.as_ref().map(AudioSink::playback_position),
+            self.audio_sink
+                .as_ref()
+                .map(|audio_sink| AudioSinkClock(audio_sink).playback_position()),
             self.playback_clock
                 .as_ref()
-                .map(PlaybackClock::playback_position),
+                .map(MediaClock::playback_position),
         )
     }
 
@@ -2734,13 +2742,7 @@ fn select_playback_position(
     clock_position: Option<Duration>,
 ) -> Option<Duration> {
     match (audio_position, clock_position) {
-        (Some(audio_position), Some(clock_position)) => {
-            if audio_position.saturating_add(AUDIO_CLOCK_STALL_TOLERANCE) < clock_position {
-                Some(clock_position)
-            } else {
-                Some(audio_position)
-            }
-        }
+        (Some(audio_position), Some(_)) => Some(audio_position),
         (Some(audio_position), None) => Some(audio_position),
         (None, Some(clock_position)) => Some(clock_position),
         (None, None) => None,
@@ -2750,7 +2752,7 @@ fn select_playback_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::PlayerRuntimeOptions;
     use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 
@@ -2799,23 +2801,20 @@ mod tests {
     }
 
     #[test]
-    fn playback_position_falls_back_to_clock_when_audio_stalls() {
+    fn playback_position_keeps_audio_clock_as_master() {
         let selected = select_playback_position(
             Some(Duration::from_millis(0)),
             Some(Duration::from_millis(600)),
         );
 
-        assert_eq!(selected, Some(Duration::from_millis(600)));
+        assert_eq!(selected, Some(Duration::from_millis(0)));
     }
 
     #[test]
-    fn playback_position_keeps_audio_clock_when_it_is_close() {
-        let selected = select_playback_position(
-            Some(Duration::from_millis(480)),
-            Some(Duration::from_millis(600)),
-        );
+    fn playback_position_falls_back_to_clock_without_audio() {
+        let selected = select_playback_position(None, Some(Duration::from_millis(600)));
 
-        assert_eq!(selected, Some(Duration::from_millis(480)));
+        assert_eq!(selected, Some(Duration::from_millis(600)));
     }
 
     #[test]

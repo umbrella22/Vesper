@@ -50,7 +50,7 @@ For distribution, build a self-contained framework:
 
 The build script:
 
-- Compiles the Rust `player-ffi-resolver` Apple bundle
+- Compiles the Rust `player-ffi-ios` Apple bundle
 - Regenerates the framework project with `xcodegen`
 - Archives iOS + iOS Simulator frameworks
 - Produces `VesperPlayerKit.xcframework`
@@ -149,7 +149,7 @@ iOS-specific semantics:
 
 ## DASH Support
 
-DASH playback uses a Rust core (`crates/extension/player-dash-hls-bridge`)
+DASH playback uses a Rust core (`crates/core/player-dash-hls-bridge`)
 plus a thin Swift transport layer. It supports single-period fMP4 manifests for
 static VOD and dynamic live / DVR when they use either `SegmentBase + sidx` or
 `SegmentTemplate` / `SegmentTimeline` addressing. The bridge rejects DRM
@@ -166,7 +166,7 @@ FFI entry point (single coarse-grained JSON op):
 
 - Rust: `player_dash_hls_bridge::ops::execute_json`
 - C export: `player_ffi_dash_bridge_execute_json` (provided by the
-  `player-ffi-resolver` Apple bundle, **not** by `include/player_ffi.h`)
+  `player-ffi-ios` Apple bundle, **not** by `include/player_ffi.h`)
 - Swift call site: `VesperPlayerKitBridgeShim`
 
 Segment caching:
@@ -265,7 +265,7 @@ xcodebuild \
 DASH bridge tests:
 
 ```sh
-cargo test -p player-dash-hls-bridge -p player-ffi-resolver --lib
+cargo test -p player-dash-hls-bridge -p player-ffi-ios --lib
 ./scripts/vesper ios ffi debug
 cd lib/ios/VesperPlayerKit
 xcodegen generate

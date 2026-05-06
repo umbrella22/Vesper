@@ -1,7 +1,11 @@
 [workspace]
 members = [
+    "crates/model/*",
     "crates/core/*",
-    "crates/extension/*",
+    "crates/ffi/*",
+    "crates/plugin/*",
+    "crates/plugin-decoder/*",
+    "crates/plugin-remux/*",
     "crates/audio/*",
     "crates/render/*",
     "crates/backend/*",

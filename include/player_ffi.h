@@ -451,8 +451,24 @@ typedef struct PlayerFfiTrackPreferences {
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 void player_ffi_error_free(struct PlayerFfiError *error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 void player_ffi_event_list_free(struct PlayerFfiEventList *events);
 
 /**
@@ -460,6 +476,12 @@ void player_ffi_event_list_free(struct PlayerFfiEventList *events);
  *
  * Passing a zero-initialized handle is a no-op. Passing a stale or already
  * consumed handle returns `PlayerFfiErrorCode::InvalidState`.
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
  */
 enum PlayerFfiCallStatus player_ffi_initializer_destroy(struct PlayerFfiInitializerHandle handle,
                                                         struct PlayerFfiError *out_error);
@@ -471,6 +493,12 @@ enum PlayerFfiCallStatus player_ffi_initializer_destroy(struct PlayerFfiInitiali
  * `player_ffi_initializer_destroy` or any other `player_ffi_initializer_*`
  * function afterwards. Reusing the consumed handle returns
  * `PlayerFfiErrorCode::InvalidState`.
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
  */
 enum PlayerFfiCallStatus player_ffi_initializer_initialize(struct PlayerFfiInitializerHandle handle,
                                                            struct PlayerFfiHandle *out_player,
@@ -479,20 +507,60 @@ enum PlayerFfiCallStatus player_ffi_initializer_initialize(struct PlayerFfiIniti
                                                            struct PlayerFfiStartup *out_startup,
                                                            struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_initializer_media_info(struct PlayerFfiInitializerHandle handle,
                                                            struct PlayerFfiMediaInfo *out_media_info,
                                                            struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_initializer_probe_uri(const char *uri,
                                                           struct PlayerFfiInitializerHandle *out_initializer,
                                                           struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_initializer_startup(struct PlayerFfiInitializerHandle handle,
                                                         struct PlayerFfiStartup *out_startup,
                                                         struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 void player_ffi_media_info_free(struct PlayerFfiMediaInfo *media_info);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_advance(struct PlayerFfiHandle handle,
                                                    struct PlayerFfiVideoFrame *out_frame,
                                                    bool *out_has_frame,
@@ -503,6 +571,12 @@ enum PlayerFfiCallStatus player_ffi_player_advance(struct PlayerFfiHandle handle
  *
  * Passing a zero-initialized handle is a no-op. Passing a stale or already
  * destroyed handle returns `PlayerFfiErrorCode::InvalidState`.
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
  */
 enum PlayerFfiCallStatus player_ffi_player_destroy(struct PlayerFfiHandle handle,
                                                    struct PlayerFfiError *out_error);
@@ -512,6 +586,12 @@ enum PlayerFfiCallStatus player_ffi_player_destroy(struct PlayerFfiHandle handle
  *
  * `out_frame` is optional. Pass `NULL` when the caller does not need an
  * immediate frame payload for this dispatch.
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
  */
 enum PlayerFfiCallStatus player_ffi_player_dispatch(struct PlayerFfiHandle handle,
                                                     enum PlayerFfiCommandKind command,
@@ -521,53 +601,133 @@ enum PlayerFfiCallStatus player_ffi_player_dispatch(struct PlayerFfiHandle handl
                                                     struct PlayerFfiSnapshot *out_snapshot,
                                                     struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_drain_events(struct PlayerFfiHandle handle,
                                                         struct PlayerFfiEventList *out_events,
                                                         struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_next_deadline_delay_ms(struct PlayerFfiHandle handle,
                                                                   bool *out_has_deadline,
                                                                   uint64_t *out_delay_ms,
                                                                   struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_set_abr_policy(struct PlayerFfiHandle handle,
                                                           const struct PlayerFfiAbrPolicy *policy,
                                                           bool *out_applied,
                                                           struct PlayerFfiSnapshot *out_snapshot,
                                                           struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_set_audio_track_selection(struct PlayerFfiHandle handle,
                                                                      const struct PlayerFfiTrackSelection *selection,
                                                                      bool *out_applied,
                                                                      struct PlayerFfiSnapshot *out_snapshot,
                                                                      struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_set_playback_rate(struct PlayerFfiHandle handle,
                                                              float playback_rate,
                                                              bool *out_applied,
                                                              struct PlayerFfiSnapshot *out_snapshot,
                                                              struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_set_subtitle_track_selection(struct PlayerFfiHandle handle,
                                                                         const struct PlayerFfiTrackSelection *selection,
                                                                         bool *out_applied,
                                                                         struct PlayerFfiSnapshot *out_snapshot,
                                                                         struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_set_video_track_selection(struct PlayerFfiHandle handle,
                                                                      const struct PlayerFfiTrackSelection *selection,
                                                                      bool *out_applied,
                                                                      struct PlayerFfiSnapshot *out_snapshot,
                                                                      struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_player_snapshot(struct PlayerFfiHandle handle,
                                                     struct PlayerFfiSnapshot *out_snapshot,
                                                     struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_resolve_preload_budget(const struct PlayerFfiPreloadBudgetPolicy *preload_budget,
                                                            struct PlayerFfiResolvedPreloadBudgetPolicy *out_budget,
                                                            struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_resolve_resilience_policy(enum PlayerFfiMediaSourceKind source_kind,
                                                               enum PlayerFfiMediaSourceProtocol source_protocol,
                                                               const struct PlayerFfiBufferingPolicy *buffering_policy,
@@ -576,16 +736,56 @@ enum PlayerFfiCallStatus player_ffi_resolve_resilience_policy(enum PlayerFfiMedi
                                                               struct PlayerFfiResolvedResiliencePolicy *out_policy,
                                                               struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 enum PlayerFfiCallStatus player_ffi_resolve_track_preferences(const struct PlayerFfiTrackPreferences *track_preferences,
                                                               struct PlayerFfiTrackPreferences *out_preferences,
                                                               struct PlayerFfiError *out_error);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 void player_ffi_snapshot_free(struct PlayerFfiSnapshot *snapshot);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 void player_ffi_startup_free(struct PlayerFfiStartup *startup);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 void player_ffi_track_preferences_free(struct PlayerFfiTrackPreferences *track_preferences);
 
+/**
+ * # Safety
+ *
+ * Raw pointers and opaque handles passed to this FFI entry point must either be null when
+ * the parameter is documented as optional or point to valid objects allocated by the
+ * matching Vesper FFI API for the duration of the call. Callers must serialize shared
+ * handle access according to the host binding contract.
+ */
 void player_ffi_video_frame_free(struct PlayerFfiVideoFrame *frame);
 
 #ifdef __cplusplus

@@ -5,18 +5,80 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionResult
 
+@OptIn(UnstableApi::class)
 class VesperSystemPlaybackService : MediaSessionService() {
+    private var registeredSession: MediaSession? = null
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
         VesperSystemPlaybackRegistry.activeSession
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val result = super.onStartCommand(intent, flags, startId)
+        if (intent?.action == ACTION_START_SYSTEM_PLAYBACK_SERVICE) {
+            attachActiveSessionForForegroundPlayback()
+        }
+        return result
+    }
+
+    override fun onDestroy() {
+        registeredSession?.let(::removeRegisteredSession)
+        registeredSession = null
+        super.onDestroy()
+    }
+
+    private fun attachActiveSessionForForegroundPlayback() {
+        val activeSession = VesperSystemPlaybackRegistry.activeSession
+        if (activeSession == null) {
+            stopSelf()
+            return
+        }
+        if (!activeSession.player.isPlaying) {
+            stopSelf()
+            return
+        }
+
+        if (registeredSession !== activeSession) {
+            registeredSession?.let(::removeRegisteredSession)
+            runCatching {
+                if (!isSessionAdded(activeSession)) {
+                    addSession(activeSession)
+                }
+                registeredSession = activeSession
+            }.onFailure { error ->
+                Log.w(TAG, "failed to attach media session to playback service", error)
+                stopSelf()
+                return
+            }
+        }
+
+        runCatching {
+            triggerNotificationUpdate()
+        }.onFailure { error ->
+            Log.w(TAG, "failed to promote media playback service", error)
+            stopSelf()
+        }
+    }
+
+    private fun removeRegisteredSession(session: MediaSession) {
+        runCatching {
+            if (isSessionAdded(session)) {
+                removeSession(session)
+            }
+        }.onFailure { error ->
+            Log.w(TAG, "failed to detach media session from playback service", error)
+        }
+    }
 }
 
 internal class VesperAndroidSystemPlaybackCoordinator(
@@ -28,6 +90,7 @@ internal class VesperAndroidSystemPlaybackCoordinator(
     private var player: ExoPlayer? = null
     private var session: MediaSession? = null
     private var serviceStarted = false
+    private var serviceSession: MediaSession? = null
     private val sessionId = "vesper-player-system-playback-${System.identityHashCode(this)}"
 
     fun attachPlayer(player: ExoPlayer?) {
@@ -123,12 +186,14 @@ internal class VesperAndroidSystemPlaybackCoordinator(
     }
 
     private fun startServiceIfNeeded() {
-        if (serviceStarted) {
+        val activeSession = session
+        if (serviceStarted && serviceSession === activeSession) {
             return
         }
         runCatching {
             ContextCompat.startForegroundService(appContext, serviceIntent())
             serviceStarted = true
+            serviceSession = activeSession
         }.onFailure { error ->
             Log.w(TAG, "failed to start media playback service", error)
         }
@@ -144,10 +209,12 @@ internal class VesperAndroidSystemPlaybackCoordinator(
             Log.w(TAG, "failed to stop media playback service", error)
         }
         serviceStarted = false
+        serviceSession = null
     }
 
     private fun serviceIntent(): Intent =
         Intent(appContext, VesperSystemPlaybackService::class.java)
+            .setAction(ACTION_START_SYSTEM_PLAYBACK_SERVICE)
 
     private fun updatePlayerMetadata() {
         val exoPlayer = player ?: return
@@ -279,4 +346,6 @@ private fun VesperSystemPlaybackMetadata.toMediaMetadata(): MediaMetadata {
     return builder.build()
 }
 
+private const val ACTION_START_SYSTEM_PLAYBACK_SERVICE =
+    "io.github.ikaros.vesper.player.android.action.START_SYSTEM_PLAYBACK_SERVICE"
 private const val TAG = "VesperSystemPlayback"

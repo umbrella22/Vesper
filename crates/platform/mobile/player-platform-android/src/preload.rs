@@ -117,7 +117,7 @@ impl AndroidPreloadBridgeSession {
 #[cfg(test)]
 mod tests {
     use super::{AndroidPreloadBridgeSession, AndroidPreloadCommand};
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::{
         InMemoryPreloadBudgetProvider, PlayerRuntimeError, PlayerRuntimeErrorCode, PreloadBudget,
         PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadEvent,

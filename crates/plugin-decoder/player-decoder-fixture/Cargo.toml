@@ -1,0 +1,14 @@
+[package]
+name = "player-decoder-fixture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+player-plugin = { path = "../../plugin/player-plugin" }
+serde.workspace = true
+serde_json.workspace = true

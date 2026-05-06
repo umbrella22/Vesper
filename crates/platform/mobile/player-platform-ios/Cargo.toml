@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-player-core = { path = "../../../core/player-core" }
-player-plugin = { path = "../../../core/player-plugin" }
-player-plugin-loader = { path = "../../../core/player-plugin-loader" }
+player-model = { path = "../../../model/player-model" }
+player-plugin = { path = "../../../plugin/player-plugin" }
+player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }
 player-runtime = { path = "../../../core/player-runtime" }

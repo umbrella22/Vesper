@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_plugin::{
     CompletedContentFormat, CompletedDownloadInfo, DownloadMetadata, OutputFormat, PipelineEvent,
     PipelineEventHook, PostDownloadProcessor, ProcessorError, ProcessorOutput, ProcessorProgress,
@@ -1219,7 +1219,7 @@ mod tests {
     };
     use crate::download::NoopProcessorProgress;
     use crate::{PlayerRuntimeError, PlayerRuntimeErrorCode};
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_plugin::{
         CompletedDownloadInfo, ContentFormatKind, OutputFormat, PipelineEvent, PipelineEventHook,
         PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,

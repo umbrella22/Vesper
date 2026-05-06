@@ -1,0 +1,16 @@
+[package]
+name = "player-remux-ffmpeg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ffmpeg-next.workspace = true
+player-plugin = { path = "../../plugin/player-plugin" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

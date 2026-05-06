@@ -1,10 +1,16 @@
+//! Desktop host launch and preload helpers.
+//!
+//! This crate is an internal host-facing bridge over the platform runtime
+//! adapters. It is not a published SDK artifact; native distribution is owned
+//! by the `lib/` packages and standalone desktop examples.
+
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use player_core::{MediaSource, MediaSourceKind, MediaSourceProtocol};
+use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use player_render_wgpu::RenderSurfaceConfig;
 use player_runtime::{
     DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, PlayerBufferingPolicy,
@@ -460,7 +466,7 @@ mod tests {
         canonical_desktop_host_local_path, desktop_runtime_options_for_source,
         normalize_desktop_host_source_uri, render_config_from_media_info,
     };
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_render_wgpu::RenderSurfaceConfig;
     use player_runtime::{
         DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, MediaSourceKind,

@@ -79,7 +79,7 @@ bridge, but DASH download entry points remain disabled in the iOS example host.
 - Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
 - View embedding: `UiKitView` with view type `io.github.ikaros.vesper_player/platform_view`
 - System playback: `configureSystemPlayback` writes `MPNowPlayingInfoCenter`, registers `MPRemoteCommandCenter`, and activates an `AVAudioSession` playback category with long-form video route sharing when background audio is enabled
-- Rust runtime: bridged through the `player-ffi-resolver` XCFramework so defaults, timeline, resilience, and playlist behavior stay aligned with the shared runtime
+- Rust runtime: bridged through the `player-ffi-ios` XCFramework so defaults, timeline, resilience, and playlist behavior stay aligned with the shared runtime
 
 ## System Playback Host Requirements
 

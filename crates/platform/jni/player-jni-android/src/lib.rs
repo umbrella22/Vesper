@@ -20,11 +20,6 @@ use player_platform_android::{
     AndroidHostCommand, AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind,
 };
 use player_plugin_loader::BenchmarkSinkPluginSession;
-use player_policy_resolver::{
-    resolve_preload_budget as resolve_preload_budget_via_shared_resolver,
-    resolve_resilience_policy as resolve_resilience_policy_via_shared_resolver,
-    resolve_track_preferences as resolve_track_preferences_via_shared_resolver,
-};
 use player_runtime::{
     MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrack,
     MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
@@ -33,6 +28,11 @@ use player_runtime::{
     PlayerResolvedResiliencePolicy, PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntimeCommand,
     PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
     PlayerTrackPreferencePolicy, PresentationState,
+    policy::{
+        resolve_preload_budget as resolve_preload_budget_via_shared_resolver,
+        resolve_resilience_policy as resolve_resilience_policy_via_shared_resolver,
+        resolve_track_preferences as resolve_track_preferences_via_shared_resolver,
+    },
 };
 
 pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";

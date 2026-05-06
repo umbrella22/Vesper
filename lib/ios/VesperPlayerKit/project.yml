@@ -48,7 +48,7 @@ targets:
           export VESPER_BUILD_IOS_PLAYER_FFI_MODE=platform
           "${SRCROOT}/../../../scripts/ios/build-player-ffi-xcframework.sh"
         outputFiles:
-          - $(SRCROOT)/Artifacts/rust-player-ffi/$(PLATFORM_NAME)/libplayer_ffi_resolver.a
+          - $(SRCROOT)/Artifacts/rust-player-ffi/$(PLATFORM_NAME)/libplayer_ffi_ios.a
     sources:
       - Sources/VesperPlayerKit
     settings:
@@ -67,7 +67,7 @@ targets:
           - $(SRCROOT)/Artifacts/rust-player-ffi/$(PLATFORM_NAME)
         OTHER_LDFLAGS:
           - $(inherited)
-          - -lplayer_ffi_resolver
+          - -lplayer_ffi_ios
     info:
       path: Sources/Generated-Info.plist
       properties:

@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
     MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
@@ -1665,7 +1665,7 @@ mod tests {
         AndroidNativePlayerRuntimeAdapterFactory, AndroidNativePlayerSession,
         AndroidNativePlayerSessionBootstrap, AndroidOpaqueHandle,
     };
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::{
         DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
         MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,

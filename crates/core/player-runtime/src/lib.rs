@@ -1,22 +1,20 @@
 #![deny(unsafe_code)]
 
 mod adapter;
+mod clock;
+pub mod policy;
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use player_core::MediaSource;
+use player_model::MediaSource;
 
 pub use adapter::{
     PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer,
 };
-pub use player_core::{
-    DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
-    MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
-    MediaTrackSelectionSnapshot, PlaybackProgress, PresentationState, VideoPixelFormat,
-};
+pub use clock::{MediaClock, PlaybackClock};
 pub use player_download::{
     DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadErrorSummary,
     DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig, DownloadProfile,
@@ -24,6 +22,11 @@ pub use player_download::{
     DownloadSource, DownloadStore, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState,
     DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore, PlayerRuntimeError,
     PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+};
+pub use player_model::{
+    DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
+    MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
+    MediaTrackSelectionSnapshot, PlaybackProgress, PresentationState, VideoPixelFormat,
 };
 pub use player_playlist::{
     PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistAdvanceOutcome,

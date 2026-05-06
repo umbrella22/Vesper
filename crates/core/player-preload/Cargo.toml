@@ -6,5 +6,5 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-player-core = { path = "../player-core" }
+player-model = { path = "../../model/player-model" }
 player-download = { path = "../player-download" }

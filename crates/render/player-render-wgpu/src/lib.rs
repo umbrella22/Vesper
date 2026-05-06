@@ -1,3 +1,9 @@
+//! WGPU video renderer for desktop experiments and examples.
+//!
+//! The renderer owns window/surface setup and RGB/YUV upload paths, but remains
+//! an internal crate while runtime integration and platform presentation
+//! contracts continue to evolve.
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};

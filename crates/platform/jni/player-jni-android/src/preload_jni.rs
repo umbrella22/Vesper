@@ -5,7 +5,7 @@ use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
 use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
 use jni::sys::{jboolean, jint, jlong, jobject, jobjectArray};
 use jni::{Env, EnvUnowned};
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_platform_android::{AndroidPreloadBridgeSession, AndroidPreloadCommand};
 use player_runtime::{
     InMemoryPreloadBudgetProvider, PlayerPreloadBudgetPolicy, PlayerRuntimeError, PreloadBudget,

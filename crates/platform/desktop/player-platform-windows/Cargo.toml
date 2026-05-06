@@ -4,14 +4,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true
 player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
-player-core = { path = "../../../core/player-core" }
+player-model = { path = "../../../model/player-model" }
 player-platform-desktop = { path = "../../common/player-platform-desktop" }
-player-plugin = { path = "../../../core/player-plugin" }
-player-plugin-loader = { path = "../../../core/player-plugin-loader" }
+player-plugin = { path = "../../../plugin/player-plugin" }
+player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }
 player-runtime = { path = "../../../core/player-runtime" }
 
 [target.'cfg(target_os = "windows")'.dependencies]

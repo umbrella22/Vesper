@@ -182,7 +182,7 @@ struct PlayerHostView: View {
                 )
                 return
             }
-            controller.selectSource(source)
+            selectSourceForPlayback(source)
             controlsVisible = true
             handlePlaybackCompletionIfNeeded(
                 playbackState: controller.uiState.playbackState,
@@ -456,6 +456,34 @@ struct PlayerHostView: View {
             playlistCoordinator.setResiliencePolicy(profile.policy)
             isApplyingResilienceProfile = false
         }
+    }
+
+    private func selectSourceForPlayback(_ source: VesperPlayerSource) {
+        controller.selectSource(source)
+        configureSystemPlayback(for: source)
+    }
+
+    private func configureSystemPlayback(for source: VesperPlayerSource) {
+        controller.configureSystemPlayback(
+            VesperSystemPlaybackConfiguration(
+                metadata: VesperSystemPlaybackMetadata(
+                    title: systemPlaybackTitle(for: source),
+                    contentUri: source.uri
+                )
+            )
+        )
+    }
+
+    private func systemPlaybackTitle(for source: VesperPlayerSource) -> String {
+        let label = source.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty {
+            return label
+        }
+        if let lastPathComponent = URL(string: source.uri)?.lastPathComponent,
+           !lastPathComponent.isEmpty {
+            return lastPathComponent
+        }
+        return source.uri
     }
 
     private func openRemoteSource() {

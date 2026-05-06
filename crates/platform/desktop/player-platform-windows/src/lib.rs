@@ -1,3 +1,10 @@
+//! Windows desktop runtime adapter.
+//!
+//! The software FFmpeg adapter is the active runtime path. The native-frame
+//! D3D11 route is intentionally exposed as a roadmap/skeleton so plugin
+//! discovery, diagnostics, and API shape can stabilize before presenter work
+//! is completed.
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -6,7 +13,7 @@ use player_backend_ffmpeg::{
     CompressedVideoPacket, FfmpegBackend, VideoDecodeInfo as BackendVideoDecodeInfo,
     VideoDecoderMode as BackendVideoDecoderMode, VideoPacketSource, VideoPacketStreamInfo,
 };
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_platform_desktop::{
     DesktopVideoFrame, DesktopVideoFramePoll, DesktopVideoSource, DesktopVideoSourceBootstrap,
     DesktopVideoSourceFactory, merge_runtime_fallback_reason,
@@ -1722,7 +1729,7 @@ mod tests {
         windows_native_frame_roadmap, windows_runtime_diagnostics,
     };
     use player_backend_ffmpeg::{CompressedVideoPacket, VideoPacketStreamInfo};
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_platform_desktop::merge_runtime_fallback_reason;
     use player_plugin::{
         DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeFrame,
@@ -1749,7 +1756,9 @@ mod tests {
 
         if cfg!(target_os = "windows") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping Windows fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping Windows fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let result = factory.probe_source_with_options(
@@ -1784,7 +1793,9 @@ mod tests {
     fn windows_host_probe_matches_factory_support() {
         if cfg!(target_os = "windows") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping Windows fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping Windows fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let result = probe_windows_host_runtime_source_with_options(
@@ -1811,7 +1822,9 @@ mod tests {
     fn windows_host_open_matches_factory_support() {
         if cfg!(target_os = "windows") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping Windows fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping Windows fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let result = open_windows_host_runtime_source_with_options(
@@ -2017,7 +2030,9 @@ mod tests {
     fn windows_candidate_probe_wraps_initializer_with_hardware_diagnostics() {
         if cfg!(target_os = "windows") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping Windows fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping Windows fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let initializer = WindowsSoftwarePlayerRuntimeAdapterFactory
@@ -2633,7 +2648,8 @@ mod tests {
     }
 
     fn test_video_path() -> Option<String> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../fixtures/media/tiny-h264-aac.m4v");
         path.canonicalize()
             .ok()
             .map(|path| path.to_string_lossy().into_owned())

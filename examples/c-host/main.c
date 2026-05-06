@@ -17,7 +17,7 @@ static void print_error(const char* context, PlayerFfiError* error) {
 }
 
 int main(int argc, char** argv) {
-  const char* source = argc > 1 ? argv[1] : "test-video.mp4";
+  const char* source = argc > 1 ? argv[1] : "fixtures/media/tiny-h264-aac.m4v";
   PlayerFfiInitializerHandle initializer = {0};
   PlayerFfiHandle player = {0};
   PlayerFfiError error = {0};

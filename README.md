@@ -289,7 +289,7 @@ template live in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
   panics surface as structured backend / platform errors instead of unwinding
   across the C boundary.
 - The DASH/HLS bridge entry point `player_ffi_dash_bridge_execute_json` is
-  provided by the `player-ffi-resolver` Apple bundle, not by the generated C
+  provided by the `player-ffi-ios` Apple bundle, not by the generated C
   header.
 
 ```sh

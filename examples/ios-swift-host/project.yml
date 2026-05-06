@@ -40,6 +40,8 @@ targets:
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        UIBackgroundModes:
+          - audio
     scheme:
       testTargets:
         - VesperPlayerHostDemoTests

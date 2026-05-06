@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 
 repo_root="$VESPER_REPO_ROOT"
-crate_dir="${repo_root}/crates/core/player-ffi"
+crate_dir="${repo_root}/crates/ffi/player-ffi"
 config_path="${crate_dir}/cbindgen.toml"
 lockfile_path="${repo_root}/Cargo.lock"
 header_path="${repo_root}/include/player_ffi.h"

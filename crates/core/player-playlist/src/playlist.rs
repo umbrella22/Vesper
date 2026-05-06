@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use player_core::MediaSource;
 use player_download::{PlayerRuntimeError, PlayerRuntimeResult};
+use player_model::MediaSource;
 use player_preload::{
     PreloadBudgetProvider, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind,
     PreloadConfig, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority,
@@ -865,7 +865,7 @@ fn rank_priority(priority: PreloadPriority) -> u8 {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use player_core::MediaSource;
+    use player_model::MediaSource;
 
     use super::{
         PlaylistActivationReason, PlaylistAdvanceOutcome, PlaylistCoordinator,

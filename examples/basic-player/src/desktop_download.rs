@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
-use player_core::{MediaSource, MediaSourceProtocol};
+use player_model::{MediaSource, MediaSourceProtocol};
 use player_plugin::{
     CompletedContentFormat, CompletedDownloadInfo, DownloadMetadata, PostDownloadProcessor,
     ProcessorOutput, ProcessorProgress,
@@ -1634,7 +1634,7 @@ mod tests {
         DesktopDownloadController, download_progress_summary, local_path_from_uri,
         prepare_download_task,
     };
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_plugin_loader::LoadedDynamicPlugin;
     use player_runtime::{DownloadTaskId, DownloadTaskStatus};
     use std::fs;
@@ -1819,7 +1819,8 @@ mod tests {
     }
 
     fn create_local_hls_fixture(root: &Path) -> PathBuf {
-        let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-video.mp4");
+        let input_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media/tiny-h264-aac.m4v");
         let manifest_path = root.join("fixture.m3u8");
         let segment_pattern = root.join("segment_%03d.ts");
 

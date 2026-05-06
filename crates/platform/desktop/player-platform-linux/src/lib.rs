@@ -1,7 +1,13 @@
+//! Linux desktop runtime adapter.
+//!
+//! This crate keeps the Linux host API available across targets for workspace
+//! integration tests. Actual runtime initialization is supported only on Linux;
+//! other targets return `Unsupported` before touching platform resources.
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_platform_desktop::{
     open_platform_desktop_source_with_options_and_interrupt,
     probe_platform_desktop_source_with_options,
@@ -158,7 +164,7 @@ mod tests {
         LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, LinuxSoftwarePlayerRuntimeAdapterFactory,
         open_linux_host_runtime_source_with_options, probe_linux_host_runtime_source_with_options,
     };
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::{
         PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterFactory, PlayerRuntimeErrorCode,
         PlayerRuntimeOptions,
@@ -170,7 +176,9 @@ mod tests {
 
         if cfg!(target_os = "linux") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping Linux fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping Linux fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let result = factory.probe_source_with_options(
@@ -204,7 +212,9 @@ mod tests {
     fn linux_host_probe_matches_factory_support() {
         if cfg!(target_os = "linux") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping Linux fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping Linux fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let result = probe_linux_host_runtime_source_with_options(
@@ -231,7 +241,9 @@ mod tests {
     fn linux_host_open_matches_factory_support() {
         if cfg!(target_os = "linux") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping Linux fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping Linux fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let result = open_linux_host_runtime_source_with_options(
@@ -258,7 +270,8 @@ mod tests {
     }
 
     fn test_video_path() -> Option<String> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../fixtures/media/tiny-h264-aac.m4v");
         path.canonicalize()
             .ok()
             .map(|path| path.to_string_lossy().into_owned())

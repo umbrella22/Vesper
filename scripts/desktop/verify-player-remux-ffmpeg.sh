@@ -68,12 +68,12 @@ run_example_test() {
   ensure_tool_available ffmpeg
   ensure_tool_available ffprobe
 
-  if [[ ! -f "$ROOT_DIR/test-video.mp4" ]]; then
+  if [[ ! -f "$ROOT_DIR/fixtures/media/tiny-h264-aac.m4v" ]]; then
     if vesper_desktop_is_ci_environment; then
-      echo "Desktop remux fixture is missing in CI, skipping example remux verification: $ROOT_DIR/test-video.mp4" >&2
+      echo "Desktop remux fixture is missing in CI, skipping example remux verification: $ROOT_DIR/fixtures/media/tiny-h264-aac.m4v" >&2
       return 0
     fi
-    echo "Desktop remux fixture is missing: $ROOT_DIR/test-video.mp4" >&2
+    echo "Desktop remux fixture is missing: $ROOT_DIR/fixtures/media/tiny-h264-aac.m4v" >&2
     exit 1
   fi
 

@@ -27,7 +27,6 @@ use desktop_ui::{
     DesktopPendingDownloadTaskViewData, DesktopPlaylistItemViewData, DesktopSidebarTab,
     SeekPreview, playback_state_label,
 };
-use player_core::MediaSource;
 #[cfg(not(target_os = "macos"))]
 use player_host_desktop::open_desktop_host_runtime_uri_with_options_and_interrupt;
 use player_host_desktop::{
@@ -35,6 +34,7 @@ use player_host_desktop::{
     normalize_desktop_host_source_uri, render_config_from_media_info,
     runtime_options_for_winit_window,
 };
+use player_model::MediaSource;
 #[cfg(target_os = "macos")]
 use player_platform_macos::{
     MacosVideoLayerFrame, MacosVideoLayerSurface,
@@ -680,8 +680,8 @@ impl DesktopPlayerApp {
 
     fn queue_download_planner(&mut self, source_uri: String, label: String) {
         let asset_prefix = match MediaSource::new(source_uri.clone()).protocol() {
-            player_core::MediaSourceProtocol::Hls => "hls",
-            player_core::MediaSourceProtocol::Dash => "dash",
+            player_model::MediaSourceProtocol::Hls => "hls",
+            player_model::MediaSourceProtocol::Dash => "dash",
             _ => "file",
         };
         let asset_id = make_asset_id(asset_prefix);
@@ -2684,12 +2684,12 @@ fn source_display_label(source_uri: &str) -> String {
 
 fn active_source_subtitle(snapshot: &player_runtime::PlayerSnapshot) -> String {
     let protocol = match MediaSource::new(snapshot.source_uri.clone()).protocol() {
-        player_core::MediaSourceProtocol::Hls => "HLS",
-        player_core::MediaSourceProtocol::Dash => "DASH",
-        player_core::MediaSourceProtocol::Progressive => "FILE",
-        player_core::MediaSourceProtocol::File => "LOCAL",
-        player_core::MediaSourceProtocol::Content => "CONTENT",
-        player_core::MediaSourceProtocol::Unknown => "SOURCE",
+        player_model::MediaSourceProtocol::Hls => "HLS",
+        player_model::MediaSourceProtocol::Dash => "DASH",
+        player_model::MediaSourceProtocol::Progressive => "FILE",
+        player_model::MediaSourceProtocol::File => "LOCAL",
+        player_model::MediaSourceProtocol::Content => "CONTENT",
+        player_model::MediaSourceProtocol::Unknown => "SOURCE",
     };
     let resolution = snapshot
         .media_info

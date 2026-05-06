@@ -61,7 +61,7 @@ resolve_optional_targets() {
 
 build_target() {
   local target="$1"
-  local build_command=(cargo build --target "$target" -p player-ffi-resolver)
+  local build_command=(cargo build --target "$target" -p player-ffi-ios)
   if [[ "$PROFILE" == "release" ]]; then
     build_command+=(--release)
   fi
@@ -88,9 +88,9 @@ strip_static_archive_if_needed() {
 build_device_archive() {
   build_target "$DEVICE_TARGET"
   copy_built_library \
-    "$ROOT_DIR/target/$DEVICE_TARGET/$PROFILE_DIR/libplayer_ffi_resolver.a" \
-    "$OUTPUT_DIR/iphoneos/libplayer_ffi_resolver.a"
-  strip_static_archive_if_needed "$OUTPUT_DIR/iphoneos/libplayer_ffi_resolver.a"
+    "$ROOT_DIR/target/$DEVICE_TARGET/$PROFILE_DIR/libplayer_ffi_ios.a" \
+    "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
+  strip_static_archive_if_needed "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
 }
 
 build_simulator_archive() {
@@ -100,9 +100,9 @@ build_simulator_archive() {
     build_target "$target"
 
     local simulator_output_dir="$OUTPUT_DIR/$target"
-    local simulator_output_path="$simulator_output_dir/libplayer_ffi_resolver.a"
+    local simulator_output_path="$simulator_output_dir/libplayer_ffi_ios.a"
     copy_built_library \
-      "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_resolver.a" \
+      "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_ios.a" \
       "$simulator_output_path"
     strip_static_archive_if_needed "$simulator_output_path"
     simulator_archives+=("$simulator_output_path")
@@ -110,12 +110,12 @@ build_simulator_archive() {
 
   mkdir -p "$OUTPUT_DIR/iphonesimulator"
   if [[ ${#simulator_archives[@]} -eq 1 ]]; then
-    cp "${simulator_archives[0]}" "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_resolver.a"
+    cp "${simulator_archives[0]}" "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
   else
     lipo -create "${simulator_archives[@]}" \
-      -output "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_resolver.a"
+      -output "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
   fi
-  strip_static_archive_if_needed "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_resolver.a"
+  strip_static_archive_if_needed "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
 }
 
 build_catalyst_archive() {
@@ -138,9 +138,9 @@ build_catalyst_archive() {
     build_target "$target"
 
     local catalyst_output_dir="$OUTPUT_DIR/$target"
-    local catalyst_output_path="$catalyst_output_dir/libplayer_ffi_resolver.a"
+    local catalyst_output_path="$catalyst_output_dir/libplayer_ffi_ios.a"
     copy_built_library \
-      "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_resolver.a" \
+      "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_ios.a" \
       "$catalyst_output_path"
     strip_static_archive_if_needed "$catalyst_output_path"
     catalyst_archives+=("$catalyst_output_path")
@@ -148,12 +148,12 @@ build_catalyst_archive() {
 
   mkdir -p "$OUTPUT_DIR/macosx"
   if [[ ${#catalyst_archives[@]} -eq 1 ]]; then
-    cp "${catalyst_archives[0]}" "$OUTPUT_DIR/macosx/libplayer_ffi_resolver.a"
+    cp "${catalyst_archives[0]}" "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
   else
     lipo -create "${catalyst_archives[@]}" \
-      -output "$OUTPUT_DIR/macosx/libplayer_ffi_resolver.a"
+      -output "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
   fi
-  strip_static_archive_if_needed "$OUTPUT_DIR/macosx/libplayer_ffi_resolver.a"
+  strip_static_archive_if_needed "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
 }
 
 if [[ "$BUILD_MODE" == "platform" ]]; then
@@ -223,15 +223,15 @@ fi
 rm -rf "$XCFRAMEWORK_PATH"
 xcframework_command=(
   xcodebuild -create-xcframework
-  -library "$OUTPUT_DIR/iphoneos/libplayer_ffi_resolver.a"
+  -library "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
   -headers "$HEADERS_DIR"
-  -library "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_resolver.a"
+  -library "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
   -headers "$HEADERS_DIR"
 )
 
 if [[ "$should_build_catalyst" == "true" ]]; then
   xcframework_command+=(
-    -library "$OUTPUT_DIR/macosx/libplayer_ffi_resolver.a"
+    -library "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
     -headers "$HEADERS_DIR"
   )
 fi

@@ -5,7 +5,7 @@ use std::os::raw::{c_char, c_float, c_uchar, c_void};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use player_core::MediaSource;
+use player_model::MediaSource;
 use player_platform_apple::{VIDEOTOOLBOX_BACKEND_NAME, probe_videotoolbox_hardware_decode};
 use player_runtime::{
     PlayerAudioInfo, PlayerMediaInfo, PlayerRuntimeAdapterFactory, PlayerRuntimeError,
@@ -979,7 +979,7 @@ mod tests {
         MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext,
         MacosManagedNativeSessionController, MacosNativePlayerCommand,
     };
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::{
         PlayerRuntimeErrorCode, PlayerRuntimeOptions, PlayerVideoDecodeMode,
         PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
@@ -998,7 +998,9 @@ mod tests {
         }
 
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let probe = probe_source_with_avfoundation(&MediaSource::new(test_video_path))
@@ -1013,7 +1015,7 @@ mod tests {
                 .as_ref()
                 .expect("video stream should exist")
                 .width,
-            960
+            128
         );
         assert_eq!(
             probe
@@ -1033,7 +1035,9 @@ mod tests {
         }
 
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let bindings = MacosSystemAvFoundationBridgeBindings;
@@ -1070,7 +1074,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn system_bindings_create_native_session_with_player_layer_surface() {
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let bindings = MacosSystemAvFoundationBridgeBindings;
@@ -1151,7 +1157,8 @@ mod tests {
     }
 
     fn test_video_path() -> Option<String> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../fixtures/media/tiny-h264-aac.m4v");
         path.canonicalize()
             .ok()
             .map(|path| path.to_string_lossy().into_owned())

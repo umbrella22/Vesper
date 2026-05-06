@@ -7,11 +7,15 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
+      - "crates/model/**"
       - "crates/core/**"
+      - "crates/ffi/**"
+      - "crates/plugin/**"
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
-      - "crates/extension/**"
+      - "crates/plugin-decoder/**"
+      - "crates/plugin-remux/**"
       - "crates/platform/common/**"
       - "crates/platform/desktop/**"
       - "examples/basic-player/**"
@@ -24,11 +28,15 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
+      - "crates/model/**"
       - "crates/core/**"
+      - "crates/ffi/**"
+      - "crates/plugin/**"
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
-      - "crates/extension/**"
+      - "crates/plugin-decoder/**"
+      - "crates/plugin-remux/**"
       - "crates/platform/common/**"
       - "crates/platform/desktop/**"
       - "examples/basic-player/**"
@@ -283,10 +291,10 @@ jobs:
       - name: Verify bundled desktop fixture
         shell: bash
         run: |
-          if [[ ! -f test-video.mp4 ]]; then
-            echo "test-video.mp4 is unavailable; fixture-backed platform tests may skip."
+          if [[ ! -f fixtures/media/tiny-h264-aac.m4v ]]; then
+            echo "fixtures/media/tiny-h264-aac.m4v is unavailable; fixture-backed platform tests may skip."
           else
-            ls -lh test-video.mp4
+            ls -lh fixtures/media/tiny-h264-aac.m4v
           fi
 
       - name: Install cbindgen

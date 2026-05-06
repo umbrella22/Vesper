@@ -7,7 +7,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 ROOT_DIR="$VESPER_REPO_ROOT"
 CC_BIN="${CC:-cc}"
 BUILD_ONLY=0
-SOURCE_PATH="$ROOT_DIR/test-video.mp4"
+SOURCE_PATH="$ROOT_DIR/fixtures/media/tiny-h264-aac.m4v"
 
 for arg in "$@"; do
   case "$arg" in

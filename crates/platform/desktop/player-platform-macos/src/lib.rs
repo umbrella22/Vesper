@@ -15,7 +15,7 @@ use player_backend_ffmpeg::{
     CompressedVideoPacket, FfmpegBackend, VideoDecodeInfo as BackendVideoDecodeInfo,
     VideoDecoderMode as BackendVideoDecoderMode, VideoPacketSource, VideoPacketStreamInfo,
 };
-use player_core::{MediaSource, MediaSourceProtocol};
+use player_model::{MediaSource, MediaSourceProtocol};
 use player_platform_apple::{VIDEOTOOLBOX_BACKEND_NAME, probe_videotoolbox_hardware_decode};
 use player_platform_desktop::{
     DesktopVideoFrame, DesktopVideoFramePoll, DesktopVideoFramePresentation, DesktopVideoSource,
@@ -2071,7 +2071,7 @@ mod tests {
     use player_backend_ffmpeg::{
         CompressedVideoPacket, FfmpegBackend, VideoPacketSource, VideoPacketStreamInfo,
     };
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
     use player_platform_desktop::{DesktopVideoFramePoll, DesktopVideoSource};
     use player_plugin::{
@@ -2107,7 +2107,9 @@ mod tests {
 
         if cfg!(target_os = "macos") {
             let Some(test_video_path) = test_video_path() else {
-                eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+                eprintln!(
+                    "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+                );
                 return;
             };
             let result = factory.probe_source_with_options(
@@ -2154,7 +2156,9 @@ mod tests {
         }
 
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let factory = MacosHostPlayerRuntimeAdapterFactory;
@@ -2191,7 +2195,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn macos_host_factory_with_surface_prefers_native_path() {
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let layer_handle = unsafe { player_macos_test_create_player_layer() };
@@ -3397,7 +3403,9 @@ mod tests {
         }
 
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let bootstrap = open_macos_software_runtime_source_with_options_and_interrupt(
@@ -3522,7 +3530,9 @@ mod tests {
         }
 
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let bootstrap = open_macos_host_runtime_source_with_options(
@@ -3550,7 +3560,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn macos_host_runtime_with_surface_prefers_native() {
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let layer_handle = unsafe { player_macos_test_create_player_layer() };
@@ -3585,7 +3597,9 @@ mod tests {
         }
 
         let Some(test_video_path) = test_video_path() else {
-            eprintln!("skipping macOS fixture-backed test: test-video.mp4 is unavailable");
+            eprintln!(
+                "skipping macOS fixture-backed test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
             return;
         };
         let probe = probe_macos_host_runtime_source_with_options(
@@ -3954,7 +3968,8 @@ mod tests {
     }
 
     fn test_video_path() -> Option<String> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../test-video.mp4");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../fixtures/media/tiny-h264-aac.m4v");
         path.canonicalize()
             .ok()
             .map(|path| path.to_string_lossy().into_owned())

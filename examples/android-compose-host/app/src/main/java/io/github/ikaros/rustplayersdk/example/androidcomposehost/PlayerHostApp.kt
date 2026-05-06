@@ -61,6 +61,8 @@ import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
 import java.io.File
 import kotlin.math.roundToInt
@@ -179,6 +181,19 @@ fun PlayerHostApp(
                     ).show()
             }
         }
+    }
+
+    fun selectSourceForPlayback(source: VesperPlayerSource) {
+        controller.selectSource(source)
+        controller.configureSystemPlayback(
+            VesperSystemPlaybackConfiguration(
+                metadata =
+                    VesperSystemPlaybackMetadata(
+                        title = source.label.ifBlank { source.uri },
+                        contentUri = source.uri,
+                    ),
+            ),
+        )
     }
 
     fun handleDownloadPrimaryAction(task: VesperDownloadTaskSnapshot) {
@@ -344,7 +359,7 @@ fun PlayerHostApp(
             playlistSnapshot.queue
                 .firstOrNull { it.item.itemId == activeItem.itemId }
                 ?.item?.source ?: return@LaunchedEffect
-        controller.selectSource(source)
+        selectSourceForPlayback(source)
         controlsVisible = true
     }
 

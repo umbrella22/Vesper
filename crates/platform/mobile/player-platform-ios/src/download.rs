@@ -252,7 +252,7 @@ fn download_manager_config(
 #[cfg(test)]
 mod tests {
     use super::{IosDownloadBridgeSession, IosDownloadCommand};
-    use player_core::MediaSource;
+    use player_model::MediaSource;
     use player_runtime::{
         DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadProfile,
         DownloadSource, DownloadTaskStatus, PlayerRuntimeError, PlayerRuntimeErrorCategory,

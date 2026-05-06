@@ -2,10 +2,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use player_core::MediaSource;
 use player_download::{
     PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
 };
+use player_model::MediaSource;
 
 pub const DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS: u32 = 2;
 pub const DEFAULT_PRELOAD_MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
@@ -741,8 +741,8 @@ mod tests {
         PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadEvent, PreloadPlanner,
         PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
     };
-    use player_core::MediaSource;
     use player_download::{PlayerRuntimeError, PlayerRuntimeErrorCode};
+    use player_model::MediaSource;
     use std::time::{Duration, Instant};
 
     fn budget(

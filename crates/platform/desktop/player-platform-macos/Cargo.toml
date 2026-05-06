@@ -9,8 +9,8 @@ version.workspace = true
 anyhow.workspace = true
 player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
 player-platform-apple = { path = "../../common/player-platform-apple" }
-player-core = { path = "../../../core/player-core" }
-player-plugin = { path = "../../../core/player-plugin" }
-player-plugin-loader = { path = "../../../core/player-plugin-loader" }
+player-model = { path = "../../../model/player-model" }
+player-plugin = { path = "../../../plugin/player-plugin" }
+player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }
 player-platform-desktop = { path = "../../common/player-platform-desktop" }
 player-runtime = { path = "../../../core/player-runtime" }
