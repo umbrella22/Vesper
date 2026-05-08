@@ -28,6 +28,9 @@ Release gate:
   notice, source, or relinking obligations by itself
 - artifacts that bundle `player-remux-ffmpeg` must be reviewed as FFmpeg
   redistribution artifacts because the plugin depends on FFmpeg libraries
+- offline MP4 export support for HLS, DASH, and FLV inputs uses the existing
+  optional remux-plugin boundary and does not by itself add a repository-bundled
+  FFmpeg binary
 
 ## Planned Third-Party Runtime Tracking
 

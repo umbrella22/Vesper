@@ -44,6 +44,7 @@ let package = Package(
         ),
         .target(
             name: "VesperPlayerKitBridgeShim",
+            dependencies: ["VesperPlayerFFI"],
             path: "Sources/VesperPlayerKitBridgeShim",
             publicHeadersPath: "include"
         ),

@@ -36,11 +36,13 @@ reference.
 - Shared playback semantics for timeline, live edge, live DVR, track catalog,
   ABR, resilience policy, preload policy, and download orchestration.
 - Offline download planning for VOD HLS, static DASH, and FLV inputs, with
-  strict total-byte discovery before transfer and optional MP4 stream-copy
-  export through the remux plugin.
+  source HTTP headers applied consistently to manifest fetches, size probes,
+  segment transfers, and optional MP4 stream-copy export through the remux
+  plugin.
 - SDK-managed offline task restore and resumable range transfers on Android and
   iOS, plus a shared desktop host download service for macOS, Windows, and Linux,
-  including per-resource restart when an HTTP server ignores resume ranges.
+  including per-resource restart when an HTTP server ignores resume ranges and
+  stale-resource errors for expired or rejected media URLs.
 - Configurable screen-awake handling while playback is active on Android, iOS,
   and Flutter mobile hosts.
 - Platform-native surfaces instead of frame-copy rendering paths for mobile
@@ -232,6 +234,11 @@ cargo check --workspace
 Android and Flutter Android builds use the Gradle wrappers checked into the
 corresponding projects, so local builds use the same Gradle / Android Gradle
 Plugin versions as the examples and scripts.
+
+iOS Rust build helpers resolve the workspace through the SDK root Cargo
+manifest, so they can be called from Xcode build phases, Flutter plugin builds,
+CI working directories, or the repository root without depending on the current
+shell directory.
 
 ## Desktop FFmpeg
 

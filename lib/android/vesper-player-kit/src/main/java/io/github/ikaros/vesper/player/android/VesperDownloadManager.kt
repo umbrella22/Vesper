@@ -248,6 +248,8 @@ class VesperDownloadManager internal constructor(
     private val runtimeScope = CoroutineScope(SupervisorJob() + runtimeDispatcher)
     private val eventBufferLock = Any()
     private val eventBuffer = mutableListOf<VesperDownloadEvent>()
+    private val taskSourceHeadersLock = Any()
+    private val taskSourceHeaders = mutableMapOf<VesperDownloadTaskId, Map<String, String>>()
     private val _snapshot = MutableStateFlow(VesperDownloadSnapshot(emptyList()))
     private var sessionHandle: Long = bindings.createDownloadSession(configuration.toNativePayload())
 
@@ -294,6 +296,9 @@ class VesperDownloadManager internal constructor(
             }
             .forEach { pauseTask(it.taskId) }
         persistSnapshot(snapshot.value)
+        synchronized(taskSourceHeadersLock) {
+            taskSourceHeaders.clear()
+        }
         executor.dispose()
         if (sessionHandle != 0L) {
             onRuntimeThread {
@@ -337,6 +342,9 @@ class VesperDownloadManager internal constructor(
                     nowEpochMs = System.currentTimeMillis(),
                 )
             }
+        if (taskId != 0L) {
+            rememberSourceHeaders(taskId, source.source.headers)
+        }
         syncRuntimeState(processCommands = true)
         return taskId.takeIf { it != 0L }
     }
@@ -354,6 +362,9 @@ class VesperDownloadManager internal constructor(
                 )
             }
         if (restored) {
+            tasks.forEach { task ->
+                rememberSourceHeaders(task.taskId, task.source.source.headers)
+            }
             syncRuntimeState(processCommands = true)
         }
         return restored
@@ -399,6 +410,7 @@ class VesperDownloadManager internal constructor(
             }
         if (removed) {
             syncRuntimeState(processCommands = true)
+            forgetSourceHeaders(taskId)
         }
         return removed
     }
@@ -439,11 +451,14 @@ class VesperDownloadManager internal constructor(
         }
 
         val nativeSnapshot = onRuntimeThread { bindings.pollDownloadSnapshot(sessionHandle) }
-        _snapshot.value = nativeSnapshot?.toPublic() ?: VesperDownloadSnapshot(emptyList())
+        _snapshot.value =
+            (nativeSnapshot?.toPublic() ?: VesperDownloadSnapshot(emptyList()))
+                .withRememberedSourceHeaders()
         persistSnapshot(_snapshot.value)
 
         val events = onRuntimeThread { bindings.drainDownloadEvents(sessionHandle).toList() }
             .map(NativeDownloadEvent::toPublic)
+            .map { it.withRememberedSourceHeaders() }
         if (events.isNotEmpty()) {
             synchronized(eventBufferLock) {
                 eventBuffer += events
@@ -460,10 +475,16 @@ class VesperDownloadManager internal constructor(
 
     private fun applyCommand(command: NativeDownloadCommand) {
         when (command) {
-            is NativeDownloadCommand.Prepare -> executor.prepare(command.task.toPublic(), runtimeReporter)
-            is NativeDownloadCommand.Start -> executor.start(command.task.toPublic(), runtimeReporter)
+            is NativeDownloadCommand.Prepare -> executor.prepare(
+                command.task.toPublic().withRememberedSourceHeaders(),
+                runtimeReporter,
+            )
+            is NativeDownloadCommand.Start -> executor.start(
+                command.task.toPublic().withRememberedSourceHeaders(),
+                runtimeReporter,
+            )
             is NativeDownloadCommand.Resume -> executor.resume(
-                command.task.toPublic(),
+                command.task.toPublic().withRememberedSourceHeaders(),
                 runtimeReporter,
             )
             is NativeDownloadCommand.Pause -> executor.pause(command.taskId)
@@ -501,7 +522,13 @@ class VesperDownloadManager internal constructor(
                     nowEpochMs = System.currentTimeMillis(),
                 )
             }
-        if (!restored || !configuration.autoStart) {
+        if (!restored) {
+            return
+        }
+        restorable.forEach { task ->
+            rememberSourceHeaders(task.taskId, task.source.source.headers)
+        }
+        if (!configuration.autoStart) {
             return
         }
         activeTaskIds.forEach { taskId ->
@@ -518,6 +545,45 @@ class VesperDownloadManager internal constructor(
 
     private fun persistSnapshot(snapshot: VesperDownloadSnapshot) {
         stateStore?.save(snapshot)
+    }
+
+    private fun rememberSourceHeaders(
+        taskId: VesperDownloadTaskId,
+        headers: Map<String, String>,
+    ) {
+        synchronized(taskSourceHeadersLock) {
+            taskSourceHeaders[taskId] = sanitizeDownloadRequestHeaders(headers)
+        }
+    }
+
+    private fun forgetSourceHeaders(taskId: VesperDownloadTaskId) {
+        synchronized(taskSourceHeadersLock) {
+            taskSourceHeaders.remove(taskId)
+        }
+    }
+
+    private fun rememberedSourceHeaders(taskId: VesperDownloadTaskId): Map<String, String> =
+        synchronized(taskSourceHeadersLock) {
+            taskSourceHeaders[taskId].orEmpty()
+        }
+
+    private fun VesperDownloadSnapshot.withRememberedSourceHeaders(): VesperDownloadSnapshot =
+        copy(tasks = tasks.map { it.withRememberedSourceHeaders() })
+
+    private fun VesperDownloadEvent.withRememberedSourceHeaders(): VesperDownloadEvent =
+        when (this) {
+            is VesperDownloadEvent.Created -> copy(task = task.withRememberedSourceHeaders())
+            is VesperDownloadEvent.StateChanged -> copy(task = task.withRememberedSourceHeaders())
+            is VesperDownloadEvent.AssetIndexUpdated -> copy(task = task.withRememberedSourceHeaders())
+            is VesperDownloadEvent.ProgressUpdated -> copy(task = task.withRememberedSourceHeaders())
+        }
+
+    private fun VesperDownloadTaskSnapshot.withRememberedSourceHeaders(): VesperDownloadTaskSnapshot {
+        val headers = rememberedSourceHeaders(taskId)
+        if (headers.isEmpty() || source.source.headers.isNotEmpty()) {
+            return this
+        }
+        return copy(source = source.copy(source = source.source.copy(headers = headers)))
     }
 
     private val runtimeReporter =
@@ -870,15 +936,16 @@ private class VesperForegroundDownloadExecutor(
     private val dataSourceFactory = DefaultDataSource.Factory(appContext)
 
     private suspend fun prepareAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+        val requestHeaders = task.source.source.headers
         if (task.assetIndex.resources.isNotEmpty() || task.assetIndex.segments.isNotEmpty()) {
-            return completePreparedAssetIndex(task.source.contentFormat, task.assetIndex)
+            return completePreparedAssetIndex(task.source.contentFormat, task.assetIndex, requestHeaders)
         }
 
         return when (task.source.contentFormat) {
-            VesperDownloadContentFormat.HlsSegments -> planHlsAssetIndex(task)
-            VesperDownloadContentFormat.DashSegments -> planDashAssetIndex(task)
-            VesperDownloadContentFormat.FlvSegments -> planFlvAssetIndex(task)
-            VesperDownloadContentFormat.SingleFile -> planSingleFileAssetIndex(task)
+            VesperDownloadContentFormat.HlsSegments -> planHlsAssetIndex(task, requestHeaders)
+            VesperDownloadContentFormat.DashSegments -> planDashAssetIndex(task, requestHeaders)
+            VesperDownloadContentFormat.FlvSegments -> planFlvAssetIndex(task, requestHeaders)
+            VesperDownloadContentFormat.SingleFile -> planSingleFileAssetIndex(task, requestHeaders)
             VesperDownloadContentFormat.Unknown -> error("download preparation cannot plan an unknown content format")
         }
     }
@@ -886,13 +953,14 @@ private class VesperForegroundDownloadExecutor(
     private suspend fun completePreparedAssetIndex(
         contentFormat: VesperDownloadContentFormat,
         assetIndex: VesperDownloadAssetIndex,
+        requestHeaders: Map<String, String>,
     ): VesperDownloadAssetIndex {
         val resources =
             assetIndex.resources.map { resource ->
                 if (resource.sizeBytes != null || resource.generatedText != null) {
                     resource
                 } else {
-                    resource.copy(sizeBytes = probeRequiredSize(resource.uri, resource.byteRange))
+                    resource.copy(sizeBytes = probeRequiredSize(resource.uri, resource.byteRange, requestHeaders))
                 }
             }
         val segments =
@@ -900,7 +968,7 @@ private class VesperForegroundDownloadExecutor(
                 if (segment.sizeBytes != null) {
                     segment
                 } else {
-                    segment.copy(sizeBytes = probeRequiredSize(segment.uri, segment.byteRange))
+                    segment.copy(sizeBytes = probeRequiredSize(segment.uri, segment.byteRange, requestHeaders))
                 }
             }
         val totalSizeBytes =
@@ -915,9 +983,12 @@ private class VesperForegroundDownloadExecutor(
         )
     }
 
-    private suspend fun planSingleFileAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+    private suspend fun planSingleFileAssetIndex(
+        task: VesperDownloadTaskSnapshot,
+        requestHeaders: Map<String, String>,
+    ): VesperDownloadAssetIndex {
         val uri = task.source.manifestUri ?: task.source.source.uri
-        val sizeBytes = probeRequiredSize(uri, null)
+        val sizeBytes = probeRequiredSize(uri, null, requestHeaders)
         return VesperDownloadAssetIndex(
             contentFormat = task.source.contentFormat,
             totalSizeBytes = sizeBytes,
@@ -933,14 +1004,17 @@ private class VesperForegroundDownloadExecutor(
         )
     }
 
-    private suspend fun planHlsAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+    private suspend fun planHlsAssetIndex(
+        task: VesperDownloadTaskSnapshot,
+        requestHeaders: Map<String, String>,
+    ): VesperDownloadAssetIndex {
         val manifestUri = task.source.manifestUri ?: task.source.source.uri
-        val manifestText = fetchText(manifestUri)
+        val manifestText = fetchText(manifestUri, requestHeaders)
         return if (manifestText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
-            planHlsMasterAssetIndex(manifestUri, manifestText, task.profile)
+            planHlsMasterAssetIndex(manifestUri, manifestText, task.profile, requestHeaders)
         } else {
             val media = parseHlsMediaPlaylist(manifestUri, manifestText)
-            buildHlsMediaAssetIndex("index.m3u8", listOf("media" to media))
+            buildHlsMediaAssetIndex("index.m3u8", listOf("media" to media), requestHeaders)
         }
     }
 
@@ -948,6 +1022,7 @@ private class VesperForegroundDownloadExecutor(
         manifestUri: String,
         manifestText: String,
         profile: VesperDownloadProfile,
+        requestHeaders: Map<String, String>,
     ): VesperDownloadAssetIndex {
         val master = parseHlsMasterPlaylist(manifestUri, manifestText)
         val variant =
@@ -957,7 +1032,7 @@ private class VesperForegroundDownloadExecutor(
                 }
                 ?: master.variants.firstOrNull()
                 ?: error("HLS master playlist did not contain a playable variant")
-        val variantMedia = parseHlsMediaPlaylist(variant.uri, fetchText(variant.uri))
+        val variantMedia = parseHlsMediaPlaylist(variant.uri, fetchText(variant.uri, requestHeaders))
         val media = mutableListOf("video" to variantMedia)
         val audio =
             profile.preferredAudioLanguage
@@ -967,10 +1042,10 @@ private class VesperForegroundDownloadExecutor(
                 ?: master.audio.firstOrNull { it.attributes["DEFAULT"]?.equals("YES", ignoreCase = true) == true }
                 ?: master.audio.firstOrNull()
         if (audio != null) {
-            media += "audio" to parseHlsMediaPlaylist(audio.uri, fetchText(audio.uri))
+            media += "audio" to parseHlsMediaPlaylist(audio.uri, fetchText(audio.uri, requestHeaders))
         }
 
-        val planned = buildHlsMediaAssetIndex("index.m3u8", media)
+        val planned = buildHlsMediaAssetIndex("index.m3u8", media, requestHeaders)
         val mediaResourceNames =
             planned.resources
                 .mapNotNull { it.relativePath }
@@ -991,6 +1066,7 @@ private class VesperForegroundDownloadExecutor(
     private suspend fun buildHlsMediaAssetIndex(
         manifestPath: String,
         mediaPlaylists: List<Pair<String, HlsMediaPlaylist>>,
+        requestHeaders: Map<String, String>,
     ): VesperDownloadAssetIndex {
         val resources =
             mutableListOf(
@@ -1015,7 +1091,7 @@ private class VesperForegroundDownloadExecutor(
             playlist.maps.forEachIndexed { index, map ->
                 val key = "${map.uri}:${map.byteRange}"
                 if (seenMaps.add(key)) {
-                    val size = probeRequiredSize(map.uri, map.byteRange)
+                    val size = probeRequiredSize(map.uri, map.byteRange, requestHeaders)
                     totalSizeBytes += size
                     val relativePath = "segments/$mediaId-init-$index.${extensionFromUri(map.uri, "mp4")}"
                     resources +=
@@ -1031,7 +1107,7 @@ private class VesperForegroundDownloadExecutor(
             }
 
             playlist.segments.forEach { segment ->
-                val size = probeRequiredSize(segment.uri, segment.byteRange)
+                val size = probeRequiredSize(segment.uri, segment.byteRange, requestHeaders)
                 totalSizeBytes += size
                 segments +=
                     VesperDownloadSegmentRecord(
@@ -1070,9 +1146,12 @@ private class VesperForegroundDownloadExecutor(
         )
     }
 
-    private suspend fun planDashAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+    private suspend fun planDashAssetIndex(
+        task: VesperDownloadTaskSnapshot,
+        requestHeaders: Map<String, String>,
+    ): VesperDownloadAssetIndex {
         val manifestUri = task.source.manifestUri ?: task.source.source.uri
-        val manifestText = fetchText(manifestUri)
+        val manifestText = fetchText(manifestUri, requestHeaders)
         val document = parseXmlDocument(manifestText)
         val documentType = document.documentElement.getAttribute("type")
         if (documentType.isNotBlank() && !documentType.equals("static", ignoreCase = true)) {
@@ -1105,7 +1184,7 @@ private class VesperForegroundDownloadExecutor(
                 val initLocalPath = "segments/$mediaId-init.mp4"
                 template.initialization?.takeIf { it.isNotBlank() }?.let { initialization ->
                     val remote = resolveRemoteReference(representation.baseUri, expandDashTemplate(initialization, representation.id, template.startNumber))
-                    val size = probeRequiredSize(remote, null)
+                    val size = probeRequiredSize(remote, null, requestHeaders)
                     totalSizeBytes += size
                     resources +=
                         VesperDownloadResourceRecord(
@@ -1118,7 +1197,7 @@ private class VesperForegroundDownloadExecutor(
                 repeat(segmentCount.toInt()) { offset ->
                     val number = template.startNumber + offset
                     val remote = resolveRemoteReference(representation.baseUri, expandDashTemplate(template.media, representation.id, number))
-                    val size = probeRequiredSize(remote, null)
+                    val size = probeRequiredSize(remote, null, requestHeaders)
                     totalSizeBytes += size
                     segments +=
                         VesperDownloadSegmentRecord(
@@ -1132,7 +1211,7 @@ private class VesperForegroundDownloadExecutor(
                 rewrittenAdaptationSets += rewriteDashTemplateAdaptationSet(representation, template, mediaId, segmentCount)
             } else if (representation.baseUrl != null) {
                 val remote = resolveRemoteReference(representation.baseUri, representation.baseUrl)
-                val size = probeRequiredSize(remote, null)
+                val size = probeRequiredSize(remote, null, requestHeaders)
                 totalSizeBytes += size
                 val localName = "media-$mediaId.${extensionFromUri(remote, "mp4")}"
                 resources +=
@@ -1164,13 +1243,16 @@ private class VesperForegroundDownloadExecutor(
         )
     }
 
-    private suspend fun planFlvAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+    private suspend fun planFlvAssetIndex(
+        task: VesperDownloadTaskSnapshot,
+        requestHeaders: Map<String, String>,
+    ): VesperDownloadAssetIndex {
         val uri = task.source.manifestUri ?: task.source.source.uri
         val clipUris =
             if (extensionFromUri(uri, "flv").equals("flv", ignoreCase = true)) {
                 listOf(uri)
             } else {
-                parseFlvClipManifest(uri, fetchText(uri))
+                parseFlvClipManifest(uri, fetchText(uri, requestHeaders))
             }
         if (clipUris.isEmpty()) {
             error("FLV clip manifest did not contain any clip URI")
@@ -1181,7 +1263,7 @@ private class VesperForegroundDownloadExecutor(
         val segments =
             clipUris.mapIndexed { index, clipUri ->
                 val sequence = index + 1L
-                val size = probeRequiredSize(clipUri, null)
+                val size = probeRequiredSize(clipUri, null, requestHeaders)
                 totalSizeBytes += size
                 val localPath = "clips/clip-${sequence.toString().padStart(5, '0')}.${extensionFromUri(clipUri, "flv")}"
                 concat.append("file '").append(escapeFfconcatPath(localPath)).append("'\n")
@@ -1285,6 +1367,7 @@ private class VesperForegroundDownloadExecutor(
                     val downloadContext = currentCoroutineContext()
                     downloadContext.ensureActive()
                     val plan = buildExecutionPlan(task)
+                    val requestHeaders = task.source.source.headers
                     var receivedBytes = 0L
                     var receivedSegments = 0
                     val trackSegments = task.assetIndex.segments.isNotEmpty()
@@ -1309,6 +1392,7 @@ private class VesperForegroundDownloadExecutor(
                                 copyUriToFile(
                                     sourceUri = entry.uri,
                                     byteRange = entry.byteRange,
+                                    requestHeaders = requestHeaders,
                                     destination = outputFile,
                                     expectedSizeBytes = entry.expectedSizeBytes,
                                     resumeFromBytes = resumeFromBytes,
@@ -1447,6 +1531,7 @@ private class VesperForegroundDownloadExecutor(
     private suspend fun copyUriToFile(
         sourceUri: String,
         byteRange: VesperDownloadByteRange?,
+        requestHeaders: Map<String, String>,
         destination: File,
         expectedSizeBytes: Long?,
         resumeFromBytes: Long,
@@ -1456,6 +1541,7 @@ private class VesperForegroundDownloadExecutor(
             return copyHttpUriToFile(
                 sourceUri = sourceUri,
                 byteRange = byteRange,
+                requestHeaders = requestHeaders,
                 destination = destination,
                 expectedSizeBytes = expectedSizeBytes,
                 resumeFromBytes = resumeFromBytes,
@@ -1466,6 +1552,7 @@ private class VesperForegroundDownloadExecutor(
         return copyDataSourceUriToFile(
             sourceUri = sourceUri,
             byteRange = byteRange,
+            requestHeaders = requestHeaders,
             destination = destination,
             expectedSizeBytes = expectedSizeBytes,
             resumeFromBytes = resumeFromBytes,
@@ -1476,6 +1563,7 @@ private class VesperForegroundDownloadExecutor(
     private suspend fun copyDataSourceUriToFile(
         sourceUri: String,
         byteRange: VesperDownloadByteRange?,
+        requestHeaders: Map<String, String>,
         destination: File,
         expectedSizeBytes: Long?,
         resumeFromBytes: Long,
@@ -1488,7 +1576,9 @@ private class VesperForegroundDownloadExecutor(
             return expected
         }
         val dataSource = dataSourceFactory.createDataSource()
-        val dataSpecBuilder = DataSpec.Builder().setUri(sourceUri)
+        val dataSpecBuilder = DataSpec.Builder()
+            .setUri(sourceUri)
+            .setDownloadRequestHeaders(requestHeaders)
         if (byteRange != null) {
             val remaining = byteRange.length.coerceAtLeast(0L) - resumeOffset
             dataSpecBuilder
@@ -1544,6 +1634,7 @@ private class VesperForegroundDownloadExecutor(
     private suspend fun copyHttpUriToFile(
         sourceUri: String,
         byteRange: VesperDownloadByteRange?,
+        requestHeaders: Map<String, String>,
         destination: File,
         expectedSizeBytes: Long?,
         resumeFromBytes: Long,
@@ -1562,6 +1653,7 @@ private class VesperForegroundDownloadExecutor(
         val connection =
             runInterruptible {
                 (URL(sourceUri).openConnection() as HttpURLConnection).apply {
+                    applyDownloadRequestHeaders(requestHeaders)
                     rangeHeader?.let { setRequestProperty("Range", it) }
                     instanceFollowRedirects = true
                     connectTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
@@ -1589,6 +1681,7 @@ private class VesperForegroundDownloadExecutor(
                             return copyHttpUriToFile(
                                 sourceUri = sourceUri,
                                 byteRange = byteRange,
+                                requestHeaders = requestHeaders,
                                 destination = destination,
                                 expectedSizeBytes = expectedSizeBytes,
                                 resumeFromBytes = 0L,
@@ -1609,6 +1702,7 @@ private class VesperForegroundDownloadExecutor(
                         return copyHttpUriToFile(
                             sourceUri = sourceUri,
                             byteRange = byteRange,
+                            requestHeaders = requestHeaders,
                             destination = destination,
                             expectedSizeBytes = expectedSizeBytes,
                             resumeFromBytes = 0L,
@@ -1622,7 +1716,7 @@ private class VesperForegroundDownloadExecutor(
                 }
                 isExpiredHttpStatus(status) -> {
                     throw staleDownloadResource(
-                        "offline download resource is stale or expired (HTTP $status) for $sourceUri; refresh the video link and prepare the task again",
+                        "offline download resource is stale or expired (HTTP $status) for $sourceUri; refresh the media link and prepare the task again",
                     )
                 }
                 status !in 200..299 -> {
@@ -1704,11 +1798,22 @@ private class VesperForegroundDownloadExecutor(
         }
     }
 
-    private suspend fun fetchText(sourceUri: String): String {
+    private suspend fun fetchText(
+        sourceUri: String,
+        requestHeaders: Map<String, String>,
+    ): String {
+        if (isHttpUri(sourceUri)) {
+            return fetchHttpText(sourceUri, requestHeaders)
+        }
         val dataSource = dataSourceFactory.createDataSource()
         return try {
             runInterruptible {
-                dataSource.open(DataSpec.Builder().setUri(sourceUri).build())
+                dataSource.open(
+                    DataSpec.Builder()
+                        .setUri(sourceUri)
+                        .setDownloadRequestHeaders(requestHeaders)
+                        .build(),
+                )
             }
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(32 * 1024)
@@ -1731,14 +1836,18 @@ private class VesperForegroundDownloadExecutor(
     private suspend fun probeRequiredSize(
         sourceUri: String,
         byteRange: VesperDownloadByteRange?,
+        requestHeaders: Map<String, String>,
     ): Long {
         if (byteRange != null) {
             return byteRange.length.coerceAtLeast(0L)
         }
-        return probeContentLength(sourceUri)
+        return probeContentLength(sourceUri, requestHeaders)
     }
 
-    private suspend fun probeContentLength(sourceUri: String): Long {
+    private suspend fun probeContentLength(
+        sourceUri: String,
+        requestHeaders: Map<String, String>,
+    ): Long {
         val parsed = Uri.parse(sourceUri)
         if (parsed.scheme.equals("file", ignoreCase = true)) {
             val fileSize = parsed.path?.let(::File)?.length() ?: 0L
@@ -1747,14 +1856,19 @@ private class VesperForegroundDownloadExecutor(
             }
         }
         if (parsed.scheme.equals("http", ignoreCase = true) || parsed.scheme.equals("https", ignoreCase = true)) {
-            probeHttpContentLength(sourceUri)?.let { return it }
+            probeHttpContentLength(sourceUri, requestHeaders)?.let { return it }
         }
 
         val dataSource = dataSourceFactory.createDataSource()
         return try {
             val length =
                 runInterruptible {
-                    dataSource.open(DataSpec.Builder().setUri(sourceUri).build())
+                    dataSource.open(
+                        DataSpec.Builder()
+                            .setUri(sourceUri)
+                            .setDownloadRequestHeaders(requestHeaders)
+                            .build(),
+                    )
                 }
             if (length <= 0L) {
                 error("remote resource did not expose a stable content length")
@@ -1765,18 +1879,58 @@ private class VesperForegroundDownloadExecutor(
         }
     }
 
-    private suspend fun probeHttpContentLength(sourceUri: String): Long? =
+    private suspend fun fetchHttpText(
+        sourceUri: String,
+        requestHeaders: Map<String, String>,
+    ): String =
         runInterruptible {
-            val head = (URL(sourceUri).openConnection() as HttpURLConnection).apply {
-                requestMethod = "HEAD"
+            val connection = (URL(sourceUri).openConnection() as HttpURLConnection).apply {
+                applyDownloadRequestHeaders(requestHeaders)
                 instanceFollowRedirects = true
                 connectTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
                 readTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
             }
             try {
+                val status = connection.responseCode
+                if (isExpiredHttpStatus(status)) {
+                    throw staleDownloadResource(
+                        "offline download resource is stale or expired (HTTP $status) for $sourceUri; refresh the media link and prepare the task again",
+                    )
+                }
+                if (status !in 200..299) {
+                    throw staleDownloadResource("remote resource returned HTTP $status for $sourceUri")
+                }
+                connection.inputStream.use { input ->
+                    input.readBytes().toString(Charsets.UTF_8)
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+
+    private suspend fun probeHttpContentLength(
+        sourceUri: String,
+        requestHeaders: Map<String, String>,
+    ): Long? =
+        runInterruptible {
+            val head = (URL(sourceUri).openConnection() as HttpURLConnection).apply {
+                applyDownloadRequestHeaders(requestHeaders)
+                requestMethod = "HEAD"
+                instanceFollowRedirects = true
+                connectTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+                readTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+            }
+            val headStatus = head.responseCode
+            try {
                 head.inputStream.close()
             } catch (_: Exception) {
                 runCatching { head.errorStream?.close() }
+            }
+            if (isExpiredHttpStatus(headStatus)) {
+                head.disconnect()
+                throw staleDownloadResource(
+                    "offline download resource is stale or expired (HTTP $headStatus) for $sourceUri; refresh the media link and prepare the task again",
+                )
             }
             head.getHeaderField("Content-Length")?.toLongOrNull()?.takeIf { it > 0L }?.let {
                 head.disconnect()
@@ -1785,15 +1939,23 @@ private class VesperForegroundDownloadExecutor(
             head.disconnect()
 
             val range = (URL(sourceUri).openConnection() as HttpURLConnection).apply {
+                applyDownloadRequestHeaders(requestHeaders)
                 setRequestProperty("Range", "bytes=0-0")
                 instanceFollowRedirects = true
                 connectTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
                 readTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
             }
+            val rangeStatus = range.responseCode
             try {
                 range.inputStream.close()
             } catch (_: Exception) {
                 runCatching { range.errorStream?.close() }
+            }
+            if (isExpiredHttpStatus(rangeStatus)) {
+                range.disconnect()
+                throw staleDownloadResource(
+                    "offline download resource is stale or expired (HTTP $rangeStatus) for $sourceUri; refresh the media link and prepare the task again",
+                )
             }
             val size =
                 range.getHeaderField("Content-Range")
@@ -2757,6 +2919,24 @@ private fun <T> JSONArray.toObjectList(transform: JSONObject.() -> T): List<T> =
             optJSONObject(index)?.let { add(it.transform()) }
         }
     }
+
+private fun sanitizeDownloadRequestHeaders(headers: Map<String, String>): Map<String, String> =
+    headers
+        .mapNotNull { (name, value) ->
+            val sanitizedName = name.trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val sanitizedValue = value.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            sanitizedName to sanitizedValue
+        }
+        .toMap()
+
+private fun HttpURLConnection.applyDownloadRequestHeaders(headers: Map<String, String>) {
+    sanitizeDownloadRequestHeaders(headers).forEach { (name, value) ->
+        setRequestProperty(name, value)
+    }
+}
+
+private fun DataSpec.Builder.setDownloadRequestHeaders(headers: Map<String, String>): DataSpec.Builder =
+    setHttpRequestHeaders(sanitizeDownloadRequestHeaders(headers))
 
 private fun isHttpUri(uri: String): Boolean {
     val scheme = Uri.parse(uri).scheme ?: return false

@@ -61,7 +61,7 @@ resolve_optional_targets() {
 
 build_target() {
   local target="$1"
-  local build_command=(cargo build --target "$target" -p player-ffi-ios)
+  local build_command=(cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --target "$target" -p player-ffi-ios)
   if [[ "$PROFILE" == "release" ]]; then
     build_command+=(--release)
   fi

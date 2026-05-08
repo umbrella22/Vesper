@@ -40,6 +40,12 @@ entry. It uses Google's Default Media Receiver unless the host sets:
     android:value="YOUR_RECEIVER_APP_ID" />
 ```
 
+`VesperCastButton` creates the underlying Android `MediaRouteButton` with an
+SDK-owned opaque light theme. This keeps the Cast platform view safe inside
+Flutter pages or activities that use transparent or translucent backgrounds,
+where the AndroidX media router button can reject the host theme during contrast
+calculation.
+
 ## Usage
 
 ```dart

@@ -55,6 +55,10 @@ The build script:
 - Archives iOS + iOS Simulator frameworks
 - Produces `VesperPlayerKit.xcframework`
 
+The iOS Rust build scripts resolve the Cargo workspace through the SDK root
+manifest. They are safe to call from Xcode build phases, CI jobs, Flutter plugin
+builds, or any other working directory.
+
 ## Public API
 
 - `VesperPlayerController` — playback control surface (`@MainActor`); exposes `@Published` `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `fixedTrackStatus`, `resiliencePolicy`, `lastError`
@@ -203,7 +207,15 @@ when the server supports them. Pause, resume, and remove operations are keyed by
 `taskId`; host UI state should not merge tasks by URL. If a server ignores a
 resume range, the manager deletes only that partial resource and restarts the
 same resource from byte zero. Expired or unavailable URLs fail with a
-stale-resource error so the host can refresh the video link.
+stale-resource error so the host can refresh the media link.
+
+When `VesperPlayerSource.headers` is set, the download executor forwards those
+headers to all SDK-owned network operations for the task: HLS, DASH, and FLV
+manifest reads; HEAD and `Range: bytes=0-0` size probes; single-file transfers;
+HLS map and segment transfers; DASH init and media segment transfers; FLV clip
+transfers; and size completion for prebuilt asset indexes. Empty header names
+and blank values are ignored, and the SDK does not add site-specific headers on
+its own.
 
 This is an SDK-managed foreground executor, not an iOS background
 `URLSessionConfiguration.background` implementation. Hosts that need OS-managed

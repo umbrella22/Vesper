@@ -241,7 +241,7 @@ VesperPlayerSource.hls(uri: 'https://example.com/stream.m3u8')
 VesperPlayerSource.dash(
   uri: 'https://example.com/manifest.mpd',
   headers: <String, String>{
-    'Referer': 'https://www.bilibili.com/',
+    'Referer': 'https://example.com/player',
     'User-Agent': 'VesperPlayer',
   },
 )
@@ -472,6 +472,12 @@ Hosts may still pass a prebuilt `VesperDownloadAssetIndex` for custom catalogs.
 In that case the native prepare phase completes missing resource sizes before
 download. Pause, resume, and remove operations should be keyed by `taskId`, not
 by URL.
+
+Headers on `VesperPlayerSource.headers` are forwarded by the Android and iOS
+host kits during download preparation and transfer. Use them for generic HTTP
+context such as `User-Agent`, `Referer`, `Origin`, `Cookie`, or authorization
+headers; the SDK applies them to manifest reads, size probes, and media
+transfers, and ignores empty header names or blank values.
 
 The default `VesperDownloadConfiguration` enables `restoreTasksOnStartup` and
 `resumePartialDownloads`. Android and iOS persist task snapshots under the

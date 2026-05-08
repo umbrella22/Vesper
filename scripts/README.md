@@ -50,5 +50,8 @@ scripts/
 - The default Android ABI is `arm64-v8a`; override it with command arguments or `RUST_ANDROID_ABIS`.
 - The default Android NDK version is `29.0.14206865`. Scripts prefer `ANDROID_NDK_ROOT`, then resolve from `ANDROID_SDK_ROOT` / `ANDROID_HOME`.
 - The default Apple/iOS slices are `ios-arm64` and `ios-simulator-arm64`; do not reintroduce x86 / x86_64 distribution slices.
+- iOS Rust build scripts pass `--manifest-path "$ROOT_DIR/Cargo.toml"` to
+  Cargo so they can be run from Xcode build phases, Flutter plugin builds, CI
+  workspaces, or temporary directories.
 - FFmpeg, OpenSSL, and libxml2 version, source URL, source archive, and output directory overrides continue to use the existing `VESPER_*` environment variable semantics.
 - `scripts/lib/` contains only shared functions and default constants. Sourcing these files must not start build work.

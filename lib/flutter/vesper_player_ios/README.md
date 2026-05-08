@@ -82,6 +82,12 @@ files and restarts only the affected resource when a server ignores a resume
 range. This is SDK-managed foreground recovery, not an iOS background
 `URLSessionConfiguration.background` implementation.
 
+Download source headers are passed through the iOS host kit for manifest reads,
+size probes, and media transfers. Hosts should put generic HTTP context such as
+`User-Agent`, `Referer`, `Origin`, `Cookie`, or authorization headers on
+`VesperPlayerSource.headers`; the SDK forwards them consistently and ignores
+empty header names or blank values.
+
 ## Technical Notes
 
 - Playback backend: AVPlayer behind the `VesperPlayerController` Swift facade

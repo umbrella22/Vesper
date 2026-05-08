@@ -44,6 +44,49 @@ class VesperDownloadManagerTest {
     }
 
     @Test
+    fun sourceHeadersSurviveNativeDownloadCommandRoundTrip() {
+        val bindings = FakeDownloadBindings(autoStart = true)
+        val executor = RecordingDownloadExecutor()
+        val manager =
+            VesperDownloadManager(
+                configuration = VesperDownloadConfiguration(autoStart = true),
+                executor = executor,
+                bindings = bindings,
+                runtimeDispatcher = Dispatchers.Unconfined,
+            )
+
+        manager.createTask(
+            assetId = "asset-a",
+            source =
+                VesperDownloadSource(
+                    source =
+                        VesperPlayerSource.remote(
+                            uri = "https://example.com/video.m3u8",
+                            label = "Video",
+                            protocol = VesperPlayerSourceProtocol.Hls,
+                            headers =
+                                mapOf(
+                                    "User-Agent" to "VesperTest/1.0",
+                                    "Referer" to "https://example.com/player",
+                                    "" to "ignored",
+                                    "Origin" to "",
+                                ),
+                        ),
+                ),
+        )
+
+        val expected =
+            mapOf(
+                "User-Agent" to "VesperTest/1.0",
+                "Referer" to "https://example.com/player",
+            )
+        assertEquals(expected, executor.preparedSourceHeaders.single())
+        assertEquals(expected, executor.startedSourceHeaders.single())
+        assertEquals(expected, manager.task(1L)?.source?.source?.headers)
+        manager.dispose()
+    }
+
+    @Test
     fun pauseResumeAndRemoveDelegateToExecutorWithoutForkingStateMachine() {
         val bindings = FakeDownloadBindings(autoStart = true)
         val executor = RecordingDownloadExecutor()
@@ -468,13 +511,25 @@ private fun NativeDownloadAssetIndex.withCompletedPath(
 private class RecordingDownloadExecutor(
     private val autoComplete: Boolean = false,
 ) : VesperDownloadExecutor {
+    val preparedSourceHeaders = mutableListOf<Map<String, String>>()
+    val startedSourceHeaders = mutableListOf<Map<String, String>>()
+    val resumedSourceHeaders = mutableListOf<Map<String, String>>()
     val startedTaskIds = mutableListOf<Long>()
     val resumedTaskIds = mutableListOf<Long>()
     val pausedTaskIds = mutableListOf<Long>()
     val removedTaskIds = mutableListOf<Long>()
 
+    override fun prepare(
+        task: VesperDownloadTaskSnapshot,
+        reporter: VesperDownloadExecutionReporter,
+    ) {
+        preparedSourceHeaders += task.source.source.headers
+        reporter.completePreparation(task.taskId, task.assetIndex)
+    }
+
     override fun start(task: VesperDownloadTaskSnapshot, reporter: VesperDownloadExecutionReporter) {
         startedTaskIds += task.taskId
+        startedSourceHeaders += task.source.source.headers
         if (autoComplete) {
             reporter.updateProgress(task.taskId, 512L, 0)
             reporter.complete(task.taskId, "/tmp/downloads/${task.taskId}.bin")
@@ -486,6 +541,7 @@ private class RecordingDownloadExecutor(
         reporter: VesperDownloadExecutionReporter,
     ) {
         resumedTaskIds += task.taskId
+        resumedSourceHeaders += task.source.source.headers
     }
 
     override fun pause(taskId: VesperDownloadTaskId) {

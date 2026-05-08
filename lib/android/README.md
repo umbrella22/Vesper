@@ -119,7 +119,15 @@ tasks are restored on startup, and existing partial remote files are resumed wit
 range requests when the server supports them. If a server ignores a resume range,
 the manager deletes only that partial resource and restarts the same resource from
 byte zero; expired or unavailable URLs fail with a stale-resource error so the
-host can refresh the video link.
+host can refresh the media link.
+
+When `VesperPlayerSource.headers` is set, the download executor forwards those
+headers to all SDK-owned network operations for the task: HLS, DASH, and FLV
+manifest reads; HEAD and `Range: bytes=0-0` size probes; Media3 `DataSpec`
+fallback reads; single-file transfers; HLS map and segment transfers; DASH init
+and media segment transfers; FLV clip transfers; and size completion for
+prebuilt asset indexes. Empty header names and blank values are ignored, and the
+SDK does not add site-specific headers on its own.
 
 This is not an Android `WorkManager` or download `ForegroundService` wrapper for
 process-death background transfer. Hosts that need OS-managed background

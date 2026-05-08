@@ -36,6 +36,40 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
     }
 
+    func testSourceHeadersSurviveNativeDownloadCommandRoundTrip() {
+        let bindings = FakeDownloadBindings(autoStart: true)
+        let executor = RecordingDownloadExecutor()
+        let manager = VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: true),
+            executor: executor,
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+
+        _ = manager.createTask(
+            assetId: "asset-a",
+            source: VesperDownloadSource(
+                source: .hls(
+                    url: URL(string: "https://example.com/video.m3u8")!,
+                    label: "Video",
+                    headers: [
+                        "User-Agent": "VesperTest/1.0",
+                        "Referer": "https://example.com/player",
+                        "": "ignored",
+                        "Origin": "",
+                    ]
+                )
+            )
+        )
+
+        let expected = [
+            "User-Agent": "VesperTest/1.0",
+            "Referer": "https://example.com/player",
+        ]
+        XCTAssertEqual(executor.startedSourceHeaders, [expected])
+        XCTAssertEqual(manager.task(1)?.source.source.headers, expected)
+    }
+
     func testPauseResumeAndRemoveDelegateToExecutorWithoutForkingStateMachine() {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
@@ -487,6 +521,9 @@ private struct StoredRuntimeCommand {
 private final class RecordingDownloadExecutor: VesperDownloadExecutor {
     private let autoComplete: Bool
 
+    private(set) var preparedSourceHeaders: [[String: String]] = []
+    private(set) var startedSourceHeaders: [[String: String]] = []
+    private(set) var resumedSourceHeaders: [[String: String]] = []
     private(set) var startedTaskIds: [UInt64] = []
     private(set) var resumedTaskIds: [UInt64] = []
     private(set) var pausedTaskIds: [UInt64] = []
@@ -496,11 +533,22 @@ private final class RecordingDownloadExecutor: VesperDownloadExecutor {
         self.autoComplete = autoComplete
     }
 
+    func prepare(
+        task: VesperDownloadTaskSnapshot,
+        reporter: any VesperDownloadExecutionReporter
+    ) {
+        preparedSourceHeaders.append(task.source.source.headers)
+        MainActor.assumeIsolated {
+            reporter.completePreparation(taskId: task.taskId, assetIndex: task.assetIndex)
+        }
+    }
+
     func start(
         task: VesperDownloadTaskSnapshot,
         reporter: any VesperDownloadExecutionReporter
     ) {
         startedTaskIds.append(task.taskId)
+        startedSourceHeaders.append(task.source.source.headers)
         if autoComplete {
             MainActor.assumeIsolated {
                 reporter.updateProgress(
@@ -521,6 +569,7 @@ private final class RecordingDownloadExecutor: VesperDownloadExecutor {
         reporter: any VesperDownloadExecutionReporter
     ) {
         resumedTaskIds.append(task.taskId)
+        resumedSourceHeaders.append(task.source.source.headers)
     }
 
     func pause(taskId: VesperDownloadTaskId) {

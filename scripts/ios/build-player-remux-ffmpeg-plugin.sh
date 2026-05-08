@@ -109,6 +109,7 @@ for slice in "${selected_slices[@]}"; do
   cargo_command=(
     cargo
     build
+    --manifest-path "$ROOT_DIR/Cargo.toml"
     --target "$rust_target"
     -p player-remux-ffmpeg
   )

@@ -845,7 +845,7 @@ fn download_remote_file(
         401 | 403 | 404 | 410 => {
             let _ = fs::remove_file(&transfer.output_path);
             return Err(source_error(format!(
-                "offline download resource is stale or expired (HTTP {}) for `{uri}`; refresh the video link and prepare the task again",
+                "offline download resource is stale or expired (HTTP {}) for `{uri}`; refresh the media link and prepare the task again",
                 transfer.status_code
             )));
         }

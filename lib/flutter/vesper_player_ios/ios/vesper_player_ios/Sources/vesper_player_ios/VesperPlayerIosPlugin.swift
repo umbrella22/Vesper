@@ -641,7 +641,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
-    private func emitDownloadRuntimeEvents(for session: DownloadSession) {
+    fileprivate func emitDownloadRuntimeEvents(for session: DownloadSession) {
         for event in session.manager.drainEvents() {
             if case let .assetIndexUpdated(task) = event {
                 downloadEventSink?([

@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.flutter.cast
 
 import android.content.Context
+import android.view.ContextThemeWrapper
 import android.view.View
 import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.cast.framework.CastButtonFactory
@@ -81,9 +82,10 @@ class VesperPlayerCastPlugin :
     }
 
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-        val button = MediaRouteButton(context)
+        val themedContext = ContextThemeWrapper(context, R.style.VesperPlayerCastButtonTheme)
+        val button = MediaRouteButton(themedContext)
         runCatching {
-            CastButtonFactory.setUpMediaRouteButton(context.applicationContext, button)
+            CastButtonFactory.setUpMediaRouteButton(themedContext, button)
         }
         return CastButtonPlatformView(button)
     }

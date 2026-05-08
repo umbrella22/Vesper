@@ -64,6 +64,12 @@ partial files with validated range requests, and restarts only the affected
 resource when a server ignores a resume range. It does not install a WorkManager
 or download ForegroundService for process-death transfers.
 
+Download source headers are passed through the Android host kit for manifest
+reads, size probes, Media3 `DataSpec` fallback reads, and media transfers. Hosts
+should put generic HTTP context such as `User-Agent`, `Referer`, `Origin`,
+`Cookie`, or authorization headers on `VesperPlayerSource.headers`; the SDK
+forwards them consistently and ignores empty header names or blank values.
+
 ## Optional Android Cast
 
 Android Cast lives in the separate `vesper_player_cast` Flutter package and the
