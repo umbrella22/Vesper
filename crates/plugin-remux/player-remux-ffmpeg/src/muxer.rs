@@ -27,9 +27,11 @@ impl PostDownloadProcessor for FfmpegRemuxProcessor {
     }
 
     fn supported_input_formats(&self) -> &[ContentFormatKind] {
-        static SUPPORTED: [ContentFormatKind; 2] = [
+        static SUPPORTED: [ContentFormatKind; 4] = [
             ContentFormatKind::HlsSegments,
             ContentFormatKind::DashSegments,
+            ContentFormatKind::FlvSegments,
+            ContentFormatKind::SingleFile,
         ];
         &SUPPORTED
     }
@@ -48,7 +50,7 @@ impl PostDownloadProcessor for FfmpegRemuxProcessor {
         output_path: &Path,
         progress: &dyn ProcessorProgress,
     ) -> Result<ProcessorOutput, ProcessorError> {
-        let manifest_path = match &input.content_format {
+        let input_path = match &input.content_format {
             CompletedContentFormat::HlsSegments { manifest_path, .. } => {
                 ensure_demuxer("hls", ContentFormatKind::HlsSegments)?;
                 manifest_path
@@ -57,7 +59,24 @@ impl PostDownloadProcessor for FfmpegRemuxProcessor {
                 ensure_demuxer("dash", ContentFormatKind::DashSegments)?;
                 manifest_path
             }
-            CompletedContentFormat::SingleFile { .. } => return Ok(ProcessorOutput::Skipped),
+            CompletedContentFormat::FlvSegments {
+                manifest_path,
+                segment_paths: _,
+            } => {
+                ensure_demuxer("concat", ContentFormatKind::FlvSegments)?;
+                manifest_path
+            }
+            CompletedContentFormat::SingleFile { path } => {
+                if !path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("flv"))
+                {
+                    return Ok(ProcessorOutput::Skipped);
+                }
+                ensure_demuxer("flv", ContentFormatKind::SingleFile)?;
+                path
+            }
         };
 
         initialize_ffmpeg()?;
@@ -65,7 +84,7 @@ impl PostDownloadProcessor for FfmpegRemuxProcessor {
             return Err(ProcessorError::Cancelled);
         }
 
-        remux_manifest_to_mp4(manifest_path, output_path, progress)?;
+        remux_input_to_mp4(input_path, output_path, progress)?;
         Ok(ProcessorOutput::MuxedFile {
             path: output_path.to_path_buf(),
             format: OutputFormat::Mp4,
@@ -88,9 +107,10 @@ fn ensure_demuxer(
 
     if unsafe { ffmpeg::ffi::av_find_input_format(c_name.as_ptr()).is_null() } {
         return Err(match content_format {
-            ContentFormatKind::HlsSegments | ContentFormatKind::DashSegments => {
-                ProcessorError::UnsupportedFormat(content_format)
-            }
+            ContentFormatKind::HlsSegments
+            | ContentFormatKind::DashSegments
+            | ContentFormatKind::FlvSegments
+            | ContentFormatKind::SingleFile => ProcessorError::UnsupportedFormat(content_format),
             _ => FfmpegProcessorError::MissingDemuxer(name).into_processor_error(),
         });
     }
@@ -98,8 +118,8 @@ fn ensure_demuxer(
     Ok(())
 }
 
-fn remux_manifest_to_mp4(
-    manifest_path: &Path,
+fn remux_input_to_mp4(
+    input_path: &Path,
     output_path: &Path,
     progress: &dyn ProcessorProgress,
 ) -> Result<(), ProcessorError> {
@@ -123,13 +143,13 @@ fn remux_manifest_to_mp4(
         })?;
     }
 
-    let input_path = manifest_path.to_string_lossy().into_owned();
+    let input_path_string = input_path.to_string_lossy().into_owned();
     let output_path_string = output_path.to_string_lossy().into_owned();
 
-    let mut input_context = format::input(&input_path).map_err(|error| {
+    let mut input_context = format::input(&input_path_string).map_err(|error| {
         FfmpegProcessorError::Remux(format!(
-            "failed to open manifest `{}`: {error}",
-            manifest_path.display()
+            "failed to open input `{}`: {error}",
+            input_path.display()
         ))
         .into_processor_error()
     })?;
@@ -147,9 +167,9 @@ fn remux_manifest_to_mp4(
 
     for (input_stream_index, input_stream) in input_context.streams().enumerate() {
         let medium = input_stream.parameters().medium();
-        // 相册导出以“稳定得到可播放 MP4”为目标，这里只保留音视频流。
-        // 某些 HLS/DASH 示例里的字幕轨或附加流直接 remux 到 MP4 时会在 write_header
-        // 阶段被 muxer 拒绝，导致整个导出失败。
+        // Gallery export prioritizes a playable MP4, so only audio/video
+        // streams are carried across. Some subtitle or auxiliary streams from
+        // HLS/DASH fixtures are rejected by the MP4 muxer during header write.
         if medium != media::Type::Audio && medium != media::Type::Video {
             continue;
         }
@@ -175,8 +195,8 @@ fn remux_manifest_to_mp4(
 
     if output_stream_index == 0 {
         return Err(FfmpegProcessorError::Remux(format!(
-            "manifest `{}` does not contain any MP4-compatible audio/video streams",
-            manifest_path.display()
+            "input `{}` does not contain any MP4-compatible audio/video streams",
+            input_path.display()
         ))
         .into_processor_error());
     }
@@ -300,7 +320,9 @@ mod tests {
             processor.supported_input_formats(),
             &[
                 ContentFormatKind::HlsSegments,
-                ContentFormatKind::DashSegments
+                ContentFormatKind::DashSegments,
+                ContentFormatKind::FlvSegments,
+                ContentFormatKind::SingleFile,
             ]
         );
         assert_eq!(

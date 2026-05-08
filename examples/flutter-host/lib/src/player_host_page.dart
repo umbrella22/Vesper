@@ -174,6 +174,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
               .toDouble();
         });
       case VesperDownloadSnapshotEvent():
+      case VesperDownloadAssetIndexUpdatedEvent():
       case VesperDownloadErrorEvent():
       case VesperDownloadDisposedEvent():
         break;
@@ -449,7 +450,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       );
       return;
     } on MissingPluginException {
-      // 宿主未接 picker 时回退到手动输入，便于调试。
+      // Fall back to manual input when the host picker is not wired, which keeps debugging simple.
     } on PlatformException catch (error) {
       if (!mounted || error.code == 'cancelled') {
         return;
@@ -557,16 +558,6 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     required String assetIdPrefix,
     required VesperPlayerSource source,
   }) async {
-    if (Platform.isIOS && source.protocol == VesperPlayerSourceProtocol.dash) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _downloadMessage = 'iOS 侧示例暂不接入 DASH 下载。';
-      });
-      return;
-    }
-
     final assetId = '$assetIdPrefix-${DateTime.now().millisecondsSinceEpoch}';
     setState(() {
       _downloadMessage = null;
@@ -682,7 +673,8 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
 
     final needsExport =
         task.source.contentFormat == VesperDownloadContentFormat.hlsSegments ||
-        task.source.contentFormat == VesperDownloadContentFormat.dashSegments;
+        task.source.contentFormat == VesperDownloadContentFormat.dashSegments ||
+        task.source.contentFormat == VesperDownloadContentFormat.flvSegments;
     if (needsExport && !_isDownloadExportPluginInstalled) {
       _showMessage('MP4 合成库未安装。');
       return;

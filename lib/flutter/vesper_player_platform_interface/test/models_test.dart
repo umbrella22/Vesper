@@ -8,6 +8,66 @@ void main() {
     expect(VesperPlayerRenderSurfaceKind.surfaceView.name, 'surfaceView');
   });
 
+  test('download DTOs encode FLV byte ranges and target output', () {
+    const source = VesperDownloadSource(
+      source: VesperPlayerSource(
+        uri: 'https://example.com/video.flv',
+        label: 'FLV demo',
+        kind: VesperPlayerSourceKind.remote,
+        protocol: VesperPlayerSourceProtocol.progressive,
+      ),
+      contentFormat: VesperDownloadContentFormat.flvSegments,
+      manifestUri: 'https://example.com/video.flv',
+    );
+    const profile = VesperDownloadProfile(
+      targetOutputFormat: VesperDownloadOutputFormat.mp4,
+      targetDirectory: '/tmp/vesper-downloads/demo',
+    );
+    const assetIndex = VesperDownloadAssetIndex(
+      contentFormat: VesperDownloadContentFormat.flvSegments,
+      totalSizeBytes: 4096,
+      resources: <VesperDownloadResourceRecord>[
+        VesperDownloadResourceRecord(
+          resourceId: 'flv-concat',
+          uri: 'vesper-generated://flv/manifest.ffconcat',
+          relativePath: 'manifest.ffconcat',
+          generatedText: 'ffconcat version 1.0\n',
+        ),
+      ],
+      segments: <VesperDownloadSegmentRecord>[
+        VesperDownloadSegmentRecord(
+          segmentId: 'clip-1',
+          uri: 'https://example.com/video.flv',
+          relativePath: 'clips/clip-00001.flv',
+          sequence: 1,
+          byteRange: VesperDownloadByteRange(offset: 128, length: 4096),
+          sizeBytes: 4096,
+        ),
+      ],
+    );
+
+    final task = VesperDownloadTaskSnapshot.fromMap(
+      VesperDownloadTaskSnapshot(
+        taskId: 7,
+        assetId: 'asset-flv',
+        source: source,
+        profile: profile,
+        state: VesperDownloadState.preparing,
+        progress: const VesperDownloadProgressSnapshot(
+          totalBytes: 4096,
+          totalSegments: 1,
+        ),
+        assetIndex: assetIndex,
+      ).toMap(),
+    );
+
+    expect(source.toMap()['contentFormat'], 'flvSegments');
+    expect(profile.toMap()['targetOutputFormat'], 'mp4');
+    expect(task.assetIndex.totalSizeBytes, 4096);
+    expect(task.assetIndex.segments.single.byteRange?.offset, 128);
+    expect(task.assetIndex.segments.single.byteRange?.length, 4096);
+  });
+
   test('system playback DTOs keep stable defaults and wire names', () {
     const metadata = VesperSystemPlaybackMetadata(
       title: 'Episode 1',

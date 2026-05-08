@@ -31,7 +31,7 @@ internal class PlayerHostViewModel(
             context = application.applicationContext,
             initialSource = null,
             resiliencePolicy = ExampleResilienceProfile.Balanced.policy,
-            // tab 切换和滚动场景下，TextureView 比 SurfaceView 更稳定。
+            // TextureView is more stable than SurfaceView for tab switches and scrolling hosts.
             surfaceKind = NativeVideoSurfaceKind.TextureView,
             preloadBudgetPolicy =
                 VesperPreloadBudgetPolicy(

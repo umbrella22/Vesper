@@ -564,16 +564,23 @@ func prepareExampleDownloadTask(
     assetId: String,
     source: VesperPlayerSource
 ) async throws -> ExamplePreparedDownloadTask {
-    switch source.protocol {
-    case .hls:
-        return try await prepareHlsDownloadTask(assetId: assetId, source: source)
-    default:
-        return ExamplePreparedDownloadTask(
-            source: VesperDownloadSource(source: source),
-            profile: VesperDownloadProfile(),
-            assetIndex: VesperDownloadAssetIndex()
-        )
-    }
+    let downloadSource = VesperDownloadSource(source: source)
+    let targetOutputFormat: VesperDownloadOutputFormat? =
+        switch downloadSource.contentFormat {
+        case .hlsSegments, .dashSegments, .flvSegments:
+            .mp4
+        case .singleFile, .unknown:
+            nil
+        }
+
+    return ExamplePreparedDownloadTask(
+        source: downloadSource,
+        profile: VesperDownloadProfile(
+            targetOutputFormat: targetOutputFormat,
+            targetDirectory: exampleDownloadTargetDirectory(assetId: assetId)
+        ),
+        assetIndex: VesperDownloadAssetIndex()
+    )
 }
 
 private struct HlsMasterSelection {

@@ -300,7 +300,8 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
         task.assetIndex.completedPath?.trim().isNotEmpty ?? false;
     final requiresExport =
         task.source.contentFormat == VesperDownloadContentFormat.hlsSegments ||
-        task.source.contentFormat == VesperDownloadContentFormat.dashSegments;
+        task.source.contentFormat == VesperDownloadContentFormat.dashSegments ||
+        task.source.contentFormat == VesperDownloadContentFormat.flvSegments;
     final saveButtonVisuallyUnavailable =
         requiresExport && !isDownloadExportPluginInstalled && !isSaving;
     final normalizedExportProgress = exportProgress?.clamp(0, 1).toDouble();

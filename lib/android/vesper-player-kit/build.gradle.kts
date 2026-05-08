@@ -6,7 +6,7 @@ plugins {
     id("com.android.library")
 }
 
-// AGP 9+ 已内建 Kotlin 支持；Flutter 侧仍可能通过 AGP 8.x 引入本模块。
+// AGP 9+ has built-in Kotlin support; Flutter hosts may still bring this module in through AGP 8.x.
 if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }

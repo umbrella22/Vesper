@@ -41,12 +41,23 @@ fun rememberVesperPlayerController(
     resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+    keepScreenOnDuringPlayback: Boolean = true,
 ): VesperPlayerController {
     val isPreview = LocalInspectionMode.current
     val context = LocalContext.current.applicationContext
-    val controller = remember(isPreview, context, initialSource, decoderBackend, surfaceKind) {
+    val controller = remember(
+        isPreview,
+        context,
+        initialSource,
+        decoderBackend,
+        surfaceKind,
+        keepScreenOnDuringPlayback,
+    ) {
         if (isPreview) {
-            VesperPlayerControllerFactory.createPreview(initialSource)
+            VesperPlayerControllerFactory.createPreview(
+                initialSource = initialSource,
+                keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
+            )
         } else {
             VesperPlayerControllerFactory.createDefault(
                 context = context,
@@ -54,11 +65,15 @@ fun rememberVesperPlayerController(
                 resiliencePolicy = resiliencePolicy,
                 decoderBackend = decoderBackend,
                 surfaceKind = surfaceKind,
+                keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
             )
         }
     }
     LaunchedEffect(controller, resiliencePolicy) {
         controller.setResiliencePolicy(resiliencePolicy)
+    }
+    LaunchedEffect(controller, keepScreenOnDuringPlayback) {
+        controller.setKeepScreenOnDuringPlayback(keepScreenOnDuringPlayback)
     }
     return controller
 }

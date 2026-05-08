@@ -10,19 +10,13 @@ publish = false
 anyhow.workspace = true
 pollster.workspace = true
 player-model = { path = "../../crates/model/player-model" }
-player-remux-ffmpeg = { path = "../../crates/plugin-remux/player-remux-ffmpeg" }
 player-backend-ffmpeg = { path = "../../crates/backend/player-backend-ffmpeg" }
 player-host-desktop = { path = "../../crates/platform/desktop/player-host-desktop" }
-player-plugin = { path = "../../crates/plugin/player-plugin" }
 player-render-wgpu = { path = "../../crates/render/player-render-wgpu" }
 player-runtime = { path = "../../crates/core/player-runtime" }
-quick-xml = "0.39.2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 winit.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 player-platform-macos = { path = "../../crates/platform/desktop/player-platform-macos" }
-
-[dev-dependencies]
-player-plugin-loader = { path = "../../crates/plugin/player-plugin-loader" }

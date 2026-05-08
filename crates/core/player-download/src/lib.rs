@@ -2,14 +2,17 @@
 
 mod download;
 mod error;
+mod planner;
 
 pub use download::{
-    DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadErrorSummary,
-    DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig, DownloadProfile,
-    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot,
-    DownloadSource, DownloadStore, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState,
-    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+    DownloadAssetId, DownloadAssetIndex, DownloadByteRange, DownloadContentFormat,
+    DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig,
+    DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord,
+    DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore, DownloadTaskId,
+    DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatus, InMemoryDownloadExecutor,
+    InMemoryDownloadStore,
 };
 pub use error::{
     PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
 };
+pub use planner::{DownloadPlanner, DownloadPlanningClient};

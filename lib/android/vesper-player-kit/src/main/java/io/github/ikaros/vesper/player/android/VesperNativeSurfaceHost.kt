@@ -19,6 +19,7 @@ class VesperNativeSurfaceHost(
     private var renderView: View? = null
     private var surface: Surface? = null
     private var videoLayoutInfo: NativeVideoLayoutInfo? = null
+    private var keepScreenOn = false
 
     private val hostLayoutListener =
         View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -55,6 +56,7 @@ class VesperNativeSurfaceHost(
         host.addView(view, matchParentLayoutParams())
         hostView = host
         renderView = view
+        applyKeepScreenOn()
         host.addOnLayoutChangeListener(hostLayoutListener)
         applyVideoTransform()
     }
@@ -70,10 +72,16 @@ class VesperNativeSurfaceHost(
         applyVideoTransform()
     }
 
+    fun setKeepScreenOn(active: Boolean) {
+        keepScreenOn = active
+        applyKeepScreenOn()
+    }
+
     fun detach(expectedHost: ViewGroup? = null) {
         if (expectedHost != null && hostView !== expectedHost) {
             return
         }
+        setKeepScreenOn(false)
         bindings.detachSurface()
         when (surfaceKind) {
             NativeVideoSurfaceKind.TextureView -> {
@@ -96,6 +104,7 @@ class VesperNativeSurfaceHost(
     private fun createSurfaceView(host: ViewGroup): SurfaceView =
         SurfaceView(host.context).apply {
             holder.addCallback(surfaceHolderCallback)
+            keepScreenOn = this@VesperNativeSurfaceHost.keepScreenOn
         }
 
     private val surfaceHolderCallback = object : SurfaceHolder.Callback {
@@ -123,6 +132,7 @@ class VesperNativeSurfaceHost(
     private fun createTextureView(host: ViewGroup): TextureView =
         TextureView(host.context).apply {
             isOpaque = true
+            keepScreenOn = this@VesperNativeSurfaceHost.keepScreenOn
             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                 override fun onSurfaceTextureAvailable(
                     surfaceTexture: SurfaceTexture,
@@ -151,7 +161,12 @@ class VesperNativeSurfaceHost(
             }
         }
 
-    // ── 宽高比适配 ──────────────────────────────────────────────────────
+    // ── Aspect ratio fit ────────────────────────────────────────────────
+
+    private fun applyKeepScreenOn() {
+        hostView?.keepScreenOn = keepScreenOn
+        renderView?.keepScreenOn = keepScreenOn
+    }
 
     private fun applyVideoTransform() {
         when (surfaceKind) {

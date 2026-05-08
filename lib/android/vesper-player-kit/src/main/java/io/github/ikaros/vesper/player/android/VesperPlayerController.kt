@@ -70,6 +70,9 @@ class VesperPlayerController internal constructor(
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) =
         bridge.setResiliencePolicy(policy)
 
+    fun setKeepScreenOnDuringPlayback(enabled: Boolean) =
+        bridge.setKeepScreenOnDuringPlayback(enabled)
+
     fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) =
         bridge.configureSystemPlayback(configuration)
 
@@ -96,6 +99,7 @@ object VesperPlayerControllerFactory {
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
         decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
         surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+        keepScreenOnDuringPlayback: Boolean = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     ): VesperPlayerController =
         VesperPlayerController(
@@ -107,17 +111,20 @@ object VesperPlayerControllerFactory {
                 preloadBudgetPolicy = preloadBudgetPolicy,
                 decoderBackend = decoderBackend,
                 surfaceKind = surfaceKind,
+                keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                 benchmarkConfiguration = benchmarkConfiguration,
             )
         )
 
     fun createPreview(
         initialSource: VesperPlayerSource? = null,
+        keepScreenOnDuringPlayback: Boolean = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     ): VesperPlayerController =
         VesperPlayerController(
             FakePlayerBridge(
                 initialSource = initialSource,
+                keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                 benchmarkConfiguration = benchmarkConfiguration,
             )
         )

@@ -44,6 +44,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
   }) async {
@@ -57,6 +58,8 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
       if (trackPreferenceMap.isNotEmpty)
         'trackPreferencePolicy': trackPreferenceMap,
       if (preloadBudgetMap.isNotEmpty) 'preloadBudgetPolicy': preloadBudgetMap,
+      if (!keepScreenOnDuringPlayback)
+        'keepScreenOnDuringPlayback': keepScreenOnDuringPlayback,
       if (benchmarkConfiguration.hasOverrides)
         'benchmarkConfiguration': benchmarkConfiguration.toMap(),
     });
@@ -198,6 +201,17 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
     return _invokeVoid('setResiliencePolicy', <String, Object?>{
       'playerId': playerId,
       'policy': policy.toMap(),
+    });
+  }
+
+  @override
+  Future<void> setKeepScreenOnDuringPlayback(
+    String playerId,
+    bool enabled,
+  ) {
+    return _invokeVoid('setKeepScreenOnDuringPlayback', <String, Object?>{
+      'playerId': playerId,
+      'enabled': enabled,
     });
   }
 

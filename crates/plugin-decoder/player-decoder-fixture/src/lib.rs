@@ -2,25 +2,18 @@ use std::ffi::{c_char, c_void};
 
 use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
-    DecoderFrameFormat, DecoderFrameMetadata, DecoderFramePlane, DecoderMediaKind,
-    DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
-    DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
-    DecoderReceiveFrameMetadata, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
-    DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ABI_VERSION,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApi, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveFrameResult, VesperDecoderReceiveNativeFrameResult, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrameMetadata,
+    DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderNativeRequirements,
+    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
+    DecoderSessionConfig, DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
+    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-decoder-fixture\0";
 const CONFIGURED_CODECS_ENV: &str = "VESPER_DECODER_FIXTURE_CODECS";
-const ABI_ENV: &str = "VESPER_DECODER_FIXTURE_ABI";
 const DEFAULT_VIDEO_CODEC: &str = "fixture-video";
-
-struct PluginBundle {
-    api: VesperDecoderPluginApi,
-    descriptor: VesperPluginDescriptor,
-}
 
 struct NativePluginBundle {
     api: VesperDecoderPluginApiV2,
@@ -35,36 +28,6 @@ struct FixtureDecoderSession {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
-    if std::env::var_os(ABI_ENV).is_some_and(|value| value == "v2") {
-        return vesper_native_plugin_entry();
-    }
-
-    let mut bundle = Box::new(PluginBundle {
-        api: VesperDecoderPluginApi {
-            context: std::ptr::null_mut(),
-            destroy: None,
-            name: Some(decoder_name),
-            capabilities_json: Some(decoder_capabilities_json),
-            free_bytes: Some(free_plugin_bytes),
-            open_session_json: Some(decoder_open_session_json),
-            send_packet: Some(decoder_send_packet),
-            receive_frame: Some(decoder_receive_frame),
-            flush_session: Some(decoder_flush_session),
-            close_session: Some(decoder_close_session),
-        },
-        descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION,
-            plugin_kind: VesperPluginKind::Decoder,
-            plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
-            api: std::ptr::null(),
-        },
-    });
-    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApi).cast::<c_void>();
-    let bundle = Box::leak(bundle);
-    &bundle.descriptor
-}
-
-fn vesper_native_plugin_entry() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(NativePluginBundle {
         api: VesperDecoderPluginApiV2 {
             context: std::ptr::null_mut(),
@@ -96,11 +59,6 @@ unsafe extern "C" fn decoder_name(_context: *mut c_void) -> *const c_char {
     PLUGIN_NAME.as_ptr().cast::<c_char>()
 }
 
-unsafe extern "C" fn decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
-    let capabilities = decoder_capabilities();
-    serialize_payload(&capabilities)
-}
-
 unsafe extern "C" fn native_decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
     let mut capabilities = decoder_capabilities();
     capabilities.supports_hardware_decode = true;
@@ -119,35 +77,6 @@ unsafe extern "C" fn native_decoder_requirements_json(_context: *mut c_void) -> 
         requires_native_device_context: false,
         accepted_bitstream_formats: vec![DecoderBitstreamFormat::Unknown("fixture".to_owned())],
     })
-}
-
-unsafe extern "C" fn decoder_open_session_json(
-    _context: *mut c_void,
-    config_json: *const u8,
-    config_json_len: usize,
-) -> VesperDecoderOpenSessionResult {
-    let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
-        Ok(config) => config,
-        Err(error) => return open_error(error),
-    };
-    if !decoder_capabilities().supports_codec(&config.codec, config.media_kind) {
-        return open_error(DecoderError::UnsupportedCodec {
-            codec: config.codec,
-        });
-    }
-
-    let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
-    let info = DecoderSessionInfo {
-        decoder_name: Some("player-decoder-fixture".to_owned()),
-        selected_hardware_backend: None,
-        output_format: Some(DecoderFrameFormat::Rgba8888),
-    };
-
-    VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
-        session: session.cast::<c_void>(),
-        payload: serialize_payload(&info),
-    }
 }
 
 unsafe extern "C" fn native_decoder_open_session_json(
@@ -211,34 +140,6 @@ unsafe extern "C" fn decoder_send_packet(
     session.last_pts_us = packet.pts_us;
     session.pending_frame = Some(data);
     process_success(&DecoderPacketResult { accepted: true })
-}
-
-unsafe extern "C" fn decoder_receive_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperDecoderReceiveFrameResult {
-    let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
-        return frame_error(DecoderError::NotConfigured);
-    };
-    let Some(data) = session.pending_frame.take() else {
-        return frame_success(&DecoderReceiveFrameMetadata::need_more_input(), Vec::new());
-    };
-    let metadata = DecoderFrameMetadata {
-        media_kind: DecoderMediaKind::Video,
-        format: DecoderFrameFormat::Rgba8888,
-        pts_us: session.last_pts_us,
-        duration_us: Some(33_333),
-        width: Some(2),
-        height: Some(2),
-        sample_rate: None,
-        channels: None,
-        planes: vec![DecoderFramePlane {
-            offset: 0,
-            len: data.len(),
-            stride: Some(8),
-        }],
-    };
-    frame_success(&DecoderReceiveFrameMetadata::frame(metadata), data)
 }
 
 unsafe extern "C" fn decoder_receive_native_frame(
@@ -410,25 +311,6 @@ fn process_error(error: DecoderError) -> VesperPluginProcessResult {
     }
 }
 
-fn frame_success(
-    metadata: &DecoderReceiveFrameMetadata,
-    data: Vec<u8>,
-) -> VesperDecoderReceiveFrameResult {
-    VesperDecoderReceiveFrameResult {
-        status: VesperPluginResultStatus::Success,
-        metadata: serialize_payload(metadata),
-        data: VesperPluginBytes::from_vec(data),
-    }
-}
-
-fn frame_error(error: DecoderError) -> VesperDecoderReceiveFrameResult {
-    VesperDecoderReceiveFrameResult {
-        status: VesperPluginResultStatus::Failure,
-        metadata: serialize_payload(&error),
-        data: VesperPluginBytes::null(),
-    }
-}
-
 fn native_frame_success(
     metadata: &DecoderReceiveNativeFrameMetadata,
     handle: usize,
@@ -455,53 +337,19 @@ mod tests {
         video_codecs_from_configured_list,
     };
     use player_plugin::{
-        DecoderError, DecoderPacket, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
-        VESPER_PLUGIN_ABI_VERSION, VesperPluginKind, VesperPluginResultStatus,
+        DecoderError, DecoderPacket, VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VesperPluginKind,
+        VesperPluginResultStatus,
     };
     use std::ffi::c_void;
-    use std::sync::{Mutex, OnceLock};
-
-    fn abi_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     #[test]
     fn exported_descriptor_matches_decoder_plugin_metadata() {
-        let _guard = abi_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // SAFETY: this test holds the fixture ABI environment lock, so no
-        // sibling test in this module can concurrently read or write the
-        // process-wide fixture switch.
-        unsafe { std::env::remove_var("VESPER_DECODER_FIXTURE_ABI") };
-        let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
-
-        assert_eq!(descriptor.abi_version, VESPER_PLUGIN_ABI_VERSION);
-        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
-        assert!(!descriptor.api.is_null());
-        assert!(!descriptor.plugin_name.is_null());
-    }
-
-    #[test]
-    fn exported_descriptor_can_switch_to_native_decoder_plugin_metadata() {
-        let _guard = abi_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // SAFETY: this test holds the fixture ABI environment lock, so no
-        // sibling test in this module can concurrently read or write the
-        // process-wide fixture switch.
-        unsafe { std::env::set_var("VESPER_DECODER_FIXTURE_ABI", "v2") };
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
         assert_eq!(descriptor.abi_version, VESPER_DECODER_PLUGIN_ABI_VERSION_V2);
         assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
         assert!(!descriptor.api.is_null());
-
-        // SAFETY: this test still holds the fixture ABI environment lock.
-        unsafe { std::env::remove_var("VESPER_DECODER_FIXTURE_ABI") };
-        let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
-        assert_eq!(descriptor.abi_version, VESPER_PLUGIN_ABI_VERSION);
+        assert!(!descriptor.plugin_name.is_null());
     }
 
     #[test]

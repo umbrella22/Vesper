@@ -178,6 +178,7 @@ final class _FakeVesperPlayerPlatform extends VesperPlayerPlatform {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
   }) async =>

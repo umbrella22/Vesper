@@ -34,6 +34,8 @@ directly.
 - Runtime snapshot: exposes the currently active adaptive video variant through `controller.snapshot.effectiveVideoTrackId`
 - Runtime observation: also exposes `controller.snapshot.videoVariantObservation`, derived from ExoPlayer's active `videoFormat` bitrate and rendered size
 - System playback: `configureSystemPlayback` binds the active ExoPlayer to a Media3 `MediaSessionService`, starts a media playback foreground service while audio is playing, exposes default 10-second seek back / play-pause / seek forward media actions through MediaSession button preferences, filters seek commands when `showSeekActions` is disabled, and clears the session on pause / stop / dispose
+- Screen awake: `createPlayer(keepScreenOnDuringPlayback: ...)` and `setKeepScreenOnDuringPlayback(...)` control whether the host playback view keeps the display awake while playback is active
+- Downloads: `VesperDownloadConfiguration` defaults to task snapshot restore and resumable partial transfers for SDK-managed downloads
 - Rust runtime: bridged through JNI so defaults, timeline, resilience, and playlist semantics stay aligned with the rest of the SDK
 
 ## System Playback Host Requirements
@@ -56,6 +58,12 @@ Android 13+ exempts media-session playback notifications from the runtime
 notification permission, so `POST_NOTIFICATIONS` denial must not block
 background playback or foreground service startup.
 
+Download restore is intentionally separate from Android OS-managed background
+transfer. The Flutter package restores SDK task state on manager startup, resumes
+partial files with validated range requests, and restarts only the affected
+resource when a server ignores a resume range. It does not install a WorkManager
+or download ForegroundService for process-death transfers.
+
 ## Optional Android Cast
 
 Android Cast lives in the separate `vesper_player_cast` Flutter package and the
@@ -75,7 +83,7 @@ receiver, offline assets, and custom receiver behavior are outside this scope.
 
 ## Optional `player-remux-ffmpeg` Remux Plugin
 
-To export downloaded HLS or DASH assets as `.mp4`, the host app must package
+To export downloaded HLS, DASH, or FLV assets as `.mp4`, the host app must package
 the optional `player-remux-ffmpeg` plugin and pass the absolute path to
 `libplayer_remux_ffmpeg.so` through
 `VesperDownloadConfiguration.pluginLibraryPaths`.

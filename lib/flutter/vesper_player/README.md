@@ -418,8 +418,8 @@ Built-in presets:
 
 ## Download Management
 
-`VesperDownloadManager` manages local downloads, pause and resume, and progress
-tracking.
+`VesperDownloadManager` manages local downloads, pause and resume, startup task
+restore, resumable partial transfers, and progress tracking.
 
 ```dart
 final manager = await VesperDownloadManager.create();
@@ -448,38 +448,45 @@ await manager.removeTask(taskId);
 await manager.dispose();
 ```
 
-### Recommended remote HLS / DASH download flow
+### Mobile prepare-phase download flow
 
-If the download source is a remote `HLS` or `DASH` manifest, do not stop at
-passing the manifest URL into `createTask(...)`. A better flow is:
+For remote VOD `HLS`, static `DASH`, and `FLV` downloads, the Android and iOS
+host kits now run a native prepare phase before transfer starts. Flutter apps
+can pass the entry-point source into `createTask(...)` with an empty
+`VesperDownloadAssetIndex`; the host kit expands manifests, resolves byte
+ranges, probes every remote byte total, writes local rewritten manifests or
+concat lists, and then emits `VesperDownloadAssetIndexUpdatedEvent` before the
+first download-progress update.
 
-1. Insert a temporary "preparing" task in the host UI as soon as the user
-   taps download.
-2. Resolve the remote manifest in the background and prebuild
-   `VesperDownloadSource`, `VesperDownloadProfile(targetDirectory: ...)`, and
-   `VesperDownloadAssetIndex(resources: ..., segments: ...)`.
-3. Call `createTask(...)` only after the real asset plan is ready, then let
-   the real task replace the placeholder entry.
+Recommended host flow:
 
-Benefits:
+1. Insert a temporary "preparing" row in the app UI as soon as the user taps download.
+2. Call `createTask(...)` with `VesperDownloadProfile(targetDirectory: ...)`.
+   Set `targetOutputFormat: VesperDownloadOutputFormat.mp4` for HLS, DASH, and
+   FLV segmented sources when the desired completed artifact is MP4.
+3. Replace the temporary row with the real task and listen to
+   `manager.snapshots`; the snapshot is updated when `AssetIndexUpdated`
+   arrives, so total bytes and segment counts appear before transfer progress.
 
-- The user sees immediate feedback instead of waiting for manifest parsing.
-- The download manager persists the real `resources + segments` plan, which is
-  what later offline playback, `.mp4` export, and host-level regression checks
-  actually need.
+Hosts may still pass a prebuilt `VesperDownloadAssetIndex` for custom catalogs.
+In that case the native prepare phase completes missing resource sizes before
+download. Pause, resume, and remove operations should be keyed by `taskId`, not
+by URL.
 
-Notes:
-
-- The current iOS example uses this planning flow for remote `HLS` only.
-  Remote `DASH` playback is supported on iOS via an in-process DASH→HLS bridge
-  in `lib/ios/VesperPlayerKit`, but the download / export planning flow has not
-  been wired through that bridge yet.
-- Pause, resume, and remove operations should be keyed by `taskId`, not by URL.
+The default `VesperDownloadConfiguration` enables `restoreTasksOnStartup` and
+`resumePartialDownloads`. Android and iOS persist task snapshots under the
+download base directory, restore interrupted preparing/downloading tasks on the
+next manager creation, and resume existing partial remote files with range
+requests when the server supports them. If a server ignores a resume range, only
+that partial resource is deleted and restarted from byte zero; expired or
+unavailable URLs fail with a stale-resource error. This is SDK-managed foreground
+download recovery; OS-managed process-death background transfer remains a host
+app service/background-session responsibility.
 
 ### Optional `.mp4` export through `player-remux-ffmpeg`
 
-`player-remux-ffmpeg` is an optional dynamic plugin that remuxes downloaded HLS or
-DASH assets into `.mp4`. The Flutter packages do not bundle it automatically.
+`player-remux-ffmpeg` is an optional dynamic plugin that remuxes downloaded HLS,
+DASH, or FLV assets into `.mp4`. The Flutter packages do not bundle it automatically.
 Export becomes available only after the host app packages the plugin library
 and passes its absolute path through
 `VesperDownloadConfiguration.pluginLibraryPaths`.

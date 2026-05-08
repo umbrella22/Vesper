@@ -104,6 +104,28 @@ The library does not ship preset URLs or demo sources. Construct
 - HLS (`.m3u8`)
 - DASH (`.mpd`)
 
+## Playback Screen Awake Policy
+
+`VesperPlayerController` keeps the attached playback view screen-awake while
+playback is actively running by default. Hosts can disable the policy when they
+create the controller or later call `setKeepScreenOnDuringPlayback(false)`.
+
+## Download Manager
+
+`VesperDownloadManager` supports SDK-managed task restore and resumable partial
+transfers. With the default `VesperDownloadConfiguration`, task snapshots are
+persisted under the download base directory, interrupted preparing/downloading
+tasks are restored on startup, and existing partial remote files are resumed with
+range requests when the server supports them. If a server ignores a resume range,
+the manager deletes only that partial resource and restarts the same resource from
+byte zero; expired or unavailable URLs fail with a stale-resource error so the
+host can refresh the video link.
+
+This is not an Android `WorkManager` or download `ForegroundService` wrapper for
+process-death background transfer. Hosts that need OS-managed background
+downloads should own that service layer and feed completed local assets back into
+the SDK.
+
 ## Minimal Compose Usage
 
 ```kotlin

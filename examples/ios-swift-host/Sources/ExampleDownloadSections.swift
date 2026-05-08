@@ -204,7 +204,8 @@ private struct ExampleDownloadTaskRow: View {
     var body: some View {
         let requiresExport =
             task.source.contentFormat == .hlsSegments ||
-            task.source.contentFormat == .dashSegments
+            task.source.contentFormat == .dashSegments ||
+            task.source.contentFormat == .flvSegments
         let saveButtonVisuallyUnavailable =
             requiresExport && !isDownloadExportPluginInstalled && !isSaving
         VStack(alignment: .leading, spacing: 10) {

@@ -35,6 +35,14 @@ reference.
   desktop backends.
 - Shared playback semantics for timeline, live edge, live DVR, track catalog,
   ABR, resilience policy, preload policy, and download orchestration.
+- Offline download planning for VOD HLS, static DASH, and FLV inputs, with
+  strict total-byte discovery before transfer and optional MP4 stream-copy
+  export through the remux plugin.
+- SDK-managed offline task restore and resumable range transfers on Android and
+  iOS, plus a shared desktop host download service for macOS, Windows, and Linux,
+  including per-resource restart when an HTTP server ignores resume ranges.
+- Configurable screen-awake handling while playback is active on Android, iOS,
+  and Flutter mobile hosts.
 - Platform-native surfaces instead of frame-copy rendering paths for mobile
   playback.
 - Optional remux / codec plugin architecture for advanced media workflows.
@@ -60,7 +68,7 @@ check before exposing advanced controls.
 | ABR `fixedTrack` policy  | ✅ exact                     | ✅ best-effort HLS/DASH pinning on iOS 15+    | ✅                                        | ✅ per-platform semantics             |
 | Resilience policy        | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
 | Preload budget           | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| Download manager         | ✅                           | ✅                                            | ✅ planner / executor in the desktop demo | ✅ Android / iOS                      |
+| Download manager         | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export       | ✅ public `player-host-desktop::download` service | ✅ Android / iOS / desktop           |
 | Hardware decode probe    | `VesperDecoderBackend`       | `VesperCodecSupport`                          | macOS VideoToolbox v2 opt-in              | Reflected through mobile capabilities |
 
 The Flutter macOS package exists as an experimental stub and does not yet ship a

@@ -211,9 +211,16 @@ typedef struct VesperRuntimeDownloadConfig {
 typedef enum VesperRuntimeDownloadContentFormat {
   VesperRuntimeDownloadContentFormatHlsSegments = 0,
   VesperRuntimeDownloadContentFormatDashSegments = 1,
-  VesperRuntimeDownloadContentFormatSingleFile = 2,
-  VesperRuntimeDownloadContentFormatUnknown = 3,
+  VesperRuntimeDownloadContentFormatFlvSegments = 2,
+  VesperRuntimeDownloadContentFormatSingleFile = 3,
+  VesperRuntimeDownloadContentFormatUnknown = 4,
 } VesperRuntimeDownloadContentFormat;
+
+typedef enum VesperRuntimeDownloadOutputFormat {
+  VesperRuntimeDownloadOutputFormatMp4 = 0,
+  VesperRuntimeDownloadOutputFormatMkv = 1,
+  VesperRuntimeDownloadOutputFormatOriginal = 2,
+} VesperRuntimeDownloadOutputFormat;
 
 typedef struct VesperRuntimeDownloadSource {
   char *source_uri;
@@ -227,14 +234,24 @@ typedef struct VesperRuntimeDownloadProfile {
   char *preferred_subtitle_language;
   char **selected_track_ids;
   uintptr_t selected_track_ids_len;
+  bool has_target_output_format;
+  VesperRuntimeDownloadOutputFormat target_output_format;
   char *target_directory;
   bool allow_metered_network;
 } VesperRuntimeDownloadProfile;
+
+typedef struct VesperRuntimeDownloadByteRange {
+  uint64_t offset;
+  uint64_t length;
+} VesperRuntimeDownloadByteRange;
 
 typedef struct VesperRuntimeDownloadResourceRecord {
   char *resource_id;
   char *uri;
   char *relative_path;
+  bool has_byte_range;
+  VesperRuntimeDownloadByteRange byte_range;
+  char *generated_text;
   bool has_size_bytes;
   uint64_t size_bytes;
   char *etag;
@@ -247,6 +264,8 @@ typedef struct VesperRuntimeDownloadSegmentRecord {
   char *relative_path;
   bool has_sequence;
   uint64_t sequence;
+  bool has_byte_range;
+  VesperRuntimeDownloadByteRange byte_range;
   bool has_size_bytes;
   uint64_t size_bytes;
   char *checksum;
@@ -306,10 +325,11 @@ typedef struct VesperRuntimeDownloadSnapshot {
 } VesperRuntimeDownloadSnapshot;
 
 typedef enum VesperRuntimeDownloadCommandKind {
-  VesperRuntimeDownloadCommandKindStart = 0,
-  VesperRuntimeDownloadCommandKindPause = 1,
-  VesperRuntimeDownloadCommandKindResume = 2,
-  VesperRuntimeDownloadCommandKindRemove = 3,
+  VesperRuntimeDownloadCommandKindPrepare = 0,
+  VesperRuntimeDownloadCommandKindStart = 1,
+  VesperRuntimeDownloadCommandKindPause = 2,
+  VesperRuntimeDownloadCommandKindResume = 3,
+  VesperRuntimeDownloadCommandKindRemove = 4,
 } VesperRuntimeDownloadCommandKind;
 
 typedef struct VesperRuntimeDownloadCommand {
@@ -326,7 +346,8 @@ typedef struct VesperRuntimeDownloadCommandList {
 typedef enum VesperRuntimeDownloadEventKind {
   VesperRuntimeDownloadEventKindCreated = 0,
   VesperRuntimeDownloadEventKindStateChanged = 1,
-  VesperRuntimeDownloadEventKindProgressUpdated = 2,
+  VesperRuntimeDownloadEventKindAssetIndexUpdated = 2,
+  VesperRuntimeDownloadEventKindProgressUpdated = 3,
 } VesperRuntimeDownloadEventKind;
 
 typedef struct VesperRuntimeDownloadEvent {
@@ -480,6 +501,11 @@ bool vesper_runtime_download_session_create_task(
     const VesperRuntimeDownloadAssetIndex *asset_index,
     uint64_t *out_task_id);
 
+bool vesper_runtime_download_session_restore_tasks(
+    uint64_t handle,
+    const VesperRuntimeDownloadTask *tasks,
+    size_t tasks_len);
+
 bool vesper_runtime_download_session_start_task(
     uint64_t handle,
     uint64_t task_id);
@@ -502,6 +528,11 @@ bool vesper_runtime_download_session_complete_task(
     uint64_t handle,
     uint64_t task_id,
     const char *completed_path);
+
+bool vesper_runtime_download_session_complete_preparation(
+    uint64_t handle,
+    uint64_t task_id,
+    const VesperRuntimeDownloadAssetIndex *asset_index);
 
 bool vesper_runtime_download_session_export_task(
     uint64_t handle,

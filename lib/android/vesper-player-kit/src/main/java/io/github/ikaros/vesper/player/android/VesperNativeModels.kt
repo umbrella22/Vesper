@@ -230,14 +230,22 @@ class NativeDownloadProfile(
     @JvmField val preferredAudioLanguage: String?,
     @JvmField val preferredSubtitleLanguage: String?,
     @JvmField val selectedTrackIds: Array<String>,
+    @JvmField val targetOutputFormatOrdinal: Int,
     @JvmField val targetDirectory: String?,
     @JvmField val allowMeteredNetwork: Boolean,
+)
+
+class NativeDownloadByteRange(
+    @JvmField val offset: Long,
+    @JvmField val length: Long,
 )
 
 class NativeDownloadResourceRecord(
     @JvmField val resourceId: String,
     @JvmField val uri: String,
     @JvmField val relativePath: String?,
+    @JvmField val byteRange: NativeDownloadByteRange?,
+    @JvmField val generatedText: String?,
     @JvmField val hasSizeBytes: Boolean,
     @JvmField val sizeBytes: Long,
     @JvmField val etag: String?,
@@ -250,6 +258,7 @@ class NativeDownloadSegmentRecord(
     @JvmField val relativePath: String?,
     @JvmField val hasSequence: Boolean,
     @JvmField val sequence: Long,
+    @JvmField val byteRange: NativeDownloadByteRange?,
     @JvmField val hasSizeBytes: Boolean,
     @JvmField val sizeBytes: Long,
     @JvmField val checksum: String?,
@@ -356,6 +365,7 @@ sealed interface NativePreloadCommand {
 }
 
 sealed interface NativeDownloadCommand {
+    data class Prepare(val task: NativeDownloadTask) : NativeDownloadCommand
     data class Start(val task: NativeDownloadTask) : NativeDownloadCommand
     data class Pause(val taskId: Long) : NativeDownloadCommand
     data class Resume(val task: NativeDownloadTask) : NativeDownloadCommand
@@ -365,5 +375,6 @@ sealed interface NativeDownloadCommand {
 sealed interface NativeDownloadEvent {
     data class Created(val task: NativeDownloadTask) : NativeDownloadEvent
     data class StateChanged(val task: NativeDownloadTask) : NativeDownloadEvent
+    data class AssetIndexUpdated(val task: NativeDownloadTask) : NativeDownloadEvent
     data class ProgressUpdated(val task: NativeDownloadTask) : NativeDownloadEvent
 }

@@ -57,21 +57,30 @@ does not need to depend on it directly.
 
 ## Recommended Download Planning Flow
 
-If you pass a remote `.m3u8` URL directly into `createTask(...)`, the host
-usually ends up with only the manifest entry point, which is not enough for a
-real offline save or a later remux step.
+For remote VOD HLS, static DASH, and FLV downloads, the iOS host kit runs a
+native prepare phase before transfer starts. The prepare phase expands the
+manifest or clip list, rejects live or size-unknown inputs, writes local
+rewritten manifests or concat lists, and reports the completed asset index
+through `AssetIndexUpdated` before download progress begins.
 
 Recommended flow:
 
 1. Insert a temporary "preparing" task in the host UI as soon as the user taps download
-2. Read the remote HLS manifest in the background and build
-   `VesperDownloadAssetIndex.resources + segments`
-3. Create the real task only after the asset plan is ready, so the downloader
-   fetches both manifest resources and media segments
+2. Call `createTask(...)` with the entry-point source, a target directory, and
+   an empty `VesperDownloadAssetIndex`
+3. Set `targetOutputFormat` to `.mp4` for HLS, DASH, and FLV segmented sources
+   when the completed artifact should be MP4
 
 The native iOS example and the Flutter example in this repository already
-follow that flow. DASH playback is supported through the iOS DASH-to-HLS
-bridge, but DASH download entry points remain disabled in the iOS example host.
+follow that flow for HLS, DASH, and FLV.
+
+`VesperDownloadConfiguration` enables task snapshot restore and resumable partial
+downloads by default. The iOS host kit restores interrupted tasks when the
+manager is recreated and resumes existing partial files with range requests when
+the server supports them. It validates resume ranges before appending partial
+files and restarts only the affected resource when a server ignores a resume
+range. This is SDK-managed foreground recovery, not an iOS background
+`URLSessionConfiguration.background` implementation.
 
 ## Technical Notes
 
@@ -79,6 +88,7 @@ bridge, but DASH download entry points remain disabled in the iOS example host.
 - Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
 - View embedding: `UiKitView` with view type `io.github.ikaros.vesper_player/platform_view`
 - System playback: `configureSystemPlayback` writes `MPNowPlayingInfoCenter`, registers `MPRemoteCommandCenter` with default 10-second skip back / play-pause / skip forward actions, and activates an `AVAudioSession` playback category with long-form video route sharing when background audio is enabled
+- Screen awake: `createPlayer(keepScreenOnDuringPlayback: ...)` and `setKeepScreenOnDuringPlayback(...)` control the SDK idle-timer policy while playback is active
 - Rust runtime: bridged through the `player-ffi-ios` XCFramework so defaults, timeline, resilience, and playlist behavior stay aligned with the shared runtime
 
 ## System Playback Host Requirements
@@ -102,7 +112,7 @@ routing.
 
 ## Optional `player-remux-ffmpeg` Remux Plugin
 
-If the host app wants to export downloaded HLS or DASH content to `.mp4`, it
+If the host app wants to export downloaded HLS, DASH, or FLV content to `.mp4`, it
 must embed the `player-remux-ffmpeg` dynamic library into the app bundle and pass the
 real `libplayer_remux_ffmpeg.dylib` path through
 `VesperDownloadConfiguration.pluginLibraryPaths`.

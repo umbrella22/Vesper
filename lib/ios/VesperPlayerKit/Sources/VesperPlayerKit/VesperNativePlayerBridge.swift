@@ -629,7 +629,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             applyVideoVariantPin(resolvedVideoVariantPin, to: item)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
-                    // iOS fixedTrack 这里只是按 variant 做 best-effort 约束，不等于精确视频轨选择。
+                    // iOS fixedTrack is a best-effort variant constraint, not exact video-track selection.
                     video: .auto(),
                     audio: current.audio,
                     subtitle: current.subtitle,

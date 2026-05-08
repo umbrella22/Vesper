@@ -204,6 +204,37 @@ private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadMan
         return true
     }
 
+    func restoreDownloadTasks(
+        sessionHandle: UInt64,
+        tasks: UnsafePointer<VesperRuntimeDownloadTask>?,
+        taskCount: Int
+    ) -> Bool {
+        guard let tasks else {
+            return taskCount == 0
+        }
+        for index in 0..<taskCount {
+            let task = tasks[index]
+            let storedTask = StoredDownloadTask(
+                taskId: task.task_id,
+                assetId: stringFromOptionalRuntimeCString(task.asset_id) ?? "",
+                sourceUri: stringFromOptionalRuntimeCString(task.source.source_uri) ?? "",
+                contentFormat: task.source.content_format,
+                manifestUri: stringFromOptionalRuntimeCString(task.source.manifest_uri),
+                status: task.status.toDownloadState(),
+                totalBytes: task.progress.has_total_bytes ? task.progress.total_bytes : nil,
+                receivedBytes: task.progress.received_bytes,
+                totalSegments: task.progress.has_total_segments ? task.progress.total_segments : nil,
+                receivedSegments: task.progress.received_segments,
+                completedPath: stringFromOptionalRuntimeCString(task.asset_index.completed_path),
+                error: nil,
+                profileTargetDirectory: stringFromOptionalRuntimeCString(task.profile.target_directory)
+            )
+            self.tasks[storedTask.taskId] = storedTask
+            nextTaskId = max(nextTaskId, storedTask.taskId + 1)
+        }
+        return true
+    }
+
     func startDownloadTask(sessionHandle: UInt64, taskId: UInt64) -> Bool {
         updateTask(taskId) { task in
             let updated = task.with(status: .downloading)
@@ -260,6 +291,27 @@ private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadMan
                 completedPath: completedPath
             )
             events.append(.init(kind: .stateChanged, task: updated))
+            return updated
+        }
+    }
+
+    func completeDownloadPreparation(
+        sessionHandle: UInt64,
+        taskId: UInt64,
+        assetIndex: UnsafePointer<VesperRuntimeDownloadAssetIndex>
+    ) -> Bool {
+        updateTask(taskId) { task in
+            let updated = task.with(
+                status: autoStart ? .downloading : task.status,
+                totalBytes: assetIndex.pointee.has_total_size_bytes ? assetIndex.pointee.total_size_bytes : nil,
+                totalSegments: assetIndex.pointee.segments_len > 0 ? UInt32(assetIndex.pointee.segments_len) : nil,
+                completedPath: stringFromOptionalRuntimeCString(assetIndex.pointee.completed_path)
+            )
+            events.append(.init(kind: .assetIndexUpdated, task: updated))
+            if autoStart {
+                commands.append(.start(updated))
+                events.append(.init(kind: .stateChanged, task: updated))
+            }
             return updated
         }
     }
@@ -373,7 +425,9 @@ private struct StoredDownloadTask {
 
     func with(
         status: VesperDownloadState? = nil,
+        totalBytes: UInt64? = nil,
         receivedBytes: UInt64? = nil,
+        totalSegments: UInt32? = nil,
         receivedSegments: UInt32? = nil,
         completedPath: String? = nil,
         error: StoredDownloadError? = nil
@@ -385,9 +439,9 @@ private struct StoredDownloadTask {
             contentFormat: contentFormat,
             manifestUri: manifestUri,
             status: status ?? self.status,
-            totalBytes: totalBytes,
+            totalBytes: totalBytes ?? self.totalBytes,
             receivedBytes: receivedBytes ?? self.receivedBytes,
-            totalSegments: totalSegments,
+            totalSegments: totalSegments ?? self.totalSegments,
             receivedSegments: receivedSegments ?? self.receivedSegments,
             completedPath: completedPath ?? self.completedPath,
             error: error ?? self.error,
@@ -536,6 +590,8 @@ private func makeRuntimeTask(from task: StoredDownloadTask) -> VesperRuntimeDown
             preferred_subtitle_language: nil,
             selected_track_ids: nil,
             selected_track_ids_len: 0,
+            has_target_output_format: false,
+            target_output_format: VesperRuntimeDownloadOutputFormatOriginal,
             target_directory: task.profileTargetDirectory.flatMap(duplicateRuntimeCString),
             allow_metered_network: false
         ),
@@ -584,6 +640,8 @@ private func emptyRuntimeTask() -> VesperRuntimeDownloadTask {
             preferred_subtitle_language: nil,
             selected_track_ids: nil,
             selected_track_ids_len: 0,
+            has_target_output_format: false,
+            target_output_format: VesperRuntimeDownloadOutputFormatOriginal,
             target_directory: nil,
             allow_metered_network: false
         ),
@@ -693,6 +751,8 @@ private func freeRuntimeDownloadProfile(_ profile: inout VesperRuntimeDownloadPr
         preferred_subtitle_language: nil,
         selected_track_ids: nil,
         selected_track_ids_len: 0,
+        has_target_output_format: false,
+        target_output_format: VesperRuntimeDownloadOutputFormatOriginal,
         target_directory: nil,
         allow_metered_network: false
     )
@@ -778,6 +838,12 @@ private extension VesperDownloadState {
     }
 }
 
+private extension VesperRuntimeDownloadTaskStatus {
+    func toDownloadState() -> VesperDownloadState {
+        VesperDownloadState(rawValue: Int(rawValue)) ?? .queued
+    }
+}
+
 private extension VesperRuntimeDownloadCommandKind {
     static var start: Self { VesperRuntimeDownloadCommandKindStart }
     static var pause: Self { VesperRuntimeDownloadCommandKindPause }
@@ -788,5 +854,6 @@ private extension VesperRuntimeDownloadCommandKind {
 private extension VesperRuntimeDownloadEventKind {
     static var created: Self { VesperRuntimeDownloadEventKindCreated }
     static var stateChanged: Self { VesperRuntimeDownloadEventKindStateChanged }
+    static var assetIndexUpdated: Self { VesperRuntimeDownloadEventKindAssetIndexUpdated }
     static var progressUpdated: Self { VesperRuntimeDownloadEventKindProgressUpdated }
 }

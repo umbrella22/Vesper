@@ -4,18 +4,19 @@ use std::path::PathBuf;
 use std::ptr;
 use std::slice;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
 use player_platform_ios::{
     IosDownloadBridgeSession, IosDownloadCommand, IosPlaylistBridgeSession,
     IosPreloadBridgeSession, IosPreloadCommand,
 };
-use player_plugin::ProcessorProgress;
+use player_plugin::{OutputFormat, ProcessorProgress};
 use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_runtime::{
-    DownloadAssetIndex, DownloadContentFormat, DownloadEvent, DownloadProfile,
-    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
+    DownloadAssetId, DownloadAssetIndex, DownloadByteRange, DownloadContentFormat,
+    DownloadErrorSummary, DownloadEvent, DownloadProfile, DownloadProgressSnapshot,
+    DownloadResourceRecord, DownloadSegmentRecord, DownloadSource, DownloadTaskId,
     DownloadTaskSnapshot, DownloadTaskStatus, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
     MediaSourceProtocol, MediaTrackSelection, MediaTrackSelectionMode, PlayerBufferingPolicy,
     PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset, PlayerPreloadBudgetPolicy,
@@ -560,9 +561,19 @@ struct ResolvedDownloadConfig {
 pub enum PlayerFfiDownloadContentFormat {
     HlsSegments = 0,
     DashSegments = 1,
-    SingleFile = 2,
+    FlvSegments = 2,
+    SingleFile = 3,
     #[default]
-    Unknown = 3,
+    Unknown = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiDownloadOutputFormat {
+    Mp4 = 0,
+    Mkv = 1,
+    #[default]
+    Original = 2,
 }
 
 #[repr(C)]
@@ -581,8 +592,17 @@ pub struct PlayerFfiDownloadProfile {
     pub preferred_subtitle_language: *mut c_char,
     pub selected_track_ids: *mut *mut c_char,
     pub selected_track_ids_len: usize,
+    pub has_target_output_format: bool,
+    pub target_output_format: PlayerFfiDownloadOutputFormat,
     pub target_directory: *mut c_char,
     pub allow_metered_network: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayerFfiDownloadByteRange {
+    pub offset: u64,
+    pub length: u64,
 }
 
 #[repr(C)]
@@ -591,6 +611,9 @@ pub struct PlayerFfiDownloadResourceRecord {
     pub resource_id: *mut c_char,
     pub uri: *mut c_char,
     pub relative_path: *mut c_char,
+    pub has_byte_range: bool,
+    pub byte_range: PlayerFfiDownloadByteRange,
+    pub generated_text: *mut c_char,
     pub has_size_bytes: bool,
     pub size_bytes: u64,
     pub etag: *mut c_char,
@@ -605,6 +628,8 @@ pub struct PlayerFfiDownloadSegmentRecord {
     pub relative_path: *mut c_char,
     pub has_sequence: bool,
     pub sequence: u64,
+    pub has_byte_range: bool,
+    pub byte_range: PlayerFfiDownloadByteRange,
     pub has_size_bytes: bool,
     pub size_bytes: u64,
     pub checksum: *mut c_char,
@@ -678,10 +703,11 @@ pub struct PlayerFfiDownloadSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerFfiDownloadCommandKind {
     #[default]
-    Start = 0,
-    Pause = 1,
-    Resume = 2,
-    Remove = 3,
+    Prepare = 0,
+    Start = 1,
+    Pause = 2,
+    Resume = 3,
+    Remove = 4,
 }
 
 #[repr(C)]
@@ -705,7 +731,8 @@ pub enum PlayerFfiDownloadEventKind {
     #[default]
     Created = 0,
     StateChanged = 1,
-    ProgressUpdated = 2,
+    AssetIndexUpdated = 2,
+    ProgressUpdated = 3,
 }
 
 #[repr(C)]
@@ -1324,6 +1351,73 @@ pub unsafe extern "C" fn player_ffi_download_session_create_task(
     PlayerFfiCallStatus::Ok
 }
 
+/// # Safety
+///
+/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
+/// the parameter is documented as optional or point to valid objects allocated by the
+/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
+/// handle access according to the host binding contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_download_session_restore_tasks(
+    handle: u64,
+    tasks: *const PlayerFfiDownloadTask,
+    tasks_len: usize,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    let tasks = if tasks_len == 0 {
+        &[][..]
+    } else {
+        if tasks.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "tasks was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe { slice::from_raw_parts(tasks, tasks_len) }
+    };
+
+    let now = Instant::now();
+    let restored_tasks = match tasks
+        .iter()
+        .map(|task| read_download_task(task, now))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let Ok(mut sessions) = download_sessions().lock() else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "download session registry lock failed",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+    let Some(session) = sessions.get_mut(handle) else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "invalid download session handle",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    if let Err(error) = session.restore_tasks(restored_tasks, now) {
+        write_error(out_error, runtime_error_to_ffi(error));
+        return PlayerFfiCallStatus::Error;
+    }
+    PlayerFfiCallStatus::Ok
+}
+
 fn with_download_session_task_mutation(
     handle: u64,
     task_id: u64,
@@ -1509,6 +1603,59 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_task(
     if let Err(error) = session.complete_task(
         player_runtime::DownloadTaskId::from_raw(task_id),
         completed_path,
+        std::time::Instant::now(),
+    ) {
+        write_error(out_error, runtime_error_to_ffi(error));
+        return PlayerFfiCallStatus::Error;
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+/// # Safety
+///
+/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
+/// the parameter is documented as optional or point to valid objects allocated by the
+/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
+/// handle access according to the host binding contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_download_session_complete_preparation(
+    handle: u64,
+    task_id: u64,
+    asset_index: *const PlayerFfiDownloadAssetIndex,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    let asset_index = match read_download_asset_index(asset_index) {
+        Ok(value) => value,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let Ok(mut sessions) = download_sessions().lock() else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "download session registry lock failed",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+    let Some(session) = sessions.get_mut(handle) else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "invalid download session handle",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    if let Err(error) = session.complete_preparation(
+        player_runtime::DownloadTaskId::from_raw(task_id),
+        asset_index,
         std::time::Instant::now(),
     ) {
         write_error(out_error, runtime_error_to_ffi(error));
@@ -3036,6 +3183,9 @@ fn read_download_profile(
             profile.selected_track_ids_len,
             "profile.selected_track_ids",
         )?,
+        target_output_format: profile
+            .has_target_output_format
+            .then(|| OutputFormat::from(profile.target_output_format)),
         target_directory: read_optional_c_string(
             profile.target_directory,
             "profile.target_directory",
@@ -3061,6 +3211,11 @@ fn read_download_resource_record(
         })?,
         relative_path: read_optional_c_string(resource.relative_path, "resource.relative_path")?
             .map(PathBuf::from),
+        byte_range: resource.has_byte_range.then_some(DownloadByteRange {
+            offset: resource.byte_range.offset,
+            length: resource.byte_range.length,
+        }),
+        generated_text: read_optional_c_string(resource.generated_text, "resource.generated_text")?,
         size_bytes: resource.has_size_bytes.then_some(resource.size_bytes),
         etag: read_optional_c_string(resource.etag, "resource.etag")?,
         checksum: read_optional_c_string(resource.checksum, "resource.checksum")?,
@@ -3085,6 +3240,10 @@ fn read_download_segment_record(
         relative_path: read_optional_c_string(segment.relative_path, "segment.relative_path")?
             .map(PathBuf::from),
         sequence: segment.has_sequence.then_some(segment.sequence),
+        byte_range: segment.has_byte_range.then_some(DownloadByteRange {
+            offset: segment.byte_range.offset,
+            length: segment.byte_range.length,
+        }),
         size_bytes: segment.has_size_bytes.then_some(segment.size_bytes),
         checksum: read_optional_c_string(segment.checksum, "segment.checksum")?,
     })
@@ -3145,6 +3304,52 @@ fn read_download_asset_index(
             "asset_index.completed_path",
         )?
         .map(PathBuf::from),
+    })
+}
+
+fn read_download_progress(
+    progress: &PlayerFfiDownloadProgressSnapshot,
+) -> DownloadProgressSnapshot {
+    DownloadProgressSnapshot {
+        received_bytes: progress.received_bytes,
+        total_bytes: progress.has_total_bytes.then_some(progress.total_bytes),
+        received_segments: progress.received_segments,
+        total_segments: progress
+            .has_total_segments
+            .then_some(progress.total_segments),
+    }
+}
+
+fn read_download_task(
+    task: &PlayerFfiDownloadTask,
+    now: Instant,
+) -> Result<DownloadTaskSnapshot, PlayerFfiError> {
+    let asset_id = read_optional_c_string(task.asset_id, "task.asset_id")?.ok_or_else(|| {
+        owned_api_error(PlayerFfiErrorCode::NullPointer, "task.asset_id was null")
+    })?;
+    let error_summary = if task.has_error {
+        Some(DownloadErrorSummary {
+            code: ffi_runtime_error_code(task.error_code),
+            category: ffi_runtime_error_category(task.error_category),
+            retriable: task.error_retriable,
+            message: read_optional_c_string(task.error_message, "task.error_message")?
+                .unwrap_or_else(|| "download failed".to_owned()),
+        })
+    } else {
+        None
+    };
+
+    Ok(DownloadTaskSnapshot {
+        task_id: DownloadTaskId::from_raw(task.task_id),
+        asset_id: DownloadAssetId::new(asset_id),
+        source: read_download_source(&task.source)?,
+        profile: read_download_profile(&task.profile)?,
+        status: DownloadTaskStatus::from(task.status),
+        progress: read_download_progress(&task.progress),
+        asset_index: read_download_asset_index(&task.asset_index)?,
+        created_at: now,
+        updated_at: now,
+        error_summary,
     })
 }
 
@@ -3355,6 +3560,11 @@ fn download_profile_to_ffi(profile: DownloadProfile) -> PlayerFfiDownloadProfile
             .unwrap_or(ptr::null_mut()),
         selected_track_ids,
         selected_track_ids_len,
+        has_target_output_format: profile.target_output_format.is_some(),
+        target_output_format: profile
+            .target_output_format
+            .map(PlayerFfiDownloadOutputFormat::from)
+            .unwrap_or_default(),
         target_directory: profile
             .target_directory
             .map(|path| into_c_string_ptr(path.to_string_lossy().into_owned()))
@@ -3372,6 +3582,15 @@ fn download_resource_record_to_ffi(
         relative_path: resource
             .relative_path
             .map(|path| into_c_string_ptr(path.to_string_lossy().into_owned()))
+            .unwrap_or(ptr::null_mut()),
+        has_byte_range: resource.byte_range.is_some(),
+        byte_range: resource
+            .byte_range
+            .map(PlayerFfiDownloadByteRange::from)
+            .unwrap_or_default(),
+        generated_text: resource
+            .generated_text
+            .map(into_c_string_ptr)
             .unwrap_or(ptr::null_mut()),
         has_size_bytes: resource.size_bytes.is_some(),
         size_bytes: resource.size_bytes.unwrap_or_default(),
@@ -3398,6 +3617,11 @@ fn download_segment_record_to_ffi(
             .unwrap_or(ptr::null_mut()),
         has_sequence: segment.sequence.is_some(),
         sequence: segment.sequence.unwrap_or_default(),
+        has_byte_range: segment.byte_range.is_some(),
+        byte_range: segment
+            .byte_range
+            .map(PlayerFfiDownloadByteRange::from)
+            .unwrap_or_default(),
         has_size_bytes: segment.size_bytes.is_some(),
         size_bytes: segment.size_bytes.unwrap_or_default(),
         checksum: segment
@@ -3565,6 +3789,7 @@ fn download_resource_record_free(resource: &mut PlayerFfiDownloadResourceRecord)
     free_c_string(&mut resource.resource_id);
     free_c_string(&mut resource.uri);
     free_c_string(&mut resource.relative_path);
+    free_c_string(&mut resource.generated_text);
     free_c_string(&mut resource.etag);
     free_c_string(&mut resource.checksum);
     *resource = PlayerFfiDownloadResourceRecord::default();
@@ -3981,6 +4206,7 @@ impl From<PlayerFfiDownloadContentFormat> for DownloadContentFormat {
         match value {
             PlayerFfiDownloadContentFormat::HlsSegments => Self::HlsSegments,
             PlayerFfiDownloadContentFormat::DashSegments => Self::DashSegments,
+            PlayerFfiDownloadContentFormat::FlvSegments => Self::FlvSegments,
             PlayerFfiDownloadContentFormat::SingleFile => Self::SingleFile,
             PlayerFfiDownloadContentFormat::Unknown => Self::Unknown,
         }
@@ -3992,8 +4218,38 @@ impl From<DownloadContentFormat> for PlayerFfiDownloadContentFormat {
         match value {
             DownloadContentFormat::HlsSegments => Self::HlsSegments,
             DownloadContentFormat::DashSegments => Self::DashSegments,
+            DownloadContentFormat::FlvSegments => Self::FlvSegments,
             DownloadContentFormat::SingleFile => Self::SingleFile,
             DownloadContentFormat::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<PlayerFfiDownloadOutputFormat> for OutputFormat {
+    fn from(value: PlayerFfiDownloadOutputFormat) -> Self {
+        match value {
+            PlayerFfiDownloadOutputFormat::Mp4 => Self::Mp4,
+            PlayerFfiDownloadOutputFormat::Mkv => Self::Mkv,
+            PlayerFfiDownloadOutputFormat::Original => Self::Original,
+        }
+    }
+}
+
+impl From<OutputFormat> for PlayerFfiDownloadOutputFormat {
+    fn from(value: OutputFormat) -> Self {
+        match value {
+            OutputFormat::Mp4 => Self::Mp4,
+            OutputFormat::Mkv => Self::Mkv,
+            OutputFormat::Original => Self::Original,
+        }
+    }
+}
+
+impl From<DownloadByteRange> for PlayerFfiDownloadByteRange {
+    fn from(value: DownloadByteRange) -> Self {
+        Self {
+            offset: value.offset,
+            length: value.length,
         }
     }
 }
@@ -4008,6 +4264,20 @@ impl From<DownloadTaskStatus> for PlayerFfiDownloadTaskStatus {
             DownloadTaskStatus::Completed => Self::Completed,
             DownloadTaskStatus::Failed => Self::Failed,
             DownloadTaskStatus::Removed => Self::Removed,
+        }
+    }
+}
+
+impl From<PlayerFfiDownloadTaskStatus> for DownloadTaskStatus {
+    fn from(value: PlayerFfiDownloadTaskStatus) -> Self {
+        match value {
+            PlayerFfiDownloadTaskStatus::Queued => Self::Queued,
+            PlayerFfiDownloadTaskStatus::Preparing => Self::Preparing,
+            PlayerFfiDownloadTaskStatus::Downloading => Self::Downloading,
+            PlayerFfiDownloadTaskStatus::Paused => Self::Paused,
+            PlayerFfiDownloadTaskStatus::Completed => Self::Completed,
+            PlayerFfiDownloadTaskStatus::Failed => Self::Failed,
+            PlayerFfiDownloadTaskStatus::Removed => Self::Removed,
         }
     }
 }
@@ -4032,6 +4302,11 @@ impl From<IosPreloadCommand> for PlayerFfiPreloadCommand {
 impl From<IosDownloadCommand> for PlayerFfiDownloadCommand {
     fn from(value: IosDownloadCommand) -> Self {
         match value {
+            IosDownloadCommand::Prepare { task } => Self {
+                kind: PlayerFfiDownloadCommandKind::Prepare,
+                task: download_task_to_ffi(task),
+                task_id: 0,
+            },
             IosDownloadCommand::Start { task } => Self {
                 kind: PlayerFfiDownloadCommandKind::Start,
                 task: download_task_to_ffi(task),
@@ -4065,6 +4340,10 @@ impl From<DownloadEvent> for PlayerFfiDownloadEvent {
             },
             DownloadEvent::StateChanged(task) => Self {
                 kind: PlayerFfiDownloadEventKind::StateChanged,
+                task: download_task_to_ffi(task),
+            },
+            DownloadEvent::AssetIndexUpdated(task) => Self {
+                kind: PlayerFfiDownloadEventKind::AssetIndexUpdated,
                 task: download_task_to_ffi(task),
             },
             DownloadEvent::ProgressUpdated(task) => Self {

@@ -29,6 +29,7 @@ class VesperPlayerController {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
   }) async {
@@ -39,6 +40,7 @@ class VesperPlayerController {
       resiliencePolicy: resiliencePolicy,
       trackPreferencePolicy: trackPreferencePolicy,
       preloadBudgetPolicy: preloadBudgetPolicy,
+      keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
       benchmarkConfiguration: benchmarkConfiguration,
     );
     return VesperPlayerController._(
@@ -153,6 +155,10 @@ class VesperPlayerController {
 
   Future<void> setResiliencePolicy(VesperPlaybackResiliencePolicy policy) =>
       setPlaybackResiliencePolicy(policy);
+
+  Future<void> setKeepScreenOnDuringPlayback(bool enabled) => _runVoidOperation(
+        () => _platform.setKeepScreenOnDuringPlayback(playerId, enabled),
+      );
 
   Future<void> updateViewport(VesperPlayerViewport viewport) =>
       _runVoidOperation(() => _platform.updateViewport(playerId, viewport));

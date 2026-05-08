@@ -3,8 +3,15 @@ import 'models.dart';
 enum VesperDownloadContentFormat {
   hlsSegments,
   dashSegments,
+  flvSegments,
   singleFile,
   unknown,
+}
+
+enum VesperDownloadOutputFormat {
+  mp4,
+  mkv,
+  original,
 }
 
 enum VesperDownloadState {
@@ -21,6 +28,8 @@ final class VesperDownloadConfiguration {
   const VesperDownloadConfiguration({
     this.autoStart = true,
     this.runPostProcessorsOnCompletion = true,
+    this.resumePartialDownloads = true,
+    this.restoreTasksOnStartup = true,
     this.baseDirectory,
     this.pluginLibraryPaths = const <String>[],
   });
@@ -32,6 +41,10 @@ final class VesperDownloadConfiguration {
       autoStart: normalized['autoStart'] as bool? ?? true,
       runPostProcessorsOnCompletion:
           normalized['runPostProcessorsOnCompletion'] as bool? ?? true,
+      resumePartialDownloads:
+          normalized['resumePartialDownloads'] as bool? ?? true,
+      restoreTasksOnStartup:
+          normalized['restoreTasksOnStartup'] as bool? ?? true,
       baseDirectory: normalized['baseDirectory'] as String?,
       pluginLibraryPaths: switch (rawPluginLibraryPaths) {
         final List<dynamic> values => values
@@ -45,6 +58,8 @@ final class VesperDownloadConfiguration {
 
   final bool autoStart;
   final bool runPostProcessorsOnCompletion;
+  final bool resumePartialDownloads;
+  final bool restoreTasksOnStartup;
   final String? baseDirectory;
   final List<String> pluginLibraryPaths;
 
@@ -52,6 +67,8 @@ final class VesperDownloadConfiguration {
     return <String, Object?>{
       'autoStart': autoStart,
       'runPostProcessorsOnCompletion': runPostProcessorsOnCompletion,
+      'resumePartialDownloads': resumePartialDownloads,
+      'restoreTasksOnStartup': restoreTasksOnStartup,
       'baseDirectory': baseDirectory,
       'pluginLibraryPaths': pluginLibraryPaths,
     };
@@ -120,6 +137,7 @@ final class VesperDownloadProfile {
     this.preferredAudioLanguage,
     this.preferredSubtitleLanguage,
     this.selectedTrackIds = const <String>[],
+    this.targetOutputFormat,
     this.targetDirectory,
     this.allowMeteredNetwork = false,
   });
@@ -139,6 +157,9 @@ final class VesperDownloadProfile {
             .toList(growable: false),
         _ => const <String>[],
       },
+      targetOutputFormat: _decodeOutputFormat(
+        normalized['targetOutputFormat'],
+      ),
       targetDirectory: normalized['targetDirectory'] as String?,
       allowMeteredNetwork: normalized['allowMeteredNetwork'] as bool? ?? false,
     );
@@ -148,6 +169,7 @@ final class VesperDownloadProfile {
   final String? preferredAudioLanguage;
   final String? preferredSubtitleLanguage;
   final List<String> selectedTrackIds;
+  final VesperDownloadOutputFormat? targetOutputFormat;
   final String? targetDirectory;
   final bool allowMeteredNetwork;
 
@@ -157,8 +179,34 @@ final class VesperDownloadProfile {
       'preferredAudioLanguage': preferredAudioLanguage,
       'preferredSubtitleLanguage': preferredSubtitleLanguage,
       'selectedTrackIds': selectedTrackIds,
+      'targetOutputFormat': targetOutputFormat?.name,
       'targetDirectory': targetDirectory,
       'allowMeteredNetwork': allowMeteredNetwork,
+    };
+  }
+}
+
+final class VesperDownloadByteRange {
+  const VesperDownloadByteRange({
+    required this.offset,
+    required this.length,
+  });
+
+  factory VesperDownloadByteRange.fromMap(Map<Object?, Object?> map) {
+    final normalized = vesperDecodeMap(map);
+    return VesperDownloadByteRange(
+      offset: _decodeInt(normalized['offset']) ?? 0,
+      length: _decodeInt(normalized['length']) ?? 0,
+    );
+  }
+
+  final int offset;
+  final int length;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'offset': offset,
+      'length': length,
     };
   }
 }
@@ -168,6 +216,8 @@ final class VesperDownloadResourceRecord {
     required this.resourceId,
     required this.uri,
     this.relativePath,
+    this.byteRange,
+    this.generatedText,
     this.sizeBytes,
     this.etag,
     this.checksum,
@@ -179,6 +229,12 @@ final class VesperDownloadResourceRecord {
       resourceId: normalized['resourceId'] as String? ?? '',
       uri: normalized['uri'] as String? ?? '',
       relativePath: normalized['relativePath'] as String?,
+      byteRange: normalized['byteRange'] == null
+          ? null
+          : VesperDownloadByteRange.fromMap(
+              vesperDecodeMap(normalized['byteRange']),
+            ),
+      generatedText: normalized['generatedText'] as String?,
       sizeBytes: _decodeInt(normalized['sizeBytes']),
       etag: normalized['etag'] as String?,
       checksum: normalized['checksum'] as String?,
@@ -188,6 +244,8 @@ final class VesperDownloadResourceRecord {
   final String resourceId;
   final String uri;
   final String? relativePath;
+  final VesperDownloadByteRange? byteRange;
+  final String? generatedText;
   final int? sizeBytes;
   final String? etag;
   final String? checksum;
@@ -197,6 +255,8 @@ final class VesperDownloadResourceRecord {
       'resourceId': resourceId,
       'uri': uri,
       'relativePath': relativePath,
+      'byteRange': byteRange?.toMap(),
+      'generatedText': generatedText,
       'sizeBytes': sizeBytes,
       'etag': etag,
       'checksum': checksum,
@@ -210,6 +270,7 @@ final class VesperDownloadSegmentRecord {
     required this.uri,
     this.relativePath,
     this.sequence,
+    this.byteRange,
     this.sizeBytes,
     this.checksum,
   });
@@ -221,6 +282,11 @@ final class VesperDownloadSegmentRecord {
       uri: normalized['uri'] as String? ?? '',
       relativePath: normalized['relativePath'] as String?,
       sequence: _decodeInt(normalized['sequence']),
+      byteRange: normalized['byteRange'] == null
+          ? null
+          : VesperDownloadByteRange.fromMap(
+              vesperDecodeMap(normalized['byteRange']),
+            ),
       sizeBytes: _decodeInt(normalized['sizeBytes']),
       checksum: normalized['checksum'] as String?,
     );
@@ -230,6 +296,7 @@ final class VesperDownloadSegmentRecord {
   final String uri;
   final String? relativePath;
   final int? sequence;
+  final VesperDownloadByteRange? byteRange;
   final int? sizeBytes;
   final String? checksum;
 
@@ -239,6 +306,7 @@ final class VesperDownloadSegmentRecord {
       'uri': uri,
       'relativePath': relativePath,
       'sequence': sequence,
+      'byteRange': byteRange?.toMap(),
       'sizeBytes': sizeBytes,
       'checksum': checksum,
     };
@@ -491,6 +559,17 @@ VesperDownloadContentFormat _decodeContentFormat(Object? raw) {
     }
   }
   return VesperDownloadContentFormat.unknown;
+}
+
+VesperDownloadOutputFormat? _decodeOutputFormat(Object? raw) {
+  if (raw is String) {
+    for (final value in VesperDownloadOutputFormat.values) {
+      if (value.name == raw) {
+        return value;
+      }
+    }
+  }
+  return null;
 }
 
 VesperDownloadState _decodeDownloadState(Object? raw) {

@@ -4,8 +4,14 @@ import android.content.Context
 import android.net.Uri
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.StringReader
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
+import javax.xml.parsers.DocumentBuilderFactory
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -24,6 +30,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import org.w3c.dom.Element
+import org.xml.sax.InputSource
 
 typealias VesperDownloadAssetId = String
 typealias VesperDownloadTaskId = Long
@@ -31,13 +41,22 @@ typealias VesperDownloadTaskId = Long
 enum class VesperDownloadContentFormat {
     HlsSegments,
     DashSegments,
+    FlvSegments,
     SingleFile,
     Unknown,
+}
+
+enum class VesperDownloadOutputFormat {
+    Mp4,
+    Mkv,
+    Original,
 }
 
 data class VesperDownloadConfiguration(
     val autoStart: Boolean = true,
     val runPostProcessorsOnCompletion: Boolean = true,
+    val resumePartialDownloads: Boolean = true,
+    val restoreTasksOnStartup: Boolean = true,
     val baseDirectory: File? = null,
     val pluginLibraryPaths: List<String> = emptyList(),
 )
@@ -66,14 +85,22 @@ data class VesperDownloadProfile(
     val preferredAudioLanguage: String? = null,
     val preferredSubtitleLanguage: String? = null,
     val selectedTrackIds: List<String> = emptyList(),
+    val targetOutputFormat: VesperDownloadOutputFormat? = null,
     val targetDirectory: String? = null,
     val allowMeteredNetwork: Boolean = false,
+)
+
+data class VesperDownloadByteRange(
+    val offset: Long,
+    val length: Long,
 )
 
 data class VesperDownloadResourceRecord(
     val resourceId: String,
     val uri: String,
     val relativePath: String? = null,
+    val byteRange: VesperDownloadByteRange? = null,
+    val generatedText: String? = null,
     val sizeBytes: Long? = null,
     val etag: String? = null,
     val checksum: String? = null,
@@ -84,6 +111,7 @@ data class VesperDownloadSegmentRecord(
     val uri: String,
     val relativePath: String? = null,
     val sequence: Long? = null,
+    val byteRange: VesperDownloadByteRange? = null,
     val sizeBytes: Long? = null,
     val checksum: String? = null,
 )
@@ -148,10 +176,17 @@ sealed interface VesperDownloadEvent {
 
     data class StateChanged(val task: VesperDownloadTaskSnapshot) : VesperDownloadEvent
 
+    data class AssetIndexUpdated(val task: VesperDownloadTaskSnapshot) : VesperDownloadEvent
+
     data class ProgressUpdated(val task: VesperDownloadTaskSnapshot) : VesperDownloadEvent
 }
 
 interface VesperDownloadExecutionReporter {
+    fun completePreparation(
+        taskId: VesperDownloadTaskId,
+        assetIndex: VesperDownloadAssetIndex,
+    )
+
     fun updateProgress(
         taskId: VesperDownloadTaskId,
         receivedBytes: Long,
@@ -176,6 +211,13 @@ interface NativeDownloadExportProgressCallback {
 }
 
 interface VesperDownloadExecutor {
+    fun prepare(
+        task: VesperDownloadTaskSnapshot,
+        reporter: VesperDownloadExecutionReporter,
+    ) {
+        reporter.completePreparation(task.taskId, task.assetIndex)
+    }
+
     fun start(
         task: VesperDownloadTaskSnapshot,
         reporter: VesperDownloadExecutionReporter,
@@ -194,9 +236,10 @@ interface VesperDownloadExecutor {
 }
 
 class VesperDownloadManager internal constructor(
-    configuration: VesperDownloadConfiguration,
+    private val configuration: VesperDownloadConfiguration,
     private val executor: VesperDownloadExecutor,
     private val bindings: DownloadBindings,
+    private val stateStore: VesperDownloadStateStore? = null,
     private val runtimeDispatcher: CoroutineDispatcher =
         Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "VesperDownloadManagerRuntime").apply { isDaemon = true }
@@ -220,16 +263,37 @@ class VesperDownloadManager internal constructor(
             executor ?: VesperForegroundDownloadExecutor(
                 context = context.applicationContext,
                 baseDirectory = configuration.baseDirectory,
+                resumePartialDownloads = configuration.resumePartialDownloads,
             ),
         bindings = NativeDownloadBindings,
+        stateStore =
+            configuration
+                .takeIf { it.restoreTasksOnStartup }
+                ?.let {
+                    VesperDownloadStateStore(
+                        File(
+                            it.baseDirectory
+                                ?: File(context.applicationContext.filesDir, "vesper-downloads"),
+                            "download-state.json",
+                        ),
+                    )
+                },
     )
 
     init {
         check(sessionHandle != 0L) { "native download session handle must not be zero" }
+        restorePersistedTasks()
         refresh()
     }
 
     fun dispose() {
+        snapshot.value.tasks
+            .filter {
+                it.state == VesperDownloadState.Preparing ||
+                    it.state == VesperDownloadState.Downloading
+            }
+            .forEach { pauseTask(it.taskId) }
+        persistSnapshot(snapshot.value)
         executor.dispose()
         if (sessionHandle != 0L) {
             onRuntimeThread {
@@ -275,6 +339,24 @@ class VesperDownloadManager internal constructor(
             }
         syncRuntimeState(processCommands = true)
         return taskId.takeIf { it != 0L }
+    }
+
+    fun restoreTasks(tasks: List<VesperDownloadTaskSnapshot>): Boolean {
+        if (tasks.isEmpty()) {
+            return true
+        }
+        val restored =
+            onRuntimeThread {
+                bindings.restoreDownloadTasks(
+                    sessionHandle = sessionHandle,
+                    tasks = tasks.map(VesperDownloadTaskSnapshot::toNativePayload).toTypedArray(),
+                    nowEpochMs = System.currentTimeMillis(),
+                )
+            }
+        if (restored) {
+            syncRuntimeState(processCommands = true)
+        }
+        return restored
     }
 
     fun startTask(taskId: VesperDownloadTaskId): Boolean {
@@ -358,6 +440,7 @@ class VesperDownloadManager internal constructor(
 
         val nativeSnapshot = onRuntimeThread { bindings.pollDownloadSnapshot(sessionHandle) }
         _snapshot.value = nativeSnapshot?.toPublic() ?: VesperDownloadSnapshot(emptyList())
+        persistSnapshot(_snapshot.value)
 
         val events = onRuntimeThread { bindings.drainDownloadEvents(sessionHandle).toList() }
             .map(NativeDownloadEvent::toPublic)
@@ -377,6 +460,7 @@ class VesperDownloadManager internal constructor(
 
     private fun applyCommand(command: NativeDownloadCommand) {
         when (command) {
+            is NativeDownloadCommand.Prepare -> executor.prepare(command.task.toPublic(), runtimeReporter)
             is NativeDownloadCommand.Start -> executor.start(command.task.toPublic(), runtimeReporter)
             is NativeDownloadCommand.Resume -> executor.resume(
                 command.task.toPublic(),
@@ -389,8 +473,73 @@ class VesperDownloadManager internal constructor(
 
     private fun <T> onRuntimeThread(block: () -> T): T = runBlocking(runtimeDispatcher) { block() }
 
+    private fun restorePersistedTasks() {
+        val storedTasks = stateStore?.load()?.tasks.orEmpty()
+        if (storedTasks.isEmpty()) {
+            return
+        }
+        val restorable = storedTasks.filter { it.state != VesperDownloadState.Removed }
+        if (restorable.isEmpty()) {
+            return
+        }
+        val activeTaskIds =
+            restorable
+                .filter {
+                    it.state == VesperDownloadState.Preparing ||
+                        it.state == VesperDownloadState.Downloading
+                }
+                .map { it.taskId }
+        val queuedTaskIds =
+            restorable
+                .filter { it.state == VesperDownloadState.Queued }
+                .map { it.taskId }
+        val restored =
+            onRuntimeThread {
+                bindings.restoreDownloadTasks(
+                    sessionHandle = sessionHandle,
+                    tasks = restorable.map(VesperDownloadTaskSnapshot::toNativePayload).toTypedArray(),
+                    nowEpochMs = System.currentTimeMillis(),
+                )
+            }
+        if (!restored || !configuration.autoStart) {
+            return
+        }
+        activeTaskIds.forEach { taskId ->
+            onRuntimeThread {
+                bindings.resumeDownloadTask(sessionHandle, taskId, System.currentTimeMillis())
+            }
+        }
+        queuedTaskIds.forEach { taskId ->
+            onRuntimeThread {
+                bindings.startDownloadTask(sessionHandle, taskId, System.currentTimeMillis())
+            }
+        }
+    }
+
+    private fun persistSnapshot(snapshot: VesperDownloadSnapshot) {
+        stateStore?.save(snapshot)
+    }
+
     private val runtimeReporter =
         object : VesperDownloadExecutionReporter {
+            override fun completePreparation(
+                taskId: VesperDownloadTaskId,
+                assetIndex: VesperDownloadAssetIndex,
+            ) {
+                if (sessionHandle == 0L) {
+                    return
+                }
+                onRuntimeThread {
+                    bindings.completeDownloadPreparation(
+                        sessionHandle = sessionHandle,
+                        taskId = taskId,
+                        assetIndex = assetIndex.toNativePayload(),
+                        nowEpochMs = System.currentTimeMillis(),
+                    )
+                }
+                syncRuntimeState(processCommands = true)
+            }
+
             override fun updateProgress(
                 taskId: VesperDownloadTaskId,
                 receivedBytes: Long,
@@ -459,6 +608,12 @@ class VesperDownloadManager internal constructor(
             nowEpochMs: Long,
         ): Long
 
+        fun restoreDownloadTasks(
+            sessionHandle: Long,
+            tasks: Array<NativeDownloadTask>,
+            nowEpochMs: Long,
+        ): Boolean
+
         fun startDownloadTask(
             sessionHandle: Long,
             taskId: Long,
@@ -489,6 +644,13 @@ class VesperDownloadManager internal constructor(
             sessionHandle: Long,
             taskId: Long,
             completedPath: String,
+            nowEpochMs: Long,
+        ): Boolean
+
+        fun completeDownloadPreparation(
+            sessionHandle: Long,
+            taskId: Long,
+            assetIndex: NativeDownloadAssetIndex,
             nowEpochMs: Long,
         ): Boolean
 
@@ -546,6 +708,17 @@ class VesperDownloadManager internal constructor(
                 nowEpochMs = nowEpochMs,
             )
 
+        override fun restoreDownloadTasks(
+            sessionHandle: Long,
+            tasks: Array<NativeDownloadTask>,
+            nowEpochMs: Long,
+        ): Boolean =
+            VesperNativeJni.restoreDownloadTasks(
+                sessionHandle = sessionHandle,
+                tasks = tasks,
+                nowEpochMs = nowEpochMs,
+            )
+
         override fun startDownloadTask(
             sessionHandle: Long,
             taskId: Long,
@@ -589,6 +762,19 @@ class VesperDownloadManager internal constructor(
                 sessionHandle = sessionHandle,
                 taskId = taskId,
                 completedPath = completedPath,
+                nowEpochMs = nowEpochMs,
+            )
+
+        override fun completeDownloadPreparation(
+            sessionHandle: Long,
+            taskId: Long,
+            assetIndex: NativeDownloadAssetIndex,
+            nowEpochMs: Long,
+        ): Boolean =
+            VesperNativeJni.completeDownloadPreparation(
+                sessionHandle = sessionHandle,
+                taskId = taskId,
+                assetIndex = assetIndex,
                 nowEpochMs = nowEpochMs,
             )
 
@@ -641,15 +827,409 @@ class VesperDownloadManager internal constructor(
     }
 }
 
+internal class VesperDownloadStateStore(private val file: File) {
+    fun load(): VesperDownloadSnapshot? =
+        runCatching {
+            if (!file.isFile) {
+                return@runCatching null
+            }
+            JSONObject(file.readText()).toDownloadSnapshot()
+        }.getOrNull()
+
+    fun save(snapshot: VesperDownloadSnapshot) {
+        runCatching {
+            val tasks = snapshot.tasks.filter { it.state != VesperDownloadState.Removed }
+            if (tasks.isEmpty()) {
+                file.delete()
+                return@runCatching
+            }
+            file.parentFile?.mkdirs()
+            val root =
+                JSONObject()
+                    .put("version", 1)
+                    .put(
+                        "tasks",
+                        JSONArray().apply {
+                            tasks.forEach { put(it.toJson()) }
+                        },
+                    )
+            file.writeText(root.toString())
+        }
+    }
+}
+
 private class VesperForegroundDownloadExecutor(
     context: Context,
     private val baseDirectory: File?,
+    private val resumePartialDownloads: Boolean = true,
 ) : VesperDownloadExecutor {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobsLock = Any()
     private val jobs = mutableMapOf<VesperDownloadTaskId, Job>()
     private val dataSourceFactory = DefaultDataSource.Factory(appContext)
+
+    private suspend fun prepareAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+        if (task.assetIndex.resources.isNotEmpty() || task.assetIndex.segments.isNotEmpty()) {
+            return completePreparedAssetIndex(task.source.contentFormat, task.assetIndex)
+        }
+
+        return when (task.source.contentFormat) {
+            VesperDownloadContentFormat.HlsSegments -> planHlsAssetIndex(task)
+            VesperDownloadContentFormat.DashSegments -> planDashAssetIndex(task)
+            VesperDownloadContentFormat.FlvSegments -> planFlvAssetIndex(task)
+            VesperDownloadContentFormat.SingleFile -> planSingleFileAssetIndex(task)
+            VesperDownloadContentFormat.Unknown -> error("download preparation cannot plan an unknown content format")
+        }
+    }
+
+    private suspend fun completePreparedAssetIndex(
+        contentFormat: VesperDownloadContentFormat,
+        assetIndex: VesperDownloadAssetIndex,
+    ): VesperDownloadAssetIndex {
+        val resources =
+            assetIndex.resources.map { resource ->
+                if (resource.sizeBytes != null || resource.generatedText != null) {
+                    resource
+                } else {
+                    resource.copy(sizeBytes = probeRequiredSize(resource.uri, resource.byteRange))
+                }
+            }
+        val segments =
+            assetIndex.segments.map { segment ->
+                if (segment.sizeBytes != null) {
+                    segment
+                } else {
+                    segment.copy(sizeBytes = probeRequiredSize(segment.uri, segment.byteRange))
+                }
+            }
+        val totalSizeBytes =
+            assetIndex.totalSizeBytes
+                ?: resources.sumOf { resource -> if (resource.generatedText == null) resource.sizeBytes ?: 0L else 0L }
+                    .let { resourceBytes -> resourceBytes + segments.sumOf { it.sizeBytes ?: 0L } }
+        return assetIndex.copy(
+            contentFormat = contentFormat,
+            totalSizeBytes = totalSizeBytes,
+            resources = resources,
+            segments = segments,
+        )
+    }
+
+    private suspend fun planSingleFileAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+        val uri = task.source.manifestUri ?: task.source.source.uri
+        val sizeBytes = probeRequiredSize(uri, null)
+        return VesperDownloadAssetIndex(
+            contentFormat = task.source.contentFormat,
+            totalSizeBytes = sizeBytes,
+            resources =
+                listOf(
+                    VesperDownloadResourceRecord(
+                        resourceId = "single-file",
+                        uri = uri,
+                        relativePath = inferredFileName(uri),
+                        sizeBytes = sizeBytes,
+                    ),
+                ),
+        )
+    }
+
+    private suspend fun planHlsAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+        val manifestUri = task.source.manifestUri ?: task.source.source.uri
+        val manifestText = fetchText(manifestUri)
+        return if (manifestText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
+            planHlsMasterAssetIndex(manifestUri, manifestText, task.profile)
+        } else {
+            val media = parseHlsMediaPlaylist(manifestUri, manifestText)
+            buildHlsMediaAssetIndex("index.m3u8", listOf("media" to media))
+        }
+    }
+
+    private suspend fun planHlsMasterAssetIndex(
+        manifestUri: String,
+        manifestText: String,
+        profile: VesperDownloadProfile,
+    ): VesperDownloadAssetIndex {
+        val master = parseHlsMasterPlaylist(manifestUri, manifestText)
+        val variant =
+            profile.variantId
+                ?.let { variantId ->
+                    master.variants.firstOrNull { it.uri == variantId || it.attributes["NAME"] == variantId }
+                }
+                ?: master.variants.firstOrNull()
+                ?: error("HLS master playlist did not contain a playable variant")
+        val variantMedia = parseHlsMediaPlaylist(variant.uri, fetchText(variant.uri))
+        val media = mutableListOf("video" to variantMedia)
+        val audio =
+            profile.preferredAudioLanguage
+                ?.let { language ->
+                    master.audio.firstOrNull { it.attributes["LANGUAGE"]?.equals(language, ignoreCase = true) == true }
+                }
+                ?: master.audio.firstOrNull { it.attributes["DEFAULT"]?.equals("YES", ignoreCase = true) == true }
+                ?: master.audio.firstOrNull()
+        if (audio != null) {
+            media += "audio" to parseHlsMediaPlaylist(audio.uri, fetchText(audio.uri))
+        }
+
+        val planned = buildHlsMediaAssetIndex("index.m3u8", media)
+        val mediaResourceNames =
+            planned.resources
+                .mapNotNull { it.relativePath }
+                .filter { it.endsWith(".m3u8") && it != "index.m3u8" }
+        val masterText = rewriteHlsMaster(variant.attributes, mediaResourceNames)
+        return planned.copy(
+            resources =
+                planned.resources.map { resource ->
+                    if (resource.resourceId == "hls-master") {
+                        resource.copy(generatedText = masterText)
+                    } else {
+                        resource
+                    }
+                },
+        )
+    }
+
+    private suspend fun buildHlsMediaAssetIndex(
+        manifestPath: String,
+        mediaPlaylists: List<Pair<String, HlsMediaPlaylist>>,
+    ): VesperDownloadAssetIndex {
+        val resources =
+            mutableListOf(
+                VesperDownloadResourceRecord(
+                    resourceId = "hls-master",
+                    uri = "vesper-generated://hls/$manifestPath",
+                    relativePath = manifestPath,
+                ),
+            )
+        val segments = mutableListOf<VesperDownloadSegmentRecord>()
+        val seenMaps = linkedSetOf<String>()
+        var totalSizeBytes = 0L
+
+        mediaPlaylists.forEach { (mediaId, playlist) ->
+            val playlistPath =
+                if (mediaPlaylists.size == 1 && manifestPath == "index.m3u8") {
+                    "index.m3u8"
+                } else {
+                    "$mediaId.m3u8"
+                }
+            val localMaps = linkedMapOf<String, String>()
+            playlist.maps.forEachIndexed { index, map ->
+                val key = "${map.uri}:${map.byteRange}"
+                if (seenMaps.add(key)) {
+                    val size = probeRequiredSize(map.uri, map.byteRange)
+                    totalSizeBytes += size
+                    val relativePath = "segments/$mediaId-init-$index.${extensionFromUri(map.uri, "mp4")}"
+                    resources +=
+                        VesperDownloadResourceRecord(
+                            resourceId = "hls-$mediaId-init-$index",
+                            uri = map.uri,
+                            relativePath = relativePath,
+                            byteRange = map.byteRange,
+                            sizeBytes = size,
+                        )
+                    localMaps[key] = relativePath
+                }
+            }
+
+            playlist.segments.forEach { segment ->
+                val size = probeRequiredSize(segment.uri, segment.byteRange)
+                totalSizeBytes += size
+                segments +=
+                    VesperDownloadSegmentRecord(
+                        segmentId = "hls-$mediaId-${segment.sequence}",
+                        uri = segment.uri,
+                        relativePath = "segments/$mediaId-${segment.sequence.toString().padStart(5, '0')}.${extensionFromUri(segment.uri, "ts")}",
+                        sequence = segment.sequence,
+                        byteRange = segment.byteRange,
+                        sizeBytes = size,
+                    )
+            }
+
+            val mediaText = rewriteHlsMedia(mediaId, playlist, localMaps)
+            resources +=
+                VesperDownloadResourceRecord(
+                    resourceId = "hls-$mediaId-playlist",
+                    uri = "vesper-generated://hls/$playlistPath",
+                    relativePath = playlistPath,
+                    generatedText = mediaText,
+                )
+        }
+
+        if (mediaPlaylists.size == 1 && manifestPath == "index.m3u8") {
+            val mediaResource = resources.firstOrNull { it.resourceId.endsWith("-playlist") }
+            if (mediaResource != null) {
+                resources.remove(mediaResource)
+                resources[0] = resources[0].copy(generatedText = mediaResource.generatedText)
+            }
+        }
+
+        return VesperDownloadAssetIndex(
+            contentFormat = VesperDownloadContentFormat.HlsSegments,
+            totalSizeBytes = totalSizeBytes,
+            resources = resources,
+            segments = segments,
+        )
+    }
+
+    private suspend fun planDashAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+        val manifestUri = task.source.manifestUri ?: task.source.source.uri
+        val manifestText = fetchText(manifestUri)
+        val document = parseXmlDocument(manifestText)
+        val documentType = document.documentElement.getAttribute("type")
+        if (documentType.isNotBlank() && !documentType.equals("static", ignoreCase = true)) {
+            error("DASH download preparation requires a static MPD")
+        }
+        val durationSeconds = parseIso8601DurationSeconds(document.documentElement.getAttribute("mediaPresentationDuration"))
+        val plannedRepresentations = selectDashRepresentations(document, manifestUri, task.profile)
+        if (plannedRepresentations.isEmpty()) {
+            error("DASH MPD did not contain a supported SegmentTemplate or SegmentBase representation")
+        }
+
+        val resources = mutableListOf<VesperDownloadResourceRecord>()
+        val segments = mutableListOf<VesperDownloadSegmentRecord>()
+        val rewrittenAdaptationSets = mutableListOf<String>()
+        var totalSizeBytes = 0L
+        var globalSequence = 1L
+
+        plannedRepresentations.forEachIndexed { index, representation ->
+            val mediaId = representation.mediaId.ifBlank { "media$index" }
+            if (representation.template != null) {
+                val template = representation.template
+                if (template.duration <= 0L) {
+                    error("DASH SegmentTemplate duration must be greater than zero")
+                }
+                val segmentSeconds = template.duration.toDouble() / template.timescale.coerceAtLeast(1L).toDouble()
+                val segmentCount =
+                    durationSeconds
+                        ?.let { kotlin.math.ceil(it / segmentSeconds).toLong().coerceAtLeast(1L) }
+                        ?: error("DASH SegmentTemplate planning requires a finite MPD duration")
+                val initLocalPath = "segments/$mediaId-init.mp4"
+                template.initialization?.takeIf { it.isNotBlank() }?.let { initialization ->
+                    val remote = resolveRemoteReference(representation.baseUri, expandDashTemplate(initialization, representation.id, template.startNumber))
+                    val size = probeRequiredSize(remote, null)
+                    totalSizeBytes += size
+                    resources +=
+                        VesperDownloadResourceRecord(
+                            resourceId = "dash-$mediaId-init",
+                            uri = remote,
+                            relativePath = initLocalPath,
+                            sizeBytes = size,
+                        )
+                }
+                repeat(segmentCount.toInt()) { offset ->
+                    val number = template.startNumber + offset
+                    val remote = resolveRemoteReference(representation.baseUri, expandDashTemplate(template.media, representation.id, number))
+                    val size = probeRequiredSize(remote, null)
+                    totalSizeBytes += size
+                    segments +=
+                        VesperDownloadSegmentRecord(
+                            segmentId = "dash-$mediaId-segment-$number",
+                            uri = remote,
+                            relativePath = "segments/$mediaId-$number.m4s",
+                            sequence = globalSequence++,
+                            sizeBytes = size,
+                        )
+                }
+                rewrittenAdaptationSets += rewriteDashTemplateAdaptationSet(representation, template, mediaId, segmentCount)
+            } else if (representation.baseUrl != null) {
+                val remote = resolveRemoteReference(representation.baseUri, representation.baseUrl)
+                val size = probeRequiredSize(remote, null)
+                totalSizeBytes += size
+                val localName = "media-$mediaId.${extensionFromUri(remote, "mp4")}"
+                resources +=
+                    VesperDownloadResourceRecord(
+                        resourceId = "dash-$mediaId-media",
+                        uri = remote,
+                        relativePath = localName,
+                        sizeBytes = size,
+                    )
+                rewrittenAdaptationSets += rewriteDashSegmentBaseAdaptationSet(representation, localName)
+            }
+        }
+
+        resources.add(
+            0,
+            VesperDownloadResourceRecord(
+                resourceId = "dash-manifest",
+                uri = "vesper-generated://dash/manifest.mpd",
+                relativePath = "manifest.mpd",
+                generatedText = rewriteDashMpd(document.documentElement.getAttribute("mediaPresentationDuration"), rewrittenAdaptationSets),
+            ),
+        )
+
+        return VesperDownloadAssetIndex(
+            contentFormat = VesperDownloadContentFormat.DashSegments,
+            totalSizeBytes = totalSizeBytes,
+            resources = resources,
+            segments = segments,
+        )
+    }
+
+    private suspend fun planFlvAssetIndex(task: VesperDownloadTaskSnapshot): VesperDownloadAssetIndex {
+        val uri = task.source.manifestUri ?: task.source.source.uri
+        val clipUris =
+            if (extensionFromUri(uri, "flv").equals("flv", ignoreCase = true)) {
+                listOf(uri)
+            } else {
+                parseFlvClipManifest(uri, fetchText(uri))
+            }
+        if (clipUris.isEmpty()) {
+            error("FLV clip manifest did not contain any clip URI")
+        }
+
+        var totalSizeBytes = 0L
+        val concat = StringBuilder("ffconcat version 1.0\n")
+        val segments =
+            clipUris.mapIndexed { index, clipUri ->
+                val sequence = index + 1L
+                val size = probeRequiredSize(clipUri, null)
+                totalSizeBytes += size
+                val localPath = "clips/clip-${sequence.toString().padStart(5, '0')}.${extensionFromUri(clipUri, "flv")}"
+                concat.append("file '").append(escapeFfconcatPath(localPath)).append("'\n")
+                VesperDownloadSegmentRecord(
+                    segmentId = "flv-clip-$sequence",
+                    uri = clipUri,
+                    relativePath = localPath,
+                    sequence = sequence,
+                    sizeBytes = size,
+                )
+            }
+
+        return VesperDownloadAssetIndex(
+            contentFormat = VesperDownloadContentFormat.FlvSegments,
+            totalSizeBytes = totalSizeBytes,
+            resources =
+                listOf(
+                    VesperDownloadResourceRecord(
+                        resourceId = "flv-concat",
+                        uri = "vesper-generated://flv/manifest.ffconcat",
+                        relativePath = "manifest.ffconcat",
+                        generatedText = concat.toString(),
+                    ),
+                ),
+            segments = segments,
+        )
+    }
+
+    override fun prepare(
+        task: VesperDownloadTaskSnapshot,
+        reporter: VesperDownloadExecutionReporter,
+    ) {
+        scope.launch {
+            try {
+                reporter.completePreparation(task.taskId, prepareAssetIndex(task))
+            } catch (error: Exception) {
+                reporter.fail(
+                    task.taskId,
+                    VesperDownloadError(
+                        codeOrdinal = ANDROID_DOWNLOAD_BACKEND_FAILURE_ORDINAL,
+                        categoryOrdinal = ANDROID_DOWNLOAD_NETWORK_CATEGORY_ORDINAL,
+                        retriable = false,
+                        message = error.message ?: "android download preparation failed",
+                    ),
+                )
+            }
+        }
+    }
 
     override fun start(
         task: VesperDownloadTaskSnapshot,
@@ -713,18 +1293,30 @@ private class VesperForegroundDownloadExecutor(
                         downloadContext.ensureActive()
                         val outputFile = resolveOutputFile(task, entry, index)
                         outputFile.parentFile?.mkdirs()
-                        if (outputFile.exists()) {
-                            outputFile.delete()
-                        }
 
                         val bytesWritten =
-                            copyUriToFile(
-                                sourceUri = entry.uri,
-                                destination = outputFile,
-                            ) { writtenBytes ->
-                                downloadContext.ensureActive()
-                                val nextBytes = receivedBytes + writtenBytes
-                                reporter.updateProgress(task.taskId, nextBytes, receivedSegments)
+                            if (entry.generatedText != null) {
+                                runInterruptible {
+                                    outputFile.writeText(entry.generatedText)
+                                }
+                                0L
+                            } else {
+                                val resumeFromBytes =
+                                    resumableExistingBytes(
+                                        destination = outputFile,
+                                        expectedSizeBytes = entry.expectedSizeBytes,
+                                    )
+                                copyUriToFile(
+                                    sourceUri = entry.uri,
+                                    byteRange = entry.byteRange,
+                                    destination = outputFile,
+                                    expectedSizeBytes = entry.expectedSizeBytes,
+                                    resumeFromBytes = resumeFromBytes,
+                                ) { writtenBytes ->
+                                    downloadContext.ensureActive()
+                                    val nextBytes = receivedBytes + writtenBytes
+                                    reporter.updateProgress(task.taskId, nextBytes, receivedSegments)
+                                }
                             }
 
                         downloadContext.ensureActive()
@@ -767,6 +1359,9 @@ private class VesperForegroundDownloadExecutor(
                 ForegroundDownloadEntry(
                     uri = resource.uri,
                     relativePath = resource.relativePath,
+                    byteRange = resource.byteRange,
+                    generatedText = resource.generatedText,
+                    expectedSizeBytes = resource.sizeBytes,
                     fallbackName = resource.resourceId.ifBlank { "resource" },
                     isSegment = false,
                 )
@@ -776,6 +1371,9 @@ private class VesperForegroundDownloadExecutor(
                 ForegroundDownloadEntry(
                     uri = segment.uri,
                     relativePath = segment.relativePath,
+                    byteRange = segment.byteRange,
+                    generatedText = null,
+                    expectedSizeBytes = segment.sizeBytes,
                     fallbackName =
                         segment.segmentId.ifBlank {
                             "segment-${segment.sequence ?: (index + 1).toLong()}"
@@ -795,6 +1393,9 @@ private class VesperForegroundDownloadExecutor(
             ForegroundDownloadEntry(
                 uri = fallbackUri,
                 relativePath = null,
+                byteRange = null,
+                generatedText = null,
+                expectedSizeBytes = task.progress.totalBytes,
                 fallbackName = task.assetId.ifBlank { "download-${task.taskId}" },
                 isSegment = false,
             ),
@@ -845,15 +1446,61 @@ private class VesperForegroundDownloadExecutor(
 
     private suspend fun copyUriToFile(
         sourceUri: String,
+        byteRange: VesperDownloadByteRange?,
         destination: File,
+        expectedSizeBytes: Long?,
+        resumeFromBytes: Long,
+        onProgress: (Long) -> Unit,
+    ): Long {
+        if (isHttpUri(sourceUri)) {
+            return copyHttpUriToFile(
+                sourceUri = sourceUri,
+                byteRange = byteRange,
+                destination = destination,
+                expectedSizeBytes = expectedSizeBytes,
+                resumeFromBytes = resumeFromBytes,
+                allowRestartAfterRangeMismatch = true,
+                onProgress = onProgress,
+            )
+        }
+        return copyDataSourceUriToFile(
+            sourceUri = sourceUri,
+            byteRange = byteRange,
+            destination = destination,
+            expectedSizeBytes = expectedSizeBytes,
+            resumeFromBytes = resumeFromBytes,
+            onProgress = onProgress,
+        )
+    }
+
+    private suspend fun copyDataSourceUriToFile(
+        sourceUri: String,
+        byteRange: VesperDownloadByteRange?,
+        destination: File,
+        expectedSizeBytes: Long?,
+        resumeFromBytes: Long,
         onProgress: (Long) -> Unit,
     ): Long {
         val copyContext = currentCoroutineContext()
+        val expected = expectedSizeBytes?.coerceAtLeast(0L)
+        val resumeOffset = resumeFromBytes.coerceAtLeast(0L)
+        if (expected != null && resumeOffset >= expected) {
+            return expected
+        }
         val dataSource = dataSourceFactory.createDataSource()
-        val dataSpec = DataSpec.Builder().setUri(sourceUri).build()
-        var totalWritten = 0L
-        var reportedBytes = 0L
-        FileOutputStream(destination).use { output ->
+        val dataSpecBuilder = DataSpec.Builder().setUri(sourceUri)
+        if (byteRange != null) {
+            val remaining = byteRange.length.coerceAtLeast(0L) - resumeOffset
+            dataSpecBuilder
+                .setPosition(byteRange.offset.coerceAtLeast(0L) + resumeOffset)
+                .setLength(remaining.coerceAtLeast(0L))
+        } else if (resumeOffset > 0L) {
+            dataSpecBuilder.setPosition(resumeOffset)
+        }
+        val dataSpec = dataSpecBuilder.build()
+        var totalWritten = resumeOffset
+        var reportedBytes = resumeOffset
+        FileOutputStream(destination, resumeOffset > 0L).use { output ->
             try {
                 copyContext.ensureActive()
                 runInterruptible {
@@ -874,6 +1521,10 @@ private class VesperForegroundDownloadExecutor(
                         output.write(buffer, 0, read)
                     }
                     totalWritten += read.toLong()
+                    if (expected != null && totalWritten > expected) {
+                        runCatching { destination.delete() }
+                        error("remote server did not honor the requested resume range for $sourceUri")
+                    }
                     if (totalWritten - reportedBytes >= ANDROID_DOWNLOAD_PROGRESS_STEP_BYTES) {
                         copyContext.ensureActive()
                         reportedBytes = totalWritten
@@ -884,16 +1535,760 @@ private class VesperForegroundDownloadExecutor(
                 runCatching { dataSource.close() }
             }
         }
+        if (expected != null && totalWritten != expected) {
+            error("downloaded ${totalWritten} bytes for $sourceUri, expected $expected")
+        }
         return totalWritten
     }
+
+    private suspend fun copyHttpUriToFile(
+        sourceUri: String,
+        byteRange: VesperDownloadByteRange?,
+        destination: File,
+        expectedSizeBytes: Long?,
+        resumeFromBytes: Long,
+        allowRestartAfterRangeMismatch: Boolean,
+        onProgress: (Long) -> Unit,
+    ): Long {
+        val copyContext = currentCoroutineContext()
+        val expected = expectedSizeBytes?.coerceAtLeast(0L)
+        val resumeOffset = resumeFromBytes.coerceAtLeast(0L)
+        if (expected != null && resumeOffset >= expected) {
+            return expected
+        }
+
+        val rangeHeader = requestedHttpRangeHeader(byteRange, resumeOffset)
+        val requestedRangeStart = requestedHttpRangeStart(byteRange, resumeOffset)
+        val connection =
+            runInterruptible {
+                (URL(sourceUri).openConnection() as HttpURLConnection).apply {
+                    rangeHeader?.let { setRequestProperty("Range", it) }
+                    instanceFollowRedirects = true
+                    connectTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+                    readTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+                }
+            }
+
+        try {
+            val status = runInterruptible { connection.responseCode }
+            when {
+                status == HttpURLConnection.HTTP_PARTIAL -> {
+                    val contentRangeStart = parseHttpContentRangeStart(connection.getHeaderField("Content-Range"))
+                    if (requestedRangeStart == null || contentRangeStart != requestedRangeStart) {
+                        throw staleDownloadResource(
+                            "remote server returned an unexpected Content-Range for $sourceUri",
+                        )
+                    }
+                }
+                status == HttpURLConnection.HTTP_OK -> {
+                    if (requestedRangeStart != null) {
+                        if (byteRange == null && resumeOffset > 0L && allowRestartAfterRangeMismatch) {
+                            connection.disconnect()
+                            runInterruptible { destination.delete() }
+                            onProgress(0L)
+                            return copyHttpUriToFile(
+                                sourceUri = sourceUri,
+                                byteRange = byteRange,
+                                destination = destination,
+                                expectedSizeBytes = expectedSizeBytes,
+                                resumeFromBytes = 0L,
+                                allowRestartAfterRangeMismatch = false,
+                                onProgress = onProgress,
+                            )
+                        }
+                        throw staleDownloadResource(
+                            "remote server did not honor the requested byte range for $sourceUri",
+                        )
+                    }
+                }
+                status == ANDROID_HTTP_RANGE_NOT_SATISFIABLE -> {
+                    if (resumeOffset > 0L && allowRestartAfterRangeMismatch) {
+                        connection.disconnect()
+                        runInterruptible { destination.delete() }
+                        onProgress(0L)
+                        return copyHttpUriToFile(
+                            sourceUri = sourceUri,
+                            byteRange = byteRange,
+                            destination = destination,
+                            expectedSizeBytes = expectedSizeBytes,
+                            resumeFromBytes = 0L,
+                            allowRestartAfterRangeMismatch = false,
+                            onProgress = onProgress,
+                        )
+                    }
+                    throw staleDownloadResource(
+                        "remote resource rejected the requested byte range for $sourceUri",
+                    )
+                }
+                isExpiredHttpStatus(status) -> {
+                    throw staleDownloadResource(
+                        "offline download resource is stale or expired (HTTP $status) for $sourceUri; refresh the video link and prepare the task again",
+                    )
+                }
+                status !in 200..299 -> {
+                    throw staleDownloadResource("remote resource returned HTTP $status for $sourceUri")
+                }
+            }
+
+            var totalWritten = resumeOffset
+            var reportedBytes = resumeOffset
+            val append = status == HttpURLConnection.HTTP_PARTIAL && resumeOffset > 0L
+            FileOutputStream(destination, append).use { output ->
+                val input =
+                    runInterruptible {
+                        connection.inputStream
+                    }
+                input.use { stream ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        copyContext.ensureActive()
+                        val read =
+                            runInterruptible {
+                                stream.read(buffer, 0, buffer.size)
+                            }
+                        if (read == -1) {
+                            break
+                        }
+                        copyContext.ensureActive()
+                        runInterruptible {
+                            output.write(buffer, 0, read)
+                        }
+                        totalWritten += read.toLong()
+                        if (expected != null && totalWritten > expected) {
+                            runInterruptible { destination.delete() }
+                            throw staleDownloadResource(
+                                "remote server sent more bytes than expected for $sourceUri",
+                            )
+                        }
+                        if (totalWritten - reportedBytes >= ANDROID_DOWNLOAD_PROGRESS_STEP_BYTES) {
+                            copyContext.ensureActive()
+                            reportedBytes = totalWritten
+                            onProgress(totalWritten)
+                        }
+                    }
+                }
+            }
+            if (expected != null && totalWritten != expected) {
+                error("downloaded ${totalWritten} bytes for $sourceUri, expected $expected")
+            }
+            return totalWritten
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun resumableExistingBytes(
+        destination: File,
+        expectedSizeBytes: Long?,
+    ): Long {
+        if (!destination.exists()) {
+            return 0L
+        }
+        if (!resumePartialDownloads) {
+            destination.delete()
+            return 0L
+        }
+        val expected = expectedSizeBytes?.coerceAtLeast(0L)
+        if (expected == null) {
+            destination.delete()
+            return 0L
+        }
+        val existing = destination.length().coerceAtLeast(0L)
+        return when {
+            existing == expected -> existing
+            existing in 1 until expected -> existing
+            else -> {
+                destination.delete()
+                0L
+            }
+        }
+    }
+
+    private suspend fun fetchText(sourceUri: String): String {
+        val dataSource = dataSourceFactory.createDataSource()
+        return try {
+            runInterruptible {
+                dataSource.open(DataSpec.Builder().setUri(sourceUri).build())
+            }
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(32 * 1024)
+            while (true) {
+                val read =
+                    runInterruptible {
+                        dataSource.read(buffer, 0, buffer.size)
+                    }
+                if (read == -1) {
+                    break
+                }
+                output.write(buffer, 0, read)
+            }
+            output.toString(Charsets.UTF_8.name())
+        } finally {
+            runCatching { dataSource.close() }
+        }
+    }
+
+    private suspend fun probeRequiredSize(
+        sourceUri: String,
+        byteRange: VesperDownloadByteRange?,
+    ): Long {
+        if (byteRange != null) {
+            return byteRange.length.coerceAtLeast(0L)
+        }
+        return probeContentLength(sourceUri)
+    }
+
+    private suspend fun probeContentLength(sourceUri: String): Long {
+        val parsed = Uri.parse(sourceUri)
+        if (parsed.scheme.equals("file", ignoreCase = true)) {
+            val fileSize = parsed.path?.let(::File)?.length() ?: 0L
+            if (fileSize > 0L) {
+                return fileSize
+            }
+        }
+        if (parsed.scheme.equals("http", ignoreCase = true) || parsed.scheme.equals("https", ignoreCase = true)) {
+            probeHttpContentLength(sourceUri)?.let { return it }
+        }
+
+        val dataSource = dataSourceFactory.createDataSource()
+        return try {
+            val length =
+                runInterruptible {
+                    dataSource.open(DataSpec.Builder().setUri(sourceUri).build())
+                }
+            if (length <= 0L) {
+                error("remote resource did not expose a stable content length")
+            }
+            length
+        } finally {
+            runCatching { dataSource.close() }
+        }
+    }
+
+    private suspend fun probeHttpContentLength(sourceUri: String): Long? =
+        runInterruptible {
+            val head = (URL(sourceUri).openConnection() as HttpURLConnection).apply {
+                requestMethod = "HEAD"
+                instanceFollowRedirects = true
+                connectTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+                readTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+            }
+            try {
+                head.inputStream.close()
+            } catch (_: Exception) {
+                runCatching { head.errorStream?.close() }
+            }
+            head.getHeaderField("Content-Length")?.toLongOrNull()?.takeIf { it > 0L }?.let {
+                head.disconnect()
+                return@runInterruptible it
+            }
+            head.disconnect()
+
+            val range = (URL(sourceUri).openConnection() as HttpURLConnection).apply {
+                setRequestProperty("Range", "bytes=0-0")
+                instanceFollowRedirects = true
+                connectTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+                readTimeout = ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS
+            }
+            try {
+                range.inputStream.close()
+            } catch (_: Exception) {
+                runCatching { range.errorStream?.close() }
+            }
+            val size =
+                range.getHeaderField("Content-Range")
+                    ?.substringAfterLast('/', "")
+                    ?.toLongOrNull()
+                    ?.takeIf { it > 0L }
+            range.disconnect()
+            size
+        }
+
+    private fun inferredFileName(uri: String): String =
+        Uri.parse(uri).lastPathSegment
+            ?.substringAfterLast('/')
+            ?.takeIf { it.isNotBlank() }
+            ?: "media.bin"
 }
 
 private data class ForegroundDownloadEntry(
     val uri: String,
     val relativePath: String?,
+    val byteRange: VesperDownloadByteRange?,
+    val generatedText: String?,
+    val expectedSizeBytes: Long?,
     val fallbackName: String,
     val isSegment: Boolean,
 )
+
+private data class HlsMasterPlaylist(
+    val variants: List<HlsVariant>,
+    val audio: List<HlsRendition>,
+)
+
+private data class HlsVariant(
+    val uri: String,
+    val attributes: Map<String, String>,
+)
+
+private data class HlsRendition(
+    val uri: String,
+    val attributes: Map<String, String>,
+)
+
+private data class HlsMediaPlaylist(
+    val targetDuration: String?,
+    val version: String?,
+    val maps: List<HlsMap>,
+    val segments: List<HlsSegment>,
+)
+
+private data class HlsMap(
+    val uri: String,
+    val byteRange: VesperDownloadByteRange?,
+)
+
+private data class HlsSegment(
+    val uri: String,
+    val duration: String?,
+    val byteRange: VesperDownloadByteRange?,
+    val sequence: Long,
+)
+
+private data class DashPlannedRepresentation(
+    val id: String,
+    val mediaId: String,
+    val mimeType: String?,
+    val codecs: String?,
+    val bandwidth: String?,
+    val baseUri: String,
+    val baseUrl: String?,
+    val template: DashTemplate?,
+)
+
+private data class DashTemplate(
+    val media: String,
+    val initialization: String?,
+    val startNumber: Long,
+    val timescale: Long,
+    val duration: Long,
+)
+
+private fun parseHlsMasterPlaylist(
+    manifestUri: String,
+    manifestText: String,
+): HlsMasterPlaylist {
+    val variants = mutableListOf<HlsVariant>()
+    val audio = mutableListOf<HlsRendition>()
+    var pendingVariant: Map<String, String>? = null
+
+    manifestText.lineSequence().map(String::trim).filter(String::isNotEmpty).forEach { line ->
+        when {
+            line.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true) -> {
+                pendingVariant = parseHlsAttributes(line.substringAfter(':', ""))
+            }
+            line.startsWith("#EXT-X-MEDIA:", ignoreCase = true) -> {
+                val attributes = parseHlsAttributes(line.substringAfter(':', ""))
+                val uri = attributes["URI"]
+                if (uri != null && attributes["TYPE"]?.equals("AUDIO", ignoreCase = true) == true) {
+                    audio += HlsRendition(resolveRemoteReference(manifestUri, uri), attributes)
+                }
+            }
+            line.startsWith("#") -> Unit
+            pendingVariant != null -> {
+                variants += HlsVariant(resolveRemoteReference(manifestUri, line), pendingVariant.orEmpty())
+                pendingVariant = null
+            }
+        }
+    }
+
+    return HlsMasterPlaylist(variants = variants, audio = audio)
+}
+
+private fun parseHlsMediaPlaylist(
+    playlistUri: String,
+    playlistText: String,
+): HlsMediaPlaylist {
+    var targetDuration: String? = null
+    var version: String? = null
+    var endList = false
+    var playlistTypeVod = false
+    var pendingDuration: String? = null
+    var pendingByteRange: VesperDownloadByteRange? = null
+    var previousRangeEnd = 0L
+    var sequence = 0L
+    val maps = mutableListOf<HlsMap>()
+    val segments = mutableListOf<HlsSegment>()
+
+    playlistText.lineSequence().map(String::trim).filter(String::isNotEmpty).forEach { line ->
+        when {
+            line.startsWith("#EXT-X-TARGETDURATION:", ignoreCase = true) -> {
+                targetDuration = line.substringAfter(':').trim()
+            }
+            line.startsWith("#EXT-X-VERSION:", ignoreCase = true) -> {
+                version = line.substringAfter(':').trim()
+            }
+            line.equals("#EXT-X-ENDLIST", ignoreCase = true) -> {
+                endList = true
+            }
+            line.startsWith("#EXT-X-PLAYLIST-TYPE:", ignoreCase = true) -> {
+                playlistTypeVod = line.substringAfter(':').trim().equals("VOD", ignoreCase = true)
+            }
+            line.startsWith("#EXT-X-MAP:", ignoreCase = true) -> {
+                val attributes = parseHlsAttributes(line.substringAfter(':', ""))
+                val uri = attributes["URI"] ?: error("HLS EXT-X-MAP was missing URI")
+                val byteRange = attributes["BYTERANGE"]?.let { parseHlsByteRange(it, previousRangeEnd) }
+                if (byteRange != null) {
+                    previousRangeEnd = byteRange.offset + byteRange.length
+                }
+                maps += HlsMap(resolveRemoteReference(playlistUri, uri), byteRange)
+            }
+            line.startsWith("#EXT-X-BYTERANGE:", ignoreCase = true) -> {
+                pendingByteRange = parseHlsByteRange(line.substringAfter(':').trim(), previousRangeEnd)
+                pendingByteRange?.let { previousRangeEnd = it.offset + it.length }
+            }
+            line.startsWith("#EXTINF:", ignoreCase = true) -> {
+                pendingDuration = line.substringAfter(':').substringBefore(',').trim()
+            }
+            line.startsWith("#") -> Unit
+            else -> {
+                sequence += 1
+                segments +=
+                    HlsSegment(
+                        uri = resolveRemoteReference(playlistUri, line),
+                        duration = pendingDuration,
+                        byteRange = pendingByteRange,
+                        sequence = sequence,
+                    )
+                pendingDuration = null
+                pendingByteRange = null
+            }
+        }
+    }
+
+    if (!endList && !playlistTypeVod) {
+        error("HLS download preparation requires a VOD playlist or EXT-X-ENDLIST")
+    }
+    if (segments.isEmpty()) {
+        error("HLS media playlist did not contain any segments")
+    }
+    return HlsMediaPlaylist(
+        targetDuration = targetDuration,
+        version = version,
+        maps = maps,
+        segments = segments,
+    )
+}
+
+private fun parseHlsAttributes(input: String): Map<String, String> {
+    val result = linkedMapOf<String, String>()
+    var start = 0
+    var inQuotes = false
+    input.forEachIndexed { index, character ->
+        if (character == '"') {
+            inQuotes = !inQuotes
+        }
+        if (character == ',' && !inQuotes) {
+            parseAttributePair(input.substring(start, index))?.let { (key, value) -> result[key] = value }
+            start = index + 1
+        }
+    }
+    parseAttributePair(input.substring(start))?.let { (key, value) -> result[key] = value }
+    return result
+}
+
+private fun parseAttributePair(input: String): Pair<String, String>? {
+    val key = input.substringBefore('=', "").trim().takeIf { it.isNotEmpty() } ?: return null
+    val value = input.substringAfter('=', "").trim().trim('"')
+    return key to value
+}
+
+private fun parseHlsByteRange(
+    value: String,
+    previousRangeEnd: Long,
+): VesperDownloadByteRange? {
+    val lengthText = value.substringBefore('@').trim()
+    val offsetText = value.substringAfter('@', "").trim()
+    val length = lengthText.toLongOrNull() ?: return null
+    val offset = offsetText.toLongOrNull() ?: previousRangeEnd
+    return VesperDownloadByteRange(offset = offset, length = length)
+}
+
+private fun rewriteHlsMaster(
+    variantAttributes: Map<String, String>,
+    mediaResourceNames: List<String>,
+): String {
+    val audioPlaylist = mediaResourceNames.firstOrNull { it.startsWith("audio") }
+    val videoPlaylist = mediaResourceNames.firstOrNull { it.startsWith("video") }
+        ?: mediaResourceNames.firstOrNull()
+        ?: "video.m3u8"
+    val bandwidth = variantAttributes["BANDWIDTH"] ?: "1"
+    return buildString {
+        append("#EXTM3U\n#EXT-X-VERSION:3\n")
+        if (audioPlaylist != null) {
+            append("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"")
+            append(audioPlaylist)
+            append("\"\n")
+            append("#EXT-X-STREAM-INF:BANDWIDTH=$bandwidth,AUDIO=\"audio\"\n")
+        } else {
+            append("#EXT-X-STREAM-INF:BANDWIDTH=$bandwidth\n")
+        }
+        append(videoPlaylist)
+        append('\n')
+    }
+}
+
+private fun rewriteHlsMedia(
+    mediaId: String,
+    playlist: HlsMediaPlaylist,
+    localMaps: Map<String, String>,
+): String =
+    buildString {
+        append("#EXTM3U\n")
+        append("#EXT-X-VERSION:${playlist.version ?: "3"}\n")
+        append("#EXT-X-PLAYLIST-TYPE:VOD\n")
+        playlist.targetDuration?.let { append("#EXT-X-TARGETDURATION:$it\n") }
+        playlist.maps.lastOrNull()?.let { map ->
+            localMaps["${map.uri}:${map.byteRange}"]?.let { path ->
+                append("#EXT-X-MAP:URI=\"$path\"\n")
+            }
+        }
+        playlist.segments.forEach { segment ->
+            append("#EXTINF:${segment.duration ?: "0"},\n")
+            append("segments/$mediaId-${segment.sequence.toString().padStart(5, '0')}.${extensionFromUri(segment.uri, "ts")}\n")
+        }
+        append("#EXT-X-ENDLIST\n")
+    }
+
+private fun parseXmlDocument(xmlText: String) =
+    DocumentBuilderFactory
+        .newInstance()
+        .apply { isNamespaceAware = true }
+        .newDocumentBuilder()
+        .parse(InputSource(StringReader(xmlText)))
+
+private fun selectDashRepresentations(
+    document: org.w3c.dom.Document,
+    manifestUri: String,
+    profile: VesperDownloadProfile,
+): List<DashPlannedRepresentation> {
+    val mpdBase = childElementsByTagName(document.documentElement, "BaseURL")
+        .firstOrNull()
+        ?.textContent
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { resolveRemoteReference(manifestUri, it) }
+        ?: manifestUri
+    val result = mutableListOf<DashPlannedRepresentation>()
+    val adaptationSets = document.getElementsByTagNameNS("*", "AdaptationSet")
+    for (index in 0 until adaptationSets.length) {
+        val adaptation = adaptationSets.item(index) as? Element ?: continue
+        val adaptationMimeType = adaptation.getAttribute("mimeType").takeIf(String::isNotBlank)
+        if (adaptationMimeType != null &&
+            !adaptationMimeType.startsWith("video/") &&
+            !adaptationMimeType.startsWith("audio/")
+        ) {
+            continue
+        }
+        val adaptationBase = childElementsByTagName(adaptation, "BaseURL")
+            .firstOrNull()
+            ?.textContent
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { resolveRemoteReference(mpdBase, it) }
+            ?: mpdBase
+        val adaptationTemplate = dashTemplateFromElement(adaptation)
+        val representations = childElementsByTagName(adaptation, "Representation")
+        val selectedRepresentation =
+            profile.variantId
+                ?.let { variantId -> representations.firstOrNull { it.getAttribute("id") == variantId } }
+                ?: representations.firstOrNull()
+                ?: continue
+        val id = selectedRepresentation.getAttribute("id").takeIf(String::isNotBlank) ?: index.toString()
+        val representationBase = childElementsByTagName(selectedRepresentation, "BaseURL")
+            .firstOrNull()
+            ?.textContent
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val template = dashTemplateFromElement(selectedRepresentation) ?: adaptationTemplate
+        val mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank) ?: adaptationMimeType
+        val mediaKind = when {
+            mimeType?.startsWith("audio/") == true -> "audio"
+            mimeType?.startsWith("video/") == true -> "video"
+            else -> "media"
+        }
+        result +=
+            DashPlannedRepresentation(
+                id = id,
+                mediaId = "$mediaKind$index",
+                mimeType = mimeType,
+                codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank),
+                bandwidth = selectedRepresentation.getAttribute("bandwidth").takeIf(String::isNotBlank),
+                baseUri = representationBase?.let { resolveRemoteReference(adaptationBase, it) } ?: adaptationBase,
+                baseUrl = if (template == null) representationBase else null,
+                template = template,
+            )
+    }
+    return result
+}
+
+private fun dashTemplateFromElement(element: Element): DashTemplate? {
+    val template = childElementsByTagName(element, "SegmentTemplate").firstOrNull() ?: return null
+    val media = template.getAttribute("media").takeIf(String::isNotBlank) ?: return null
+    return DashTemplate(
+        media = media,
+        initialization = template.getAttribute("initialization").takeIf(String::isNotBlank),
+        startNumber = template.getAttribute("startNumber").toLongOrNull() ?: 1L,
+        timescale = template.getAttribute("timescale").toLongOrNull() ?: 1L,
+        duration = template.getAttribute("duration").toLongOrNull() ?: 0L,
+    )
+}
+
+private fun childElementsByTagName(
+    parent: Element,
+    tagName: String,
+): List<Element> =
+    buildList {
+        val children = parent.childNodes
+        for (index in 0 until children.length) {
+            val child = children.item(index) as? Element ?: continue
+            if (child.localName == tagName || child.tagName == tagName) {
+                add(child)
+            }
+        }
+    }
+
+private fun parseIso8601DurationSeconds(value: String?): Double? {
+    if (value.isNullOrBlank() || !value.startsWith("PT")) {
+        return null
+    }
+    var number = ""
+    var total = 0.0
+    value.drop(2).forEach { character ->
+        if (character.isDigit() || character == '.') {
+            number += character
+            return@forEach
+        }
+        val parsed = number.toDoubleOrNull() ?: return null
+        number = ""
+        when (character) {
+            'H' -> total += parsed * 3600.0
+            'M' -> total += parsed * 60.0
+            'S' -> total += parsed
+            else -> return null
+        }
+    }
+    return total.takeIf { it > 0.0 }
+}
+
+private fun expandDashTemplate(
+    template: String,
+    representationId: String,
+    number: Long,
+): String =
+    replaceDashNumberToken(template.replace("\$RepresentationID\$", representationId), number)
+
+private fun replaceDashNumberToken(
+    value: String,
+    number: Long,
+): String {
+    var output = value.replace("\$Number\$", number.toString())
+    while (true) {
+        val start = output.indexOf("\$Number%")
+        if (start < 0) {
+            return output
+        }
+        val end = output.indexOf('$', start + "\$Number%".length)
+        if (end < 0) {
+            return output
+        }
+        val spec = output.substring(start + "\$Number%".length, end)
+        val width = spec.removeSuffix("d").removePrefix("0").toIntOrNull() ?: 0
+        output = output.replaceRange(start, end + 1, number.toString().padStart(width, '0'))
+    }
+}
+
+private fun rewriteDashMpd(
+    duration: String?,
+    adaptationSets: List<String>,
+): String =
+    buildString {
+        append("<MPD type=\"static\"")
+        duration?.takeIf { it.isNotBlank() }?.let { append(" mediaPresentationDuration=\"").append(escapeXml(it)).append('"') }
+        append(" xmlns=\"urn:mpeg:dash:schema:mpd:2011\"><Period>")
+        adaptationSets.forEach(::append)
+        append("</Period></MPD>\n")
+    }
+
+private fun rewriteDashTemplateAdaptationSet(
+    representation: DashPlannedRepresentation,
+    template: DashTemplate,
+    mediaId: String,
+    segmentCount: Long,
+): String {
+    val mime = representation.mimeType?.let { " mimeType=\"${escapeXml(it)}\"" }.orEmpty()
+    val codecs = representation.codecs?.let { " codecs=\"${escapeXml(it)}\"" }.orEmpty()
+    val bandwidth = representation.bandwidth ?: "1"
+    val initialization = template.initialization?.let { " initialization=\"segments/$mediaId-init.mp4\"" }.orEmpty()
+    return "<AdaptationSet$mime><Representation id=\"${escapeXml(representation.id)}\" bandwidth=\"$bandwidth\"$codecs><SegmentTemplate timescale=\"${template.timescale}\" duration=\"${template.duration}\" startNumber=\"${template.startNumber}\"$initialization media=\"segments/$mediaId-\$Number\$.m4s\" /></Representation></AdaptationSet><!-- plannedSegments=$segmentCount -->"
+}
+
+private fun rewriteDashSegmentBaseAdaptationSet(
+    representation: DashPlannedRepresentation,
+    localName: String,
+): String {
+    val mime = representation.mimeType?.let { " mimeType=\"${escapeXml(it)}\"" }.orEmpty()
+    val codecs = representation.codecs?.let { " codecs=\"${escapeXml(it)}\"" }.orEmpty()
+    val bandwidth = representation.bandwidth ?: "1"
+    return "<AdaptationSet$mime><Representation id=\"${escapeXml(representation.id)}\" bandwidth=\"$bandwidth\"$codecs><BaseURL>${escapeXml(localName)}</BaseURL><SegmentBase /></Representation></AdaptationSet>"
+}
+
+private fun parseFlvClipManifest(
+    baseUri: String,
+    manifestText: String,
+): List<String> =
+    manifestText
+        .lineSequence()
+        .map(String::trim)
+        .filter { it.isNotEmpty() && !it.startsWith("#") && !it.equals("ffconcat version 1.0", ignoreCase = true) }
+        .map { line ->
+            line.removePrefix("file")
+                .trim()
+                .trim('\'', '"')
+        }
+        .filter(String::isNotEmpty)
+        .map { resolveRemoteReference(baseUri, it) }
+        .toList()
+
+private fun resolveRemoteReference(
+    baseUri: String,
+    reference: String,
+): String =
+    runCatching {
+        val ref = URI(reference)
+        if (ref.isAbsolute || baseUri.isBlank()) {
+            ref.toString()
+        } else {
+            URI(baseUri).resolve(ref).toString()
+        }
+    }.getOrElse { reference }
+
+private fun extensionFromUri(
+    uri: String,
+    fallback: String,
+): String {
+    val name = Uri.parse(uri).lastPathSegment?.substringAfterLast('/', "") ?: return fallback
+    return name.substringAfterLast('.', "").takeIf { it.isNotBlank() && it != name } ?: fallback
+}
+
+private fun escapeXml(value: String): String =
+    value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+
+private fun escapeFfconcatPath(path: String): String = path.replace("'", "'\\''")
 
 private fun VesperDownloadConfiguration.toNativePayload(): NativeDownloadConfig =
     NativeDownloadConfig(
@@ -915,6 +2310,7 @@ private fun VesperDownloadProfile.toNativePayload(): NativeDownloadProfile =
         preferredAudioLanguage = preferredAudioLanguage,
         preferredSubtitleLanguage = preferredSubtitleLanguage,
         selectedTrackIds = selectedTrackIds.toTypedArray(),
+        targetOutputFormatOrdinal = targetOutputFormat?.ordinal ?: -1,
         targetDirectory = targetDirectory,
         allowMeteredNetwork = allowMeteredNetwork,
     )
@@ -937,6 +2333,8 @@ private fun VesperDownloadResourceRecord.toNativePayload(): NativeDownloadResour
         resourceId = resourceId,
         uri = uri,
         relativePath = relativePath,
+        byteRange = byteRange?.toNativePayload(),
+        generatedText = generatedText,
         hasSizeBytes = sizeBytes != null,
         sizeBytes = sizeBytes ?: 0L,
         etag = etag,
@@ -950,9 +2348,39 @@ private fun VesperDownloadSegmentRecord.toNativePayload(): NativeDownloadSegment
         relativePath = relativePath,
         hasSequence = sequence != null,
         sequence = sequence ?: 0L,
+        byteRange = byteRange?.toNativePayload(),
         hasSizeBytes = sizeBytes != null,
         sizeBytes = sizeBytes ?: 0L,
         checksum = checksum,
+    )
+
+private fun VesperDownloadByteRange.toNativePayload(): NativeDownloadByteRange =
+    NativeDownloadByteRange(offset = offset, length = length)
+
+private fun VesperDownloadProgressSnapshot.toNativePayload(): NativeDownloadProgress =
+    NativeDownloadProgress(
+        receivedBytes = receivedBytes,
+        hasTotalBytes = totalBytes != null,
+        totalBytes = totalBytes ?: 0L,
+        receivedSegments = receivedSegments,
+        hasTotalSegments = totalSegments != null,
+        totalSegments = totalSegments ?: 0,
+    )
+
+private fun VesperDownloadTaskSnapshot.toNativePayload(): NativeDownloadTask =
+    NativeDownloadTask(
+        taskId = taskId,
+        assetId = assetId,
+        source = source.toNativePayload(),
+        profile = profile.toNativePayload(),
+        statusOrdinal = state.ordinal,
+        progress = progress.toNativePayload(),
+        assetIndex = assetIndex.toNativePayload(),
+        hasError = error != null,
+        errorCodeOrdinal = error?.codeOrdinal ?: 0,
+        errorCategoryOrdinal = error?.categoryOrdinal ?: 0,
+        errorRetriable = error?.retriable ?: false,
+        errorMessage = error?.message,
     )
 
 private fun NativeDownloadSnapshot.toPublic(): VesperDownloadSnapshot =
@@ -1009,7 +2437,8 @@ private fun NativeDownloadSource.toPublic(): VesperDownloadSource =
             when (contentFormatOrdinal) {
                 0 -> VesperDownloadContentFormat.HlsSegments
                 1 -> VesperDownloadContentFormat.DashSegments
-                2 -> VesperDownloadContentFormat.SingleFile
+                2 -> VesperDownloadContentFormat.FlvSegments
+                3 -> VesperDownloadContentFormat.SingleFile
                 else -> VesperDownloadContentFormat.Unknown
             },
         manifestUri = manifestUri,
@@ -1021,6 +2450,13 @@ private fun NativeDownloadProfile.toPublic(): VesperDownloadProfile =
         preferredAudioLanguage = preferredAudioLanguage,
         preferredSubtitleLanguage = preferredSubtitleLanguage,
         selectedTrackIds = selectedTrackIds.toList(),
+        targetOutputFormat =
+            when (targetOutputFormatOrdinal) {
+                0 -> VesperDownloadOutputFormat.Mp4
+                1 -> VesperDownloadOutputFormat.Mkv
+                2 -> VesperDownloadOutputFormat.Original
+                else -> null
+            },
         targetDirectory = targetDirectory,
         allowMeteredNetwork = allowMeteredNetwork,
     )
@@ -1031,7 +2467,8 @@ private fun NativeDownloadAssetIndex.toPublic(): VesperDownloadAssetIndex =
             when (contentFormatOrdinal) {
                 0 -> VesperDownloadContentFormat.HlsSegments
                 1 -> VesperDownloadContentFormat.DashSegments
-                2 -> VesperDownloadContentFormat.SingleFile
+                2 -> VesperDownloadContentFormat.FlvSegments
+                3 -> VesperDownloadContentFormat.SingleFile
                 else -> VesperDownloadContentFormat.Unknown
             },
         version = version,
@@ -1048,6 +2485,8 @@ private fun NativeDownloadResourceRecord.toPublic(): VesperDownloadResourceRecor
         resourceId = resourceId,
         uri = uri,
         relativePath = relativePath,
+        byteRange = byteRange?.toPublic(),
+        generatedText = generatedText,
         sizeBytes = if (hasSizeBytes) sizeBytes else null,
         etag = etag,
         checksum = checksum,
@@ -1059,9 +2498,13 @@ private fun NativeDownloadSegmentRecord.toPublic(): VesperDownloadSegmentRecord 
         uri = uri,
         relativePath = relativePath,
         sequence = if (hasSequence) sequence else null,
+        byteRange = byteRange?.toPublic(),
         sizeBytes = if (hasSizeBytes) sizeBytes else null,
         checksum = checksum,
     )
+
+private fun NativeDownloadByteRange.toPublic(): VesperDownloadByteRange =
+    VesperDownloadByteRange(offset = offset, length = length)
 
 private fun NativeDownloadProgress.toPublic(): VesperDownloadProgressSnapshot =
     VesperDownloadProgressSnapshot(
@@ -1075,9 +2518,298 @@ private fun NativeDownloadEvent.toPublic(): VesperDownloadEvent =
     when (this) {
         is NativeDownloadEvent.Created -> VesperDownloadEvent.Created(task.toPublic())
         is NativeDownloadEvent.StateChanged -> VesperDownloadEvent.StateChanged(task.toPublic())
+        is NativeDownloadEvent.AssetIndexUpdated -> VesperDownloadEvent.AssetIndexUpdated(task.toPublic())
         is NativeDownloadEvent.ProgressUpdated -> VesperDownloadEvent.ProgressUpdated(task.toPublic())
     }
+
+private fun VesperDownloadTaskSnapshot.toJson(): JSONObject =
+    JSONObject()
+        .put("taskId", taskId)
+        .put("assetId", assetId)
+        .put("source", source.toJson())
+        .put("profile", profile.toJson())
+        .put("state", state.ordinal)
+        .put("progress", progress.toJson())
+        .put("assetIndex", assetIndex.toJson())
+        .put("error", error?.toJson())
+
+private fun JSONObject.toDownloadTask(): VesperDownloadTaskSnapshot =
+    VesperDownloadTaskSnapshot(
+        taskId = optLong("taskId", 0L),
+        assetId = optString("assetId", ""),
+        source = optJSONObject("source")?.toDownloadSource() ?: VesperDownloadSource(
+            source = VesperPlayerSource.remote("", ""),
+            contentFormat = VesperDownloadContentFormat.Unknown,
+        ),
+        profile = optJSONObject("profile")?.toDownloadProfile() ?: VesperDownloadProfile(),
+        state = enumValue<VesperDownloadState>(optInt("state", VesperDownloadState.Paused.ordinal)),
+        progress = optJSONObject("progress")?.toDownloadProgress() ?: VesperDownloadProgressSnapshot(),
+        assetIndex = optJSONObject("assetIndex")?.toDownloadAssetIndex() ?: VesperDownloadAssetIndex(),
+        error = optJSONObject("error")?.toDownloadError(),
+    )
+
+private fun VesperDownloadSnapshot.toJson(): JSONObject =
+    JSONObject()
+        .put(
+            "tasks",
+            JSONArray().apply {
+                tasks.forEach { put(it.toJson()) }
+            },
+        )
+
+private fun JSONObject.toDownloadSnapshot(): VesperDownloadSnapshot =
+    VesperDownloadSnapshot(
+        tasks =
+            optJSONArray("tasks")
+                ?.toObjectList { toDownloadTask() }
+                ?: emptyList(),
+    )
+
+private fun VesperDownloadSource.toJson(): JSONObject =
+    JSONObject()
+        .put("source", source.toJson())
+        .put("contentFormat", contentFormat.ordinal)
+        .put("manifestUri", manifestUri)
+
+private fun JSONObject.toDownloadSource(): VesperDownloadSource =
+    VesperDownloadSource(
+        source = optJSONObject("source")?.toPlayerSource() ?: VesperPlayerSource.remote("", ""),
+        contentFormat = enumValue(optInt("contentFormat", VesperDownloadContentFormat.Unknown.ordinal)),
+        manifestUri = optStringOrNull("manifestUri"),
+    )
+
+private fun VesperPlayerSource.toJson(): JSONObject =
+    JSONObject()
+        .put("uri", uri)
+        .put("label", label)
+        .put("kind", kind.ordinal)
+        .put("protocol", protocol.ordinal)
+        .put(
+            "headers",
+            JSONObject().apply {
+                headers.forEach { (key, value) -> put(key, value) }
+            },
+        )
+
+private fun JSONObject.toPlayerSource(): VesperPlayerSource =
+    VesperPlayerSource(
+        uri = optString("uri", ""),
+        label = optString("label", ""),
+        kind = enumValue(optInt("kind", VesperPlayerSourceKind.Remote.ordinal)),
+        protocol = enumValue(optInt("protocol", VesperPlayerSourceProtocol.Unknown.ordinal)),
+        headers =
+            optJSONObject("headers")
+                ?.keys()
+                ?.asSequence()
+                ?.associateWith { key -> optJSONObject("headers")?.optString(key, "") ?: "" }
+                ?: emptyMap(),
+    )
+
+private fun VesperDownloadProfile.toJson(): JSONObject =
+    JSONObject()
+        .put("variantId", variantId)
+        .put("preferredAudioLanguage", preferredAudioLanguage)
+        .put("preferredSubtitleLanguage", preferredSubtitleLanguage)
+        .put("selectedTrackIds", JSONArray().apply { selectedTrackIds.forEach(::put) })
+        .put("targetOutputFormat", targetOutputFormat?.ordinal ?: -1)
+        .put("targetDirectory", targetDirectory)
+        .put("allowMeteredNetwork", allowMeteredNetwork)
+
+private fun JSONObject.toDownloadProfile(): VesperDownloadProfile =
+    VesperDownloadProfile(
+        variantId = optStringOrNull("variantId"),
+        preferredAudioLanguage = optStringOrNull("preferredAudioLanguage"),
+        preferredSubtitleLanguage = optStringOrNull("preferredSubtitleLanguage"),
+        selectedTrackIds = optJSONArray("selectedTrackIds")?.toStringList() ?: emptyList(),
+        targetOutputFormat =
+            optInt("targetOutputFormat", -1)
+                .takeIf { it >= 0 }
+                ?.let { enumValue<VesperDownloadOutputFormat>(it) },
+        targetDirectory = optStringOrNull("targetDirectory"),
+        allowMeteredNetwork = optBoolean("allowMeteredNetwork", false),
+    )
+
+private fun VesperDownloadProgressSnapshot.toJson(): JSONObject =
+    JSONObject()
+        .put("receivedBytes", receivedBytes)
+        .put("totalBytes", totalBytes)
+        .put("receivedSegments", receivedSegments)
+        .put("totalSegments", totalSegments)
+
+private fun JSONObject.toDownloadProgress(): VesperDownloadProgressSnapshot =
+    VesperDownloadProgressSnapshot(
+        receivedBytes = optLong("receivedBytes", 0L),
+        totalBytes = optLongOrNull("totalBytes"),
+        receivedSegments = optInt("receivedSegments", 0),
+        totalSegments = optIntOrNull("totalSegments"),
+    )
+
+private fun VesperDownloadAssetIndex.toJson(): JSONObject =
+    JSONObject()
+        .put("contentFormat", contentFormat.ordinal)
+        .put("version", version)
+        .put("etag", etag)
+        .put("checksum", checksum)
+        .put("totalSizeBytes", totalSizeBytes)
+        .put("resources", JSONArray().apply { resources.forEach { put(it.toJson()) } })
+        .put("segments", JSONArray().apply { segments.forEach { put(it.toJson()) } })
+        .put("completedPath", completedPath)
+
+private fun JSONObject.toDownloadAssetIndex(): VesperDownloadAssetIndex =
+    VesperDownloadAssetIndex(
+        contentFormat = enumValue(optInt("contentFormat", VesperDownloadContentFormat.Unknown.ordinal)),
+        version = optStringOrNull("version"),
+        etag = optStringOrNull("etag"),
+        checksum = optStringOrNull("checksum"),
+        totalSizeBytes = optLongOrNull("totalSizeBytes"),
+        resources = optJSONArray("resources")?.toObjectList { toDownloadResource() } ?: emptyList(),
+        segments = optJSONArray("segments")?.toObjectList { toDownloadSegment() } ?: emptyList(),
+        completedPath = optStringOrNull("completedPath"),
+    )
+
+private fun VesperDownloadResourceRecord.toJson(): JSONObject =
+    JSONObject()
+        .put("resourceId", resourceId)
+        .put("uri", uri)
+        .put("relativePath", relativePath)
+        .put("byteRange", byteRange?.toJson())
+        .put("generatedText", generatedText)
+        .put("sizeBytes", sizeBytes)
+        .put("etag", etag)
+        .put("checksum", checksum)
+
+private fun JSONObject.toDownloadResource(): VesperDownloadResourceRecord =
+    VesperDownloadResourceRecord(
+        resourceId = optString("resourceId", ""),
+        uri = optString("uri", ""),
+        relativePath = optStringOrNull("relativePath"),
+        byteRange = optJSONObject("byteRange")?.toDownloadByteRange(),
+        generatedText = optStringOrNull("generatedText"),
+        sizeBytes = optLongOrNull("sizeBytes"),
+        etag = optStringOrNull("etag"),
+        checksum = optStringOrNull("checksum"),
+    )
+
+private fun VesperDownloadSegmentRecord.toJson(): JSONObject =
+    JSONObject()
+        .put("segmentId", segmentId)
+        .put("uri", uri)
+        .put("relativePath", relativePath)
+        .put("sequence", sequence)
+        .put("byteRange", byteRange?.toJson())
+        .put("sizeBytes", sizeBytes)
+        .put("checksum", checksum)
+
+private fun JSONObject.toDownloadSegment(): VesperDownloadSegmentRecord =
+    VesperDownloadSegmentRecord(
+        segmentId = optString("segmentId", ""),
+        uri = optString("uri", ""),
+        relativePath = optStringOrNull("relativePath"),
+        sequence = optLongOrNull("sequence"),
+        byteRange = optJSONObject("byteRange")?.toDownloadByteRange(),
+        sizeBytes = optLongOrNull("sizeBytes"),
+        checksum = optStringOrNull("checksum"),
+    )
+
+private fun VesperDownloadByteRange.toJson(): JSONObject =
+    JSONObject().put("offset", offset).put("length", length)
+
+private fun JSONObject.toDownloadByteRange(): VesperDownloadByteRange =
+    VesperDownloadByteRange(offset = optLong("offset", 0L), length = optLong("length", 0L))
+
+private fun VesperDownloadError.toJson(): JSONObject =
+    JSONObject()
+        .put("codeOrdinal", codeOrdinal)
+        .put("categoryOrdinal", categoryOrdinal)
+        .put("retriable", retriable)
+        .put("message", message)
+
+private fun JSONObject.toDownloadError(): VesperDownloadError =
+    VesperDownloadError(
+        codeOrdinal = optInt("codeOrdinal", 0),
+        categoryOrdinal = optInt("categoryOrdinal", 0),
+        retriable = optBoolean("retriable", false),
+        message = optString("message", "download failed"),
+    )
+
+private inline fun <reified T : Enum<T>> enumValue(ordinal: Int): T =
+    enumValues<T>().getOrElse(ordinal) { enumValues<T>().last() }
+
+private fun JSONObject.optStringOrNull(key: String): String? =
+    if (isNull(key)) null else optString(key).takeIf(String::isNotEmpty)
+
+private fun JSONObject.optLongOrNull(key: String): Long? =
+    if (isNull(key) || !has(key)) null else optLong(key)
+
+private fun JSONObject.optIntOrNull(key: String): Int? =
+    if (isNull(key) || !has(key)) null else optInt(key)
+
+private fun JSONArray.toStringList(): List<String> =
+    buildList {
+        for (index in 0 until length()) {
+            optString(index).takeIf(String::isNotEmpty)?.let(::add)
+        }
+    }
+
+private fun <T> JSONArray.toObjectList(transform: JSONObject.() -> T): List<T> =
+    buildList {
+        for (index in 0 until length()) {
+            optJSONObject(index)?.let { add(it.transform()) }
+        }
+    }
+
+private fun isHttpUri(uri: String): Boolean {
+    val scheme = Uri.parse(uri).scheme ?: return false
+    return scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)
+}
+
+private fun requestedHttpRangeHeader(
+    byteRange: VesperDownloadByteRange?,
+    resumeOffset: Long,
+): String? {
+    val offset = resumeOffset.coerceAtLeast(0L)
+    if (byteRange != null) {
+        val remaining = byteRange.length.coerceAtLeast(0L) - offset
+        if (remaining <= 0L) {
+            return null
+        }
+        val start = byteRange.offset.coerceAtLeast(0L) + offset
+        val end = start + remaining - 1L
+        return "bytes=$start-$end"
+    }
+    return if (offset > 0L) "bytes=$offset-" else null
+}
+
+private fun requestedHttpRangeStart(
+    byteRange: VesperDownloadByteRange?,
+    resumeOffset: Long,
+): Long? {
+    val offset = resumeOffset.coerceAtLeast(0L)
+    return when {
+        byteRange != null -> byteRange.offset.coerceAtLeast(0L) + offset
+        offset > 0L -> offset
+        else -> null
+    }
+}
+
+private fun parseHttpContentRangeStart(contentRange: String?): Long? {
+    val range = contentRange?.substringAfter(' ', "")?.takeIf { it.isNotBlank() } ?: return null
+    if (range.startsWith("*")) {
+        return null
+    }
+    return range.substringBefore('-').toLongOrNull()
+}
+
+private fun isExpiredHttpStatus(status: Int): Boolean =
+    status == HttpURLConnection.HTTP_UNAUTHORIZED ||
+        status == HttpURLConnection.HTTP_FORBIDDEN ||
+        status == HttpURLConnection.HTTP_NOT_FOUND ||
+        status == HttpURLConnection.HTTP_GONE
+
+private fun staleDownloadResource(message: String): IllegalStateException = IllegalStateException(message)
 
 private const val ANDROID_DOWNLOAD_BACKEND_FAILURE_ORDINAL = 3
 private const val ANDROID_DOWNLOAD_NETWORK_CATEGORY_ORDINAL = 2
 private const val ANDROID_DOWNLOAD_PROGRESS_STEP_BYTES = 64L * 1024L
+private const val ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS = 15_000
+private const val ANDROID_HTTP_RANGE_NOT_SATISFIABLE = 416

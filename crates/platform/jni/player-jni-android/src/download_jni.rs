@@ -8,11 +8,12 @@ use jni::sys::{jboolean, jint, jlong, jobject, jobjectArray};
 use jni::{Env, EnvUnowned, JavaVM};
 use player_model::MediaSource;
 use player_platform_android::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
-use player_plugin::ProcessorProgress;
+use player_plugin::{OutputFormat, ProcessorProgress};
 use player_runtime::{
-    DownloadAssetIndex, DownloadContentFormat, DownloadEvent, DownloadProfile,
-    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
-    DownloadTaskSnapshot, PlayerRuntimeError,
+    DownloadAssetId, DownloadAssetIndex, DownloadByteRange, DownloadContentFormat,
+    DownloadErrorSummary, DownloadEvent, DownloadProfile, DownloadProgressSnapshot,
+    DownloadResourceRecord, DownloadSegmentRecord, DownloadSource, DownloadTaskId,
+    DownloadTaskSnapshot, DownloadTaskStatus, PlayerRuntimeError,
 };
 
 use crate::{
@@ -96,7 +97,7 @@ fn with_download_session_mut<R>(
         session
     };
 
-    // 持有 session 锁期间禁止回调 Java，避免同一 handle 发生重入阻塞。
+    // Do not call back into Java while the session lock is held; the same handle could reenter.
     let mut session = lock_or_recover(session.as_ref());
     Some(f(&mut session))
 }
@@ -118,7 +119,7 @@ fn with_download_session<R>(
         session
     };
 
-    // 只读路径同样会持有 session 锁，闭包内不要触发会重入 JNI 的 Java 回调。
+    // Read-only paths still hold the session lock; closures must not trigger reentrant JNI callbacks.
     let session = lock_or_recover(session.as_ref());
     Some(f(&session))
 }
@@ -225,6 +226,26 @@ fn string_array_field(
     Ok(values)
 }
 
+fn object_field<'local>(
+    env: &mut Env<'local>,
+    object: &JObject<'local>,
+    field_name: &str,
+    class_name: &str,
+) -> JniResult<Option<JObject<'local>>> {
+    let value = env
+        .get_field(
+            object,
+            jni_name(field_name),
+            field_sig(format!("L{class_name};")).field_signature(),
+        )?
+        .l()?;
+    if value.is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
 fn download_config_from_java(
     env: &mut Env<'_>,
     config: JObject<'_>,
@@ -248,7 +269,8 @@ fn download_source_from_java(env: &mut Env<'_>, source: JObject<'_>) -> JniResul
     let content_format = match int_field(env, &source, "contentFormatOrdinal")? {
         0 => DownloadContentFormat::HlsSegments,
         1 => DownloadContentFormat::DashSegments,
-        2 => DownloadContentFormat::SingleFile,
+        2 => DownloadContentFormat::FlvSegments,
+        3 => DownloadContentFormat::SingleFile,
         _ => DownloadContentFormat::Unknown,
     };
     let mut download_source = DownloadSource::new(MediaSource::new(source_uri), content_format);
@@ -269,19 +291,35 @@ fn download_profile_from_java(
         preferred_audio_language: string_field(env, &profile, "preferredAudioLanguage")?,
         preferred_subtitle_language: string_field(env, &profile, "preferredSubtitleLanguage")?,
         selected_track_ids: string_array_field(env, &profile, "selectedTrackIds")?,
+        target_output_format: match int_field(env, &profile, "targetOutputFormatOrdinal")? {
+            0 => Some(OutputFormat::Mp4),
+            1 => Some(OutputFormat::Mkv),
+            2 => Some(OutputFormat::Original),
+            _ => None,
+        },
         target_directory: string_field(env, &profile, "targetDirectory")?.map(PathBuf::from),
         allow_metered_network: bool_field(env, &profile, "allowMeteredNetwork")?,
     })
 }
 
-fn download_resource_record_from_java(
-    env: &mut Env<'_>,
-    resource: JObject<'_>,
+fn download_resource_record_from_java<'local>(
+    env: &mut Env<'local>,
+    resource: JObject<'local>,
 ) -> JniResult<DownloadResourceRecord> {
+    let byte_range = object_field(
+        env,
+        &resource,
+        "byteRange",
+        &format!("{PKG}/NativeDownloadByteRange"),
+    )?
+    .map(|byte_range| download_byte_range_from_java(env, byte_range))
+    .transpose()?;
     Ok(DownloadResourceRecord {
         resource_id: string_field(env, &resource, "resourceId")?.unwrap_or_default(),
         uri: string_field(env, &resource, "uri")?.unwrap_or_default(),
         relative_path: string_field(env, &resource, "relativePath")?.map(PathBuf::from),
+        byte_range,
+        generated_text: string_field(env, &resource, "generatedText")?,
         size_bytes: bool_field(env, &resource, "hasSizeBytes")?
             .then_some(long_field(env, &resource, "sizeBytes")?.max(0) as u64),
         etag: string_field(env, &resource, "etag")?,
@@ -289,19 +327,38 @@ fn download_resource_record_from_java(
     })
 }
 
-fn download_segment_record_from_java(
-    env: &mut Env<'_>,
-    segment: JObject<'_>,
+fn download_segment_record_from_java<'local>(
+    env: &mut Env<'local>,
+    segment: JObject<'local>,
 ) -> JniResult<DownloadSegmentRecord> {
+    let byte_range = object_field(
+        env,
+        &segment,
+        "byteRange",
+        &format!("{PKG}/NativeDownloadByteRange"),
+    )?
+    .map(|byte_range| download_byte_range_from_java(env, byte_range))
+    .transpose()?;
     Ok(DownloadSegmentRecord {
         segment_id: string_field(env, &segment, "segmentId")?.unwrap_or_default(),
         uri: string_field(env, &segment, "uri")?.unwrap_or_default(),
         relative_path: string_field(env, &segment, "relativePath")?.map(PathBuf::from),
         sequence: bool_field(env, &segment, "hasSequence")?
             .then_some(long_field(env, &segment, "sequence")?.max(0) as u64),
+        byte_range,
         size_bytes: bool_field(env, &segment, "hasSizeBytes")?
             .then_some(long_field(env, &segment, "sizeBytes")?.max(0) as u64),
         checksum: string_field(env, &segment, "checksum")?,
+    })
+}
+
+fn download_byte_range_from_java<'local>(
+    env: &mut Env<'local>,
+    byte_range: JObject<'local>,
+) -> JniResult<DownloadByteRange> {
+    Ok(DownloadByteRange {
+        offset: long_field(env, &byte_range, "offset")?.max(0) as u64,
+        length: long_field(env, &byte_range, "length")?.max(0) as u64,
     })
 }
 
@@ -369,7 +426,8 @@ fn download_asset_index_from_java(
         content_format: match int_field(env, &asset_index, "contentFormatOrdinal")? {
             0 => DownloadContentFormat::HlsSegments,
             1 => DownloadContentFormat::DashSegments,
-            2 => DownloadContentFormat::SingleFile,
+            2 => DownloadContentFormat::FlvSegments,
+            3 => DownloadContentFormat::SingleFile,
             _ => DownloadContentFormat::Unknown,
         },
         version: string_field(env, &asset_index, "version")?,
@@ -380,6 +438,83 @@ fn download_asset_index_from_java(
         resources: download_resource_records_from_java(env, &asset_index)?,
         segments: download_segment_records_from_java(env, &asset_index)?,
         completed_path: string_field(env, &asset_index, "completedPath")?.map(PathBuf::from),
+    })
+}
+
+fn download_progress_from_java(
+    env: &mut Env<'_>,
+    progress: JObject<'_>,
+) -> JniResult<DownloadProgressSnapshot> {
+    Ok(DownloadProgressSnapshot {
+        received_bytes: long_field(env, &progress, "receivedBytes")?.max(0) as u64,
+        total_bytes: bool_field(env, &progress, "hasTotalBytes")?
+            .then_some(long_field(env, &progress, "totalBytes")?.max(0) as u64),
+        received_segments: int_field(env, &progress, "receivedSegments")?.max(0) as u32,
+        total_segments: bool_field(env, &progress, "hasTotalSegments")?
+            .then_some(int_field(env, &progress, "totalSegments")?.max(0) as u32),
+    })
+}
+
+fn download_task_from_java<'local>(
+    env: &mut Env<'local>,
+    task: JObject<'local>,
+    now: Instant,
+) -> JniResult<DownloadTaskSnapshot> {
+    let source = object_field(env, &task, "source", &format!("{PKG}/NativeDownloadSource"))?
+        .ok_or_else(|| jni::errors::Error::NullPtr("task.source"))?;
+    let profile = object_field(
+        env,
+        &task,
+        "profile",
+        &format!("{PKG}/NativeDownloadProfile"),
+    )?
+    .ok_or_else(|| jni::errors::Error::NullPtr("task.profile"))?;
+    let progress = object_field(
+        env,
+        &task,
+        "progress",
+        &format!("{PKG}/NativeDownloadProgress"),
+    )?
+    .ok_or_else(|| jni::errors::Error::NullPtr("task.progress"))?;
+    let asset_index = object_field(
+        env,
+        &task,
+        "assetIndex",
+        &format!("{PKG}/NativeDownloadAssetIndex"),
+    )?
+    .ok_or_else(|| jni::errors::Error::NullPtr("task.assetIndex"))?;
+    let error_summary = if bool_field(env, &task, "hasError")? {
+        Some(DownloadErrorSummary {
+            code: error_code_from_ordinal(int_field(env, &task, "errorCodeOrdinal")?),
+            category: error_category_from_ordinal(int_field(env, &task, "errorCategoryOrdinal")?),
+            retriable: bool_field(env, &task, "errorRetriable")?,
+            message: string_field(env, &task, "errorMessage")?
+                .unwrap_or_else(|| "download failed".to_owned()),
+        })
+    } else {
+        None
+    };
+
+    Ok(DownloadTaskSnapshot {
+        task_id: DownloadTaskId::from_raw(long_field(env, &task, "taskId")?.max(0) as u64),
+        asset_id: DownloadAssetId::new(string_field(env, &task, "assetId")?.unwrap_or_default()),
+        source: download_source_from_java(env, source)?,
+        profile: download_profile_from_java(env, profile)?,
+        status: match int_field(env, &task, "statusOrdinal")? {
+            0 => DownloadTaskStatus::Queued,
+            1 => DownloadTaskStatus::Preparing,
+            2 => DownloadTaskStatus::Downloading,
+            3 => DownloadTaskStatus::Paused,
+            4 => DownloadTaskStatus::Completed,
+            5 => DownloadTaskStatus::Failed,
+            6 => DownloadTaskStatus::Removed,
+            _ => DownloadTaskStatus::Queued,
+        },
+        progress: download_progress_from_java(env, progress)?,
+        asset_index: download_asset_index_from_java(env, asset_index)?,
+        created_at: now,
+        updated_at: now,
+        error_summary,
     })
 }
 
@@ -412,8 +547,9 @@ fn download_source_object<'local>(
             JValue::Int(match source.content_format {
                 DownloadContentFormat::HlsSegments => 0,
                 DownloadContentFormat::DashSegments => 1,
-                DownloadContentFormat::SingleFile => 2,
-                DownloadContentFormat::Unknown => 3,
+                DownloadContentFormat::FlvSegments => 2,
+                DownloadContentFormat::SingleFile => 3,
+                DownloadContentFormat::Unknown => 4,
             }),
             JValue::Object(&manifest_uri),
         ],
@@ -441,7 +577,7 @@ fn download_profile_object<'local>(
     env.new_object(
         class,
         method_sig(
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)V",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;ILjava/lang/String;Z)V",
         )
         .method_signature(),
         &[
@@ -449,6 +585,12 @@ fn download_profile_object<'local>(
             JValue::Object(&preferred_audio_language),
             JValue::Object(&preferred_subtitle_language),
             JValue::Object(&selected_track_ids),
+            JValue::Int(match profile.target_output_format {
+                Some(OutputFormat::Mp4) => 0,
+                Some(OutputFormat::Mkv) => 1,
+                Some(OutputFormat::Original) => 2,
+                None => -1,
+            }),
             JValue::Object(&target_directory),
             JValue::Bool(profile.allow_metered_network),
         ],
@@ -471,16 +613,22 @@ fn download_resource_record_object<'local>(
     )?;
     let etag = optional_java_string(env, resource.etag.as_deref())?;
     let checksum = optional_java_string(env, resource.checksum.as_deref())?;
+    let byte_range = optional_download_byte_range_object(env, resource.byte_range)?;
+    let generated_text = optional_java_string(env, resource.generated_text.as_deref())?;
     env.new_object(
         class,
         method_sig(
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZJLjava/lang/String;Ljava/lang/String;)V",
+            &format!(
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;L{PKG}/NativeDownloadByteRange;Ljava/lang/String;ZJLjava/lang/String;Ljava/lang/String;)V"
+            ),
         )
         .method_signature(),
         &[
             JValue::Object(&resource_id),
             JValue::Object(&uri),
             JValue::Object(&relative_path),
+            JValue::Object(&byte_range),
+            JValue::Object(&generated_text),
             JValue::Bool(resource.size_bytes.is_some()),
             JValue::Long(u64_to_jlong_saturating(
                 resource.size_bytes.unwrap_or_default(),
@@ -506,10 +654,13 @@ fn download_segment_record_object<'local>(
             .and_then(|path| path.to_str()),
     )?;
     let checksum = optional_java_string(env, segment.checksum.as_deref())?;
+    let byte_range = optional_download_byte_range_object(env, segment.byte_range)?;
     env.new_object(
         class,
         method_sig(
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZJZJLjava/lang/String;)V",
+            &format!(
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZJL{PKG}/NativeDownloadByteRange;ZJLjava/lang/String;)V"
+            ),
         )
         .method_signature(),
         &[
@@ -520,11 +671,30 @@ fn download_segment_record_object<'local>(
             JValue::Long(u64_to_jlong_saturating(
                 segment.sequence.unwrap_or_default(),
             )),
+            JValue::Object(&byte_range),
             JValue::Bool(segment.size_bytes.is_some()),
             JValue::Long(u64_to_jlong_saturating(
                 segment.size_bytes.unwrap_or_default(),
             )),
             JValue::Object(&checksum),
+        ],
+    )
+}
+
+fn optional_download_byte_range_object<'local>(
+    env: &mut Env<'local>,
+    byte_range: Option<DownloadByteRange>,
+) -> JniResult<JObject<'local>> {
+    let Some(byte_range) = byte_range else {
+        return Ok(JObject::null());
+    };
+    let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadByteRange")))?;
+    env.new_object(
+        class,
+        method_sig("(JJ)V").method_signature(),
+        &[
+            JValue::Long(u64_to_jlong_saturating(byte_range.offset)),
+            JValue::Long(u64_to_jlong_saturating(byte_range.length)),
         ],
     )
 }
@@ -576,8 +746,9 @@ fn download_asset_index_object<'local>(
             JValue::Int(match asset_index.content_format {
                 DownloadContentFormat::HlsSegments => 0,
                 DownloadContentFormat::DashSegments => 1,
-                DownloadContentFormat::SingleFile => 2,
-                DownloadContentFormat::Unknown => 3,
+                DownloadContentFormat::FlvSegments => 2,
+                DownloadContentFormat::SingleFile => 3,
+                DownloadContentFormat::Unknown => 4,
             }),
             JValue::Object(&version),
             JValue::Object(&etag),
@@ -686,6 +857,15 @@ fn download_command_object<'local>(
     command: &AndroidDownloadCommand,
 ) -> JniResult<JObject<'local>> {
     match command {
+        AndroidDownloadCommand::Prepare { task } => {
+            let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadCommand$Prepare")))?;
+            let task = download_task_object(env, task)?;
+            env.new_object(
+                class,
+                method_sig(&format!("(L{PKG}/NativeDownloadTask;)V")).method_signature(),
+                &[JValue::Object(&task)],
+            )
+        }
         AndroidDownloadCommand::Start { task } => {
             let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadCommand$Start")))?;
             let task = download_task_object(env, task)?;
@@ -740,6 +920,17 @@ fn download_event_object<'local>(
         DownloadEvent::StateChanged(task) => {
             let class =
                 env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent$StateChanged")))?;
+            let task = download_task_object(env, task)?;
+            env.new_object(
+                class,
+                method_sig(&format!("(L{PKG}/NativeDownloadTask;)V")).method_signature(),
+                &[JValue::Object(&task)],
+            )
+        }
+        DownloadEvent::AssetIndexUpdated(task) => {
+            let class = env.find_class(jni_name(format!(
+                "{PKG}/NativeDownloadEvent$AssetIndexUpdated"
+            )))?;
             let task = download_task_object(env, task)?;
             env.new_object(
                 class,
@@ -829,6 +1020,37 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 Ok(result
                     .map(|task_id| u64_to_jlong_saturating(task_id.get()))
                     .unwrap_or_default())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_restoreDownloadTasks(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    tasks: JObjectArray<'_, JObject<'_>>,
+    _now_epoch_ms: jlong,
+) -> jboolean {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let len = tasks.len(env)?;
+                let now = Instant::now();
+                let mut restored_tasks = Vec::with_capacity(len);
+                for index in 0..len {
+                    let task = tasks.get_element(env, index)?;
+                    if !task.is_null() {
+                        restored_tasks.push(download_task_from_java(env, task, now)?);
+                    }
+                }
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    session.restore_tasks(restored_tasks, now)
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     })
@@ -928,6 +1150,34 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                         player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
                         received_bytes.max(0) as u64,
                         received_segments.max(0) as u32,
+                        Instant::now(),
+                    )
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_completeDownloadPreparation(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    task_id: jlong,
+    asset_index: JObject<'_>,
+    _now_epoch_ms: jlong,
+) -> jboolean {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let asset_index = download_asset_index_from_java(env, asset_index)?;
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    session.complete_preparation(
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        asset_index,
                         Instant::now(),
                     )
                 }) else {

@@ -267,6 +267,7 @@ interface PlayerBridge {
     fun setSubtitleTrackSelection(selection: VesperTrackSelection)
     fun setAbrPolicy(policy: VesperAbrPolicy)
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy)
+    fun setKeepScreenOnDuringPlayback(enabled: Boolean)
     fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration)
     fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata)
     fun clearSystemPlayback()

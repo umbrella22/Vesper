@@ -44,6 +44,7 @@ impl DownloadTaskId {
 pub enum DownloadContentFormat {
     HlsSegments,
     DashSegments,
+    FlvSegments,
     SingleFile,
     Unknown,
 }
@@ -76,8 +77,15 @@ pub struct DownloadProfile {
     pub preferred_audio_language: Option<String>,
     pub preferred_subtitle_language: Option<String>,
     pub selected_track_ids: Vec<String>,
+    pub target_output_format: Option<OutputFormat>,
     pub target_directory: Option<PathBuf>,
     pub allow_metered_network: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadByteRange {
+    pub offset: u64,
+    pub length: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +93,8 @@ pub struct DownloadResourceRecord {
     pub resource_id: String,
     pub uri: String,
     pub relative_path: Option<PathBuf>,
+    pub byte_range: Option<DownloadByteRange>,
+    pub generated_text: Option<String>,
     pub size_bytes: Option<u64>,
     pub etag: Option<String>,
     pub checksum: Option<String>,
@@ -96,6 +106,7 @@ pub struct DownloadSegmentRecord {
     pub uri: String,
     pub relative_path: Option<PathBuf>,
     pub sequence: Option<u64>,
+    pub byte_range: Option<DownloadByteRange>,
     pub size_bytes: Option<u64>,
     pub checksum: Option<String>,
 }
@@ -129,9 +140,17 @@ impl Default for DownloadAssetIndex {
 
 impl DownloadAssetIndex {
     pub fn inferred_total_size_bytes(&self) -> Option<u64> {
+        if self.resources.is_empty() && self.segments.is_empty() {
+            return self.total_size_bytes;
+        }
+
         self.total_size_bytes.or_else(|| {
             let resource_sum = self.resources.iter().try_fold(0_u64, |sum, resource| {
-                resource.size_bytes.map(|size| sum + size)
+                if resource.generated_text.is_some() {
+                    Some(sum)
+                } else {
+                    resource.size_bytes.map(|size| sum + size)
+                }
             });
             let segment_sum = self.segments.iter().try_fold(0_u64, |sum, segment| {
                 segment.size_bytes.map(|size| sum + size)
@@ -249,12 +268,12 @@ pub struct DownloadSnapshot {
 pub enum DownloadEvent {
     Created(DownloadTaskSnapshot),
     StateChanged(DownloadTaskSnapshot),
+    AssetIndexUpdated(DownloadTaskSnapshot),
     ProgressUpdated(DownloadTaskSnapshot),
 }
 
 #[derive(Default)]
-// 若未来新增必填字段，需同步更新 player-platform-{android,ios}/src/download.rs::new()
-// 的默认构造，避免空配置路径与 new_with_plugin_library_paths 路径再次漂移。
+// Keep platform default constructors aligned when adding required fields.
 pub struct DownloadManagerConfig {
     pub auto_start: bool,
     pub run_post_processors_on_completion: bool,
@@ -348,7 +367,10 @@ impl InMemoryDownloadStore {
 }
 
 pub trait DownloadExecutor {
-    fn prepare(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()>;
+    fn prepare(
+        &mut self,
+        task: &DownloadTaskSnapshot,
+    ) -> PlayerRuntimeResult<DownloadPrepareResult>;
 
     fn start(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()>;
 
@@ -357,6 +379,12 @@ pub trait DownloadExecutor {
     fn resume(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()>;
 
     fn remove(&mut self, task_id: DownloadTaskId) -> PlayerRuntimeResult<()>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadPrepareResult {
+    Ready(Option<DownloadAssetIndex>),
+    Pending,
 }
 
 #[derive(Debug, Default)]
@@ -391,9 +419,12 @@ impl InMemoryDownloadExecutor {
 }
 
 impl DownloadExecutor for InMemoryDownloadExecutor {
-    fn prepare(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn prepare(
+        &mut self,
+        task: &DownloadTaskSnapshot,
+    ) -> PlayerRuntimeResult<DownloadPrepareResult> {
         self.prepared.push(task.task_id);
-        Ok(())
+        Ok(DownloadPrepareResult::Ready(None))
     }
 
     fn start(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
@@ -516,6 +547,45 @@ where
         Ok(task_id)
     }
 
+    pub fn restore_tasks(
+        &mut self,
+        tasks: impl IntoIterator<Item = DownloadTaskSnapshot>,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Vec<DownloadTaskSnapshot>> {
+        let mut restored = Vec::new();
+        let mut max_task_id = self.next_task_id.saturating_sub(1);
+
+        for mut task in tasks {
+            if task.status == DownloadTaskStatus::Removed {
+                continue;
+            }
+
+            task.status = match task.status {
+                DownloadTaskStatus::Preparing | DownloadTaskStatus::Downloading => {
+                    DownloadTaskStatus::Paused
+                }
+                status => status,
+            };
+            task.progress.total_bytes = task
+                .progress
+                .total_bytes
+                .or_else(|| task.asset_index.inferred_total_size_bytes());
+            task.progress.total_segments = task
+                .progress
+                .total_segments
+                .or_else(|| task.asset_index.total_segment_count());
+            task.updated_at = now;
+
+            max_task_id = max_task_id.max(task.task_id.get());
+            self.store.save_task(task.clone())?;
+            self.emit_event(DownloadEvent::StateChanged(task.clone()));
+            restored.push(task);
+        }
+
+        self.next_task_id = self.next_task_id.max(max_task_id.saturating_add(1));
+        Ok(restored)
+    }
+
     pub fn start_task(
         &mut self,
         task_id: DownloadTaskId,
@@ -538,24 +608,33 @@ where
             return Ok(None);
         };
 
-        if let Err(error) = self.executor.prepare(&preparing) {
-            return self.fail_task(task_id, error, now);
+        match self.executor.prepare(&preparing) {
+            Ok(prepare_result) => {
+                self.apply_prepare_result(task_id, preparing, prepare_result, now)
+            }
+            Err(error) => self.fail_task(task_id, error, now),
         }
+    }
 
-        let downloading = self.update_task(task_id, now, |task| {
-            task.status = DownloadTaskStatus::Downloading;
-            task.error_summary = None;
-        })?;
-
-        let Some(downloading) = downloading else {
+    pub fn complete_preparation(
+        &mut self,
+        task_id: DownloadTaskId,
+        asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
 
-        if let Err(error) = self.executor.start(&downloading) {
-            return self.fail_task(task_id, error, now);
+        if snapshot.status != DownloadTaskStatus::Preparing {
+            return Ok(Some(snapshot));
         }
 
-        Ok(Some(downloading))
+        let Some(_) = self.update_asset_index(task_id, asset_index, now)? else {
+            return Ok(None);
+        };
+
+        self.start_prepared_task(task_id, now)
     }
 
     pub fn pause_task(
@@ -591,6 +670,24 @@ where
 
         if snapshot.status != DownloadTaskStatus::Paused {
             return Ok(Some(snapshot));
+        }
+
+        if task_needs_preparation(&snapshot) {
+            let preparing = self.update_task(task_id, now, |task| {
+                task.status = DownloadTaskStatus::Preparing;
+                task.error_summary = None;
+            })?;
+
+            let Some(preparing) = preparing else {
+                return Ok(None);
+            };
+
+            return match self.executor.prepare(&preparing) {
+                Ok(prepare_result) => {
+                    self.apply_prepare_result(task_id, preparing, prepare_result, now)
+                }
+                Err(error) => self.fail_task(task_id, error, now),
+            };
         }
 
         self.executor.resume(&snapshot)?;
@@ -640,7 +737,9 @@ where
             finalized.progress.received_segments = total_segments;
         }
 
-        let processed_output_path = if self.config.run_post_processors_on_completion {
+        let processed_output_path = if self.config.run_post_processors_on_completion
+            && should_run_post_processors_on_completion(&finalized)
+        {
             match self.run_post_processors(&finalized) {
                 Ok(path) => path,
                 Err(error) => return self.fail_task(task_id, error, now),
@@ -690,8 +789,15 @@ where
         }
 
         match snapshot.source.content_format {
+            DownloadContentFormat::SingleFile
+                if should_run_post_processors_on_completion(&snapshot) =>
+            {
+                self.export_processed_output(&snapshot, output_path, progress)
+            }
             DownloadContentFormat::SingleFile => resolve_single_file_path(&snapshot),
-            DownloadContentFormat::HlsSegments | DownloadContentFormat::DashSegments => {
+            DownloadContentFormat::HlsSegments
+            | DownloadContentFormat::DashSegments
+            | DownloadContentFormat::FlvSegments => {
                 self.export_processed_output(&snapshot, output_path, progress)
             }
             DownloadContentFormat::Unknown => Err(PlayerRuntimeError::with_category(
@@ -711,6 +817,19 @@ where
         error: PlayerRuntimeError,
         now: Instant,
     ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        let Some(snapshot) = self.store.task(task_id) else {
+            return Ok(None);
+        };
+
+        if matches!(
+            snapshot.status,
+            DownloadTaskStatus::Paused
+                | DownloadTaskStatus::Completed
+                | DownloadTaskStatus::Removed
+        ) {
+            return Ok(Some(snapshot));
+        }
+
         let error_summary = DownloadErrorSummary::from(error);
         self.update_task(task_id, now, |task| {
             task.status = DownloadTaskStatus::Failed;
@@ -754,6 +873,64 @@ where
         Ok(Some(snapshot))
     }
 
+    fn update_asset_index(
+        &mut self,
+        task_id: DownloadTaskId,
+        mut asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        let Some(mut snapshot) = self.store.task(task_id) else {
+            return Ok(None);
+        };
+
+        asset_index.content_format = snapshot.source.content_format;
+        snapshot.progress = DownloadProgressSnapshot::from_index(&asset_index);
+        snapshot.asset_index = asset_index;
+        snapshot.updated_at = now;
+        self.store.save_task(snapshot.clone())?;
+        self.emit_event(DownloadEvent::AssetIndexUpdated(snapshot.clone()));
+        Ok(Some(snapshot))
+    }
+
+    fn apply_prepare_result(
+        &mut self,
+        task_id: DownloadTaskId,
+        preparing: DownloadTaskSnapshot,
+        prepare_result: DownloadPrepareResult,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        match prepare_result {
+            DownloadPrepareResult::Ready(asset_index) => {
+                if let Some(asset_index) = asset_index {
+                    let _ = self.update_asset_index(task_id, asset_index, now)?;
+                }
+                self.start_prepared_task(task_id, now)
+            }
+            DownloadPrepareResult::Pending => Ok(Some(preparing)),
+        }
+    }
+
+    fn start_prepared_task(
+        &mut self,
+        task_id: DownloadTaskId,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        let downloading = self.update_task(task_id, now, |task| {
+            task.status = DownloadTaskStatus::Downloading;
+            task.error_summary = None;
+        })?;
+
+        let Some(downloading) = downloading else {
+            return Ok(None);
+        };
+
+        if let Err(error) = self.executor.start(&downloading) {
+            return self.fail_task(task_id, error, now);
+        }
+
+        Ok(Some(downloading))
+    }
+
     fn emit_event(&mut self, event: DownloadEvent) {
         self.dispatch_pipeline_events(&event);
         self.events.push(event);
@@ -790,7 +967,7 @@ where
                     });
                 }
             }
-            DownloadEvent::ProgressUpdated(_) => {}
+            DownloadEvent::AssetIndexUpdated(_) | DownloadEvent::ProgressUpdated(_) => {}
         }
     }
 
@@ -957,6 +1134,10 @@ where
                 manifest_path: resolve_manifest_path(snapshot)?,
                 segment_paths: resolve_segment_paths(snapshot),
             },
+            DownloadContentFormat::FlvSegments => CompletedContentFormat::FlvSegments {
+                manifest_path: resolve_manifest_path(snapshot)?,
+                segment_paths: resolve_segment_paths(snapshot),
+            },
             DownloadContentFormat::SingleFile => CompletedContentFormat::SingleFile {
                 path: resolve_single_file_path(snapshot)?,
             },
@@ -1041,6 +1222,31 @@ fn output_format_extension(format: &OutputFormat) -> String {
     }
 }
 
+fn should_run_post_processors_on_completion(snapshot: &DownloadTaskSnapshot) -> bool {
+    match snapshot.source.content_format {
+        DownloadContentFormat::HlsSegments
+        | DownloadContentFormat::DashSegments
+        | DownloadContentFormat::FlvSegments => snapshot
+            .profile
+            .target_output_format
+            .as_ref()
+            .is_none_or(|format| *format == OutputFormat::Mp4),
+        DownloadContentFormat::SingleFile => snapshot
+            .profile
+            .target_output_format
+            .as_ref()
+            .is_some_and(|format| *format == OutputFormat::Mp4),
+        DownloadContentFormat::Unknown => false,
+    }
+}
+
+fn task_needs_preparation(snapshot: &DownloadTaskSnapshot) -> bool {
+    snapshot.asset_index.resources.is_empty()
+        && snapshot.asset_index.segments.is_empty()
+        && snapshot.asset_index.total_size_bytes.is_none()
+        && snapshot.asset_index.completed_path.is_none()
+}
+
 fn sanitize_asset_id(asset_id: &str) -> String {
     let sanitized = asset_id
         .chars()
@@ -1059,10 +1265,7 @@ fn sanitize_asset_id(asset_id: &str) -> String {
 
 fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult<PathBuf> {
     if let Some(path) = snapshot.asset_index.completed_path.as_ref()
-        && matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("m3u8" | "mpd")
-        )
+        && is_manifest_path_for_format(path, snapshot.source.content_format)
     {
         return Ok(path.clone());
     }
@@ -1074,12 +1277,7 @@ fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult
         .find_map(|resource| {
             resolve_index_path(snapshot, resource.relative_path.as_deref(), &resource.uri)
         })
-        .filter(|path| {
-            matches!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some("m3u8" | "mpd")
-            )
-        })
+        .filter(|path| is_manifest_path_for_format(path, snapshot.source.content_format))
     {
         return Ok(path);
     }
@@ -1101,6 +1299,23 @@ fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult
             snapshot.task_id.get()
         ),
     ))
+}
+
+fn is_manifest_path_for_format(path: &Path, content_format: DownloadContentFormat) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default();
+    match content_format {
+        DownloadContentFormat::HlsSegments => extension.eq_ignore_ascii_case("m3u8"),
+        DownloadContentFormat::DashSegments => extension.eq_ignore_ascii_case("mpd"),
+        DownloadContentFormat::FlvSegments => {
+            extension.eq_ignore_ascii_case("ffconcat")
+                || extension.eq_ignore_ascii_case("txt")
+                || extension.eq_ignore_ascii_case("flv")
+        }
+        DownloadContentFormat::SingleFile | DownloadContentFormat::Unknown => false,
+    }
 }
 
 fn resolve_segment_paths(snapshot: &DownloadTaskSnapshot) -> Vec<PathBuf> {
@@ -1214,11 +1429,14 @@ fn map_processor_error(processor_name: &str, error: ProcessorError) -> PlayerRun
 mod tests {
     use super::{
         DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadEvent, DownloadManager,
-        DownloadManagerConfig, DownloadProfile, DownloadResourceRecord, DownloadSegmentRecord,
-        DownloadSource, DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+        DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadResourceRecord,
+        DownloadSegmentRecord, DownloadSource, DownloadTaskId, DownloadTaskStatus,
+        InMemoryDownloadExecutor, InMemoryDownloadStore,
     };
     use crate::download::NoopProcessorProgress;
-    use crate::{PlayerRuntimeError, PlayerRuntimeErrorCode};
+    use crate::{
+        PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+    };
     use player_model::MediaSource;
     use player_plugin::{
         CompletedDownloadInfo, ContentFormatKind, OutputFormat, PipelineEvent, PipelineEventHook,
@@ -1294,6 +1512,14 @@ mod tests {
         ratios: Mutex<Vec<f32>>,
     }
 
+    #[derive(Debug, Default)]
+    struct PendingPrepareExecutor {
+        prepared: Vec<DownloadTaskId>,
+        started: Vec<DownloadTaskId>,
+        paused: Vec<DownloadTaskId>,
+        removed: Vec<DownloadTaskId>,
+    }
+
     impl RecordingProgress {
         fn ratios(&self) -> Vec<f32> {
             match self.ratios.lock() {
@@ -1328,6 +1554,36 @@ mod tests {
             _progress: &dyn ProcessorProgress,
         ) -> Result<ProcessorOutput, ProcessorError> {
             Err(ProcessorError::MuxFailed("ffmpeg remux failed".to_owned()))
+        }
+    }
+
+    impl super::DownloadExecutor for PendingPrepareExecutor {
+        fn prepare(
+            &mut self,
+            task: &super::DownloadTaskSnapshot,
+        ) -> PlayerRuntimeResult<DownloadPrepareResult> {
+            self.prepared.push(task.task_id);
+            Ok(DownloadPrepareResult::Pending)
+        }
+
+        fn start(&mut self, task: &super::DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+            self.started.push(task.task_id);
+            Ok(())
+        }
+
+        fn pause(&mut self, task_id: DownloadTaskId) -> PlayerRuntimeResult<()> {
+            self.paused.push(task_id);
+            Ok(())
+        }
+
+        fn resume(&mut self, task: &super::DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+            self.started.push(task.task_id);
+            Ok(())
+        }
+
+        fn remove(&mut self, task_id: DownloadTaskId) -> PlayerRuntimeResult<()> {
+            self.removed.push(task_id);
+            Ok(())
         }
     }
 
@@ -1377,6 +1633,8 @@ mod tests {
                 resource_id: "manifest".to_owned(),
                 uri: "playlist.m3u8".to_owned(),
                 relative_path: Some(PathBuf::from("playlist.m3u8")),
+                byte_range: None,
+                generated_text: None,
                 size_bytes: None,
                 etag: None,
                 checksum: None,
@@ -1387,6 +1645,7 @@ mod tests {
                     uri: "seg-1.ts".to_owned(),
                     relative_path: Some(PathBuf::from("seg-1.ts")),
                     sequence: Some(1),
+                    byte_range: None,
                     size_bytes: Some(512),
                     checksum: None,
                 },
@@ -1395,6 +1654,7 @@ mod tests {
                     uri: "seg-2.ts".to_owned(),
                     relative_path: Some(PathBuf::from("seg-2.ts")),
                     sequence: Some(2),
+                    byte_range: None,
                     size_bytes: Some(512),
                     checksum: None,
                 },
@@ -1480,6 +1740,58 @@ mod tests {
     }
 
     #[test]
+    fn manager_restores_persisted_tasks_as_resumable_snapshots() {
+        let config = || DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let now = Instant::now();
+        let mut manager = DownloadManager::new(
+            config(),
+            InMemoryDownloadStore::default(),
+            InMemoryDownloadExecutor::default(),
+        );
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                asset_index(2048),
+                now,
+            )
+            .expect("create task should succeed");
+        let mut persisted = manager.task(task_id).expect("task should exist");
+        persisted.status = DownloadTaskStatus::Downloading;
+        persisted.progress.received_bytes = 512;
+        persisted.progress.total_bytes = None;
+
+        let mut restored_manager = DownloadManager::new(
+            config(),
+            InMemoryDownloadStore::default(),
+            InMemoryDownloadExecutor::default(),
+        );
+        let restored = restored_manager
+            .restore_tasks(vec![persisted], now)
+            .expect("restore should succeed");
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].status, DownloadTaskStatus::Paused);
+        assert_eq!(restored[0].progress.received_bytes, 512);
+        assert_eq!(restored[0].progress.total_bytes, Some(2048));
+        let new_task_id = restored_manager
+            .create_task(
+                "asset-b",
+                source("https://example.com/b.m3u8"),
+                DownloadProfile::default(),
+                asset_index(1024),
+                now,
+            )
+            .expect("create task after restore should succeed");
+        assert_eq!(new_task_id.get(), task_id.get() + 1);
+    }
+
+    #[test]
     fn manager_updates_progress_tracks_asset_index_and_completes() {
         let config = DownloadManagerConfig {
             auto_start: false,
@@ -1528,6 +1840,194 @@ mod tests {
         let tasks = manager.tasks_for_asset(&DownloadAssetId::new("asset-a"));
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].status, DownloadTaskStatus::Completed);
+    }
+
+    #[test]
+    fn manager_waits_for_pending_prepare_and_starts_after_completion() {
+        let config = DownloadManagerConfig {
+            auto_start: true,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = PendingPrepareExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                DownloadAssetIndex::default(),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let preparing = manager.task(task_id).expect("task should exist");
+        assert_eq!(preparing.status, DownloadTaskStatus::Preparing);
+        assert_eq!(preparing.progress.total_bytes, None);
+        assert_eq!(manager.executor().prepared, vec![task_id]);
+        assert!(manager.executor().started.is_empty());
+
+        let downloading = manager
+            .complete_preparation(task_id, segmented_asset_index(2048), now)
+            .expect("preparation completion should succeed")
+            .expect("task should exist");
+
+        assert_eq!(downloading.status, DownloadTaskStatus::Downloading);
+        assert_eq!(downloading.progress.total_bytes, Some(2048));
+        assert_eq!(downloading.progress.total_segments, Some(2));
+        assert_eq!(manager.executor().started, vec![task_id]);
+
+        let events = manager.drain_events();
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                DownloadEvent::AssetIndexUpdated(snapshot)
+                    if snapshot.task_id == task_id
+                        && snapshot.progress.total_bytes == Some(2048)
+            )
+        }));
+    }
+
+    #[test]
+    fn manager_resumes_paused_pending_prepare_by_preparing_again() {
+        let config = DownloadManagerConfig {
+            auto_start: true,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = PendingPrepareExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                DownloadAssetIndex::default(),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let paused = manager
+            .pause_task(task_id, now)
+            .expect("pause should succeed")
+            .expect("task should exist");
+        assert_eq!(paused.status, DownloadTaskStatus::Paused);
+
+        let preparing = manager
+            .resume_task(task_id, now)
+            .expect("resume should succeed")
+            .expect("task should exist");
+
+        assert_eq!(preparing.status, DownloadTaskStatus::Preparing);
+        assert_eq!(manager.executor().prepared, vec![task_id, task_id]);
+        assert!(manager.executor().started.is_empty());
+
+        let downloading = manager
+            .complete_preparation(task_id, segmented_asset_index(2048), now)
+            .expect("preparation completion should succeed")
+            .expect("task should exist");
+
+        assert_eq!(downloading.status, DownloadTaskStatus::Downloading);
+        assert_eq!(manager.executor().started, vec![task_id]);
+    }
+
+    #[test]
+    fn manager_can_remove_task_while_preparing() {
+        let config = DownloadManagerConfig {
+            auto_start: true,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = PendingPrepareExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                DownloadAssetIndex::default(),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let removed = manager
+            .remove_task(task_id, now)
+            .expect("remove should succeed")
+            .expect("task should exist");
+
+        assert_eq!(removed.status, DownloadTaskStatus::Removed);
+        assert_eq!(manager.executor().removed, vec![task_id]);
+        assert!(manager.executor().started.is_empty());
+    }
+
+    #[test]
+    fn manager_ignores_late_failure_after_pause_or_remove() {
+        let config = DownloadManagerConfig {
+            auto_start: true,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = InMemoryDownloadExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                asset_index(2048),
+                now,
+            )
+            .expect("create task should succeed");
+        let _ = manager
+            .pause_task(task_id, now)
+            .expect("pause should succeed")
+            .expect("task should exist");
+
+        let paused = manager
+            .fail_task(
+                task_id,
+                PlayerRuntimeError::with_category(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    PlayerRuntimeErrorCategory::Network,
+                    "late worker failure",
+                ),
+                now,
+            )
+            .expect("late fail should be accepted")
+            .expect("task should exist");
+        assert_eq!(paused.status, DownloadTaskStatus::Paused);
+        assert!(paused.error_summary.is_none());
+
+        let _ = manager
+            .remove_task(task_id, now)
+            .expect("remove should succeed")
+            .expect("task should exist");
+        let removed = manager
+            .fail_task(
+                task_id,
+                PlayerRuntimeError::with_category(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    PlayerRuntimeErrorCategory::Network,
+                    "later worker failure",
+                ),
+                now,
+            )
+            .expect("late fail should be accepted")
+            .expect("task should exist");
+        assert_eq!(removed.status, DownloadTaskStatus::Removed);
+        assert!(removed.error_summary.is_none());
     }
 
     #[test]

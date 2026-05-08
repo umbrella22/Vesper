@@ -7,13 +7,14 @@ use player_plugin::ProcessorProgress;
 use player_plugin_loader::LoadedDynamicPlugin;
 use player_runtime::{
     DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadManager,
-    DownloadManagerConfig, DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId,
-    DownloadTaskSnapshot, InMemoryDownloadStore, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-    PlayerRuntimeErrorCode, PlayerRuntimeResult,
+    DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadSnapshot,
+    DownloadSource, DownloadTaskId, DownloadTaskSnapshot, InMemoryDownloadStore,
+    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IosDownloadCommand {
+    Prepare { task: DownloadTaskSnapshot },
     Start { task: DownloadTaskSnapshot },
     Pause { task_id: DownloadTaskId },
     Resume { task: DownloadTaskSnapshot },
@@ -44,8 +45,12 @@ impl IosDownloadExecutor {
 }
 
 impl DownloadExecutor for IosDownloadExecutor {
-    fn prepare(&mut self, _task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
-        Ok(())
+    fn prepare(
+        &mut self,
+        task: &DownloadTaskSnapshot,
+    ) -> PlayerRuntimeResult<DownloadPrepareResult> {
+        self.push_command(IosDownloadCommand::Prepare { task: task.clone() })?;
+        Ok(DownloadPrepareResult::Pending)
     }
 
     fn start(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
@@ -119,6 +124,14 @@ impl IosDownloadBridgeSession {
             .create_task(asset_id, source, profile, asset_index, now)
     }
 
+    pub fn restore_tasks(
+        &mut self,
+        tasks: impl IntoIterator<Item = DownloadTaskSnapshot>,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Vec<DownloadTaskSnapshot>> {
+        self.manager.restore_tasks(tasks, now)
+    }
+
     pub fn start_task(
         &mut self,
         task_id: DownloadTaskId,
@@ -152,6 +165,15 @@ impl IosDownloadBridgeSession {
     ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
         self.manager
             .update_progress(task_id, received_bytes, received_segments, now)
+    }
+
+    pub fn complete_preparation(
+        &mut self,
+        task_id: DownloadTaskId,
+        asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        self.manager.complete_preparation(task_id, asset_index, now)
     }
 
     pub fn complete_task(
@@ -274,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn ios_download_bridge_emits_start_pause_resume_and_remove_commands() {
+    fn ios_download_bridge_emits_prepare_start_pause_resume_and_remove_commands() {
         let now = Instant::now();
         let mut session = IosDownloadBridgeSession::new(true);
         let task_id = session
@@ -282,11 +304,23 @@ mod tests {
                 "asset-a",
                 source("https://example.com/a.m3u8"),
                 DownloadProfile::default(),
-                asset_index(1_024),
+                DownloadAssetIndex::default(),
                 now,
             )
             .expect("task should be created");
 
+        let commands = session.drain_commands();
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            IosDownloadCommand::Prepare { task } if task.task_id == task_id
+        ));
+
+        let prepared = session
+            .complete_preparation(task_id, asset_index(1_024), now)
+            .expect("preparation should complete")
+            .expect("task should exist");
+        assert_eq!(prepared.status, DownloadTaskStatus::Downloading);
         let commands = session.drain_commands();
         assert_eq!(commands.len(), 1);
         assert!(matches!(

@@ -6,7 +6,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-mod desktop_download;
 mod desktop_file_dialog;
 mod desktop_overlay_ui;
 mod desktop_presenter;
@@ -14,11 +13,6 @@ mod desktop_symbols;
 mod desktop_ui;
 #[cfg(target_os = "macos")]
 mod macos_host_overlay;
-use desktop_download::{
-    DesktopDownloadController, PendingDownloadTask, PreparedDownloadTask,
-    download_primary_action_label, download_progress_summary, download_status_label,
-    draft_download_label, make_asset_id, normalized_progress_ratio, prepare_download_task,
-};
 use desktop_file_dialog::pick_local_media_file;
 use desktop_overlay_ui::playback_stage_rect;
 use desktop_presenter::DesktopUiPresenter;
@@ -26,6 +20,11 @@ use desktop_ui::{
     CONTROL_RATES, ControlAction, DesktopDownloadTaskViewData, DesktopOverlayViewModel,
     DesktopPendingDownloadTaskViewData, DesktopPlaylistItemViewData, DesktopSidebarTab,
     SeekPreview, playback_state_label,
+};
+use player_host_desktop::download::{
+    DesktopDownloadController, PendingDownloadTask, PreparedDownloadTask,
+    download_primary_action_label, download_progress_summary, download_status_label,
+    draft_download_label, make_asset_id, normalized_progress_ratio, prepare_download_task,
 };
 #[cfg(not(target_os = "macos"))]
 use player_host_desktop::open_desktop_host_runtime_uri_with_options_and_interrupt;

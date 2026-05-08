@@ -10,6 +10,7 @@ use crate::ProcessorCapabilities;
 pub enum ContentFormatKind {
     HlsSegments,
     DashSegments,
+    FlvSegments,
     SingleFile,
     Unknown,
 }
@@ -51,6 +52,10 @@ pub enum CompletedContentFormat {
         manifest_path: PathBuf,
         segment_paths: Vec<PathBuf>,
     },
+    FlvSegments {
+        manifest_path: PathBuf,
+        segment_paths: Vec<PathBuf>,
+    },
     SingleFile {
         path: PathBuf,
     },
@@ -61,6 +66,7 @@ impl CompletedContentFormat {
         match self {
             Self::HlsSegments { .. } => ContentFormatKind::HlsSegments,
             Self::DashSegments { .. } => ContentFormatKind::DashSegments,
+            Self::FlvSegments { .. } => ContentFormatKind::FlvSegments,
             Self::SingleFile { .. } => ContentFormatKind::SingleFile,
         }
     }

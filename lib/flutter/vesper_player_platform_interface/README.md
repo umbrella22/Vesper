@@ -100,6 +100,7 @@ VesperCachePreset
 VesperPlayerErrorCategory
 VesperViewportHintKind
 VesperDownloadContentFormat
+VesperDownloadOutputFormat
 VesperDownloadState
 ```
 

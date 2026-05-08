@@ -96,6 +96,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 session.lastError = nil
                 session.manager.refresh()
                 emitDownloadSnapshot(for: session)
+                emitDownloadRuntimeEvents(for: session)
                 return nil
             }
         case "disposeDownloadManager":
@@ -223,6 +224,17 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 let policyMap = try requireNestedMap(arguments: arguments(of: call), key: "policy")
                 session.lastError = nil
                 session.controller.setResiliencePolicy(try policyMap.toResiliencePolicy())
+                emitSnapshot(for: session)
+                return nil
+            }
+        case "setKeepScreenOnDuringPlayback":
+            handleSessionCommand(call, result: result) { session in
+                let arguments = arguments(of: call)
+                guard let enabled = arguments["enabled"] as? Bool else {
+                    throw PluginError.missingArgument("enabled")
+                }
+                session.lastError = nil
+                session.controller.setKeepScreenOnDuringPlayback(enabled)
                 emitSnapshot(for: session)
                 return nil
             }
@@ -401,6 +413,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             } else {
                 benchmarkConfiguration = .disabled
             }
+            let keepScreenOnDuringPlayback =
+                (arguments["keepScreenOnDuringPlayback"] as? Bool) ?? true
 
             let session = PlayerSession(
                 id: UUID().uuidString,
@@ -409,6 +423,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     resiliencePolicy: resiliencePolicy,
                     trackPreferencePolicy: trackPreferencePolicy,
                     preloadBudgetPolicy: preloadBudgetPolicy,
+                    keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
                     benchmarkConfiguration: benchmarkConfiguration
                 ),
                 benchmarkConsoleLogging: benchmarkConfiguration.consoleLogging
@@ -590,6 +605,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             Task { @MainActor in
                 guard let self else { return }
                 self.emitDownloadSnapshot(for: session)
+                self.emitDownloadRuntimeEvents(for: session)
             }
         }
     }
@@ -622,6 +638,19 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "type": "snapshot",
             "snapshot": buildDownloadSnapshotMap(for: session),
         ])
+    }
+
+    @MainActor
+    private func emitDownloadRuntimeEvents(for session: DownloadSession) {
+        for event in session.manager.drainEvents() {
+            if case let .assetIndexUpdated(task) = event {
+                downloadEventSink?([
+                    "downloadId": session.id,
+                    "type": "assetIndexUpdated",
+                    "task": task.toMap,
+                ])
+            }
+        }
     }
 
     @MainActor
@@ -1009,7 +1038,10 @@ private final class DownloadEventStreamHandler: NSObject, FlutterStreamHandler {
         Task { @MainActor [weak plugin] in
             guard let plugin else { return }
             plugin.downloadEventSink = events
-            plugin.downloadSessions.values.forEach { plugin.emitDownloadSnapshot(for: $0) }
+            plugin.downloadSessions.values.forEach {
+                plugin.emitDownloadSnapshot(for: $0)
+                plugin.emitDownloadRuntimeEvents(for: $0)
+            }
         }
         return nil
     }
@@ -1327,6 +1359,8 @@ private extension Dictionary where Key == String, Value == Any {
             autoStart: self["autoStart"] as? Bool ?? true,
             runPostProcessorsOnCompletion:
                 self["runPostProcessorsOnCompletion"] as? Bool ?? true,
+            resumePartialDownloads: self["resumePartialDownloads"] as? Bool ?? true,
+            restoreTasksOnStartup: self["restoreTasksOnStartup"] as? Bool ?? true,
             baseDirectory: (self["baseDirectory"] as? String).map {
                 URL(fileURLWithPath: $0, isDirectory: true)
             },
@@ -1344,6 +1378,8 @@ private extension Dictionary where Key == String, Value == Any {
             contentFormat = .hlsSegments
         case "dashSegments":
             contentFormat = .dashSegments
+        case "flvSegments":
+            contentFormat = .flvSegments
         case "singleFile":
             contentFormat = .singleFile
         default:
@@ -1365,6 +1401,9 @@ private extension Dictionary where Key == String, Value == Any {
                 (self["selectedTrackIds"] as? [Any])?.compactMap { value in
                     value as? String
                 } ?? [],
+            targetOutputFormat: downloadOutputFormat(
+                from: self["targetOutputFormat"] as? String
+            ),
             targetDirectory: (self["targetDirectory"] as? String).map {
                 URL(fileURLWithPath: $0, isDirectory: true)
             },
@@ -1379,6 +1418,8 @@ private extension Dictionary where Key == String, Value == Any {
             contentFormat = .hlsSegments
         case "dashSegments":
             contentFormat = .dashSegments
+        case "flvSegments":
+            contentFormat = .flvSegments
         case "singleFile":
             contentFormat = .singleFile
         default:
@@ -1407,6 +1448,8 @@ private extension Dictionary where Key == String, Value == Any {
             resourceId: self["resourceId"] as? String ?? "",
             uri: self["uri"] as? String ?? "",
             relativePath: self["relativePath"] as? String,
+            byteRange: stringKeyedMap(self["byteRange"])?.toDownloadByteRange(),
+            generatedText: self["generatedText"] as? String,
             sizeBytes: (self["sizeBytes"] as? NSNumber)?.uint64Value,
             etag: self["etag"] as? String,
             checksum: self["checksum"] as? String
@@ -1419,8 +1462,16 @@ private extension Dictionary where Key == String, Value == Any {
             uri: self["uri"] as? String ?? "",
             relativePath: self["relativePath"] as? String,
             sequence: (self["sequence"] as? NSNumber)?.uint64Value,
+            byteRange: stringKeyedMap(self["byteRange"])?.toDownloadByteRange(),
             sizeBytes: (self["sizeBytes"] as? NSNumber)?.uint64Value,
             checksum: self["checksum"] as? String
+        )
+    }
+
+    func toDownloadByteRange() -> VesperDownloadByteRange {
+        VesperDownloadByteRange(
+            offset: (self["offset"] as? NSNumber)?.uint64Value ?? 0,
+            length: (self["length"] as? NSNumber)?.uint64Value ?? 0
         )
     }
 
@@ -1694,6 +1745,7 @@ private extension VesperDownloadProfile {
             "preferredAudioLanguage": flutterValue(preferredAudioLanguage),
             "preferredSubtitleLanguage": flutterValue(preferredSubtitleLanguage),
             "selectedTrackIds": selectedTrackIds,
+            "targetOutputFormat": flutterValue(targetOutputFormat?.toWireName()),
             "targetDirectory": flutterValue(targetDirectory?.path),
             "allowMeteredNetwork": allowMeteredNetwork,
         ]
@@ -1732,6 +1784,8 @@ private extension VesperDownloadResourceRecord {
             "resourceId": resourceId,
             "uri": uri,
             "relativePath": flutterValue(relativePath),
+            "byteRange": flutterValue(byteRange?.toMap),
+            "generatedText": flutterValue(generatedText),
             "sizeBytes": flutterValue(sizeBytes),
             "etag": flutterValue(etag),
             "checksum": flutterValue(checksum),
@@ -1746,8 +1800,18 @@ private extension VesperDownloadSegmentRecord {
             "uri": uri,
             "relativePath": flutterValue(relativePath),
             "sequence": flutterValue(sequence),
+            "byteRange": flutterValue(byteRange?.toMap),
             "sizeBytes": flutterValue(sizeBytes),
             "checksum": flutterValue(checksum),
+        ]
+    }
+}
+
+private extension VesperDownloadByteRange {
+    var toMap: [String: Any] {
+        [
+            "offset": offset,
+            "length": length,
         ]
     }
 }
@@ -1815,6 +1879,19 @@ private func asFlutterError(_ error: Error, code: String) -> FlutterError {
         message: error.localizedDescription,
         details: errorMap(from: error)
     )
+}
+
+private func downloadOutputFormat(from raw: String?) -> VesperDownloadOutputFormat? {
+    switch raw {
+    case "mp4":
+        return .mp4
+    case "mkv":
+        return .mkv
+    case "original":
+        return .original
+    default:
+        return nil
+    }
 }
 
 private func asDownloadFlutterError(_ error: Error, code: String) -> FlutterError {
@@ -2008,10 +2085,25 @@ private extension VesperDownloadContentFormat {
             "hlsSegments"
         case .dashSegments:
             "dashSegments"
+        case .flvSegments:
+            "flvSegments"
         case .singleFile:
             "singleFile"
         case .unknown:
             "unknown"
+        }
+    }
+}
+
+private extension VesperDownloadOutputFormat {
+    func toWireName() -> String {
+        switch self {
+        case .mp4:
+            "mp4"
+        case .mkv:
+            "mkv"
+        case .original:
+            "original"
         }
     }
 }

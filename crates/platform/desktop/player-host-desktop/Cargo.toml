@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 player-model = { path = "../../../model/player-model" }
+player-platform-desktop = { path = "../../common/player-platform-desktop" }
 player-runtime = { path = "../../../core/player-runtime" }
 player-render-wgpu = { path = "../../../render/player-render-wgpu" }
 winit.workspace = true

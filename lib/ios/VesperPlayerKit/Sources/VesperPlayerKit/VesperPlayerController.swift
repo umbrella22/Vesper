@@ -88,10 +88,16 @@ public final class VesperPlayerController: ObservableObject {
     private let drainBenchmarkEventsImpl: () -> [VesperBenchmarkEvent]
     private let benchmarkSummaryImpl: () -> VesperBenchmarkSummary
     private let routePickerPlayerImpl: () -> AVPlayer?
+    private let screenSleepToken = VesperScreenSleepToken()
+    private var keepScreenOnDuringPlayback: Bool
     private lazy var systemPlaybackCoordinator = VesperSystemPlaybackCoordinator(controller: self)
 
-    init<Bridge: ObservablePlayerBridge>(_ bridge: Bridge) {
+    init<Bridge: ObservablePlayerBridge>(
+        _ bridge: Bridge,
+        keepScreenOnDuringPlayback: Bool = true
+    ) {
         backend = bridge.backend
+        self.keepScreenOnDuringPlayback = keepScreenOnDuringPlayback
         publishedUiState = bridge.publishedUiState
         publishedTrackCatalog = bridge.publishedTrackCatalog
         publishedTrackSelection = bridge.publishedTrackSelection
@@ -140,7 +146,16 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedResiliencePolicy = bridge.publishedResiliencePolicy
                 self.publishedLastError = bridge.publishedLastError
                 self.systemPlaybackCoordinator.updatePlaybackState(self.publishedUiState)
+                self.updateScreenSleepPolicy()
             }
+        }
+        updateScreenSleepPolicy()
+    }
+
+    deinit {
+        let token = screenSleepToken
+        Task { @MainActor in
+            VesperScreenSleepCoordinator.setActive(false, for: token)
         }
     }
 
@@ -149,6 +164,7 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func dispose() {
+        VesperScreenSleepCoordinator.setActive(false, for: screenSleepToken)
         systemPlaybackCoordinator.clear()
         disposeImpl()
     }
@@ -226,6 +242,11 @@ public final class VesperPlayerController: ObservableObject {
         setResiliencePolicyImpl(policy)
     }
 
+    public func setKeepScreenOnDuringPlayback(_ enabled: Bool) {
+        keepScreenOnDuringPlayback = enabled
+        updateScreenSleepPolicy()
+    }
+
     public func configureSystemPlayback(_ configuration: VesperSystemPlaybackConfiguration) {
         systemPlaybackCoordinator.configure(configuration)
     }
@@ -260,4 +281,37 @@ public final class VesperPlayerController: ObservableObject {
 
     /// Playback rates exposed by the current iOS host surface.
     public static let supportedPlaybackRates: [Float] = [0.5, 1.0, 1.5, 2.0, 3.0]
+
+    private func updateScreenSleepPolicy() {
+        VesperScreenSleepCoordinator.setActive(
+            keepScreenOnDuringPlayback && publishedUiState.playbackState == .playing,
+            for: screenSleepToken
+        )
+    }
+}
+
+private final class VesperScreenSleepToken {}
+
+@MainActor
+private enum VesperScreenSleepCoordinator {
+    private static var activeTokens: Set<ObjectIdentifier> = []
+    private static var previousIdleTimerDisabled: Bool?
+
+    static func setActive(_ active: Bool, for token: VesperScreenSleepToken) {
+        let identifier = ObjectIdentifier(token)
+        if active {
+            let wasEmpty = activeTokens.isEmpty
+            activeTokens.insert(identifier)
+            if wasEmpty {
+                previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+                UIApplication.shared.isIdleTimerDisabled = true
+            }
+            return
+        }
+
+        activeTokens.remove(identifier)
+        guard activeTokens.isEmpty else { return }
+        UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled ?? false
+        previousIdleTimerDisabled = nil
+    }
 }

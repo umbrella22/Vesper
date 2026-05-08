@@ -2,5 +2,5 @@
 
 IPHONEOS_DEPLOYMENT_TARGET=17.0
 
-// Rust FFI xcframework 目前只发布 arm64 simulator slice。
+// The Rust FFI XCFramework currently publishes only the arm64 simulator slice.
 EXCLUDED_ARCHS[sdk=iphonesimulator*]=i386 x86_64

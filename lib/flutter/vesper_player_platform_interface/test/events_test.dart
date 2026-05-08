@@ -2,6 +2,55 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('download asset-index update event decodes prepared task', () {
+    final event = VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
+      'downloadId': 'downloads',
+      'type': 'assetIndexUpdated',
+      'task': <Object?, Object?>{
+        'taskId': 11,
+        'assetId': 'asset-hls',
+        'source': VesperDownloadSource.fromSource(
+          source: VesperPlayerSource.hls(
+            uri: 'https://example.com/master.m3u8',
+            label: 'HLS demo',
+          ),
+          manifestUri: 'https://example.com/master.m3u8',
+        ).toMap(),
+        'profile': const VesperDownloadProfile(
+          targetOutputFormat: VesperDownloadOutputFormat.mp4,
+        ).toMap(),
+        'state': 'preparing',
+        'progress': const VesperDownloadProgressSnapshot(
+          totalBytes: 1024,
+          totalSegments: 2,
+        ).toMap(),
+        'assetIndex': const VesperDownloadAssetIndex(
+          contentFormat: VesperDownloadContentFormat.hlsSegments,
+          totalSizeBytes: 1024,
+          segments: <VesperDownloadSegmentRecord>[
+            VesperDownloadSegmentRecord(
+              segmentId: 'seg-1',
+              uri: 'https://example.com/seg-1.ts',
+              relativePath: 'seg-1.ts',
+              sequence: 1,
+              sizeBytes: 1024,
+            ),
+          ],
+        ).toMap(),
+      },
+    });
+
+    expect(event, isA<VesperDownloadAssetIndexUpdatedEvent>());
+    final updateEvent = event as VesperDownloadAssetIndexUpdatedEvent;
+    expect(updateEvent.downloadId, 'downloads');
+    expect(updateEvent.task.taskId, 11);
+    expect(updateEvent.task.assetIndex.totalSizeBytes, 1024);
+    expect(
+      updateEvent.task.profile.targetOutputFormat,
+      VesperDownloadOutputFormat.mp4,
+    );
+  });
+
   test('player snapshot event decodes embedded host lastError', () {
     final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
       'playerId': 'ios-player',

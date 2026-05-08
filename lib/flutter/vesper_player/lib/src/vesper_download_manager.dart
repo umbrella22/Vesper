@@ -147,6 +147,8 @@ class VesperDownloadManager {
           _applyErrorEvent(event);
         case VesperDownloadExportProgressEvent():
           _eventsController.add(event);
+        case VesperDownloadAssetIndexUpdatedEvent():
+          _applyAssetIndexUpdatedEvent(event);
         case VesperDownloadDisposedEvent():
           _eventsController.add(event);
       }
@@ -173,6 +175,32 @@ class VesperDownloadManager {
     }
     snapshotListenable.value = event.snapshot;
     _snapshotsController.add(event.snapshot);
+    _eventsController.add(event);
+  }
+
+  void _applyAssetIndexUpdatedEvent(
+    VesperDownloadAssetIndexUpdatedEvent event,
+  ) {
+    if (_disposed) {
+      return;
+    }
+    var replaced = false;
+    final tasks = snapshot.tasks.map((task) {
+      if (task.taskId != event.task.taskId) {
+        return task;
+      }
+      replaced = true;
+      return event.task;
+    }).toList(growable: true);
+    if (!replaced) {
+      tasks.add(event.task);
+    }
+
+    final updatedSnapshot = VesperDownloadSnapshot(
+      tasks: List<VesperDownloadTaskSnapshot>.unmodifiable(tasks),
+    );
+    snapshotListenable.value = updatedSnapshot;
+    _snapshotsController.add(updatedSnapshot);
     _eventsController.add(event);
   }
 

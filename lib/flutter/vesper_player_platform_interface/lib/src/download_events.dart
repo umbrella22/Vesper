@@ -28,6 +28,13 @@ sealed class VesperDownloadManagerEvent {
           taskId: (normalized['taskId'] as num?)?.toInt() ?? 0,
           ratio: (normalized['ratio'] as num?)?.toDouble() ?? 0,
         );
+      case 'assetIndexUpdated':
+        return VesperDownloadAssetIndexUpdatedEvent(
+          downloadId: downloadId,
+          task: VesperDownloadTaskSnapshot.fromMap(
+            vesperDecodeMap(normalized['task']),
+          ),
+        );
       case 'disposed':
         return VesperDownloadDisposedEvent(downloadId: downloadId);
       case 'snapshot':
@@ -78,4 +85,14 @@ final class VesperDownloadExportProgressEvent
 
   final int taskId;
   final double ratio;
+}
+
+final class VesperDownloadAssetIndexUpdatedEvent
+    extends VesperDownloadManagerEvent {
+  const VesperDownloadAssetIndexUpdatedEvent({
+    required super.downloadId,
+    required this.task,
+  });
+
+  final VesperDownloadTaskSnapshot task;
 }

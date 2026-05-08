@@ -9,7 +9,7 @@ pub enum DecoderMediaKind {
     Audio,
 }
 
-/// CPU frame formats supported by decoder plugin ABI v1.
+/// Decoded frame formats advertised by decoder plugins.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DecoderFrameFormat {
     Rgba8888,
@@ -82,7 +82,7 @@ pub struct DecoderSessionInfo {
     pub output_format: Option<DecoderFrameFormat>,
 }
 
-/// Compressed packet metadata passed to `DecoderSession::send_packet`.
+/// Compressed packet metadata passed to `NativeDecoderSession::send_packet`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DecoderPacket {
     pub pts_us: Option<i64>,
@@ -107,77 +107,10 @@ impl Default for DecoderPacketResult {
     }
 }
 
-/// Describes one plane inside a decoded CPU-frame payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DecoderFramePlane {
-    pub offset: usize,
-    pub len: usize,
-    pub stride: Option<u32>,
-}
-
-/// Metadata for a decoded frame. Pixel or PCM bytes are transferred separately.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DecoderFrameMetadata {
-    pub media_kind: DecoderMediaKind,
-    pub format: DecoderFrameFormat,
-    pub pts_us: Option<i64>,
-    pub duration_us: Option<i64>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub sample_rate: Option<u32>,
-    pub channels: Option<u16>,
-    pub planes: Vec<DecoderFramePlane>,
-}
-
-/// A decoded frame returned by the Rust-side decoder session trait.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DecoderFrame {
-    pub metadata: DecoderFrameMetadata,
-    pub data: Vec<u8>,
-}
-
 /// Receive state encoded in frame metadata over the C ABI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DecoderReceiveFrameStatus {
     Frame,
-    NeedMoreInput,
-    Eof,
-}
-
-/// Metadata returned by the dynamic ABI receive-frame call.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DecoderReceiveFrameMetadata {
-    pub status: DecoderReceiveFrameStatus,
-    pub frame: Option<DecoderFrameMetadata>,
-}
-
-impl DecoderReceiveFrameMetadata {
-    pub fn frame(frame: DecoderFrameMetadata) -> Self {
-        Self {
-            status: DecoderReceiveFrameStatus::Frame,
-            frame: Some(frame),
-        }
-    }
-
-    pub fn need_more_input() -> Self {
-        Self {
-            status: DecoderReceiveFrameStatus::NeedMoreInput,
-            frame: None,
-        }
-    }
-
-    pub fn eof() -> Self {
-        Self {
-            status: DecoderReceiveFrameStatus::Eof,
-            frame: None,
-        }
-    }
-}
-
-/// Rust-side receive result returned by decoder sessions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecoderReceiveFrameOutput {
-    Frame(DecoderFrame),
     NeedMoreInput,
     Eof,
 }
@@ -359,18 +292,6 @@ impl DecoderError {
     }
 }
 
-/// Creates decoder sessions for one plugin.
-pub trait DecoderPluginFactory: Send + Sync {
-    fn name(&self) -> &str;
-
-    fn capabilities(&self) -> DecoderCapabilities;
-
-    fn open_session(
-        &self,
-        config: &DecoderSessionConfig,
-    ) -> Result<Box<dyn DecoderSession>, DecoderError>;
-}
-
 /// Creates native-frame decoder sessions for one plugin.
 pub trait NativeDecoderPluginFactory: Send + Sync {
     fn name(&self) -> &str;
@@ -385,23 +306,6 @@ pub trait NativeDecoderPluginFactory: Send + Sync {
         &self,
         config: &DecoderSessionConfig,
     ) -> Result<Box<dyn NativeDecoderSession>, DecoderError>;
-}
-
-/// Stateful decoder session created by a decoder plugin factory.
-pub trait DecoderSession: Send {
-    fn session_info(&self) -> DecoderSessionInfo;
-
-    fn send_packet(
-        &mut self,
-        packet: &DecoderPacket,
-        data: &[u8],
-    ) -> Result<DecoderPacketResult, DecoderError>;
-
-    fn receive_frame(&mut self) -> Result<DecoderReceiveFrameOutput, DecoderError>;
-
-    fn flush(&mut self) -> Result<(), DecoderError>;
-
-    fn close(&mut self) -> Result<(), DecoderError>;
 }
 
 /// Stateful native-frame decoder session created by a v2 decoder plugin factory.

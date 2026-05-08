@@ -5,6 +5,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub mod download;
+
 use player_audio_cpal::{
     AudioOutputConfig, AudioOutputDescriptor, AudioSink, AudioSinkController, detect_default_output,
 };

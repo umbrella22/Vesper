@@ -13,6 +13,7 @@ enum PlayerBridgeFactory {
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        keepScreenOnDuringPlayback: Bool = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
     ) -> VesperPlayerController {
         switch defaultBackend {
@@ -24,7 +25,8 @@ enum PlayerBridgeFactory {
                     trackPreferencePolicy: trackPreferencePolicy,
                     preloadBudgetPolicy: preloadBudgetPolicy,
                     benchmarkConfiguration: benchmarkConfiguration
-                )
+                ),
+                keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
         case .rustNativeStub:
             VesperPlayerController(
@@ -34,7 +36,8 @@ enum PlayerBridgeFactory {
                     trackPreferencePolicy: trackPreferencePolicy,
                     preloadBudgetPolicy: preloadBudgetPolicy,
                     benchmarkConfiguration: benchmarkConfiguration
-                )
+                ),
+                keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
         }
     }
@@ -51,6 +54,7 @@ public enum VesperPlayerControllerFactory {
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+        keepScreenOnDuringPlayback: Bool = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
     ) -> VesperPlayerController {
         PlayerBridgeFactory.makeDefaultBridge(
@@ -58,6 +62,7 @@ public enum VesperPlayerControllerFactory {
             resiliencePolicy: resiliencePolicy,
             trackPreferencePolicy: trackPreferencePolicy,
             preloadBudgetPolicy: preloadBudgetPolicy,
+            keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
             benchmarkConfiguration: benchmarkConfiguration
         )
     }

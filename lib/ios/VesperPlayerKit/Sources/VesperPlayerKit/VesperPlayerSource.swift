@@ -1,11 +1,11 @@
 import Foundation
 
-public enum VesperPlayerSourceKind: String, Equatable {
+public enum VesperPlayerSourceKind: String, Equatable, Codable {
     case local
     case remote
 }
 
-public enum VesperPlayerSourceProtocol: String, Equatable {
+public enum VesperPlayerSourceProtocol: String, Equatable, Codable {
     case unknown
     case file
     case content
@@ -14,7 +14,7 @@ public enum VesperPlayerSourceProtocol: String, Equatable {
     case dash
 }
 
-public struct VesperPlayerSource: Equatable {
+public struct VesperPlayerSource: Equatable, Codable {
     public let uri: String
     public let label: String
     public let kind: VesperPlayerSourceKind

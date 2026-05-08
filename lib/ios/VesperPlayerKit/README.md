@@ -190,29 +190,30 @@ ABR behavior:
 
 ## Download Manager
 
-`VesperDownloadManager` supports single-file and segmented downloads.
+`VesperDownloadManager` supports single-file and segmented downloads. For remote
+VOD HLS, static DASH, and FLV inputs, the iOS host kit runs a native prepare
+phase before transfer starts. The prepare phase expands manifests or clip lists,
+resolves byte ranges, requires known remote byte totals, writes local rewritten
+manifests or concat lists, and publishes `AssetIndexUpdated` before download
+progress begins.
 
-Recommended flow for remote HLS:
+The default configuration also persists task snapshots, restores interrupted
+tasks on startup, and resumes partially written remote files with range requests
+when the server supports them. Pause, resume, and remove operations are keyed by
+`taskId`; host UI state should not merge tasks by URL. If a server ignores a
+resume range, the manager deletes only that partial resource and restarts the
+same resource from byte zero. Expired or unavailable URLs fail with a
+stale-resource error so the host can refresh the video link.
 
-1. Show an optimistic "preparing" entry in the UI when the user starts a download.
-2. Read the manifest in the background and build
-   `VesperDownloadAssetIndex(resources + segments)` plus a dedicated
-   `targetDirectory`.
-3. Call `createTask(...)` only after the source / profile / asset index are ready.
-
-Notes:
-
-- The foreground executor downloads `assetIndex.resources + assetIndex.segments`
-  together when both are provided.
-- Pause / resume / remove are keyed by `taskId`; do not merge tasks by URL in
-  host UI state.
-- The bundled iOS example wires this segmented flow for HLS only. DASH
-  download is not supported on the AVPlayer backend.
+This is an SDK-managed foreground executor, not an iOS background
+`URLSessionConfiguration.background` implementation. Hosts that need OS-managed
+process-death background transfer should own that background session layer and
+feed completed local assets back into the SDK.
 
 ## Optional FFmpeg Remux Plugin
 
 `exportTaskOutput(...)` uses an optional `player-remux-ffmpeg` dynamic plugin
-when the host wants to export downloaded HLS or DASH assets to `.mp4`. The
+when the host wants to export downloaded HLS, DASH, or FLV assets to `.mp4`. The
 host must embed a signed `libplayer_remux_ffmpeg.dylib` in the app bundle and
 pass its absolute path through `VesperDownloadConfiguration.pluginLibraryPaths`.
 

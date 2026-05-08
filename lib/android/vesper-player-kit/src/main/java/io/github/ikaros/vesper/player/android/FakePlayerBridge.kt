@@ -14,9 +14,11 @@ class FakePlayerBridge(
     trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
+    private var keepScreenOnDuringPlayback: Boolean = true,
     appContext: Context? = null,
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
+    private var attachedHost: ViewGroup? = null
     private val i18n = VesperPlayerI18n.fromContext(appContext)
     private val benchmarkRecorder = VesperBenchmarkRecorder(benchmarkConfiguration)
 
@@ -68,6 +70,7 @@ class FakePlayerBridge(
 
     override fun dispose() {
         recordBenchmark("dispose_command")
+        attachedHost?.keepScreenOn = false
         benchmarkRecorder.dispose()
     }
 
@@ -93,6 +96,8 @@ class FakePlayerBridge(
     }
 
     override fun attachSurfaceHost(host: ViewGroup) {
+        attachedHost?.keepScreenOn = false
+        attachedHost = host
         if (host.isEmpty()) {
             host.addView(
                 FrameLayout(host.context).apply {
@@ -104,9 +109,16 @@ class FakePlayerBridge(
                 ),
             )
         }
+        syncKeepScreenOn()
     }
 
-    override fun detachSurfaceHost(host: ViewGroup?) = Unit
+    override fun detachSurfaceHost(host: ViewGroup?) {
+        if (host != null && attachedHost !== host) {
+            return
+        }
+        attachedHost?.keepScreenOn = false
+        attachedHost = null
+    }
 
     override fun play() {
         recordBenchmark("play_command")
@@ -184,6 +196,11 @@ class FakePlayerBridge(
         _resiliencePolicy.value = policy
     }
 
+    override fun setKeepScreenOnDuringPlayback(enabled: Boolean) {
+        keepScreenOnDuringPlayback = enabled
+        syncKeepScreenOn()
+    }
+
     override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) = Unit
 
     override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) = Unit
@@ -198,6 +215,13 @@ class FakePlayerBridge(
 
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
+        syncKeepScreenOn()
+    }
+
+    private fun syncKeepScreenOn() {
+        attachedHost?.keepScreenOn =
+            keepScreenOnDuringPlayback &&
+            _uiState.value.playbackState == PlaybackStateUi.Playing
     }
 
     private fun recordBenchmark(

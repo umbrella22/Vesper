@@ -56,6 +56,11 @@ object VesperNativeJni {
         assetIndex: NativeDownloadAssetIndex,
         nowEpochMs: Long,
     ): Long
+    external fun restoreDownloadTasks(
+        sessionHandle: Long,
+        tasks: Array<NativeDownloadTask>,
+        nowEpochMs: Long,
+    ): Boolean
     external fun startDownloadTask(sessionHandle: Long, taskId: Long, nowEpochMs: Long): Boolean
     external fun pauseDownloadTask(sessionHandle: Long, taskId: Long, nowEpochMs: Long): Boolean
     external fun resumeDownloadTask(sessionHandle: Long, taskId: Long, nowEpochMs: Long): Boolean
@@ -70,6 +75,12 @@ object VesperNativeJni {
         sessionHandle: Long,
         taskId: Long,
         completedPath: String,
+        nowEpochMs: Long,
+    ): Boolean
+    external fun completeDownloadPreparation(
+        sessionHandle: Long,
+        taskId: Long,
+        assetIndex: NativeDownloadAssetIndex,
         nowEpochMs: Long,
     ): Boolean
     external fun exportDownloadTask(

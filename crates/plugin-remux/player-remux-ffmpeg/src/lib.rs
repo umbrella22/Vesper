@@ -4,7 +4,7 @@ mod muxer;
 use std::ffi::{CStr, c_char, c_void};
 
 use player_plugin::{
-    CompletedDownloadInfo, PostDownloadProcessor, ProcessorError, VESPER_PLUGIN_ABI_VERSION,
+    CompletedDownloadInfo, PostDownloadProcessor, ProcessorError, VESPER_PLUGIN_ABI_VERSION_V2,
     VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
     VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
 };
@@ -33,7 +33,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
             process_json: Some(processor_process_json),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION,
+            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
             plugin_kind: VesperPluginKind::PostDownloadProcessor,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
@@ -144,13 +144,13 @@ impl player_plugin::ProcessorProgress for CallbackProgress {
 #[cfg(test)]
 mod tests {
     use super::{decode_input, vesper_plugin_entry};
-    use player_plugin::{ProcessorError, VESPER_PLUGIN_ABI_VERSION, VesperPluginKind};
+    use player_plugin::{ProcessorError, VESPER_PLUGIN_ABI_VERSION_V2, VesperPluginKind};
 
     #[test]
     fn exported_descriptor_matches_expected_plugin_metadata() {
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
-        assert_eq!(descriptor.abi_version, VESPER_PLUGIN_ABI_VERSION);
+        assert_eq!(descriptor.abi_version, VESPER_PLUGIN_ABI_VERSION_V2);
         assert_eq!(
             descriptor.plugin_kind,
             VesperPluginKind::PostDownloadProcessor

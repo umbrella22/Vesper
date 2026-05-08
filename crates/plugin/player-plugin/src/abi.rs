@@ -240,7 +240,7 @@ unsafe impl Sync for VesperBenchmarkSinkApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperDecoderPluginApi::open_session_json`.
+/// Result returned by `VesperDecoderPluginApiV2::open_session_json`.
 ///
 /// When `status` is `Success`, `session` must be a plugin-owned opaque session
 /// pointer and `payload` may encode a `DecoderSessionInfo` JSON document. When
@@ -258,30 +258,6 @@ impl Default for VesperDecoderOpenSessionResult {
             status: VesperPluginResultStatus::Success,
             session: std::ptr::null_mut(),
             payload: VesperPluginBytes::null(),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperDecoderPluginApi::receive_frame`.
-///
-/// On success, `metadata` must encode a `DecoderReceiveFrameMetadata` JSON
-/// document. When that metadata reports a frame, `data` contains the CPU frame
-/// bytes referenced by its plane offsets. On failure, `metadata` must encode a
-/// `DecoderError` JSON document and `data` should be empty.
-pub struct VesperDecoderReceiveFrameResult {
-    pub status: VesperPluginResultStatus,
-    pub metadata: VesperPluginBytes,
-    pub data: VesperPluginBytes,
-}
-
-impl Default for VesperDecoderReceiveFrameResult {
-    fn default() -> Self {
-        Self {
-            status: VesperPluginResultStatus::Success,
-            metadata: VesperPluginBytes::null(),
-            data: VesperPluginBytes::null(),
         }
     }
 }
@@ -310,65 +286,6 @@ impl Default for VesperDecoderReceiveNativeFrameResult {
         }
     }
 }
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-/// C ABI exposed by a decoder plugin.
-///
-/// The v1 decoder ABI transfers compressed packet bytes from host to plugin as
-/// borrowed pointers and decoded CPU-frame bytes from plugin to host as
-/// `VesperPluginBytes`. GPU/native handles are intentionally capability-only in
-/// this ABI version.
-pub struct VesperDecoderPluginApi {
-    pub context: *mut c_void,
-    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
-    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
-    pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
-    pub open_session_json: Option<
-        unsafe extern "C" fn(
-            context: *mut c_void,
-            config_json: *const u8,
-            config_json_len: usize,
-        ) -> VesperDecoderOpenSessionResult,
-    >,
-    pub send_packet: Option<
-        unsafe extern "C" fn(
-            context: *mut c_void,
-            session: *mut c_void,
-            packet_json: *const u8,
-            packet_json_len: usize,
-            packet_data: *const u8,
-            packet_data_len: usize,
-        ) -> VesperPluginProcessResult,
-    >,
-    pub receive_frame: Option<
-        unsafe extern "C" fn(
-            context: *mut c_void,
-            session: *mut c_void,
-        ) -> VesperDecoderReceiveFrameResult,
-    >,
-    pub flush_session: Option<
-        unsafe extern "C" fn(
-            context: *mut c_void,
-            session: *mut c_void,
-        ) -> VesperPluginProcessResult,
-    >,
-    pub close_session: Option<
-        unsafe extern "C" fn(
-            context: *mut c_void,
-            session: *mut c_void,
-        ) -> VesperPluginProcessResult,
-    >,
-    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
-}
-
-// SAFETY: host-side wrappers only expose this API behind `DecoderPluginFactory`,
-// and plugin authors must uphold the declared `Send + Sync` contract for the
-// underlying context pointer and callbacks.
-unsafe impl Send for VesperDecoderPluginApi {}
-// SAFETY: same reasoning as above; the plugin context is required to be safe for
-// concurrent shared access when exposed as a decoder plugin.
-unsafe impl Sync for VesperDecoderPluginApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -454,9 +371,9 @@ pub struct VesperPluginDescriptor {
 /// Entry point exported by every plugin dynamic library.
 pub type VesperPluginEntryPoint = unsafe extern "C" fn() -> *const VesperPluginDescriptor;
 
-/// Current ABI version shared by the host and plugin crates.
-pub const VESPER_PLUGIN_ABI_VERSION: u32 = 1;
-/// Native-frame decoder plugin ABI version.
-pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = 3;
+/// Current ABI version shared by every plugin kind.
+pub const VESPER_PLUGIN_ABI_VERSION_V2: u32 = 2;
+/// Native-frame decoder plugins use the same v2 descriptor version as every other plugin kind.
+pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = VESPER_PLUGIN_ABI_VERSION_V2;
 /// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

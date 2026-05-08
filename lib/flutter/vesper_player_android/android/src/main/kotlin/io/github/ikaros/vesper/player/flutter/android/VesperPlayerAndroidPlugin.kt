@@ -39,10 +39,13 @@ import io.github.ikaros.vesper.player.android.VesperBufferingPreset
 import io.github.ikaros.vesper.player.android.VesperCachePolicy
 import io.github.ikaros.vesper.player.android.VesperCachePreset
 import io.github.ikaros.vesper.player.android.VesperDownloadAssetIndex
+import io.github.ikaros.vesper.player.android.VesperDownloadByteRange
 import io.github.ikaros.vesper.player.android.VesperDownloadConfiguration
 import io.github.ikaros.vesper.player.android.VesperDownloadContentFormat
 import io.github.ikaros.vesper.player.android.VesperDownloadError
+import io.github.ikaros.vesper.player.android.VesperDownloadEvent
 import io.github.ikaros.vesper.player.android.VesperDownloadManager
+import io.github.ikaros.vesper.player.android.VesperDownloadOutputFormat
 import io.github.ikaros.vesper.player.android.VesperDownloadProfile
 import io.github.ikaros.vesper.player.android.VesperDownloadProgressSnapshot
 import io.github.ikaros.vesper.player.android.VesperDownloadResourceRecord
@@ -71,6 +74,7 @@ import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackSelection
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionMode
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
+import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -118,7 +122,10 @@ class VesperPlayerAndroidPlugin :
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                     downloadEventSink = events
-                    downloadSessions.values.forEach(::emitDownloadSnapshot)
+                    downloadSessions.values.forEach { session ->
+                        emitDownloadSnapshot(session)
+                        emitDownloadRuntimeEvents(session)
+                    }
                 }
 
                 override fun onCancel(arguments: Any?) {
@@ -199,6 +206,7 @@ class VesperPlayerAndroidPlugin :
                 session.lastError = null
                 session.manager.refresh()
                 emitDownloadSnapshot(session)
+                emitDownloadRuntimeEvents(session)
                 null
             }
             "disposeDownloadManager" -> handleDownloadSessionCommand(call, result) { session ->
@@ -304,6 +312,14 @@ class VesperPlayerAndroidPlugin :
                 val policyMap = requireNestedMap(call.argumentMap(), "policy")
                 session.lastError = null
                 session.controller.setResiliencePolicy(policyMap.toResiliencePolicy())
+                emitSnapshot(session)
+                null
+            }
+            "setKeepScreenOnDuringPlayback" -> handleSessionCommand(call, result) { session ->
+                val enabled = call.argumentMap()["enabled"] as? Boolean
+                    ?: throw IllegalArgumentException("Missing enabled.")
+                session.lastError = null
+                session.controller.setKeepScreenOnDuringPlayback(enabled)
                 emitSnapshot(session)
                 null
             }
@@ -485,6 +501,8 @@ class VesperPlayerAndroidPlugin :
                     ?.toBenchmarkConfiguration()
                     ?: VesperBenchmarkConfiguration.Disabled
             val surfaceKind = arguments["renderSurfaceKind"].toNativeVideoSurfaceKind()
+            val keepScreenOnDuringPlayback =
+                arguments["keepScreenOnDuringPlayback"] as? Boolean ?: true
 
             val session = PlayerSession(
                 id = UUID.randomUUID().toString(),
@@ -499,6 +517,7 @@ class VesperPlayerAndroidPlugin :
                     preloadBudgetPolicy =
                         preloadBudgetPolicyMap?.stringMap()?.toPreloadBudgetPolicy()
                             ?: VesperPreloadBudgetPolicy(),
+                    keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                     benchmarkConfiguration = benchmarkConfiguration,
                     surfaceKind = surfaceKind,
                 ),
@@ -773,6 +792,7 @@ class VesperPlayerAndroidPlugin :
         session.observerJob = scope.launch {
             session.manager.snapshot.collect {
                 emitDownloadSnapshot(session)
+                emitDownloadRuntimeEvents(session)
             }
         }
     }
@@ -808,6 +828,23 @@ class VesperPlayerAndroidPlugin :
                 "snapshot" to buildDownloadSnapshotMap(session),
             ),
         )
+    }
+
+    private fun emitDownloadRuntimeEvents(session: DownloadSession) {
+        session.manager.drainEvents().forEach { event ->
+            when (event) {
+                is VesperDownloadEvent.AssetIndexUpdated -> {
+                    downloadEventSink?.success(
+                        mapOf(
+                            "downloadId" to session.id,
+                            "type" to "assetIndexUpdated",
+                            "task" to event.task.toMap(),
+                        ),
+                    )
+                }
+                else -> Unit
+            }
+        }
     }
 
     private fun emitDownloadError(session: DownloadSession, error: Throwable) {
@@ -1210,6 +1247,9 @@ private fun Map<String, Any?>.toDownloadConfiguration(): VesperDownloadConfigura
         autoStart = this["autoStart"] as? Boolean ?: true,
         runPostProcessorsOnCompletion =
             this["runPostProcessorsOnCompletion"] as? Boolean ?: true,
+        resumePartialDownloads = this["resumePartialDownloads"] as? Boolean ?: true,
+        restoreTasksOnStartup = this["restoreTasksOnStartup"] as? Boolean ?: true,
+        baseDirectory = (this["baseDirectory"] as? String)?.let(::File),
         pluginLibraryPaths =
             (this["pluginLibraryPaths"] as? List<*>)
                 ?.mapNotNull { value -> value?.toString() }
@@ -1223,6 +1263,7 @@ private fun Map<String, Any?>.toDownloadSource(): VesperDownloadSource =
             when (this["contentFormat"] as? String) {
                 "hlsSegments" -> VesperDownloadContentFormat.HlsSegments
                 "dashSegments" -> VesperDownloadContentFormat.DashSegments
+                "flvSegments" -> VesperDownloadContentFormat.FlvSegments
                 "singleFile" -> VesperDownloadContentFormat.SingleFile
                 else -> VesperDownloadContentFormat.Unknown
             },
@@ -1238,6 +1279,13 @@ private fun Map<String, Any?>.toDownloadProfile(): VesperDownloadProfile =
             (this["selectedTrackIds"] as? List<*>)
                 ?.mapNotNull { value -> value?.toString() }
                 ?: emptyList(),
+        targetOutputFormat =
+            when (this["targetOutputFormat"] as? String) {
+                "mp4" -> VesperDownloadOutputFormat.Mp4
+                "mkv" -> VesperDownloadOutputFormat.Mkv
+                "original" -> VesperDownloadOutputFormat.Original
+                else -> null
+            },
         targetDirectory = this["targetDirectory"] as? String,
         allowMeteredNetwork = this["allowMeteredNetwork"] as? Boolean ?: false,
     )
@@ -1248,6 +1296,7 @@ private fun Map<String, Any?>.toDownloadAssetIndex(): VesperDownloadAssetIndex =
             when (this["contentFormat"] as? String) {
                 "hlsSegments" -> VesperDownloadContentFormat.HlsSegments
                 "dashSegments" -> VesperDownloadContentFormat.DashSegments
+                "flvSegments" -> VesperDownloadContentFormat.FlvSegments
                 "singleFile" -> VesperDownloadContentFormat.SingleFile
                 else -> VesperDownloadContentFormat.Unknown
             },
@@ -1275,6 +1324,8 @@ private fun Map<String, Any?>.toDownloadResourceRecord(): VesperDownloadResource
         resourceId = this["resourceId"] as? String ?: "",
         uri = this["uri"] as? String ?: "",
         relativePath = this["relativePath"] as? String,
+        byteRange = (this["byteRange"] as? Map<*, *>)?.stringMap()?.toDownloadByteRange(),
+        generatedText = this["generatedText"] as? String,
         sizeBytes = (this["sizeBytes"] as? Number)?.toLong(),
         etag = this["etag"] as? String,
         checksum = this["checksum"] as? String,
@@ -1286,8 +1337,15 @@ private fun Map<String, Any?>.toDownloadSegmentRecord(): VesperDownloadSegmentRe
         uri = this["uri"] as? String ?: "",
         relativePath = this["relativePath"] as? String,
         sequence = (this["sequence"] as? Number)?.toLong(),
+        byteRange = (this["byteRange"] as? Map<*, *>)?.stringMap()?.toDownloadByteRange(),
         sizeBytes = (this["sizeBytes"] as? Number)?.toLong(),
         checksum = this["checksum"] as? String,
+    )
+
+private fun Map<String, Any?>.toDownloadByteRange(): VesperDownloadByteRange =
+    VesperDownloadByteRange(
+        offset = (this["offset"] as? Number)?.toLong() ?: 0L,
+        length = (this["length"] as? Number)?.toLong() ?: 0L,
     )
 
 private fun Map<String, Any?>.toTrackSelection(): VesperTrackSelection =
@@ -1718,6 +1776,7 @@ private fun VesperDownloadProfile.toMap(): Map<String, Any?> =
         "preferredAudioLanguage" to preferredAudioLanguage,
         "preferredSubtitleLanguage" to preferredSubtitleLanguage,
         "selectedTrackIds" to selectedTrackIds,
+        "targetOutputFormat" to targetOutputFormat?.toWireName(),
         "targetDirectory" to targetDirectory,
         "allowMeteredNetwork" to allowMeteredNetwork,
     )
@@ -1747,6 +1806,8 @@ private fun VesperDownloadResourceRecord.toMap(): Map<String, Any?> =
         "resourceId" to resourceId,
         "uri" to uri,
         "relativePath" to relativePath,
+        "byteRange" to byteRange?.toMap(),
+        "generatedText" to generatedText,
         "sizeBytes" to sizeBytes,
         "etag" to etag,
         "checksum" to checksum,
@@ -1758,8 +1819,15 @@ private fun VesperDownloadSegmentRecord.toMap(): Map<String, Any?> =
         "uri" to uri,
         "relativePath" to relativePath,
         "sequence" to sequence,
+        "byteRange" to byteRange?.toMap(),
         "sizeBytes" to sizeBytes,
         "checksum" to checksum,
+    )
+
+private fun VesperDownloadByteRange.toMap(): Map<String, Any?> =
+    mapOf(
+        "offset" to offset,
+        "length" to length,
     )
 
 private fun VesperDownloadError.toMap(): Map<String, Any?> =
@@ -1785,8 +1853,16 @@ private fun VesperDownloadContentFormat.toWireName(): String =
     when (this) {
         VesperDownloadContentFormat.HlsSegments -> "hlsSegments"
         VesperDownloadContentFormat.DashSegments -> "dashSegments"
+        VesperDownloadContentFormat.FlvSegments -> "flvSegments"
         VesperDownloadContentFormat.SingleFile -> "singleFile"
         VesperDownloadContentFormat.Unknown -> "unknown"
+    }
+
+private fun VesperDownloadOutputFormat.toWireName(): String =
+    when (this) {
+        VesperDownloadOutputFormat.Mp4 -> "mp4"
+        VesperDownloadOutputFormat.Mkv -> "mkv"
+        VesperDownloadOutputFormat.Original -> "original"
     }
 
 private const val METHOD_CHANNEL_NAME = "io.github.ikaros.vesper_player"

@@ -111,6 +111,40 @@ void main() {
     );
   });
 
+  test('createPlayer forwards disabled keep-screen-on policy', () async {
+    final platform = MethodChannelVesperPlayerIos();
+
+    await platform.createPlayer(keepScreenOnDuringPlayback: false);
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'createPlayer');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{
+        'initialSource': null,
+        'renderSurfaceKind': VesperPlayerRenderSurfaceKind.auto.name,
+        'resiliencePolicy': const VesperPlaybackResiliencePolicy().toMap(),
+        'keepScreenOnDuringPlayback': false,
+      },
+    );
+  });
+
+  test('setKeepScreenOnDuringPlayback forwards player id and flag', () async {
+    final platform = MethodChannelVesperPlayerIos();
+
+    await platform.setKeepScreenOnDuringPlayback('ios-player', false);
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'setKeepScreenOnDuringPlayback');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'ios-player',
+        'enabled': false,
+      },
+    );
+  });
+
   test(
     'setResiliencePolicy preserves explicit unlimited retry override',
     () async {

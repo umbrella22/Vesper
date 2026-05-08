@@ -216,7 +216,7 @@ private class FakeDownloadBindings(
                 assetId = assetId,
                 source = source,
                 profile = profile,
-                statusOrdinal = if (autoStart) 2 else 0,
+                statusOrdinal = if (autoStart) 1 else 0,
                 progress =
                     NativeDownloadProgress(
                         receivedBytes = 0L,
@@ -237,16 +237,54 @@ private class FakeDownloadBindings(
         events += NativeDownloadEvent.Created(task)
         events += NativeDownloadEvent.StateChanged(task)
         if (autoStart) {
-            commands += NativeDownloadCommand.Start(task)
+            commands += NativeDownloadCommand.Prepare(task)
         }
         return taskId
     }
 
+    override fun restoreDownloadTasks(
+        sessionHandle: Long,
+        tasks: Array<NativeDownloadTask>,
+        nowEpochMs: Long,
+    ): Boolean {
+        tasks.forEach { task ->
+            this.tasks[task.taskId] = task
+            nextTaskId = maxOf(nextTaskId, task.taskId + 1)
+        }
+        return true
+    }
+
     override fun startDownloadTask(sessionHandle: Long, taskId: Long, nowEpochMs: Long): Boolean =
         updateTask(taskId) { task ->
-            task.withStatus(statusOrdinal = 2).also { updated ->
-                commands += NativeDownloadCommand.Start(updated)
+            task.withStatus(statusOrdinal = 1).also { updated ->
+                commands += NativeDownloadCommand.Prepare(updated)
                 events += NativeDownloadEvent.StateChanged(updated)
+            }
+        }
+
+    override fun completeDownloadPreparation(
+        sessionHandle: Long,
+        taskId: Long,
+        assetIndex: NativeDownloadAssetIndex,
+        nowEpochMs: Long,
+    ): Boolean =
+        updateTask(taskId) { task ->
+            task.withStatus(
+                statusOrdinal = 2,
+                progress =
+                    NativeDownloadProgress(
+                        receivedBytes = 0L,
+                        hasTotalBytes = assetIndex.hasTotalSizeBytes,
+                        totalBytes = assetIndex.totalSizeBytes,
+                        receivedSegments = 0,
+                        hasTotalSegments = assetIndex.segments.isNotEmpty(),
+                        totalSegments = assetIndex.segments.size,
+                    ),
+                assetIndex = assetIndex,
+            ).also { updated ->
+                events += NativeDownloadEvent.AssetIndexUpdated(updated)
+                events += NativeDownloadEvent.StateChanged(updated)
+                commands += NativeDownloadCommand.Start(updated)
             }
         }
 

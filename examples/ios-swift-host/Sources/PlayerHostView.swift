@@ -1,6 +1,8 @@
 import AVFoundation
+import CoreTransferable
 import MediaPlayer
 import Photos
+import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -16,7 +18,8 @@ struct PlayerHostView: View {
     @StateObject private var downloadManager: VesperDownloadManager
     @StateObject private var deviceControls = ExampleIOSDeviceControls()
     @State private var pendingSeekRatio: Double?
-    @State private var isVideoImporterPresented = false
+    @State private var isVideoPickerPresented = false
+    @State private var selectedVideoItem: PhotosPickerItem?
     @State private var hostMessage: String?
     @State private var downloadMessage: String?
     @State private var downloadAlertMessage: String?
@@ -208,23 +211,22 @@ struct PlayerHostView: View {
         .onChange(of: pendingSeekRatio) { _, _ in
             scheduleControlsAutoHide(for: controller.uiState)
         }
-        .fileImporter(
-            isPresented: $isVideoImporterPresented,
-            allowedContentTypes: [.movie, .video],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case let .success(urls):
-                guard let url = urls.first else { return }
-                hostMessage = ExampleI18n.preparingSelectedVideo
-                Task(priority: .userInitiated) {
-                    try? await Task.sleep(for: .milliseconds(120))
-                    await handleImportedVideo(url)
+        .photosPicker(
+            isPresented: $isVideoPickerPresented,
+            selection: $selectedVideoItem,
+            matching: .videos,
+            photoLibrary: .shared()
+        )
+        .onChange(of: selectedVideoItem) { _, item in
+            guard let item else {
+                return
+            }
+            hostMessage = ExampleI18n.preparingVideoFromPhotos
+            Task(priority: .userInitiated) {
+                await handlePickedVideo(item)
+                await MainActor.run {
+                    selectedVideoItem = nil
                 }
-            case let .failure(error):
-                let nsError = error as NSError
-                guard nsError.code != NSUserCancelledError else { return }
-                hostMessage = ExampleI18n.failedToLoadSelectedLocalVideo(error.localizedDescription)
             }
         }
         .sheet(item: $activeSheet) { sheet in
@@ -524,10 +526,6 @@ struct PlayerHostView: View {
         source: VesperPlayerSource
     ) {
         let assetId = "\(assetIdPrefix)-\(Int(Date().timeIntervalSince1970 * 1000.0))"
-        if source.protocol == .dash {
-            downloadMessage = ExampleI18n.dashNotSupportedOnIos
-            return
-        }
 
         pendingDownloadTasks.append(
             ExamplePendingDownloadTask(
@@ -591,7 +589,8 @@ struct PlayerHostView: View {
 
         let needsExport =
             task.source.contentFormat == .hlsSegments ||
-            task.source.contentFormat == .dashSegments
+            task.source.contentFormat == .dashSegments ||
+            task.source.contentFormat == .flvSegments
         guard !needsExport || isDownloadExportPluginInstalled else {
             downloadAlertMessage = ExampleI18n.downloadExportPluginMissing
             return
@@ -646,7 +645,7 @@ struct PlayerHostView: View {
 
     private func pickVideo() {
         hostMessage = nil
-        isVideoImporterPresented = true
+        isVideoPickerPresented = true
     }
 
     private func setFullscreen(_ fullscreen: Bool) {
@@ -761,13 +760,15 @@ struct PlayerHostView: View {
         playlistCoordinator.handlePlaybackCompleted()
     }
 
-    private func handleImportedVideo(_ url: URL) async {
+    private func handlePickedVideo(_ item: PhotosPickerItem) async {
         do {
-            let persisted = try persistImportedVideoFile(from: url)
+            guard let imported = try await item.loadTransferable(type: ImportedVideoTransferable.self) else {
+                throw ExampleVideoImportError.noVideoFile
+            }
             await MainActor.run {
                 hostMessage = nil
-                exampleIosHostLog("picked local video url=\(persisted.url.absoluteString)")
-                queuedLocalSource = .localFile(url: persisted.url, label: persisted.label)
+                exampleIosHostLog("picked local video url=\(imported.url.absoluteString)")
+                queuedLocalSource = .localFile(url: imported.url, label: imported.label)
                 let nextPlaylistItemIds = enqueuePlaylistItem(
                     playlistItemIds,
                     itemId: IOS_LOCAL_PLAYLIST_ITEM_ID
@@ -780,36 +781,10 @@ struct PlayerHostView: View {
             }
         } catch {
             await MainActor.run {
-                hostMessage = ExampleI18n.failedToLoadSelectedLocalVideo(error.localizedDescription)
+                hostMessage = ExampleI18n.failedToLoadSelectedPhotoVideo(error.localizedDescription)
                 exampleIosHostLog("picked local video failed: \(error.localizedDescription)")
             }
         }
-    }
-
-    private func persistImportedVideoFile(from url: URL) throws -> (url: URL, label: String) {
-        let startedSecurityScope = url.startAccessingSecurityScopedResource()
-        defer {
-            if startedSecurityScope {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        let fileExtension = url.pathExtension.isEmpty ? "mov" : url.pathExtension
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(fileExtension)
-
-        if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
-        }
-
-        do {
-            try FileManager.default.copyItem(at: url, to: destination)
-        } catch {
-            throw error
-        }
-
-        return (destination, url.lastPathComponent)
     }
 
     private func saveVideoToPhotoLibrary(completedPath: String) async throws {
@@ -943,6 +918,43 @@ private struct ExampleHiddenVolumeView: UIViewRepresentable {
 private extension UIWindowScene {
     var keyWindow: UIWindow? {
         windows.first(where: \.isKeyWindow)
+    }
+}
+
+private struct ImportedVideoTransferable: Transferable {
+    let url: URL
+    let label: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { video in
+            SentTransferredFile(video.url)
+        } importing: { received in
+            let fileExtension = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(fileExtension)
+
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: received.file, to: destination)
+
+            let label = received.file.lastPathComponent.isEmpty
+                ? destination.lastPathComponent
+                : received.file.lastPathComponent
+            return ImportedVideoTransferable(url: destination, label: label)
+        }
+    }
+}
+
+private enum ExampleVideoImportError: LocalizedError {
+    case noVideoFile
+
+    var errorDescription: String? {
+        switch self {
+        case .noVideoFile:
+            return ExampleI18n.failedToLoadSelectedVideoFromPhotos
+        }
     }
 }
 

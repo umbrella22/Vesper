@@ -268,9 +268,16 @@ typedef struct PlayerFfiDownloadConfig {
 typedef enum PlayerFfiDownloadContentFormat {
   PlayerFfiDownloadContentFormatHlsSegments = 0,
   PlayerFfiDownloadContentFormatDashSegments = 1,
-  PlayerFfiDownloadContentFormatSingleFile = 2,
-  PlayerFfiDownloadContentFormatUnknown = 3,
+  PlayerFfiDownloadContentFormatFlvSegments = 2,
+  PlayerFfiDownloadContentFormatSingleFile = 3,
+  PlayerFfiDownloadContentFormatUnknown = 4,
 } PlayerFfiDownloadContentFormat;
+
+typedef enum PlayerFfiDownloadOutputFormat {
+  PlayerFfiDownloadOutputFormatMp4 = 0,
+  PlayerFfiDownloadOutputFormatMkv = 1,
+  PlayerFfiDownloadOutputFormatOriginal = 2,
+} PlayerFfiDownloadOutputFormat;
 
 typedef struct PlayerFfiDownloadSource {
   char *source_uri;
@@ -284,14 +291,24 @@ typedef struct PlayerFfiDownloadProfile {
   char *preferred_subtitle_language;
   char **selected_track_ids;
   uintptr_t selected_track_ids_len;
+  bool has_target_output_format;
+  PlayerFfiDownloadOutputFormat target_output_format;
   char *target_directory;
   bool allow_metered_network;
 } PlayerFfiDownloadProfile;
+
+typedef struct PlayerFfiDownloadByteRange {
+  uint64_t offset;
+  uint64_t length;
+} PlayerFfiDownloadByteRange;
 
 typedef struct PlayerFfiDownloadResourceRecord {
   char *resource_id;
   char *uri;
   char *relative_path;
+  bool has_byte_range;
+  PlayerFfiDownloadByteRange byte_range;
+  char *generated_text;
   bool has_size_bytes;
   uint64_t size_bytes;
   char *etag;
@@ -304,6 +321,8 @@ typedef struct PlayerFfiDownloadSegmentRecord {
   char *relative_path;
   bool has_sequence;
   uint64_t sequence;
+  bool has_byte_range;
+  PlayerFfiDownloadByteRange byte_range;
   bool has_size_bytes;
   uint64_t size_bytes;
   char *checksum;
@@ -363,10 +382,11 @@ typedef struct PlayerFfiDownloadSnapshot {
 } PlayerFfiDownloadSnapshot;
 
 typedef enum PlayerFfiDownloadCommandKind {
-  PlayerFfiDownloadCommandKindStart = 0,
-  PlayerFfiDownloadCommandKindPause = 1,
-  PlayerFfiDownloadCommandKindResume = 2,
-  PlayerFfiDownloadCommandKindRemove = 3,
+  PlayerFfiDownloadCommandKindPrepare = 0,
+  PlayerFfiDownloadCommandKindStart = 1,
+  PlayerFfiDownloadCommandKindPause = 2,
+  PlayerFfiDownloadCommandKindResume = 3,
+  PlayerFfiDownloadCommandKindRemove = 4,
 } PlayerFfiDownloadCommandKind;
 
 typedef struct PlayerFfiDownloadCommand {
@@ -383,7 +403,8 @@ typedef struct PlayerFfiDownloadCommandList {
 typedef enum PlayerFfiDownloadEventKind {
   PlayerFfiDownloadEventKindCreated = 0,
   PlayerFfiDownloadEventKindStateChanged = 1,
-  PlayerFfiDownloadEventKindProgressUpdated = 2,
+  PlayerFfiDownloadEventKindAssetIndexUpdated = 2,
+  PlayerFfiDownloadEventKindProgressUpdated = 3,
 } PlayerFfiDownloadEventKind;
 
 typedef struct PlayerFfiDownloadEvent {
@@ -518,6 +539,12 @@ extern PlayerFfiCallStatus player_ffi_download_session_create_task(
     uint64_t *out_task_id,
     PlayerFfiError *out_error);
 
+extern PlayerFfiCallStatus player_ffi_download_session_restore_tasks(
+    uint64_t handle,
+    const PlayerFfiDownloadTask *tasks,
+    uintptr_t tasks_len,
+    PlayerFfiError *out_error);
+
 extern PlayerFfiCallStatus player_ffi_download_session_start_task(
     uint64_t handle,
     uint64_t task_id,
@@ -544,6 +571,12 @@ extern PlayerFfiCallStatus player_ffi_download_session_complete_task(
     uint64_t handle,
     uint64_t task_id,
     const char *completed_path,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_download_session_complete_preparation(
+    uint64_t handle,
+    uint64_t task_id,
+    const PlayerFfiDownloadAssetIndex *asset_index,
     PlayerFfiError *out_error);
 
 extern PlayerFfiCallStatus player_ffi_download_session_export_task(
@@ -1431,6 +1464,25 @@ bool vesper_runtime_download_session_create_task(
       &ffi_error);
 }
 
+bool vesper_runtime_download_session_restore_tasks(
+    uint64_t handle,
+    const VesperRuntimeDownloadTask *tasks,
+    size_t tasks_len) {
+  if (tasks_len > 0 && tasks == NULL) {
+    return false;
+  }
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  return call_playlist_status(
+      player_ffi_download_session_restore_tasks(
+          handle,
+          (const PlayerFfiDownloadTask *)tasks,
+          (uintptr_t)tasks_len,
+          &ffi_error),
+      &ffi_error);
+}
+
 bool vesper_runtime_download_session_start_task(
     uint64_t handle,
     uint64_t task_id) {
@@ -1489,6 +1541,25 @@ bool vesper_runtime_download_session_complete_task(
           handle,
           task_id,
           completed_path,
+          &ffi_error),
+      &ffi_error);
+}
+
+bool vesper_runtime_download_session_complete_preparation(
+    uint64_t handle,
+    uint64_t task_id,
+    const VesperRuntimeDownloadAssetIndex *asset_index) {
+  if (asset_index == NULL) {
+    return false;
+  }
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  return call_playlist_status(
+      player_ffi_download_session_complete_preparation(
+          handle,
+          task_id,
+          (const PlayerFfiDownloadAssetIndex *)asset_index,
           &ffi_error),
       &ffi_error);
 }

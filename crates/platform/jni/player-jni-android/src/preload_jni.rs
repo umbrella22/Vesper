@@ -49,7 +49,7 @@ fn with_preload_session_mut<R>(
         session
     };
 
-    // 持有 session 锁期间禁止回调 Java，避免同一预加载 session 发生重入阻塞。
+    // Do not call back into Java while the session lock is held; the same preload session could reenter.
     let mut session = lock_or_recover(session.as_ref());
     Some(f(&mut session))
 }

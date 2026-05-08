@@ -48,7 +48,7 @@ fn with_playlist_session_mut<R>(
         session
     };
 
-    // 持有 session 锁期间不要回调 Java，也不要触发会重入 JNI 的析构链路。
+    // Do not call back into Java or trigger JNI-reentrant teardown while the session lock is held.
     let mut session = lock_or_recover(session.as_ref());
     Some(f(&mut session))
 }

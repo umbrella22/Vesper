@@ -72,6 +72,7 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
   });
@@ -125,6 +126,15 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     String playerId,
     VesperPlaybackResiliencePolicy policy,
   );
+
+  Future<void> setKeepScreenOnDuringPlayback(
+    String playerId,
+    bool enabled,
+  ) async {
+    throw UnimplementedError(
+      'setKeepScreenOnDuringPlayback() has not been implemented.',
+    );
+  }
 
   Future<void> updateViewport(String playerId, VesperPlayerViewport viewport);
 
@@ -208,6 +218,7 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
         const VesperTrackPreferencePolicy(),
     VesperPreloadBudgetPolicy preloadBudgetPolicy =
         const VesperPreloadBudgetPolicy(),
+    bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
   }) async {

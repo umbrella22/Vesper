@@ -1,6 +1,9 @@
-use std::collections::{HashMap, HashSet};
+//! Desktop SDK-managed offline download support shared by macOS, Windows, and Linux hosts.
+
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -10,25 +13,47 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
+use player_download::{DownloadPlanner, DownloadPlanningClient};
 use player_model::{MediaSource, MediaSourceProtocol};
 use player_plugin::{
-    CompletedContentFormat, CompletedDownloadInfo, DownloadMetadata, PostDownloadProcessor,
-    ProcessorOutput, ProcessorProgress,
+    CompletedContentFormat, CompletedDownloadInfo, DownloadMetadata, OutputFormat,
+    PostDownloadProcessor, ProcessorOutput, ProcessorProgress,
 };
 use player_remux_ffmpeg::FfmpegRemuxProcessor;
 use player_runtime::{
-    DownloadAssetIndex, DownloadContentFormat, DownloadManager, DownloadManagerConfig,
-    DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord,
+    DownloadAssetIndex, DownloadByteRange, DownloadContentFormat, DownloadManager,
+    DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot,
     DownloadSource, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus,
     DownloadTaskStatus::Completed, InMemoryDownloadStore, PlayerRuntimeError,
     PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
 };
-use quick_xml::Reader;
-use quick_xml::events::{BytesStart, Event};
 
 const CURL_BIN: &str = "curl";
-const DOWNLOAD_ROOT_DIR: &str = "vesper-basic-player-downloads";
+const DOWNLOAD_ROOT_DIR: &str = "vesper-desktop-downloads";
 const CURL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DesktopDownloadPlanningClient;
+
+impl DownloadPlanningClient for DesktopDownloadPlanningClient {
+    fn fetch_text(&self, uri: &str) -> player_runtime::PlayerRuntimeResult<String> {
+        fetch_remote_text(uri).map_err(|error| source_error(error.to_string()))
+    }
+
+    fn content_length(&self, uri: &str) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+        if let Some(local_path) = local_path_from_uri(uri) {
+            return fs::metadata(&local_path)
+                .map(|metadata| Some(metadata.len()))
+                .map_err(|error| {
+                    source_error(format!(
+                        "failed to inspect local resource `{}`: {error}",
+                        local_path.display()
+                    ))
+                });
+        }
+        probe_remote_content_length(uri)
+    }
+}
 #[derive(Debug, Clone)]
 pub struct PreparedDownloadTask {
     pub source: DownloadSource,
@@ -54,6 +79,9 @@ pub struct DesktopDownloadPollResult {
 struct DownloadWorkItem {
     uri: String,
     target_path: PathBuf,
+    byte_range: Option<DownloadByteRange>,
+    generated_text: Option<String>,
+    expected_size_bytes: Option<u64>,
     counts_as_segment: bool,
 }
 
@@ -129,7 +157,10 @@ impl DesktopDownloadExecutor {
 }
 
 impl player_runtime::DownloadExecutor for DesktopDownloadExecutor {
-    fn prepare(&mut self, task: &DownloadTaskSnapshot) -> player_runtime::PlayerRuntimeResult<()> {
+    fn prepare(
+        &mut self,
+        task: &DownloadTaskSnapshot,
+    ) -> player_runtime::PlayerRuntimeResult<DownloadPrepareResult> {
         if let Some(target_directory) = task.profile.target_directory.as_ref() {
             fs::create_dir_all(target_directory).map_err(|error| {
                 source_error(format!(
@@ -138,7 +169,7 @@ impl player_runtime::DownloadExecutor for DesktopDownloadExecutor {
                 ))
             })?;
         }
-        Ok(())
+        Ok(DownloadPrepareResult::Ready(None))
     }
 
     fn start(&mut self, task: &DownloadTaskSnapshot) -> player_runtime::PlayerRuntimeResult<()> {
@@ -176,7 +207,7 @@ impl DesktopDownloadController {
         Self::with_post_processor(Arc::new(FfmpegRemuxProcessor::new()))
     }
 
-    fn with_post_processor(processor: Arc<dyn PostDownloadProcessor>) -> Self {
+    pub fn with_post_processor(processor: Arc<dyn PostDownloadProcessor>) -> Self {
         let (worker_tx, worker_rx) = mpsc::channel();
         let (export_tx, export_rx) = mpsc::channel();
         let manager = DownloadManager::new(
@@ -500,14 +531,38 @@ pub fn prepare_download_task(
         )
     })?;
 
-    match resolved_download_content_format(source) {
-        DownloadContentFormat::HlsSegments => {
-            prepare_hls_download_task(asset_id, source, source_label, target_directory)
+    let content_format = resolved_download_content_format(source);
+    let download_source = DownloadSource::new(source.clone(), content_format);
+    let profile = DownloadProfile {
+        target_output_format: default_desktop_output_format(content_format, source.uri()),
+        target_directory: Some(target_directory),
+        ..DownloadProfile::default()
+    };
+    let asset_index =
+        DownloadPlanner::new(DesktopDownloadPlanningClient).plan(&download_source, &profile)?;
+
+    Ok(PreparedDownloadTask {
+        source: download_source,
+        profile,
+        asset_index,
+        resolved_label: draft_download_label(source_label, source.uri()),
+    })
+}
+
+fn default_desktop_output_format(
+    content_format: DownloadContentFormat,
+    source_uri: &str,
+) -> Option<OutputFormat> {
+    match content_format {
+        DownloadContentFormat::HlsSegments
+        | DownloadContentFormat::DashSegments
+        | DownloadContentFormat::FlvSegments => Some(OutputFormat::Mp4),
+        DownloadContentFormat::SingleFile
+            if uri_extension(source_uri).as_deref() == Some("flv") =>
+        {
+            Some(OutputFormat::Mp4)
         }
-        DownloadContentFormat::DashSegments => {
-            prepare_dash_download_task(asset_id, source, source_label, target_directory)
-        }
-        _ => prepare_single_file_download_task(source, source_label, target_directory),
+        DownloadContentFormat::SingleFile | DownloadContentFormat::Unknown => None,
     }
 }
 
@@ -515,219 +570,29 @@ fn resolved_download_content_format(source: &MediaSource) -> DownloadContentForm
     match source.protocol() {
         MediaSourceProtocol::Hls => DownloadContentFormat::HlsSegments,
         MediaSourceProtocol::Dash => DownloadContentFormat::DashSegments,
-        _ => local_manifest_download_content_format(source.uri())
-            .unwrap_or(DownloadContentFormat::SingleFile),
+        _ => uri_download_content_format(source.uri()).unwrap_or(DownloadContentFormat::SingleFile),
     }
 }
 
-fn local_manifest_download_content_format(uri: &str) -> Option<DownloadContentFormat> {
-    let extension = local_path_from_uri(uri)?
-        .extension()
-        .and_then(OsStr::to_str)?
-        .to_ascii_lowercase();
-    match extension.as_str() {
+fn uri_download_content_format(uri: &str) -> Option<DownloadContentFormat> {
+    match uri_extension(uri)?.as_str() {
         "m3u8" => Some(DownloadContentFormat::HlsSegments),
         "mpd" => Some(DownloadContentFormat::DashSegments),
+        "flv" | "ffconcat" => Some(DownloadContentFormat::FlvSegments),
         _ => None,
     }
 }
 
-fn prepare_single_file_download_task(
-    source: &MediaSource,
-    source_label: &str,
-    target_directory: PathBuf,
-) -> Result<PreparedDownloadTask> {
-    let file_name = single_file_name_for_uri(source.uri());
-    let mut index = DownloadAssetIndex {
-        content_format: DownloadContentFormat::SingleFile,
-        ..DownloadAssetIndex::default()
-    };
-    let mut resource = DownloadResourceRecord {
-        resource_id: file_name.clone(),
-        uri: source.uri().to_owned(),
-        relative_path: Some(PathBuf::from(&file_name)),
-        size_bytes: None,
-        etag: None,
-        checksum: None,
-    };
-
-    if let Some(local_path) = local_path_from_uri(source.uri()) {
-        resource.size_bytes = fs::metadata(local_path).ok().map(|metadata| metadata.len());
-    }
-    index.resources.push(resource);
-    index.total_size_bytes = index.inferred_total_size_bytes();
-
-    Ok(PreparedDownloadTask {
-        source: DownloadSource::new(source.clone(), DownloadContentFormat::SingleFile),
-        profile: DownloadProfile {
-            target_directory: Some(target_directory),
-            ..DownloadProfile::default()
-        },
-        asset_index: index,
-        resolved_label: draft_download_label(source_label, source.uri()),
-    })
-}
-
-fn prepare_hls_download_task(
-    _asset_id: &str,
-    source: &MediaSource,
-    source_label: &str,
-    target_directory: PathBuf,
-) -> Result<PreparedDownloadTask> {
-    let manifest_uri = source.uri().to_owned();
-    let manifest_text = fetch_remote_text(&manifest_uri)?;
-    let mut resources = Vec::new();
-    let mut resource_ids = HashSet::new();
-    let mut segments = Vec::new();
-    let mut segment_ids = HashSet::new();
-
-    add_resource_record(&mut resources, &mut resource_ids, &manifest_uri);
-
-    if let Some(master) = parse_hls_master_manifest(&manifest_text, &manifest_uri) {
-        add_resource_record(
-            &mut resources,
-            &mut resource_ids,
-            &master.variant_playlist_uri,
-        );
-        if let Some(audio_playlist_uri) = master.audio_playlist_uri.as_ref() {
-            add_resource_record(&mut resources, &mut resource_ids, audio_playlist_uri);
-        }
-
-        let video_playlist_text = fetch_remote_text(&master.variant_playlist_uri)?;
-        collect_hls_media_playlist_entries(
-            &video_playlist_text,
-            &master.variant_playlist_uri,
-            &mut resources,
-            &mut resource_ids,
-            &mut segments,
-            &mut segment_ids,
-        );
-
-        if let Some(audio_playlist_uri) = master.audio_playlist_uri {
-            let audio_playlist_text = fetch_remote_text(&audio_playlist_uri)?;
-            collect_hls_media_playlist_entries(
-                &audio_playlist_text,
-                &audio_playlist_uri,
-                &mut resources,
-                &mut resource_ids,
-                &mut segments,
-                &mut segment_ids,
-            );
-        }
-    } else {
-        collect_hls_media_playlist_entries(
-            &manifest_text,
-            &manifest_uri,
-            &mut resources,
-            &mut resource_ids,
-            &mut segments,
-            &mut segment_ids,
-        );
-    }
-
-    Ok(PreparedDownloadTask {
-        source: DownloadSource::new(source.clone(), DownloadContentFormat::HlsSegments)
-            .with_manifest_uri(&manifest_uri),
-        profile: DownloadProfile {
-            target_directory: Some(target_directory),
-            ..DownloadProfile::default()
-        },
-        asset_index: DownloadAssetIndex {
-            content_format: DownloadContentFormat::HlsSegments,
-            resources,
-            segments,
-            ..DownloadAssetIndex::default()
-        },
-        resolved_label: draft_download_label(source_label, source.uri()),
-    })
-}
-
-fn prepare_dash_download_task(
-    _asset_id: &str,
-    source: &MediaSource,
-    source_label: &str,
-    target_directory: PathBuf,
-) -> Result<PreparedDownloadTask> {
-    let manifest_uri = source.uri().to_owned();
-    let manifest_text = fetch_remote_text(&manifest_uri)?;
-    let presentation_duration_seconds = parse_iso8601_duration_seconds(
-        attribute_from_start_tag(&manifest_text, "MPD", "mediaPresentationDuration").as_deref(),
-    );
-    let adaptation_sets = parse_dash_adaptation_sets(&manifest_text)?;
-
-    let mut resources = Vec::new();
-    let mut resource_ids = HashSet::new();
-    let mut segments = Vec::new();
-    let mut segment_ids = HashSet::new();
-
-    add_resource_record(&mut resources, &mut resource_ids, &manifest_uri);
-    let mut next_sequence = 0_u64;
-
-    for adaptation in adaptation_sets {
-        if !adaptation.mime_type.starts_with("video/")
-            && !adaptation.mime_type.starts_with("audio/")
-        {
-            continue;
-        }
-        let Some(duration) = adaptation.segment_template.duration else {
-            continue;
-        };
-        if duration == 0 {
-            continue;
-        }
-        let representation_id = adaptation.representation_id;
-        let timescale = adaptation.segment_template.timescale.unwrap_or(1);
-        let start_number = adaptation.segment_template.start_number.unwrap_or(1);
-        let segment_count = presentation_duration_seconds
-            .map(|seconds| ((seconds * timescale as f64) / duration as f64).ceil() as u64)
-            .unwrap_or(1)
-            .max(1);
-
-        let initialization_uri = manifest_uri_resolve(
-            &manifest_uri,
-            &replace_representation_tokens(
-                &adaptation.segment_template.initialization,
-                &representation_id,
-                start_number,
-            ),
-        )?;
-        add_resource_record(&mut resources, &mut resource_ids, &initialization_uri);
-
-        for offset in 0..segment_count {
-            let segment_number = start_number + offset;
-            let segment_uri = manifest_uri_resolve(
-                &manifest_uri,
-                &replace_representation_tokens(
-                    &adaptation.segment_template.media,
-                    &representation_id,
-                    segment_number,
-                ),
-            )?;
-            add_segment_record(
-                &mut segments,
-                &mut segment_ids,
-                &segment_uri,
-                Some(next_sequence),
-            );
-            next_sequence += 1;
-        }
-    }
-
-    Ok(PreparedDownloadTask {
-        source: DownloadSource::new(source.clone(), DownloadContentFormat::DashSegments)
-            .with_manifest_uri(&manifest_uri),
-        profile: DownloadProfile {
-            target_directory: Some(target_directory),
-            ..DownloadProfile::default()
-        },
-        asset_index: DownloadAssetIndex {
-            content_format: DownloadContentFormat::DashSegments,
-            resources,
-            segments,
-            ..DownloadAssetIndex::default()
-        },
-        resolved_label: draft_download_label(source_label, source.uri()),
-    })
+fn uri_extension(uri: &str) -> Option<String> {
+    let path = uri
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(uri)
+        .rsplit('/')
+        .next()
+        .unwrap_or(uri);
+    path.rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
 }
 
 fn run_download_task(
@@ -754,29 +619,45 @@ fn run_download_task(
                 })?;
             }
 
-            if item.target_path.exists() {
-                let metadata = fs::metadata(&item.target_path).map_err(|error| {
-                    source_error(format!(
-                        "failed to inspect cached file `{}`: {error}",
-                        item.target_path.display()
-                    ))
-                })?;
-                received_bytes = received_bytes.saturating_add(metadata.len());
-                if item.counts_as_segment {
-                    received_segments = received_segments.saturating_add(1);
+            if let Some(generated_text) = item.generated_text.as_ref() {
+                if item.target_path.exists() {
+                    if item.counts_as_segment {
+                        received_segments = received_segments.saturating_add(1);
+                    }
+                    let _ = worker_tx.send(WorkerEvent::Progress {
+                        task_id: task.task_id,
+                        received_bytes,
+                        received_segments,
+                    });
+                    continue;
                 }
-                let _ = worker_tx.send(WorkerEvent::Progress {
-                    task_id: task.task_id,
-                    received_bytes,
-                    received_segments,
-                });
-                continue;
-            }
-
-            if let Some(local_path) = local_path_from_uri(&item.uri) {
-                copy_local_file(&local_path, &item.target_path, &cancel_flag)?;
+                write_generated_text(generated_text, &item.target_path, &cancel_flag)?;
+            } else if let Some(local_path) = local_path_from_uri(&item.uri) {
+                if item.target_path.exists() {
+                    fs::remove_file(&item.target_path).map_err(|error| {
+                        source_error(format!(
+                            "failed to replace partial local download `{}`: {error}",
+                            item.target_path.display()
+                        ))
+                    })?;
+                }
+                copy_local_file(
+                    &local_path,
+                    &item.target_path,
+                    item.byte_range,
+                    &cancel_flag,
+                )?;
             } else {
-                download_remote_file(&item.uri, &item.target_path, &cancel_flag)?;
+                let resume_from_bytes =
+                    resumable_existing_bytes(&item.target_path, item.expected_size_bytes)?;
+                download_remote_file(
+                    &item.uri,
+                    &item.target_path,
+                    item.byte_range,
+                    item.expected_size_bytes,
+                    resume_from_bytes,
+                    &cancel_flag,
+                )?;
             }
 
             let metadata = fs::metadata(&item.target_path).map_err(|error| {
@@ -785,7 +666,19 @@ fn run_download_task(
                     item.target_path.display()
                 ))
             })?;
-            received_bytes = received_bytes.saturating_add(metadata.len());
+            if item.generated_text.is_none() {
+                if let Some(expected_size_bytes) = item.expected_size_bytes
+                    && metadata.len() != expected_size_bytes
+                {
+                    return Err(source_error(format!(
+                        "downloaded {} bytes for `{}`, expected {}",
+                        metadata.len(),
+                        item.uri,
+                        expected_size_bytes
+                    )));
+                }
+                received_bytes = received_bytes.saturating_add(metadata.len());
+            }
             if item.counts_as_segment {
                 received_segments = received_segments.saturating_add(1);
             }
@@ -835,6 +728,9 @@ fn build_work_items(
         items.push(DownloadWorkItem {
             uri: resource.uri.clone(),
             target_path: target_directory.join(relative_path),
+            byte_range: resource.byte_range,
+            generated_text: resource.generated_text.clone(),
+            expected_size_bytes: resource.size_bytes,
             counts_as_segment: false,
         });
     }
@@ -846,6 +742,9 @@ fn build_work_items(
         items.push(DownloadWorkItem {
             uri: segment.uri.clone(),
             target_path: target_directory.join(relative_path),
+            byte_range: segment.byte_range,
+            generated_text: None,
+            expected_size_bytes: segment.size_bytes,
             counts_as_segment: true,
         });
     }
@@ -861,7 +760,9 @@ fn resolve_completed_path(task: &DownloadTaskSnapshot) -> Option<PathBuf> {
             .first()
             .and_then(|resource| resource.relative_path.clone())
             .map(|relative_path| target_directory.join(relative_path)),
-        DownloadContentFormat::HlsSegments | DownloadContentFormat::DashSegments => task
+        DownloadContentFormat::HlsSegments
+        | DownloadContentFormat::DashSegments
+        | DownloadContentFormat::FlvSegments => task
             .asset_index
             .resources
             .iter()
@@ -871,7 +772,7 @@ fn resolve_completed_path(task: &DownloadTaskSnapshot) -> Option<PathBuf> {
                     .as_ref()
                     .and_then(|path| path.extension())
                     .and_then(OsStr::to_str)
-                    .is_some_and(|extension| matches!(extension, "m3u8" | "mpd"))
+                    .is_some_and(|extension| matches!(extension, "m3u8" | "mpd" | "ffconcat"))
             })
             .and_then(|resource| resource.relative_path.clone())
             .map(|relative_path| target_directory.join(relative_path)),
@@ -882,30 +783,209 @@ fn resolve_completed_path(task: &DownloadTaskSnapshot) -> Option<PathBuf> {
 fn download_remote_file(
     uri: &str,
     output_path: &Path,
+    byte_range: Option<DownloadByteRange>,
+    expected_size_bytes: Option<u64>,
+    resume_from_bytes: u64,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(), PlayerRuntimeError> {
-    let mut child = Command::new(CURL_BIN)
+    if expected_size_bytes.is_some_and(|expected| resume_from_bytes >= expected) {
+        return Ok(());
+    }
+
+    let requested_start = requested_range_start(byte_range, resume_from_bytes);
+    let requested_header = requested_range_header(byte_range, resume_from_bytes);
+    let transfer = run_curl_download(uri, requested_header.as_deref(), output_path, cancel_flag)?;
+
+    match transfer.status_code {
+        206 => {
+            let content_range_start = parse_content_range_start(&transfer.headers);
+            if requested_start.is_none() || content_range_start != requested_start {
+                let _ = fs::remove_file(&transfer.output_path);
+                return Err(source_error(format!(
+                    "remote server returned an unexpected Content-Range for `{uri}`"
+                )));
+            }
+        }
+        200 => {
+            if requested_start.is_some() {
+                let _ = fs::remove_file(&transfer.output_path);
+                if byte_range.is_none() && resume_from_bytes > 0 {
+                    let _ = fs::remove_file(output_path);
+                    return download_remote_file(
+                        uri,
+                        output_path,
+                        None,
+                        expected_size_bytes,
+                        0,
+                        cancel_flag,
+                    );
+                }
+                return Err(source_error(format!(
+                    "remote server did not honor the requested byte range for `{uri}`"
+                )));
+            }
+        }
+        416 => {
+            let _ = fs::remove_file(&transfer.output_path);
+            if resume_from_bytes > 0 {
+                let _ = fs::remove_file(output_path);
+                return download_remote_file(
+                    uri,
+                    output_path,
+                    byte_range,
+                    expected_size_bytes,
+                    0,
+                    cancel_flag,
+                );
+            }
+            return Err(source_error(format!(
+                "remote resource rejected the requested byte range for `{uri}`"
+            )));
+        }
+        401 | 403 | 404 | 410 => {
+            let _ = fs::remove_file(&transfer.output_path);
+            return Err(source_error(format!(
+                "offline download resource is stale or expired (HTTP {}) for `{uri}`; refresh the video link and prepare the task again",
+                transfer.status_code
+            )));
+        }
+        200..=299 => {}
+        status => {
+            let _ = fs::remove_file(&transfer.output_path);
+            return Err(network_error(format!(
+                "remote resource returned HTTP {status} for `{uri}`"
+            )));
+        }
+    }
+
+    if transfer.append {
+        append_file(&transfer.output_path, output_path)?;
+        let _ = fs::remove_file(&transfer.output_path);
+    } else {
+        if output_path.exists() {
+            fs::remove_file(output_path).map_err(|error| {
+                source_error(format!(
+                    "failed to replace `{}` before download: {error}",
+                    output_path.display()
+                ))
+            })?;
+        }
+        fs::rename(&transfer.output_path, output_path).map_err(|error| {
+            source_error(format!(
+                "failed to move downloaded temp file `{}` to `{}`: {error}",
+                transfer.output_path.display(),
+                output_path.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn run_curl_download(
+    uri: &str,
+    range_header: Option<&str>,
+    output_path: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+) -> Result<CurlDownloadOutput, PlayerRuntimeError> {
+    let temp_path = temporary_sibling_path(output_path, "part");
+    let headers_path = temporary_sibling_path(output_path, "headers");
+    let mut command = Command::new(CURL_BIN);
+    command
         .arg("-L")
-        .arg("--fail")
         .arg("--silent")
         .arg("--show-error")
+        .arg("--dump-header")
+        .arg(&headers_path)
+        .arg("--write-out")
+        .arg("%{http_code}");
+    if let Some(range_header) = range_header {
+        command.arg("--range").arg(range_header);
+    }
+    let mut child = command
         .arg("--output")
-        .arg(output_path)
+        .arg(&temp_path)
         .arg(uri)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| network_error(format!("failed to spawn curl: {error}")))?;
 
-    wait_for_child(&mut child, uri, cancel_flag)
+    let status = wait_for_child(&mut child, uri, cancel_flag)?;
+    let mut stdout = String::new();
+    if let Some(mut stream) = child.stdout.take() {
+        stream.read_to_string(&mut stdout).map_err(|error| {
+            network_error(format!(
+                "failed to read curl status output for `{uri}`: {error}"
+            ))
+        })?;
+    }
+    let mut stderr = String::new();
+    if let Some(mut stream) = child.stderr.take() {
+        stream.read_to_string(&mut stderr).map_err(|error| {
+            network_error(format!(
+                "failed to read curl error output for `{uri}`: {error}"
+            ))
+        })?;
+    }
+
+    if !status.success() {
+        let _ = fs::remove_file(&temp_path);
+        let _ = fs::remove_file(&headers_path);
+        return Err(network_error(format!(
+            "curl failed for `{uri}` with status {status}: {}",
+            stderr.trim()
+        )));
+    }
+
+    let headers = fs::read_to_string(&headers_path).unwrap_or_default();
+    let _ = fs::remove_file(&headers_path);
+    let status_code = stdout.trim().parse::<u16>().unwrap_or(0);
+    Ok(CurlDownloadOutput {
+        status_code,
+        headers,
+        output_path: temp_path,
+        append: range_header.is_some(),
+    })
 }
 
 fn copy_local_file(
     source_path: &Path,
     output_path: &Path,
+    byte_range: Option<DownloadByteRange>,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(), PlayerRuntimeError> {
     if cancel_flag.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if let Some(byte_range) = byte_range {
+        let mut input = fs::File::open(source_path).map_err(|error| {
+            source_error(format!(
+                "failed to open `{}` for ranged copy: {error}",
+                source_path.display()
+            ))
+        })?;
+        input
+            .seek(SeekFrom::Start(byte_range.offset))
+            .map_err(|error| {
+                source_error(format!(
+                    "failed to seek `{}` for ranged copy: {error}",
+                    source_path.display()
+                ))
+            })?;
+        let mut output = fs::File::create(output_path).map_err(|error| {
+            source_error(format!(
+                "failed to create `{}` for ranged copy: {error}",
+                output_path.display()
+            ))
+        })?;
+        let mut limited = input.take(byte_range.length);
+        std::io::copy(&mut limited, &mut output).map_err(|error| {
+            source_error(format!(
+                "failed to copy byte range from `{}` to `{}`: {error}",
+                source_path.display(),
+                output_path.display()
+            ))
+        })?;
         return Ok(());
     }
     fs::copy(source_path, output_path).map_err(|error| {
@@ -918,25 +998,167 @@ fn copy_local_file(
     Ok(())
 }
 
+fn write_generated_text(
+    text: &str,
+    output_path: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+) -> Result<(), PlayerRuntimeError> {
+    if cancel_flag.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let mut output = fs::File::create(output_path).map_err(|error| {
+        source_error(format!(
+            "failed to create generated download resource `{}`: {error}",
+            output_path.display()
+        ))
+    })?;
+    output.write_all(text.as_bytes()).map_err(|error| {
+        source_error(format!(
+            "failed to write generated download resource `{}`: {error}",
+            output_path.display()
+        ))
+    })
+}
+
+fn resumable_existing_bytes(
+    output_path: &Path,
+    expected_size_bytes: Option<u64>,
+) -> Result<u64, PlayerRuntimeError> {
+    if !output_path.exists() {
+        return Ok(0);
+    }
+    let Some(expected) = expected_size_bytes else {
+        fs::remove_file(output_path).map_err(|error| {
+            source_error(format!(
+                "failed to remove unverified partial download `{}`: {error}",
+                output_path.display()
+            ))
+        })?;
+        return Ok(0);
+    };
+    let existing = fs::metadata(output_path)
+        .map_err(|error| {
+            source_error(format!(
+                "failed to inspect partial download `{}`: {error}",
+                output_path.display()
+            ))
+        })?
+        .len();
+
+    if existing == expected {
+        return Ok(existing);
+    }
+    if existing > 0 && existing < expected {
+        return Ok(existing);
+    }
+    fs::remove_file(output_path).map_err(|error| {
+        source_error(format!(
+            "failed to remove invalid partial download `{}`: {error}",
+            output_path.display()
+        ))
+    })?;
+    Ok(0)
+}
+
+fn requested_range_header(
+    byte_range: Option<DownloadByteRange>,
+    resume_from_bytes: u64,
+) -> Option<String> {
+    if let Some(byte_range) = byte_range {
+        if resume_from_bytes >= byte_range.length {
+            return None;
+        }
+        let start = byte_range.offset.saturating_add(resume_from_bytes);
+        let remaining = byte_range.length.saturating_sub(resume_from_bytes);
+        let end = start.saturating_add(remaining.saturating_sub(1));
+        return Some(format!("{start}-{end}"));
+    }
+    (resume_from_bytes > 0).then(|| format!("{resume_from_bytes}-"))
+}
+
+fn requested_range_start(
+    byte_range: Option<DownloadByteRange>,
+    resume_from_bytes: u64,
+) -> Option<u64> {
+    if let Some(byte_range) = byte_range {
+        return Some(byte_range.offset.saturating_add(resume_from_bytes));
+    }
+    (resume_from_bytes > 0).then_some(resume_from_bytes)
+}
+
+fn parse_content_range_start(headers: &str) -> Option<u64> {
+    let content_range = last_header_value(headers, "content-range")?;
+    let (_, range) = content_range.split_once(' ')?;
+    if range.starts_with('*') {
+        return None;
+    }
+    range.split_once('-')?.0.parse::<u64>().ok()
+}
+
+fn append_file(source_path: &Path, output_path: &Path) -> Result<(), PlayerRuntimeError> {
+    let mut input = fs::File::open(source_path).map_err(|error| {
+        source_error(format!(
+            "failed to open temp download `{}` for append: {error}",
+            source_path.display()
+        ))
+    })?;
+    let mut output = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(output_path)
+        .map_err(|error| {
+            source_error(format!(
+                "failed to open partial download `{}` for append: {error}",
+                output_path.display()
+            ))
+        })?;
+    std::io::copy(&mut input, &mut output).map_err(|error| {
+        source_error(format!(
+            "failed to append `{}` to `{}`: {error}",
+            source_path.display(),
+            output_path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn temporary_sibling_path(output_path: &Path, extension: &str) -> PathBuf {
+    let file_name = output_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("download");
+    output_path.with_file_name(format!("{file_name}.{}.{}", unique_suffix(), extension))
+}
+
+fn unique_suffix() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".to_owned())
+}
+
+#[derive(Debug)]
+struct CurlDownloadOutput {
+    status_code: u16,
+    headers: String,
+    output_path: PathBuf,
+    append: bool,
+}
+
 fn wait_for_child(
     child: &mut Child,
     uri: &str,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<(), PlayerRuntimeError> {
+) -> Result<std::process::ExitStatus, PlayerRuntimeError> {
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = child.kill();
             let _ = child.wait();
-            return Ok(());
+            return Err(playback_error(format!("download cancelled for `{uri}`")));
         }
 
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => {
-                return Err(network_error(format!(
-                    "curl failed for `{uri}` with status {status}"
-                )));
-            }
+            Ok(Some(status)) => return Ok(status),
             Ok(None) => thread::sleep(CURL_POLL_INTERVAL),
             Err(error) => {
                 return Err(network_error(format!(
@@ -971,24 +1193,76 @@ fn fetch_remote_text(uri: &str) -> Result<String> {
         .map_err(|error| anyhow!("manifest `{uri}` was not valid UTF-8: {error}"))
 }
 
-fn desktop_download_target_directory(asset_id: &str) -> PathBuf {
-    std::env::temp_dir().join(DOWNLOAD_ROOT_DIR).join(asset_id)
+fn probe_remote_content_length(uri: &str) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+    if let Some(size) = probe_remote_head_content_length(uri)? {
+        return Ok(Some(size));
+    }
+    probe_remote_range_content_length(uri)
 }
 
-fn single_file_name_for_uri(uri: &str) -> String {
-    let fallback = "download.bin";
-    let file_name = uri
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(uri)
-        .rsplit('/')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(fallback);
-    if file_name.is_empty() {
-        fallback.to_owned()
-    } else {
-        sanitize_path_segment(file_name)
+fn probe_remote_head_content_length(uri: &str) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+    let output = Command::new(CURL_BIN)
+        .arg("-L")
+        .arg("--head")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--write-out")
+        .arg("\n%{http_code}")
+        .arg(uri)
+        .output()
+        .map_err(|error| {
+            network_error(format!("failed to spawn curl HEAD for `{uri}`: {error}"))
+        })?;
+    if !output.status.success() {
+        return Ok(None);
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some((headers, status_text)) = stdout.rsplit_once('\n') else {
+        return Ok(None);
+    };
+    let status_code = status_text.trim().parse::<u16>().unwrap_or(0);
+    if !(200..=299).contains(&status_code) {
+        return Ok(None);
+    }
+    Ok(last_header_value(headers, "content-length").and_then(|value| value.parse::<u64>().ok()))
+}
+
+fn probe_remote_range_content_length(
+    uri: &str,
+) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+    let output_path =
+        std::env::temp_dir().join(format!("vesper-content-length-{}", unique_suffix()));
+    let transfer = run_curl_download(
+        uri,
+        Some("0-0"),
+        &output_path,
+        &Arc::new(AtomicBool::new(false)),
+    )?;
+    let size = if transfer.status_code == 206 {
+        last_header_value(&transfer.headers, "content-range").and_then(|value| {
+            value
+                .rsplit_once('/')
+                .and_then(|(_, total)| total.trim().parse::<u64>().ok())
+        })
+    } else {
+        None
+    };
+    let _ = fs::remove_file(&transfer.output_path);
+    Ok(size)
+}
+
+fn last_header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    headers.lines().rev().find_map(|line| {
+        let (header_name, value) = line.split_once(':')?;
+        header_name
+            .trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim())
+    })
+}
+
+fn desktop_download_target_directory(asset_id: &str) -> PathBuf {
+    std::env::temp_dir().join(DOWNLOAD_ROOT_DIR).join(asset_id)
 }
 
 fn local_path_from_uri(uri: &str) -> Option<PathBuf> {
@@ -1041,329 +1315,6 @@ fn relative_path_for_uri(uri: &str) -> String {
     } else {
         format!("{host}/{}", path_segments.join("/"))
     }
-}
-
-fn add_resource_record(
-    resources: &mut Vec<DownloadResourceRecord>,
-    resource_ids: &mut HashSet<String>,
-    uri: &str,
-) {
-    let relative_path = PathBuf::from(relative_path_for_uri(uri));
-    let resource_id = relative_path.to_string_lossy().into_owned();
-    if !resource_ids.insert(resource_id.clone()) {
-        return;
-    }
-    resources.push(DownloadResourceRecord {
-        resource_id,
-        uri: uri.to_owned(),
-        relative_path: Some(relative_path),
-        size_bytes: None,
-        etag: None,
-        checksum: None,
-    });
-}
-
-fn add_segment_record(
-    segments: &mut Vec<DownloadSegmentRecord>,
-    segment_ids: &mut HashSet<String>,
-    uri: &str,
-    sequence: Option<u64>,
-) {
-    let relative_path = PathBuf::from(relative_path_for_uri(uri));
-    let segment_id = relative_path.to_string_lossy().into_owned();
-    if !segment_ids.insert(segment_id.clone()) {
-        return;
-    }
-    segments.push(DownloadSegmentRecord {
-        segment_id,
-        uri: uri.to_owned(),
-        relative_path: Some(relative_path),
-        sequence,
-        size_bytes: None,
-        checksum: None,
-    });
-}
-
-#[derive(Debug, Clone)]
-struct ParsedHlsMaster {
-    variant_playlist_uri: String,
-    audio_playlist_uri: Option<String>,
-}
-
-fn parse_hls_master_manifest(manifest_text: &str, manifest_uri: &str) -> Option<ParsedHlsMaster> {
-    let mut pending_variant = false;
-    let mut variant_playlist_uri = None;
-    let mut audio_playlist_uri = None;
-
-    for raw_line in manifest_text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with("#EXT-X-MEDIA:") && line.contains("TYPE=AUDIO") {
-            if let Some(uri) = parse_hls_attribute(line, "URI") {
-                audio_playlist_uri = manifest_uri_resolve(manifest_uri, &uri).ok();
-            }
-            continue;
-        }
-        if line.starts_with("#EXT-X-STREAM-INF:") {
-            pending_variant = true;
-            continue;
-        }
-        if pending_variant && !line.starts_with('#') {
-            variant_playlist_uri = manifest_uri_resolve(manifest_uri, line).ok();
-            break;
-        }
-    }
-
-    variant_playlist_uri.map(|variant_playlist_uri| ParsedHlsMaster {
-        variant_playlist_uri,
-        audio_playlist_uri,
-    })
-}
-
-fn collect_hls_media_playlist_entries(
-    manifest_text: &str,
-    manifest_uri: &str,
-    resources: &mut Vec<DownloadResourceRecord>,
-    resource_ids: &mut HashSet<String>,
-    segments: &mut Vec<DownloadSegmentRecord>,
-    segment_ids: &mut HashSet<String>,
-) {
-    let mut next_sequence = 0_u64;
-    for raw_line in manifest_text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
-            next_sequence = value.trim().parse::<u64>().unwrap_or(0);
-            continue;
-        }
-        if line.starts_with("#EXT-X-KEY:") {
-            if let Some(uri) = parse_hls_attribute(line, "URI")
-                && let Ok(resolved) = manifest_uri_resolve(manifest_uri, &uri)
-            {
-                add_resource_record(resources, resource_ids, &resolved);
-            }
-            continue;
-        }
-        if line.starts_with("#EXT-X-MAP:") {
-            if let Some(uri) = parse_hls_attribute(line, "URI")
-                && let Ok(resolved) = manifest_uri_resolve(manifest_uri, &uri)
-            {
-                add_resource_record(resources, resource_ids, &resolved);
-            }
-            continue;
-        }
-        if line.starts_with('#') {
-            continue;
-        }
-        if let Ok(resolved) = manifest_uri_resolve(manifest_uri, line) {
-            add_segment_record(segments, segment_ids, &resolved, Some(next_sequence));
-            next_sequence = next_sequence.saturating_add(1);
-        }
-    }
-}
-
-fn parse_hls_attribute(line: &str, attribute_name: &str) -> Option<String> {
-    let needle = format!("{attribute_name}=\"");
-    let (_, remainder) = line.split_once(&needle)?;
-    let (value, _) = remainder.split_once('"')?;
-    Some(value.to_owned())
-}
-
-#[derive(Debug, Clone)]
-struct DashAdaptationSet {
-    mime_type: String,
-    representation_id: String,
-    segment_template: DashSegmentTemplate,
-}
-
-#[derive(Debug, Clone)]
-struct DashSegmentTemplate {
-    initialization: String,
-    media: String,
-    start_number: Option<u64>,
-    timescale: Option<u64>,
-    duration: Option<u64>,
-}
-
-fn parse_dash_adaptation_sets(manifest_text: &str) -> Result<Vec<DashAdaptationSet>> {
-    let mut reader = Reader::from_str(manifest_text);
-    reader.config_mut().trim_text(true);
-    let mut buffer = Vec::new();
-    let mut result = Vec::new();
-    let mut current_adaptation_mime_type: Option<String> = None;
-    let mut current_representation_id: Option<String> = None;
-    let mut current_template: Option<DashSegmentTemplate> = None;
-    let mut inside_adaptation = false;
-    let mut inside_representation = false;
-    let mut adaptation_collected = false;
-
-    loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(start)) => match start.local_name().as_ref() {
-                b"AdaptationSet" => {
-                    inside_adaptation = true;
-                    inside_representation = false;
-                    adaptation_collected = false;
-                    current_representation_id = None;
-                    current_template = None;
-                    current_adaptation_mime_type = attr_value(&start, b"mimeType")
-                        .or_else(|| attr_value(&start, b"contentType"));
-                }
-                b"Representation" if inside_adaptation && !adaptation_collected => {
-                    inside_representation = true;
-                    current_representation_id = attr_value(&start, b"id");
-                }
-                b"SegmentTemplate"
-                    if inside_adaptation && (!adaptation_collected || inside_representation) =>
-                {
-                    let template = DashSegmentTemplate {
-                        initialization: attr_value(&start, b"initialization").unwrap_or_default(),
-                        media: attr_value(&start, b"media").unwrap_or_default(),
-                        start_number: attr_value(&start, b"startNumber")
-                            .and_then(|value| value.parse::<u64>().ok()),
-                        timescale: attr_value(&start, b"timescale")
-                            .and_then(|value| value.parse::<u64>().ok()),
-                        duration: attr_value(&start, b"duration")
-                            .and_then(|value| value.parse::<u64>().ok()),
-                    };
-                    current_template = Some(template);
-                }
-                _ => {}
-            },
-            Ok(Event::End(end)) => match end.local_name().as_ref() {
-                b"Representation" => {
-                    if inside_adaptation
-                        && !adaptation_collected
-                        && current_representation_id.is_some()
-                        && current_template.is_some()
-                    {
-                        result.push(DashAdaptationSet {
-                            mime_type: current_adaptation_mime_type.clone().unwrap_or_default(),
-                            representation_id: current_representation_id
-                                .clone()
-                                .unwrap_or_default(),
-                            segment_template: current_template.clone().unwrap(),
-                        });
-                        adaptation_collected = true;
-                    }
-                    inside_representation = false;
-                }
-                b"AdaptationSet" => {
-                    inside_adaptation = false;
-                    inside_representation = false;
-                    current_adaptation_mime_type = None;
-                    current_representation_id = None;
-                    current_template = None;
-                }
-                _ => {}
-            },
-            Ok(Event::Eof) => break,
-            Err(error) => {
-                return Err(anyhow!("failed to parse DASH manifest XML: {error}"));
-            }
-            _ => {}
-        }
-        buffer.clear();
-    }
-
-    Ok(result)
-}
-
-fn attr_value(start: &BytesStart<'_>, key: &[u8]) -> Option<String> {
-    start
-        .attributes()
-        .flatten()
-        .find(|attribute| attribute.key.as_ref() == key)
-        .and_then(|attribute| {
-            String::from_utf8(attribute.value.as_ref().to_vec())
-                .ok()
-                .map(|value| value.trim().to_owned())
-        })
-}
-
-fn replace_representation_tokens(template: &str, representation_id: &str, number: u64) -> String {
-    template
-        .replace("$RepresentationID$", representation_id)
-        .replace("$Number$", &number.to_string())
-}
-
-fn parse_iso8601_duration_seconds(value: Option<&str>) -> Option<f64> {
-    let value = value?;
-    let value = value.strip_prefix("PT")?;
-    let mut remaining = value;
-    let mut hours = 0.0_f64;
-    let mut minutes = 0.0_f64;
-    let mut seconds = 0.0_f64;
-
-    while !remaining.is_empty() {
-        let boundary = remaining
-            .find(|character: char| !character.is_ascii_digit() && character != '.')
-            .unwrap_or(remaining.len());
-        if boundary == remaining.len() {
-            break;
-        }
-        let (number, rest) = remaining.split_at(boundary);
-        let unit = rest.chars().next()?;
-        let parsed = number.parse::<f64>().ok()?;
-        match unit {
-            'H' => hours = parsed,
-            'M' => minutes = parsed,
-            'S' => seconds = parsed,
-            _ => return None,
-        }
-        remaining = &rest[1..];
-    }
-
-    Some(hours * 3600.0 + minutes * 60.0 + seconds)
-}
-
-fn attribute_from_start_tag(
-    manifest_text: &str,
-    element_name: &str,
-    attribute_name: &str,
-) -> Option<String> {
-    let start_tag = format!("<{element_name} ");
-    let (_, remainder) = manifest_text.split_once(&start_tag)?;
-    let needle = format!("{attribute_name}=\"");
-    let (_, attribute_tail) = remainder.split_once(&needle)?;
-    let (value, _) = attribute_tail.split_once('"')?;
-    Some(value.to_owned())
-}
-
-fn manifest_uri_resolve(base_uri: &str, reference: &str) -> Result<String> {
-    if reference.starts_with("http://") || reference.starts_with("https://") {
-        return Ok(reference.to_owned());
-    }
-
-    let (prefix, path) = match base_uri.rsplit_once('/') {
-        Some((prefix, _)) => (prefix, path_after_authority(base_uri)),
-        None => return Ok(reference.to_owned()),
-    };
-
-    let prefix = prefix.to_owned();
-    if reference.starts_with('/') {
-        let authority = if let Some((scheme, rest)) = base_uri.split_once("://") {
-            let host = rest.split('/').next().unwrap_or(rest);
-            format!("{scheme}://{host}")
-        } else {
-            prefix
-        };
-        return Ok(format!("{authority}{reference}"));
-    }
-
-    let _ = path;
-    Ok(format!("{prefix}/{reference}"))
-}
-
-fn path_after_authority(uri: &str) -> &str {
-    uri.split_once("://")
-        .and_then(|(_, rest)| rest.split_once('/').map(|(_, path)| path))
-        .unwrap_or(uri)
 }
 
 fn sanitize_path_segment(segment: &str) -> String {
@@ -1422,6 +1373,10 @@ fn completed_download_info(
             manifest_path: resolve_manifest_path(snapshot)?,
             segment_paths: resolve_segment_paths(snapshot),
         },
+        DownloadContentFormat::FlvSegments => CompletedContentFormat::FlvSegments {
+            manifest_path: resolve_manifest_path(snapshot)?,
+            segment_paths: resolve_segment_paths(snapshot),
+        },
         DownloadContentFormat::SingleFile => CompletedContentFormat::SingleFile {
             path: resolve_single_file_path(snapshot)?,
         },
@@ -1457,7 +1412,7 @@ fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> Result<PathBuf, Pla
                 relative_path
                     .extension()
                     .and_then(OsStr::to_str)
-                    .is_some_and(|extension| matches!(extension, "m3u8" | "mpd"))
+                    .is_some_and(|extension| matches!(extension, "m3u8" | "mpd" | "ffconcat"))
                     .then(|| target_directory.join(relative_path))
             })
         })
@@ -1656,6 +1611,8 @@ mod tests {
     fn prepare_download_task_detects_local_hls_manifest_path() {
         let workspace = TestWorkspace::new("local-hls-prepare");
         let manifest_path = workspace.path().join("fixture.m3u8");
+        fs::write(workspace.path().join("segment_000.ts"), b"segment")
+            .expect("write local segment");
         fs::write(
             &manifest_path,
             "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1.0,\nsegment_000.ts\n#EXT-X-ENDLIST\n",
@@ -1819,12 +1776,11 @@ mod tests {
     }
 
     fn create_local_hls_fixture(root: &Path) -> PathBuf {
-        let input_path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media/tiny-h264-aac.m4v");
+        let input_path = workspace_root().join("fixtures/media/tiny-h264-aac.m4v");
         let manifest_path = root.join("fixture.m3u8");
         let segment_pattern = root.join("segment_%03d.ts");
 
-        // 这里用本地 MP4 现场切出一个很小的 HLS 夹具，避免测试依赖公网样本。
+        // Build a tiny local HLS fixture from the local MP4 so tests do not depend on public samples.
         let status = Command::new("ffmpeg")
             .arg("-y")
             .arg("-loglevel")
@@ -1911,10 +1867,7 @@ mod tests {
             return path;
         }
 
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("derive workspace root");
+        let workspace_root = workspace_root();
         let target_dir = std::env::var_os("CARGO_TARGET_DIR")
             .map(PathBuf::from)
             .map(|path| {
@@ -1959,6 +1912,13 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos().to_string())
             .unwrap_or_else(|_| "0".to_owned())
+    }
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../..")
+            .canonicalize()
+            .expect("derive workspace root")
     }
 
     struct TestWorkspace {

@@ -6,7 +6,7 @@ plugins {
     id("com.android.library")
 }
 
-// AGP 9+ 已内建 Kotlin 支持；保留对旧 AGP 宿主的兼容。
+// AGP 9+ has built-in Kotlin support; keep compatibility with older AGP hosts.
 if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }

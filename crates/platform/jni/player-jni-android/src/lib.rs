@@ -258,7 +258,7 @@ fn with_session_mut<R>(
         session
     };
 
-    // 持有 session 锁期间禁止调用任何 `env.call_*`，也不要触发可能重入 JNI 的析构路径。
+    // Do not call `env.call_*` or trigger JNI-reentrant teardown while the session lock is held.
     let mut session = lock_or_recover(session.as_ref());
     Some(f(&mut session))
 }

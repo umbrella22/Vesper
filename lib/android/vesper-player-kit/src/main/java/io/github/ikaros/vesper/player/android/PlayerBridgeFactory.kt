@@ -13,6 +13,7 @@ object PlayerBridgeFactory {
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
         decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
         surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+        keepScreenOnDuringPlayback: Boolean = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     ): PlayerBridge =
         when (defaultBackend) {
@@ -22,6 +23,7 @@ object PlayerBridgeFactory {
                     resiliencePolicy = resiliencePolicy,
                     trackPreferencePolicy = trackPreferencePolicy,
                     preloadBudgetPolicy = preloadBudgetPolicy,
+                    keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                     benchmarkConfiguration = benchmarkConfiguration,
                     appContext = context.applicationContext,
                 )
@@ -41,6 +43,7 @@ object PlayerBridgeFactory {
                     preloadBudgetPolicy = preloadBudgetPolicy,
                     decoderBackend = decoderBackend,
                     benchmarkRecorder = benchmarkRecorder,
+                    keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                     appContext = context.applicationContext,
                     surfaceKind = surfaceKind,
                 )

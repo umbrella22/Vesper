@@ -16,7 +16,7 @@ Examples:
   $(basename "$0")
   $(basename "$0") loader
   $(basename "$0") debug all
-  $(basename "$0") release example
+  $(basename "$0") release download
 EOF
 }
 
@@ -25,7 +25,7 @@ for token in "$@"; do
     debug|release)
       PROFILE="$token"
       ;;
-    loader|example|all)
+    loader|download|example|all)
       MODE="$token"
       ;;
     *)
@@ -64,7 +64,7 @@ run_loader_test() {
     --exact
 }
 
-run_example_test() {
+run_download_test() {
   ensure_tool_available ffmpeg
   ensure_tool_available ffprobe
 
@@ -78,8 +78,8 @@ run_example_test() {
   fi
 
   cargo test \
-    -p basic-player \
-    desktop_download::tests::desktop_export_remuxes_downloaded_hls_fixture_to_mp4_via_dynamic_plugin \
+    -p player-platform-desktop \
+    download::tests::desktop_export_remuxes_downloaded_hls_fixture_to_mp4_via_dynamic_plugin \
     -- \
     --ignored \
     --exact
@@ -103,12 +103,12 @@ main() {
     loader)
       run_loader_test
       ;;
-    example)
-      run_example_test
+    download|example)
+      run_download_test
       ;;
     all)
       run_loader_test
-      run_example_test
+      run_download_test
       ;;
   esac
 }

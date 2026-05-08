@@ -17,6 +17,7 @@ class VesperNativePlayerBridge(
     private val preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
     private val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
+    private var keepScreenOnDuringPlayback: Boolean = true,
     appContext: Context? = null,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ) : PlayerBridge {
@@ -140,6 +141,7 @@ class VesperNativePlayerBridge(
         hasInitializedSource = false
         clearTrackState()
         bindings.clearSystemPlayback()
+        surfaceHost.setKeepScreenOn(false)
         surfaceHost.detach()
         bindings.dispose()
         recordBenchmark("dispose_command")
@@ -315,6 +317,11 @@ class VesperNativePlayerBridge(
         restorePlaybackState(source, preservedState)
     }
 
+    override fun setKeepScreenOnDuringPlayback(enabled: Boolean) {
+        keepScreenOnDuringPlayback = enabled
+        syncKeepScreenOn()
+    }
+
     override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) {
         if (isDisposed) {
             return
@@ -343,6 +350,15 @@ class VesperNativePlayerBridge(
 
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()
+        syncKeepScreenOn()
+    }
+
+    private fun syncKeepScreenOn() {
+        surfaceHost.setKeepScreenOn(
+            !isDisposed &&
+                keepScreenOnDuringPlayback &&
+                _uiState.value.playbackState == PlaybackStateUi.Playing,
+        )
     }
 
     private fun recordBenchmark(

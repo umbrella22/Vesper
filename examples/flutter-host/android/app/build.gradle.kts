@@ -67,7 +67,7 @@ android {
 
     packaging {
         jniLibs {
-            // 例子里需要把 remux 插件暴露成稳定文件路径，便于交给动态插件加载器。
+            // The example exposes the remux plugin at a stable file path for the dynamic plugin loader.
             useLegacyPackaging = true
         }
     }

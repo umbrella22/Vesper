@@ -1,4 +1,4 @@
-//! Desktop host launch and preload helpers.
+//! Desktop host launch, preload, and download helpers.
 //!
 //! This crate is an internal host-facing bridge over the platform runtime
 //! adapters. It is not a published SDK artifact; native distribution is owned
@@ -20,6 +20,8 @@ use player_runtime::{
     PreloadTaskId, PreloadTaskSnapshot,
 };
 use winit::window::Window;
+
+pub use player_platform_desktop::download;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use player_runtime::{PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget};
