@@ -1,5 +1,11 @@
 package io.github.ikaros.vesper.player.android
 
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
+import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -84,6 +90,65 @@ class VesperDownloadManagerTest {
         assertEquals(expected, executor.startedSourceHeaders.single())
         assertEquals(expected, manager.task(1L)?.source?.source?.headers)
         manager.dispose()
+    }
+
+    @Test
+    fun foregroundExecutorForwardsSourceHeadersToManifestProbesAndTransfers() {
+        val requests = mutableListOf<RecordedHttpRequest>()
+        val server = headerRecordingServer(requests)
+        server.start()
+        val outputDir = Files.createTempDirectory("vesper-android-download-test").toFile()
+        try {
+            val baseUrl = "http://127.0.0.1:${server.address.port}"
+            val headers =
+                mapOf(
+                    "User-Agent" to "VesperFixture/1.0",
+                    "Referer" to "https://example.com/player",
+                )
+            val task =
+                VesperDownloadTaskSnapshot(
+                    taskId = 7L,
+                    assetId = "asset-http",
+                    source =
+                        VesperDownloadSource(
+                            source =
+                                VesperPlayerSource.hls(
+                                    uri = "$baseUrl/index.m3u8",
+                                    label = "Fixture",
+                                    headers = headers,
+                                ),
+                        ),
+                    profile = VesperDownloadProfile(targetDirectory = outputDir.absolutePath),
+                    state = VesperDownloadState.Preparing,
+                    progress = VesperDownloadProgressSnapshot(),
+                    assetIndex = VesperDownloadAssetIndex(),
+                )
+            val executor =
+                VesperForegroundDownloadExecutor(
+                    context = null,
+                    baseDirectory = outputDir,
+                )
+            val reporter = BlockingDownloadReporter()
+
+            executor.prepare(task, reporter)
+            val assetIndex = reporter.awaitPreparedAssetIndex()
+            assertNotNull(assetIndex)
+
+            executor.start(task.copy(assetIndex = checkNotNull(assetIndex)), reporter)
+            assertTrue("download did not complete", reporter.awaitCompleted())
+
+            assertRecordedHeader(requests, "GET", "/index.m3u8", "User-Agent", "VesperFixture/1.0")
+            assertRecordedHeader(requests, "HEAD", "/init.mp4", "Referer", "https://example.com/player")
+            assertRecordedHeader(requests, "HEAD", "/segment.ts", "Referer", "https://example.com/player")
+            assertRecordedHeader(requests, "GET", "/init.mp4", "User-Agent", "VesperFixture/1.0")
+            assertRecordedHeader(requests, "GET", "/segment.ts", "User-Agent", "VesperFixture/1.0")
+            assertRecordedHeader(requests, "GET", "/init.mp4", "Range", "bytes=0-3")
+            assertRecordedHeader(requests, "GET", "/segment.ts", "Range", "bytes=0-11")
+            executor.dispose()
+        } finally {
+            server.stop(0)
+            outputDir.deleteRecursively()
+        }
     }
 
     @Test
@@ -507,6 +572,137 @@ private fun NativeDownloadAssetIndex.withCompletedPath(
         segments = segments,
         completedPath = completedPath,
     )
+
+private data class RecordedHttpRequest(
+    val method: String,
+    val path: String,
+    val headers: Map<String, String>,
+)
+
+private class BlockingDownloadReporter : VesperDownloadExecutionReporter {
+    private val preparedLatch = CountDownLatch(1)
+    private val completedLatch = CountDownLatch(1)
+    @Volatile private var preparedAssetIndex: VesperDownloadAssetIndex? = null
+    @Volatile private var failure: VesperDownloadError? = null
+
+    override fun completePreparation(
+        taskId: VesperDownloadTaskId,
+        assetIndex: VesperDownloadAssetIndex,
+    ) {
+        preparedAssetIndex = assetIndex
+        preparedLatch.countDown()
+    }
+
+    override fun updateProgress(
+        taskId: VesperDownloadTaskId,
+        receivedBytes: Long,
+        receivedSegments: Int,
+    ) = Unit
+
+    override fun complete(taskId: VesperDownloadTaskId, completedPath: String?) {
+        completedLatch.countDown()
+    }
+
+    override fun fail(taskId: VesperDownloadTaskId, error: VesperDownloadError) {
+        failure = error
+        preparedLatch.countDown()
+        completedLatch.countDown()
+    }
+
+    fun awaitPreparedAssetIndex(): VesperDownloadAssetIndex? {
+        assertTrue(
+            "download preparation did not finish: ${failure?.message}",
+            preparedLatch.await(5, TimeUnit.SECONDS),
+        )
+        assertEquals(null, failure)
+        return preparedAssetIndex
+    }
+
+    fun awaitCompleted(): Boolean {
+        val completed = completedLatch.await(5, TimeUnit.SECONDS)
+        assertEquals(null, failure)
+        return completed
+    }
+}
+
+private fun headerRecordingServer(requests: MutableList<RecordedHttpRequest>): HttpServer {
+    val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    server.createContext("/") { exchange ->
+        val request =
+            RecordedHttpRequest(
+                method = exchange.requestMethod,
+                path = exchange.requestURI.path,
+                headers =
+                    exchange.requestHeaders
+                        .mapKeys { (name, _) -> name.lowercase() }
+                        .mapValues { (_, values) -> values.joinToString(",") },
+            )
+        synchronized(requests) {
+            requests += request
+        }
+        exchange.respondForFixturePath()
+    }
+    return server
+}
+
+private fun HttpExchange.respondForFixturePath() {
+    val body =
+        when (requestURI.path) {
+            "/index.m3u8" ->
+                """
+                #EXTM3U
+                #EXT-X-VERSION:7
+                #EXT-X-TARGETDURATION:1
+                #EXT-X-MAP:URI="init.mp4"
+                #EXTINF:1.0,
+                segment.ts
+                #EXT-X-ENDLIST
+                """.trimIndent().toByteArray()
+            "/init.mp4" -> "init".toByteArray()
+            "/segment.ts" -> "segment-data".toByteArray()
+            else -> ByteArray(0)
+        }
+    if (body.isEmpty()) {
+        sendResponseHeaders(404, -1)
+        close()
+        return
+    }
+    responseHeaders.add("Content-Length", body.size.toString())
+    if (requestMethod.equals("HEAD", ignoreCase = true)) {
+        sendResponseHeaders(200, -1)
+    } else if (requestHeaders.getFirst("Range")?.startsWith("bytes=") == true) {
+        val range = checkNotNull(requestHeaders.getFirst("Range")).removePrefix("bytes=")
+        val start = range.substringBefore('-').toInt()
+        val end = range.substringAfter('-').toInt()
+        if (start !in body.indices || end !in body.indices || end < start) {
+            sendResponseHeaders(416, -1)
+        } else {
+            val slice = body.copyOfRange(start, end + 1)
+            responseHeaders.add("Content-Range", "bytes $start-$end/${body.size}")
+            sendResponseHeaders(206, slice.size.toLong())
+            responseBody.use { it.write(slice) }
+        }
+    } else {
+        sendResponseHeaders(200, body.size.toLong())
+        responseBody.use { it.write(body) }
+    }
+    close()
+}
+
+private fun assertRecordedHeader(
+    requests: List<RecordedHttpRequest>,
+    method: String,
+    path: String,
+    headerName: String,
+    expectedValue: String,
+) {
+    val request =
+        synchronized(requests) {
+            requests.firstOrNull { it.method.equals(method, ignoreCase = true) && it.path == path }
+        }
+    assertNotNull("missing $method $path request; saw $requests", request)
+    assertEquals(expectedValue, request?.headers?.get(headerName.lowercase()))
+}
 
 private class RecordingDownloadExecutor(
     private val autoComplete: Boolean = false,

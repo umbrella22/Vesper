@@ -223,6 +223,8 @@ class NativeDownloadSource(
     @JvmField val sourceUri: String,
     @JvmField val contentFormatOrdinal: Int,
     @JvmField val manifestUri: String?,
+    @JvmField val headerNames: Array<String>,
+    @JvmField val headerValues: Array<String>,
 )
 
 class NativeDownloadProfile(

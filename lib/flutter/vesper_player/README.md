@@ -483,11 +483,13 @@ The default `VesperDownloadConfiguration` enables `restoreTasksOnStartup` and
 `resumePartialDownloads`. Android and iOS persist task snapshots under the
 download base directory, restore interrupted preparing/downloading tasks on the
 next manager creation, and resume existing partial remote files with range
-requests when the server supports them. If a server ignores a resume range, only
-that partial resource is deleted and restarted from byte zero; expired or
-unavailable URLs fail with a stale-resource error. This is SDK-managed foreground
-download recovery; OS-managed process-death background transfer remains a host
-app service/background-session responsibility.
+requests when the server supports them. Known-size HTTP resources without an
+explicit byte range are also transferred with bounded closed Range chunks from
+the first byte, with `Content-Range` validation before appending. If a server
+ignores a resume range, only that partial resource is deleted and restarted from
+byte zero; expired or unavailable URLs fail with a stale-resource error. This is
+SDK-managed foreground download recovery; OS-managed process-death background
+transfer remains a host app service/background-session responsibility.
 
 ### Optional `.mp4` export through `player-remux-ffmpeg`
 

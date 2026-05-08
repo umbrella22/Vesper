@@ -226,6 +226,9 @@ typedef struct VesperRuntimeDownloadSource {
   char *source_uri;
   VesperRuntimeDownloadContentFormat content_format;
   char *manifest_uri;
+  char **header_names;
+  char **header_values;
+  uintptr_t headers_len;
 } VesperRuntimeDownloadSource;
 
 typedef struct VesperRuntimeDownloadProfile {

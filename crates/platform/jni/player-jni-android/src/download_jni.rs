@@ -273,7 +273,10 @@ fn download_source_from_java(env: &mut Env<'_>, source: JObject<'_>) -> JniResul
         3 => DownloadContentFormat::SingleFile,
         _ => DownloadContentFormat::Unknown,
     };
-    let mut download_source = DownloadSource::new(MediaSource::new(source_uri), content_format);
+    let header_names = string_array_field(env, &source, "headerNames")?;
+    let header_values = string_array_field(env, &source, "headerValues")?;
+    let mut download_source = DownloadSource::new(MediaSource::new(source_uri), content_format)
+        .with_request_headers(header_names.into_iter().zip(header_values));
     if let Some(manifest_uri) = string_field(env, &source, "manifestUri")?
         && !manifest_uri.is_empty()
     {
@@ -539,9 +542,25 @@ fn download_source_object<'local>(
     let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadSource")))?;
     let source_uri = JObject::from(env.new_string(source.source.uri())?);
     let manifest_uri = optional_java_string(env, source.manifest_uri.as_deref())?;
+    let header_entries = source.request_headers.iter().collect::<Vec<_>>();
+    let header_names = java_string_array_object(
+        env,
+        &header_entries
+            .iter()
+            .map(|(name, _)| (*name).clone())
+            .collect::<Vec<_>>(),
+    )?;
+    let header_values = java_string_array_object(
+        env,
+        &header_entries
+            .iter()
+            .map(|(_, value)| (*value).clone())
+            .collect::<Vec<_>>(),
+    )?;
     env.new_object(
         class,
-        method_sig("(Ljava/lang/String;ILjava/lang/String;)V").method_signature(),
+        method_sig("(Ljava/lang/String;ILjava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V")
+            .method_signature(),
         &[
             JValue::Object(&source_uri),
             JValue::Int(match source.content_format {
@@ -552,6 +571,8 @@ fn download_source_object<'local>(
                 DownloadContentFormat::Unknown => 4,
             }),
             JValue::Object(&manifest_uri),
+            JValue::Object(&header_names),
+            JValue::Object(&header_values),
         ],
     )
 }

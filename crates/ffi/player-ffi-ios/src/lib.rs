@@ -582,6 +582,9 @@ pub struct PlayerFfiDownloadSource {
     pub source_uri: *mut c_char,
     pub content_format: PlayerFfiDownloadContentFormat,
     pub manifest_uri: *mut c_char,
+    pub header_names: *mut *mut c_char,
+    pub header_values: *mut *mut c_char,
+    pub headers_len: usize,
 }
 
 #[repr(C)]
@@ -3125,8 +3128,13 @@ fn read_download_source(
             )
         })?;
 
+    let header_names =
+        read_string_list(source.header_names, source.headers_len, "source.header_names")?;
+    let header_values =
+        read_string_list(source.header_values, source.headers_len, "source.header_values")?;
     let mut download_source =
-        DownloadSource::new(MediaSource::new(source_uri), source.content_format.into());
+        DownloadSource::new(MediaSource::new(source_uri), source.content_format.into())
+            .with_request_headers(header_names.into_iter().zip(header_values));
     if let Some(manifest_uri) = read_optional_c_string(source.manifest_uri, "source.manifest_uri")?
         && !manifest_uri.is_empty()
     {
@@ -3532,6 +3540,11 @@ fn into_c_string_list(values: Vec<String>) -> (*mut *mut c_char, usize) {
 }
 
 fn download_source_to_ffi(source: DownloadSource) -> PlayerFfiDownloadSource {
+    let (header_names, header_values): (Vec<_>, Vec<_>) =
+        source.request_headers.into_iter().unzip();
+    let (header_names, headers_len) = into_c_string_list(header_names);
+    let (header_values, header_values_len) = into_c_string_list(header_values);
+    debug_assert_eq!(headers_len, header_values_len);
     PlayerFfiDownloadSource {
         source_uri: into_c_string_ptr(source.source.uri().to_owned()),
         content_format: source.content_format.into(),
@@ -3539,6 +3552,9 @@ fn download_source_to_ffi(source: DownloadSource) -> PlayerFfiDownloadSource {
             .manifest_uri
             .map(into_c_string_ptr)
             .unwrap_or(ptr::null_mut()),
+        header_names,
+        header_values,
+        headers_len,
     }
 }
 
@@ -3782,6 +3798,9 @@ fn download_profile_free(profile: &mut PlayerFfiDownloadProfile) {
 fn download_source_free(source: &mut PlayerFfiDownloadSource) {
     free_c_string(&mut source.source_uri);
     free_c_string(&mut source.manifest_uri);
+    let mut header_values_len = source.headers_len;
+    free_c_string_list(&mut source.header_names, &mut source.headers_len);
+    free_c_string_list(&mut source.header_values, &mut header_values_len);
     *source = PlayerFfiDownloadSource::default();
 }
 

@@ -283,6 +283,9 @@ typedef struct PlayerFfiDownloadSource {
   char *source_uri;
   PlayerFfiDownloadContentFormat content_format;
   char *manifest_uri;
+  char **header_names;
+  char **header_values;
+  uintptr_t headers_len;
 } PlayerFfiDownloadSource;
 
 typedef struct PlayerFfiDownloadProfile {

@@ -32,9 +32,10 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
   Rust backend。
 - timeline、live edge、live DVR、track catalog、ABR、resilience policy、preload
   policy 和 download orchestration 的共享语义。
-- 针对点播 HLS、静态 DASH 和 FLV 输入的离线下载规划，在传输前严格执行总字节数探测，并可选择通过重封装插件以 MP4 流拷贝方式导出。
-- 由 SDK 管理的离线任务恢复与断点区间传输，适用于 Android 和 iOS；同时提供适用于 macOS、Windows 和 Linux 的共享桌面端下载服务，支持当
-  HTTP 服务器忽略续传区间时按资源单独重启。
+- 针对点播 HLS、静态 DASH 和 FLV 输入的离线下载规划：对清单获取、大小探测、分片传输以及可选通过重封装插件以 MP4 流拷贝导出的过程，统一应用源 HTTP 头。
+- 由 SDK 管理的离线任务恢复与断点区间传输，适用于 Android 和 iOS；同时提供适用于 macOS、Windows 和 Linux 的共享桌面端下载服务。
+  该服务包括：当 HTTP 服务器忽略续传区间时按资源单独重启；针对已知大小的 HTTP 资源使用有边界的 Range 分块；
+  以及资源过期错误处理——通过宿主提供的恢复钩子处理过期或被拒的媒体 URL。
 - 在 Android、iOS 和 Flutter 移动端播放处于活动状态时，支持可配置的屏幕常亮处理。
 - 移动端使用平台原生 surface，而不是通过帧拷贝方式回传画面。
 - 可选的 remux / codec plugin 架构，覆盖更高级的媒体工作流。

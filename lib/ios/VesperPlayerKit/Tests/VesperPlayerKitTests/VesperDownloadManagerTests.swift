@@ -219,6 +219,7 @@ private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadMan
             sourceUri: stringFromOptionalRuntimeCString(source.pointee.source_uri) ?? "",
             contentFormat: source.pointee.content_format,
             manifestUri: stringFromOptionalRuntimeCString(source.pointee.manifest_uri),
+            sourceHeaders: runtimeDownloadSourceHeaders(source.pointee),
             status: autoStart ? .downloading : .queued,
             totalBytes: assetIndex.pointee.has_total_size_bytes ? assetIndex.pointee.total_size_bytes : nil,
             receivedBytes: 0,
@@ -254,6 +255,7 @@ private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadMan
                 sourceUri: stringFromOptionalRuntimeCString(task.source.source_uri) ?? "",
                 contentFormat: task.source.content_format,
                 manifestUri: stringFromOptionalRuntimeCString(task.source.manifest_uri),
+                sourceHeaders: runtimeDownloadSourceHeaders(task.source),
                 status: task.status.toDownloadState(),
                 totalBytes: task.progress.has_total_bytes ? task.progress.total_bytes : nil,
                 receivedBytes: task.progress.received_bytes,
@@ -448,6 +450,7 @@ private struct StoredDownloadTask {
     let sourceUri: String
     let contentFormat: VesperRuntimeDownloadContentFormat
     let manifestUri: String?
+    let sourceHeaders: [String: String]
     let status: VesperDownloadState
     let totalBytes: UInt64?
     let receivedBytes: UInt64
@@ -472,6 +475,7 @@ private struct StoredDownloadTask {
             sourceUri: sourceUri,
             contentFormat: contentFormat,
             manifestUri: manifestUri,
+            sourceHeaders: sourceHeaders,
             status: status ?? self.status,
             totalBytes: totalBytes ?? self.totalBytes,
             receivedBytes: receivedBytes ?? self.receivedBytes,
@@ -625,13 +629,18 @@ private func makeRuntimeEventList(from events: [StoredRuntimeEvent]) -> VesperRu
 }
 
 private func makeRuntimeTask(from task: StoredDownloadTask) -> VesperRuntimeDownloadTask {
-    VesperRuntimeDownloadTask(
+    let headerNames = Array(task.sourceHeaders.keys)
+    let headerValues = headerNames.map { task.sourceHeaders[$0] ?? "" }
+    return VesperRuntimeDownloadTask(
         task_id: task.taskId,
         asset_id: duplicateRuntimeCString(task.assetId),
         source: VesperRuntimeDownloadSource(
             source_uri: duplicateRuntimeCString(task.sourceUri),
             content_format: task.contentFormat,
-            manifest_uri: task.manifestUri.flatMap(duplicateRuntimeCString)
+            manifest_uri: task.manifestUri.flatMap(duplicateRuntimeCString),
+            header_names: duplicateRuntimeCStringArray(headerNames),
+            header_values: duplicateRuntimeCStringArray(headerValues),
+            headers_len: UInt(headerNames.count)
         ),
         profile: VesperRuntimeDownloadProfile(
             variant_id: nil,
@@ -681,7 +690,10 @@ private func emptyRuntimeTask() -> VesperRuntimeDownloadTask {
         source: VesperRuntimeDownloadSource(
             source_uri: nil,
             content_format: VesperRuntimeDownloadContentFormatUnknown,
-            manifest_uri: nil
+            manifest_uri: nil,
+            header_names: nil,
+            header_values: nil,
+            headers_len: 0
         ),
         profile: VesperRuntimeDownloadProfile(
             variant_id: nil,
@@ -775,10 +787,25 @@ private func freeRuntimeTask(_ task: inout VesperRuntimeDownloadTask) {
 private func freeRuntimeDownloadSource(_ source: inout VesperRuntimeDownloadSource) {
     freeRuntimeCString(source.source_uri)
     freeRuntimeCString(source.manifest_uri)
+    if let headerNames = source.header_names, source.headers_len > 0 {
+        for index in 0..<Int(source.headers_len) {
+            freeRuntimeCString(headerNames[index])
+        }
+        headerNames.deallocate()
+    }
+    if let headerValues = source.header_values, source.headers_len > 0 {
+        for index in 0..<Int(source.headers_len) {
+            freeRuntimeCString(headerValues[index])
+        }
+        headerValues.deallocate()
+    }
     source = VesperRuntimeDownloadSource(
         source_uri: nil,
         content_format: VesperRuntimeDownloadContentFormatUnknown,
-        manifest_uri: nil
+        manifest_uri: nil,
+        header_names: nil,
+        header_values: nil,
+        headers_len: 0
     )
 }
 
@@ -850,6 +877,36 @@ private func freeRuntimeDownloadAssetIndex(_ assetIndex: inout VesperRuntimeDown
 
 private func duplicateRuntimeCString(_ value: String) -> UnsafeMutablePointer<CChar>? {
     strdup(value)
+}
+
+private func duplicateRuntimeCStringArray(_ values: [String]) -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>? {
+    guard !values.isEmpty else {
+        return nil
+    }
+    let pointer = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: values.count)
+    for (index, value) in values.enumerated() {
+        pointer[index] = duplicateRuntimeCString(value)
+    }
+    return pointer
+}
+
+private func runtimeDownloadSourceHeaders(_ source: VesperRuntimeDownloadSource) -> [String: String] {
+    guard let headerNames = source.header_names,
+          let headerValues = source.header_values,
+          source.headers_len > 0
+    else {
+        return [:]
+    }
+    var headers: [String: String] = [:]
+    for index in 0..<Int(source.headers_len) {
+        guard let name = stringFromOptionalRuntimeCString(headerNames[index]),
+              let value = stringFromOptionalRuntimeCString(headerValues[index])
+        else {
+            continue
+        }
+        headers[name] = value
+    }
+    return headers
 }
 
 private func stringFromOptionalRuntimeCString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {

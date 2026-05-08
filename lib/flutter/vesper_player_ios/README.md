@@ -79,7 +79,9 @@ downloads by default. The iOS host kit restores interrupted tasks when the
 manager is recreated and resumes existing partial files with range requests when
 the server supports them. It validates resume ranges before appending partial
 files and restarts only the affected resource when a server ignores a resume
-range. This is SDK-managed foreground recovery, not an iOS background
+range. Known-size HTTP resources without an explicit byte range are also
+transferred with bounded closed Range chunks from the first byte. This is
+SDK-managed foreground recovery, not an iOS background
 `URLSessionConfiguration.background` implementation.
 
 Download source headers are passed through the iOS host kit for manifest reads,

@@ -61,8 +61,10 @@ background playback or foreground service startup.
 Download restore is intentionally separate from Android OS-managed background
 transfer. The Flutter package restores SDK task state on manager startup, resumes
 partial files with validated range requests, and restarts only the affected
-resource when a server ignores a resume range. It does not install a WorkManager
-or download ForegroundService for process-death transfers.
+resource when a server ignores a resume range. Known-size HTTP resources without
+an explicit byte range are also transferred with bounded closed Range chunks from
+the first byte. It does not install a WorkManager or download ForegroundService
+for process-death transfers.
 
 Download source headers are passed through the Android host kit for manifest
 reads, size probes, Media3 `DataSpec` fallback reads, and media transfers. Hosts

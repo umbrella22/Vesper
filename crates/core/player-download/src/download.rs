@@ -54,6 +54,7 @@ pub struct DownloadSource {
     pub source: MediaSource,
     pub content_format: DownloadContentFormat,
     pub manifest_uri: Option<String>,
+    pub request_headers: HashMap<String, String>,
 }
 
 impl DownloadSource {
@@ -62,6 +63,7 @@ impl DownloadSource {
             source,
             content_format,
             manifest_uri: None,
+            request_headers: HashMap::new(),
         }
     }
 
@@ -69,6 +71,29 @@ impl DownloadSource {
         self.manifest_uri = Some(manifest_uri.into().trim().to_owned());
         self
     }
+
+    pub fn with_request_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        self.request_headers = sanitize_request_headers(headers);
+        self
+    }
+}
+
+fn sanitize_request_headers(
+    headers: impl IntoIterator<Item = (String, String)>,
+) -> HashMap<String, String> {
+    headers
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let name = name.trim().to_owned();
+            if name.is_empty() || value.trim().is_empty() {
+                return None;
+            }
+            Some((name, value))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

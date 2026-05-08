@@ -42,7 +42,8 @@ reference.
 - SDK-managed offline task restore and resumable range transfers on Android and
   iOS, plus a shared desktop host download service for macOS, Windows, and Linux,
   including per-resource restart when an HTTP server ignores resume ranges and
-  stale-resource errors for expired or rejected media URLs.
+  bounded Range chunks for known-size HTTP resources, and stale-resource errors
+  with host-provided recovery hooks for expired or rejected media URLs.
 - Configurable screen-awake handling while playback is active on Android, iOS,
   and Flutter mobile hosts.
 - Platform-native surfaces instead of frame-copy rendering paths for mobile

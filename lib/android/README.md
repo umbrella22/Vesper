@@ -121,6 +121,14 @@ the manager deletes only that partial resource and restarts the same resource fr
 byte zero; expired or unavailable URLs fail with a stale-resource error so the
 host can refresh the media link.
 
+When an HTTP resource has a known `sizeBytes` and no explicit byte range, the
+foreground executor also uses bounded closed Range requests for the initial
+transfer instead of a single unbounded `GET`. Each `206 Partial Content`
+response is validated against `Content-Range` before bytes are appended. If a
+small resource is requested as one complete range and the server ignores Range
+with `200 OK`, the response is accepted only when the final byte count matches
+the known size.
+
 When `VesperPlayerSource.headers` is set, the download executor forwards those
 headers to all SDK-owned network operations for the task: HLS, DASH, and FLV
 manifest reads; HEAD and `Range: bytes=0-0` size probes; Media3 `DataSpec`
@@ -128,6 +136,12 @@ fallback reads; single-file transfers; HLS map and segment transfers; DASH init
 and media segment transfers; FLV clip transfers; and size completion for
 prebuilt asset indexes. Empty header names and blank values are ignored, and the
 SDK does not add site-specific headers on its own.
+
+Hosts that can refresh signed or short-lived media URLs may pass a
+`VesperDownloadStaleResourceRecoverer` to `VesperDownloadManager`. The recoverer
+receives the failed task and a `VesperDownloadStaleResource`, returns a refreshed
+`VesperDownloadSource`, and the executor re-runs preparation before starting the
+same task. If no recoverer is provided, stale resources fail normally.
 
 This is not an Android `WorkManager` or download `ForegroundService` wrapper for
 process-death background transfer. Hosts that need OS-managed background
