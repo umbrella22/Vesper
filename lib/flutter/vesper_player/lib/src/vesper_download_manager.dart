@@ -19,10 +19,12 @@ class VesperDownloadManager {
   static Future<VesperDownloadManager> create({
     VesperDownloadConfiguration configuration =
         const VesperDownloadConfiguration(),
+    VesperDownloadStaleResourcePlanRecoveryCallback? staleResourceRecovery,
   }) async {
     final platform = VesperPlayerPlatform.instance;
     final result = await platform.createDownloadManager(
       configuration: configuration,
+      staleResourceRecovery: staleResourceRecovery,
     );
     return VesperDownloadManager._(
       downloadId: result.downloadId,

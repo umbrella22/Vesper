@@ -1674,6 +1674,77 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_preparation(
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
 /// handle access according to the host binding contract.
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_download_session_replace_task_plan(
+    handle: u64,
+    task_id: u64,
+    source: *const PlayerFfiDownloadSource,
+    profile: *const PlayerFfiDownloadProfile,
+    asset_index: *const PlayerFfiDownloadAssetIndex,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    let source = match read_download_source(source) {
+        Ok(source) => source,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+    let profile = match read_download_profile(profile) {
+        Ok(profile) => profile,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+    let asset_index = match read_download_asset_index(asset_index) {
+        Ok(value) => value,
+        Err(error) => {
+            write_error(out_error, error);
+            return PlayerFfiCallStatus::Error;
+        }
+    };
+
+    let Ok(mut sessions) = download_sessions().lock() else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "download session registry lock failed",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+    let Some(session) = sessions.get_mut(handle) else {
+        write_error(
+            out_error,
+            owned_api_error(
+                PlayerFfiErrorCode::InvalidArgument,
+                "invalid download session handle",
+            ),
+        );
+        return PlayerFfiCallStatus::Error;
+    };
+
+    if let Err(error) = session.replace_task_plan(
+        player_runtime::DownloadTaskId::from_raw(task_id),
+        source,
+        profile,
+        asset_index,
+        std::time::Instant::now(),
+    ) {
+        write_error(out_error, runtime_error_to_ffi(error));
+        return PlayerFfiCallStatus::Error;
+    }
+    PlayerFfiCallStatus::Ok
+}
+
+/// # Safety
+///
+/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
+/// the parameter is documented as optional or point to valid objects allocated by the
+/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
+/// handle access according to the host binding contract.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_download_session_export_task(
     handle: u64,
     task_id: u64,
@@ -3604,10 +3675,7 @@ fn download_resource_record_to_ffi(
             .byte_range
             .map(PlayerFfiDownloadByteRange::from)
             .unwrap_or_default(),
-        generated_text: resource
-            .generated_text
-            .map(into_c_string_ptr)
-            .unwrap_or(ptr::null_mut()),
+        generated_text: ptr::null_mut(),
         has_size_bytes: resource.size_bytes.is_some(),
         size_bytes: resource.size_bytes.unwrap_or_default(),
         etag: resource

@@ -48,10 +48,13 @@ import io.github.ikaros.vesper.player.android.VesperDownloadManager
 import io.github.ikaros.vesper.player.android.VesperDownloadOutputFormat
 import io.github.ikaros.vesper.player.android.VesperDownloadProfile
 import io.github.ikaros.vesper.player.android.VesperDownloadProgressSnapshot
+import io.github.ikaros.vesper.player.android.VesperDownloadRecoveredTaskPlan
 import io.github.ikaros.vesper.player.android.VesperDownloadResourceRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSegmentRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadState
+import io.github.ikaros.vesper.player.android.VesperDownloadStaleResource
+import io.github.ikaros.vesper.player.android.VesperDownloadStaleResourcePlanRecoverer
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
@@ -85,8 +88,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 class VesperPlayerAndroidPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
@@ -545,13 +551,27 @@ class VesperPlayerAndroidPlugin :
         runCatching {
             val arguments = call.argumentMap()
             val configurationMap = requireNestedMap(arguments, "configuration")
+            val downloadId = UUID.randomUUID().toString()
+            val hasStaleResourceRecovery = arguments["hasStaleResourceRecovery"] as? Boolean ?: false
             val session =
                 DownloadSession(
-                    id = UUID.randomUUID().toString(),
+                    id = downloadId,
                     manager =
                         VesperDownloadManager(
                             context = applicationContext,
                             configuration = configurationMap.toDownloadConfiguration(),
+                            staleResourcePlanRecoverer =
+                                if (hasStaleResourceRecovery) {
+                                    object : VesperDownloadStaleResourcePlanRecoverer {
+                                        override suspend fun recoverPlan(
+                                            task: VesperDownloadTaskSnapshot,
+                                            staleResource: VesperDownloadStaleResource,
+                                        ): VesperDownloadRecoveredTaskPlan? =
+                                            recoverDownloadTaskPlan(downloadId, task, staleResource)
+                                    }
+                                } else {
+                                    null
+                                },
                         ),
                 )
             downloadSessions[session.id] = session
@@ -569,6 +589,46 @@ class VesperPlayerAndroidPlugin :
                 )
             }
     }
+
+    private suspend fun recoverDownloadTaskPlan(
+        downloadId: String,
+        task: VesperDownloadTaskSnapshot,
+        staleResource: VesperDownloadStaleResource,
+    ): VesperDownloadRecoveredTaskPlan? =
+        withContext(Dispatchers.Main) {
+            suspendCoroutine { continuation ->
+                methodChannel.invokeMethod(
+                    "recoverDownloadTaskPlan",
+                    mapOf(
+                        "downloadId" to downloadId,
+                        "task" to task.toMap(),
+                        "staleResource" to staleResource.toMap(),
+                    ),
+                    object : MethodChannel.Result {
+                        override fun success(result: Any?) {
+                            val plan =
+                                (result as? Map<*, *>)
+                                    ?.entries
+                                    ?.associate { (key, value) -> key.toString() to value }
+                                    ?.toDownloadRecoveredTaskPlan()
+                            continuation.resume(plan)
+                        }
+
+                        override fun error(
+                            errorCode: String,
+                            errorMessage: String?,
+                            errorDetails: Any?,
+                        ) {
+                            continuation.resume(null)
+                        }
+
+                        override fun notImplemented() {
+                            continuation.resume(null)
+                        }
+                    },
+                )
+            }
+        }
 
     private fun handleSessionCommand(
         call: MethodCall,
@@ -1254,6 +1314,16 @@ private fun Map<String, Any?>.toDownloadConfiguration(): VesperDownloadConfigura
             (this["pluginLibraryPaths"] as? List<*>)
                 ?.mapNotNull { value -> value?.toString() }
                 ?: emptyList(),
+        rangeChunkBytes = (this["rangeChunkBytes"] as? Number)?.toLong(),
+        minProgressBytes = (this["minProgressBytes"] as? Number)?.toLong() ?: 512L * 1024L,
+        minProgressIntervalMs = (this["minProgressIntervalMs"] as? Number)?.toLong() ?: 250L,
+    )
+
+private fun Map<String, Any?>.toDownloadRecoveredTaskPlan(): VesperDownloadRecoveredTaskPlan =
+    VesperDownloadRecoveredTaskPlan(
+        source = requireNestedMap(this, "source").toDownloadSource(),
+        profile = requireNestedMap(this, "profile").toDownloadProfile(),
+        assetIndex = requireNestedMap(this, "assetIndex").toDownloadAssetIndex(),
     )
 
 private fun Map<String, Any?>.toDownloadSource(): VesperDownloadSource =
@@ -1807,10 +1877,22 @@ private fun VesperDownloadResourceRecord.toMap(): Map<String, Any?> =
         "uri" to uri,
         "relativePath" to relativePath,
         "byteRange" to byteRange?.toMap(),
-        "generatedText" to generatedText,
+        "generatedText" to null,
         "sizeBytes" to sizeBytes,
         "etag" to etag,
         "checksum" to checksum,
+    )
+
+private fun VesperDownloadStaleResource.toMap(): Map<String, Any?> =
+    mapOf(
+        "taskId" to taskId,
+        "resourceId" to resourceId,
+        "segmentId" to segmentId,
+        "uri" to uri,
+        "phase" to phase.name.replaceFirstChar { it.lowercase() },
+        "statusCode" to statusCode,
+        "receivedBytes" to receivedBytes,
+        "message" to message,
     )
 
 private fun VesperDownloadSegmentRecord.toMap(): Map<String, Any?> =

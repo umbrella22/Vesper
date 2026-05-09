@@ -8,10 +8,10 @@ usage() {
 Usage: scripts/vesper <group> <command> [args...]
 
 Groups:
-  ffi      generate | verify | c-host-smoke
+  ffi      generate | sync | verify | c-host-smoke
   android  ffmpeg | jni | aar | remux-plugin | stage-release
   apple    ffmpeg
-  ios      ffi | remux-plugin | kit-xcframework | embed-remux-plugin | stage-release
+  ios      ffi | remux-plugin | kit-xcframework | embed-remux-plugin | stage-release | verify-bridge-shim
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
   release  notes
@@ -30,6 +30,9 @@ shift 2
 case "$group:$command" in
   ffi:generate)
     exec "$SCRIPT_DIR/ffi/generate-player-ffi-header.sh" "$@"
+    ;;
+  ffi:sync)
+    exec "$SCRIPT_DIR/ffi/sync-player-ffi-header.sh" "$@"
     ;;
   ffi:verify)
     exec "$SCRIPT_DIR/ffi/verify-player-ffi-header.sh" "$@"
@@ -69,6 +72,9 @@ case "$group:$command" in
     ;;
   ios:stage-release)
     exec "$SCRIPT_DIR/ios/stage-vesper-player-kit-release.sh" "$@"
+    ;;
+  ios:verify-bridge-shim)
+    exec "$SCRIPT_DIR/ios/verify-vesper-player-kit-bridge-shim.sh" "$@"
     ;;
   desktop:ensure-ffmpeg)
     exec "$SCRIPT_DIR/desktop/ensure-ffmpeg.sh" "$@"

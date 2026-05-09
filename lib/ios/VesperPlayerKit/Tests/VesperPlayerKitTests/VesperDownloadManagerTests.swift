@@ -151,6 +151,51 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(bindings.createdConfiguration?.runPostProcessorsOnCompletion, false)
     }
 
+    func testNativeBridgeMaterializesGeneratedTextWithoutReturningBody() throws {
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-native-download-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+
+        let manager = VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(
+                autoStart: false,
+                restoreTasksOnStartup: false,
+                baseDirectory: baseDirectory
+            ),
+            executor: RecordingDownloadExecutor()
+        )
+        defer { manager.dispose() }
+
+        let generatedBody = String(repeating: "<S id=\"segment\" />", count: 1024)
+        let taskId = try XCTUnwrap(manager.createTask(
+            assetId: "asset-generated",
+            source: VesperDownloadSource(
+                source: .dash(
+                    url: URL(string: "https://example.com/manifest.mpd")!,
+                    label: "DASH"
+                )
+            ),
+            assetIndex: VesperDownloadAssetIndex(
+                contentFormat: .dashSegments,
+                resources: [
+                    VesperDownloadResourceRecord(
+                        resourceId: "manifest",
+                        uri: "generated://manifest",
+                        relativePath: "manifest.mpd",
+                        generatedText: generatedBody
+                    ),
+                ]
+            )
+        ))
+
+        let task = try XCTUnwrap(manager.task(taskId))
+        let resource = try XCTUnwrap(task.assetIndex.resources.first)
+        XCTAssertNil(resource.generatedText)
+        XCTAssertTrue(resource.uri.hasPrefix("file://"))
+        XCTAssertEqual(resource.relativePath, "manifest.mpd")
+        XCTAssertEqual(resource.sizeBytes, UInt64(generatedBody.utf8.count))
+    }
+
     func testExportTaskOutputForwardsProgressAndCancellationToBindings() async throws {
         let bindings = FakeDownloadBindings(autoStart: false)
         let manager = VesperDownloadManager(
@@ -348,6 +393,36 @@ private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadMan
                 commands.append(.start(updated))
                 events.append(.init(kind: .stateChanged, task: updated))
             }
+            return updated
+        }
+    }
+
+    func replaceDownloadTaskPlan(
+        sessionHandle: UInt64,
+        taskId: UInt64,
+        source: UnsafePointer<VesperRuntimeDownloadSource>,
+        profile: UnsafePointer<VesperRuntimeDownloadProfile>,
+        assetIndex: UnsafePointer<VesperRuntimeDownloadAssetIndex>
+    ) -> Bool {
+        updateTask(taskId) { task in
+            let updated = StoredDownloadTask(
+                taskId: task.taskId,
+                assetId: task.assetId,
+                sourceUri: stringFromOptionalRuntimeCString(source.pointee.source_uri) ?? "",
+                contentFormat: source.pointee.content_format,
+                manifestUri: stringFromOptionalRuntimeCString(source.pointee.manifest_uri),
+                sourceHeaders: runtimeDownloadSourceHeaders(source.pointee),
+                status: .preparing,
+                totalBytes: assetIndex.pointee.has_total_size_bytes ? assetIndex.pointee.total_size_bytes : nil,
+                receivedBytes: 0,
+                totalSegments: assetIndex.pointee.segments_len > 0 ? UInt32(assetIndex.pointee.segments_len) : nil,
+                receivedSegments: 0,
+                completedPath: stringFromOptionalRuntimeCString(assetIndex.pointee.completed_path),
+                error: nil,
+                profileTargetDirectory: stringFromOptionalRuntimeCString(profile.pointee.target_directory)
+            )
+            events.append(.init(kind: .assetIndexUpdated, task: updated))
+            events.append(.init(kind: .stateChanged, task: updated))
             return updated
         }
     }

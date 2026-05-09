@@ -176,6 +176,18 @@ impl AndroidDownloadBridgeSession {
         self.manager.complete_preparation(task_id, asset_index, now)
     }
 
+    pub fn replace_task_plan(
+        &mut self,
+        task_id: DownloadTaskId,
+        source: DownloadSource,
+        profile: DownloadProfile,
+        asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        self.manager
+            .replace_task_plan(task_id, source, profile, asset_index, now)
+    }
+
     pub fn complete_task(
         &mut self,
         task_id: DownloadTaskId,

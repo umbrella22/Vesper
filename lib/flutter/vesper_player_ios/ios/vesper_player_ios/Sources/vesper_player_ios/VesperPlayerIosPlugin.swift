@@ -448,11 +448,28 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         do {
             let arguments = arguments(of: call)
             let configurationMap = try requireNestedMap(arguments: arguments, key: "configuration")
+            let downloadId = UUID().uuidString
+            let hasStaleResourceRecovery = arguments["hasStaleResourceRecovery"] as? Bool ?? false
+            let configuration = configurationMap.toDownloadConfiguration()
+            let recoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler?
+            if hasStaleResourceRecovery {
+                recoveryHandler = { [weak self] task, staleResource in
+                    await self?.recoverDownloadTaskPlan(
+                        downloadId: downloadId,
+                        task: task,
+                        staleResource: staleResource
+                    )
+                }
+            } else {
+                recoveryHandler = nil
+            }
+            let manager = VesperDownloadManager(
+                configuration: configuration,
+                staleResourcePlanRecoveryHandler: recoveryHandler
+            )
             let session = DownloadSession(
-                id: UUID().uuidString,
-                manager: VesperDownloadManager(
-                    configuration: configurationMap.toDownloadConfiguration()
-                )
+                id: downloadId,
+                manager: manager
             )
             downloadSessions[session.id] = session
             observeDownloadSession(session)
@@ -463,6 +480,31 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             ])
         } catch {
             result(asDownloadFlutterError(error, code: "vesper_download_create_failed"))
+        }
+    }
+
+    @MainActor
+    private func recoverDownloadTaskPlan(
+        downloadId: String,
+        task: VesperDownloadTaskSnapshot,
+        staleResource: VesperDownloadStaleResource
+    ) async -> VesperDownloadRecoveredTaskPlan? {
+        guard let methodChannel else {
+            return nil
+        }
+        let payload: [String: Any] = [
+            "downloadId": downloadId,
+            "task": task.toMap,
+            "staleResource": staleResource.toMap,
+        ]
+        return await withCheckedContinuation { continuation in
+            methodChannel.invokeMethod("recoverDownloadTaskPlan", arguments: payload) { value in
+                guard let map = value as? [String: Any] else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: try? map.toDownloadRecoveredTaskPlan())
+            }
         }
     }
 
@@ -1367,7 +1409,18 @@ private extension Dictionary where Key == String, Value == Any {
             pluginLibraryPaths:
                 (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
                     value as? String
-                } ?? []
+                } ?? [],
+            rangeChunkBytes: (self["rangeChunkBytes"] as? NSNumber)?.uint64Value,
+            minProgressBytes: (self["minProgressBytes"] as? NSNumber)?.uint64Value ?? 512 * 1024,
+            minProgressIntervalMs: (self["minProgressIntervalMs"] as? NSNumber)?.uint64Value ?? 250
+        )
+    }
+
+    func toDownloadRecoveredTaskPlan() throws -> VesperDownloadRecoveredTaskPlan {
+        VesperDownloadRecoveredTaskPlan(
+            source: try requireNestedMap(arguments: self, key: "source").toDownloadSource(),
+            profile: try requireNestedMap(arguments: self, key: "profile").toDownloadProfile(),
+            assetIndex: try requireNestedMap(arguments: self, key: "assetIndex").toDownloadAssetIndex()
         )
     }
 
@@ -1785,10 +1838,25 @@ private extension VesperDownloadResourceRecord {
             "uri": uri,
             "relativePath": flutterValue(relativePath),
             "byteRange": flutterValue(byteRange?.toMap),
-            "generatedText": flutterValue(generatedText),
+            "generatedText": NSNull(),
             "sizeBytes": flutterValue(sizeBytes),
             "etag": flutterValue(etag),
             "checksum": flutterValue(checksum),
+        ]
+    }
+}
+
+private extension VesperDownloadStaleResource {
+    var toMap: [String: Any] {
+        [
+            "taskId": taskId,
+            "resourceId": flutterValue(resourceId),
+            "segmentId": flutterValue(segmentId),
+            "uri": flutterValue(uri),
+            "phase": phase == .download ? "download" : "prepare",
+            "statusCode": flutterValue(statusCode),
+            "receivedBytes": receivedBytes,
+            "message": message,
         ]
     }
 }

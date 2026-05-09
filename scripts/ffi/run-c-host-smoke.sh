@@ -22,6 +22,9 @@ done
 
 cd "$ROOT_DIR"
 
+echo "[c-host] syncing generated FFI header"
+"$ROOT_DIR/scripts/vesper" ffi sync
+
 echo "[c-host] building player-ffi"
 cargo build -p player-ffi
 

@@ -635,7 +635,7 @@ fn download_resource_record_object<'local>(
     let etag = optional_java_string(env, resource.etag.as_deref())?;
     let checksum = optional_java_string(env, resource.checksum.as_deref())?;
     let byte_range = optional_download_byte_range_object(env, resource.byte_range)?;
-    let generated_text = optional_java_string(env, resource.generated_text.as_deref())?;
+    let generated_text = JObject::null();
     env.new_object(
         class,
         method_sig(
@@ -1198,6 +1198,40 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 let Some(result) = with_download_session_mut(env, session_handle, |session| {
                     session.complete_preparation(
                         player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        asset_index,
+                        Instant::now(),
+                    )
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(result.is_ok() as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_replaceDownloadTaskPlan(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    task_id: jlong,
+    source: JObject<'_>,
+    profile: JObject<'_>,
+    asset_index: JObject<'_>,
+    _now_epoch_ms: jlong,
+) -> jboolean {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let source = download_source_from_java(env, source)?;
+                let profile = download_profile_from_java(env, profile)?;
+                let asset_index = download_asset_index_from_java(env, asset_index)?;
+                let Some(result) = with_download_session_mut(env, session_handle, |session| {
+                    session.replace_task_plan(
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        source,
+                        profile,
                         asset_index,
                         Instant::now(),
                     )

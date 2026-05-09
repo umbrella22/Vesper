@@ -6,6 +6,7 @@ import 'package:vesper_player_platform_interface/vesper_player_platform_interfac
 class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   MethodChannelVesperPlayerAndroid() {
     VesperPlayerPlatform.instance = this;
+    _methodChannel.setMethodCallHandler(_handleMethodCall);
   }
 
   static const MethodChannel _methodChannel = MethodChannel(
@@ -32,6 +33,10 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
           .map((dynamic event) => Map<Object?, Object?>.from(event as Map))
           .map(VesperDownloadManagerEvent.fromMap)
           .asBroadcastStream();
+
+  final Map<String, VesperDownloadStaleResourcePlanRecoveryCallback>
+      _downloadRecoveryHandlers =
+      <String, VesperDownloadStaleResourcePlanRecoveryCallback>{};
 
   @override
   Future<VesperPlatformCreateResult> createPlayer({
@@ -283,15 +288,24 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   Future<VesperPlatformDownloadCreateResult> createDownloadManager({
     VesperDownloadConfiguration configuration =
         const VesperDownloadConfiguration(),
+    VesperDownloadStaleResourcePlanRecoveryCallback? staleResourceRecovery,
   }) async {
     final result = await _methodChannel.invokeMethod<Object?>(
       'createDownloadManager',
-      <String, Object?>{'configuration': configuration.toMap()},
+      <String, Object?>{
+        'configuration': configuration.toMap(),
+        'hasStaleResourceRecovery': staleResourceRecovery != null,
+      },
     );
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)
         : <Object?, Object?>{};
-    return VesperPlatformDownloadCreateResult.fromMap(decoded);
+    final createResult = VesperPlatformDownloadCreateResult.fromMap(decoded);
+    if (staleResourceRecovery != null && createResult.downloadId.isNotEmpty) {
+      _downloadRecoveryHandlers[createResult.downloadId] =
+          staleResourceRecovery;
+    }
+    return createResult;
   }
 
   @override
@@ -308,6 +322,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
 
   @override
   Future<void> disposeDownloadManager(String downloadId) {
+    _downloadRecoveryHandlers.remove(downloadId);
     return _invokeVoid('disposeDownloadManager', <String, Object?>{
       'downloadId': downloadId,
     });
@@ -385,6 +400,27 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
 
   Future<void> _invokeVoid(String method, [Object? arguments]) async {
     await _methodChannel.invokeMethod<void>(method, arguments);
+  }
+
+  Future<Object?> _handleMethodCall(MethodCall call) async {
+    if (call.method != 'recoverDownloadTaskPlan') {
+      throw MissingPluginException();
+    }
+    final arguments = call.arguments is Map
+        ? Map<Object?, Object?>.from(call.arguments as Map)
+        : <Object?, Object?>{};
+    final downloadId = arguments['downloadId'] as String? ?? '';
+    final handler = _downloadRecoveryHandlers[downloadId];
+    if (handler == null) {
+      return null;
+    }
+    final plan = await handler(
+      VesperDownloadTaskSnapshot.fromMap(vesperDecodeMap(arguments['task'])),
+      VesperDownloadStaleResource.fromMap(
+        vesperDecodeMap(arguments['staleResource']),
+      ),
+    );
+    return plan?.toMap();
   }
 }
 

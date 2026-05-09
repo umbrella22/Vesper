@@ -194,6 +194,9 @@ jobs:
       - name: Test iOS Rust adapter crates
         run: cargo test -p player-platform-ios -p player-ffi-ios
 
+      - name: Verify VesperPlayerKit bridge shim
+        run: ./scripts/vesper ios verify-bridge-shim
+
       - name: Build Rust iOS resolver bundle
         run: ./scripts/vesper ios ffi release
 

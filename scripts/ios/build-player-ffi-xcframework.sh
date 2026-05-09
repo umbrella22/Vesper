@@ -75,6 +75,12 @@ copy_built_library() {
   cp "$source_path" "$destination_path"
 }
 
+index_static_archive() {
+  local archive_path="$1"
+
+  xcrun ranlib "$archive_path"
+}
+
 strip_static_archive_if_needed() {
   local archive_path="$1"
 
@@ -85,12 +91,19 @@ strip_static_archive_if_needed() {
   xcrun strip -S -x "$archive_path"
 }
 
+finalize_static_archive() {
+  local archive_path="$1"
+
+  strip_static_archive_if_needed "$archive_path"
+  index_static_archive "$archive_path"
+}
+
 build_device_archive() {
   build_target "$DEVICE_TARGET"
   copy_built_library \
     "$ROOT_DIR/target/$DEVICE_TARGET/$PROFILE_DIR/libplayer_ffi_ios.a" \
     "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
-  strip_static_archive_if_needed "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
+  finalize_static_archive "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
 }
 
 build_simulator_archive() {
@@ -104,7 +117,7 @@ build_simulator_archive() {
     copy_built_library \
       "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_ios.a" \
       "$simulator_output_path"
-    strip_static_archive_if_needed "$simulator_output_path"
+    finalize_static_archive "$simulator_output_path"
     simulator_archives+=("$simulator_output_path")
   done
 
@@ -115,7 +128,7 @@ build_simulator_archive() {
     lipo -create "${simulator_archives[@]}" \
       -output "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
   fi
-  strip_static_archive_if_needed "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
+  finalize_static_archive "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
 }
 
 build_catalyst_archive() {
@@ -142,7 +155,7 @@ build_catalyst_archive() {
     copy_built_library \
       "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_ios.a" \
       "$catalyst_output_path"
-    strip_static_archive_if_needed "$catalyst_output_path"
+    finalize_static_archive "$catalyst_output_path"
     catalyst_archives+=("$catalyst_output_path")
   done
 
@@ -153,7 +166,7 @@ build_catalyst_archive() {
     lipo -create "${catalyst_archives[@]}" \
       -output "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
   fi
-  strip_static_archive_if_needed "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
+  finalize_static_archive "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
 }
 
 if [[ "$BUILD_MODE" == "platform" ]]; then

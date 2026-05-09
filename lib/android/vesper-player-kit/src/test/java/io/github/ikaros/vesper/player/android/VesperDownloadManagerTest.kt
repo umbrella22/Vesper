@@ -142,8 +142,6 @@ class VesperDownloadManagerTest {
             assertRecordedHeader(requests, "HEAD", "/segment.ts", "Referer", "https://example.com/player")
             assertRecordedHeader(requests, "GET", "/init.mp4", "User-Agent", "VesperFixture/1.0")
             assertRecordedHeader(requests, "GET", "/segment.ts", "User-Agent", "VesperFixture/1.0")
-            assertRecordedHeader(requests, "GET", "/init.mp4", "Range", "bytes=0-3")
-            assertRecordedHeader(requests, "GET", "/segment.ts", "Range", "bytes=0-11")
             executor.dispose()
         } finally {
             server.stop(0)
@@ -393,6 +391,42 @@ private class FakeDownloadBindings(
                 events += NativeDownloadEvent.AssetIndexUpdated(updated)
                 events += NativeDownloadEvent.StateChanged(updated)
                 commands += NativeDownloadCommand.Start(updated)
+            }
+        }
+
+    override fun replaceDownloadTaskPlan(
+        sessionHandle: Long,
+        taskId: Long,
+        source: NativeDownloadSource,
+        profile: NativeDownloadProfile,
+        assetIndex: NativeDownloadAssetIndex,
+        nowEpochMs: Long,
+    ): Boolean =
+        updateTask(taskId) { task ->
+            NativeDownloadTask(
+                taskId = task.taskId,
+                assetId = task.assetId,
+                source = source,
+                profile = profile,
+                statusOrdinal = 1,
+                progress =
+                    NativeDownloadProgress(
+                        receivedBytes = 0L,
+                        hasTotalBytes = assetIndex.hasTotalSizeBytes,
+                        totalBytes = assetIndex.totalSizeBytes,
+                        receivedSegments = 0,
+                        hasTotalSegments = assetIndex.segments.isNotEmpty(),
+                        totalSegments = assetIndex.segments.size,
+                    ),
+                assetIndex = assetIndex,
+                hasError = false,
+                errorCodeOrdinal = 0,
+                errorCategoryOrdinal = 0,
+                errorRetriable = false,
+                errorMessage = null,
+            ).also { updated ->
+                events += NativeDownloadEvent.AssetIndexUpdated(updated)
+                events += NativeDownloadEvent.StateChanged(updated)
             }
         }
 

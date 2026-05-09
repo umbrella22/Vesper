@@ -41,7 +41,8 @@ The public C header is checked in at
 [`include/player_ffi.h`](../../include/player_ffi.h) and is generated from
 `crates/ffi/player-ffi` via `cbindgen`.
 
-- Regenerate: `scripts/vesper ffi generate`
+- Sync before local builds: `scripts/vesper ffi sync`
+- Regenerate explicitly: `scripts/vesper ffi generate`
 - Verify it is up to date: `scripts/vesper ffi verify`
 
 ## Handle Semantics

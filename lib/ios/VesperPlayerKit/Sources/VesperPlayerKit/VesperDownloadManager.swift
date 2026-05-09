@@ -2,7 +2,8 @@ import Combine
 import Foundation
 import VesperPlayerKitBridgeShim
 
-private let vesperDownloadHttpRangeChunkBytes: UInt64 = 4 * 1024 * 1024
+@usableFromInline let vesperDownloadDefaultMinProgressBytes: UInt64 = 512 * 1024
+@usableFromInline let vesperDownloadDefaultMinProgressIntervalMs: UInt64 = 250
 
 public typealias VesperDownloadAssetId = String
 public typealias VesperDownloadTaskId = UInt64
@@ -28,6 +29,9 @@ public struct VesperDownloadConfiguration: Equatable {
     public let restoreTasksOnStartup: Bool
     public let baseDirectory: URL?
     public let pluginLibraryPaths: [String]
+    public let rangeChunkBytes: UInt64?
+    public let minProgressBytes: UInt64
+    public let minProgressIntervalMs: UInt64
 
     public init(
         autoStart: Bool = true,
@@ -35,7 +39,10 @@ public struct VesperDownloadConfiguration: Equatable {
         resumePartialDownloads: Bool = true,
         restoreTasksOnStartup: Bool = true,
         baseDirectory: URL? = nil,
-        pluginLibraryPaths: [String] = []
+        pluginLibraryPaths: [String] = [],
+        rangeChunkBytes: UInt64? = nil,
+        minProgressBytes: UInt64 = vesperDownloadDefaultMinProgressBytes,
+        minProgressIntervalMs: UInt64 = vesperDownloadDefaultMinProgressIntervalMs
     ) {
         self.autoStart = autoStart
         self.runPostProcessorsOnCompletion = runPostProcessorsOnCompletion
@@ -43,21 +50,70 @@ public struct VesperDownloadConfiguration: Equatable {
         self.restoreTasksOnStartup = restoreTasksOnStartup
         self.baseDirectory = baseDirectory
         self.pluginLibraryPaths = pluginLibraryPaths
+        self.rangeChunkBytes = rangeChunkBytes.flatMap { $0 > 0 ? $0 : nil }
+        self.minProgressBytes = max(minProgressBytes, 1)
+        self.minProgressIntervalMs = minProgressIntervalMs
     }
+}
+
+public enum VesperDownloadStaleResourcePhase: String, Equatable, Codable {
+    case prepare
+    case download
 }
 
 public struct VesperDownloadStaleResource: Equatable {
     public let taskId: VesperDownloadTaskId
+    public let resourceId: String?
+    public let segmentId: String?
+    public let uri: String?
+    public let phase: VesperDownloadStaleResourcePhase
+    public let statusCode: Int?
+    public let receivedBytes: UInt64
     public let message: String
 
-    public init(taskId: VesperDownloadTaskId, message: String) {
+    public init(
+        taskId: VesperDownloadTaskId,
+        resourceId: String? = nil,
+        segmentId: String? = nil,
+        uri: String? = nil,
+        phase: VesperDownloadStaleResourcePhase = .prepare,
+        statusCode: Int? = nil,
+        receivedBytes: UInt64 = 0,
+        message: String
+    ) {
         self.taskId = taskId
+        self.resourceId = resourceId
+        self.segmentId = segmentId
+        self.uri = uri
+        self.phase = phase
+        self.statusCode = statusCode
+        self.receivedBytes = receivedBytes
         self.message = message
     }
 }
 
+public struct VesperDownloadRecoveredTaskPlan: Equatable {
+    public let source: VesperDownloadSource
+    public let profile: VesperDownloadProfile
+    public let assetIndex: VesperDownloadAssetIndex
+
+    public init(
+        source: VesperDownloadSource,
+        profile: VesperDownloadProfile,
+        assetIndex: VesperDownloadAssetIndex
+    ) {
+        self.source = source
+        self.profile = profile
+        self.assetIndex = assetIndex
+    }
+}
+
+@available(*, deprecated, message: "Use VesperDownloadStaleResourcePlanRecoveryHandler to refresh source, profile, and asset index together.")
 public typealias VesperDownloadStaleResourceRecoveryHandler =
     @Sendable (VesperDownloadTaskSnapshot, VesperDownloadStaleResource) async -> VesperDownloadSource?
+
+public typealias VesperDownloadStaleResourcePlanRecoveryHandler =
+    @Sendable (VesperDownloadTaskSnapshot, VesperDownloadStaleResource) async -> VesperDownloadRecoveredTaskPlan?
 
 public struct VesperDownloadSource: Equatable, Codable {
     public let source: VesperPlayerSource
@@ -324,6 +380,13 @@ public protocol VesperDownloadExecutionReporter: AnyObject {
         assetIndex: VesperDownloadAssetIndex
     )
 
+    func replaceTaskPlan(
+        taskId: VesperDownloadTaskId,
+        source: VesperDownloadSource,
+        profile: VesperDownloadProfile,
+        assetIndex: VesperDownloadAssetIndex
+    )
+
     func updateProgress(
         taskId: VesperDownloadTaskId,
         receivedBytes: UInt64,
@@ -364,6 +427,15 @@ public protocol VesperDownloadExecutor: AnyObject {
     func dispose()
 }
 
+public extension VesperDownloadExecutionReporter {
+    func replaceTaskPlan(
+        taskId: VesperDownloadTaskId,
+        source: VesperDownloadSource,
+        profile: VesperDownloadProfile,
+        assetIndex: VesperDownloadAssetIndex
+    ) {}
+}
+
 public extension VesperDownloadExecutor {
     func prepare(
         task: VesperDownloadTaskSnapshot,
@@ -402,13 +474,18 @@ public final class VesperDownloadManager: ObservableObject {
     public init(
         configuration: VesperDownloadConfiguration = VesperDownloadConfiguration(),
         executor: (any VesperDownloadExecutor)? = nil,
-        staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler? = nil
+        staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler? = nil,
+        staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler? = nil
     ) {
         self.configuration = configuration
         self.executor = executor ?? VesperForegroundDownloadExecutor(
             baseDirectory: configuration.baseDirectory,
             resumePartialDownloads: configuration.resumePartialDownloads,
-            staleResourceRecoveryHandler: staleResourceRecoveryHandler
+            rangeChunkBytes: configuration.rangeChunkBytes,
+            minProgressBytes: configuration.minProgressBytes,
+            minProgressIntervalMs: configuration.minProgressIntervalMs,
+            staleResourceRecoveryHandler: staleResourceRecoveryHandler,
+            staleResourcePlanRecoveryHandler: staleResourcePlanRecoveryHandler
         )
         bindings = NativeDownloadBindings()
         stateStore = configuration.restoreTasksOnStartup
@@ -479,9 +556,24 @@ public final class VesperDownloadManager: ObservableObject {
         profile: VesperDownloadProfile = VesperDownloadProfile(),
         assetIndex: VesperDownloadAssetIndex = VesperDownloadAssetIndex()
     ) -> VesperDownloadTaskId? {
+        let normalizedAssetIndex: VesperDownloadAssetIndex
+        do {
+            normalizedAssetIndex = try VesperGeneratedDownloadResourceMaterializer(
+                baseDirectory: configuration.baseDirectory
+            ).materialize(
+                assetId: assetId,
+                taskId: nil,
+                profile: profile,
+                assetIndex: assetIndex
+            )
+        } catch {
+            iosHostLog("download generated resource materialization failed: \(error.localizedDescription)")
+            return nil
+        }
+
         var runtimeSource = source.toRuntimeBridgePayload()
         var runtimeProfile = profile.toRuntimeBridgePayload()
-        var runtimeAssetIndex = assetIndex.toRuntimeBridgePayload()
+        var runtimeAssetIndex = normalizedAssetIndex.toRuntimeBridgePayload()
         var taskId: UInt64 = 0
         let created = withUnsafePointer(to: &runtimeSource) { sourcePointer in
             withUnsafePointer(to: &runtimeProfile) { profilePointer in
@@ -518,16 +610,34 @@ public final class VesperDownloadManager: ObservableObject {
             return true
         }
 
-        let pointer = UnsafeMutablePointer<VesperRuntimeDownloadTask>.allocate(capacity: tasks.count)
-        for (index, task) in tasks.enumerated() {
+        let materializer = VesperGeneratedDownloadResourceMaterializer(baseDirectory: configuration.baseDirectory)
+        let normalizedTasks: [VesperDownloadTaskSnapshot]
+        do {
+            normalizedTasks = try tasks.map { task in
+                try task.withAssetIndex(
+                    materializer.materialize(
+                        assetId: task.assetId,
+                        taskId: task.taskId,
+                        profile: task.profile,
+                        assetIndex: task.assetIndex
+                    )
+                )
+            }
+        } catch {
+            iosHostLog("download state restore failed while materializing generated resources: \(error.localizedDescription)")
+            return false
+        }
+
+        let pointer = UnsafeMutablePointer<VesperRuntimeDownloadTask>.allocate(capacity: normalizedTasks.count)
+        for (index, task) in normalizedTasks.enumerated() {
             pointer[index] = task.toRuntimeBridgePayload()
         }
         let restored = bindings.restoreDownloadTasks(
             sessionHandle: sessionHandle,
             tasks: UnsafePointer(pointer),
-            taskCount: tasks.count
+            taskCount: normalizedTasks.count
         )
-        for index in 0..<tasks.count {
+        for index in 0..<normalizedTasks.count {
             freeRuntimeDownloadTask(&pointer[index])
         }
         pointer.deallocate()
@@ -682,7 +792,7 @@ public final class VesperDownloadManager: ObservableObject {
     }
 
     private func persistSnapshot(_ snapshot: VesperDownloadSnapshot) {
-        stateStore?.save(snapshot)
+        stateStore?.save(snapshot.compactedForPersistence())
     }
 
     private static func stateStoreURL(for configuration: VesperDownloadConfiguration) -> URL {
@@ -716,6 +826,37 @@ public final class VesperDownloadManager: ObservableObject {
             }
             freeRuntimeDownloadAssetIndex(&runtimeAssetIndex)
             manager.syncRuntimeState(processCommands: true)
+        }
+
+        func replaceTaskPlan(
+            taskId: VesperDownloadTaskId,
+            source: VesperDownloadSource,
+            profile: VesperDownloadProfile,
+            assetIndex: VesperDownloadAssetIndex
+        ) {
+            guard let manager, manager.sessionHandle != 0 else {
+                return
+            }
+            var runtimeSource = source.toRuntimeBridgePayload()
+            var runtimeProfile = profile.toRuntimeBridgePayload()
+            var runtimeAssetIndex = assetIndex.toRuntimeBridgePayload()
+            _ = withUnsafePointer(to: &runtimeSource) { sourcePointer in
+                withUnsafePointer(to: &runtimeProfile) { profilePointer in
+                    withUnsafePointer(to: &runtimeAssetIndex) { assetIndexPointer in
+                        manager.bindings.replaceDownloadTaskPlan(
+                            sessionHandle: manager.sessionHandle,
+                            taskId: taskId,
+                            source: sourcePointer,
+                            profile: profilePointer,
+                            assetIndex: assetIndexPointer
+                        )
+                    }
+                }
+            }
+            freeRuntimeDownloadSource(&runtimeSource)
+            freeRuntimeDownloadProfile(&runtimeProfile)
+            freeRuntimeDownloadAssetIndex(&runtimeAssetIndex)
+            manager.syncRuntimeState(processCommands: false)
         }
 
         func updateProgress(
@@ -805,6 +946,14 @@ public final class VesperDownloadManager: ObservableObject {
             assetIndex: UnsafePointer<VesperRuntimeDownloadAssetIndex>
         ) -> Bool
 
+        func replaceDownloadTaskPlan(
+            sessionHandle: UInt64,
+            taskId: UInt64,
+            source: UnsafePointer<VesperRuntimeDownloadSource>,
+            profile: UnsafePointer<VesperRuntimeDownloadProfile>,
+            assetIndex: UnsafePointer<VesperRuntimeDownloadAssetIndex>
+        ) -> Bool
+
         func exportDownloadTask(
             sessionHandle: UInt64,
             taskId: UInt64,
@@ -888,45 +1037,115 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
     private var recoveredSources: [VesperDownloadTaskId: VesperDownloadSource] = [:]
     private let baseDirectory: URL?
     private let resumePartialDownloads: Bool
+    private let rangeChunkBytes: UInt64?
+    private let minProgressBytes: UInt64
+    private let minProgressIntervalMs: UInt64
     private let staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler?
+    private let staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler?
 
     public init(
         baseDirectory: URL? = nil,
         resumePartialDownloads: Bool = true,
-        staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler? = nil
+        rangeChunkBytes: UInt64? = nil,
+        minProgressBytes: UInt64 = vesperDownloadDefaultMinProgressBytes,
+        minProgressIntervalMs: UInt64 = vesperDownloadDefaultMinProgressIntervalMs,
+        staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler? = nil,
+        staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler? = nil
     ) {
         self.baseDirectory = baseDirectory
         self.resumePartialDownloads = resumePartialDownloads
+        self.rangeChunkBytes = rangeChunkBytes.flatMap { $0 > 0 ? $0 : nil }
+        self.minProgressBytes = max(minProgressBytes, 1)
+        self.minProgressIntervalMs = minProgressIntervalMs
         self.staleResourceRecoveryHandler = staleResourceRecoveryHandler
+        self.staleResourcePlanRecoveryHandler = staleResourcePlanRecoveryHandler
     }
 
-    private func prepareAssetIndexWithRecovery(task: VesperDownloadTaskSnapshot) async throws -> VesperDownloadAssetIndex {
+    private func prepareAssetIndexWithRecovery(
+        task: VesperDownloadTaskSnapshot,
+        reporter: any VesperDownloadExecutionReporter
+    ) async throws -> VesperDownloadAssetIndex {
         do {
-            return try await prepareAssetIndex(task: task)
+            let assetIndex = try await prepareAssetIndex(task: task)
+            return try materializeGeneratedResources(
+                assetId: task.assetId,
+                taskId: task.taskId,
+                profile: task.profile,
+                assetIndex: assetIndex
+            )
         } catch let error as VesperStaleDownloadResourceError {
-            guard let staleResourceRecoveryHandler else {
+            let staleResource = error.staleResource(taskId: task.taskId, phase: .prepare)
+            guard let recoveredPlan = await recoverTaskPlan(task: task, staleResource: staleResource) else {
                 throw error
             }
-            guard let recoveredSource = await staleResourceRecoveryHandler(
-                task,
-                VesperDownloadStaleResource(taskId: task.taskId, message: error.localizedDescription)
-            ) else {
-                throw error
-            }
+            let materializedRecoveredIndex = try materializeGeneratedResources(
+                assetId: task.assetId,
+                taskId: task.taskId,
+                profile: recoveredPlan.profile,
+                assetIndex: recoveredPlan.assetIndex
+            )
             let recoveredTask = VesperDownloadTaskSnapshot(
                 taskId: task.taskId,
                 assetId: task.assetId,
-                source: recoveredSource,
-                profile: task.profile,
+                source: recoveredPlan.source,
+                profile: recoveredPlan.profile,
                 state: task.state,
                 progress: task.progress,
-                assetIndex: VesperDownloadAssetIndex(),
+                assetIndex: materializedRecoveredIndex,
                 error: task.error
             )
+            await reporter.replaceTaskPlan(
+                taskId: task.taskId,
+                source: recoveredPlan.source,
+                profile: recoveredPlan.profile,
+                assetIndex: materializedRecoveredIndex
+            )
             let assetIndex = try await prepareAssetIndex(task: recoveredTask)
-            storeRecoveredSource(recoveredSource, forTaskId: task.taskId)
-            return assetIndex
+            let materializedAssetIndex = try materializeGeneratedResources(
+                assetId: task.assetId,
+                taskId: task.taskId,
+                profile: recoveredPlan.profile,
+                assetIndex: assetIndex
+            )
+            storeRecoveredSource(recoveredPlan.source, forTaskId: task.taskId)
+            return materializedAssetIndex
         }
+    }
+
+    private func recoverTaskPlan(
+        task: VesperDownloadTaskSnapshot,
+        staleResource: VesperDownloadStaleResource
+    ) async -> VesperDownloadRecoveredTaskPlan? {
+        if let staleResourcePlanRecoveryHandler {
+            return await staleResourcePlanRecoveryHandler(task, staleResource)
+        }
+        guard let staleResourceRecoveryHandler,
+              let source = await staleResourceRecoveryHandler(task, staleResource)
+        else {
+            return nil
+        }
+        return VesperDownloadRecoveredTaskPlan(
+            source: source,
+            profile: task.profile,
+            assetIndex: VesperDownloadAssetIndex()
+        )
+    }
+
+    private func materializeGeneratedResources(
+        assetId: VesperDownloadAssetId,
+        taskId: VesperDownloadTaskId?,
+        profile: VesperDownloadProfile,
+        assetIndex: VesperDownloadAssetIndex
+    ) throws -> VesperDownloadAssetIndex {
+        try VesperGeneratedDownloadResourceMaterializer(
+            fileManager: fileManager,
+            baseDirectory: baseDirectory
+        ).materialize(
+            assetId: assetId,
+            taskId: taskId,
+            profile: profile,
+            assetIndex: assetIndex
+        )
     }
 
     private func storeRecoveredSource(_ source: VesperDownloadSource, forTaskId taskId: VesperDownloadTaskId) {
@@ -1396,7 +1615,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
     ) {
         Task.detached(priority: .utility) {
             do {
-                let assetIndex = try await self.prepareAssetIndexWithRecovery(task: task)
+                let assetIndex = try await self.prepareAssetIndexWithRecovery(task: task, reporter: reporter)
                 await reporter.completePreparation(taskId: task.taskId, assetIndex: assetIndex)
             } catch {
                 await reporter.fail(
@@ -1472,17 +1691,32 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 return
             }
 
+            var receivedBytes: UInt64 = 0
+            var receivedSegments: UInt32 = 0
+            var activeEntry: ForegroundDownloadEntry?
+
             do {
-                let plan = try self.executionPlan(for: task)
-                let requestHeaders = task.source.source.headers
-                var receivedBytes: UInt64 = 0
-                var receivedSegments: UInt32 = 0
-                let trackSegments = !task.assetIndex.segments.isEmpty
+                let materializedTask = try task.withAssetIndex(
+                    self.materializeGeneratedResources(
+                        assetId: task.assetId,
+                        taskId: task.taskId,
+                        profile: task.profile,
+                        assetIndex: task.assetIndex
+                    )
+                )
+                let plan = try self.executionPlan(for: materializedTask)
+                let requestHeaders = materializedTask.source.source.headers
+                let trackSegments = !materializedTask.assetIndex.segments.isEmpty
+                var progressThrottle = DownloadProgressThrottle(
+                    minProgressBytes: self.minProgressBytes,
+                    minProgressIntervalMs: self.minProgressIntervalMs
+                )
 
                 for (index, entry) in plan.enumerated() {
                     try Task.checkCancellation()
+                    activeEntry = entry
 
-                    let destinationURL = try self.outputURL(for: task, entry: entry, index: index)
+                    let destinationURL = try self.outputURL(for: materializedTask, entry: entry, index: index)
                     try self.fileManager.createDirectory(
                         at: destinationURL.deletingLastPathComponent(),
                         withIntermediateDirectories: true
@@ -1510,17 +1744,21 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                             resumeFromBytes: resumeFromBytes,
                             to: destinationURL
                         ) { entryBytes in
-                            await reporter.updateProgress(
-                                taskId: task.taskId,
-                                receivedBytes: receivedBytes + entryBytes,
-                                receivedSegments: receivedSegments
-                            )
+                            let nextBytes = receivedBytes + entryBytes
+                            if progressThrottle.shouldReport(receivedBytes: nextBytes, force: false) {
+                                await reporter.updateProgress(
+                                    taskId: task.taskId,
+                                    receivedBytes: nextBytes,
+                                    receivedSegments: receivedSegments
+                                )
+                            }
                         }
                     }
                     receivedBytes += writtenBytes
                     if trackSegments, entry.isSegment {
                         receivedSegments += 1
                     }
+                    progressThrottle.markReported(receivedBytes: receivedBytes)
                     await reporter.updateProgress(
                         taskId: task.taskId,
                         receivedBytes: receivedBytes,
@@ -1530,10 +1768,43 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
 
                 await reporter.complete(
                     taskId: task.taskId,
-                    completedPath: self.completedPath(for: task, plan: plan)
+                    completedPath: self.completedPath(for: materializedTask, plan: plan)
                 )
             } catch is CancellationError {
                 return
+            } catch let staleError as VesperStaleDownloadResourceError {
+                do {
+                    let recovered = try await self.recoverStaleDownload(
+                        task: task,
+                        staleError: staleError,
+                        activeEntry: activeEntry,
+                        receivedBytes: receivedBytes,
+                        reporter: reporter
+                    )
+                    if recovered {
+                        return
+                    }
+                } catch {
+                    await reporter.fail(
+                        taskId: task.taskId,
+                        error: VesperDownloadError(
+                            codeOrdinal: 3,
+                            categoryOrdinal: 2,
+                            retriable: false,
+                            message: error.localizedDescription
+                        )
+                    )
+                    return
+                }
+                await reporter.fail(
+                    taskId: task.taskId,
+                    error: VesperDownloadError(
+                        codeOrdinal: 3,
+                        categoryOrdinal: 2,
+                        retriable: false,
+                        message: staleError.localizedDescription
+                    )
+                )
             } catch {
                 await reporter.fail(
                     taskId: task.taskId,
@@ -1559,10 +1830,68 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         lock.unlock()
     }
 
+    private func recoverStaleDownload(
+        task: VesperDownloadTaskSnapshot,
+        staleError: VesperStaleDownloadResourceError,
+        activeEntry: ForegroundDownloadEntry?,
+        receivedBytes: UInt64,
+        reporter: any VesperDownloadExecutionReporter
+    ) async throws -> Bool {
+        let staleResource = staleError.staleResource(
+            taskId: task.taskId,
+            fallbackResourceId: activeEntry?.resourceId,
+            fallbackSegmentId: activeEntry?.segmentId,
+            fallbackUri: activeEntry?.url.absoluteString,
+            phase: .download,
+            receivedBytes: receivedBytes
+        )
+        guard let recoveredPlan = await recoverTaskPlan(task: task, staleResource: staleResource) else {
+            return false
+        }
+
+        pause(taskId: task.taskId)
+        try? fileManager.removeItem(at: defaultBaseDirectory(for: task))
+
+        let materializedRecoveredIndex = try materializeGeneratedResources(
+            assetId: task.assetId,
+            taskId: task.taskId,
+            profile: recoveredPlan.profile,
+            assetIndex: recoveredPlan.assetIndex
+        )
+        let recoveredTask = VesperDownloadTaskSnapshot(
+            taskId: task.taskId,
+            assetId: task.assetId,
+            source: recoveredPlan.source,
+            profile: recoveredPlan.profile,
+            state: .preparing,
+            progress: VesperDownloadProgressSnapshot(),
+            assetIndex: materializedRecoveredIndex,
+            error: nil
+        )
+        await reporter.replaceTaskPlan(
+            taskId: task.taskId,
+            source: recoveredPlan.source,
+            profile: recoveredPlan.profile,
+            assetIndex: materializedRecoveredIndex
+        )
+
+        let preparedIndex = try await prepareAssetIndex(task: recoveredTask)
+        let materializedPreparedIndex = try materializeGeneratedResources(
+            assetId: task.assetId,
+            taskId: task.taskId,
+            profile: recoveredPlan.profile,
+            assetIndex: preparedIndex
+        )
+        await reporter.completePreparation(taskId: task.taskId, assetIndex: materializedPreparedIndex)
+        return true
+    }
+
     private func executionPlan(for task: VesperDownloadTaskSnapshot) throws -> [ForegroundDownloadEntry] {
         let resources = try task.assetIndex.resources.map {
             ForegroundDownloadEntry(
                 url: try resolveURL($0.uri),
+                resourceId: $0.resourceId.isEmpty ? nil : $0.resourceId,
+                segmentId: nil,
                 relativePath: $0.relativePath,
                 byteRange: $0.byteRange,
                 generatedText: $0.generatedText,
@@ -1574,6 +1903,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         let segments = try task.assetIndex.segments.enumerated().map { index, segment in
             ForegroundDownloadEntry(
                 url: try resolveURL(segment.uri),
+                resourceId: nil,
+                segmentId: segment.segmentId.isEmpty ? nil : segment.segmentId,
                 relativePath: segment.relativePath,
                 byteRange: segment.byteRange,
                 generatedText: nil,
@@ -1589,6 +1920,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         return [
             ForegroundDownloadEntry(
                 url: try resolveURL(task.source.manifestUri ?? task.source.source.uri),
+                resourceId: nil,
+                segmentId: nil,
                 relativePath: nil,
                 byteRange: nil,
                 generatedText: nil,
@@ -1613,11 +1946,23 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
     ) throws -> URL {
         let baseDirectory = defaultBaseDirectory(for: task)
         if let relativePath = entry.relativePath, !relativePath.isEmpty {
-            let relativeURL = URL(fileURLWithPath: relativePath)
-            if relativeURL.path.hasPrefix("/") {
-                return relativeURL
+            if relativePath.hasPrefix("/") {
+                return URL(fileURLWithPath: relativePath)
             }
-            return baseDirectory.appendingPathComponent(relativePath)
+            let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+            if components.contains(where: { $0 == ".." }) {
+                throw VesperForegroundDownloadPreparationError.invalidSource(
+                    "download output path escapes the task directory: \(relativePath)"
+                )
+            }
+            let candidate = baseDirectory.appendingPathComponent(relativePath).standardizedFileURL
+            let standardizedBase = baseDirectory.standardizedFileURL
+            guard candidate.path == standardizedBase.path || candidate.path.hasPrefix(standardizedBase.path + "/") else {
+                throw VesperForegroundDownloadPreparationError.invalidSource(
+                    "download output path escapes the task directory: \(relativePath)"
+                )
+            }
+            return candidate
         }
 
         let filename =
@@ -1675,12 +2020,13 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 onProgress: onProgress
             )
         }
-        if byteRange == nil, let expectedSizeBytes, expectedSizeBytes > 0 {
+        if byteRange == nil, let expectedSizeBytes, expectedSizeBytes > 0, let rangeChunkBytes {
             return try await fetchKnownSizeHTTPResource(
                 sourceURL,
                 requestHeaders: requestHeaders,
                 expectedSizeBytes: expectedSizeBytes,
                 resumeFromBytes: resumeFromBytes,
+                rangeChunkBytes: rangeChunkBytes,
                 to: destinationURL,
                 allowRestartAfterRangeMismatch: allowRestartAfterRangeMismatch,
                 onProgress: onProgress
@@ -1751,7 +2097,10 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 )
             case 401, 403, 404, 410:
                 throw staleDownloadResource(
-                    "offline download resource is stale or expired (HTTP \(http.statusCode)) for \(sourceURL.absoluteString); refresh the media link and prepare the task again"
+                    "offline download resource is stale or expired (HTTP \(http.statusCode)) for \(sourceURL.absoluteString); refresh the media link and prepare the task again",
+                    uri: sourceURL.absoluteString,
+                    phase: .download,
+                    statusCode: http.statusCode
                 )
             case 200..<300:
                 break
@@ -1812,6 +2161,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         requestHeaders: [String: String],
         expectedSizeBytes: UInt64,
         resumeFromBytes: UInt64,
+        rangeChunkBytes: UInt64,
         to destinationURL: URL,
         allowRestartAfterRangeMismatch: Bool,
         onProgress: (UInt64) async -> Void
@@ -1821,7 +2171,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
             return expectedSizeBytes
         }
         while offset < expectedSizeBytes {
-            let chunkLength = min(vesperDownloadHttpRangeChunkBytes, expectedSizeBytes - offset)
+            let chunkLength = min(rangeChunkBytes, expectedSizeBytes - offset)
             let chunkEnd = offset + chunkLength - 1
             let nextOffset = try await fetchHTTPRangeChunk(
                 sourceURL,
@@ -1829,6 +2179,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 expectedSizeBytes: expectedSizeBytes,
                 rangeStart: offset,
                 rangeEndInclusive: chunkEnd,
+                rangeChunkBytes: rangeChunkBytes,
                 to: destinationURL,
                 allowRestartAfterRangeMismatch: allowRestartAfterRangeMismatch,
                 onProgress: onProgress
@@ -1849,6 +2200,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         expectedSizeBytes: UInt64,
         rangeStart: UInt64,
         rangeEndInclusive: UInt64,
+        rangeChunkBytes: UInt64,
         to destinationURL: URL,
         allowRestartAfterRangeMismatch: Bool,
         onProgress: (UInt64) async -> Void
@@ -1884,6 +2236,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                         requestHeaders: requestHeaders,
                         expectedSizeBytes: expectedSizeBytes,
                         resumeFromBytes: 0,
+                        rangeChunkBytes: rangeChunkBytes,
                         to: destinationURL,
                         allowRestartAfterRangeMismatch: false,
                         onProgress: onProgress
@@ -1899,12 +2252,13 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 await onProgress(0)
                 return try await fetchKnownSizeHTTPResource(
                     sourceURL,
-                    requestHeaders: requestHeaders,
-                    expectedSizeBytes: expectedSizeBytes,
-                    resumeFromBytes: 0,
-                    to: destinationURL,
-                    allowRestartAfterRangeMismatch: false,
-                    onProgress: onProgress
+                        requestHeaders: requestHeaders,
+                        expectedSizeBytes: expectedSizeBytes,
+                        resumeFromBytes: 0,
+                        rangeChunkBytes: rangeChunkBytes,
+                        to: destinationURL,
+                        allowRestartAfterRangeMismatch: false,
+                        onProgress: onProgress
                 )
             }
             throw staleDownloadResource(
@@ -1938,6 +2292,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                     requestHeaders: requestHeaders,
                     expectedSizeBytes: expectedSizeBytes,
                     resumeFromBytes: 0,
+                    rangeChunkBytes: rangeChunkBytes,
                     to: destinationURL,
                     allowRestartAfterRangeMismatch: false,
                     onProgress: onProgress
@@ -2247,6 +2602,8 @@ private func parseHttpContentRangeStart(_ contentRange: String?) -> UInt64? {
 
 private struct ForegroundDownloadEntry {
     let url: URL
+    let resourceId: String?
+    let segmentId: String?
     let relativePath: String?
     let byteRange: VesperDownloadByteRange?
     let generatedText: String?
@@ -2269,14 +2626,238 @@ private enum VesperForegroundDownloadPreparationError: LocalizedError {
 
 private struct VesperStaleDownloadResourceError: LocalizedError {
     let message: String
+    let resourceId: String?
+    let segmentId: String?
+    let uri: String?
+    let phase: VesperDownloadStaleResourcePhase?
+    let statusCode: Int?
+    let receivedBytes: UInt64
 
     var errorDescription: String? {
         message
     }
+
+    func staleResource(
+        taskId: VesperDownloadTaskId,
+        fallbackResourceId: String? = nil,
+        fallbackSegmentId: String? = nil,
+        fallbackUri: String? = nil,
+        phase fallbackPhase: VesperDownloadStaleResourcePhase,
+        receivedBytes fallbackReceivedBytes: UInt64 = 0
+    ) -> VesperDownloadStaleResource {
+        VesperDownloadStaleResource(
+            taskId: taskId,
+            resourceId: resourceId ?? fallbackResourceId,
+            segmentId: segmentId ?? fallbackSegmentId,
+            uri: uri ?? fallbackUri,
+            phase: phase ?? fallbackPhase,
+            statusCode: statusCode,
+            receivedBytes: receivedBytes > 0 ? receivedBytes : fallbackReceivedBytes,
+            message: message
+        )
+    }
 }
 
-private func staleDownloadResource(_ message: String) -> VesperStaleDownloadResourceError {
-    VesperStaleDownloadResourceError(message: message)
+private func staleDownloadResource(
+    _ message: String,
+    resourceId: String? = nil,
+    segmentId: String? = nil,
+    uri: String? = nil,
+    phase: VesperDownloadStaleResourcePhase? = nil,
+    statusCode: Int? = nil,
+    receivedBytes: UInt64 = 0
+) -> VesperStaleDownloadResourceError {
+    VesperStaleDownloadResourceError(
+        message: message,
+        resourceId: resourceId,
+        segmentId: segmentId,
+        uri: uri,
+        phase: phase,
+        statusCode: statusCode,
+        receivedBytes: receivedBytes
+    )
+}
+
+private struct DownloadProgressThrottle {
+    private let minProgressBytes: UInt64
+    private let minProgressIntervalNs: UInt64
+    private var lastReportedBytes: UInt64 = 0
+    private var lastReportedTimeNs: UInt64 = 0
+
+    init(minProgressBytes: UInt64, minProgressIntervalMs: UInt64) {
+        self.minProgressBytes = max(minProgressBytes, 1)
+        self.minProgressIntervalNs = minProgressIntervalMs * 1_000_000
+    }
+
+    mutating func shouldReport(receivedBytes: UInt64, force: Bool) -> Bool {
+        if force || receivedBytes < lastReportedBytes {
+            markReported(receivedBytes: receivedBytes)
+            return true
+        }
+        if receivedBytes - lastReportedBytes < minProgressBytes {
+            return false
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        if lastReportedTimeNs != 0, now - lastReportedTimeNs < minProgressIntervalNs {
+            return false
+        }
+        markReported(receivedBytes: receivedBytes, now: now)
+        return true
+    }
+
+    mutating func markReported(receivedBytes: UInt64) {
+        markReported(receivedBytes: receivedBytes, now: DispatchTime.now().uptimeNanoseconds)
+    }
+
+    private mutating func markReported(receivedBytes: UInt64, now: UInt64) {
+        lastReportedBytes = receivedBytes
+        lastReportedTimeNs = now
+    }
+}
+
+private struct VesperGeneratedDownloadResourceMaterializer {
+    let fileManager: FileManager
+    let baseDirectory: URL?
+
+    init(fileManager: FileManager = .default, baseDirectory: URL?) {
+        self.fileManager = fileManager
+        self.baseDirectory = baseDirectory
+    }
+
+    func materialize(
+        assetId: VesperDownloadAssetId,
+        taskId: VesperDownloadTaskId?,
+        profile: VesperDownloadProfile,
+        assetIndex: VesperDownloadAssetIndex
+    ) throws -> VesperDownloadAssetIndex {
+        guard assetIndex.resources.contains(where: { $0.generatedText != nil }) else {
+            return assetIndex.compactedForPersistence()
+        }
+
+        let taskDirectory = taskBaseDirectory(assetId: assetId, taskId: taskId, profile: profile)
+        let generatedDirectory = taskDirectory.appendingPathComponent(".generated", isDirectory: true)
+        try fileManager.createDirectory(at: generatedDirectory, withIntermediateDirectories: true)
+
+        var usedNames = Set<String>()
+        let resources = try assetIndex.resources.map { resource in
+            guard let generatedText = resource.generatedText else {
+                return resource
+            }
+            let data = Data(generatedText.utf8)
+            let fileName = uniqueGeneratedFileName(for: resource, usedNames: &usedNames)
+            let destinationURL = generatedDirectory.appendingPathComponent(fileName, isDirectory: false)
+            do {
+                try data.write(to: destinationURL, options: .atomic)
+            } catch {
+                throw VesperForegroundDownloadPreparationError.invalidSource(
+                    "failed to persist generated download resource \(resource.resourceId): \(error.localizedDescription)"
+                )
+            }
+            return resource.withMaterializedGeneratedText(
+                uri: destinationURL.absoluteString,
+                sizeBytes: UInt64(data.count)
+            )
+        }
+
+        return VesperDownloadAssetIndex(
+            contentFormat: assetIndex.contentFormat,
+            version: assetIndex.version,
+            etag: assetIndex.etag,
+            checksum: assetIndex.checksum,
+            totalSizeBytes: recomputedTotalSizeBytes(
+                original: assetIndex.totalSizeBytes,
+                resources: resources,
+                segments: assetIndex.segments
+            ),
+            resources: resources,
+            segments: assetIndex.segments,
+            completedPath: assetIndex.completedPath
+        )
+    }
+
+    private func taskBaseDirectory(
+        assetId: VesperDownloadAssetId,
+        taskId: VesperDownloadTaskId?,
+        profile: VesperDownloadProfile
+    ) -> URL {
+        if let targetDirectory = profile.targetDirectory {
+            return targetDirectory
+        }
+        let root = baseDirectory
+            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("vesper-downloads", isDirectory: true)
+        let assetComponent = assetId.isEmpty ? taskId.map(String.init) ?? "asset" : assetId
+        return root.appendingPathComponent(assetComponent, isDirectory: true)
+    }
+
+    private func uniqueGeneratedFileName(
+        for resource: VesperDownloadResourceRecord,
+        usedNames: inout Set<String>
+    ) -> String {
+        let baseName = generatedBaseName(for: resource)
+        if usedNames.insert(baseName).inserted {
+            return baseName
+        }
+        let hashed = appendStableHash(
+            to: baseName,
+            hash: stableShortHash("\(resource.resourceId)|\(resource.relativePath ?? "")|\(resource.uri)")
+        )
+        _ = usedNames.insert(hashed)
+        return hashed
+    }
+
+    private func generatedBaseName(for resource: VesperDownloadResourceRecord) -> String {
+        let raw = resource.relativePath.flatMap(lastPathComponent) ?? resource.resourceId
+        let sanitized = raw
+            .replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "_", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        if sanitized.isEmpty || sanitized == ".." {
+            return "resource-\(stableShortHash(resource.resourceId.isEmpty ? resource.uri : resource.resourceId))"
+        }
+        return sanitized
+    }
+
+    private func lastPathComponent(_ value: String) -> String? {
+        value.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init)
+    }
+
+    private func appendStableHash(to fileName: String, hash: String) -> String {
+        let nsName = fileName as NSString
+        let ext = nsName.pathExtension
+        let stem = nsName.deletingPathExtension
+        return ext.isEmpty ? "\(stem)-\(hash)" : "\(stem)-\(hash).\(ext)"
+    }
+
+    private func stableShortHash(_ value: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        let text = String(hash, radix: 16)
+        return String(text.suffix(8))
+    }
+
+    private func recomputedTotalSizeBytes(
+        original: UInt64?,
+        resources: [VesperDownloadResourceRecord],
+        segments: [VesperDownloadSegmentRecord]
+    ) -> UInt64? {
+        var total: UInt64 = 0
+        for resource in resources {
+            guard let sizeBytes = resource.sizeBytes else {
+                return original
+            }
+            total += sizeBytes
+        }
+        for segment in segments {
+            guard let sizeBytes = segment.sizeBytes else {
+                return original
+            }
+            total += sizeBytes
+        }
+        return total
+    }
 }
 
 private struct HlsMasterPlaylist {
@@ -2918,6 +3499,19 @@ private func padded(_ value: UInt64, width: Int) -> String {
 }
 
 private extension VesperDownloadResourceRecord {
+    func compactedForPersistence() -> VesperDownloadResourceRecord {
+        VesperDownloadResourceRecord(
+            resourceId: resourceId,
+            uri: uri,
+            relativePath: relativePath,
+            byteRange: byteRange,
+            generatedText: nil,
+            sizeBytes: sizeBytes,
+            etag: etag,
+            checksum: checksum
+        )
+    }
+
     func withSizeBytes(_ sizeBytes: UInt64) -> VesperDownloadResourceRecord {
         VesperDownloadResourceRecord(
             resourceId: resourceId,
@@ -2925,6 +3519,19 @@ private extension VesperDownloadResourceRecord {
             relativePath: relativePath,
             byteRange: byteRange,
             generatedText: generatedText,
+            sizeBytes: sizeBytes,
+            etag: etag,
+            checksum: checksum
+        )
+    }
+
+    func withMaterializedGeneratedText(uri: String, sizeBytes: UInt64) -> VesperDownloadResourceRecord {
+        VesperDownloadResourceRecord(
+            resourceId: resourceId,
+            uri: uri,
+            relativePath: relativePath,
+            byteRange: byteRange,
+            generatedText: nil,
             sizeBytes: sizeBytes,
             etag: etag,
             checksum: checksum
@@ -2960,6 +3567,19 @@ private extension VesperDownloadSegmentRecord {
 }
 
 private extension VesperDownloadAssetIndex {
+    func compactedForPersistence() -> VesperDownloadAssetIndex {
+        VesperDownloadAssetIndex(
+            contentFormat: contentFormat,
+            version: version,
+            etag: etag,
+            checksum: checksum,
+            totalSizeBytes: totalSizeBytes,
+            resources: resources.map { $0.compactedForPersistence() },
+            segments: segments,
+            completedPath: completedPath
+        )
+    }
+
     func withResources(_ resources: [VesperDownloadResourceRecord]) -> VesperDownloadAssetIndex {
         VesperDownloadAssetIndex(
             contentFormat: contentFormat,
@@ -2970,6 +3590,29 @@ private extension VesperDownloadAssetIndex {
             resources: resources,
             segments: segments,
             completedPath: completedPath
+        )
+    }
+}
+
+private extension VesperDownloadTaskSnapshot {
+    func withAssetIndex(_ assetIndex: VesperDownloadAssetIndex) -> VesperDownloadTaskSnapshot {
+        VesperDownloadTaskSnapshot(
+            taskId: taskId,
+            assetId: assetId,
+            source: source,
+            profile: profile,
+            state: state,
+            progress: progress,
+            assetIndex: assetIndex,
+            error: error
+        )
+    }
+}
+
+private extension VesperDownloadSnapshot {
+    func compactedForPersistence() -> VesperDownloadSnapshot {
+        VesperDownloadSnapshot(
+            tasks: tasks.map { $0.withAssetIndex($0.assetIndex.compactedForPersistence()) }
         )
     }
 }
@@ -3108,6 +3751,22 @@ private struct NativeDownloadBindings: VesperDownloadManager.DownloadBindings {
         vesper_runtime_download_session_complete_preparation(
             sessionHandle,
             taskId,
+            assetIndex
+        )
+    }
+
+    func replaceDownloadTaskPlan(
+        sessionHandle: UInt64,
+        taskId: UInt64,
+        source: UnsafePointer<VesperRuntimeDownloadSource>,
+        profile: UnsafePointer<VesperRuntimeDownloadProfile>,
+        assetIndex: UnsafePointer<VesperRuntimeDownloadAssetIndex>
+    ) -> Bool {
+        vesper_runtime_download_session_replace_task_plan(
+            sessionHandle,
+            taskId,
+            source,
+            profile,
             assetIndex
         )
     }
@@ -3718,7 +4377,7 @@ private extension VesperRuntimeDownloadResourceRecord {
             uri: stringFromRuntimeCString(uri) ?? "",
             relativePath: stringFromRuntimeCString(relative_path),
             byteRange: has_byte_range ? byte_range.toPublic() : nil,
-            generatedText: stringFromRuntimeCString(generated_text),
+            generatedText: nil,
             sizeBytes: has_size_bytes ? size_bytes : nil,
             etag: stringFromRuntimeCString(etag),
             checksum: stringFromRuntimeCString(checksum)

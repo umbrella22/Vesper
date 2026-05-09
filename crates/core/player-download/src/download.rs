@@ -662,6 +662,41 @@ where
         self.start_prepared_task(task_id, now)
     }
 
+    pub fn replace_task_plan(
+        &mut self,
+        task_id: DownloadTaskId,
+        source: DownloadSource,
+        profile: DownloadProfile,
+        mut asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+        let Some(snapshot) = self.store.task(task_id) else {
+            return Ok(None);
+        };
+
+        if matches!(
+            snapshot.status,
+            DownloadTaskStatus::Completed | DownloadTaskStatus::Removed
+        ) {
+            return Ok(Some(snapshot));
+        }
+
+        asset_index.content_format = source.content_format;
+        let mut replaced = snapshot;
+        replaced.source = source;
+        replaced.profile = profile;
+        replaced.progress = DownloadProgressSnapshot::from_index(&asset_index);
+        replaced.asset_index = asset_index;
+        replaced.status = DownloadTaskStatus::Preparing;
+        replaced.error_summary = None;
+        replaced.updated_at = now;
+
+        self.store.save_task(replaced.clone())?;
+        self.emit_event(DownloadEvent::AssetIndexUpdated(replaced.clone()));
+        self.emit_event(DownloadEvent::StateChanged(replaced.clone()));
+        Ok(Some(replaced))
+    }
+
     pub fn pause_task(
         &mut self,
         task_id: DownloadTaskId,
@@ -1718,6 +1753,67 @@ mod tests {
         let events = manager.drain_events();
         assert_eq!(events.len(), 4);
         assert!(matches!(events[0], DownloadEvent::Created(_)));
+    }
+
+    #[test]
+    fn manager_replaces_task_plan_and_resets_progress_for_recovery() {
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = InMemoryDownloadExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/old.m3u8"),
+                DownloadProfile::default(),
+                asset_index(1024),
+                now,
+            )
+            .expect("create task should succeed");
+        manager
+            .update_progress(task_id, 512, 0, now)
+            .expect("progress update should succeed");
+        manager
+            .fail_task(
+                task_id,
+                PlayerRuntimeError::with_category(
+                    PlayerRuntimeErrorCode::BackendFailure,
+                    PlayerRuntimeErrorCategory::Network,
+                    "stale resource",
+                ),
+                now,
+            )
+            .expect("failure should succeed");
+
+        let replaced = manager
+            .replace_task_plan(
+                task_id,
+                source("https://example.com/new.m3u8"),
+                DownloadProfile::default(),
+                segmented_asset_index(2048),
+                now,
+            )
+            .expect("replace should succeed")
+            .expect("task should exist");
+
+        assert_eq!(replaced.status, DownloadTaskStatus::Preparing);
+        assert_eq!(replaced.source.source.uri(), "https://example.com/new.m3u8");
+        assert_eq!(replaced.progress.received_bytes, 0);
+        assert_eq!(replaced.progress.total_bytes, Some(2048));
+        assert!(replaced.error_summary.is_none());
+        let events = manager.drain_events();
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, DownloadEvent::AssetIndexUpdated(task) if task.task_id == task_id)));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, DownloadEvent::StateChanged(task) if task.task_id == task_id && task.status == DownloadTaskStatus::Preparing)));
     }
 
     #[test]

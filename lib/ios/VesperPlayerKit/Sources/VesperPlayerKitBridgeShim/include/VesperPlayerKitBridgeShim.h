@@ -2,6 +2,7 @@
 #define VESPER_PLAYER_KIT_BRIDGE_SHIM_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct VesperRuntimeBufferingPolicy {
@@ -535,6 +536,13 @@ bool vesper_runtime_download_session_complete_task(
 bool vesper_runtime_download_session_complete_preparation(
     uint64_t handle,
     uint64_t task_id,
+    const VesperRuntimeDownloadAssetIndex *asset_index);
+
+bool vesper_runtime_download_session_replace_task_plan(
+    uint64_t handle,
+    uint64_t task_id,
+    const VesperRuntimeDownloadSource *source,
+    const VesperRuntimeDownloadProfile *profile,
     const VesperRuntimeDownloadAssetIndex *asset_index);
 
 bool vesper_runtime_download_session_export_task(

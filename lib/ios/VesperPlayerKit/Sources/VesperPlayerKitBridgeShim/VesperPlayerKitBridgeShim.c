@@ -1,6 +1,7 @@
 #include "include/VesperPlayerKitBridgeShim.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -582,6 +583,14 @@ extern PlayerFfiCallStatus player_ffi_download_session_complete_preparation(
     const PlayerFfiDownloadAssetIndex *asset_index,
     PlayerFfiError *out_error);
 
+extern PlayerFfiCallStatus player_ffi_download_session_replace_task_plan(
+    uint64_t handle,
+    uint64_t task_id,
+    const PlayerFfiDownloadSource *source,
+    const PlayerFfiDownloadProfile *profile,
+    const PlayerFfiDownloadAssetIndex *asset_index,
+    PlayerFfiError *out_error);
+
 extern PlayerFfiCallStatus player_ffi_download_session_export_task(
     uint64_t handle,
     uint64_t task_id,
@@ -672,6 +681,702 @@ static char *duplicate_string(const char *value) {
     return NULL;
   }
   return strdup(value);
+}
+
+static bool can_allocate_items(uintptr_t len, size_t item_size) {
+  return item_size > 0 && len <= (uintptr_t)(SIZE_MAX / item_size);
+}
+
+static bool duplicate_runtime_string(const char *value, char **out_value) {
+  if (out_value == NULL) {
+    return false;
+  }
+  *out_value = NULL;
+  if (value == NULL) {
+    return true;
+  }
+  *out_value = duplicate_string(value);
+  return *out_value != NULL;
+}
+
+static void free_runtime_string_list(char **values, uintptr_t len) {
+  if (values == NULL) {
+    return;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    free(values[index]);
+  }
+  free(values);
+}
+
+static bool copy_ffi_string_list_to_runtime(
+    char **values,
+    uintptr_t len,
+    char ***out_values) {
+  if (out_values == NULL) {
+    return false;
+  }
+  *out_values = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (values == NULL || !can_allocate_items(len, sizeof(char *))) {
+    return false;
+  }
+
+  char **copied_values = calloc((size_t)len, sizeof(char *));
+  if (copied_values == NULL) {
+    return false;
+  }
+
+  for (uintptr_t index = 0; index < len; index += 1) {
+    if (!duplicate_runtime_string(values[index], &copied_values[index])) {
+      free_runtime_string_list(copied_values, len);
+      return false;
+    }
+  }
+
+  *out_values = copied_values;
+  return true;
+}
+
+static PlayerFfiDownloadByteRange ffi_download_byte_range_from_runtime(
+    VesperRuntimeDownloadByteRange byte_range) {
+  PlayerFfiDownloadByteRange ffi_byte_range = {
+      .offset = byte_range.offset,
+      .length = byte_range.length,
+  };
+  return ffi_byte_range;
+}
+
+static VesperRuntimeDownloadByteRange runtime_download_byte_range_from_ffi(
+    PlayerFfiDownloadByteRange byte_range) {
+  VesperRuntimeDownloadByteRange runtime_byte_range = {
+      .offset = byte_range.offset,
+      .length = byte_range.length,
+  };
+  return runtime_byte_range;
+}
+
+static PlayerFfiDownloadConfig ffi_download_config_from_runtime(
+    const VesperRuntimeDownloadConfig *config) {
+  PlayerFfiDownloadConfig ffi_config = {
+      .auto_start = config->auto_start,
+      .run_post_processors_on_completion = config->run_post_processors_on_completion,
+      .plugin_library_paths = config->plugin_library_paths,
+      .plugin_library_paths_len = config->plugin_library_paths_len,
+  };
+  return ffi_config;
+}
+
+static PlayerFfiDownloadSource ffi_download_source_from_runtime(
+    const VesperRuntimeDownloadSource *source) {
+  PlayerFfiDownloadSource ffi_source = {
+      .source_uri = source->source_uri,
+      .content_format = (PlayerFfiDownloadContentFormat)source->content_format,
+      .manifest_uri = source->manifest_uri,
+      .header_names = source->header_names,
+      .header_values = source->header_values,
+      .headers_len = source->headers_len,
+  };
+  return ffi_source;
+}
+
+static PlayerFfiDownloadProfile ffi_download_profile_from_runtime(
+    const VesperRuntimeDownloadProfile *profile) {
+  PlayerFfiDownloadProfile ffi_profile = {
+      .variant_id = profile->variant_id,
+      .preferred_audio_language = profile->preferred_audio_language,
+      .preferred_subtitle_language = profile->preferred_subtitle_language,
+      .selected_track_ids = profile->selected_track_ids,
+      .selected_track_ids_len = profile->selected_track_ids_len,
+      .has_target_output_format = profile->has_target_output_format,
+      .target_output_format = (PlayerFfiDownloadOutputFormat)profile->target_output_format,
+      .target_directory = profile->target_directory,
+      .allow_metered_network = profile->allow_metered_network,
+  };
+  return ffi_profile;
+}
+
+static PlayerFfiDownloadResourceRecord ffi_download_resource_from_runtime(
+    const VesperRuntimeDownloadResourceRecord *resource) {
+  PlayerFfiDownloadResourceRecord ffi_resource = {
+      .resource_id = resource->resource_id,
+      .uri = resource->uri,
+      .relative_path = resource->relative_path,
+      .has_byte_range = resource->has_byte_range,
+      .byte_range = ffi_download_byte_range_from_runtime(resource->byte_range),
+      .generated_text = resource->generated_text,
+      .has_size_bytes = resource->has_size_bytes,
+      .size_bytes = resource->size_bytes,
+      .etag = resource->etag,
+      .checksum = resource->checksum,
+  };
+  return ffi_resource;
+}
+
+static PlayerFfiDownloadSegmentRecord ffi_download_segment_from_runtime(
+    const VesperRuntimeDownloadSegmentRecord *segment) {
+  PlayerFfiDownloadSegmentRecord ffi_segment = {
+      .segment_id = segment->segment_id,
+      .uri = segment->uri,
+      .relative_path = segment->relative_path,
+      .has_sequence = segment->has_sequence,
+      .sequence = segment->sequence,
+      .has_byte_range = segment->has_byte_range,
+      .byte_range = ffi_download_byte_range_from_runtime(segment->byte_range),
+      .has_size_bytes = segment->has_size_bytes,
+      .size_bytes = segment->size_bytes,
+      .checksum = segment->checksum,
+  };
+  return ffi_segment;
+}
+
+static void free_borrowed_ffi_download_asset_index(PlayerFfiDownloadAssetIndex *asset_index) {
+  if (asset_index == NULL) {
+    return;
+  }
+  free(asset_index->resources);
+  free(asset_index->segments);
+  memset(asset_index, 0, sizeof(*asset_index));
+}
+
+static bool copy_runtime_download_resources_to_ffi(
+    const VesperRuntimeDownloadResourceRecord *resources,
+    uintptr_t len,
+    PlayerFfiDownloadResourceRecord **out_resources) {
+  if (out_resources == NULL) {
+    return false;
+  }
+  *out_resources = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (resources == NULL || !can_allocate_items(len, sizeof(PlayerFfiDownloadResourceRecord))) {
+    return false;
+  }
+
+  PlayerFfiDownloadResourceRecord *ffi_resources =
+      calloc((size_t)len, sizeof(PlayerFfiDownloadResourceRecord));
+  if (ffi_resources == NULL) {
+    return false;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    ffi_resources[index] = ffi_download_resource_from_runtime(&resources[index]);
+  }
+  *out_resources = ffi_resources;
+  return true;
+}
+
+static bool copy_runtime_download_segments_to_ffi(
+    const VesperRuntimeDownloadSegmentRecord *segments,
+    uintptr_t len,
+    PlayerFfiDownloadSegmentRecord **out_segments) {
+  if (out_segments == NULL) {
+    return false;
+  }
+  *out_segments = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (segments == NULL || !can_allocate_items(len, sizeof(PlayerFfiDownloadSegmentRecord))) {
+    return false;
+  }
+
+  PlayerFfiDownloadSegmentRecord *ffi_segments =
+      calloc((size_t)len, sizeof(PlayerFfiDownloadSegmentRecord));
+  if (ffi_segments == NULL) {
+    return false;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    ffi_segments[index] = ffi_download_segment_from_runtime(&segments[index]);
+  }
+  *out_segments = ffi_segments;
+  return true;
+}
+
+static bool ffi_download_asset_index_from_runtime(
+    const VesperRuntimeDownloadAssetIndex *asset_index,
+    PlayerFfiDownloadAssetIndex *out_asset_index) {
+  if (asset_index == NULL || out_asset_index == NULL) {
+    return false;
+  }
+  memset(out_asset_index, 0, sizeof(*out_asset_index));
+
+  out_asset_index->content_format = (PlayerFfiDownloadContentFormat)asset_index->content_format;
+  out_asset_index->version = asset_index->version;
+  out_asset_index->etag = asset_index->etag;
+  out_asset_index->checksum = asset_index->checksum;
+  out_asset_index->has_total_size_bytes = asset_index->has_total_size_bytes;
+  out_asset_index->total_size_bytes = asset_index->total_size_bytes;
+  out_asset_index->resources_len = asset_index->resources_len;
+  out_asset_index->segments_len = asset_index->segments_len;
+  out_asset_index->completed_path = asset_index->completed_path;
+
+  if (!copy_runtime_download_resources_to_ffi(
+          asset_index->resources,
+          asset_index->resources_len,
+          &out_asset_index->resources) ||
+      !copy_runtime_download_segments_to_ffi(
+          asset_index->segments,
+          asset_index->segments_len,
+          &out_asset_index->segments)) {
+    free_borrowed_ffi_download_asset_index(out_asset_index);
+    return false;
+  }
+  return true;
+}
+
+static PlayerFfiDownloadProgressSnapshot ffi_download_progress_from_runtime(
+    VesperRuntimeDownloadProgressSnapshot progress) {
+  PlayerFfiDownloadProgressSnapshot ffi_progress = {
+      .received_bytes = progress.received_bytes,
+      .has_total_bytes = progress.has_total_bytes,
+      .total_bytes = progress.total_bytes,
+      .received_segments = progress.received_segments,
+      .has_total_segments = progress.has_total_segments,
+      .total_segments = progress.total_segments,
+  };
+  return ffi_progress;
+}
+
+static void free_borrowed_ffi_download_task(PlayerFfiDownloadTask *task) {
+  if (task == NULL) {
+    return;
+  }
+  free_borrowed_ffi_download_asset_index(&task->asset_index);
+  memset(task, 0, sizeof(*task));
+}
+
+static bool ffi_download_task_from_runtime(
+    const VesperRuntimeDownloadTask *task,
+    PlayerFfiDownloadTask *out_task) {
+  if (task == NULL || out_task == NULL) {
+    return false;
+  }
+  memset(out_task, 0, sizeof(*out_task));
+
+  out_task->task_id = task->task_id;
+  out_task->asset_id = task->asset_id;
+  out_task->source = ffi_download_source_from_runtime(&task->source);
+  out_task->profile = ffi_download_profile_from_runtime(&task->profile);
+  out_task->status = (PlayerFfiDownloadTaskStatus)task->status;
+  out_task->progress = ffi_download_progress_from_runtime(task->progress);
+  out_task->has_error = task->has_error;
+  out_task->error_code = task->error_code;
+  out_task->error_category = task->error_category;
+  out_task->error_retriable = task->error_retriable;
+  out_task->error_message = task->error_message;
+  if (!ffi_download_asset_index_from_runtime(&task->asset_index, &out_task->asset_index)) {
+    free_borrowed_ffi_download_task(out_task);
+    return false;
+  }
+  return true;
+}
+
+static void free_borrowed_ffi_download_tasks(PlayerFfiDownloadTask *tasks, uintptr_t len) {
+  if (tasks == NULL) {
+    return;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    free_borrowed_ffi_download_task(&tasks[index]);
+  }
+  free(tasks);
+}
+
+static bool copy_runtime_download_tasks_to_ffi(
+    const VesperRuntimeDownloadTask *tasks,
+    uintptr_t len,
+    PlayerFfiDownloadTask **out_tasks) {
+  if (out_tasks == NULL) {
+    return false;
+  }
+  *out_tasks = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (tasks == NULL || !can_allocate_items(len, sizeof(PlayerFfiDownloadTask))) {
+    return false;
+  }
+
+  PlayerFfiDownloadTask *ffi_tasks = calloc((size_t)len, sizeof(PlayerFfiDownloadTask));
+  if (ffi_tasks == NULL) {
+    return false;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    if (!ffi_download_task_from_runtime(&tasks[index], &ffi_tasks[index])) {
+      free_borrowed_ffi_download_tasks(ffi_tasks, len);
+      return false;
+    }
+  }
+  *out_tasks = ffi_tasks;
+  return true;
+}
+
+static void free_runtime_download_source_strings(VesperRuntimeDownloadSource *source) {
+  if (source == NULL) {
+    return;
+  }
+  uintptr_t headers_len = source->headers_len;
+  free(source->source_uri);
+  free(source->manifest_uri);
+  free_runtime_string_list(source->header_names, headers_len);
+  free_runtime_string_list(source->header_values, headers_len);
+  memset(source, 0, sizeof(*source));
+}
+
+static void free_runtime_download_profile_strings(VesperRuntimeDownloadProfile *profile) {
+  if (profile == NULL) {
+    return;
+  }
+  free(profile->variant_id);
+  free(profile->preferred_audio_language);
+  free(profile->preferred_subtitle_language);
+  free_runtime_string_list(profile->selected_track_ids, profile->selected_track_ids_len);
+  free(profile->target_directory);
+  memset(profile, 0, sizeof(*profile));
+}
+
+static void free_runtime_download_resource_strings(VesperRuntimeDownloadResourceRecord *resource) {
+  if (resource == NULL) {
+    return;
+  }
+  free(resource->resource_id);
+  free(resource->uri);
+  free(resource->relative_path);
+  free(resource->generated_text);
+  free(resource->etag);
+  free(resource->checksum);
+  memset(resource, 0, sizeof(*resource));
+}
+
+static void free_runtime_download_segment_strings(VesperRuntimeDownloadSegmentRecord *segment) {
+  if (segment == NULL) {
+    return;
+  }
+  free(segment->segment_id);
+  free(segment->uri);
+  free(segment->relative_path);
+  free(segment->checksum);
+  memset(segment, 0, sizeof(*segment));
+}
+
+static void free_runtime_download_asset_index_strings(VesperRuntimeDownloadAssetIndex *asset_index) {
+  if (asset_index == NULL) {
+    return;
+  }
+  free(asset_index->version);
+  free(asset_index->etag);
+  free(asset_index->checksum);
+  if (asset_index->resources != NULL) {
+    for (uintptr_t index = 0; index < asset_index->resources_len; index += 1) {
+      free_runtime_download_resource_strings(&asset_index->resources[index]);
+    }
+    free(asset_index->resources);
+  }
+  if (asset_index->segments != NULL) {
+    for (uintptr_t index = 0; index < asset_index->segments_len; index += 1) {
+      free_runtime_download_segment_strings(&asset_index->segments[index]);
+    }
+    free(asset_index->segments);
+  }
+  free(asset_index->completed_path);
+  memset(asset_index, 0, sizeof(*asset_index));
+}
+
+static void free_runtime_download_task_strings(VesperRuntimeDownloadTask *task) {
+  if (task == NULL) {
+    return;
+  }
+  free(task->asset_id);
+  free_runtime_download_source_strings(&task->source);
+  free_runtime_download_profile_strings(&task->profile);
+  free_runtime_download_asset_index_strings(&task->asset_index);
+  free(task->error_message);
+  memset(task, 0, sizeof(*task));
+}
+
+static void free_runtime_download_command_strings(VesperRuntimeDownloadCommand *command) {
+  if (command == NULL) {
+    return;
+  }
+  free_runtime_download_task_strings(&command->task);
+  memset(command, 0, sizeof(*command));
+}
+
+static void free_runtime_download_event_strings(VesperRuntimeDownloadEvent *event) {
+  if (event == NULL) {
+    return;
+  }
+  free_runtime_download_task_strings(&event->task);
+  memset(event, 0, sizeof(*event));
+}
+
+static bool runtime_download_source_from_ffi(
+    const PlayerFfiDownloadSource *source,
+    VesperRuntimeDownloadSource *out_source) {
+  if (source == NULL || out_source == NULL) {
+    return false;
+  }
+  memset(out_source, 0, sizeof(*out_source));
+  out_source->content_format = (VesperRuntimeDownloadContentFormat)source->content_format;
+  out_source->headers_len = source->headers_len;
+  if (!duplicate_runtime_string(source->source_uri, &out_source->source_uri) ||
+      !duplicate_runtime_string(source->manifest_uri, &out_source->manifest_uri) ||
+      !copy_ffi_string_list_to_runtime(
+          source->header_names,
+          source->headers_len,
+          &out_source->header_names) ||
+      !copy_ffi_string_list_to_runtime(
+          source->header_values,
+          source->headers_len,
+          &out_source->header_values)) {
+    free_runtime_download_source_strings(out_source);
+    return false;
+  }
+  return true;
+}
+
+static bool runtime_download_profile_from_ffi(
+    const PlayerFfiDownloadProfile *profile,
+    VesperRuntimeDownloadProfile *out_profile) {
+  if (profile == NULL || out_profile == NULL) {
+    return false;
+  }
+  memset(out_profile, 0, sizeof(*out_profile));
+  out_profile->selected_track_ids_len = profile->selected_track_ids_len;
+  out_profile->has_target_output_format = profile->has_target_output_format;
+  out_profile->target_output_format =
+      (VesperRuntimeDownloadOutputFormat)profile->target_output_format;
+  out_profile->allow_metered_network = profile->allow_metered_network;
+  if (!duplicate_runtime_string(profile->variant_id, &out_profile->variant_id) ||
+      !duplicate_runtime_string(
+          profile->preferred_audio_language,
+          &out_profile->preferred_audio_language) ||
+      !duplicate_runtime_string(
+          profile->preferred_subtitle_language,
+          &out_profile->preferred_subtitle_language) ||
+      !copy_ffi_string_list_to_runtime(
+          profile->selected_track_ids,
+          profile->selected_track_ids_len,
+          &out_profile->selected_track_ids) ||
+      !duplicate_runtime_string(profile->target_directory, &out_profile->target_directory)) {
+    free_runtime_download_profile_strings(out_profile);
+    return false;
+  }
+  return true;
+}
+
+static bool runtime_download_resource_from_ffi(
+    const PlayerFfiDownloadResourceRecord *resource,
+    VesperRuntimeDownloadResourceRecord *out_resource) {
+  if (resource == NULL || out_resource == NULL) {
+    return false;
+  }
+  memset(out_resource, 0, sizeof(*out_resource));
+  out_resource->has_byte_range = resource->has_byte_range;
+  out_resource->byte_range = runtime_download_byte_range_from_ffi(resource->byte_range);
+  out_resource->generated_text = NULL;
+  out_resource->has_size_bytes = resource->has_size_bytes;
+  out_resource->size_bytes = resource->size_bytes;
+  if (!duplicate_runtime_string(resource->resource_id, &out_resource->resource_id) ||
+      !duplicate_runtime_string(resource->uri, &out_resource->uri) ||
+      !duplicate_runtime_string(resource->relative_path, &out_resource->relative_path) ||
+      !duplicate_runtime_string(resource->etag, &out_resource->etag) ||
+      !duplicate_runtime_string(resource->checksum, &out_resource->checksum)) {
+    free_runtime_download_resource_strings(out_resource);
+    return false;
+  }
+  return true;
+}
+
+static bool runtime_download_segment_from_ffi(
+    const PlayerFfiDownloadSegmentRecord *segment,
+    VesperRuntimeDownloadSegmentRecord *out_segment) {
+  if (segment == NULL || out_segment == NULL) {
+    return false;
+  }
+  memset(out_segment, 0, sizeof(*out_segment));
+  out_segment->has_sequence = segment->has_sequence;
+  out_segment->sequence = segment->sequence;
+  out_segment->has_byte_range = segment->has_byte_range;
+  out_segment->byte_range = runtime_download_byte_range_from_ffi(segment->byte_range);
+  out_segment->has_size_bytes = segment->has_size_bytes;
+  out_segment->size_bytes = segment->size_bytes;
+  if (!duplicate_runtime_string(segment->segment_id, &out_segment->segment_id) ||
+      !duplicate_runtime_string(segment->uri, &out_segment->uri) ||
+      !duplicate_runtime_string(segment->relative_path, &out_segment->relative_path) ||
+      !duplicate_runtime_string(segment->checksum, &out_segment->checksum)) {
+    free_runtime_download_segment_strings(out_segment);
+    return false;
+  }
+  return true;
+}
+
+static bool copy_ffi_download_resources_to_runtime(
+    const PlayerFfiDownloadResourceRecord *resources,
+    uintptr_t len,
+    VesperRuntimeDownloadResourceRecord **out_resources) {
+  if (out_resources == NULL) {
+    return false;
+  }
+  *out_resources = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (resources == NULL || !can_allocate_items(len, sizeof(VesperRuntimeDownloadResourceRecord))) {
+    return false;
+  }
+
+  VesperRuntimeDownloadResourceRecord *runtime_resources =
+      calloc((size_t)len, sizeof(VesperRuntimeDownloadResourceRecord));
+  if (runtime_resources == NULL) {
+    return false;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    if (!runtime_download_resource_from_ffi(&resources[index], &runtime_resources[index])) {
+      for (uintptr_t cleanup_index = 0; cleanup_index < len; cleanup_index += 1) {
+        free_runtime_download_resource_strings(&runtime_resources[cleanup_index]);
+      }
+      free(runtime_resources);
+      return false;
+    }
+  }
+  *out_resources = runtime_resources;
+  return true;
+}
+
+static bool copy_ffi_download_segments_to_runtime(
+    const PlayerFfiDownloadSegmentRecord *segments,
+    uintptr_t len,
+    VesperRuntimeDownloadSegmentRecord **out_segments) {
+  if (out_segments == NULL) {
+    return false;
+  }
+  *out_segments = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (segments == NULL || !can_allocate_items(len, sizeof(VesperRuntimeDownloadSegmentRecord))) {
+    return false;
+  }
+
+  VesperRuntimeDownloadSegmentRecord *runtime_segments =
+      calloc((size_t)len, sizeof(VesperRuntimeDownloadSegmentRecord));
+  if (runtime_segments == NULL) {
+    return false;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    if (!runtime_download_segment_from_ffi(&segments[index], &runtime_segments[index])) {
+      for (uintptr_t cleanup_index = 0; cleanup_index < len; cleanup_index += 1) {
+        free_runtime_download_segment_strings(&runtime_segments[cleanup_index]);
+      }
+      free(runtime_segments);
+      return false;
+    }
+  }
+  *out_segments = runtime_segments;
+  return true;
+}
+
+static bool runtime_download_asset_index_from_ffi(
+    const PlayerFfiDownloadAssetIndex *asset_index,
+    VesperRuntimeDownloadAssetIndex *out_asset_index) {
+  if (asset_index == NULL || out_asset_index == NULL) {
+    return false;
+  }
+  memset(out_asset_index, 0, sizeof(*out_asset_index));
+  out_asset_index->content_format =
+      (VesperRuntimeDownloadContentFormat)asset_index->content_format;
+  out_asset_index->has_total_size_bytes = asset_index->has_total_size_bytes;
+  out_asset_index->total_size_bytes = asset_index->total_size_bytes;
+  out_asset_index->resources_len = asset_index->resources_len;
+  out_asset_index->segments_len = asset_index->segments_len;
+  if (!duplicate_runtime_string(asset_index->version, &out_asset_index->version) ||
+      !duplicate_runtime_string(asset_index->etag, &out_asset_index->etag) ||
+      !duplicate_runtime_string(asset_index->checksum, &out_asset_index->checksum) ||
+      !copy_ffi_download_resources_to_runtime(
+          asset_index->resources,
+          asset_index->resources_len,
+          &out_asset_index->resources) ||
+      !copy_ffi_download_segments_to_runtime(
+          asset_index->segments,
+          asset_index->segments_len,
+          &out_asset_index->segments) ||
+      !duplicate_runtime_string(asset_index->completed_path, &out_asset_index->completed_path)) {
+    free_runtime_download_asset_index_strings(out_asset_index);
+    return false;
+  }
+  return true;
+}
+
+static VesperRuntimeDownloadProgressSnapshot runtime_download_progress_from_ffi(
+    PlayerFfiDownloadProgressSnapshot progress) {
+  VesperRuntimeDownloadProgressSnapshot runtime_progress = {
+      .received_bytes = progress.received_bytes,
+      .has_total_bytes = progress.has_total_bytes,
+      .total_bytes = progress.total_bytes,
+      .received_segments = progress.received_segments,
+      .has_total_segments = progress.has_total_segments,
+      .total_segments = progress.total_segments,
+  };
+  return runtime_progress;
+}
+
+static bool runtime_download_task_from_ffi(
+    const PlayerFfiDownloadTask *task,
+    VesperRuntimeDownloadTask *out_task) {
+  if (task == NULL || out_task == NULL) {
+    return false;
+  }
+  memset(out_task, 0, sizeof(*out_task));
+  out_task->task_id = task->task_id;
+  out_task->status = (VesperRuntimeDownloadTaskStatus)task->status;
+  out_task->progress = runtime_download_progress_from_ffi(task->progress);
+  out_task->has_error = task->has_error;
+  out_task->error_code = task->error_code;
+  out_task->error_category = task->error_category;
+  out_task->error_retriable = task->error_retriable;
+  if (!duplicate_runtime_string(task->asset_id, &out_task->asset_id) ||
+      !runtime_download_source_from_ffi(&task->source, &out_task->source) ||
+      !runtime_download_profile_from_ffi(&task->profile, &out_task->profile) ||
+      !runtime_download_asset_index_from_ffi(&task->asset_index, &out_task->asset_index) ||
+      !duplicate_runtime_string(task->error_message, &out_task->error_message)) {
+    free_runtime_download_task_strings(out_task);
+    return false;
+  }
+  return true;
+}
+
+static bool runtime_download_command_from_ffi(
+    const PlayerFfiDownloadCommand *command,
+    VesperRuntimeDownloadCommand *out_command) {
+  if (command == NULL || out_command == NULL) {
+    return false;
+  }
+  memset(out_command, 0, sizeof(*out_command));
+  out_command->kind = (VesperRuntimeDownloadCommandKind)command->kind;
+  out_command->task_id = command->task_id;
+  if (!runtime_download_task_from_ffi(&command->task, &out_command->task)) {
+    free_runtime_download_command_strings(out_command);
+    return false;
+  }
+  return true;
+}
+
+static bool runtime_download_event_from_ffi(
+    const PlayerFfiDownloadEvent *event,
+    VesperRuntimeDownloadEvent *out_event) {
+  if (event == NULL || out_event == NULL) {
+    return false;
+  }
+  memset(out_event, 0, sizeof(*out_event));
+  out_event->kind = (VesperRuntimeDownloadEventKind)event->kind;
+  if (!runtime_download_task_from_ffi(&event->task, &out_event->task)) {
+    free_runtime_download_event_strings(out_event);
+    return false;
+  }
+  return true;
 }
 
 bool vesper_runtime_resolve_resilience_policy(
@@ -1432,10 +2137,11 @@ bool vesper_runtime_download_session_create(
   }
 
   PlayerFfiError ffi_error;
+  PlayerFfiDownloadConfig ffi_config = ffi_download_config_from_runtime(config);
   memset(&ffi_error, 0, sizeof(ffi_error));
   return call_playlist_status(
       player_ffi_download_session_create(
-          (const PlayerFfiDownloadConfig *)config,
+          &ffi_config,
           out_handle,
           &ffi_error),
       &ffi_error);
@@ -1454,17 +2160,23 @@ bool vesper_runtime_download_session_create_task(
   }
 
   PlayerFfiError ffi_error;
+  PlayerFfiDownloadSource ffi_source = ffi_download_source_from_runtime(source);
+  PlayerFfiDownloadProfile ffi_profile = ffi_download_profile_from_runtime(profile);
+  PlayerFfiDownloadAssetIndex ffi_asset_index;
+  if (!ffi_download_asset_index_from_runtime(asset_index, &ffi_asset_index)) {
+    return false;
+  }
   memset(&ffi_error, 0, sizeof(ffi_error));
-  return call_playlist_status(
-      player_ffi_download_session_create_task(
-          handle,
-          asset_id,
-          (const PlayerFfiDownloadSource *)source,
-          (const PlayerFfiDownloadProfile *)profile,
-          (const PlayerFfiDownloadAssetIndex *)asset_index,
-          out_task_id,
-          &ffi_error),
+  PlayerFfiCallStatus status = player_ffi_download_session_create_task(
+      handle,
+      asset_id,
+      &ffi_source,
+      &ffi_profile,
+      &ffi_asset_index,
+      out_task_id,
       &ffi_error);
+  free_borrowed_ffi_download_asset_index(&ffi_asset_index);
+  return call_playlist_status(status, &ffi_error);
 }
 
 bool vesper_runtime_download_session_restore_tasks(
@@ -1476,14 +2188,18 @@ bool vesper_runtime_download_session_restore_tasks(
   }
 
   PlayerFfiError ffi_error;
+  PlayerFfiDownloadTask *ffi_tasks = NULL;
+  if (!copy_runtime_download_tasks_to_ffi(tasks, tasks_len, &ffi_tasks)) {
+    return false;
+  }
   memset(&ffi_error, 0, sizeof(ffi_error));
-  return call_playlist_status(
-      player_ffi_download_session_restore_tasks(
-          handle,
-          (const PlayerFfiDownloadTask *)tasks,
-          (uintptr_t)tasks_len,
-          &ffi_error),
+  PlayerFfiCallStatus status = player_ffi_download_session_restore_tasks(
+      handle,
+      ffi_tasks,
+      (uintptr_t)tasks_len,
       &ffi_error);
+  free_borrowed_ffi_download_tasks(ffi_tasks, tasks_len);
+  return call_playlist_status(status, &ffi_error);
 }
 
 bool vesper_runtime_download_session_start_task(
@@ -1557,14 +2273,47 @@ bool vesper_runtime_download_session_complete_preparation(
   }
 
   PlayerFfiError ffi_error;
+  PlayerFfiDownloadAssetIndex ffi_asset_index;
+  if (!ffi_download_asset_index_from_runtime(asset_index, &ffi_asset_index)) {
+    return false;
+  }
   memset(&ffi_error, 0, sizeof(ffi_error));
-  return call_playlist_status(
-      player_ffi_download_session_complete_preparation(
-          handle,
-          task_id,
-          (const PlayerFfiDownloadAssetIndex *)asset_index,
-          &ffi_error),
+  PlayerFfiCallStatus status = player_ffi_download_session_complete_preparation(
+      handle,
+      task_id,
+      &ffi_asset_index,
       &ffi_error);
+  free_borrowed_ffi_download_asset_index(&ffi_asset_index);
+  return call_playlist_status(status, &ffi_error);
+}
+
+bool vesper_runtime_download_session_replace_task_plan(
+    uint64_t handle,
+    uint64_t task_id,
+    const VesperRuntimeDownloadSource *source,
+    const VesperRuntimeDownloadProfile *profile,
+    const VesperRuntimeDownloadAssetIndex *asset_index) {
+  if (source == NULL || profile == NULL || asset_index == NULL) {
+    return false;
+  }
+
+  PlayerFfiError ffi_error;
+  PlayerFfiDownloadSource ffi_source = ffi_download_source_from_runtime(source);
+  PlayerFfiDownloadProfile ffi_profile = ffi_download_profile_from_runtime(profile);
+  PlayerFfiDownloadAssetIndex ffi_asset_index;
+  if (!ffi_download_asset_index_from_runtime(asset_index, &ffi_asset_index)) {
+    return false;
+  }
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  PlayerFfiCallStatus status = player_ffi_download_session_replace_task_plan(
+      handle,
+      task_id,
+      &ffi_source,
+      &ffi_profile,
+      &ffi_asset_index,
+      &ffi_error);
+  free_borrowed_ffi_download_asset_index(&ffi_asset_index);
+  return call_playlist_status(status, &ffi_error);
 }
 
 bool vesper_runtime_download_session_export_task(
@@ -1641,8 +2390,41 @@ bool vesper_runtime_download_session_snapshot(
     return false;
   }
 
-  out_snapshot->tasks = (VesperRuntimeDownloadTask *)ffi_snapshot.tasks;
   out_snapshot->len = ffi_snapshot.len;
+  out_snapshot->tasks = NULL;
+  if (ffi_snapshot.len == 0) {
+    player_ffi_download_snapshot_free(&ffi_snapshot);
+    return true;
+  }
+  if (ffi_snapshot.tasks == NULL) {
+    player_ffi_download_snapshot_free(&ffi_snapshot);
+    out_snapshot->len = 0;
+    return false;
+  }
+
+  if (!can_allocate_items(ffi_snapshot.len, sizeof(VesperRuntimeDownloadTask))) {
+    player_ffi_download_snapshot_free(&ffi_snapshot);
+    out_snapshot->len = 0;
+    return false;
+  }
+
+  out_snapshot->tasks = calloc((size_t)ffi_snapshot.len, sizeof(VesperRuntimeDownloadTask));
+  if (out_snapshot->tasks == NULL) {
+    player_ffi_download_snapshot_free(&ffi_snapshot);
+    out_snapshot->len = 0;
+    return false;
+  }
+
+  for (uintptr_t index = 0; index < ffi_snapshot.len; index += 1) {
+    if (!runtime_download_task_from_ffi(
+            &ffi_snapshot.tasks[index],
+            &out_snapshot->tasks[index])) {
+      vesper_runtime_download_snapshot_free(out_snapshot);
+      player_ffi_download_snapshot_free(&ffi_snapshot);
+      return false;
+    }
+  }
+  player_ffi_download_snapshot_free(&ffi_snapshot);
   return true;
 }
 
@@ -1667,8 +2449,41 @@ bool vesper_runtime_download_session_drain_commands(
     return false;
   }
 
-  out_commands->commands = (VesperRuntimeDownloadCommand *)ffi_commands.commands;
   out_commands->len = ffi_commands.len;
+  out_commands->commands = NULL;
+  if (ffi_commands.len == 0) {
+    player_ffi_download_command_list_free(&ffi_commands);
+    return true;
+  }
+  if (ffi_commands.commands == NULL) {
+    player_ffi_download_command_list_free(&ffi_commands);
+    out_commands->len = 0;
+    return false;
+  }
+
+  if (!can_allocate_items(ffi_commands.len, sizeof(VesperRuntimeDownloadCommand))) {
+    player_ffi_download_command_list_free(&ffi_commands);
+    out_commands->len = 0;
+    return false;
+  }
+
+  out_commands->commands = calloc((size_t)ffi_commands.len, sizeof(VesperRuntimeDownloadCommand));
+  if (out_commands->commands == NULL) {
+    player_ffi_download_command_list_free(&ffi_commands);
+    out_commands->len = 0;
+    return false;
+  }
+
+  for (uintptr_t index = 0; index < ffi_commands.len; index += 1) {
+    if (!runtime_download_command_from_ffi(
+            &ffi_commands.commands[index],
+            &out_commands->commands[index])) {
+      vesper_runtime_download_command_list_free(out_commands);
+      player_ffi_download_command_list_free(&ffi_commands);
+      return false;
+    }
+  }
+  player_ffi_download_command_list_free(&ffi_commands);
   return true;
 }
 
@@ -1693,24 +2508,84 @@ bool vesper_runtime_download_session_drain_events(
     return false;
   }
 
-  out_events->events = (VesperRuntimeDownloadEvent *)ffi_events.events;
   out_events->len = ffi_events.len;
+  out_events->events = NULL;
+  if (ffi_events.len == 0) {
+    player_ffi_download_event_list_free(&ffi_events);
+    return true;
+  }
+  if (ffi_events.events == NULL) {
+    player_ffi_download_event_list_free(&ffi_events);
+    out_events->len = 0;
+    return false;
+  }
+
+  if (!can_allocate_items(ffi_events.len, sizeof(VesperRuntimeDownloadEvent))) {
+    player_ffi_download_event_list_free(&ffi_events);
+    out_events->len = 0;
+    return false;
+  }
+
+  out_events->events = calloc((size_t)ffi_events.len, sizeof(VesperRuntimeDownloadEvent));
+  if (out_events->events == NULL) {
+    player_ffi_download_event_list_free(&ffi_events);
+    out_events->len = 0;
+    return false;
+  }
+
+  for (uintptr_t index = 0; index < ffi_events.len; index += 1) {
+    if (!runtime_download_event_from_ffi(
+            &ffi_events.events[index],
+            &out_events->events[index])) {
+      vesper_runtime_download_event_list_free(out_events);
+      player_ffi_download_event_list_free(&ffi_events);
+      return false;
+    }
+  }
+  player_ffi_download_event_list_free(&ffi_events);
   return true;
 }
 
 void vesper_runtime_download_snapshot_free(
     VesperRuntimeDownloadSnapshot *snapshot) {
-  player_ffi_download_snapshot_free((PlayerFfiDownloadSnapshot *)snapshot);
+  if (snapshot == NULL) {
+    return;
+  }
+  if (snapshot->tasks != NULL) {
+    for (uintptr_t index = 0; index < snapshot->len; index += 1) {
+      free_runtime_download_task_strings(&snapshot->tasks[index]);
+    }
+    free(snapshot->tasks);
+  }
+  memset(snapshot, 0, sizeof(*snapshot));
 }
 
 void vesper_runtime_download_command_list_free(
     VesperRuntimeDownloadCommandList *commands) {
-  player_ffi_download_command_list_free((PlayerFfiDownloadCommandList *)commands);
+  if (commands == NULL) {
+    return;
+  }
+  if (commands->commands != NULL) {
+    for (uintptr_t index = 0; index < commands->len; index += 1) {
+      free_runtime_download_command_strings(&commands->commands[index]);
+    }
+    free(commands->commands);
+  }
+  memset(commands, 0, sizeof(*commands));
 }
 
 void vesper_runtime_download_event_list_free(
     VesperRuntimeDownloadEventList *events) {
-  player_ffi_download_event_list_free((PlayerFfiDownloadEventList *)events);
+  if (events == NULL) {
+    return;
+  }
+  if (events->events != NULL) {
+    for (uintptr_t index = 0; index < events->len; index += 1) {
+      free_runtime_download_event_strings(&events->events[index]);
+    }
+    free(events->events);
+  }
+  memset(events, 0, sizeof(*events));
 }
 
 void vesper_runtime_download_session_dispose(uint64_t handle) {

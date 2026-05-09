@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'models.dart';
 
 enum VesperDownloadContentFormat {
@@ -24,6 +26,11 @@ enum VesperDownloadState {
   removed,
 }
 
+enum VesperDownloadStaleResourcePhase {
+  prepare,
+  download,
+}
+
 final class VesperDownloadConfiguration {
   const VesperDownloadConfiguration({
     this.autoStart = true,
@@ -32,6 +39,9 @@ final class VesperDownloadConfiguration {
     this.restoreTasksOnStartup = true,
     this.baseDirectory,
     this.pluginLibraryPaths = const <String>[],
+    this.rangeChunkBytes,
+    this.minProgressBytes = 512 * 1024,
+    this.minProgressIntervalMs = 250,
   });
 
   factory VesperDownloadConfiguration.fromMap(Map<Object?, Object?> map) {
@@ -46,6 +56,11 @@ final class VesperDownloadConfiguration {
       restoreTasksOnStartup:
           normalized['restoreTasksOnStartup'] as bool? ?? true,
       baseDirectory: normalized['baseDirectory'] as String?,
+      rangeChunkBytes: _decodeInt(normalized['rangeChunkBytes']),
+      minProgressBytes:
+          _decodeInt(normalized['minProgressBytes']) ?? 512 * 1024,
+      minProgressIntervalMs:
+          _decodeInt(normalized['minProgressIntervalMs']) ?? 250,
       pluginLibraryPaths: switch (rawPluginLibraryPaths) {
         final List<dynamic> values => values
             .map((value) => value?.toString() ?? '')
@@ -62,6 +77,9 @@ final class VesperDownloadConfiguration {
   final bool restoreTasksOnStartup;
   final String? baseDirectory;
   final List<String> pluginLibraryPaths;
+  final int? rangeChunkBytes;
+  final int minProgressBytes;
+  final int minProgressIntervalMs;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -71,9 +89,18 @@ final class VesperDownloadConfiguration {
       'restoreTasksOnStartup': restoreTasksOnStartup,
       'baseDirectory': baseDirectory,
       'pluginLibraryPaths': pluginLibraryPaths,
+      'rangeChunkBytes': rangeChunkBytes,
+      'minProgressBytes': minProgressBytes,
+      'minProgressIntervalMs': minProgressIntervalMs,
     };
   }
 }
+
+typedef VesperDownloadStaleResourcePlanRecoveryCallback
+    = FutureOr<VesperDownloadRecoveredTaskPlan?> Function(
+  VesperDownloadTaskSnapshot task,
+  VesperDownloadStaleResource staleResource,
+);
 
 final class VesperDownloadSource {
   const VesperDownloadSource({
@@ -384,6 +411,89 @@ final class VesperDownloadAssetIndex {
   }
 }
 
+final class VesperDownloadStaleResource {
+  const VesperDownloadStaleResource({
+    required this.taskId,
+    this.resourceId,
+    this.segmentId,
+    this.uri,
+    this.phase = VesperDownloadStaleResourcePhase.prepare,
+    this.statusCode,
+    this.receivedBytes = 0,
+    required this.message,
+  });
+
+  factory VesperDownloadStaleResource.fromMap(Map<Object?, Object?> map) {
+    final normalized = vesperDecodeMap(map);
+    return VesperDownloadStaleResource(
+      taskId: _decodeInt(normalized['taskId']) ?? 0,
+      resourceId: normalized['resourceId'] as String?,
+      segmentId: normalized['segmentId'] as String?,
+      uri: normalized['uri'] as String?,
+      phase: _decodeStaleResourcePhase(normalized['phase']),
+      statusCode: _decodeInt(normalized['statusCode']),
+      receivedBytes: _decodeInt(normalized['receivedBytes']) ?? 0,
+      message: normalized['message'] as String? ?? '',
+    );
+  }
+
+  final int taskId;
+  final String? resourceId;
+  final String? segmentId;
+  final String? uri;
+  final VesperDownloadStaleResourcePhase phase;
+  final int? statusCode;
+  final int receivedBytes;
+  final String message;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'taskId': taskId,
+      'resourceId': resourceId,
+      'segmentId': segmentId,
+      'uri': uri,
+      'phase': phase.name,
+      'statusCode': statusCode,
+      'receivedBytes': receivedBytes,
+      'message': message,
+    };
+  }
+}
+
+final class VesperDownloadRecoveredTaskPlan {
+  const VesperDownloadRecoveredTaskPlan({
+    required this.source,
+    required this.profile,
+    required this.assetIndex,
+  });
+
+  factory VesperDownloadRecoveredTaskPlan.fromMap(Map<Object?, Object?> map) {
+    final normalized = vesperDecodeMap(map);
+    return VesperDownloadRecoveredTaskPlan(
+      source:
+          VesperDownloadSource.fromMap(vesperDecodeMap(normalized['source'])),
+      profile: VesperDownloadProfile.fromMap(
+        vesperDecodeMap(normalized['profile']),
+      ),
+      assetIndex: VesperDownloadAssetIndex.fromMap(
+        vesperDecodeMap(normalized['assetIndex']),
+      ),
+    );
+  }
+
+  final VesperDownloadSource source;
+  final VesperDownloadProfile profile;
+  final VesperDownloadAssetIndex assetIndex;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'source': source.toMap(),
+      'profile': profile.toMap(),
+      'assetIndex': assetIndex.toMap(),
+    };
+  }
+}
+
 final class VesperDownloadProgressSnapshot {
   const VesperDownloadProgressSnapshot({
     this.receivedBytes = 0,
@@ -581,6 +691,17 @@ VesperDownloadState _decodeDownloadState(Object? raw) {
     }
   }
   return VesperDownloadState.queued;
+}
+
+VesperDownloadStaleResourcePhase _decodeStaleResourcePhase(Object? raw) {
+  if (raw is String) {
+    for (final value in VesperDownloadStaleResourcePhase.values) {
+      if (value.name == raw) {
+        return value;
+      }
+    }
+  }
+  return VesperDownloadStaleResourcePhase.prepare;
 }
 
 int? _decodeInt(Object? raw) {

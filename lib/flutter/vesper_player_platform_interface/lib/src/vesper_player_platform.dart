@@ -175,6 +175,7 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
   Future<VesperPlatformDownloadCreateResult> createDownloadManager({
     VesperDownloadConfiguration configuration =
         const VesperDownloadConfiguration(),
+    VesperDownloadStaleResourcePlanRecoveryCallback? staleResourceRecovery,
   });
 
   Stream<VesperDownloadManagerEvent> downloadEventsFor(String downloadId);
@@ -349,6 +350,7 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
   Future<VesperPlatformDownloadCreateResult> createDownloadManager({
     VesperDownloadConfiguration configuration =
         const VesperDownloadConfiguration(),
+    VesperDownloadStaleResourcePlanRecoveryCallback? staleResourceRecovery,
   }) async =>
       throw VesperUnsupportedError();
 

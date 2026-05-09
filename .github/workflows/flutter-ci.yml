@@ -329,6 +329,9 @@ jobs:
       - name: Test iOS bridge crates
         run: cargo test -p player-platform-ios -p player-ffi-ios
 
+      - name: Verify VesperPlayerKit bridge shim
+        run: ./scripts/vesper ios verify-bridge-shim
+
       - name: Analyze and test Flutter iOS package
         shell: bash
         run: |

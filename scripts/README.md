@@ -21,6 +21,7 @@ scripts/
 
 ```sh
 ./scripts/vesper ffi generate
+./scripts/vesper ffi sync
 ./scripts/vesper ffi verify
 ./scripts/vesper ffi c-host-smoke
 
@@ -31,6 +32,7 @@ scripts/
 
 ./scripts/vesper apple ffmpeg ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios ffi release
+./scripts/vesper ios verify-bridge-shim
 ./scripts/vesper ios remux-plugin /tmp/vesper-ios-player-remux-ffmpeg release ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios kit-xcframework
 ./scripts/vesper ios stage-release

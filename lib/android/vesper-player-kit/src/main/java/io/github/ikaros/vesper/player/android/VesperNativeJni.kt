@@ -83,6 +83,14 @@ object VesperNativeJni {
         assetIndex: NativeDownloadAssetIndex,
         nowEpochMs: Long,
     ): Boolean
+    external fun replaceDownloadTaskPlan(
+        sessionHandle: Long,
+        taskId: Long,
+        source: NativeDownloadSource,
+        profile: NativeDownloadProfile,
+        assetIndex: NativeDownloadAssetIndex,
+        nowEpochMs: Long,
+    ): Boolean
     external fun exportDownloadTask(
         sessionHandle: Long,
         taskId: Long,

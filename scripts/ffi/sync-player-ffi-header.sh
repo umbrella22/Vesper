@@ -17,7 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 if ! command -v cbindgen >/dev/null 2>&1; then
-  echo "cbindgen is required to verify include/player_ffi.h." >&2
+  echo "cbindgen is required to sync include/player_ffi.h." >&2
   echo "Install it with: cargo install cbindgen" >&2
   exit 1
 fi
@@ -30,10 +30,10 @@ cbindgen "${crate_dir}" \
   --only-target-dependencies \
   --output "${tmp_header}"
 
-if ! diff -u "${header_path}" "${tmp_header}"; then
-  echo "" >&2
-  echo "include/player_ffi.h is out of date. Run scripts/vesper ffi sync." >&2
-  exit 1
+if [[ -f "${header_path}" ]] && cmp -s "${header_path}" "${tmp_header}"; then
+  echo "include/player_ffi.h is up to date."
+  exit 0
 fi
 
-echo "include/player_ffi.h is up to date."
+cp "${tmp_header}" "${header_path}"
+echo "Synced ${header_path}"
