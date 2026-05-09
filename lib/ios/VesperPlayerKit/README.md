@@ -73,7 +73,7 @@ builds, or any other working directory.
 - `VesperPreloadBudgetPolicy` — caps for concurrent preload tasks, memory, disk, warm-up window
 - `VesperTrackPreferencePolicy` — preferred audio / subtitle languages
 - `VesperCodecSupport` — hardware decode capability probe
-- `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / drainEvents`
+- `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput / drainEvents`
 
 The package does not embed demo URLs or preset sources. Construct
 `VesperPlayerSource` from your own content. A runnable sample lives at
@@ -164,7 +164,7 @@ Responsibility split:
 | Layer | Responsibilities                                                                                                                                                                          |
 | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Rust  | MPD / `SegmentBase` / `SegmentTemplate` / `SegmentTimeline` parsing, SIDX parsing, representation selection, HLS playlist generation, template expansion                                  |
-| Swift | `AVAssetResourceLoaderDelegate` + `vesper-dash://` URL routing, `URLSession` requests, header injection, `NWListener` loopback HTTP server, segment cache, prefetch, AVPlayer integration |
+| Swift | `AVAssetResourceLoaderDelegate` + `vesper-dash://` URL routing, guarded `URLSession` requests, header injection, segment cache, prefetch, AVPlayer integration                            |
 
 FFI entry point (single coarse-grained JSON op):
 
@@ -198,8 +198,10 @@ ABR behavior:
 VOD HLS, static DASH, and FLV inputs, the iOS host kit runs a native prepare
 phase before transfer starts. The prepare phase expands manifests or clip lists,
 resolves byte ranges, requires known remote byte totals, writes local rewritten
-manifests or concat lists, and publishes `AssetIndexUpdated` before download
-progress begins.
+manifests or concat lists, and publishes a compact `taskUpdated` event before
+download progress begins. Progress and state changes are incremental patches;
+only task creation, asset-index replacement, and recovered plans carry full task
+snapshots.
 
 The default configuration also persists task snapshots, restores interrupted
 tasks on startup, and resumes partially written remote files with range requests
@@ -209,13 +211,17 @@ resume range, the manager deletes only that partial resource and restarts the
 same resource from byte zero. Expired or unavailable URLs fail with a
 stale-resource error so the host can refresh the media link.
 
-When an HTTP resource has a known `sizeBytes` and no explicit byte range, the
-foreground executor also uses bounded closed Range requests for the initial
-transfer instead of a single unbounded `GET`. Each `206 Partial Content`
-response is validated against `Content-Range` before bytes are appended. If a
-small resource is requested as one complete range and the server ignores Range
-with `200 OK`, the response is accepted only when the final byte count matches
-the known size.
+Remote media URLs used by the iOS offline downloader and DASH bridge must be
+HTTPS. The SDK does not relax App Transport Security for `http://` media
+resources; host apps that must support insecure HTTP should fetch those
+resources outside the SDK and provide local file URLs.
+
+The foreground executor streams complete resources by default and sends `Range:
+bytes=<existing>-` only when resuming a partial file. Fixed closed Range chunks
+are used only when `rangeChunkBytes` is explicitly configured. Each `206 Partial
+Content` response is validated against `Content-Range` before bytes are
+appended, and the SDK-created download directories, state file, generated
+resources, and final offline files are marked as excluded from iCloud backup.
 
 When `VesperPlayerSource.headers` is set, the download executor forwards those
 headers to all SDK-owned network operations for the task: HLS, DASH, and FLV
@@ -235,6 +241,11 @@ This is an SDK-managed foreground executor, not an iOS background
 `URLSessionConfiguration.background` implementation. Hosts that need OS-managed
 process-death background transfer should own that background session layer and
 feed completed local assets back into the SDK.
+
+Completed files can be exposed through `shareTaskOutput(...)`, which presents a
+`UIActivityViewController`, or `saveTaskOutput(...)`, which presents an iOS
+document export picker. `exportTaskOutput(...)` still writes to an explicit
+host-provided path and keeps the original offline file in place.
 
 ## Optional FFmpeg Remux Plugin
 

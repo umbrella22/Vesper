@@ -65,6 +65,7 @@ enum ExampleI18n {
     static var downloadActionPause: String { string("example.download.action_pause") }
     static var downloadActionResume: String { string("example.download.action_resume") }
     static var downloadSaveToPhotos: String { string("example.download.save_to_photos") }
+    static var downloadShareOutput: String { string("example.download.share_output") }
     static var downloadRemoveTask: String { string("example.download.remove_task") }
     static var downloadProgressUnknown: String { string("example.download.progress_unknown") }
     static var downloadCreateTaskFailed: String { string("example.download.create_task_failed") }

@@ -61,7 +61,9 @@ For remote VOD HLS, static DASH, and FLV downloads, the iOS host kit runs a
 native prepare phase before transfer starts. The prepare phase expands the
 manifest or clip list, rejects live or size-unknown inputs, writes local
 rewritten manifests or concat lists, and reports the completed asset index
-through `AssetIndexUpdated` before download progress begins.
+through `taskUpdated` before download progress begins. Download events are a
+breaking incremental stream: `initialSnapshot`, `taskCreated`, `taskUpdated`,
+`taskRemoved`, `downloadError`, and `exportProgress`.
 
 Recommended flow:
 
@@ -79,10 +81,21 @@ downloads by default. The iOS host kit restores interrupted tasks when the
 manager is recreated and resumes existing partial files with range requests when
 the server supports them. It validates resume ranges before appending partial
 files and restarts only the affected resource when a server ignores a resume
-range. Known-size HTTP resources without an explicit byte range are also
-transferred with bounded closed Range chunks from the first byte. This is
-SDK-managed foreground recovery, not an iOS background
+range. Complete resources stream by default, `Range: bytes=<existing>-` is used
+for resume, and fixed Range chunks are used only when `rangeChunkBytes` is
+configured. This is SDK-managed foreground recovery, not an iOS background
 `URLSessionConfiguration.background` implementation.
+
+Remote media URLs used by the iOS offline downloader and DASH bridge must be
+HTTPS. The SDK does not relax App Transport Security for `http://` media
+resources; host apps that must support insecure HTTP should fetch those
+resources outside the SDK and pass local file URLs to the player or downloader.
+SDK-created download directories, state files, generated resources, and final
+offline files are excluded from iCloud backup.
+
+Use `shareTaskOutput(...)` for the native share sheet and `saveTaskOutput(...)`
+for the iOS document export picker. Both expose completed files without moving
+or deleting the SDK-owned offline copy.
 
 Download source headers are passed through the iOS host kit for manifest reads,
 size probes, and media transfers. Hosts should put generic HTTP context such as

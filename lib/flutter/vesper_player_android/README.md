@@ -61,10 +61,19 @@ background playback or foreground service startup.
 Download restore is intentionally separate from Android OS-managed background
 transfer. The Flutter package restores SDK task state on manager startup, resumes
 partial files with validated range requests, and restarts only the affected
-resource when a server ignores a resume range. Known-size HTTP resources without
-an explicit byte range are also transferred with bounded closed Range chunks from
-the first byte. It does not install a WorkManager or download ForegroundService
-for process-death transfers.
+resource when a server ignores a resume range. Complete resources stream by
+default, `Range: bytes=<existing>-` is used for resume, and fixed Range chunks
+are used only when `rangeChunkBytes` is configured. It does not install a
+WorkManager or download ForegroundService for process-death transfers.
+
+The Android host kit stores downloads under the app-private
+`filesDir/vesper-downloads` by default and does not request public storage
+permissions. `shareTaskOutput(...)` shares completed private files through the
+SDK FileProvider authority `${applicationId}.vesper.player.fileprovider`, and
+`saveTaskOutput(...)` copies completed files into MediaStore `Downloads` or
+`Movies` with scoped storage on Android 10 and newer. Android 9 and older hosts
+should use the share helper or their own export flow because the SDK does not
+request legacy public storage permissions.
 
 Download source headers are passed through the Android host kit for manifest
 reads, size probes, Media3 `DataSpec` fallback reads, and media transfers. Hosts

@@ -205,6 +205,21 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     int taskId,
     String outputPath,
   );
+
+  Future<void> shareDownloadTask(
+    String downloadId,
+    int taskId, {
+    String? fileName,
+    String? mimeType,
+  });
+
+  Future<String?> saveDownloadTask(
+    String downloadId,
+    int taskId, {
+    String? fileName,
+    VesperDownloadPublicCollection collection =
+        VesperDownloadPublicCollection.downloads,
+  });
 }
 
 final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
@@ -399,5 +414,24 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
     int taskId,
     String outputPath,
   ) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<void> shareDownloadTask(
+    String downloadId,
+    int taskId, {
+    String? fileName,
+    String? mimeType,
+  }) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<String?> saveDownloadTask(
+    String downloadId,
+    int taskId, {
+    String? fileName,
+    VesperDownloadPublicCollection collection =
+        VesperDownloadPublicCollection.downloads,
+  }) async =>
       throw VesperUnsupportedError();
 }

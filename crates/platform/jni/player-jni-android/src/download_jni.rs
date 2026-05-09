@@ -559,8 +559,10 @@ fn download_source_object<'local>(
     )?;
     env.new_object(
         class,
-        method_sig("(Ljava/lang/String;ILjava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V")
-            .method_signature(),
+        method_sig(
+            "(Ljava/lang/String;ILjava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V",
+        )
+        .method_signature(),
         &[
             JValue::Object(&source_uri),
             JValue::Int(match source.content_format {
@@ -811,6 +813,18 @@ fn download_progress_object<'local>(
     )
 }
 
+fn download_status_ordinal(status: DownloadTaskStatus) -> jint {
+    match status {
+        DownloadTaskStatus::Queued => 0,
+        DownloadTaskStatus::Preparing => 1,
+        DownloadTaskStatus::Downloading => 2,
+        DownloadTaskStatus::Paused => 3,
+        DownloadTaskStatus::Completed => 4,
+        DownloadTaskStatus::Failed => 5,
+        DownloadTaskStatus::Removed => 6,
+    }
+}
+
 fn download_task_object<'local>(
     env: &mut Env<'local>,
     task: &DownloadTaskSnapshot,
@@ -838,15 +852,7 @@ fn download_task_object<'local>(
             JValue::Object(&asset_id),
             JValue::Object(&source),
             JValue::Object(&profile),
-            JValue::Int(match task.status {
-                player_runtime::DownloadTaskStatus::Queued => 0,
-                player_runtime::DownloadTaskStatus::Preparing => 1,
-                player_runtime::DownloadTaskStatus::Downloading => 2,
-                player_runtime::DownloadTaskStatus::Paused => 3,
-                player_runtime::DownloadTaskStatus::Completed => 4,
-                player_runtime::DownloadTaskStatus::Failed => 5,
-                player_runtime::DownloadTaskStatus::Removed => 6,
-            }),
+            JValue::Int(download_status_ordinal(task.status)),
             JValue::Object(&progress),
             JValue::Object(&asset_index),
             JValue::Bool(task.error_summary.is_some()),
@@ -938,14 +944,56 @@ fn download_event_object<'local>(
                 &[JValue::Object(&task)],
             )
         }
-        DownloadEvent::StateChanged(task) => {
+        DownloadEvent::StateChanged(patch) => {
             let class =
                 env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent$StateChanged")))?;
-            let task = download_task_object(env, task)?;
+            let progress = download_progress_object(env, &patch.progress)?;
+            let error_message = optional_java_string(
+                env,
+                patch
+                    .error_summary
+                    .as_ref()
+                    .map(|summary| summary.message.as_str()),
+            )?;
+            let completed_path = optional_java_string(
+                env,
+                patch.completed_path.as_ref().and_then(|path| path.to_str()),
+            )?;
             env.new_object(
                 class,
-                method_sig(&format!("(L{PKG}/NativeDownloadTask;)V")).method_signature(),
-                &[JValue::Object(&task)],
+                method_sig(&format!(
+                    "(JIL{PKG}/NativeDownloadProgress;ZIIZLjava/lang/String;Ljava/lang/String;)V"
+                ))
+                .method_signature(),
+                &[
+                    JValue::Long(u64_to_jlong_saturating(patch.task_id.get())),
+                    JValue::Int(download_status_ordinal(patch.status)),
+                    JValue::Object(&progress),
+                    JValue::Bool(patch.error_summary.is_some()),
+                    JValue::Int(
+                        patch
+                            .error_summary
+                            .as_ref()
+                            .map(|summary| summary.code as jint)
+                            .unwrap_or_default(),
+                    ),
+                    JValue::Int(
+                        patch
+                            .error_summary
+                            .as_ref()
+                            .map(|summary| summary.category as jint)
+                            .unwrap_or_default(),
+                    ),
+                    JValue::Bool(
+                        patch
+                            .error_summary
+                            .as_ref()
+                            .map(|summary| summary.retriable)
+                            .unwrap_or(false),
+                    ),
+                    JValue::Object(&error_message),
+                    JValue::Object(&completed_path),
+                ],
             )
         }
         DownloadEvent::AssetIndexUpdated(task) => {
@@ -959,15 +1007,18 @@ fn download_event_object<'local>(
                 &[JValue::Object(&task)],
             )
         }
-        DownloadEvent::ProgressUpdated(task) => {
+        DownloadEvent::ProgressUpdated(patch) => {
             let class = env.find_class(jni_name(format!(
                 "{PKG}/NativeDownloadEvent$ProgressUpdated"
             )))?;
-            let task = download_task_object(env, task)?;
+            let progress = download_progress_object(env, &patch.progress)?;
             env.new_object(
                 class,
-                method_sig(&format!("(L{PKG}/NativeDownloadTask;)V")).method_signature(),
-                &[JValue::Object(&task)],
+                method_sig(&format!("(JL{PKG}/NativeDownloadProgress;)V")).method_signature(),
+                &[
+                    JValue::Long(u64_to_jlong_saturating(patch.task_id.get())),
+                    JValue::Object(&progress),
+                ],
             )
         }
     }

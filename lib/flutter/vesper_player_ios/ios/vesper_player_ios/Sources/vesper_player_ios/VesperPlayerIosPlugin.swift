@@ -95,7 +95,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             handleDownloadSessionCommand(call, result: result) { session in
                 session.lastError = nil
                 session.manager.refresh()
-                emitDownloadSnapshot(for: session)
                 emitDownloadRuntimeEvents(for: session)
                 return nil
             }
@@ -326,6 +325,10 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "exportDownloadTask":
             handleDownloadExportTask(call, result: result)
+        case "shareDownloadTask":
+            handleDownloadShareTask(call, result: result)
+        case "saveDownloadTask":
+            handleDownloadSaveTask(call, result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -632,6 +635,79 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func handleDownloadShareTask(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let (session, taskId, arguments) = try resolveDownloadOutputRequest(call)
+            guard let presenter = topViewController() else {
+                throw PluginError.operationFailed("No view controller is available for sharing.")
+            }
+            try session.manager.shareTaskOutput(
+                taskId: taskId,
+                fileName: arguments["fileName"] as? String,
+                mimeType: arguments["mimeType"] as? String,
+                from: presenter
+            )
+            result(nil)
+        } catch {
+            result(asDownloadFlutterError(error, code: "vesper_download_operation_failed"))
+        }
+    }
+
+    @MainActor
+    private func handleDownloadSaveTask(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let (session, taskId, arguments) = try resolveDownloadOutputRequest(call)
+            guard let presenter = topViewController() else {
+                throw PluginError.operationFailed("No view controller is available for saving.")
+            }
+            _ = try session.manager.saveTaskOutput(
+                taskId: taskId,
+                fileName: arguments["fileName"] as? String,
+                from: presenter
+            )
+            result(nil)
+        } catch {
+            result(asDownloadFlutterError(error, code: "vesper_download_operation_failed"))
+        }
+    }
+
+    @MainActor
+    private func resolveDownloadOutputRequest(
+        _ call: FlutterMethodCall
+    ) throws -> (DownloadSession, VesperDownloadTaskId, [String: Any]) {
+        let arguments = arguments(of: call)
+        guard let downloadId = arguments["downloadId"] as? String, !downloadId.isEmpty else {
+            throw PluginError.missingArgument("downloadId")
+        }
+        guard let session = downloadSessions[downloadId] else {
+            throw PluginError.unknownDownload(downloadId)
+        }
+        guard let taskId = (arguments["taskId"] as? NSNumber)?.uint64Value else {
+            throw PluginError.missingArgument("taskId")
+        }
+        return (session, taskId, arguments)
+    }
+
+    @MainActor
+    private func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let window = scenes
+            .flatMap(\.windows)
+            .first(where: { $0.isKeyWindow })
+        var controller = window?.rootViewController
+        while let presented = controller?.presentedViewController {
+            controller = presented
+        }
+        return controller
+    }
+
+    @MainActor
     private func observeSession(_ session: PlayerSession) {
         session.observation = session.controller.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in
@@ -646,7 +722,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         session.observation = session.manager.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.emitDownloadSnapshot(for: session)
                 self.emitDownloadRuntimeEvents(for: session)
             }
         }
@@ -677,7 +752,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     fileprivate func emitDownloadSnapshot(for session: DownloadSession) {
         downloadEventSink?([
             "downloadId": session.id,
-            "type": "snapshot",
+            "type": "initialSnapshot",
             "snapshot": buildDownloadSnapshotMap(for: session),
         ])
     }
@@ -685,11 +760,38 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     fileprivate func emitDownloadRuntimeEvents(for session: DownloadSession) {
         for event in session.manager.drainEvents() {
-            if case let .assetIndexUpdated(task) = event {
+            switch event {
+            case let .created(task):
                 downloadEventSink?([
                     "downloadId": session.id,
-                    "type": "assetIndexUpdated",
+                    "type": "taskCreated",
                     "task": task.toMap,
+                ])
+            case let .assetIndexUpdated(task):
+                downloadEventSink?([
+                    "downloadId": session.id,
+                    "type": "taskUpdated",
+                    "task": task.toMap,
+                ])
+            case let .stateChanged(patch):
+                if patch.state == .removed {
+                    downloadEventSink?([
+                        "downloadId": session.id,
+                        "type": "taskRemoved",
+                        "taskId": NSNumber(value: patch.taskId),
+                    ])
+                } else {
+                    downloadEventSink?([
+                        "downloadId": session.id,
+                        "type": "taskUpdated",
+                        "patch": patch.toMap,
+                    ])
+                }
+            case let .progressUpdated(patch):
+                downloadEventSink?([
+                    "downloadId": session.id,
+                    "type": "taskUpdated",
+                    "progressPatch": patch.toMap,
                 ])
             }
         }
@@ -699,7 +801,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     private func emitDownloadError(for session: DownloadSession, error: Error) {
         downloadEventSink?([
             "downloadId": session.id,
-            "type": "error",
+            "type": "downloadError",
             "error": session.lastError ?? downloadErrorMap(from: error),
             "snapshot": buildDownloadSnapshotMap(for: session),
         ])
@@ -1103,6 +1205,7 @@ private enum PluginError: LocalizedError {
     case invalidTrackSelection(String)
     case invalidAbrPolicy(String)
     case unsupported(String)
+    case operationFailed(String)
     case unknownPlayer(String)
     case unknownDownload(String)
 
@@ -1119,6 +1222,8 @@ private enum PluginError: LocalizedError {
         case let .invalidAbrPolicy(message):
             message
         case let .unsupported(message):
+            message
+        case let .operationFailed(message):
             message
         case let .unknownPlayer(playerId):
             "Unknown playerId: \(playerId)"
@@ -1777,6 +1882,27 @@ private extension VesperDownloadTaskSnapshot {
             "progress": progress.toMap,
             "assetIndex": assetIndex.toMap,
             "error": flutterValue(error?.toMap),
+        ]
+    }
+}
+
+private extension VesperDownloadTaskStatePatch {
+    var toMap: [String: Any] {
+        [
+            "taskId": taskId,
+            "state": state.toWireName(),
+            "progress": progress.toMap,
+            "error": flutterValue(error?.toMap),
+            "completedPath": flutterValue(completedPath),
+        ]
+    }
+}
+
+private extension VesperDownloadTaskProgressPatch {
+    var toMap: [String: Any] {
+        [
+            "taskId": taskId,
+            "progress": progress.toMap,
         ]
     }
 }

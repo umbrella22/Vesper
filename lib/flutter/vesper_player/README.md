@@ -455,8 +455,8 @@ host kits now run a native prepare phase before transfer starts. Flutter apps
 can pass the entry-point source into `createTask(...)` with an empty
 `VesperDownloadAssetIndex`; the host kit expands manifests, resolves byte
 ranges, probes every remote byte total, writes local rewritten manifests or
-concat lists, and then emits `VesperDownloadAssetIndexUpdatedEvent` before the
-first download-progress update.
+concat lists, and then emits `VesperDownloadTaskUpdatedEvent` with a full task
+before the first progress patch.
 
 Recommended host flow:
 
@@ -465,8 +465,9 @@ Recommended host flow:
    Set `targetOutputFormat: VesperDownloadOutputFormat.mp4` for HLS, DASH, and
    FLV segmented sources when the desired completed artifact is MP4.
 3. Replace the temporary row with the real task and listen to
-   `manager.snapshots`; the snapshot is updated when `AssetIndexUpdated`
-   arrives, so total bytes and segment counts appear before transfer progress.
+   `manager.snapshots`; the snapshot is updated from `taskCreated`,
+   `taskUpdated`, and `taskRemoved` events, so total bytes and segment counts
+   appear before transfer progress.
 
 Hosts may still pass a prebuilt `VesperDownloadAssetIndex` for custom catalogs.
 In that case the native prepare phase completes missing resource sizes before
@@ -483,13 +484,21 @@ The default `VesperDownloadConfiguration` enables `restoreTasksOnStartup` and
 `resumePartialDownloads`. Android and iOS persist task snapshots under the
 download base directory, restore interrupted preparing/downloading tasks on the
 next manager creation, and resume existing partial remote files with range
-requests when the server supports them. Known-size HTTP resources without an
-explicit byte range are also transferred with bounded closed Range chunks from
-the first byte, with `Content-Range` validation before appending. If a server
-ignores a resume range, only that partial resource is deleted and restarted from
-byte zero; expired or unavailable URLs fail with a stale-resource error. This is
-SDK-managed foreground download recovery; OS-managed process-death background
-transfer remains a host app service/background-session responsibility.
+requests when the server supports them. Complete resources stream by default,
+`Range: bytes=<existing>-` is used for resume, and fixed Range chunks are used
+only when `rangeChunkBytes` is configured. If a server ignores a resume range,
+only that partial resource is deleted and restarted from byte zero; expired or
+unavailable URLs fail with a stale-resource error. This is SDK-managed
+foreground download recovery; OS-managed process-death background transfer is
+not enabled by default and remains a separate host opt-in design.
+
+On iOS, offline media URLs must be HTTPS because the SDK does not relax App
+Transport Security for `http://` resources. On Android, downloads are stored
+under the app-private files directory by default. Use `shareTaskOutput(...)` for
+the native share sheet or Android `FileProvider`, and `saveTaskOutput(...)` for
+the iOS document export flow or Android 10+ MediaStore `Downloads` / `Movies`.
+On Android 9 and older, use `shareTaskOutput(...)`/FileProvider or a host-owned
+export flow because the SDK does not request legacy public storage permissions.
 
 ### Optional `.mp4` export through `player-remux-ffmpeg`
 
@@ -518,6 +527,12 @@ manager.events.listen((event) {
 });
 
 await manager.exportTaskOutput(taskId, '/path/to/output.mp4');
+await manager.shareTaskOutput(taskId, fileName: 'movie.mp4', mimeType: 'video/mp4');
+final savedUri = await manager.saveTaskOutput(
+  taskId,
+  fileName: 'movie.mp4',
+  collection: VesperDownloadPublicCollection.movies,
+);
 ```
 
 Key points:

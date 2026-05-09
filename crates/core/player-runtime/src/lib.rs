@@ -20,9 +20,9 @@ pub use player_download::{
     DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig,
     DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord,
     DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore, DownloadTaskId,
-    DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatus, InMemoryDownloadExecutor,
-    InMemoryDownloadStore, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
-    PlayerRuntimeResult,
+    DownloadTaskProgressPatch, DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatePatch,
+    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore, PlayerRuntimeError,
+    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
 };
 pub use player_model::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,

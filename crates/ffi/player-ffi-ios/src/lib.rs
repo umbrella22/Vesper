@@ -743,6 +743,15 @@ pub enum PlayerFfiDownloadEventKind {
 pub struct PlayerFfiDownloadEvent {
     pub kind: PlayerFfiDownloadEventKind,
     pub task: PlayerFfiDownloadTask,
+    pub task_id: u64,
+    pub status: PlayerFfiDownloadTaskStatus,
+    pub progress: PlayerFfiDownloadProgressSnapshot,
+    pub has_error: bool,
+    pub error_code: u32,
+    pub error_category: u32,
+    pub error_retriable: bool,
+    pub error_message: *mut c_char,
+    pub completed_path: *mut c_char,
 }
 
 #[repr(C)]
@@ -3199,10 +3208,16 @@ fn read_download_source(
             )
         })?;
 
-    let header_names =
-        read_string_list(source.header_names, source.headers_len, "source.header_names")?;
-    let header_values =
-        read_string_list(source.header_values, source.headers_len, "source.header_values")?;
+    let header_names = read_string_list(
+        source.header_names,
+        source.headers_len,
+        "source.header_names",
+    )?;
+    let header_values = read_string_list(
+        source.header_values,
+        source.headers_len,
+        "source.header_values",
+    )?;
     let mut download_source =
         DownloadSource::new(MediaSource::new(source_uri), source.content_format.into())
             .with_request_headers(header_names.into_iter().zip(header_values));
@@ -3767,6 +3782,11 @@ fn download_asset_index_to_ffi(asset_index: DownloadAssetIndex) -> PlayerFfiDown
     }
 }
 
+fn into_optional_c_string_path(path: Option<PathBuf>) -> *mut c_char {
+    path.map(|path| into_c_string_ptr(path.to_string_lossy().into_owned()))
+        .unwrap_or(ptr::null_mut())
+}
+
 fn download_progress_to_ffi(
     progress: DownloadProgressSnapshot,
 ) -> PlayerFfiDownloadProgressSnapshot {
@@ -3782,16 +3802,7 @@ fn download_progress_to_ffi(
 
 fn download_task_to_ffi(task: DownloadTaskSnapshot) -> PlayerFfiDownloadTask {
     let (has_error, error_code, error_category, error_retriable, error_message) =
-        match task.error_summary {
-            Some(error) => (
-                true,
-                error.code as u32,
-                error.category as u32,
-                error.retriable,
-                into_c_string_ptr(error.message),
-            ),
-            None => (false, 0, 0, false, ptr::null_mut()),
-        };
+        download_error_to_ffi_fields(task.error_summary);
 
     PlayerFfiDownloadTask {
         task_id: task.task_id.get(),
@@ -3806,6 +3817,21 @@ fn download_task_to_ffi(task: DownloadTaskSnapshot) -> PlayerFfiDownloadTask {
         error_category,
         error_retriable,
         error_message,
+    }
+}
+
+fn download_error_to_ffi_fields(
+    error: Option<DownloadErrorSummary>,
+) -> (bool, u32, u32, bool, *mut c_char) {
+    match error {
+        Some(error) => (
+            true,
+            error.code as u32,
+            error.category as u32,
+            error.retriable,
+            into_c_string_ptr(error.message),
+        ),
+        None => (false, 0, 0, false, ptr::null_mut()),
     }
 }
 
@@ -3828,6 +3854,8 @@ fn download_command_free(command: &mut PlayerFfiDownloadCommand) {
 
 fn download_event_free(event: &mut PlayerFfiDownloadEvent) {
     download_task_free(&mut event.task);
+    free_c_string(&mut event.error_message);
+    free_c_string(&mut event.completed_path);
     *event = PlayerFfiDownloadEvent::default();
 }
 
@@ -4421,21 +4449,46 @@ impl From<IosDownloadCommand> for PlayerFfiDownloadCommand {
 impl From<DownloadEvent> for PlayerFfiDownloadEvent {
     fn from(value: DownloadEvent) -> Self {
         match value {
-            DownloadEvent::Created(task) => Self {
-                kind: PlayerFfiDownloadEventKind::Created,
-                task: download_task_to_ffi(task),
-            },
-            DownloadEvent::StateChanged(task) => Self {
-                kind: PlayerFfiDownloadEventKind::StateChanged,
-                task: download_task_to_ffi(task),
-            },
-            DownloadEvent::AssetIndexUpdated(task) => Self {
-                kind: PlayerFfiDownloadEventKind::AssetIndexUpdated,
-                task: download_task_to_ffi(task),
-            },
-            DownloadEvent::ProgressUpdated(task) => Self {
+            DownloadEvent::Created(task) => {
+                let task_id = task.task_id.get();
+                Self {
+                    kind: PlayerFfiDownloadEventKind::Created,
+                    task: download_task_to_ffi(task),
+                    task_id,
+                    ..Self::default()
+                }
+            }
+            DownloadEvent::StateChanged(patch) => {
+                let (has_error, error_code, error_category, error_retriable, error_message) =
+                    download_error_to_ffi_fields(patch.error_summary);
+                Self {
+                    kind: PlayerFfiDownloadEventKind::StateChanged,
+                    task_id: patch.task_id.get(),
+                    status: patch.status.into(),
+                    progress: download_progress_to_ffi(patch.progress),
+                    has_error,
+                    error_code,
+                    error_category,
+                    error_retriable,
+                    error_message,
+                    completed_path: into_optional_c_string_path(patch.completed_path),
+                    ..Self::default()
+                }
+            }
+            DownloadEvent::AssetIndexUpdated(task) => {
+                let task_id = task.task_id.get();
+                Self {
+                    kind: PlayerFfiDownloadEventKind::AssetIndexUpdated,
+                    task: download_task_to_ffi(task),
+                    task_id,
+                    ..Self::default()
+                }
+            }
+            DownloadEvent::ProgressUpdated(patch) => Self {
                 kind: PlayerFfiDownloadEventKind::ProgressUpdated,
-                task: download_task_to_ffi(task),
+                task_id: patch.task_id.get(),
+                progress: download_progress_to_ffi(patch.progress),
+                ..Self::default()
             },
         }
     }

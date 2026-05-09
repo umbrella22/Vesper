@@ -48,6 +48,7 @@ import io.github.ikaros.vesper.player.android.VesperDownloadManager
 import io.github.ikaros.vesper.player.android.VesperDownloadOutputFormat
 import io.github.ikaros.vesper.player.android.VesperDownloadProfile
 import io.github.ikaros.vesper.player.android.VesperDownloadProgressSnapshot
+import io.github.ikaros.vesper.player.android.VesperDownloadPublicCollection
 import io.github.ikaros.vesper.player.android.VesperDownloadRecoveredTaskPlan
 import io.github.ikaros.vesper.player.android.VesperDownloadResourceRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSegmentRecord
@@ -55,6 +56,8 @@ import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadState
 import io.github.ikaros.vesper.player.android.VesperDownloadStaleResource
 import io.github.ikaros.vesper.player.android.VesperDownloadStaleResourcePlanRecoverer
+import io.github.ikaros.vesper.player.android.VesperDownloadTaskProgressPatch
+import io.github.ikaros.vesper.player.android.VesperDownloadTaskStatePatch
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
@@ -211,7 +214,6 @@ class VesperPlayerAndroidPlugin :
             "refreshDownloadManager" -> handleDownloadSessionCommand(call, result) { session ->
                 session.lastError = null
                 session.manager.refresh()
-                emitDownloadSnapshot(session)
                 emitDownloadRuntimeEvents(session)
                 null
             }
@@ -402,6 +404,8 @@ class VesperPlayerAndroidPlugin :
                 session.manager.removeTask(taskId)
             }
             "exportDownloadTask" -> handleDownloadExportTask(call, result)
+            "shareDownloadTask" -> handleDownloadShareTask(call, result)
+            "saveDownloadTask" -> handleDownloadSaveTask(call, result)
             else -> result.notImplemented()
         }
     }
@@ -827,6 +831,117 @@ class VesperPlayerAndroidPlugin :
         }
     }
 
+    private fun handleDownloadShareTask(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val resolved = resolveDownloadOutputRequest(call, result) ?: return
+        runCatching {
+            resolved.session.lastError = null
+            resolved.session.manager.shareTaskOutput(
+                context = activity ?: applicationContext,
+                taskId = resolved.taskId,
+                fileName = resolved.arguments["fileName"] as? String,
+                mimeType = resolved.arguments["mimeType"] as? String,
+            )
+        }.onSuccess {
+            result.success(null)
+        }.onFailure { error ->
+            resolved.session.lastError = error.toDownloadErrorMap()
+            emitDownloadError(resolved.session, error)
+            result.error(
+                "vesper_download_operation_failed",
+                error.message,
+                resolved.session.lastError,
+            )
+        }
+    }
+
+    private fun handleDownloadSaveTask(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val resolved = resolveDownloadOutputRequest(call, result) ?: return
+        runCatching {
+            resolved.session.lastError = null
+            resolved.session.manager.saveTaskOutput(
+                context = applicationContext,
+                taskId = resolved.taskId,
+                fileName = resolved.arguments["fileName"] as? String,
+                collection =
+                    when (resolved.arguments["collection"] as? String) {
+                        "movies" -> VesperDownloadPublicCollection.Movies
+                        else -> VesperDownloadPublicCollection.Downloads
+                    },
+            ).toString()
+        }.onSuccess(result::success)
+            .onFailure { error ->
+                resolved.session.lastError = error.toDownloadErrorMap()
+                emitDownloadError(resolved.session, error)
+                result.error(
+                    "vesper_download_operation_failed",
+                    error.message,
+                    resolved.session.lastError,
+                )
+            }
+    }
+
+    private data class ResolvedDownloadOutputRequest(
+        val session: DownloadSession,
+        val taskId: Long,
+        val arguments: Map<String, Any?>,
+    )
+
+    private fun resolveDownloadOutputRequest(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ): ResolvedDownloadOutputRequest? {
+        val arguments = call.argumentMap()
+        val sessionId = arguments["downloadId"] as? String
+        if (sessionId.isNullOrBlank()) {
+            result.error(
+                "vesper_missing_download_id",
+                "Missing downloadId.",
+                mapOf(
+                    "message" to "Missing downloadId.",
+                    "codeOrdinal" to 0,
+                    "categoryOrdinal" to 0,
+                    "retriable" to false,
+                ),
+            )
+            return null
+        }
+        val session = downloadSessions[sessionId]
+        if (session == null) {
+            result.error(
+                "vesper_unknown_download",
+                "Unknown downloadId: $sessionId",
+                mapOf(
+                    "message" to "Unknown downloadId: $sessionId",
+                    "codeOrdinal" to 0,
+                    "categoryOrdinal" to 0,
+                    "retriable" to false,
+                ),
+            )
+            return null
+        }
+        val taskId = (arguments["taskId"] as? Number)?.toLong()
+        if (taskId == null) {
+            result.error(
+                "vesper_missing_task_id",
+                "Missing taskId.",
+                mapOf(
+                    "message" to "Missing taskId.",
+                    "codeOrdinal" to 0,
+                    "categoryOrdinal" to 0,
+                    "retriable" to false,
+                ),
+            )
+            return null
+        }
+        return ResolvedDownloadOutputRequest(session, taskId, arguments)
+    }
+
     private fun observeSession(session: PlayerSession) {
         session.observerJob = scope.launch {
             combine(
@@ -851,7 +966,6 @@ class VesperPlayerAndroidPlugin :
     private fun observeDownloadSession(session: DownloadSession) {
         session.observerJob = scope.launch {
             session.manager.snapshot.collect {
-                emitDownloadSnapshot(session)
                 emitDownloadRuntimeEvents(session)
             }
         }
@@ -884,7 +998,7 @@ class VesperPlayerAndroidPlugin :
         downloadEventSink?.success(
             mapOf(
                 "downloadId" to session.id,
-                "type" to "snapshot",
+                "type" to "initialSnapshot",
                 "snapshot" to buildDownloadSnapshotMap(session),
             ),
         )
@@ -893,16 +1007,52 @@ class VesperPlayerAndroidPlugin :
     private fun emitDownloadRuntimeEvents(session: DownloadSession) {
         session.manager.drainEvents().forEach { event ->
             when (event) {
-                is VesperDownloadEvent.AssetIndexUpdated -> {
+                is VesperDownloadEvent.Created -> {
                     downloadEventSink?.success(
                         mapOf(
                             "downloadId" to session.id,
-                            "type" to "assetIndexUpdated",
+                            "type" to "taskCreated",
                             "task" to event.task.toMap(),
                         ),
                     )
                 }
-                else -> Unit
+                is VesperDownloadEvent.AssetIndexUpdated -> {
+                    downloadEventSink?.success(
+                        mapOf(
+                            "downloadId" to session.id,
+                            "type" to "taskUpdated",
+                            "task" to event.task.toMap(),
+                        ),
+                    )
+                }
+                is VesperDownloadEvent.StateChanged -> {
+                    if (event.patch.state == VesperDownloadState.Removed) {
+                        downloadEventSink?.success(
+                            mapOf(
+                                "downloadId" to session.id,
+                                "type" to "taskRemoved",
+                                "taskId" to event.patch.taskId,
+                            ),
+                        )
+                    } else {
+                        downloadEventSink?.success(
+                            mapOf(
+                                "downloadId" to session.id,
+                                "type" to "taskUpdated",
+                                "patch" to event.patch.toMap(),
+                            ),
+                        )
+                    }
+                }
+                is VesperDownloadEvent.ProgressUpdated -> {
+                    downloadEventSink?.success(
+                        mapOf(
+                            "downloadId" to session.id,
+                            "type" to "taskUpdated",
+                            "progressPatch" to event.patch.toMap(),
+                        ),
+                    )
+                }
             }
         }
     }
@@ -911,7 +1061,7 @@ class VesperPlayerAndroidPlugin :
         downloadEventSink?.success(
             mapOf(
                 "downloadId" to session.id,
-                "type" to "error",
+                "type" to "downloadError",
                 "error" to (session.lastError ?: error.toDownloadErrorMap()),
                 "snapshot" to buildDownloadSnapshotMap(session),
             ),
@@ -1831,6 +1981,21 @@ private fun VesperDownloadTaskSnapshot.toMap(): Map<String, Any?> =
         "progress" to progress.toMap(),
         "assetIndex" to assetIndex.toMap(),
         "error" to error?.toMap(),
+    )
+
+private fun VesperDownloadTaskStatePatch.toMap(): Map<String, Any?> =
+    mapOf(
+        "taskId" to taskId,
+        "state" to state.toWireName(),
+        "progress" to progress.toMap(),
+        "error" to error?.toMap(),
+        "completedPath" to completedPath,
+    )
+
+private fun VesperDownloadTaskProgressPatch.toMap(): Map<String, Any?> =
+    mapOf(
+        "taskId" to taskId,
+        "progress" to progress.toMap(),
     )
 
 private fun VesperDownloadSource.toMap(): Map<String, Any?> =

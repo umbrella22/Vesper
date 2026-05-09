@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import java.io.File
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -9,7 +10,9 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -183,7 +186,7 @@ class VesperDownloadManagerTest {
 
         assertTrue(manager.removeTask(1L))
         assertEquals(listOf(1L), executor.removedTaskIds)
-        assertEquals(VesperDownloadState.Removed, manager.task(1L)?.state)
+        assertNull(manager.task(1L))
         manager.dispose()
     }
 
@@ -252,6 +255,100 @@ class VesperDownloadManagerTest {
     }
 
     @Test
+    fun defaultDownloadBaseDirectoryStaysUnderAppPrivateFilesDir() {
+        val filesDir = Files.createTempDirectory("vesper-android-files").toFile()
+        val configured = Files.createTempDirectory("vesper-android-custom").toFile()
+        try {
+            assertEquals(
+                File(filesDir, "vesper-downloads"),
+                vesperDefaultDownloadBaseDirectory(filesDir, null),
+            )
+            assertEquals(
+                configured,
+                vesperDefaultDownloadBaseDirectory(filesDir, configured),
+            )
+        } finally {
+            filesDir.deleteRecursively()
+            configured.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun manifestDoesNotRequestPublicStorageOrDownloadForegroundServicePermissions() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+
+        assertFalse(manifest.contains("MANAGE_EXTERNAL_STORAGE"))
+        assertFalse(manifest.contains("WRITE_EXTERNAL_STORAGE"))
+        assertFalse(manifest.contains("FOREGROUND_SERVICE_DATA_SYNC"))
+        assertFalse(manifest.contains("foregroundServiceType=\"dataSync\""))
+    }
+
+    @Test
+    fun consumerRulesKeepAndroidBridgeClassesForR8() {
+        val rules = File("consumer-rules.pro").readText()
+
+        assertTrue(rules.contains("-keep class io.github.ikaros.vesper.player.android.**"))
+        assertTrue(rules.contains("*;"))
+    }
+
+    @Test
+    fun persistedActiveTasksRestoreAndAutoResumeOnStartup() {
+        val directory = Files.createTempDirectory("vesper-android-restore").toFile()
+        val task =
+            VesperDownloadTaskSnapshot(
+                taskId = 42L,
+                assetId = "asset-restore",
+                source =
+                    VesperDownloadSource(
+                        source =
+                            VesperPlayerSource.remote(
+                                uri = "https://example.com/video.mp4",
+                                label = "Video",
+                            ),
+                        contentFormat = VesperDownloadContentFormat.SingleFile,
+                    ),
+                profile = VesperDownloadProfile(),
+                state = VesperDownloadState.Downloading,
+                progress = VesperDownloadProgressSnapshot(receivedBytes = 512L, totalBytes = 1024L),
+                assetIndex =
+                    VesperDownloadAssetIndex(
+                        contentFormat = VesperDownloadContentFormat.SingleFile,
+                        totalSizeBytes = 1024L,
+                        resources =
+                            listOf(
+                                VesperDownloadResourceRecord(
+                                    resourceId = "video",
+                                    uri = "https://example.com/video.mp4",
+                                    relativePath = "video.mp4",
+                                    sizeBytes = 1024L,
+                                ),
+                            ),
+                    ),
+            )
+        val stateStore = InMemoryDownloadStateStore(VesperDownloadSnapshot(listOf(task)))
+
+        val bindings = FakeDownloadBindings(autoStart = false)
+        val executor = RecordingDownloadExecutor()
+        val manager =
+            VesperDownloadManager(
+                configuration = VesperDownloadConfiguration(autoStart = true),
+                executor = executor,
+                bindings = bindings,
+                stateStore = stateStore,
+                defaultBaseDirectory = directory,
+                runtimeDispatcher = Dispatchers.Unconfined,
+            )
+
+        try {
+            assertEquals(VesperDownloadState.Downloading, manager.task(42L)?.state)
+            assertEquals(listOf(42L), executor.resumedTaskIds)
+        } finally {
+            manager.dispose()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun exportTaskOutputForwardsProgressAndCancellationToBindings() = runBlocking {
         val bindings = FakeDownloadBindings(autoStart = false)
         val manager =
@@ -286,6 +383,18 @@ class VesperDownloadManagerTest {
         assertEquals(listOf(0.25f, 1.0f), bindings.forwardedProgress)
         assertEquals(true, bindings.exportWasCancelled)
         manager.dispose()
+    }
+}
+
+private class InMemoryDownloadStateStore(
+    initialSnapshot: VesperDownloadSnapshot = VesperDownloadSnapshot(emptyList()),
+) : VesperDownloadStatePersistence {
+    private var snapshot = initialSnapshot
+
+    override fun load(): VesperDownloadSnapshot = snapshot
+
+    override fun save(snapshot: VesperDownloadSnapshot) {
+        this.snapshot = snapshot
     }
 }
 
@@ -341,7 +450,7 @@ private class FakeDownloadBindings(
             )
         tasks[taskId] = task
         events += NativeDownloadEvent.Created(task)
-        events += NativeDownloadEvent.StateChanged(task)
+        events += task.toStateChangedEvent()
         if (autoStart) {
             commands += NativeDownloadCommand.Prepare(task)
         }
@@ -364,7 +473,7 @@ private class FakeDownloadBindings(
         updateTask(taskId) { task ->
             task.withStatus(statusOrdinal = 1).also { updated ->
                 commands += NativeDownloadCommand.Prepare(updated)
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
             }
         }
 
@@ -389,7 +498,7 @@ private class FakeDownloadBindings(
                 assetIndex = assetIndex,
             ).also { updated ->
                 events += NativeDownloadEvent.AssetIndexUpdated(updated)
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
                 commands += NativeDownloadCommand.Start(updated)
             }
         }
@@ -426,7 +535,7 @@ private class FakeDownloadBindings(
                 errorMessage = null,
             ).also { updated ->
                 events += NativeDownloadEvent.AssetIndexUpdated(updated)
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
             }
         }
 
@@ -434,7 +543,7 @@ private class FakeDownloadBindings(
         updateTask(taskId) { task ->
             task.withStatus(statusOrdinal = 3).also { updated ->
                 commands += NativeDownloadCommand.Pause(taskId)
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
             }
         }
 
@@ -442,7 +551,7 @@ private class FakeDownloadBindings(
         updateTask(taskId) { task ->
             task.withStatus(statusOrdinal = 2).also { updated ->
                 commands += NativeDownloadCommand.Resume(updated)
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
             }
         }
 
@@ -461,7 +570,7 @@ private class FakeDownloadBindings(
                         receivedSegments = receivedSegments,
                     ),
             ).also { updated ->
-                events += NativeDownloadEvent.ProgressUpdated(updated)
+                events += updated.toProgressUpdatedEvent()
             }
         }
 
@@ -484,7 +593,7 @@ private class FakeDownloadBindings(
                     ),
                 assetIndex = task.assetIndex.withCompletedPath(completedPath),
             ).also { updated ->
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
             }
         }
 
@@ -518,7 +627,7 @@ private class FakeDownloadBindings(
                 errorRetriable = retriable,
                 errorMessage = message,
             ).also { updated ->
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
             }
         }
 
@@ -526,7 +635,7 @@ private class FakeDownloadBindings(
         updateTask(taskId) { task ->
             task.withStatus(statusOrdinal = 6).also { updated ->
                 commands += NativeDownloadCommand.Remove(taskId)
-                events += NativeDownloadEvent.StateChanged(updated)
+                events += updated.toStateChangedEvent()
             }
         }
 
@@ -578,6 +687,25 @@ private fun NativeDownloadTask.withProgress(
     progress: NativeDownloadProgress,
 ): NativeDownloadTask =
     withStatus(statusOrdinal = statusOrdinal, progress = progress)
+
+private fun NativeDownloadTask.toStateChangedEvent(): NativeDownloadEvent.StateChanged =
+    NativeDownloadEvent.StateChanged(
+        taskId = taskId,
+        statusOrdinal = statusOrdinal,
+        progress = progress,
+        hasError = hasError,
+        errorCodeOrdinal = errorCodeOrdinal,
+        errorCategoryOrdinal = errorCategoryOrdinal,
+        errorRetriable = errorRetriable,
+        errorMessage = errorMessage,
+        completedPath = assetIndex.completedPath,
+    )
+
+private fun NativeDownloadTask.toProgressUpdatedEvent(): NativeDownloadEvent.ProgressUpdated =
+    NativeDownloadEvent.ProgressUpdated(
+        taskId = taskId,
+        progress = progress,
+    )
 
 private fun NativeDownloadProgress.withValues(
     receivedBytes: Long = this.receivedBytes,

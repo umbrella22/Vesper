@@ -1,11 +1,19 @@
 package io.github.ikaros.vesper.player.android
 
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.StringReader
 import java.net.HttpURLConnection
@@ -67,6 +75,11 @@ data class VesperDownloadConfiguration(
 enum class VesperDownloadStaleResourcePhase {
     Prepare,
     Download,
+}
+
+enum class VesperDownloadPublicCollection {
+    Downloads,
+    Movies,
 }
 
 data class VesperDownloadStaleResource(
@@ -211,14 +224,84 @@ data class VesperDownloadSnapshot(
     val tasks: List<VesperDownloadTaskSnapshot>,
 )
 
+data class VesperDownloadTaskStatePatch(
+    val taskId: VesperDownloadTaskId,
+    val state: VesperDownloadState,
+    val progress: VesperDownloadProgressSnapshot,
+    val error: VesperDownloadError? = null,
+    val completedPath: String? = null,
+)
+
+data class VesperDownloadTaskProgressPatch(
+    val taskId: VesperDownloadTaskId,
+    val progress: VesperDownloadProgressSnapshot,
+)
+
 sealed interface VesperDownloadEvent {
     data class Created(val task: VesperDownloadTaskSnapshot) : VesperDownloadEvent
 
-    data class StateChanged(val task: VesperDownloadTaskSnapshot) : VesperDownloadEvent
+    data class StateChanged(val patch: VesperDownloadTaskStatePatch) : VesperDownloadEvent
 
     data class AssetIndexUpdated(val task: VesperDownloadTaskSnapshot) : VesperDownloadEvent
 
-    data class ProgressUpdated(val task: VesperDownloadTaskSnapshot) : VesperDownloadEvent
+    data class ProgressUpdated(val patch: VesperDownloadTaskProgressPatch) : VesperDownloadEvent
+}
+
+private val VesperDownloadEvent.isRemovedStatePatch: Boolean
+    get() = this is VesperDownloadEvent.StateChanged && patch.state == VesperDownloadState.Removed
+
+internal fun vesperDefaultDownloadBaseDirectory(
+    filesDir: File,
+    configuredBaseDirectory: File?,
+): File = configuredBaseDirectory ?: File(filesDir, "vesper-downloads")
+
+private data class ProgressPersistenceCheckpoint(
+    val bytes: Long,
+    val epochMs: Long,
+)
+
+private class DownloadTaskStore {
+    private val tasksById = linkedMapOf<VesperDownloadTaskId, VesperDownloadTaskSnapshot>()
+
+    fun replaceAll(snapshot: VesperDownloadSnapshot) {
+        tasksById.clear()
+        snapshot.tasks.filter { it.state != VesperDownloadState.Removed }.forEach { task ->
+            tasksById[task.taskId] = task
+        }
+    }
+
+    fun apply(events: List<VesperDownloadEvent>): VesperDownloadSnapshot {
+        events.forEach { event ->
+            when (event) {
+                is VesperDownloadEvent.Created -> tasksById[event.task.taskId] = event.task
+                is VesperDownloadEvent.AssetIndexUpdated -> tasksById[event.task.taskId] = event.task
+                is VesperDownloadEvent.StateChanged -> {
+                    if (event.patch.state == VesperDownloadState.Removed) {
+                        tasksById.remove(event.patch.taskId)
+                        return@forEach
+                    }
+                    val task = tasksById[event.patch.taskId] ?: return@forEach
+                    tasksById[event.patch.taskId] =
+                        task.copy(
+                            state = event.patch.state,
+                            progress = event.patch.progress,
+                            assetIndex =
+                                task.assetIndex.copy(
+                                    completedPath = event.patch.completedPath ?: task.assetIndex.completedPath,
+                                ),
+                            error = event.patch.error,
+                        )
+                }
+                is VesperDownloadEvent.ProgressUpdated -> {
+                    val task = tasksById[event.patch.taskId] ?: return@forEach
+                    tasksById[event.patch.taskId] = task.copy(progress = event.patch.progress)
+                }
+            }
+        }
+        return snapshot()
+    }
+
+    fun snapshot(): VesperDownloadSnapshot = VesperDownloadSnapshot(tasksById.values.toList())
 }
 
 interface VesperDownloadExecutionReporter {
@@ -286,7 +369,7 @@ class VesperDownloadManager internal constructor(
     private val configuration: VesperDownloadConfiguration,
     private val executor: VesperDownloadExecutor,
     private val bindings: DownloadBindings,
-    private val stateStore: VesperDownloadStateStore? = null,
+    private val stateStore: VesperDownloadStatePersistence? = null,
     private val defaultBaseDirectory: File? = configuration.baseDirectory,
     private val runtimeDispatcher: CoroutineDispatcher =
         Executors.newSingleThreadExecutor { runnable ->
@@ -296,6 +379,8 @@ class VesperDownloadManager internal constructor(
     private val runtimeScope = CoroutineScope(SupervisorJob() + runtimeDispatcher)
     private val eventBufferLock = Any()
     private val eventBuffer = mutableListOf<VesperDownloadEvent>()
+    private val taskStore = DownloadTaskStore()
+    private val lastProgressPersistence = mutableMapOf<VesperDownloadTaskId, ProgressPersistenceCheckpoint>()
     private val _snapshot = MutableStateFlow(VesperDownloadSnapshot(emptyList()))
     private var sessionHandle: Long = bindings.createDownloadSession(configuration.toNativePayload())
 
@@ -327,20 +412,16 @@ class VesperDownloadManager internal constructor(
                 ?.let {
                     VesperDownloadStateStore(
                         File(
-                            it.baseDirectory
-                                ?: File(context.applicationContext.filesDir, "vesper-downloads"),
+                            vesperDefaultDownloadBaseDirectory(context.applicationContext.filesDir, it.baseDirectory),
                             "download-state.json",
                         ),
                     )
                 },
-        defaultBaseDirectory = configuration.baseDirectory ?: File(context.applicationContext.filesDir, "vesper-downloads"),
+        defaultBaseDirectory = vesperDefaultDownloadBaseDirectory(
+            context.applicationContext.filesDir,
+            configuration.baseDirectory,
+        ),
     )
-
-    init {
-        check(sessionHandle != 0L) { "native download session handle must not be zero" }
-        restorePersistedTasks()
-        refresh()
-    }
 
     fun dispose() {
         snapshot.value.tasks
@@ -359,10 +440,16 @@ class VesperDownloadManager internal constructor(
         }
         runtimeScope.cancel()
         (runtimeDispatcher as? AutoCloseable)?.close()
+        taskStore.replaceAll(VesperDownloadSnapshot(emptyList()))
+        lastProgressPersistence.clear()
     }
 
     fun refresh() {
         syncRuntimeState(processCommands = true)
+    }
+
+    fun forceFullSync() {
+        forceFullSync(processCommands = true)
     }
 
     fun drainEvents(): List<VesperDownloadEvent> =
@@ -437,7 +524,7 @@ class VesperDownloadManager internal constructor(
                 )
             }
         if (restored) {
-            syncRuntimeState(processCommands = true)
+            forceFullSync(processCommands = true)
         }
         return restored
     }
@@ -512,18 +599,79 @@ class VesperDownloadManager internal constructor(
         }
     }
 
+    fun shareTaskOutput(
+        context: Context,
+        taskId: VesperDownloadTaskId,
+        fileName: String? = null,
+        mimeType: String? = null,
+        authority: String = "${context.packageName}.vesper.player.fileprovider",
+    ) {
+        val source = outputFileForTask(taskId)
+        val sharedFile = preparedShareFile(context, source, fileName)
+        val uri = FileProvider.getUriForFile(context, authority, sharedFile)
+        val intent =
+            Intent(Intent.ACTION_SEND)
+                .setType(mimeType ?: guessMimeType(sharedFile))
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val chooser = Intent.createChooser(intent, null)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (context !is android.app.Activity) {
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+    }
+
+    fun saveTaskOutput(
+        context: Context,
+        taskId: VesperDownloadTaskId,
+        fileName: String? = null,
+        collection: VesperDownloadPublicCollection = VesperDownloadPublicCollection.Downloads,
+    ): Uri {
+        check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "saveTaskOutput requires Android 10 or newer MediaStore scoped storage"
+        }
+        val source = outputFileForTask(taskId)
+        val displayName = sanitizedOutputFileName(fileName ?: source.name)
+        val mimeType = guessMimeType(source)
+        val values =
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, collection.relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        val resolver = context.contentResolver
+        val collectionUri = collection.contentUri
+        val uri = checkNotNull(resolver.insert(collectionUri, values)) {
+            "MediaStore did not allocate an output URI"
+        }
+        runCatching {
+            resolver.openOutputStream(uri)?.use { output ->
+                FileInputStream(source).use { input ->
+                    input.copyTo(output)
+                }
+            } ?: error("MediaStore output stream was unavailable")
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        }.onFailure { error ->
+            resolver.delete(uri, null, null)
+            throw error
+        }.getOrThrow()
+        return uri
+    }
+
     private fun syncRuntimeState(processCommands: Boolean) {
         if (sessionHandle == 0L) {
+            taskStore.replaceAll(VesperDownloadSnapshot(emptyList()))
             _snapshot.value = VesperDownloadSnapshot(emptyList())
+            lastProgressPersistence.clear()
             synchronized(eventBufferLock) {
                 eventBuffer.clear()
             }
             return
         }
-
-        val nativeSnapshot = onRuntimeThread { bindings.pollDownloadSnapshot(sessionHandle) }
-        _snapshot.value = nativeSnapshot?.toPublic() ?: VesperDownloadSnapshot(emptyList())
-        persistSnapshot(_snapshot.value)
 
         val events = onRuntimeThread { bindings.drainDownloadEvents(sessionHandle).toList() }
             .map(NativeDownloadEvent::toPublic)
@@ -531,14 +679,98 @@ class VesperDownloadManager internal constructor(
             synchronized(eventBufferLock) {
                 eventBuffer += events
             }
+            val immediateEvents = events.filterNot { it.isRemovedStatePatch }
+            if (immediateEvents.isNotEmpty()) {
+                val updatedSnapshot = taskStore.apply(immediateEvents)
+                _snapshot.value = updatedSnapshot
+            }
         }
 
-        if (!processCommands) {
+        if (processCommands) {
+            val commands = onRuntimeThread { bindings.drainDownloadCommands(sessionHandle).toList() }
+            commands.forEach(::applyCommand)
+        }
+
+        if (events.isNotEmpty()) {
+            val removalEvents = events.filter { it.isRemovedStatePatch }
+            if (removalEvents.isNotEmpty()) {
+                val updatedSnapshot = taskStore.apply(removalEvents)
+                _snapshot.value = updatedSnapshot
+            }
+            if (shouldPersistSnapshot(events)) {
+                persistSnapshot(_snapshot.value)
+            }
+        }
+    }
+
+    private fun forceFullSync(processCommands: Boolean) {
+        if (sessionHandle == 0L) {
+            taskStore.replaceAll(VesperDownloadSnapshot(emptyList()))
+            _snapshot.value = VesperDownloadSnapshot(emptyList())
+            lastProgressPersistence.clear()
+            synchronized(eventBufferLock) {
+                eventBuffer.clear()
+            }
             return
         }
 
-        val commands = onRuntimeThread { bindings.drainDownloadCommands(sessionHandle).toList() }
-        commands.forEach(::applyCommand)
+        val fullSnapshot =
+            onRuntimeThread { bindings.pollDownloadSnapshot(sessionHandle) }?.toPublic()
+                ?: VesperDownloadSnapshot(emptyList())
+        taskStore.replaceAll(fullSnapshot)
+        val activeSnapshot = taskStore.snapshot()
+        _snapshot.value = activeSnapshot
+        persistSnapshot(activeSnapshot)
+        syncRuntimeState(processCommands = processCommands)
+    }
+
+    private fun shouldPersistSnapshot(events: List<VesperDownloadEvent>): Boolean {
+        var shouldPersist = false
+        events.forEach { event ->
+            when (event) {
+                is VesperDownloadEvent.Created,
+                is VesperDownloadEvent.AssetIndexUpdated -> shouldPersist = true
+                is VesperDownloadEvent.StateChanged -> {
+                    shouldPersist = true
+                    lastProgressPersistence[event.patch.taskId] =
+                        ProgressPersistenceCheckpoint(
+                            bytes = event.patch.progress.receivedBytes,
+                            epochMs = System.currentTimeMillis(),
+                        )
+                }
+                is VesperDownloadEvent.ProgressUpdated -> {
+                    if (shouldPersistProgressCheckpoint(event.patch)) {
+                        shouldPersist = true
+                    }
+                }
+            }
+        }
+        return shouldPersist
+    }
+
+    private fun shouldPersistProgressCheckpoint(patch: VesperDownloadTaskProgressPatch): Boolean {
+        val now = System.currentTimeMillis()
+        val previous = lastProgressPersistence[patch.taskId]
+        if (previous == null) {
+            lastProgressPersistence[patch.taskId] =
+                ProgressPersistenceCheckpoint(patch.progress.receivedBytes, now)
+            return true
+        }
+        val byteDelta =
+            if (patch.progress.receivedBytes >= previous.bytes) {
+                patch.progress.receivedBytes - previous.bytes
+            } else {
+                0L
+            }
+        val elapsedMs = now - previous.epochMs
+        if (byteDelta < configuration.minProgressBytes ||
+            elapsedMs < configuration.minProgressIntervalMs
+        ) {
+            return false
+        }
+        lastProgressPersistence[patch.taskId] =
+            ProgressPersistenceCheckpoint(patch.progress.receivedBytes, now)
+        return true
     }
 
     private fun applyCommand(command: NativeDownloadCommand) {
@@ -603,6 +835,7 @@ class VesperDownloadManager internal constructor(
         if (!restored) {
             return
         }
+        forceFullSync(processCommands = true)
         if (!configuration.autoStart) {
             return
         }
@@ -627,6 +860,48 @@ class VesperDownloadManager internal constructor(
             baseDirectory = configuration.baseDirectory,
             fallbackBaseDirectory = defaultBaseDirectory,
         )
+
+    private fun outputFileForTask(taskId: VesperDownloadTaskId): File {
+        val task = task(taskId)
+            ?: error("download task $taskId was not found")
+        check(task.state == VesperDownloadState.Completed) {
+            "download task $taskId must be completed before sharing or saving"
+        }
+        val completedPath = task.assetIndex.completedPath
+        check(!completedPath.isNullOrBlank()) {
+            "download task $taskId does not have an output file"
+        }
+        val uri = runCatching { Uri.parse(completedPath) }.getOrNull()
+        val file =
+            if (uri?.scheme.equals("file", ignoreCase = true)) {
+                File(checkNotNull(uri?.path) { "download task output file URI is invalid" })
+            } else {
+                File(completedPath)
+            }
+        check(file.isFile) {
+            "download task output file does not exist: ${file.absolutePath}"
+        }
+        return file
+    }
+
+    private fun preparedShareFile(
+        context: Context,
+        source: File,
+        fileName: String?,
+    ): File {
+        val safeFileName = fileName?.takeIf { it.isNotBlank() }?.let(::sanitizedOutputFileName)
+            ?: source.name
+        if (safeFileName == source.name && source.absolutePath.startsWith(context.filesDir.absolutePath)) {
+            return source
+        }
+        val directory = File(context.cacheDir, "vesper-download-share")
+        directory.mkdirs()
+        val target = File(directory, safeFileName)
+        if (target.absolutePath != source.absolutePath) {
+            source.copyTo(target, overwrite = true)
+        }
+        return target
+    }
 
     private val runtimeReporter =
         object : VesperDownloadExecutionReporter {
@@ -723,6 +998,12 @@ class VesperDownloadManager internal constructor(
                 syncRuntimeState(processCommands = false)
             }
         }
+
+    init {
+        check(sessionHandle != 0L) { "native download session handle must not be zero" }
+        restorePersistedTasks()
+        forceFullSync()
+    }
 
     internal interface DownloadBindings {
         fun createDownloadSession(config: NativeDownloadConfig): Long
@@ -983,8 +1264,14 @@ class VesperDownloadManager internal constructor(
     }
 }
 
-internal class VesperDownloadStateStore(private val file: File) {
-    fun load(): VesperDownloadSnapshot? =
+internal interface VesperDownloadStatePersistence {
+    fun load(): VesperDownloadSnapshot?
+
+    fun save(snapshot: VesperDownloadSnapshot)
+}
+
+internal class VesperDownloadStateStore(private val file: File) : VesperDownloadStatePersistence {
+    override fun load(): VesperDownloadSnapshot? =
         runCatching {
             if (!file.isFile) {
                 return@runCatching null
@@ -992,7 +1279,7 @@ internal class VesperDownloadStateStore(private val file: File) {
             JSONObject(file.readText()).toDownloadSnapshot()
         }.getOrNull()
 
-    fun save(snapshot: VesperDownloadSnapshot) {
+    override fun save(snapshot: VesperDownloadSnapshot) {
         runCatching {
             val tasks = snapshot.tasks.filter { it.state != VesperDownloadState.Removed }
             if (tasks.isEmpty()) {
@@ -1001,14 +1288,15 @@ internal class VesperDownloadStateStore(private val file: File) {
             }
             file.parentFile?.mkdirs()
             val root =
-                JSONObject()
-                    .put("version", 1)
-                    .put(
+                JSONObject().apply {
+                    put("version", 1)
+                    put(
                         "tasks",
                         JSONArray().apply {
                             tasks.forEach { put(it.toJson()) }
                         },
                     )
+                }
             file.writeText(root.toString())
         }
     }
@@ -1103,7 +1391,7 @@ internal class VesperForegroundDownloadExecutor(
     ): VesperDownloadAssetIndex =
         VesperGeneratedDownloadResourceMaterializer(
             baseDirectory = baseDirectory,
-            fallbackBaseDirectory = appContext?.filesDir?.let { File(it, "vesper-downloads") },
+            fallbackBaseDirectory = appContext?.filesDir?.let { vesperDefaultDownloadBaseDirectory(it, null) },
         ).materialize(assetId, taskId, profile, assetIndex)
 
     private fun VesperDownloadTaskSnapshot.withRecoveredSource(): VesperDownloadTaskSnapshot {
@@ -1821,9 +2109,9 @@ internal class VesperForegroundDownloadExecutor(
     private fun resolveDefaultAssetDirectory(task: VesperDownloadTaskSnapshot): File =
         File(
             baseDirectory
-                ?: File(
+                ?: vesperDefaultDownloadBaseDirectory(
                     checkNotNull(appContext) { "Android Context is required when no download base directory is configured" }.filesDir,
-                    "vesper-downloads",
+                    null,
                 ),
             task.assetId.ifBlank { task.taskId.toString() },
         )
@@ -3235,17 +3523,7 @@ private fun NativeDownloadTask.toPublic(): VesperDownloadTaskSnapshot =
         assetId = assetId,
         source = source.toPublic(),
         profile = profile.toPublic(),
-        state =
-            when (statusOrdinal) {
-                0 -> VesperDownloadState.Queued
-                1 -> VesperDownloadState.Preparing
-                2 -> VesperDownloadState.Downloading
-                3 -> VesperDownloadState.Paused
-                4 -> VesperDownloadState.Completed
-                5 -> VesperDownloadState.Failed
-                6 -> VesperDownloadState.Removed
-                else -> VesperDownloadState.Queued
-            },
+        state = statusOrdinal.toDownloadState(),
         progress = progress.toPublic(),
         assetIndex = assetIndex.toPublic(),
         error =
@@ -3260,6 +3538,18 @@ private fun NativeDownloadTask.toPublic(): VesperDownloadTaskSnapshot =
                 null
             },
     )
+
+private fun Int.toDownloadState(): VesperDownloadState =
+    when (this) {
+        0 -> VesperDownloadState.Queued
+        1 -> VesperDownloadState.Preparing
+        2 -> VesperDownloadState.Downloading
+        3 -> VesperDownloadState.Paused
+        4 -> VesperDownloadState.Completed
+        5 -> VesperDownloadState.Failed
+        6 -> VesperDownloadState.Removed
+        else -> VesperDownloadState.Queued
+    }
 
 private fun NativeDownloadSource.toPublic(): VesperDownloadSource =
     downloadSourceHeaders().let { headers ->
@@ -3363,21 +3653,47 @@ private fun NativeDownloadProgress.toPublic(): VesperDownloadProgressSnapshot =
 private fun NativeDownloadEvent.toPublic(): VesperDownloadEvent =
     when (this) {
         is NativeDownloadEvent.Created -> VesperDownloadEvent.Created(task.toPublic())
-        is NativeDownloadEvent.StateChanged -> VesperDownloadEvent.StateChanged(task.toPublic())
+        is NativeDownloadEvent.StateChanged ->
+            VesperDownloadEvent.StateChanged(
+                VesperDownloadTaskStatePatch(
+                    taskId = taskId,
+                    state = statusOrdinal.toDownloadState(),
+                    progress = progress.toPublic(),
+                    error =
+                        if (hasError) {
+                            VesperDownloadError(
+                                codeOrdinal = errorCodeOrdinal,
+                                categoryOrdinal = errorCategoryOrdinal,
+                                retriable = errorRetriable,
+                                message = errorMessage.orEmpty(),
+                            )
+                        } else {
+                            null
+                        },
+                    completedPath = completedPath,
+                ),
+            )
         is NativeDownloadEvent.AssetIndexUpdated -> VesperDownloadEvent.AssetIndexUpdated(task.toPublic())
-        is NativeDownloadEvent.ProgressUpdated -> VesperDownloadEvent.ProgressUpdated(task.toPublic())
+        is NativeDownloadEvent.ProgressUpdated ->
+            VesperDownloadEvent.ProgressUpdated(
+                VesperDownloadTaskProgressPatch(
+                    taskId = taskId,
+                    progress = progress.toPublic(),
+                ),
+            )
     }
 
 private fun VesperDownloadTaskSnapshot.toJson(): JSONObject =
-    JSONObject()
-        .put("taskId", taskId)
-        .put("assetId", assetId)
-        .put("source", source.toJson())
-        .put("profile", profile.toJson())
-        .put("state", state.ordinal)
-        .put("progress", progress.toJson())
-        .put("assetIndex", assetIndex.toJson())
-        .put("error", error?.toJson())
+    JSONObject().apply {
+        put("taskId", taskId)
+        put("assetId", assetId)
+        put("source", source.toJson())
+        put("profile", profile.toJson())
+        put("state", state.ordinal)
+        put("progress", progress.toJson())
+        put("assetIndex", assetIndex.toJson())
+        put("error", error?.toJson())
+    }
 
 private fun JSONObject.toDownloadTask(): VesperDownloadTaskSnapshot =
     VesperDownloadTaskSnapshot(
@@ -3395,13 +3711,14 @@ private fun JSONObject.toDownloadTask(): VesperDownloadTaskSnapshot =
     )
 
 private fun VesperDownloadSnapshot.toJson(): JSONObject =
-    JSONObject()
-        .put(
+    JSONObject().apply {
+        put(
             "tasks",
             JSONArray().apply {
                 tasks.forEach { put(it.toJson()) }
             },
         )
+    }
 
 private fun JSONObject.toDownloadSnapshot(): VesperDownloadSnapshot =
     VesperDownloadSnapshot(
@@ -3412,10 +3729,11 @@ private fun JSONObject.toDownloadSnapshot(): VesperDownloadSnapshot =
     )
 
 private fun VesperDownloadSource.toJson(): JSONObject =
-    JSONObject()
-        .put("source", source.toJson())
-        .put("contentFormat", contentFormat.ordinal)
-        .put("manifestUri", manifestUri)
+    JSONObject().apply {
+        put("source", source.toJson())
+        put("contentFormat", contentFormat.ordinal)
+        put("manifestUri", manifestUri)
+    }
 
 private fun JSONObject.toDownloadSource(): VesperDownloadSource =
     VesperDownloadSource(
@@ -3425,17 +3743,18 @@ private fun JSONObject.toDownloadSource(): VesperDownloadSource =
     )
 
 private fun VesperPlayerSource.toJson(): JSONObject =
-    JSONObject()
-        .put("uri", uri)
-        .put("label", label)
-        .put("kind", kind.ordinal)
-        .put("protocol", protocol.ordinal)
-        .put(
+    JSONObject().apply {
+        put("uri", uri)
+        put("label", label)
+        put("kind", kind.ordinal)
+        put("protocol", protocol.ordinal)
+        put(
             "headers",
             JSONObject().apply {
                 headers.forEach { (key, value) -> put(key, value) }
             },
         )
+    }
 
 private fun JSONObject.toPlayerSource(): VesperPlayerSource =
     VesperPlayerSource(
@@ -3452,14 +3771,15 @@ private fun JSONObject.toPlayerSource(): VesperPlayerSource =
     )
 
 private fun VesperDownloadProfile.toJson(): JSONObject =
-    JSONObject()
-        .put("variantId", variantId)
-        .put("preferredAudioLanguage", preferredAudioLanguage)
-        .put("preferredSubtitleLanguage", preferredSubtitleLanguage)
-        .put("selectedTrackIds", JSONArray().apply { selectedTrackIds.forEach(::put) })
-        .put("targetOutputFormat", targetOutputFormat?.ordinal ?: -1)
-        .put("targetDirectory", targetDirectory)
-        .put("allowMeteredNetwork", allowMeteredNetwork)
+    JSONObject().apply {
+        put("variantId", variantId)
+        put("preferredAudioLanguage", preferredAudioLanguage)
+        put("preferredSubtitleLanguage", preferredSubtitleLanguage)
+        put("selectedTrackIds", JSONArray().apply { selectedTrackIds.forEach(::put) })
+        put("targetOutputFormat", targetOutputFormat?.ordinal ?: -1)
+        put("targetDirectory", targetDirectory)
+        put("allowMeteredNetwork", allowMeteredNetwork)
+    }
 
 private fun JSONObject.toDownloadProfile(): VesperDownloadProfile =
     VesperDownloadProfile(
@@ -3476,11 +3796,12 @@ private fun JSONObject.toDownloadProfile(): VesperDownloadProfile =
     )
 
 private fun VesperDownloadProgressSnapshot.toJson(): JSONObject =
-    JSONObject()
-        .put("receivedBytes", receivedBytes)
-        .put("totalBytes", totalBytes)
-        .put("receivedSegments", receivedSegments)
-        .put("totalSegments", totalSegments)
+    JSONObject().apply {
+        put("receivedBytes", receivedBytes)
+        put("totalBytes", totalBytes)
+        put("receivedSegments", receivedSegments)
+        put("totalSegments", totalSegments)
+    }
 
 private fun JSONObject.toDownloadProgress(): VesperDownloadProgressSnapshot =
     VesperDownloadProgressSnapshot(
@@ -3491,15 +3812,16 @@ private fun JSONObject.toDownloadProgress(): VesperDownloadProgressSnapshot =
     )
 
 private fun VesperDownloadAssetIndex.toJson(): JSONObject =
-    JSONObject()
-        .put("contentFormat", contentFormat.ordinal)
-        .put("version", version)
-        .put("etag", etag)
-        .put("checksum", checksum)
-        .put("totalSizeBytes", totalSizeBytes)
-        .put("resources", JSONArray().apply { resources.forEach { put(it.toJson()) } })
-        .put("segments", JSONArray().apply { segments.forEach { put(it.toJson()) } })
-        .put("completedPath", completedPath)
+    JSONObject().apply {
+        put("contentFormat", contentFormat.ordinal)
+        put("version", version)
+        put("etag", etag)
+        put("checksum", checksum)
+        put("totalSizeBytes", totalSizeBytes)
+        put("resources", JSONArray().apply { resources.forEach { put(it.toJson()) } })
+        put("segments", JSONArray().apply { segments.forEach { put(it.toJson()) } })
+        put("completedPath", completedPath)
+    }
 
 private fun JSONObject.toDownloadAssetIndex(): VesperDownloadAssetIndex =
     VesperDownloadAssetIndex(
@@ -3514,15 +3836,16 @@ private fun JSONObject.toDownloadAssetIndex(): VesperDownloadAssetIndex =
     )
 
 private fun VesperDownloadResourceRecord.toJson(): JSONObject =
-    JSONObject()
-        .put("resourceId", resourceId)
-        .put("uri", uri)
-        .put("relativePath", relativePath)
-        .put("byteRange", byteRange?.toJson())
-        .put("generatedText", null)
-        .put("sizeBytes", sizeBytes)
-        .put("etag", etag)
-        .put("checksum", checksum)
+    JSONObject().apply {
+        put("resourceId", resourceId)
+        put("uri", uri)
+        put("relativePath", relativePath)
+        put("byteRange", byteRange?.toJson())
+        put("generatedText", null)
+        put("sizeBytes", sizeBytes)
+        put("etag", etag)
+        put("checksum", checksum)
+    }
 
 private fun JSONObject.toDownloadResource(): VesperDownloadResourceRecord =
     VesperDownloadResourceRecord(
@@ -3537,14 +3860,15 @@ private fun JSONObject.toDownloadResource(): VesperDownloadResourceRecord =
     )
 
 private fun VesperDownloadSegmentRecord.toJson(): JSONObject =
-    JSONObject()
-        .put("segmentId", segmentId)
-        .put("uri", uri)
-        .put("relativePath", relativePath)
-        .put("sequence", sequence)
-        .put("byteRange", byteRange?.toJson())
-        .put("sizeBytes", sizeBytes)
-        .put("checksum", checksum)
+    JSONObject().apply {
+        put("segmentId", segmentId)
+        put("uri", uri)
+        put("relativePath", relativePath)
+        put("sequence", sequence)
+        put("byteRange", byteRange?.toJson())
+        put("sizeBytes", sizeBytes)
+        put("checksum", checksum)
+    }
 
 private fun JSONObject.toDownloadSegment(): VesperDownloadSegmentRecord =
     VesperDownloadSegmentRecord(
@@ -3558,17 +3882,21 @@ private fun JSONObject.toDownloadSegment(): VesperDownloadSegmentRecord =
     )
 
 private fun VesperDownloadByteRange.toJson(): JSONObject =
-    JSONObject().put("offset", offset).put("length", length)
+    JSONObject().apply {
+        put("offset", offset)
+        put("length", length)
+    }
 
 private fun JSONObject.toDownloadByteRange(): VesperDownloadByteRange =
     VesperDownloadByteRange(offset = optLong("offset", 0L), length = optLong("length", 0L))
 
 private fun VesperDownloadError.toJson(): JSONObject =
-    JSONObject()
-        .put("codeOrdinal", codeOrdinal)
-        .put("categoryOrdinal", categoryOrdinal)
-        .put("retriable", retriable)
-        .put("message", message)
+    JSONObject().apply {
+        put("codeOrdinal", codeOrdinal)
+        put("categoryOrdinal", categoryOrdinal)
+        put("retriable", retriable)
+        put("message", message)
+    }
 
 private fun JSONObject.toDownloadError(): VesperDownloadError =
     VesperDownloadError(
@@ -3612,6 +3940,38 @@ private fun sanitizeDownloadRequestHeaders(headers: Map<String, String>): Map<St
             sanitizedName to sanitizedValue
         }
         .toMap()
+
+private fun sanitizedOutputFileName(value: String): String {
+    val sanitized = value.replace(Regex("[^A-Za-z0-9._ -]+"), "_").trim('.', ' ')
+    return sanitized.takeIf { it.isNotBlank() && it != ".." } ?: "vesper-download"
+}
+
+private fun guessMimeType(file: File): String {
+    val extension = file.extension.takeIf { it.isNotBlank() } ?: return "application/octet-stream"
+    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase())
+        ?: when (extension.lowercase()) {
+            "m3u8" -> "application/vnd.apple.mpegurl"
+            "mpd" -> "application/dash+xml"
+            "mp4" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "ts" -> "video/mp2t"
+            else -> "application/octet-stream"
+        }
+}
+
+private val VesperDownloadPublicCollection.relativePath: String
+    get() =
+        when (this) {
+            VesperDownloadPublicCollection.Downloads -> Environment.DIRECTORY_DOWNLOADS
+            VesperDownloadPublicCollection.Movies -> Environment.DIRECTORY_MOVIES
+        }
+
+private val VesperDownloadPublicCollection.contentUri: Uri
+    get() =
+        when (this) {
+            VesperDownloadPublicCollection.Downloads -> MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            VesperDownloadPublicCollection.Movies -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
 
 private fun NativeDownloadSource.downloadSourceHeaders(): Map<String, String> =
     sanitizeDownloadRequestHeaders(

@@ -16,6 +16,18 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(source.headers["User-Agent"], "VesperTest")
     }
 
+    func testDashNetworkClientRejectsInsecureHTTPBeforeATS() async {
+        let client = VesperDashNetworkClient()
+
+        do {
+            _ = try await client.data(for: URL(string: "http://cdn.example.com/master.mpd")!)
+            XCTFail("insecure DASH HTTP request should fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("App Transport Security"))
+            XCTAssertTrue(error.localizedDescription.contains("http://cdn.example.com/master.mpd"))
+        }
+    }
+
     func testManifestParserReadsStaticSegmentBaseVod() throws {
         let manifest = try VesperDashManifestParser.parse(
             data: Data(sampleMpd.utf8),
@@ -176,7 +188,7 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: mediaRedirectURL), mediaData)
     }
 
-    func testSegmentTemplateMediaPlaylistUsesLoopbackSegmentUrls() async throws {
+    func testSegmentTemplateMediaPlaylistUsesResourceLoaderSegmentUrls() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -207,18 +219,22 @@ final class VesperDashBridgeTests: XCTestCase {
 
         XCTAssertTrue(playlist.contains("#EXT-X-MAP:URI=\"vesper-dash://segment/"))
         XCTAssertTrue(playlist.contains("/v4_258/init.mp4\""))
-        XCTAssertTrue(playlist.contains("/dash/"))
+        XCTAssertFalse(playlist.contains("http://127.0.0.1:"))
         XCTAssertTrue(playlist.contains("/v4_258/0.m4s"))
         XCTAssertFalse(playlist.contains("v4_258-270146-i-1.m4s"))
         XCTAssertFalse(playlist.contains("data:video/mp4;base64,"))
 
         let mediaURLText = try XCTUnwrap(
-            firstMatch(#"http://127\.0\.0\.1:[0-9]+/dash/[^[:space:]]+/v4_258/0\.m4s"#, in: playlist)
+            firstMatch(#"vesper-dash://segment/[^"]+/v4_258/0\.m4s"#, in: playlist)
         )
-        let (loadedMediaData, _) = try await URLSession.shared.data(from: try XCTUnwrap(URL(string: mediaURLText)))
+        XCTAssertEqual(
+            session.route(for: try XCTUnwrap(URL(string: mediaURLText))),
+            .segment("v4_258", .media(0))
+        )
+        let loadedMediaData = try await session.segmentData(renditionId: "v4_258", segment: .media(0))
 
-        // Loopback returns the fMP4 bytes verbatim, including sidx, instead of
-        // stripping sequential sidx boxes.
+        // Resource loader segment delivery preserves the fMP4 bytes verbatim,
+        // including sidx, instead of stripping sequential sidx boxes.
         XCTAssertEqual(loadedMediaData, mediaData)
     }
 
@@ -300,7 +316,7 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertNotNil(mediaSegmentEnd["cacheHit"])
     }
 
-    func testConcurrentSegmentTemplateMediaPlaylistsShareLoopbackServer() async throws {
+    func testConcurrentSegmentTemplateMediaPlaylistsUseResourceLoaderSegmentUrls() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -356,8 +372,9 @@ final class VesperDashBridgeTests: XCTestCase {
             return output
         }
 
-        let ports = Set(try playlists.map { try firstLoopbackPort(in: $0) })
-        XCTAssertEqual(ports.count, 1)
+        let sessionIds = Set(try playlists.map { try firstResourceLoaderSegmentSessionId(in: $0) })
+        XCTAssertEqual(sessionIds, [session.id])
+        XCTAssertTrue(playlists.allSatisfy { !$0.contains("http://127.0.0.1:") })
     }
 
     @MainActor
@@ -468,7 +485,7 @@ final class VesperDashBridgeTests: XCTestCase {
         )
     }
 
-    func testLargeSegmentTemplateLoopbackStreamsTemporaryFileAndSkipsCache() async throws {
+    func testLargeSegmentTemplateResourceLoaderUsesTemporaryFileAndSkipsCache() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -494,16 +511,24 @@ final class VesperDashBridgeTests: XCTestCase {
             as: UTF8.self
         )
         let mediaURLText = try XCTUnwrap(
-            firstMatch(#"http://127\.0\.0\.1:[0-9]+/dash/[^[:space:]]+/v1_257/0\.m4s"#, in: playlist)
+            firstMatch(#"vesper-dash://segment/[^"]+/v1_257/0\.m4s"#, in: playlist)
         )
-        var request = URLRequest(url: try XCTUnwrap(URL(string: mediaURLText)))
-        request.setValue("bytes=0-15", forHTTPHeaderField: "Range")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let httpResponse = try XCTUnwrap(response as? HTTPURLResponse)
-
-        XCTAssertEqual(httpResponse.statusCode, 206)
-        XCTAssertEqual(data, Data((0..<16).map(UInt8.init)))
+        XCTAssertEqual(
+            session.route(for: try XCTUnwrap(URL(string: mediaURLText))),
+            .segment("v1_257", .media(0))
+        )
+        let payload = try await session.segmentResourcePayload(renditionId: "v1_257", segment: .media(0))
+        guard case let .file(url, offset, size, removeAfterServing, _) = payload else {
+            XCTFail("large media segment should be delivered from a temporary file")
+            return
+        }
+        XCTAssertTrue(removeAfterServing)
+        XCTAssertEqual(size, VesperDashSession.segmentCacheMaxSingleMediaBytes + 4_096)
+        let readHandle = try FileHandle(forReadingFrom: url)
+        defer { try? readHandle.close() }
+        try readHandle.seek(toOffset: offset)
+        XCTAssertEqual(try readHandle.read(upToCount: 16), Data((0..<16).map(UInt8.init)))
+        payload.cleanupIfTemporary()
 
         let cachedFiles = try FileManager.default.contentsOfDirectory(
             at: session.segmentCacheDirectory,
@@ -1355,12 +1380,13 @@ private func firstMatch(_ pattern: String, in text: String) -> String? {
     text.range(of: pattern, options: .regularExpression).map { String(text[$0]) }
 }
 
-private func firstLoopbackPort(in playlist: String) throws -> Int {
+private func firstResourceLoaderSegmentSessionId(in playlist: String) throws -> String {
     let urlText = try XCTUnwrap(
-        firstMatch(#"http://127\.0\.0\.1:[0-9]+/dash/[^\s"]+"#, in: playlist)
+        firstMatch(#"vesper-dash://segment/[^"]+"#, in: playlist)
     )
     let url = try XCTUnwrap(URL(string: urlText))
-    return try XCTUnwrap(url.port)
+    let components = url.pathComponents.filter { $0 != "/" }
+    return try XCTUnwrap(components.first)
 }
 
 private func eventAttributes(

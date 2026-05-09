@@ -67,16 +67,23 @@ authors. Application code should usually depend on `vesper_player` directly.
 | `VesperDownloadAssetIndex`       | Planned resources, segments, size, version, and checksum metadata            |
 | `VesperDownloadTaskSnapshot`     | Snapshot for a single task                                                   |
 | `VesperDownloadSnapshot`         | Aggregate snapshot for all tasks                                             |
+| `VesperDownloadTaskStatePatch`   | Incremental state update for a single task                                   |
+| `VesperDownloadTaskProgressPatch` | Incremental progress update for a single task                               |
 | `VesperDownloadProgressSnapshot` | Byte, segment, and ratio-based progress                                      |
 | `VesperDownloadError`            | Download-specific error model                                                |
+| `VesperDownloadPublicCollection` | Public save target for supported platform export helpers                     |
 
 ### Download events
 
-| Event type                    | Emitted when                     |
-| ----------------------------- | -------------------------------- |
-| `VesperDownloadSnapshotEvent` | Download state changes           |
-| `VesperDownloadErrorEvent`    | A download error occurs          |
-| `VesperDownloadDisposedEvent` | The download manager is disposed |
+| Event type                            | Emitted when                                      |
+| ------------------------------------- | ------------------------------------------------- |
+| `VesperDownloadInitialSnapshotEvent`  | A manager starts or a platform forces full sync   |
+| `VesperDownloadTaskCreatedEvent`      | A task is created                                 |
+| `VesperDownloadTaskUpdatedEvent`      | A compact task, state, or progress update arrives |
+| `VesperDownloadTaskRemovedEvent`      | A task is removed                                 |
+| `VesperDownloadErrorEvent`            | A download error occurs                           |
+| `VesperDownloadExportProgressEvent`   | A native export operation reports progress        |
+| `VesperDownloadDisposedEvent`         | The download manager is disposed                  |
 
 ### Enums
 
@@ -102,6 +109,7 @@ VesperViewportHintKind
 VesperDownloadContentFormat
 VesperDownloadOutputFormat
 VesperDownloadState
+VesperDownloadPublicCollection
 ```
 
 ## Implementing A New Platform Package

@@ -12,6 +12,7 @@ class VesperDownloadManager {
         snapshotListenable = ValueNotifier<VesperDownloadSnapshot>(
           initialSnapshot,
         ) {
+    _replaceTasks(initialSnapshot.tasks);
     _snapshotsController.add(initialSnapshot);
     _bindPlatformEvents();
   }
@@ -42,6 +43,8 @@ class VesperDownloadManager {
       StreamController<VesperDownloadSnapshot>.broadcast();
 
   StreamSubscription<VesperDownloadManagerEvent>? _platformSubscription;
+  final Map<int, VesperDownloadTaskSnapshot> _tasksById =
+      <int, VesperDownloadTaskSnapshot>{};
   bool _disposed = false;
 
   VesperDownloadSnapshot get snapshot => snapshotListenable.value;
@@ -111,6 +114,35 @@ class VesperDownloadManager {
     return _platform.exportDownloadTask(downloadId, taskId, outputPath);
   }
 
+  Future<void> shareTaskOutput(
+    int taskId, {
+    String? fileName,
+    String? mimeType,
+  }) {
+    _ensureActive();
+    return _platform.shareDownloadTask(
+      downloadId,
+      taskId,
+      fileName: fileName,
+      mimeType: mimeType,
+    );
+  }
+
+  Future<String?> saveTaskOutput(
+    int taskId, {
+    String? fileName,
+    VesperDownloadPublicCollection collection =
+        VesperDownloadPublicCollection.downloads,
+  }) {
+    _ensureActive();
+    return _platform.saveDownloadTask(
+      downloadId,
+      taskId,
+      fileName: fileName,
+      collection: collection,
+    );
+  }
+
   Future<void> dispose() async {
     if (_disposed) {
       return;
@@ -143,67 +175,133 @@ class VesperDownloadManager {
     _platformSubscription =
         _platform.downloadEventsFor(downloadId).listen((event) {
       switch (event) {
-        case VesperDownloadSnapshotEvent():
-          _applySnapshot(event.snapshot);
+        case VesperDownloadInitialSnapshotEvent():
+          _applySnapshot(event.snapshot, forwardEvent: event);
         case VesperDownloadErrorEvent():
           _applyErrorEvent(event);
         case VesperDownloadExportProgressEvent():
           _eventsController.add(event);
-        case VesperDownloadAssetIndexUpdatedEvent():
-          _applyAssetIndexUpdatedEvent(event);
+        case VesperDownloadTaskCreatedEvent():
+          _applyTaskCreatedEvent(event);
+        case VesperDownloadTaskUpdatedEvent():
+          _applyTaskUpdatedEvent(event);
+        case VesperDownloadTaskRemovedEvent():
+          _applyTaskRemovedEvent(event);
         case VesperDownloadDisposedEvent():
           _eventsController.add(event);
       }
     });
   }
 
-  void _applySnapshot(VesperDownloadSnapshot snapshot) {
+  void _applySnapshot(
+    VesperDownloadSnapshot snapshot, {
+    required VesperDownloadManagerEvent forwardEvent,
+  }) {
     if (_disposed) {
       return;
     }
+    _replaceTasks(snapshot.tasks);
     snapshotListenable.value = snapshot;
     _snapshotsController.add(snapshot);
-    _eventsController.add(
-      VesperDownloadSnapshotEvent(
-        downloadId: downloadId,
-        snapshot: snapshot,
-      ),
-    );
+    _eventsController.add(forwardEvent);
   }
 
   void _applyErrorEvent(VesperDownloadErrorEvent event) {
     if (_disposed) {
       return;
     }
+    _replaceTasks(event.snapshot.tasks);
     snapshotListenable.value = event.snapshot;
     _snapshotsController.add(event.snapshot);
     _eventsController.add(event);
   }
 
-  void _applyAssetIndexUpdatedEvent(
-    VesperDownloadAssetIndexUpdatedEvent event,
-  ) {
+  void _applyTaskCreatedEvent(VesperDownloadTaskCreatedEvent event) {
     if (_disposed) {
       return;
     }
-    var replaced = false;
-    final tasks = snapshot.tasks.map((task) {
-      if (task.taskId != event.task.taskId) {
-        return task;
-      }
-      replaced = true;
-      return event.task;
-    }).toList(growable: true);
-    if (!replaced) {
-      tasks.add(event.task);
-    }
+    _tasksById[event.task.taskId] = event.task;
+    _publishTaskMap(event);
+  }
 
+  void _applyTaskUpdatedEvent(VesperDownloadTaskUpdatedEvent event) {
+    if (_disposed) {
+      return;
+    }
+    final task = event.task;
+    if (task != null) {
+      _tasksById[task.taskId] = task;
+    }
+    final patch = event.patch;
+    if (patch != null) {
+      final existing = _tasksById[patch.taskId];
+      if (existing != null) {
+        _tasksById[patch.taskId] = existing.copyWith(
+          state: patch.state,
+          progress: patch.progress,
+          assetIndex: _assetIndexWithCompletedPath(
+            existing.assetIndex,
+            patch.completedPath,
+          ),
+          error: patch.error,
+        );
+      }
+    }
+    final progressPatch = event.progressPatch;
+    if (progressPatch != null) {
+      final existing = _tasksById[progressPatch.taskId];
+      if (existing != null) {
+        _tasksById[progressPatch.taskId] = existing.copyWith(
+          progress: progressPatch.progress,
+        );
+      }
+    }
+    _publishTaskMap(event);
+  }
+
+  void _applyTaskRemovedEvent(VesperDownloadTaskRemovedEvent event) {
+    if (_disposed) {
+      return;
+    }
+    _tasksById.remove(event.taskId);
+    _publishTaskMap(event);
+  }
+
+  void _publishTaskMap(VesperDownloadManagerEvent event) {
     final updatedSnapshot = VesperDownloadSnapshot(
-      tasks: List<VesperDownloadTaskSnapshot>.unmodifiable(tasks),
+      tasks: List<VesperDownloadTaskSnapshot>.unmodifiable(
+        _tasksById.values,
+      ),
     );
     snapshotListenable.value = updatedSnapshot;
     _snapshotsController.add(updatedSnapshot);
     _eventsController.add(event);
+  }
+
+  void _replaceTasks(List<VesperDownloadTaskSnapshot> tasks) {
+    _tasksById
+      ..clear()
+      ..addEntries(
+          tasks.map((task) => MapEntry<int, VesperDownloadTaskSnapshot>(
+                task.taskId,
+                task,
+              )));
+  }
+
+  VesperDownloadAssetIndex _assetIndexWithCompletedPath(
+    VesperDownloadAssetIndex assetIndex,
+    String? completedPath,
+  ) {
+    return VesperDownloadAssetIndex(
+      contentFormat: assetIndex.contentFormat,
+      version: assetIndex.version,
+      etag: assetIndex.etag,
+      checksum: assetIndex.checksum,
+      totalSizeBytes: assetIndex.totalSizeBytes,
+      resources: assetIndex.resources,
+      segments: assetIndex.segments,
+      completedPath: completedPath ?? assetIndex.completedPath,
+    );
   }
 
   void _ensureActive() {

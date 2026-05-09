@@ -376,7 +376,20 @@ sealed interface NativeDownloadCommand {
 
 sealed interface NativeDownloadEvent {
     data class Created(val task: NativeDownloadTask) : NativeDownloadEvent
-    data class StateChanged(val task: NativeDownloadTask) : NativeDownloadEvent
+    data class StateChanged(
+        val taskId: Long,
+        val statusOrdinal: Int,
+        val progress: NativeDownloadProgress,
+        val hasError: Boolean,
+        val errorCodeOrdinal: Int,
+        val errorCategoryOrdinal: Int,
+        val errorRetriable: Boolean,
+        val errorMessage: String?,
+        val completedPath: String?,
+    ) : NativeDownloadEvent
     data class AssetIndexUpdated(val task: NativeDownloadTask) : NativeDownloadEvent
-    data class ProgressUpdated(val task: NativeDownloadTask) : NativeDownloadEvent
+    data class ProgressUpdated(
+        val taskId: Long,
+        val progress: NativeDownloadProgress,
+    ) : NativeDownloadEvent
 }

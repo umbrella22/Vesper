@@ -1,5 +1,5 @@
-# Rust JNI 会按精确二进制类名解析 Android bridge 类和成员。
-# release shrink/obfuscation 不能重命名或移除这些类与成员。
+# Rust JNI resolves Android bridge classes and members by exact binary names.
+# Release shrinking and obfuscation must not rename or remove these classes or members.
 -keep class io.github.ikaros.vesper.player.android.** {
     *;
 }

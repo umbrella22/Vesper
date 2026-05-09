@@ -398,6 +398,40 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
     });
   }
 
+  @override
+  Future<void> shareDownloadTask(
+    String downloadId,
+    int taskId, {
+    String? fileName,
+    String? mimeType,
+  }) {
+    return _invokeVoid('shareDownloadTask', <String, Object?>{
+      'downloadId': downloadId,
+      'taskId': taskId,
+      'fileName': fileName,
+      'mimeType': mimeType,
+    });
+  }
+
+  @override
+  Future<String?> saveDownloadTask(
+    String downloadId,
+    int taskId, {
+    String? fileName,
+    VesperDownloadPublicCollection collection =
+        VesperDownloadPublicCollection.downloads,
+  }) {
+    return _methodChannel.invokeMethod<String>(
+      'saveDownloadTask',
+      <String, Object?>{
+        'downloadId': downloadId,
+        'taskId': taskId,
+        'fileName': fileName,
+        'collection': collection.name,
+      },
+    );
+  }
+
   Future<void> _invokeVoid(String method, [Object? arguments]) async {
     await _methodChannel.invokeMethod<void>(method, arguments);
   }

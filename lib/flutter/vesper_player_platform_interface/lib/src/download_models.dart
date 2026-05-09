@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'models.dart';
 
+const Object _vesperDownloadUnset = Object();
+
 enum VesperDownloadContentFormat {
   hlsSegments,
   dashSegments,
@@ -29,6 +31,11 @@ enum VesperDownloadState {
 enum VesperDownloadStaleResourcePhase {
   prepare,
   download,
+}
+
+enum VesperDownloadPublicCollection {
+  downloads,
+  movies,
 }
 
 final class VesperDownloadConfiguration {
@@ -623,6 +630,95 @@ final class VesperDownloadTaskSnapshot {
       'progress': progress.toMap(),
       'assetIndex': assetIndex.toMap(),
       'error': error?.toMap(),
+    };
+  }
+
+  VesperDownloadTaskSnapshot copyWith({
+    VesperDownloadState? state,
+    VesperDownloadProgressSnapshot? progress,
+    VesperDownloadAssetIndex? assetIndex,
+    Object? error = _vesperDownloadUnset,
+  }) {
+    return VesperDownloadTaskSnapshot(
+      taskId: taskId,
+      assetId: assetId,
+      source: source,
+      profile: profile,
+      state: state ?? this.state,
+      progress: progress ?? this.progress,
+      assetIndex: assetIndex ?? this.assetIndex,
+      error: identical(error, _vesperDownloadUnset)
+          ? this.error
+          : error as VesperDownloadError?,
+    );
+  }
+}
+
+final class VesperDownloadTaskStatePatch {
+  const VesperDownloadTaskStatePatch({
+    required this.taskId,
+    required this.state,
+    required this.progress,
+    this.error,
+    this.completedPath,
+  });
+
+  factory VesperDownloadTaskStatePatch.fromMap(Map<Object?, Object?> map) {
+    final normalized = vesperDecodeMap(map);
+    final rawError = normalized['error'];
+    return VesperDownloadTaskStatePatch(
+      taskId: _decodeInt(normalized['taskId']) ?? 0,
+      state: _decodeDownloadState(normalized['state']),
+      progress: VesperDownloadProgressSnapshot.fromMap(
+        vesperDecodeMap(normalized['progress']),
+      ),
+      error: rawError == null
+          ? null
+          : VesperDownloadError.fromMap(vesperDecodeMap(rawError)),
+      completedPath: normalized['completedPath'] as String?,
+    );
+  }
+
+  final int taskId;
+  final VesperDownloadState state;
+  final VesperDownloadProgressSnapshot progress;
+  final VesperDownloadError? error;
+  final String? completedPath;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'taskId': taskId,
+      'state': state.name,
+      'progress': progress.toMap(),
+      'error': error?.toMap(),
+      'completedPath': completedPath,
+    };
+  }
+}
+
+final class VesperDownloadTaskProgressPatch {
+  const VesperDownloadTaskProgressPatch({
+    required this.taskId,
+    required this.progress,
+  });
+
+  factory VesperDownloadTaskProgressPatch.fromMap(Map<Object?, Object?> map) {
+    final normalized = vesperDecodeMap(map);
+    return VesperDownloadTaskProgressPatch(
+      taskId: _decodeInt(normalized['taskId']) ?? 0,
+      progress: VesperDownloadProgressSnapshot.fromMap(
+        vesperDecodeMap(normalized['progress']),
+      ),
+    );
+  }
+
+  final int taskId;
+  final VesperDownloadProgressSnapshot progress;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'taskId': taskId,
+      'progress': progress.toMap(),
     };
   }
 }

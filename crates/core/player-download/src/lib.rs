@@ -9,8 +9,8 @@ pub use download::{
     DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig,
     DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord,
     DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore, DownloadTaskId,
-    DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatus, InMemoryDownloadExecutor,
-    InMemoryDownloadStore,
+    DownloadTaskProgressPatch, DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatePatch,
+    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
 };
 pub use error::{
     PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,

@@ -1,12 +1,19 @@
 import Combine
 import Foundation
 import VesperPlayerKitBridgeShim
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @usableFromInline let vesperDownloadDefaultMinProgressBytes: UInt64 = 512 * 1024
 @usableFromInline let vesperDownloadDefaultMinProgressIntervalMs: UInt64 = 250
+@usableFromInline let vesperDownloadDefaultStalledTransferTimeoutMs: UInt64 = 30_000
 
 public typealias VesperDownloadAssetId = String
 public typealias VesperDownloadTaskId = UInt64
+
+private let vesperDownloadATSFailureMessage =
+    "iOS offline downloads require HTTPS media URLs. The SDK does not relax App Transport Security for http:// resources; host apps that need insecure HTTP must fetch those resources outside the SDK and provide local file URLs."
 
 public enum VesperDownloadContentFormat: Int, Equatable, Codable {
     case hlsSegments = 0
@@ -32,6 +39,7 @@ public struct VesperDownloadConfiguration: Equatable {
     public let rangeChunkBytes: UInt64?
     public let minProgressBytes: UInt64
     public let minProgressIntervalMs: UInt64
+    public let stalledTransferTimeoutMs: UInt64
 
     public init(
         autoStart: Bool = true,
@@ -42,7 +50,8 @@ public struct VesperDownloadConfiguration: Equatable {
         pluginLibraryPaths: [String] = [],
         rangeChunkBytes: UInt64? = nil,
         minProgressBytes: UInt64 = vesperDownloadDefaultMinProgressBytes,
-        minProgressIntervalMs: UInt64 = vesperDownloadDefaultMinProgressIntervalMs
+        minProgressIntervalMs: UInt64 = vesperDownloadDefaultMinProgressIntervalMs,
+        stalledTransferTimeoutMs: UInt64 = vesperDownloadDefaultStalledTransferTimeoutMs
     ) {
         self.autoStart = autoStart
         self.runPostProcessorsOnCompletion = runPostProcessorsOnCompletion
@@ -53,6 +62,7 @@ public struct VesperDownloadConfiguration: Equatable {
         self.rangeChunkBytes = rangeChunkBytes.flatMap { $0 > 0 ? $0 : nil }
         self.minProgressBytes = max(minProgressBytes, 1)
         self.minProgressIntervalMs = minProgressIntervalMs
+        self.stalledTransferTimeoutMs = stalledTransferTimeoutMs
     }
 }
 
@@ -366,11 +376,52 @@ public struct VesperDownloadSnapshot: Equatable, Codable {
     }
 }
 
+public struct VesperDownloadTaskStatePatch: Equatable {
+    public let taskId: VesperDownloadTaskId
+    public let state: VesperDownloadState
+    public let progress: VesperDownloadProgressSnapshot
+    public let error: VesperDownloadError?
+    public let completedPath: String?
+
+    public init(
+        taskId: VesperDownloadTaskId,
+        state: VesperDownloadState,
+        progress: VesperDownloadProgressSnapshot,
+        error: VesperDownloadError? = nil,
+        completedPath: String? = nil
+    ) {
+        self.taskId = taskId
+        self.state = state
+        self.progress = progress
+        self.error = error
+        self.completedPath = completedPath
+    }
+}
+
+public struct VesperDownloadTaskProgressPatch: Equatable {
+    public let taskId: VesperDownloadTaskId
+    public let progress: VesperDownloadProgressSnapshot
+
+    public init(taskId: VesperDownloadTaskId, progress: VesperDownloadProgressSnapshot) {
+        self.taskId = taskId
+        self.progress = progress
+    }
+}
+
 public enum VesperDownloadEvent: Equatable {
     case created(VesperDownloadTaskSnapshot)
-    case stateChanged(VesperDownloadTaskSnapshot)
+    case stateChanged(VesperDownloadTaskStatePatch)
     case assetIndexUpdated(VesperDownloadTaskSnapshot)
-    case progressUpdated(VesperDownloadTaskSnapshot)
+    case progressUpdated(VesperDownloadTaskProgressPatch)
+}
+
+private extension VesperDownloadEvent {
+    var isRemovedStatePatch: Bool {
+        if case let .stateChanged(patch) = self {
+            return patch.state == .removed
+        }
+        return false
+    }
 }
 
 @MainActor
@@ -468,7 +519,9 @@ public final class VesperDownloadManager: ObservableObject {
     private let bindings: any DownloadBindings
     private let configuration: VesperDownloadConfiguration
     private let stateStore: VesperDownloadStateStore?
+    private let taskStore = DownloadTaskStore()
     private var eventBuffer: [VesperDownloadEvent] = []
+    private var lastProgressPersistence: [VesperDownloadTaskId: (bytes: UInt64, date: Date)] = [:]
     private var sessionHandle: UInt64 = 0
 
     public init(
@@ -484,18 +537,21 @@ public final class VesperDownloadManager: ObservableObject {
             rangeChunkBytes: configuration.rangeChunkBytes,
             minProgressBytes: configuration.minProgressBytes,
             minProgressIntervalMs: configuration.minProgressIntervalMs,
+            stalledTransferTimeoutMs: configuration.stalledTransferTimeoutMs,
             staleResourceRecoveryHandler: staleResourceRecoveryHandler,
             staleResourcePlanRecoveryHandler: staleResourcePlanRecoveryHandler
         )
         bindings = NativeDownloadBindings()
+        let stateStoreURL = Self.stateStoreURL(for: configuration)
         stateStore = configuration.restoreTasksOnStartup
-            ? VesperDownloadStateStore(fileURL: Self.stateStoreURL(for: configuration))
+            ? VesperDownloadStateStore(fileURL: stateStoreURL)
             : nil
         snapshot = VesperDownloadSnapshot(tasks: [])
+        excludeDownloadItemFromBackup(stateStoreURL.deletingLastPathComponent())
         sessionHandle = bindings.createDownloadSession(configuration: configuration)
         precondition(sessionHandle != 0, "native download session handle must not be zero")
         restorePersistedTasks()
-        refresh()
+        forceFullSync()
     }
 
     internal init(
@@ -509,7 +565,7 @@ public final class VesperDownloadManager: ObservableObject {
         stateStore = nil
         snapshot = VesperDownloadSnapshot(tasks: [])
         sessionHandle = bindings.createDownloadSession(configuration: configuration)
-        refresh()
+        forceFullSync()
     }
 
     deinit {
@@ -529,11 +585,17 @@ public final class VesperDownloadManager: ObservableObject {
             sessionHandle = 0
         }
         eventBuffer.removeAll(keepingCapacity: false)
+        taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))
+        lastProgressPersistence.removeAll(keepingCapacity: false)
         snapshot = VesperDownloadSnapshot(tasks: [])
     }
 
     public func refresh() {
         syncRuntimeState(processCommands: true)
+    }
+
+    public func forceFullSync() {
+        forceFullSync(processCommands: true)
     }
 
     public func drainEvents() -> [VesperDownloadEvent] {
@@ -643,7 +705,7 @@ public final class VesperDownloadManager: ObservableObject {
         pointer.deallocate()
 
         if restored {
-            syncRuntimeState(processCommands: true)
+            forceFullSync(processCommands: true)
         }
         return restored
     }
@@ -710,38 +772,193 @@ public final class VesperDownloadManager: ObservableObject {
         }
     }
 
+    public func outputURL(forTask taskId: VesperDownloadTaskId) throws -> URL {
+        guard let task = task(taskId) else {
+            throw DownloadExportBridgeError("download task \(taskId) was not found")
+        }
+        guard task.state == .completed else {
+            throw DownloadExportBridgeError("download task \(taskId) must be completed before sharing or saving")
+        }
+        guard let completedPath = task.assetIndex.completedPath, !completedPath.isEmpty else {
+            throw DownloadExportBridgeError("download task \(taskId) does not have an output file")
+        }
+        let url = downloadOutputURL(from: completedPath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw DownloadExportBridgeError("download task output file does not exist")
+        }
+        return url
+    }
+
+    #if canImport(UIKit)
+    public func shareTaskOutput(
+        taskId: VesperDownloadTaskId,
+        fileName: String? = nil,
+        mimeType: String? = nil,
+        from presenter: UIViewController
+    ) throws {
+        _ = mimeType
+        let url = try preparedDownloadOutputURL(taskId: taskId, fileName: fileName)
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let popover = controller.popoverPresentationController {
+            popover.sourceView = presenter.view
+            popover.sourceRect = CGRect(
+                x: presenter.view.bounds.midX,
+                y: presenter.view.bounds.midY,
+                width: 1,
+                height: 1
+            )
+            popover.permittedArrowDirections = []
+        }
+        presenter.present(controller, animated: true)
+    }
+
+    @discardableResult
+    public func saveTaskOutput(
+        taskId: VesperDownloadTaskId,
+        fileName: String? = nil,
+        from presenter: UIViewController
+    ) throws -> URL {
+        let url = try preparedDownloadOutputURL(taskId: taskId, fileName: fileName)
+        let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
+        presenter.present(picker, animated: true)
+        return url
+    }
+    #endif
+
+    private func preparedDownloadOutputURL(
+        taskId: VesperDownloadTaskId,
+        fileName: String?
+    ) throws -> URL {
+        let sourceURL = try outputURL(forTask: taskId)
+        guard let fileName, !fileName.isEmpty else {
+            return sourceURL
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-download-share", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let targetURL = directory.appendingPathComponent(sanitizedOutputFileName(fileName))
+        if FileManager.default.fileExists(atPath: targetURL.path) {
+            try FileManager.default.removeItem(at: targetURL)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: targetURL)
+        return targetURL
+    }
+
+    private func downloadOutputURL(from path: String) -> URL {
+        if let url = URL(string: path), url.isFileURL {
+            return url
+        }
+        return URL(fileURLWithPath: path)
+    }
+
     private func syncRuntimeState(processCommands: Bool) {
         guard sessionHandle != 0 else {
+            taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))
             snapshot = VesperDownloadSnapshot(tasks: [])
             eventBuffer.removeAll(keepingCapacity: false)
+            lastProgressPersistence.removeAll(keepingCapacity: false)
+            return
+        }
+
+        var runtimeEvents = VesperRuntimeDownloadEventList(events: nil, len: 0)
+        var events: [VesperDownloadEvent] = []
+        if bindings.drainDownloadEvents(sessionHandle: sessionHandle, outEvents: &runtimeEvents) {
+            events = runtimeEvents.toPublic()
+            eventBuffer.append(contentsOf: events)
+            bindings.freeDownloadEventList(&runtimeEvents)
+        }
+
+        let immediateEvents = events.filter { !$0.isRemovedStatePatch }
+        if !immediateEvents.isEmpty {
+            let updatedSnapshot = taskStore.apply(immediateEvents)
+            if updatedSnapshot != snapshot {
+                snapshot = updatedSnapshot
+            }
+        }
+
+        if processCommands {
+            var runtimeCommands = VesperRuntimeDownloadCommandList(commands: nil, len: 0)
+            if bindings.drainDownloadCommands(sessionHandle: sessionHandle, outCommands: &runtimeCommands) {
+                let commands = runtimeCommands.toPublic()
+                bindings.freeDownloadCommandList(&runtimeCommands)
+                commands.forEach(applyCommand(_:))
+            }
+        }
+
+        if !events.isEmpty {
+            let removalEvents = events.filter(\.isRemovedStatePatch)
+            if !removalEvents.isEmpty {
+                let updatedSnapshot = taskStore.apply(removalEvents)
+                if updatedSnapshot != snapshot {
+                    snapshot = updatedSnapshot
+                }
+            }
+            if shouldPersistSnapshot(after: events) {
+                persistSnapshot(snapshot)
+            }
+        }
+    }
+
+    private func forceFullSync(processCommands: Bool) {
+        guard sessionHandle != 0 else {
+            taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))
+            snapshot = VesperDownloadSnapshot(tasks: [])
+            eventBuffer.removeAll(keepingCapacity: false)
+            lastProgressPersistence.removeAll(keepingCapacity: false)
             return
         }
 
         var runtimeSnapshot = VesperRuntimeDownloadSnapshot(tasks: nil, len: 0)
         if bindings.downloadSessionSnapshot(sessionHandle: sessionHandle, outSnapshot: &runtimeSnapshot) {
-            snapshot = runtimeSnapshot.toPublic()
+            let fullSnapshot = runtimeSnapshot.toPublic()
+            taskStore.replaceAll(fullSnapshot)
+            let activeSnapshot = taskStore.snapshot()
+            snapshot = activeSnapshot
+            persistSnapshot(activeSnapshot)
             bindings.freeDownloadSnapshot(&runtimeSnapshot)
         } else {
+            taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))
             snapshot = VesperDownloadSnapshot(tasks: [])
         }
-        persistSnapshot(snapshot)
 
-        var runtimeEvents = VesperRuntimeDownloadEventList(events: nil, len: 0)
-        if bindings.drainDownloadEvents(sessionHandle: sessionHandle, outEvents: &runtimeEvents) {
-            eventBuffer.append(contentsOf: runtimeEvents.toPublic())
-            bindings.freeDownloadEventList(&runtimeEvents)
-        }
+        syncRuntimeState(processCommands: processCommands)
+    }
 
-        guard processCommands else {
-            return
+    private func shouldPersistSnapshot(after events: [VesperDownloadEvent]) -> Bool {
+        var shouldPersist = false
+        for event in events {
+            switch event {
+            case .created, .assetIndexUpdated:
+                shouldPersist = true
+            case let .stateChanged(patch):
+                shouldPersist = true
+                lastProgressPersistence[patch.taskId] = (patch.progress.receivedBytes, Date())
+            case let .progressUpdated(patch):
+                if shouldPersistProgressCheckpoint(patch) {
+                    shouldPersist = true
+                }
+            }
         }
+        return shouldPersist
+    }
 
-        var runtimeCommands = VesperRuntimeDownloadCommandList(commands: nil, len: 0)
-        if bindings.drainDownloadCommands(sessionHandle: sessionHandle, outCommands: &runtimeCommands) {
-            let commands = runtimeCommands.toPublic()
-            bindings.freeDownloadCommandList(&runtimeCommands)
-            commands.forEach(applyCommand(_:))
+    private func shouldPersistProgressCheckpoint(_ patch: VesperDownloadTaskProgressPatch) -> Bool {
+        let now = Date()
+        guard let previous = lastProgressPersistence[patch.taskId] else {
+            lastProgressPersistence[patch.taskId] = (patch.progress.receivedBytes, now)
+            return true
         }
+        let byteDelta = patch.progress.receivedBytes >= previous.bytes
+            ? patch.progress.receivedBytes - previous.bytes
+            : 0
+        let elapsedMs = UInt64(max(0, now.timeIntervalSince(previous.date) * 1000))
+        guard byteDelta >= configuration.minProgressBytes,
+              elapsedMs >= configuration.minProgressIntervalMs
+        else {
+            return false
+        }
+        lastProgressPersistence[patch.taskId] = (patch.progress.receivedBytes, now)
+        return true
     }
 
     private func applyCommand(_ command: RuntimeDownloadCommand) {
@@ -993,6 +1210,58 @@ public final class VesperDownloadManager: ObservableObject {
     }
 }
 
+private final class DownloadTaskStore {
+    private var tasksById: [VesperDownloadTaskId: VesperDownloadTaskSnapshot] = [:]
+    private var order: [VesperDownloadTaskId] = []
+
+    func replaceAll(_ snapshot: VesperDownloadSnapshot) {
+        let activeTasks = snapshot.tasks.filter { $0.state != .removed }
+        tasksById = Dictionary(uniqueKeysWithValues: activeTasks.map { ($0.taskId, $0) })
+        order = activeTasks.map(\.taskId)
+    }
+
+    @discardableResult
+    func apply(_ events: [VesperDownloadEvent]) -> VesperDownloadSnapshot {
+        for event in events {
+            switch event {
+            case let .created(task), let .assetIndexUpdated(task):
+                upsert(task)
+            case let .stateChanged(patch):
+                if patch.state == .removed {
+                    remove(patch.taskId)
+                    continue
+                }
+                guard let task = tasksById[patch.taskId] else {
+                    continue
+                }
+                tasksById[patch.taskId] = task.withStatePatch(patch)
+            case let .progressUpdated(patch):
+                guard let task = tasksById[patch.taskId] else {
+                    continue
+                }
+                tasksById[patch.taskId] = task.withProgress(patch.progress)
+            }
+        }
+        return snapshot()
+    }
+
+    func snapshot() -> VesperDownloadSnapshot {
+        VesperDownloadSnapshot(tasks: order.compactMap { tasksById[$0] })
+    }
+
+    private func upsert(_ task: VesperDownloadTaskSnapshot) {
+        if tasksById[task.taskId] == nil {
+            order.append(task.taskId)
+        }
+        tasksById[task.taskId] = task
+    }
+
+    private func remove(_ taskId: VesperDownloadTaskId) {
+        tasksById.removeValue(forKey: taskId)
+        order.removeAll { $0 == taskId }
+    }
+}
+
 private final class VesperDownloadStateStore {
     private let fileURL: URL
     private let encoder = JSONEncoder()
@@ -1022,8 +1291,10 @@ private final class VesperDownloadStateStore {
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
+            excludeDownloadItemFromBackup(fileURL.deletingLastPathComponent())
             let data = try encoder.encode(VesperDownloadSnapshot(tasks: tasks))
             try data.write(to: fileURL, options: .atomic)
+            excludeDownloadItemFromBackup(fileURL)
         } catch {
             iosHostLog("download state persistence failed: \(error.localizedDescription)")
         }
@@ -1040,6 +1311,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
     private let rangeChunkBytes: UInt64?
     private let minProgressBytes: UInt64
     private let minProgressIntervalMs: UInt64
+    private let stalledTransferTimeoutMs: UInt64
     private let staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler?
     private let staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler?
 
@@ -1049,6 +1321,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         rangeChunkBytes: UInt64? = nil,
         minProgressBytes: UInt64 = vesperDownloadDefaultMinProgressBytes,
         minProgressIntervalMs: UInt64 = vesperDownloadDefaultMinProgressIntervalMs,
+        stalledTransferTimeoutMs: UInt64 = vesperDownloadDefaultStalledTransferTimeoutMs,
         staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler? = nil,
         staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler? = nil
     ) {
@@ -1057,6 +1330,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         self.rangeChunkBytes = rangeChunkBytes.flatMap { $0 > 0 ? $0 : nil }
         self.minProgressBytes = max(minProgressBytes, 1)
         self.minProgressIntervalMs = minProgressIntervalMs
+        self.stalledTransferTimeoutMs = stalledTransferTimeoutMs
         self.staleResourceRecoveryHandler = staleResourceRecoveryHandler
         self.staleResourcePlanRecoveryHandler = staleResourcePlanRecoveryHandler
     }
@@ -1721,6 +1995,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                         at: destinationURL.deletingLastPathComponent(),
                         withIntermediateDirectories: true
                     )
+                    excludeDownloadItemFromBackup(self.defaultBaseDirectory(for: materializedTask))
+                    excludeDownloadItemFromBackup(destinationURL.deletingLastPathComponent())
 
                     if self.fileManager.fileExists(atPath: destinationURL.path),
                        entry.generatedText != nil {
@@ -1754,6 +2030,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                             }
                         }
                     }
+                    excludeDownloadItemFromBackup(destinationURL)
                     receivedBytes += writtenBytes
                     if trackSegments, entry.isSegment {
                         receivedSegments += 1
@@ -1996,6 +2273,45 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         return root.appendingPathComponent(task.assetId.isEmpty ? String(task.taskId) : task.assetId)
     }
 
+    private func httpBodyStream(for request: URLRequest, sourceURL: URL) async throws -> VesperHTTPBodyStream {
+        try rejectInsecureHTTPURL(sourceURL)
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = true
+        let timeoutSeconds = max(TimeInterval(stalledTransferTimeoutMs) / 1_000, 1)
+        configuration.timeoutIntervalForRequest = timeoutSeconds
+        configuration.timeoutIntervalForResource = max(timeoutSeconds * 4, 60)
+
+        let delegate = VesperURLSessionDataStreamDelegate(
+            stalledTransferTimeoutMs: stalledTransferTimeoutMs,
+            sourceDescription: sourceURL.absoluteString
+        )
+        let delegateQueue = OperationQueue()
+        delegateQueue.maxConcurrentOperationCount = 1
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: delegateQueue)
+        let task = session.dataTask(with: request)
+        delegate.bind(session: session, task: task)
+        task.resume()
+        let response = try await delegate.waitForResponse()
+        return VesperHTTPBodyStream(
+            response: response,
+            chunks: delegate.chunks,
+            cancel: { delegate.cancel() }
+        )
+    }
+
+    private func httpData(for request: URLRequest, sourceURL: URL) async throws -> (Data, URLResponse) {
+        let stream = try await httpBodyStream(for: request, sourceURL: sourceURL)
+        defer { stream.cancel() }
+
+        var data = Data()
+        for try await chunk in stream.chunks {
+            try Task.checkCancellation()
+            data.append(chunk)
+        }
+        return (data, stream.response)
+    }
+
     private func fetch(
         _ sourceURL: URL,
         byteRange: VesperDownloadByteRange?,
@@ -2036,26 +2352,49 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         var request = URLRequest(url: sourceURL)
         request.applyDownloadHttpHeaders(requestHeaders)
         var requestedRangeStart: UInt64?
+        var requestedRangeEndInclusive: UInt64?
+        var expectedResponseBodyBytes: UInt64?
         if let byteRange {
+            guard resumeFromBytes < byteRange.length else {
+                return byteRange.length
+            }
             let remaining = byteRange.length > resumeFromBytes ? byteRange.length - resumeFromBytes : 0
             let start = byteRange.offset + resumeFromBytes
             let end = remaining == 0 ? start : start + remaining - 1
             request.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
             requestedRangeStart = start
+            requestedRangeEndInclusive = end
+            expectedResponseBodyBytes = remaining
         } else if resumeFromBytes > 0 {
             request.setValue("bytes=\(resumeFromBytes)-", forHTTPHeaderField: "Range")
             requestedRangeStart = resumeFromBytes
+            requestedRangeEndInclusive = expectedSizeBytes.flatMap { $0 > 0 ? $0 - 1 : nil }
+            expectedResponseBodyBytes = expectedSizeBytes.map { $0 > resumeFromBytes ? $0 - resumeFromBytes : 0 }
         }
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let stream = try await httpBodyStream(for: request, sourceURL: sourceURL)
+        defer { stream.cancel() }
+        var expectedFinalBytesAfterResponse: UInt64?
+        let response = stream.response
         if let http = response as? HTTPURLResponse {
             switch http.statusCode {
             case 206:
-                let contentRangeStart = parseHttpContentRangeStart(http.value(forHTTPHeaderField: "Content-Range"))
-                guard let requestedRangeStart, contentRangeStart == requestedRangeStart else {
+                guard let requestedRangeStart else {
                     throw VesperForegroundDownloadPreparationError.invalidSource(
                         "remote server returned an unexpected Content-Range for \(sourceURL.absoluteString)"
                     )
+                }
+                let contentRange = try validateHTTPPartialContentRange(
+                    contentRangeHeader: http.value(forHTTPHeaderField: "Content-Range"),
+                    contentLengthHeader: http.value(forHTTPHeaderField: "Content-Length"),
+                    requestedStart: requestedRangeStart,
+                    requestedEndInclusive: requestedRangeEndInclusive,
+                    expectedBodyLength: expectedResponseBodyBytes,
+                    expectedTotalSizeBytes: byteRange == nil ? expectedSizeBytes : nil,
+                    sourceDescription: sourceURL.absoluteString
+                )
+                if let responseBytes = contentRange.length {
+                    expectedFinalBytesAfterResponse = resumeFromBytes + responseBytes
                 }
             case 200:
                 if requestedRangeStart != nil {
@@ -2075,6 +2414,13 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                     }
                     throw VesperForegroundDownloadPreparationError.invalidSource(
                         "remote server did not honor the requested byte range for \(sourceURL.absoluteString)"
+                    )
+                }
+                if let expectedSizeBytes,
+                   let contentLength = parseHttpContentLength(http.value(forHTTPHeaderField: "Content-Length")),
+                   contentLength != expectedSizeBytes {
+                    throw VesperForegroundDownloadPreparationError.invalidSource(
+                        "remote server reported Content-Length \(contentLength), expected \(expectedSizeBytes) for \(sourceURL.absoluteString)"
                     )
                 }
             case 416:
@@ -2123,15 +2469,46 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         }
 
         var totalWritten = resumeFromBytes
+        var lastCleanFileSize = resumeFromBytes
         var buffer = Data()
         buffer.reserveCapacity(64 * 1024)
 
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            buffer.append(byte)
-            if buffer.count >= 64 * 1024 {
+        do {
+            for try await data in stream.chunks {
+                try Task.checkCancellation()
+                buffer.append(data)
+                if buffer.count >= 64 * 1024 {
+                    try output.write(contentsOf: buffer)
+                    totalWritten += UInt64(buffer.count)
+                    lastCleanFileSize = totalWritten
+                    if let expectedFinalBytesAfterResponse,
+                       totalWritten > expectedFinalBytesAfterResponse {
+                        try? fileManager.removeItem(at: destinationURL)
+                        throw VesperForegroundDownloadPreparationError.invalidSource(
+                            "remote server sent more bytes than its Content-Range for \(sourceURL.absoluteString)"
+                        )
+                    }
+                    if let expectedSizeBytes, totalWritten > expectedSizeBytes {
+                        try? fileManager.removeItem(at: destinationURL)
+                        throw VesperForegroundDownloadPreparationError.invalidSource(
+                            "remote server sent more bytes than expected for \(sourceURL.absoluteString)"
+                        )
+                    }
+                    buffer.removeAll(keepingCapacity: true)
+                    await onProgress(totalWritten)
+                }
+            }
+            if !buffer.isEmpty {
                 try output.write(contentsOf: buffer)
                 totalWritten += UInt64(buffer.count)
+                lastCleanFileSize = totalWritten
+                if let expectedFinalBytesAfterResponse,
+                   totalWritten > expectedFinalBytesAfterResponse {
+                    try? fileManager.removeItem(at: destinationURL)
+                    throw VesperForegroundDownloadPreparationError.invalidSource(
+                        "remote server sent more bytes than its Content-Range for \(sourceURL.absoluteString)"
+                    )
+                }
                 if let expectedSizeBytes, totalWritten > expectedSizeBytes {
                     try? fileManager.removeItem(at: destinationURL)
                     throw VesperForegroundDownloadPreparationError.invalidSource(
@@ -2141,11 +2518,16 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 buffer.removeAll(keepingCapacity: true)
                 await onProgress(totalWritten)
             }
+        } catch {
+            try? truncateFile(at: destinationURL, to: lastCleanFileSize)
+            throw error
         }
-        if !buffer.isEmpty {
-            try output.write(contentsOf: buffer)
-            totalWritten += UInt64(buffer.count)
-            await onProgress(totalWritten)
+
+        if let expectedFinalBytesAfterResponse,
+           totalWritten != expectedFinalBytesAfterResponse {
+            throw VesperForegroundDownloadPreparationError.invalidSource(
+                "downloaded \(totalWritten) bytes after resume, expected \(expectedFinalBytesAfterResponse)"
+            )
         }
 
         if let expectedSizeBytes, totalWritten != expectedSizeBytes {
@@ -2209,7 +2591,9 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         request.applyDownloadHttpHeaders(requestHeaders)
         request.setValue("bytes=\(rangeStart)-\(rangeEndInclusive)", forHTTPHeaderField: "Range")
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let stream = try await httpBodyStream(for: request, sourceURL: sourceURL)
+        defer { stream.cancel() }
+        let response = stream.response
         guard let http = response as? HTTPURLResponse else {
             throw VesperForegroundDownloadPreparationError.invalidSource(
                 "remote resource did not return an HTTP response for \(sourceURL.absoluteString)"
@@ -2220,10 +2604,22 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
 
         switch statusCode {
         case 206:
-            let contentRangeStart = parseHttpContentRangeStart(http.value(forHTTPHeaderField: "Content-Range"))
-            guard contentRangeStart == rangeStart else {
+            do {
+                try validateHTTPPartialContentRange(
+                    contentRangeHeader: http.value(forHTTPHeaderField: "Content-Range"),
+                    contentLengthHeader: http.value(forHTTPHeaderField: "Content-Length"),
+                    requestedStart: rangeStart,
+                    requestedEndInclusive: rangeEndInclusive,
+                    expectedBodyLength: rangeEndInclusive - rangeStart + 1,
+                    expectedTotalSizeBytes: expectedSizeBytes,
+                    sourceDescription: sourceURL.absoluteString
+                )
+            } catch {
                 throw staleDownloadResource(
-                    "remote server returned an unexpected Content-Range for \(sourceURL.absoluteString)"
+                    error.localizedDescription,
+                    uri: sourceURL.absoluteString,
+                    phase: .download,
+                    receivedBytes: rangeStart
                 )
             }
         case 200:
@@ -2244,6 +2640,12 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 }
                 throw staleDownloadResource(
                     "remote server did not honor the requested byte range for \(sourceURL.absoluteString)"
+                )
+            }
+            if let contentLength = parseHttpContentLength(http.value(forHTTPHeaderField: "Content-Length")),
+               contentLength != expectedSizeBytes {
+                throw staleDownloadResource(
+                    "remote server reported Content-Length \(contentLength), expected \(expectedSizeBytes) for \(sourceURL.absoluteString)"
                 )
             }
         case 416:
@@ -2308,15 +2710,34 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         }
 
         var totalWritten = append ? rangeStart : 0
+        var lastCleanFileSize = totalWritten
         var buffer = Data()
         buffer.reserveCapacity(64 * 1024)
 
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            buffer.append(byte)
-            if buffer.count >= 64 * 1024 {
+        do {
+            for try await data in stream.chunks {
+                try Task.checkCancellation()
+                buffer.append(data)
+                if buffer.count >= 64 * 1024 {
+                    try output.write(contentsOf: buffer)
+                    totalWritten += UInt64(buffer.count)
+                    lastCleanFileSize = totalWritten
+                    try validateHTTPRangeProgress(
+                        totalWritten: totalWritten,
+                        expectedSizeBytes: expectedSizeBytes,
+                        rangeEndInclusive: rangeEndInclusive,
+                        isPartialResponse: statusCode == 206,
+                        sourceURL: sourceURL,
+                        destinationURL: destinationURL
+                    )
+                    buffer.removeAll(keepingCapacity: true)
+                    await onProgress(totalWritten)
+                }
+            }
+            if !buffer.isEmpty {
                 try output.write(contentsOf: buffer)
                 totalWritten += UInt64(buffer.count)
+                lastCleanFileSize = totalWritten
                 try validateHTTPRangeProgress(
                     totalWritten: totalWritten,
                     expectedSizeBytes: expectedSizeBytes,
@@ -2328,19 +2749,9 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 buffer.removeAll(keepingCapacity: true)
                 await onProgress(totalWritten)
             }
-        }
-        if !buffer.isEmpty {
-            try output.write(contentsOf: buffer)
-            totalWritten += UInt64(buffer.count)
-            try validateHTTPRangeProgress(
-                totalWritten: totalWritten,
-                expectedSizeBytes: expectedSizeBytes,
-                rangeEndInclusive: rangeEndInclusive,
-                isPartialResponse: statusCode == 206,
-                sourceURL: sourceURL,
-                destinationURL: destinationURL
-            )
-            await onProgress(totalWritten)
+        } catch {
+            try? truncateFile(at: destinationURL, to: lastCleanFileSize)
+            throw error
         }
 
         if statusCode == 206 {
@@ -2382,6 +2793,15 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         }
     }
 
+    private func truncateFile(at url: URL, to size: UInt64) throws {
+        guard fileManager.fileExists(atPath: url.path) else {
+            return
+        }
+        let output = try FileHandle(forWritingTo: url)
+        defer { try? output.close() }
+        try output.truncate(atOffset: size)
+    }
+
     private func copyFileURL(
         _ sourceURL: URL,
         byteRange: VesperDownloadByteRange?,
@@ -2409,21 +2829,28 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         }
 
         var totalWritten = resumeFromBytes
+        var lastCleanFileSize = resumeFromBytes
         var remaining = byteRange.map { $0.length > resumeFromBytes ? $0.length - resumeFromBytes : 0 }
-        while remaining == nil || remaining! > 0 {
-            try Task.checkCancellation()
-            let chunkSize = Int(min(UInt64(64 * 1024), remaining ?? UInt64(64 * 1024)))
-            let data = try input.read(upToCount: chunkSize) ?? Data()
-            if data.isEmpty {
-                break
+        do {
+            while remaining == nil || remaining! > 0 {
+                try Task.checkCancellation()
+                let chunkSize = Int(min(UInt64(64 * 1024), remaining ?? UInt64(64 * 1024)))
+                let data = try input.read(upToCount: chunkSize) ?? Data()
+                if data.isEmpty {
+                    break
+                }
+                try output.write(contentsOf: data)
+                let count = UInt64(data.count)
+                totalWritten += count
+                lastCleanFileSize = totalWritten
+                if let currentRemaining = remaining {
+                    remaining = currentRemaining > count ? currentRemaining - count : 0
+                }
+                await onProgress(totalWritten)
             }
-            try output.write(contentsOf: data)
-            let count = UInt64(data.count)
-            totalWritten += count
-            if let currentRemaining = remaining {
-                remaining = currentRemaining > count ? currentRemaining - count : 0
-            }
-            await onProgress(totalWritten)
+        } catch {
+            try? truncateFile(at: destinationURL, to: lastCleanFileSize)
+            throw error
         }
 
         if let expectedSizeBytes, totalWritten != expectedSizeBytes {
@@ -2473,7 +2900,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         } else {
             var request = URLRequest(url: sourceURL)
             request.applyDownloadHttpHeaders(requestHeaders)
-            let (responseData, response) = try await URLSession.shared.data(for: request)
+            let (responseData, response) = try await httpData(for: request, sourceURL: sourceURL)
             if let http = response as? HTTPURLResponse {
                 if isExpiredHttpStatus(http.statusCode) {
                     throw staleDownloadResource(
@@ -2520,7 +2947,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         var request = URLRequest(url: sourceURL)
         request.applyDownloadHttpHeaders(requestHeaders)
         request.httpMethod = "HEAD"
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await httpData(for: request, sourceURL: sourceURL)
         if let http = response as? HTTPURLResponse,
            isExpiredHttpStatus(http.statusCode) {
             throw staleDownloadResource(
@@ -2537,7 +2964,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         var rangeRequest = URLRequest(url: sourceURL)
         rangeRequest.applyDownloadHttpHeaders(requestHeaders)
         rangeRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
-        let (_, rangeResponse) = try await URLSession.shared.data(for: rangeRequest)
+        let (_, rangeResponse) = try await httpData(for: rangeRequest, sourceURL: sourceURL)
         if let http = rangeResponse as? HTTPURLResponse,
            isExpiredHttpStatus(http.statusCode) {
             throw staleDownloadResource(
@@ -2545,9 +2972,9 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
             )
         }
         if let http = rangeResponse as? HTTPURLResponse,
-           let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
-           let totalText = contentRange.split(separator: "/").last,
-           let size = UInt64(totalText), size > 0
+           let contentRange = parseHttpContentRange(http.value(forHTTPHeaderField: "Content-Range")),
+           let size = contentRange.total,
+           size > 0
         {
             return size
         }
@@ -2573,10 +3000,234 @@ private func sanitizedDownloadHttpHeaders(_ headers: [String: String]) -> [Strin
     return result
 }
 
+private func sanitizedOutputFileName(_ value: String) -> String {
+    let sanitized = value
+        .replacingOccurrences(of: "[^A-Za-z0-9._ -]+", with: "_", options: .regularExpression)
+        .trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+    return sanitized.isEmpty || sanitized == ".." ? "vesper-download" : sanitized
+}
+
+private func rejectInsecureHTTPURL(_ url: URL) throws {
+    guard url.scheme?.lowercased() == "http" else {
+        return
+    }
+    throw VesperForegroundDownloadPreparationError.invalidSource(
+        "\(vesperDownloadATSFailureMessage) URL: \(url.absoluteString)"
+    )
+}
+
+func excludeDownloadItemFromBackup(_ url: URL, fileManager: FileManager = .default) {
+    guard fileManager.fileExists(atPath: url.path) else {
+        return
+    }
+    var excludedURL = url
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    do {
+        try excludedURL.setResourceValues(values)
+    } catch {
+        iosHostLog("failed to exclude download item from iCloud backup: \(error.localizedDescription)")
+    }
+}
+
 private extension URLRequest {
     mutating func applyDownloadHttpHeaders(_ headers: [String: String]) {
         for (name, value) in sanitizedDownloadHttpHeaders(headers) {
             setValue(value, forHTTPHeaderField: name)
+        }
+        if value(forHTTPHeaderField: "Accept-Encoding") == nil {
+            setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        }
+    }
+}
+
+private struct VesperHTTPBodyStream {
+    let response: URLResponse
+    let chunks: AsyncThrowingStream<Data, Error>
+    let cancel: @Sendable () -> Void
+}
+
+private final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let sourceDescription: String
+    private let stalledTransferTimeoutNs: UInt64
+    private let lock = NSLock()
+    private let watchdogQueue: DispatchQueue
+    private let chunksContinuation: AsyncThrowingStream<Data, Error>.Continuation
+    private var responseContinuation: CheckedContinuation<URLResponse, Error>?
+    private var responseResult: Result<URLResponse, Error>?
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private var watchdog: DispatchSourceTimer?
+    private var lastActivityNs: UInt64
+    private var didFinish = false
+
+    let chunks: AsyncThrowingStream<Data, Error>
+
+    init(stalledTransferTimeoutMs: UInt64, sourceDescription: String) {
+        self.sourceDescription = sourceDescription
+        let (timeoutNs, overflow) = stalledTransferTimeoutMs.multipliedReportingOverflow(by: 1_000_000)
+        stalledTransferTimeoutNs = overflow ? UInt64.max : timeoutNs
+        watchdogQueue = DispatchQueue(
+            label: "io.github.ikaros.vesper.player.download.http-watchdog.\(UUID().uuidString)"
+        )
+        lastActivityNs = DispatchTime.now().uptimeNanoseconds
+
+        var continuation: AsyncThrowingStream<Data, Error>.Continuation!
+        chunks = AsyncThrowingStream(Data.self, bufferingPolicy: .unbounded) { streamContinuation in
+            continuation = streamContinuation
+        }
+        chunksContinuation = continuation
+        super.init()
+        chunksContinuation.onTermination = { @Sendable [weak self] _ in
+            self?.cancel()
+        }
+    }
+
+    func bind(session: URLSession, task: URLSessionDataTask) {
+        lock.lock()
+        self.session = session
+        self.task = task
+        lastActivityNs = DispatchTime.now().uptimeNanoseconds
+        lock.unlock()
+        startWatchdogIfNeeded()
+    }
+
+    func waitForResponse() async throws -> URLResponse {
+        if let result = lockedResponseResult() {
+            return try result.get()
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let responseResult {
+                lock.unlock()
+                continuation.resume(with: responseResult)
+            } else {
+                responseContinuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func cancel() {
+        var localTask: URLSessionDataTask?
+        var localSession: URLSession?
+        lock.lock()
+        localTask = task
+        localSession = session
+        lock.unlock()
+        localTask?.cancel()
+        localSession?.invalidateAndCancel()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        markActivity()
+        completeResponse(.success(response))
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard !data.isEmpty else { return }
+        markActivity()
+        chunksContinuation.yield(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            finish(throwing: error)
+        } else {
+            finish()
+        }
+    }
+
+    private func lockedResponseResult() -> Result<URLResponse, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return responseResult
+    }
+
+    private func completeResponse(_ result: Result<URLResponse, Error>) {
+        var continuation: CheckedContinuation<URLResponse, Error>?
+        lock.lock()
+        if responseResult == nil {
+            responseResult = result
+            continuation = responseContinuation
+            responseContinuation = nil
+        }
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+
+    private func markActivity() {
+        lock.lock()
+        lastActivityNs = DispatchTime.now().uptimeNanoseconds
+        lock.unlock()
+    }
+
+    private func startWatchdogIfNeeded() {
+        guard stalledTransferTimeoutNs > 0 else { return }
+        let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
+        let interval = DispatchTimeInterval.nanoseconds(
+            Int(min(stalledTransferTimeoutNs, UInt64(Int.max)))
+        )
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in
+            self?.failIfStalled()
+        }
+        lock.lock()
+        watchdog = timer
+        lock.unlock()
+        timer.resume()
+    }
+
+    private func failIfStalled() {
+        let shouldFail: Bool
+        lock.lock()
+        let elapsedNs = DispatchTime.now().uptimeNanoseconds - lastActivityNs
+        shouldFail = !didFinish && stalledTransferTimeoutNs > 0 && elapsedNs >= stalledTransferTimeoutNs
+        lock.unlock()
+        guard shouldFail else { return }
+        let error = VesperForegroundDownloadPreparationError.invalidSource(
+            "network transfer stalled without progress for \(sourceDescription)"
+        )
+        finish(throwing: error)
+        task?.cancel()
+        session?.invalidateAndCancel()
+    }
+
+    private func finish(throwing error: Error? = nil) {
+        var shouldFinishStream = false
+        var localWatchdog: DispatchSourceTimer?
+        var localSession: URLSession?
+        lock.lock()
+        if !didFinish {
+            didFinish = true
+            shouldFinishStream = true
+            localWatchdog = watchdog
+            watchdog = nil
+            localSession = session
+        }
+        lock.unlock()
+
+        if let error {
+            completeResponse(.failure(error))
+        } else {
+            completeResponse(.failure(VesperForegroundDownloadPreparationError.invalidSource(
+                "remote resource did not return a response for \(sourceDescription)"
+            )))
+        }
+        localWatchdog?.cancel()
+        if shouldFinishStream {
+            if let error {
+                chunksContinuation.finish(throwing: error)
+            } else {
+                chunksContinuation.finish()
+            }
+            localSession?.finishTasksAndInvalidate()
         }
     }
 }
@@ -2585,19 +3236,105 @@ private func isExpiredHttpStatus(_ statusCode: Int) -> Bool {
     statusCode == 401 || statusCode == 403 || statusCode == 404 || statusCode == 410
 }
 
-private func parseHttpContentRangeStart(_ contentRange: String?) -> UInt64? {
+struct VesperHTTPContentRange: Equatable {
+    let start: UInt64?
+    let end: UInt64?
+    let total: UInt64?
+
+    var isUnsatisfied: Bool {
+        start == nil && end == nil
+    }
+
+    var length: UInt64? {
+        guard let start, let end, end >= start else {
+            return nil
+        }
+        return end - start + 1
+    }
+}
+
+func parseHttpContentRange(_ contentRange: String?) -> VesperHTTPContentRange? {
     guard let contentRange else {
         return nil
     }
-    let fields = contentRange.split(separator: " ", maxSplits: 1)
-    guard fields.count == 2 else {
+    let fields = contentRange.trimmingCharacters(in: .whitespacesAndNewlines)
+        .split(separator: " ", maxSplits: 1)
+    guard fields.count == 2,
+          fields[0].lowercased() == "bytes"
+    else {
         return nil
     }
-    let range = fields[1]
-    guard !range.hasPrefix("*"), let startText = range.split(separator: "-", maxSplits: 1).first else {
+    let value = fields[1]
+    let rangeAndTotal = value.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+    guard rangeAndTotal.count == 2 else { return nil }
+    let totalText = rangeAndTotal[1].trimmingCharacters(in: .whitespaces)
+    let total = totalText == "*" ? nil : UInt64(totalText)
+    if value.hasPrefix("*") {
+        guard value.hasPrefix("*/") || rangeAndTotal[0] == "*" else { return nil }
+        return VesperHTTPContentRange(start: nil, end: nil, total: total)
+    }
+
+    let rangeParts = rangeAndTotal[0].split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+    guard rangeParts.count == 2,
+          let start = UInt64(rangeParts[0].trimmingCharacters(in: .whitespaces)),
+          let end = UInt64(rangeParts[1].trimmingCharacters(in: .whitespaces)),
+          end >= start
+    else {
         return nil
     }
-    return UInt64(startText)
+    return VesperHTTPContentRange(start: start, end: end, total: total)
+}
+
+func parseHttpContentLength(_ contentLength: String?) -> UInt64? {
+    guard let contentLength else { return nil }
+    return UInt64(contentLength.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
+@discardableResult
+func validateHTTPPartialContentRange(
+    contentRangeHeader: String?,
+    contentLengthHeader: String?,
+    requestedStart: UInt64,
+    requestedEndInclusive: UInt64?,
+    expectedBodyLength: UInt64?,
+    expectedTotalSizeBytes: UInt64?,
+    sourceDescription: String
+) throws -> VesperHTTPContentRange {
+    guard let contentRange = parseHttpContentRange(contentRangeHeader),
+          !contentRange.isUnsatisfied,
+          contentRange.start == requestedStart,
+          let responseEnd = contentRange.end
+    else {
+        throw VesperForegroundDownloadPreparationError.invalidSource(
+            "remote server returned an unexpected Content-Range for \(sourceDescription)"
+        )
+    }
+    if let requestedEndInclusive, responseEnd != requestedEndInclusive {
+        throw VesperForegroundDownloadPreparationError.invalidSource(
+            "remote server returned a Content-Range outside the requested byte range for \(sourceDescription)"
+        )
+    }
+    if let expectedTotalSizeBytes,
+       let total = contentRange.total,
+       total != expectedTotalSizeBytes {
+        throw VesperForegroundDownloadPreparationError.invalidSource(
+            "remote server reported Content-Range total \(total), expected \(expectedTotalSizeBytes) for \(sourceDescription)"
+        )
+    }
+    if let length = contentRange.length {
+        if let expectedBodyLength, length != expectedBodyLength {
+            throw VesperForegroundDownloadPreparationError.invalidSource(
+                "remote server returned \(length) range bytes, expected \(expectedBodyLength) for \(sourceDescription)"
+            )
+        }
+        if let contentLength = parseHttpContentLength(contentLengthHeader),
+           contentLength != length {
+            throw VesperForegroundDownloadPreparationError.invalidSource(
+                "remote server reported Content-Length \(contentLength), expected \(length) from Content-Range for \(sourceDescription)"
+            )
+        }
+    }
+    return contentRange
 }
 
 private struct ForegroundDownloadEntry {
@@ -2737,6 +3474,8 @@ private struct VesperGeneratedDownloadResourceMaterializer {
         let taskDirectory = taskBaseDirectory(assetId: assetId, taskId: taskId, profile: profile)
         let generatedDirectory = taskDirectory.appendingPathComponent(".generated", isDirectory: true)
         try fileManager.createDirectory(at: generatedDirectory, withIntermediateDirectories: true)
+        excludeDownloadItemFromBackup(taskDirectory, fileManager: fileManager)
+        excludeDownloadItemFromBackup(generatedDirectory, fileManager: fileManager)
 
         var usedNames = Set<String>()
         let resources = try assetIndex.resources.map { resource in
@@ -2748,6 +3487,7 @@ private struct VesperGeneratedDownloadResourceMaterializer {
             let destinationURL = generatedDirectory.appendingPathComponent(fileName, isDirectory: false)
             do {
                 try data.write(to: destinationURL, options: .atomic)
+                excludeDownloadItemFromBackup(destinationURL, fileManager: fileManager)
             } catch {
                 throw VesperForegroundDownloadPreparationError.invalidSource(
                     "failed to persist generated download resource \(resource.resourceId): \(error.localizedDescription)"
@@ -3592,10 +4332,49 @@ private extension VesperDownloadAssetIndex {
             completedPath: completedPath
         )
     }
+
+    func withCompletedPath(_ completedPath: String?) -> VesperDownloadAssetIndex {
+        VesperDownloadAssetIndex(
+            contentFormat: contentFormat,
+            version: version,
+            etag: etag,
+            checksum: checksum,
+            totalSizeBytes: totalSizeBytes,
+            resources: resources,
+            segments: segments,
+            completedPath: completedPath
+        )
+    }
 }
 
 private extension VesperDownloadTaskSnapshot {
     func withAssetIndex(_ assetIndex: VesperDownloadAssetIndex) -> VesperDownloadTaskSnapshot {
+        VesperDownloadTaskSnapshot(
+            taskId: taskId,
+            assetId: assetId,
+            source: source,
+            profile: profile,
+            state: state,
+            progress: progress,
+            assetIndex: assetIndex,
+            error: error
+        )
+    }
+
+    func withStatePatch(_ patch: VesperDownloadTaskStatePatch) -> VesperDownloadTaskSnapshot {
+        VesperDownloadTaskSnapshot(
+            taskId: taskId,
+            assetId: assetId,
+            source: source,
+            profile: profile,
+            state: patch.state,
+            progress: patch.progress,
+            assetIndex: assetIndex.withCompletedPath(patch.completedPath ?? assetIndex.completedPath),
+            error: patch.error
+        )
+    }
+
+    func withProgress(_ progress: VesperDownloadProgressSnapshot) -> VesperDownloadTaskSnapshot {
         VesperDownloadTaskSnapshot(
             taskId: taskId,
             assetId: assetId,
@@ -4445,20 +5224,45 @@ private extension VesperRuntimeDownloadEventList {
         guard let events, len > 0 else {
             return []
         }
-        return Array(UnsafeBufferPointer(start: events, count: Int(len))).compactMap { event in
+        let buffer = UnsafeBufferPointer<VesperRuntimeDownloadEvent>(start: events, count: Int(len))
+        return buffer.compactMap { event in
             switch event.kind {
             case .created:
                 return .created(event.task.toPublic())
             case .stateChanged:
-                return .stateChanged(event.task.toPublic())
+                return .stateChanged(
+                    VesperDownloadTaskStatePatch(
+                        taskId: event.task_id,
+                        state: VesperDownloadState(rawValue: Int(event.status.rawValue)) ?? .queued,
+                        progress: event.progress.toPublic(),
+                        error: event.has_error ? event.toDownloadError() : nil,
+                        completedPath: stringFromRuntimeCString(event.completed_path)
+                    )
+                )
             case .assetIndexUpdated:
                 return .assetIndexUpdated(event.task.toPublic())
             case .progressUpdated:
-                return .progressUpdated(event.task.toPublic())
+                return .progressUpdated(
+                    VesperDownloadTaskProgressPatch(
+                        taskId: event.task_id,
+                        progress: event.progress.toPublic()
+                    )
+                )
             default:
                 return nil
             }
         }
+    }
+}
+
+private extension VesperRuntimeDownloadEvent {
+    func toDownloadError() -> VesperDownloadError {
+        VesperDownloadError(
+            codeOrdinal: error_code,
+            categoryOrdinal: error_category,
+            retriable: error_retriable,
+            message: stringFromRuntimeCString(error_message) ?? ""
+        )
     }
 }
 

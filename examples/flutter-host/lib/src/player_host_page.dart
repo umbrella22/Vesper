@@ -173,8 +173,10 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
               .clamp(0, 1)
               .toDouble();
         });
-      case VesperDownloadSnapshotEvent():
-      case VesperDownloadAssetIndexUpdatedEvent():
+      case VesperDownloadInitialSnapshotEvent():
+      case VesperDownloadTaskCreatedEvent():
+      case VesperDownloadTaskUpdatedEvent():
+      case VesperDownloadTaskRemovedEvent():
       case VesperDownloadErrorEvent():
       case VesperDownloadDisposedEvent():
         break;

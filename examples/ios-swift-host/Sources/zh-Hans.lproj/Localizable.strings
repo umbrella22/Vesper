@@ -52,6 +52,7 @@
 "example.download.action_pause" = "暂停";
 "example.download.action_resume" = "恢复";
 "example.download.save_to_photos" = "转存到相册";
+"example.download.share_output" = "分享输出";
 "example.download.remove_task" = "移除";
 "example.download.task_meta" = "assetId: %@ · %@";
 "example.download.progress_unknown" = "进度未知";

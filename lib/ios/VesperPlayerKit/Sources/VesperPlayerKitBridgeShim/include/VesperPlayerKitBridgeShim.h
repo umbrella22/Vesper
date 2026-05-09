@@ -357,6 +357,15 @@ typedef enum VesperRuntimeDownloadEventKind {
 typedef struct VesperRuntimeDownloadEvent {
   VesperRuntimeDownloadEventKind kind;
   VesperRuntimeDownloadTask task;
+  uint64_t task_id;
+  VesperRuntimeDownloadTaskStatus status;
+  VesperRuntimeDownloadProgressSnapshot progress;
+  bool has_error;
+  uint32_t error_code;
+  uint32_t error_category;
+  bool error_retriable;
+  char *error_message;
+  char *completed_path;
 } VesperRuntimeDownloadEvent;
 
 typedef struct VesperRuntimeDownloadEventList {

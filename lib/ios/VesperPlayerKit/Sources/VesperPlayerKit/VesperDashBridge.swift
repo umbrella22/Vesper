@@ -1,7 +1,11 @@
 @preconcurrency import AVFoundation
 import Foundation
-@preconcurrency import Network
 import VesperPlayerKitBridgeShim
+
+private let vesperDashATSFailureMessage =
+    "iOS DASH playback requires HTTPS media URLs. The SDK does not relax App Transport Security for http:// resources; host apps that need insecure HTTP must fetch those resources outside the SDK and provide local file URLs."
+private let vesperDashNetworkStallTimeoutSeconds: TimeInterval = 30
+private let vesperDashNetworkResourceTimeoutSeconds: TimeInterval = 3_600
 
 private struct VesperDashSegmentCacheKey: Hashable {
     let renditionId: String
@@ -29,10 +33,11 @@ private struct VesperDashCachedSegmentFile {
 
 private enum VesperDashResourceResponse {
     case data(Data, contentType: String)
+    case segment(VesperDashSegmentPayload)
     case redirect(URL)
 }
 
-fileprivate enum VesperDashSegmentPayload {
+enum VesperDashSegmentPayload {
     case data(Data, contentType: String)
     case file(url: URL, offset: UInt64, size: UInt64, removeAfterServing: Bool, contentType: String)
 
@@ -174,10 +179,9 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                     switch segment {
                     case .initialization:
                         // Init segments are small and AVPlayer normally fetches them once, so
-                        // return the raw bytes through the resource loader instead of the
-                        // loopback server. This lets benchmark events record whether AVPlayer
-                        // requested the init segment; AVPlayer has been observed to skip
-                        // loopback HTTP URLs referenced from EXT-X-MAP.
+                        // return the raw bytes through the resource loader. This keeps init
+                        // delivery visible to benchmark events and avoids relying on local HTTP
+                        // behavior for EXT-X-MAP.
                         let initData = try await session.segmentData(
                             renditionId: renditionId,
                             segment: .initialization
@@ -190,8 +194,11 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                         // contentType must be a UTI, not a MIME type. fMP4 / ISO BMFF maps to public.mpeg-4.
                         response = .data(initData, contentType: "public.mpeg-4")
                     case .media:
-                        response = .redirect(
-                            try await session.segmentRedirectURL(renditionId: renditionId, segment: segment)
+                        response = .segment(
+                            try await session.segmentResourcePayload(
+                                renditionId: renditionId,
+                                segment: segment
+                            )
                         )
                     }
                 }
@@ -235,6 +242,23 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                     }
                 }
                 loadingRequest.finishLoading()
+            case let .segment(payload):
+                defer { payload.cleanupIfTemporary() }
+                do {
+                    loadingRequest.contentInformationRequest?.contentType = self.avContentType(
+                        forSegmentContentType: payload.contentType
+                    )
+                    loadingRequest.contentInformationRequest?.contentLength = try self.checkedContentLength(
+                        payload.size
+                    )
+                    loadingRequest.contentInformationRequest?.isByteRangeAccessSupported = true
+                    if let dataRequest = loadingRequest.dataRequest {
+                        try self.respond(to: dataRequest, with: payload)
+                    }
+                    loadingRequest.finishLoading()
+                } catch {
+                    loadingRequest.finishLoading(with: error)
+                }
             case let .redirect(url):
                 var request = URLRequest(url: url)
                 request.cachePolicy = .returnCacheDataElseLoad
@@ -289,501 +313,73 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
         }
         dataRequest.respond(with: data.subdata(in: offset..<(offset + requestedLength)))
     }
-}
 
-private final class VesperDashLoopbackStartGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didResume = false
-
-    func resumeOnce(_ body: () -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !didResume else { return }
-        didResume = true
-        body()
-    }
-}
-
-fileprivate final class VesperDashLoopbackServer: @unchecked Sendable {
-    fileprivate typealias SegmentPayloadProvider = @Sendable (String, VesperDashSegmentRequest) async throws -> VesperDashSegmentPayload
-    private static let fileChunkSize = 256 * 1024
-
-    private let sessionId: String
-    private let listener: NWListener
-    private let queue: DispatchQueue
-    private let segmentPayloadProvider: SegmentPayloadProvider
-    private var port: UInt16?
-    private var didStart = false
-
-    fileprivate init(
-        sessionId: String,
-        segmentPayloadProvider: @escaping SegmentPayloadProvider
+    private func respond(
+        to dataRequest: AVAssetResourceLoadingDataRequest,
+        with payload: VesperDashSegmentPayload
     ) throws {
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(
-            host: .ipv4(IPv4Address("127.0.0.1")!),
-            port: 0
-        )
-        listener = try NWListener(using: parameters)
-        queue = DispatchQueue(label: "io.github.ikaros.vesper.player.dash.loopback.\(sessionId)")
-        self.sessionId = sessionId
-        self.segmentPayloadProvider = segmentPayloadProvider
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.handle(connection: connection)
+        let requestedOffset = dataRequest.currentOffset != 0
+            ? dataRequest.currentOffset
+            : dataRequest.requestedOffset
+        guard requestedOffset >= 0 else {
+            throw VesperDashBridgeError.invalidManifest("negative segment byte offset requested")
         }
-    }
-
-    deinit {
-        listener.cancel()
-    }
-
-    func start() async throws {
-        guard !didStart else { return }
-        try await withCheckedThrowingContinuation { continuation in
-            let startGate = VesperDashLoopbackStartGate()
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self else { return }
-                switch state {
-                case .ready:
-                    self.port = self.listener.port?.rawValue
-                    startGate.resumeOnce {
-                        continuation.resume()
-                    }
-                case let .failed(error):
-                    startGate.resumeOnce {
-                        continuation.resume(throwing: error)
-                    }
-                case .cancelled:
-                    startGate.resumeOnce {
-                        continuation.resume(
-                            throwing: VesperDashBridgeError.network("DASH loopback server was cancelled")
-                        )
-                    }
-                default:
-                    break
-                }
-            }
-            listener.start(queue: queue)
+        let offset = UInt64(requestedOffset)
+        guard offset <= payload.size else {
+            throw VesperDashBridgeError.invalidManifest("segment byte offset exceeds response size")
         }
-        didStart = true
-    }
-
-    func segmentURL(for renditionId: String, segment: VesperDashSegmentRequest) throws -> URL {
-        guard let port else {
-            throw VesperDashBridgeError.network("DASH loopback server is not ready")
-        }
-        let encodedId = renditionId.addingPercentEncoding(withAllowedCharacters: dashPathComponentAllowedCharacters)
-            ?? renditionId
-        let segmentName: String
-        switch segment {
-        case .initialization:
-            segmentName = "init.mp4"
-        case let .media(index):
-            segmentName = "\(index).m4s"
-        }
-        return URL(string: "http://127.0.0.1:\(port)/dash/\(sessionId)/\(encodedId)/\(segmentName)")!
-    }
-
-    private func handle(connection: NWConnection) {
-        connection.start(queue: queue)
-        receiveRequest(on: connection, accumulated: Data())
-    }
-
-    /// AVPlayer HTTP requests may arrive split across TCP packets, or with
-    /// extra bytes after the header block. Keep reading until "\r\n\r\n" is
-    /// visible, then parse the request manually.
-    private func receiveRequest(on connection: NWConnection, accumulated: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 32_768) { [weak self] data, _, isComplete, error in
-            guard let self else {
-                connection.cancel()
-                return
-            }
-            if error != nil {
-                connection.cancel()
-                return
-            }
-            var buffer = accumulated
-            if let data, !data.isEmpty {
-                buffer.append(data)
-            }
-            if let headerEndRange = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                let headerData = buffer.prefix(upTo: headerEndRange.lowerBound)
-                guard
-                    let headerText = String(data: headerData, encoding: .utf8),
-                    let parsed = self.parseRequest(headerText)
-                else {
-                    let firstLine = String(data: headerData, encoding: .utf8)?
-                        .components(separatedBy: "\r\n").first ?? "<unparseable>"
-                    iosHostLog("dashLoopbackRequest rejected session=\(self.sessionId) line=\(firstLine)")
-                    self.sendStatus(404, reason: "Not Found", on: connection)
-                    return
-                }
-                iosHostLog(
-                    "dashLoopbackRequest session=\(self.sessionId) method=\(parsed.method) rendition=\(parsed.renditionId) segment=\(parsed.segment) range=\(parsed.range.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none")"
-                )
-                self.sendSegment(parsed, on: connection)
-                return
-            }
-            if isComplete || buffer.count > 64_000 {
-                self.sendStatus(400, reason: "Bad Request", on: connection)
-                return
-            }
-            self.receiveRequest(on: connection, accumulated: buffer)
-        }
-    }
-
-    private struct ParsedRequest {
-        let method: HttpMethod
-        let renditionId: String
-        let segment: VesperDashSegmentRequest
-        let range: ClosedRange<UInt64>?
-    }
-
-    private enum HttpMethod {
-        case get
-        case head
-    }
-
-    private func parseRequest(_ headerText: String) -> ParsedRequest? {
-        let lines = headerText.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return nil }
-        let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2 else { return nil }
-        let method: HttpMethod
-        switch parts[0].uppercased() {
-        case "GET":
-            method = .get
-        case "HEAD":
-            method = .head
-        default:
-            return nil
-        }
-        let path = parts[1].split(separator: "?", maxSplits: 1).first.map(String.init) ?? String(parts[1])
-        let components = path
-            .split(separator: "/")
-            .map(String.init)
-        guard components.count == 4,
-              components[0] == "dash",
-              components[1] == sessionId
-        else {
-            return nil
-        }
-        let renditionId = components[2].removingPercentEncoding ?? components[2]
-        let segmentName = components[3]
-        let segment: VesperDashSegmentRequest
-        if segmentName == "init.mp4" {
-            segment = .initialization
-        } else if segmentName.hasSuffix(".m4s"),
-                  let index = Int(segmentName.dropLast(".m4s".count)),
-                  index >= 0 {
-            segment = .media(index)
-        } else {
-            return nil
-        }
-
-        var range: ClosedRange<UInt64>?
-        for line in lines.dropFirst() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let colon = trimmed.firstIndex(of: ":") else { continue }
-            let name = trimmed[..<colon].lowercased()
-            guard name == "range" else { continue }
-            let value = trimmed[trimmed.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            range = parseRangeHeader(value)
-            break
-        }
-        return ParsedRequest(method: method, renditionId: renditionId, segment: segment, range: range)
-    }
-
-    /// Supports the single-range `bytes=start-end` form used by AVPlayer.
-    /// The end offset is optional.
-    private func parseRangeHeader(_ value: String) -> ClosedRange<UInt64>? {
-        guard let equals = value.firstIndex(of: "=") else { return nil }
-        let unit = value[..<equals].trimmingCharacters(in: .whitespaces).lowercased()
-        guard unit == "bytes" else { return nil }
-        let spec = value[value.index(after: equals)...]
-        guard let dash = spec.firstIndex(of: "-") else { return nil }
-        let startText = spec[..<dash].trimmingCharacters(in: .whitespaces)
-        let endText = spec[spec.index(after: dash)...].trimmingCharacters(in: .whitespaces)
-        guard let start = UInt64(startText) else { return nil }
-        if endText.isEmpty {
-            return start...UInt64.max
-        }
-        guard let end = UInt64(endText), end >= start else { return nil }
-        return start...end
-    }
-
-    private func sendSegment(
-        _ request: ParsedRequest,
-        on connection: NWConnection
-    ) {
-        let startedAt = Date()
-        Task {
-            do {
-                let payload = try await self.segmentPayloadProvider(request.renditionId, request.segment)
-                let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
-                self.queue.async {
-                    self.sendPayloadResponse(
-                        payload,
-                        elapsedMs: elapsedMs,
-                        request: request,
-                        on: connection
-                    )
-                }
-            } catch {
-                iosHostLog("dashLoopbackSegment failed rendition=\(request.renditionId) segment=\(request.segment) error=\(error.localizedDescription)")
-                self.queue.async {
-                    self.sendStatus(502, reason: "Bad Gateway", on: connection)
-                }
-            }
-        }
-    }
-
-    private func sendPayloadResponse(
-        _ payload: VesperDashSegmentPayload,
-        elapsedMs: Int,
-        request: ParsedRequest,
-        on connection: NWConnection
-    ) {
-        let totalLength = payload.size
-        let bodyStart: UInt64
-        let bodyLength: UInt64
-        let statusLine: String
-        let contentRange: String?
-        if let range = request.range {
-            if totalLength == 0 || range.lowerBound >= totalLength {
-                payload.cleanupIfTemporary()
-                let header = "HTTP/1.1 416 Range Not Satisfiable\r\n"
-                    + "Content-Range: bytes */\(totalLength)\r\n"
-                    + "Content-Length: 0\r\n"
-                    + "Connection: close\r\n\r\n"
-                connection.send(
-                    content: Data(header.utf8),
-                    isComplete: true,
-                    completion: .contentProcessed { [weak self] _ in
-                        self?.scheduleGracefulClose(connection)
-                    }
-                )
-                return
-            }
-            let start = range.lowerBound
-            let end = min(range.upperBound, totalLength - 1)
-            bodyStart = start
-            bodyLength = end - start + 1
-            statusLine = "HTTP/1.1 206 Partial Content\r\n"
-            contentRange = "Content-Range: bytes \(start)-\(end)/\(totalLength)\r\n"
-        } else {
-            bodyStart = 0
-            bodyLength = totalLength
-            statusLine = "HTTP/1.1 200 OK\r\n"
-            contentRange = nil
-        }
-        var header = statusLine
-            + "Content-Type: \(payload.contentType)\r\n"
-            + "Content-Length: \(bodyLength)\r\n"
-            + "Accept-Ranges: bytes\r\n"
-            + "Cache-Control: no-store\r\n"
-            + "Connection: close\r\n"
-        if let contentRange {
-            header += contentRange
-        }
-        header += "\r\n"
-#if DEBUG
-        if elapsedMs >= 500 {
-            iosHostLog(
-                "dashLoopbackSegment served rendition=\(request.renditionId) segment=\(request.segment) method=\(request.method) bytes=\(bodyLength)/\(totalLength) elapsedMs=\(elapsedMs)"
-            )
-        }
-#endif
-        // HEAD responses must not include a body; AVPlayer can otherwise
-        // treat body bytes as part of the next response.
-        guard request.method == .get, bodyLength > 0 else {
-            payload.cleanupIfTemporary()
-            connection.send(
-                content: Data(header.utf8),
-                isComplete: true,
-                completion: .contentProcessed { [weak self] _ in
-                    self?.scheduleGracefulClose(connection)
-                }
-            )
+        let remaining = payload.size - offset
+        let requestedLength = dataRequest.requestedLength > 0
+            ? min(UInt64(dataRequest.requestedLength), remaining)
+            : remaining
+        guard requestedLength > 0 else {
             return
         }
 
-        connection.send(
-            content: Data(header.utf8),
-            isComplete: false,
-            completion: .contentProcessed { [weak self] error in
-                guard let self else { return }
-                if error != nil {
-                    payload.cleanupIfTemporary()
-                    self.scheduleGracefulClose(connection)
-                    return
-                }
-                self.sendPayloadBody(
-                    payload,
-                    start: bodyStart,
-                    length: bodyLength,
-                    on: connection
-                )
-            }
-        )
-    }
-
-    private func sendPayloadBody(
-        _ payload: VesperDashSegmentPayload,
-        start: UInt64,
-        length: UInt64,
-        on connection: NWConnection
-    ) {
         switch payload {
         case let .data(data, _):
-            let startIndex = Int(start)
-            let endIndex = startIndex + Int(length)
-            connection.send(
-                content: data.subdata(in: startIndex..<endIndex),
-                isComplete: true,
-                completion: .contentProcessed { [weak self] _ in
-                    self?.scheduleGracefulClose(connection)
-                }
-            )
-        case let .file(url, offset, _, removeAfterServing, _):
-            do {
-                let handle = try FileHandle(forReadingFrom: url)
-                try handle.seek(toOffset: offset + start)
-                sendFileChunks(
-                    handle: handle,
-                    url: url,
-                    remaining: length,
-                    removeAfterServing: removeAfterServing,
-                    on: connection
-                )
-            } catch {
-                if removeAfterServing {
-                    try? FileManager.default.removeItem(at: url)
-                }
-                connection.cancel()
-            }
+            let startIndex = try checkedInt(offset, field: "segment response offset")
+            let length = try checkedInt(requestedLength, field: "segment response length")
+            dataRequest.respond(with: data.subdata(in: startIndex..<(startIndex + length)))
+        case let .file(url, fileOffset, _, _, _):
+            try respond(to: dataRequest, withFileAt: url, offset: fileOffset + offset, length: requestedLength)
         }
     }
 
-    private func sendFileChunks(
-        handle: FileHandle,
-        url: URL,
-        remaining: UInt64,
-        removeAfterServing: Bool,
-        on connection: NWConnection
-    ) {
-        guard remaining > 0 else {
-            try? handle.close()
-            if removeAfterServing {
-                try? FileManager.default.removeItem(at: url)
-            }
-            connection.send(
-                content: nil,
-                isComplete: true,
-                completion: .contentProcessed { [weak self] _ in
-                    self?.scheduleGracefulClose(connection)
-                }
-            )
-            return
-        }
-
-        let count = min(Int(remaining), Self.fileChunkSize)
-        do {
+    private func respond(
+        to dataRequest: AVAssetResourceLoadingDataRequest,
+        withFileAt url: URL,
+        offset: UInt64,
+        length: UInt64
+    ) throws {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: offset)
+        var remaining = length
+        while remaining > 0 {
+            let count = min(try checkedInt(remaining, field: "segment response remaining"), 256 * 1024)
             let data = try handle.read(upToCount: count) ?? Data()
             guard !data.isEmpty else {
-                try? handle.close()
-                if removeAfterServing {
-                    try? FileManager.default.removeItem(at: url)
-                }
-                connection.cancel()
-                return
+                throw VesperDashBridgeError.network("segment file is shorter than requested")
             }
-            let nextRemaining = remaining.saturatingSubtract(UInt64(data.count))
-            connection.send(
-                content: data,
-                isComplete: nextRemaining == 0,
-                completion: .contentProcessed { [weak self] error in
-                    guard let self else { return }
-                    if error != nil {
-                        try? handle.close()
-                        if removeAfterServing {
-                            try? FileManager.default.removeItem(at: url)
-                        }
-                        self.scheduleGracefulClose(connection)
-                        return
-                    }
-                    if nextRemaining == 0 {
-                        try? handle.close()
-                        if removeAfterServing {
-                            try? FileManager.default.removeItem(at: url)
-                        }
-                        self.scheduleGracefulClose(connection)
-                    } else {
-                        self.sendFileChunks(
-                            handle: handle,
-                            url: url,
-                            remaining: nextRemaining,
-                            removeAfterServing: removeAfterServing,
-                            on: connection
-                        )
-                    }
-                }
-            )
-        } catch {
-            try? handle.close()
-            if removeAfterServing {
-                try? FileManager.default.removeItem(at: url)
-            }
-            connection.cancel()
+            dataRequest.respond(with: data)
+            remaining = remaining.saturatingSubtract(UInt64(data.count))
         }
     }
 
-    private func sendStatus(_ status: Int, reason: String, on connection: NWConnection) {
-        let response = "HTTP/1.1 \(status) \(reason)\r\n"
-            + "Content-Length: 0\r\n"
-            + "Connection: close\r\n\r\n"
-        connection.send(
-            content: Data(response.utf8),
-            isComplete: true,
-            completion: .contentProcessed { [weak self] _ in
-                self?.scheduleGracefulClose(connection)
-            }
-        )
+    private func checkedContentLength(_ value: UInt64) throws -> Int64 {
+        guard value <= UInt64(Int64.max) else {
+            throw VesperDashBridgeError.network("segment response exceeds Int64.max")
+        }
+        return Int64(value)
     }
 
-    /// Do not cancel immediately after sending the HTTP response: NWConnection
-    /// would send RST and AVPlayer can occasionally report truncated tail
-    /// bytes. Instead, keep receiving until the peer closes with FIN, and keep
-    /// a timeout fallback to avoid leaking connections. A boxed flag prevents
-    /// both paths from calling cancel and logging `is already cancelled,
-    /// ignoring cancel`.
-    private func scheduleGracefulClose(_ connection: NWConnection) {
-        let cancelled = VesperDashAtomicBool()
-        let cancelOnce: () -> Void = {
-            guard cancelled.swapTrue() == false else { return }
-            connection.cancel()
+    private func avContentType(forSegmentContentType contentType: String) -> String {
+        let normalized = contentType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.contains("vtt") {
+            return "public.webvtt"
         }
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in
-            cancelOnce()
-        }
-        queue.asyncAfter(deadline: .now() + .seconds(2)) {
-            cancelOnce()
-        }
-    }
-}
-
-/// Single-bit atomic flag used to deduplicate loopback connection shutdown.
-private final class VesperDashAtomicBool: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
-
-    /// Sets the value to true and returns the value before the swap.
-    func swapTrue() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        let previous = value
-        value = true
-        return previous
+        return "public.mpeg-4"
     }
 }
 
@@ -824,8 +420,6 @@ actor VesperDashSession {
     private var segmentCacheTotalBytes: UInt64 = 0
     private var backgroundPrefetchRenditionIds: Set<String> = []
     private var backgroundPrefetchLargeMediaRenditionIds: Set<String> = []
-    private var loopbackServer: VesperDashLoopbackServer?
-    private var loopbackServerStartTask: Task<VesperDashLoopbackServer, Error>?
     private let videoDecodeCapabilityProvider: VideoDecodeCapabilityProvider
     private let benchmarkEventRecorder: BenchmarkEventRecorder?
 
@@ -1125,7 +719,6 @@ actor VesperDashSession {
             manifest: manifest,
             segmentTemplate: segmentTemplate
         )
-        let server = try await dashLoopbackServer()
         startBackgroundSegmentPrefetch(
             renditionId: playable.renditionId,
             segmentCount: segments.count,
@@ -1134,12 +727,10 @@ actor VesperDashSession {
                 segments: segments
             )
         )
-        // Point EXT-X-MAP at the vesper-dash:// scheme so it goes through
-        // AVAssetResourceLoaderDelegate. When EXT-X-MAP used a loopback HTTP
-        // URL, AVPlayer sometimes skipped that request, likely because it did
-        // not reuse loopback HTTP for a different origin path. Missing init
-        // bytes surface as 'frmt'. The custom scheme guarantees resource
-        // loader delivery and benchmark visibility.
+        // Point EXT-X-MAP and media segments at the vesper-dash:// scheme so
+        // every DASH-derived HLS resource goes through AVAssetResourceLoaderDelegate.
+        // Missing init bytes surface as 'frmt', so the custom scheme keeps
+        // delivery deterministic and visible to benchmark events.
         let initializationURL = segmentTemplate.initialization.map { _ in
             self.segmentURL(for: playable.renditionId, segment: .initialization).absoluteString
         }
@@ -1155,10 +746,7 @@ actor VesperDashSession {
                     segment: segment,
                     fallbackIndex: index
                 )
-                let segmentURL = try server.segmentURL(
-                    for: playable.renditionId,
-                    segment: .media(segmentIndex)
-                )
+                let segmentURL = self.segmentURL(for: playable.renditionId, segment: .media(segmentIndex))
                 return VesperDashHlsSegment(
                     duration: segment.duration,
                     uri: segmentURL.absoluteString,
@@ -1168,7 +756,7 @@ actor VesperDashSession {
         )
 #if DEBUG
         iosHostLog(
-            "dashMediaPlaylist rendition=\(playable.renditionId) loopbackSegments=true count=\(segments.count) init=\(initializationURL ?? "none")"
+            "dashMediaPlaylist rendition=\(playable.renditionId) resourceLoaderSegments=true count=\(segments.count) init=\(initializationURL ?? "none")"
         )
         // Log the first playlist lines to diagnose HLS tag concatenation
         // regressions, such as EXT-X-PLAYLIST-TYPE and EXT-X-MAP being glued
@@ -1211,50 +799,23 @@ actor VesperDashSession {
         return "video/mp4"
     }
 
-    private func dashLoopbackServer() async throws -> VesperDashLoopbackServer {
-        if let loopbackServer {
-            return loopbackServer
-        }
-        if let loopbackServerStartTask {
-            return try await loopbackServerStartTask.value
-        }
-        let server = try VesperDashLoopbackServer(sessionId: id) { [weak self] renditionId, segment in
-            guard let self else {
-                throw VesperDashBridgeError.network("DASH session is no longer available")
-            }
-            return try await self.segmentPayload(
-                renditionId: renditionId,
-                segment: segment,
-                requestOrigin: "loopback"
-            )
-        }
-        let startTask = Task { () throws -> VesperDashLoopbackServer in
-            try await server.start()
-            return server
-        }
-        loopbackServerStartTask = startTask
-        do {
-            let startedServer = try await startTask.value
-            if loopbackServer == nil {
-                loopbackServer = startedServer
-                loopbackServerStartTask = nil
-#if DEBUG
-                iosHostLog("dashLoopbackServer started session=\(id)")
-#endif
-            }
-            return startedServer
-        } catch {
-            loopbackServerStartTask = nil
-            throw error
-        }
-    }
-
     func segmentData(renditionId: String, segment: VesperDashSegmentRequest) async throws -> Data {
         try await segmentPayload(
             renditionId: renditionId,
             segment: segment,
             requestOrigin: "resourceLoader"
         ).readData()
+    }
+
+    func segmentResourcePayload(
+        renditionId: String,
+        segment: VesperDashSegmentRequest
+    ) async throws -> VesperDashSegmentPayload {
+        try await segmentPayload(
+            renditionId: renditionId,
+            segment: segment,
+            requestOrigin: "resourceLoader"
+        )
     }
 
     private func segmentPayload(
@@ -2682,13 +2243,16 @@ class VesperDashNetworkClient {
         if url.isFileURL {
             return try readLocalFile(url: url, byteRange: byteRange)
         }
+        try rejectInsecureHTTPURL(url)
 
         var request = URLRequest(url: url)
         applyHttpHeaders(headers, to: &request)
         if let byteRange {
             request.setValue("bytes=\(byteRange.start)-\(byteRange.end)", forHTTPHeaderField: "Range")
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let session = makeSession()
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
             throw VesperDashBridgeError.network("HTTP \(httpResponse.statusCode) for \(url.absoluteString)")
@@ -2701,6 +2265,9 @@ class VesperDashNetworkClient {
         byteRange: VesperDashByteRange? = nil,
         to destinationURL: URL
     ) async throws -> UInt64 {
+        if !url.isFileURL {
+            try rejectInsecureHTTPURL(url)
+        }
         try FileManager.default.createDirectory(
             at: destinationURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -2716,7 +2283,9 @@ class VesperDashNetworkClient {
         if let byteRange {
             request.setValue("bytes=\(byteRange.start)-\(byteRange.end)", forHTTPHeaderField: "Range")
         }
-        let (temporaryURL, response) = try await URLSession.shared.download(for: request)
+        let session = makeSession()
+        defer { session.invalidateAndCancel() }
+        let (temporaryURL, response) = try await session.download(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
             try? FileManager.default.removeItem(at: temporaryURL)
@@ -2724,6 +2293,21 @@ class VesperDashNetworkClient {
         }
         try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
         return fileSize(at: destinationURL) ?? 0
+    }
+
+    private func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = vesperDashNetworkStallTimeoutSeconds
+        configuration.timeoutIntervalForResource = vesperDashNetworkResourceTimeoutSeconds
+        return URLSession(configuration: configuration)
+    }
+
+    private func rejectInsecureHTTPURL(_ url: URL) throws {
+        guard url.scheme?.lowercased() == "http" else {
+            return
+        }
+        throw VesperDashBridgeError.network("\(vesperDashATSFailureMessage) URL: \(url.absoluteString)")
     }
 
     private func readLocalFile(url: URL, byteRange: VesperDashByteRange?) throws -> Data {
@@ -2863,6 +2447,9 @@ private func dashSegmentKindName(_ segment: VesperDashSegmentRequest) -> String 
 func applyHttpHeaders(_ headers: [String: String], to request: inout URLRequest) {
     for (field, value) in headers where !field.isEmpty {
         request.setValue(value, forHTTPHeaderField: field)
+    }
+    if request.value(forHTTPHeaderField: "Accept-Encoding") == nil {
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
     }
 }
 

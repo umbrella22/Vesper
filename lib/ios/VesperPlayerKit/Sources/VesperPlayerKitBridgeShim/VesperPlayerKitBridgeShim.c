@@ -414,6 +414,15 @@ typedef enum PlayerFfiDownloadEventKind {
 typedef struct PlayerFfiDownloadEvent {
   PlayerFfiDownloadEventKind kind;
   PlayerFfiDownloadTask task;
+  uint64_t task_id;
+  PlayerFfiDownloadTaskStatus status;
+  PlayerFfiDownloadProgressSnapshot progress;
+  bool has_error;
+  uint32_t error_code;
+  uint32_t error_category;
+  bool error_retriable;
+  char *error_message;
+  char *completed_path;
 } PlayerFfiDownloadEvent;
 
 typedef struct PlayerFfiDownloadEventList {
@@ -1109,6 +1118,8 @@ static void free_runtime_download_event_strings(VesperRuntimeDownloadEvent *even
     return;
   }
   free_runtime_download_task_strings(&event->task);
+  free(event->error_message);
+  free(event->completed_path);
   memset(event, 0, sizeof(*event));
 }
 
@@ -1372,9 +1383,29 @@ static bool runtime_download_event_from_ffi(
   }
   memset(out_event, 0, sizeof(*out_event));
   out_event->kind = (VesperRuntimeDownloadEventKind)event->kind;
-  if (!runtime_download_task_from_ffi(&event->task, &out_event->task)) {
+  out_event->task_id = event->task_id;
+  out_event->status = (VesperRuntimeDownloadTaskStatus)event->status;
+  out_event->progress.received_bytes = event->progress.received_bytes;
+  out_event->progress.has_total_bytes = event->progress.has_total_bytes;
+  out_event->progress.total_bytes = event->progress.total_bytes;
+  out_event->progress.received_segments = event->progress.received_segments;
+  out_event->progress.has_total_segments = event->progress.has_total_segments;
+  out_event->progress.total_segments = event->progress.total_segments;
+  out_event->has_error = event->has_error;
+  out_event->error_code = event->error_code;
+  out_event->error_category = event->error_category;
+  out_event->error_retriable = event->error_retriable;
+  if (!duplicate_runtime_string(event->error_message, &out_event->error_message) ||
+      !duplicate_runtime_string(event->completed_path, &out_event->completed_path)) {
     free_runtime_download_event_strings(out_event);
     return false;
+  }
+  if (event->kind == PlayerFfiDownloadEventKindCreated ||
+      event->kind == PlayerFfiDownloadEventKindAssetIndexUpdated) {
+    if (!runtime_download_task_from_ffi(&event->task, &out_event->task)) {
+      free_runtime_download_event_strings(out_event);
+      return false;
+    }
   }
   return true;
 }

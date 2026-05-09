@@ -77,7 +77,7 @@ Core (`vesper-player-kit`):
 - `VesperTrackPreferencePolicy` — preferred audio / subtitle languages
 - `VesperDecoderBackend` — `SystemOnly` / `SystemPreferred` / `ExtensionPreferred`
 - `NativeVideoSurfaceKind` — `SurfaceView` (default, HDR / high frame rate) or `TextureView` (scrolling / animated stages)
-- `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput`
+- `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput`
 
 Cast (`vesper-player-kit-cast`):
 
@@ -122,12 +122,20 @@ byte zero; expired or unavailable URLs fail with a stale-resource error so the
 host can refresh the media link.
 
 When an HTTP resource has a known `sizeBytes` and no explicit byte range, the
-foreground executor also uses bounded closed Range requests for the initial
-transfer instead of a single unbounded `GET`. Each `206 Partial Content`
-response is validated against `Content-Range` before bytes are appended. If a
-small resource is requested as one complete range and the server ignores Range
-with `200 OK`, the response is accepted only when the final byte count matches
-the known size.
+foreground executor streams the resource by default and sends `Range:
+bytes=<existing>-` only when resuming a partial file. Fixed closed Range chunks
+are used only when `rangeChunkBytes` is explicitly configured. Each `206 Partial
+Content` response is validated against `Content-Range` before bytes are
+appended.
+
+The default download base directory is under the app-private `filesDir`
+(`filesDir/vesper-downloads`). The SDK does not request
+`MANAGE_EXTERNAL_STORAGE`. `shareTaskOutput(...)` exposes a completed private
+file through the SDK `FileProvider` authority
+`${applicationId}.vesper.player.fileprovider`; `saveTaskOutput(...)` copies a
+completed file into Android 10+ MediaStore `Downloads` or `Movies` with
+`IS_PENDING`, without requesting broad storage access. Android 9 and older hosts
+should use the share helper or a host-owned export flow.
 
 When `VesperPlayerSource.headers` is set, the download executor forwards those
 headers to all SDK-owned network operations for the task: HLS, DASH, and FLV
@@ -145,8 +153,9 @@ same task. If no recoverer is provided, stale resources fail normally.
 
 This is not an Android `WorkManager` or download `ForegroundService` wrapper for
 process-death background transfer. Hosts that need OS-managed background
-downloads should own that service layer and feed completed local assets back into
-the SDK.
+downloads should own that service layer, use the correct Android
+`foregroundServiceType` such as `dataSync` when required, and feed completed
+local assets back into the SDK.
 
 ## Minimal Compose Usage
 

@@ -407,6 +407,7 @@ struct PlayerHostView: View {
                     exportProgressByTaskId: exportProgressByTaskId,
                     onPrimaryAction: handleDownloadPrimaryAction,
                     onSaveToPhotos: saveDownloadToPhotos,
+                    onShareOutput: shareDownloadOutput,
                     onRemoveTask: { task in
                         _ = downloadManager.removeTask(task.taskId)
                     }
@@ -643,6 +644,25 @@ struct PlayerHostView: View {
         }
     }
 
+    private func shareDownloadOutput(_ task: VesperDownloadTaskSnapshot) {
+        guard let presenter = topViewController() else {
+            downloadAlertMessage = ExampleI18n.downloadSaveToPhotosFailed(
+                ExampleI18n.downloadSaveToPhotosFailedUnknown
+            )
+            return
+        }
+        do {
+            try downloadManager.shareTaskOutput(
+                taskId: task.taskId,
+                fileName: nil,
+                mimeType: nil,
+                from: presenter
+            )
+        } catch {
+            downloadAlertMessage = ExampleI18n.downloadSaveToPhotosFailed(error.localizedDescription)
+        }
+    }
+
     private func pickVideo() {
         hostMessage = nil
         isVideoPickerPresented = true
@@ -819,6 +839,18 @@ struct PlayerHostView: View {
                 continuation.resume(returning: ())
             }
         }
+    }
+
+    private func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let window = scenes
+            .flatMap(\.windows)
+            .first(where: { $0.isKeyWindow })
+        var controller = window?.rootViewController
+        while let presented = controller?.presentedViewController {
+            controller = presented
+        }
+        return controller
     }
 
     private func requestPhotoLibraryAuthorization() async -> PHAuthorizationStatus {

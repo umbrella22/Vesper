@@ -52,6 +52,7 @@
 "example.download.action_pause" = "Pause";
 "example.download.action_resume" = "Resume";
 "example.download.save_to_photos" = "Save to Photos";
+"example.download.share_output" = "Share Output";
 "example.download.remove_task" = "Remove";
 "example.download.task_meta" = "assetId: %@ · %@";
 "example.download.progress_unknown" = "Unknown progress";

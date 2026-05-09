@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -270,6 +272,25 @@ impl From<PlayerRuntimeError> for DownloadErrorSummary {
     }
 }
 
+impl DownloadTaskSnapshot {
+    fn state_patch(&self) -> DownloadTaskStatePatch {
+        DownloadTaskStatePatch {
+            task_id: self.task_id,
+            status: self.status,
+            progress: self.progress.clone(),
+            error_summary: self.error_summary.clone(),
+            completed_path: self.asset_index.completed_path.clone(),
+        }
+    }
+
+    fn progress_patch(&self) -> DownloadTaskProgressPatch {
+        DownloadTaskProgressPatch {
+            task_id: self.task_id,
+            progress: self.progress.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadTaskSnapshot {
     pub task_id: DownloadTaskId,
@@ -290,11 +311,26 @@ pub struct DownloadSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadTaskStatePatch {
+    pub task_id: DownloadTaskId,
+    pub status: DownloadTaskStatus,
+    pub progress: DownloadProgressSnapshot,
+    pub error_summary: Option<DownloadErrorSummary>,
+    pub completed_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadTaskProgressPatch {
+    pub task_id: DownloadTaskId,
+    pub progress: DownloadProgressSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadEvent {
     Created(DownloadTaskSnapshot),
-    StateChanged(DownloadTaskSnapshot),
+    StateChanged(DownloadTaskStatePatch),
     AssetIndexUpdated(DownloadTaskSnapshot),
-    ProgressUpdated(DownloadTaskSnapshot),
+    ProgressUpdated(DownloadTaskProgressPatch),
 }
 
 #[derive(Default)]
@@ -563,7 +599,7 @@ where
 
         self.store.save_task(snapshot.clone())?;
         self.emit_event(DownloadEvent::Created(snapshot.clone()));
-        self.emit_event(DownloadEvent::StateChanged(snapshot));
+        self.emit_event(DownloadEvent::StateChanged(snapshot.state_patch()));
 
         if self.config.auto_start {
             let _ = self.start_task(task_id, now)?;
@@ -603,7 +639,7 @@ where
 
             max_task_id = max_task_id.max(task.task_id.get());
             self.store.save_task(task.clone())?;
-            self.emit_event(DownloadEvent::StateChanged(task.clone()));
+            self.emit_event(DownloadEvent::StateChanged(task.state_patch()));
             restored.push(task);
         }
 
@@ -693,7 +729,7 @@ where
 
         self.store.save_task(replaced.clone())?;
         self.emit_event(DownloadEvent::AssetIndexUpdated(replaced.clone()));
-        self.emit_event(DownloadEvent::StateChanged(replaced.clone()));
+        self.emit_event(DownloadEvent::StateChanged(replaced.state_patch()));
         Ok(Some(replaced))
     }
 
@@ -772,7 +808,7 @@ where
         snapshot.progress.received_segments = received_segments;
         snapshot.updated_at = now;
         self.store.save_task(snapshot.clone())?;
-        self.emit_event(DownloadEvent::ProgressUpdated(snapshot.clone()));
+        self.emit_event(DownloadEvent::ProgressUpdated(snapshot.progress_patch()));
         Ok(Some(snapshot))
     }
 
@@ -854,7 +890,9 @@ where
             {
                 self.export_processed_output(&snapshot, output_path, progress)
             }
-            DownloadContentFormat::SingleFile => resolve_single_file_path(&snapshot),
+            DownloadContentFormat::SingleFile => {
+                self.export_single_file_output(&snapshot, output_path, progress)
+            }
             DownloadContentFormat::HlsSegments
             | DownloadContentFormat::DashSegments
             | DownloadContentFormat::FlvSegments => {
@@ -929,7 +967,7 @@ where
         mutate(&mut snapshot);
         snapshot.updated_at = now;
         self.store.save_task(snapshot.clone())?;
-        self.emit_event(DownloadEvent::StateChanged(snapshot.clone()));
+        self.emit_event(DownloadEvent::StateChanged(snapshot.state_patch()));
         Ok(Some(snapshot))
     }
 
@@ -1004,22 +1042,22 @@ where
                     asset_id: snapshot.asset_id.as_str().to_owned(),
                 });
             }
-            DownloadEvent::StateChanged(snapshot) => {
+            DownloadEvent::StateChanged(patch) => {
                 self.dispatch_pipeline_event(PipelineEvent::DownloadTaskStateChanged {
-                    task_id: snapshot.task_id.get().to_string(),
-                    new_state: snapshot.status.as_str().to_owned(),
+                    task_id: patch.task_id.get().to_string(),
+                    new_state: patch.status.as_str().to_owned(),
                 });
 
-                if snapshot.status == DownloadTaskStatus::Completed {
+                if patch.status == DownloadTaskStatus::Completed {
                     self.dispatch_pipeline_event(PipelineEvent::DownloadTaskCompleted {
-                        task_id: snapshot.task_id.get().to_string(),
+                        task_id: patch.task_id.get().to_string(),
                     });
                 }
 
-                if snapshot.status == DownloadTaskStatus::Failed {
+                if patch.status == DownloadTaskStatus::Failed {
                     self.dispatch_pipeline_event(PipelineEvent::DownloadTaskFailed {
-                        task_id: snapshot.task_id.get().to_string(),
-                        error: snapshot
+                        task_id: patch.task_id.get().to_string(),
+                        error: patch
                             .error_summary
                             .as_ref()
                             .map(|summary| summary.message.clone())
@@ -1168,6 +1206,24 @@ where
                 snapshot.task_id.get()
             ),
         ))
+    }
+
+    fn export_single_file_output(
+        &self,
+        snapshot: &DownloadTaskSnapshot,
+        output_path: Option<&Path>,
+        progress: &dyn ProcessorProgress,
+    ) -> PlayerRuntimeResult<PathBuf> {
+        let source_path = resolve_single_file_path(snapshot)?;
+        let Some(output_path) = output_path else {
+            return Ok(source_path);
+        };
+        if paths_refer_to_same_file(&source_path, output_path) {
+            return Ok(source_path);
+        }
+
+        copy_single_file_export(&source_path, output_path, progress)?;
+        Ok(output_path.to_path_buf())
     }
 
     fn completed_download_info(
@@ -1414,6 +1470,83 @@ fn resolve_single_file_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeRes
     ))
 }
 
+fn copy_single_file_export(
+    source_path: &Path,
+    output_path: &Path,
+    progress: &dyn ProcessorProgress,
+) -> PlayerRuntimeResult<()> {
+    if progress.is_cancelled() {
+        return Err(PlayerRuntimeError::with_category(
+            PlayerRuntimeErrorCode::BackendFailure,
+            PlayerRuntimeErrorCategory::Platform,
+            "download export was cancelled",
+        ));
+    }
+
+    let total_bytes = fs::metadata(source_path)
+        .map_err(|error| export_io_error(source_path, "read source metadata", error))?
+        .len();
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| export_io_error(parent, "create export directory", error))?;
+    }
+
+    let mut input = File::open(source_path)
+        .map_err(|error| export_io_error(source_path, "open export source", error))?;
+    let mut output = File::create(output_path)
+        .map_err(|error| export_io_error(output_path, "create export output", error))?;
+    let mut copied_bytes = 0_u64;
+    let mut buffer = [0_u8; 1024 * 1024];
+
+    loop {
+        if progress.is_cancelled() {
+            return Err(PlayerRuntimeError::with_category(
+                PlayerRuntimeErrorCode::BackendFailure,
+                PlayerRuntimeErrorCategory::Platform,
+                "download export was cancelled",
+            ));
+        }
+        let read = input
+            .read(&mut buffer)
+            .map_err(|error| export_io_error(source_path, "read export source", error))?;
+        if read == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..read])
+            .map_err(|error| export_io_error(output_path, "write export output", error))?;
+        copied_bytes = copied_bytes.saturating_add(read as u64);
+        if total_bytes > 0 {
+            progress.on_progress((copied_bytes as f32 / total_bytes as f32).clamp(0.0, 1.0));
+        }
+    }
+    output
+        .sync_all()
+        .map_err(|error| export_io_error(output_path, "flush export output", error))?;
+    progress.on_progress(1.0);
+    Ok(())
+}
+
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn export_io_error(path: &Path, operation: &str, error: std::io::Error) -> PlayerRuntimeError {
+    PlayerRuntimeError::with_category(
+        PlayerRuntimeErrorCode::BackendFailure,
+        PlayerRuntimeErrorCategory::Platform,
+        format!("failed to {operation} `{}`: {error}", path.display()),
+    )
+}
+
 fn resolve_index_path(
     snapshot: &DownloadTaskSnapshot,
     relative_path: Option<&Path>,
@@ -1503,9 +1636,10 @@ mod tests {
         PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,
         ProcessorProgress,
     };
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     #[derive(Debug, Default)]
     struct RecordingHook {
@@ -1813,7 +1947,7 @@ mod tests {
             .any(|event| matches!(event, DownloadEvent::AssetIndexUpdated(task) if task.task_id == task_id)));
         assert!(events
             .iter()
-            .any(|event| matches!(event, DownloadEvent::StateChanged(task) if task.task_id == task_id && task.status == DownloadTaskStatus::Preparing)));
+            .any(|event| matches!(event, DownloadEvent::StateChanged(patch) if patch.task_id == task_id && patch.status == DownloadTaskStatus::Preparing)));
     }
 
     #[test]
@@ -2408,12 +2542,17 @@ mod tests {
         let executor = InMemoryDownloadExecutor::default();
         let mut manager = DownloadManager::new(config, store, executor);
         let now = Instant::now();
+        let temp_dir = unique_test_dir("vesper-single-file-export");
+        fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+        let source_path = temp_dir.join("input.mp4");
+        let output_path = temp_dir.join("exported.mp4");
+        fs::write(&source_path, b"vesper media bytes").expect("source file should be written");
 
         let task_id = manager
             .create_task(
                 "asset-a",
                 DownloadSource::new(
-                    MediaSource::new("file:///tmp/input.mp4"),
+                    MediaSource::new(format!("file://{}", source_path.display())),
                     DownloadContentFormat::SingleFile,
                 ),
                 DownloadProfile::default(),
@@ -2423,17 +2562,31 @@ mod tests {
             .expect("create task should succeed");
 
         let _ = manager
-            .complete_task(task_id, Some(PathBuf::from("/tmp/input.mp4")), now)
+            .complete_task(task_id, Some(source_path.clone()), now)
             .expect("complete should succeed");
 
         let exported = manager
-            .export_task_output(
-                task_id,
-                Some(PathBuf::from("/tmp/ignored.mp4").as_path()),
-                &NoopProcessorProgress,
-            )
-            .expect("single-file export should reuse original path");
+            .export_task_output(task_id, Some(output_path.as_path()), &NoopProcessorProgress)
+            .expect("single-file export should copy original file");
 
-        assert_eq!(exported, PathBuf::from("/tmp/input.mp4"));
+        assert_eq!(exported, output_path);
+        assert_eq!(
+            fs::read(&source_path).expect("source file should remain readable"),
+            b"vesper media bytes"
+        );
+        assert_eq!(
+            fs::read(&exported).expect("export file should be readable"),
+            b"vesper media bytes"
+        );
+
+        fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
+    }
+
+    fn unique_test_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
     }
 }

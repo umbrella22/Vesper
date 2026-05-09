@@ -97,7 +97,7 @@ final class VesperDownloadManagerTests: XCTestCase {
 
         XCTAssertTrue(manager.removeTask(1))
         XCTAssertEqual(executor.removedTaskIds, [1])
-        XCTAssertEqual(manager.task(1)?.state, .removed)
+        XCTAssertNil(manager.task(1))
     }
 
     func testExecutorReporterUpdatesSharedSnapshotProgressAndCompletion() {
@@ -194,6 +194,167 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertTrue(resource.uri.hasPrefix("file://"))
         XCTAssertEqual(resource.relativePath, "manifest.mpd")
         XCTAssertEqual(resource.sizeBytes, UInt64(generatedBody.utf8.count))
+        let materializedURL = try XCTUnwrap(URL(string: resource.uri))
+        XCTAssertEqual(
+            try materializedURL.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup,
+            true
+        )
+    }
+
+    func testForegroundExecutorRejectsInsecureHTTPManifestBeforeATS() async throws {
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-http-manifest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+        let executor = VesperForegroundDownloadExecutor(baseDirectory: baseDirectory)
+        defer { executor.dispose() }
+        let failure = expectation(description: "insecure manifest should fail")
+        let reporter = DownloadReporterProbe(failureExpectation: failure)
+        let task = VesperDownloadTaskSnapshot(
+            taskId: 1,
+            assetId: "asset-http",
+            source: VesperDownloadSource(
+                source: .hls(
+                    url: URL(string: "http://cdn.example.com/index.m3u8")!,
+                    label: "HTTP HLS"
+                )
+            ),
+            profile: VesperDownloadProfile(),
+            state: .preparing,
+            progress: VesperDownloadProgressSnapshot(),
+            assetIndex: VesperDownloadAssetIndex()
+        )
+
+        executor.prepare(task: task, reporter: reporter)
+        await fulfillment(of: [failure], timeout: 2)
+
+        XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
+        XCTAssertTrue(reporter.failure?.message.contains("http://cdn.example.com/index.m3u8") == true)
+    }
+
+    func testForegroundExecutorRejectsInsecureHTTPSizeProbeBeforeATS() async throws {
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-http-probe-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+        let executor = VesperForegroundDownloadExecutor(baseDirectory: baseDirectory)
+        defer { executor.dispose() }
+        let failure = expectation(description: "insecure size probe should fail")
+        let reporter = DownloadReporterProbe(failureExpectation: failure)
+        let task = VesperDownloadTaskSnapshot(
+            taskId: 2,
+            assetId: "asset-http-probe",
+            source: VesperDownloadSource(
+                source: .remoteUrl(URL(string: "https://example.com/video.mp4")!, label: "Video")
+            ),
+            profile: VesperDownloadProfile(),
+            state: .preparing,
+            progress: VesperDownloadProgressSnapshot(),
+            assetIndex: VesperDownloadAssetIndex(
+                contentFormat: .singleFile,
+                resources: [
+                    VesperDownloadResourceRecord(
+                        resourceId: "video",
+                        uri: "http://cdn.example.com/video.mp4",
+                        relativePath: "video.mp4"
+                    ),
+                ]
+            )
+        )
+
+        executor.prepare(task: task, reporter: reporter)
+        await fulfillment(of: [failure], timeout: 2)
+
+        XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
+        XCTAssertTrue(reporter.failure?.message.contains("http://cdn.example.com/video.mp4") == true)
+    }
+
+    func testForegroundExecutorRejectsInsecureHTTPMediaTransferBeforeATS() async throws {
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-http-transfer-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+        let executor = VesperForegroundDownloadExecutor(baseDirectory: baseDirectory)
+        defer { executor.dispose() }
+        let failure = expectation(description: "insecure media transfer should fail")
+        let reporter = DownloadReporterProbe(failureExpectation: failure)
+        let task = VesperDownloadTaskSnapshot(
+            taskId: 3,
+            assetId: "asset-http-transfer",
+            source: VesperDownloadSource(
+                source: .remoteUrl(URL(string: "https://example.com/video.mp4")!, label: "Video")
+            ),
+            profile: VesperDownloadProfile(),
+            state: .downloading,
+            progress: VesperDownloadProgressSnapshot(totalBytes: 4),
+            assetIndex: VesperDownloadAssetIndex(
+                contentFormat: .singleFile,
+                totalSizeBytes: 4,
+                resources: [
+                    VesperDownloadResourceRecord(
+                        resourceId: "video",
+                        uri: "http://cdn.example.com/video.mp4",
+                        relativePath: "video.mp4",
+                        sizeBytes: 4
+                    ),
+                ]
+            )
+        )
+
+        executor.start(task: task, reporter: reporter)
+        await fulfillment(of: [failure], timeout: 2)
+
+        XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
+        XCTAssertTrue(reporter.failure?.message.contains("http://cdn.example.com/video.mp4") == true)
+    }
+
+    func testHTTPContentRangeParserHandlesConcreteAndUnsatisfiedRanges() throws {
+        XCTAssertEqual(
+            parseHttpContentRange("bytes 10-19/1024"),
+            VesperHTTPContentRange(start: 10, end: 19, total: 1024)
+        )
+        XCTAssertEqual(
+            parseHttpContentRange("bytes */1024"),
+            VesperHTTPContentRange(start: nil, end: nil, total: 1024)
+        )
+        XCTAssertNil(parseHttpContentRange("items 10-19/1024"))
+        XCTAssertNil(parseHttpContentRange("bytes 19-10/1024"))
+    }
+
+    func testHTTPPartialContentRangeValidationRejectsMalformedAndMismatchedHeaders() throws {
+        XCTAssertNoThrow(try validateHTTPPartialContentRange(
+            contentRangeHeader: "bytes 100-199/1000",
+            contentLengthHeader: "100",
+            requestedStart: 100,
+            requestedEndInclusive: 199,
+            expectedBodyLength: 100,
+            expectedTotalSizeBytes: 1000,
+            sourceDescription: "https://example.com/video.mp4"
+        ))
+        XCTAssertThrowsError(try validateHTTPPartialContentRange(
+            contentRangeHeader: "bytes */1000",
+            contentLengthHeader: "0",
+            requestedStart: 100,
+            requestedEndInclusive: 199,
+            expectedBodyLength: 100,
+            expectedTotalSizeBytes: 1000,
+            sourceDescription: "https://example.com/video.mp4"
+        ))
+        XCTAssertThrowsError(try validateHTTPPartialContentRange(
+            contentRangeHeader: "bytes 0-999/1000",
+            contentLengthHeader: "1000",
+            requestedStart: 100,
+            requestedEndInclusive: 199,
+            expectedBodyLength: 100,
+            expectedTotalSizeBytes: 1000,
+            sourceDescription: "https://example.com/video.mp4"
+        ))
+        XCTAssertThrowsError(try validateHTTPPartialContentRange(
+            contentRangeHeader: "bytes 100-199/1000",
+            contentLengthHeader: "101",
+            requestedStart: 100,
+            requestedEndInclusive: 199,
+            expectedBodyLength: 100,
+            expectedTotalSizeBytes: 1000,
+            sourceDescription: "https://example.com/video.mp4"
+        ))
     }
 
     func testExportTaskOutputForwardsProgressAndCancellationToBindings() async throws {
@@ -663,6 +824,40 @@ private final class RecordingDownloadExecutor: VesperDownloadExecutor {
     }
 }
 
+@MainActor
+private final class DownloadReporterProbe: VesperDownloadExecutionReporter {
+    private let failureExpectation: XCTestExpectation
+    private(set) var failure: VesperDownloadError?
+
+    init(failureExpectation: XCTestExpectation) {
+        self.failureExpectation = failureExpectation
+    }
+
+    func completePreparation(
+        taskId: VesperDownloadTaskId,
+        assetIndex: VesperDownloadAssetIndex
+    ) {}
+
+    func updateProgress(
+        taskId: VesperDownloadTaskId,
+        receivedBytes: UInt64,
+        receivedSegments: UInt32
+    ) {}
+
+    func complete(
+        taskId: VesperDownloadTaskId,
+        completedPath: String?
+    ) {}
+
+    func fail(
+        taskId: VesperDownloadTaskId,
+        error: VesperDownloadError
+    ) {
+        failure = error
+        failureExpectation.fulfill()
+    }
+}
+
 private func makeRuntimeSnapshot(from tasks: [StoredDownloadTask]) -> VesperRuntimeDownloadSnapshot {
     guard !tasks.isEmpty else {
         return VesperRuntimeDownloadSnapshot(tasks: nil, len: 0)
@@ -695,12 +890,44 @@ private func makeRuntimeEventList(from events: [StoredRuntimeEvent]) -> VesperRu
     }
     let pointer = UnsafeMutablePointer<VesperRuntimeDownloadEvent>.allocate(capacity: events.count)
     for (index, event) in events.enumerated() {
-        pointer[index] = VesperRuntimeDownloadEvent(
-            kind: event.kind,
-            task: makeRuntimeTask(from: event.task)
-        )
+        pointer[index] = makeRuntimeEvent(from: event)
     }
     return VesperRuntimeDownloadEventList(events: pointer, len: UInt(events.count))
+}
+
+private func makeRuntimeEvent(from event: StoredRuntimeEvent) -> VesperRuntimeDownloadEvent {
+    let task = event.task
+    let error = task.error
+    let fullTask: VesperRuntimeDownloadTask
+    if event.kind == .created || event.kind == .assetIndexUpdated {
+        fullTask = makeRuntimeTask(from: task)
+    } else {
+        fullTask = emptyRuntimeTask()
+    }
+    return VesperRuntimeDownloadEvent(
+        kind: event.kind,
+        task: fullTask,
+        task_id: task.taskId,
+        status: task.status.toRuntimeStatus(),
+        progress: makeRuntimeProgress(from: task),
+        has_error: error != nil,
+        error_code: error?.code ?? 0,
+        error_category: error?.category ?? 0,
+        error_retriable: error?.retriable ?? false,
+        error_message: error.map { duplicateRuntimeCString($0.message) } ?? nil,
+        completed_path: task.completedPath.map(duplicateRuntimeCString) ?? nil
+    )
+}
+
+private func makeRuntimeProgress(from task: StoredDownloadTask) -> VesperRuntimeDownloadProgressSnapshot {
+    VesperRuntimeDownloadProgressSnapshot(
+        received_bytes: task.receivedBytes,
+        has_total_bytes: task.totalBytes != nil,
+        total_bytes: task.totalBytes ?? 0,
+        received_segments: task.receivedSegments,
+        has_total_segments: task.totalSegments != nil,
+        total_segments: task.totalSegments ?? 0
+    )
 }
 
 private func makeRuntimeTask(from task: StoredDownloadTask) -> VesperRuntimeDownloadTask {
@@ -844,6 +1071,8 @@ private func freeRuntimeEventList(_ events: inout VesperRuntimeDownloadEventList
     for index in 0..<Int(events.len) {
         var event = eventPointer[index]
         freeRuntimeTask(&event.task)
+        freeRuntimeCString(event.error_message)
+        freeRuntimeCString(event.completed_path)
     }
     eventPointer.deinitialize(count: Int(events.len))
     eventPointer.deallocate()

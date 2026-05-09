@@ -179,6 +179,55 @@ void main() {
     );
   });
 
+  test('download output helpers forward payloads', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'saveDownloadTask') {
+        return null;
+      }
+      return null;
+    });
+    final platform = MethodChannelVesperPlayerIos();
+
+    await platform.shareDownloadTask(
+      'downloads',
+      42,
+      fileName: 'movie.mp4',
+      mimeType: 'video/mp4',
+    );
+    final savedUri = await platform.saveDownloadTask(
+      'downloads',
+      42,
+      fileName: 'movie.mp4',
+      collection: VesperDownloadPublicCollection.movies,
+    );
+
+    expect(savedUri, isNull);
+    expect(calls.map((call) => call.method), <String>[
+      'shareDownloadTask',
+      'saveDownloadTask',
+    ]);
+    expect(
+      Map<Object?, Object?>.from(calls[0].arguments as Map),
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'taskId': 42,
+        'fileName': 'movie.mp4',
+        'mimeType': 'video/mp4',
+      },
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[1].arguments as Map),
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'taskId': 42,
+        'fileName': 'movie.mp4',
+        'collection': VesperDownloadPublicCollection.movies.name,
+      },
+    );
+  });
+
   test('updateViewport forwards derived shared hint payload', () async {
     final platform = MethodChannelVesperPlayerIos();
     const viewport = VesperPlayerViewport(

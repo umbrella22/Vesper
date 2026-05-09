@@ -2,10 +2,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
-  test('download asset-index update event decodes prepared task', () {
+  test('download task update event decodes prepared task', () {
     final event = VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
       'downloadId': 'downloads',
-      'type': 'assetIndexUpdated',
+      'type': 'taskUpdated',
       'task': <Object?, Object?>{
         'taskId': 11,
         'assetId': 'asset-hls',
@@ -40,14 +40,24 @@ void main() {
       },
     });
 
-    expect(event, isA<VesperDownloadAssetIndexUpdatedEvent>());
-    final updateEvent = event as VesperDownloadAssetIndexUpdatedEvent;
+    expect(event, isA<VesperDownloadTaskUpdatedEvent>());
+    final updateEvent = event as VesperDownloadTaskUpdatedEvent;
     expect(updateEvent.downloadId, 'downloads');
-    expect(updateEvent.task.taskId, 11);
-    expect(updateEvent.task.assetIndex.totalSizeBytes, 1024);
+    expect(updateEvent.task?.taskId, 11);
+    expect(updateEvent.task?.assetIndex.totalSizeBytes, 1024);
     expect(
-      updateEvent.task.profile.targetOutputFormat,
+      updateEvent.task?.profile.targetOutputFormat,
       VesperDownloadOutputFormat.mp4,
+    );
+  });
+
+  test('download manager event requires the breaking incremental type', () {
+    expect(
+      () => VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
+        'downloadId': 'downloads',
+        'snapshot': const VesperDownloadSnapshot.initial().toMap(),
+      }),
+      throwsA(isA<FormatException>()),
     );
   });
 

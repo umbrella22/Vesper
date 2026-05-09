@@ -109,6 +109,7 @@ struct ExampleDownloadTasksSection: View {
     let exportProgressByTaskId: [VesperDownloadTaskId: Float]
     let onPrimaryAction: (VesperDownloadTaskSnapshot) -> Void
     let onSaveToPhotos: (VesperDownloadTaskSnapshot) -> Void
+    let onShareOutput: (VesperDownloadTaskSnapshot) -> Void
     let onRemoveTask: (VesperDownloadTaskSnapshot) -> Void
 
     var body: some View {
@@ -141,6 +142,7 @@ struct ExampleDownloadTasksSection: View {
                             exportProgress: exportProgressByTaskId[task.taskId],
                             onPrimaryAction: { onPrimaryAction(task) },
                             onSaveToPhotos: { onSaveToPhotos(task) },
+                            onShareOutput: { onShareOutput(task) },
                             onRemoveTask: { onRemoveTask(task) }
                         )
                     }
@@ -199,6 +201,7 @@ private struct ExampleDownloadTaskRow: View {
     let exportProgress: Float?
     let onPrimaryAction: () -> Void
     let onSaveToPhotos: () -> Void
+    let onShareOutput: () -> Void
     let onRemoveTask: () -> Void
 
     var body: some View {
@@ -208,6 +211,7 @@ private struct ExampleDownloadTaskRow: View {
             task.source.contentFormat == .flvSegments
         let saveButtonVisuallyUnavailable =
             requiresExport && !isDownloadExportPluginInstalled && !isSaving
+        let canShareOutput = !requiresExport && task.state == .completed
         VStack(alignment: .leading, spacing: 10) {
             Text(task.source.source.label)
                 .font(.body.weight(.semibold))
@@ -286,6 +290,19 @@ private struct ExampleDownloadTaskRow: View {
                             : palette.title
                     )
                     .disabled(isSaving)
+
+                    if canShareOutput {
+                        Button(action: onShareOutput) {
+                            Text(ExampleI18n.downloadShareOutput)
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                        .background(.white.opacity(0.08), in: Capsule())
+                        .foregroundStyle(palette.title)
+                        .disabled(isSaving)
+                    }
                 }
 
                 Button(action: onRemoveTask) {

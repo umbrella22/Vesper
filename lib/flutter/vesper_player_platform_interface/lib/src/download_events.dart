@@ -6,11 +6,18 @@ sealed class VesperDownloadManagerEvent {
 
   factory VesperDownloadManagerEvent.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
-    final type = normalized['type'] as String? ?? 'snapshot';
+    final type = normalized['type'] as String?;
     final downloadId = normalized['downloadId'] as String? ?? '';
 
     switch (type) {
-      case 'error':
+      case 'initialSnapshot':
+        return VesperDownloadInitialSnapshotEvent(
+          downloadId: downloadId,
+          snapshot: VesperDownloadSnapshot.fromMap(
+            vesperDecodeMap(normalized['snapshot']),
+          ),
+        );
+      case 'downloadError':
         final snapshot = VesperDownloadSnapshot.fromMap(
           vesperDecodeMap(normalized['snapshot']),
         );
@@ -28,31 +35,51 @@ sealed class VesperDownloadManagerEvent {
           taskId: (normalized['taskId'] as num?)?.toInt() ?? 0,
           ratio: (normalized['ratio'] as num?)?.toDouble() ?? 0,
         );
-      case 'assetIndexUpdated':
-        return VesperDownloadAssetIndexUpdatedEvent(
+      case 'taskCreated':
+        return VesperDownloadTaskCreatedEvent(
           downloadId: downloadId,
           task: VesperDownloadTaskSnapshot.fromMap(
             vesperDecodeMap(normalized['task']),
           ),
         );
+      case 'taskUpdated':
+        final rawTask = normalized['task'];
+        final rawPatch = normalized['patch'];
+        return VesperDownloadTaskUpdatedEvent(
+          downloadId: downloadId,
+          task: rawTask == null
+              ? null
+              : VesperDownloadTaskSnapshot.fromMap(vesperDecodeMap(rawTask)),
+          patch: rawPatch == null
+              ? null
+              : VesperDownloadTaskStatePatch.fromMap(
+                  vesperDecodeMap(rawPatch),
+                ),
+          progressPatch: normalized['progressPatch'] == null
+              ? null
+              : VesperDownloadTaskProgressPatch.fromMap(
+                  vesperDecodeMap(normalized['progressPatch']),
+                ),
+        );
+      case 'taskRemoved':
+        return VesperDownloadTaskRemovedEvent(
+          downloadId: downloadId,
+          taskId: (normalized['taskId'] as num?)?.toInt() ?? 0,
+        );
       case 'disposed':
         return VesperDownloadDisposedEvent(downloadId: downloadId);
-      case 'snapshot':
       default:
-        return VesperDownloadSnapshotEvent(
-          downloadId: downloadId,
-          snapshot: VesperDownloadSnapshot.fromMap(
-            vesperDecodeMap(normalized['snapshot']),
-          ),
-        );
+        throw FormatException(
+            'Unknown download event type: ${type ?? '<missing>'}');
     }
   }
 
   final String downloadId;
 }
 
-final class VesperDownloadSnapshotEvent extends VesperDownloadManagerEvent {
-  const VesperDownloadSnapshotEvent({
+final class VesperDownloadInitialSnapshotEvent
+    extends VesperDownloadManagerEvent {
+  const VesperDownloadInitialSnapshotEvent({
     required super.downloadId,
     required this.snapshot,
   });
@@ -87,12 +114,33 @@ final class VesperDownloadExportProgressEvent
   final double ratio;
 }
 
-final class VesperDownloadAssetIndexUpdatedEvent
-    extends VesperDownloadManagerEvent {
-  const VesperDownloadAssetIndexUpdatedEvent({
+final class VesperDownloadTaskCreatedEvent extends VesperDownloadManagerEvent {
+  const VesperDownloadTaskCreatedEvent({
     required super.downloadId,
     required this.task,
   });
 
   final VesperDownloadTaskSnapshot task;
+}
+
+final class VesperDownloadTaskUpdatedEvent extends VesperDownloadManagerEvent {
+  const VesperDownloadTaskUpdatedEvent({
+    required super.downloadId,
+    this.task,
+    this.patch,
+    this.progressPatch,
+  });
+
+  final VesperDownloadTaskSnapshot? task;
+  final VesperDownloadTaskStatePatch? patch;
+  final VesperDownloadTaskProgressPatch? progressPatch;
+}
+
+final class VesperDownloadTaskRemovedEvent extends VesperDownloadManagerEvent {
+  const VesperDownloadTaskRemovedEvent({
+    required super.downloadId,
+    required this.taskId,
+  });
+
+  final int taskId;
 }

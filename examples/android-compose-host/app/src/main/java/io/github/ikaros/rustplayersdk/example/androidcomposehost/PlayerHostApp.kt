@@ -56,6 +56,7 @@ import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.VesperDownloadManager
 import io.github.ikaros.vesper.player.android.VesperDownloadContentFormat
 import io.github.ikaros.vesper.player.android.VesperDownloadSource
+import io.github.ikaros.vesper.player.android.VesperDownloadPublicCollection
 import io.github.ikaros.vesper.player.android.VesperDownloadState
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
@@ -250,28 +251,30 @@ fun PlayerHostApp(
             var manifestMutation: DownloadExportManifestMutation? = null
             val message =
                 runCatching {
-                    val gallerySourcePath =
-                        if (needsExport) {
-                            manifestMutation = prepareSegmentedExportManifestIfNeeded(task)
-                            exportFile = createDownloadExportFile(context, task)
-                            runCatching { exportFile.delete() }
-                            downloadManager.exportTaskOutput(
-                                taskId = task.taskId,
-                                outputPath = exportFile.absolutePath,
-                                onProgress = { ratio ->
-                                    scope.launch {
-                                        exportProgressByTaskId =
-                                            exportProgressByTaskId + (
-                                                task.taskId to ratio.coerceIn(0f, 1f)
-                                            )
-                                    }
-                                },
-                            )
-                            exportFile.absolutePath
-                        } else {
-                            completedPath
-                        }
-                    saveVideoToGallery(context, gallerySourcePath)
+                    if (needsExport) {
+                        manifestMutation = prepareSegmentedExportManifestIfNeeded(task)
+                        exportFile = createDownloadExportFile(context, task)
+                        runCatching { exportFile.delete() }
+                        downloadManager.exportTaskOutput(
+                            taskId = task.taskId,
+                            outputPath = exportFile.absolutePath,
+                            onProgress = { ratio ->
+                                scope.launch {
+                                    exportProgressByTaskId =
+                                        exportProgressByTaskId + (
+                                            task.taskId to ratio.coerceIn(0f, 1f)
+                                        )
+                                }
+                            },
+                        )
+                        saveVideoToGallery(context, exportFile.absolutePath)
+                    } else {
+                        downloadManager.saveTaskOutput(
+                            context = context,
+                            taskId = task.taskId,
+                            collection = VesperDownloadPublicCollection.Movies,
+                        )
+                    }
                 }.fold(
                     onSuccess = {
                         context.getString(R.string.example_download_save_to_gallery_success)

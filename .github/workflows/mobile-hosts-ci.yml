@@ -200,6 +200,11 @@ jobs:
       - name: Build Rust iOS resolver bundle
         run: ./scripts/vesper ios ffi release
 
+      - name: Verify iOS bridge symbols in resolver bundle
+        run: |
+          VESPER_IOS_FFI_ARCHIVE=lib/ios/VesperPlayerKit/Artifacts/rust-player-ffi/iphonesimulator/libplayer_ffi_ios.a \
+            ./scripts/vesper ios verify-bridge-shim
+
       - name: Verify iOS host kit does not bundle player-remux-ffmpeg by default
         run: ./scripts/vesper mobile verify-no-remux ios
 
