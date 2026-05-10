@@ -169,6 +169,27 @@ data class VesperDownloadSegmentRecord(
     val checksum: String? = null,
 )
 
+enum class VesperDownloadStreamKind {
+    Combined,
+    Video,
+    Audio,
+    SecondaryAudio,
+    Subtitle,
+    Auxiliary,
+}
+
+data class VesperDownloadAssetStream(
+    val streamId: String,
+    val kind: VesperDownloadStreamKind = VesperDownloadStreamKind.Combined,
+    val language: String? = null,
+    val codec: String? = null,
+    val label: String? = null,
+    val qualityRank: Int? = null,
+    val resourceIds: List<String> = emptyList(),
+    val segmentIds: List<String> = emptyList(),
+    val metadata: Map<String, String> = emptyMap(),
+)
+
 data class VesperDownloadAssetIndex(
     val contentFormat: VesperDownloadContentFormat = VesperDownloadContentFormat.Unknown,
     val version: String? = null,
@@ -177,6 +198,7 @@ data class VesperDownloadAssetIndex(
     val totalSizeBytes: Long? = null,
     val resources: List<VesperDownloadResourceRecord> = emptyList(),
     val segments: List<VesperDownloadSegmentRecord> = emptyList(),
+    val streams: List<VesperDownloadAssetStream> = emptyList(),
     val completedPath: String? = null,
 )
 
@@ -3456,6 +3478,7 @@ private fun VesperDownloadAssetIndex.toNativePayload(): NativeDownloadAssetIndex
         totalSizeBytes = totalSizeBytes ?: 0L,
         resources = resources.map(VesperDownloadResourceRecord::toNativePayload).toTypedArray(),
         segments = segments.map(VesperDownloadSegmentRecord::toNativePayload).toTypedArray(),
+        streams = streams.map(VesperDownloadAssetStream::toNativePayload).toTypedArray(),
         completedPath = completedPath,
     )
 
@@ -3483,6 +3506,21 @@ private fun VesperDownloadSegmentRecord.toNativePayload(): NativeDownloadSegment
         hasSizeBytes = sizeBytes != null,
         sizeBytes = sizeBytes ?: 0L,
         checksum = checksum,
+    )
+
+private fun VesperDownloadAssetStream.toNativePayload(): NativeDownloadAssetStream =
+    NativeDownloadAssetStream(
+        streamId = streamId,
+        kindOrdinal = kind.ordinal,
+        language = language,
+        codec = codec,
+        label = label,
+        hasQualityRank = qualityRank != null,
+        qualityRank = qualityRank ?: 0,
+        resourceIds = resourceIds.toTypedArray(),
+        segmentIds = segmentIds.toTypedArray(),
+        metadataKeys = metadata.entries.map { it.key }.toTypedArray(),
+        metadataValues = metadata.entries.map { it.value }.toTypedArray(),
     )
 
 private fun VesperDownloadByteRange.toNativePayload(): NativeDownloadByteRange =
@@ -3613,6 +3651,7 @@ private fun NativeDownloadAssetIndex.toPublic(): VesperDownloadAssetIndex =
         totalSizeBytes = if (hasTotalSizeBytes) totalSizeBytes else null,
         resources = resources.map(NativeDownloadResourceRecord::toPublic),
         segments = segments.map(NativeDownloadSegmentRecord::toPublic),
+        streams = streams.map(NativeDownloadAssetStream::toPublic),
         completedPath = completedPath,
     )
 
@@ -3637,6 +3676,19 @@ private fun NativeDownloadSegmentRecord.toPublic(): VesperDownloadSegmentRecord 
         byteRange = byteRange?.toPublic(),
         sizeBytes = if (hasSizeBytes) sizeBytes else null,
         checksum = checksum,
+    )
+
+private fun NativeDownloadAssetStream.toPublic(): VesperDownloadAssetStream =
+    VesperDownloadAssetStream(
+        streamId = streamId,
+        kind = VesperDownloadStreamKind.entries.getOrElse(kindOrdinal) { VesperDownloadStreamKind.Combined },
+        language = language,
+        codec = codec,
+        label = label,
+        qualityRank = if (hasQualityRank) qualityRank else null,
+        resourceIds = resourceIds.toList(),
+        segmentIds = segmentIds.toList(),
+        metadata = metadataKeys.zip(metadataValues).toMap(),
     )
 
 private fun NativeDownloadByteRange.toPublic(): VesperDownloadByteRange =
@@ -3820,6 +3872,7 @@ private fun VesperDownloadAssetIndex.toJson(): JSONObject =
         put("totalSizeBytes", totalSizeBytes)
         put("resources", JSONArray().apply { resources.forEach { put(it.toJson()) } })
         put("segments", JSONArray().apply { segments.forEach { put(it.toJson()) } })
+        put("streams", JSONArray().apply { streams.forEach { put(it.toJson()) } })
         put("completedPath", completedPath)
     }
 
@@ -3832,6 +3885,7 @@ private fun JSONObject.toDownloadAssetIndex(): VesperDownloadAssetIndex =
         totalSizeBytes = optLongOrNull("totalSizeBytes"),
         resources = optJSONArray("resources")?.toObjectList { toDownloadResource() } ?: emptyList(),
         segments = optJSONArray("segments")?.toObjectList { toDownloadSegment() } ?: emptyList(),
+        streams = optJSONArray("streams")?.toObjectList { toDownloadAssetStream() } ?: emptyList(),
         completedPath = optStringOrNull("completedPath"),
     )
 
@@ -3881,6 +3935,32 @@ private fun JSONObject.toDownloadSegment(): VesperDownloadSegmentRecord =
         checksum = optStringOrNull("checksum"),
     )
 
+private fun VesperDownloadAssetStream.toJson(): JSONObject =
+    JSONObject().apply {
+        put("streamId", streamId)
+        put("kind", kind.ordinal)
+        put("language", language)
+        put("codec", codec)
+        put("label", label)
+        put("qualityRank", qualityRank)
+        put("resourceIds", JSONArray().apply { resourceIds.forEach(::put) })
+        put("segmentIds", JSONArray().apply { segmentIds.forEach(::put) })
+        put("metadata", JSONObject().apply { metadata.forEach { (key, value) -> put(key, value) } })
+    }
+
+private fun JSONObject.toDownloadAssetStream(): VesperDownloadAssetStream =
+    VesperDownloadAssetStream(
+        streamId = optString("streamId", ""),
+        kind = enumValue(optInt("kind", VesperDownloadStreamKind.Combined.ordinal)),
+        language = optStringOrNull("language"),
+        codec = optStringOrNull("codec"),
+        label = optStringOrNull("label"),
+        qualityRank = optIntOrNull("qualityRank"),
+        resourceIds = optJSONArray("resourceIds")?.toStringList() ?: emptyList(),
+        segmentIds = optJSONArray("segmentIds")?.toStringList() ?: emptyList(),
+        metadata = optJSONObject("metadata")?.toStringMap() ?: emptyMap(),
+    )
+
 private fun VesperDownloadByteRange.toJson(): JSONObject =
     JSONObject().apply {
         put("offset", offset)
@@ -3922,6 +4002,13 @@ private fun JSONArray.toStringList(): List<String> =
     buildList {
         for (index in 0 until length()) {
             optString(index).takeIf(String::isNotEmpty)?.let(::add)
+        }
+    }
+
+private fun JSONObject.toStringMap(): Map<String, String> =
+    buildMap {
+        keys().forEach { key ->
+            optString(key).takeIf(String::isNotEmpty)?.let { put(key, it) }
         }
     }
 

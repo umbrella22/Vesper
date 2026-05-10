@@ -14,19 +14,19 @@ use player_platform_ios::{
 use player_plugin::{OutputFormat, ProcessorProgress};
 use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadByteRange, DownloadContentFormat,
-    DownloadErrorSummary, DownloadEvent, DownloadProfile, DownloadProgressSnapshot,
-    DownloadResourceRecord, DownloadSegmentRecord, DownloadSource, DownloadTaskId,
-    DownloadTaskSnapshot, DownloadTaskStatus, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
-    MediaSourceProtocol, MediaTrackSelection, MediaTrackSelectionMode, PlayerBufferingPolicy,
-    PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset, PlayerPreloadBudgetPolicy,
-    PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-    PlayerRuntimeErrorCode, PlayerTrackPreferencePolicy, PlaylistActiveItem,
-    PlaylistCoordinatorConfig, PlaylistFailureStrategy, PlaylistNeighborWindow,
-    PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistSwitchPolicy,
-    PlaylistViewportHint, PlaylistViewportHintKind, PreloadBudget, PreloadBudgetScope,
-    PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadPriority, PreloadSelectionHint,
-    PreloadTaskSnapshot,
+    DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
+    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadProfile,
+    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
+    DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus, MediaAbrMode,
+    MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
+    MediaTrackSelectionMode, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
+    PlayerCachePreset, PlayerPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy,
+    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+    PlayerTrackPreferencePolicy, PlaylistActiveItem, PlaylistCoordinatorConfig,
+    PlaylistFailureStrategy, PlaylistNeighborWindow, PlaylistPreloadWindow, PlaylistQueueItem,
+    PlaylistRepeatMode, PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
+    PreloadBudget, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
+    PreloadPriority, PreloadSelectionHint, PreloadTaskSnapshot,
     policy::{
         resolve_preload_budget as resolve_preload_budget_with_runtime,
         resolve_resilience_policy as resolve_resilience_policy_with_runtime,
@@ -577,6 +577,18 @@ pub enum PlayerFfiDownloadOutputFormat {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiDownloadStreamKind {
+    #[default]
+    Combined = 0,
+    Video = 1,
+    Audio = 2,
+    SecondaryAudio = 3,
+    Subtitle = 4,
+    Auxiliary = 5,
+}
+
+#[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiDownloadSource {
     pub source_uri: *mut c_char,
@@ -640,6 +652,25 @@ pub struct PlayerFfiDownloadSegmentRecord {
 
 #[repr(C)]
 #[derive(Debug, Default)]
+pub struct PlayerFfiDownloadAssetStream {
+    pub stream_id: *mut c_char,
+    pub kind: PlayerFfiDownloadStreamKind,
+    pub language: *mut c_char,
+    pub codec: *mut c_char,
+    pub label: *mut c_char,
+    pub has_quality_rank: bool,
+    pub quality_rank: u32,
+    pub resource_ids: *mut *mut c_char,
+    pub resource_ids_len: usize,
+    pub segment_ids: *mut *mut c_char,
+    pub segment_ids_len: usize,
+    pub metadata_keys: *mut *mut c_char,
+    pub metadata_values: *mut *mut c_char,
+    pub metadata_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
 pub struct PlayerFfiDownloadAssetIndex {
     pub content_format: PlayerFfiDownloadContentFormat,
     pub version: *mut c_char,
@@ -651,6 +682,8 @@ pub struct PlayerFfiDownloadAssetIndex {
     pub resources_len: usize,
     pub segments: *mut PlayerFfiDownloadSegmentRecord,
     pub segments_len: usize,
+    pub streams: *mut PlayerFfiDownloadAssetStream,
+    pub streams_len: usize,
     pub completed_path: *mut c_char,
 }
 
@@ -3343,6 +3376,51 @@ fn read_download_segment_record(
     })
 }
 
+fn read_download_asset_stream(
+    stream: &PlayerFfiDownloadAssetStream,
+) -> Result<DownloadAssetStream, PlayerFfiError> {
+    let resource_ids = read_string_list(
+        stream.resource_ids,
+        stream.resource_ids_len,
+        "stream.resource_ids",
+    )?;
+    let segment_ids = read_string_list(
+        stream.segment_ids,
+        stream.segment_ids_len,
+        "stream.segment_ids",
+    )?;
+    let metadata_keys = read_string_list(
+        stream.metadata_keys,
+        stream.metadata_len,
+        "stream.metadata_keys",
+    )?;
+    let metadata_values = read_string_list(
+        stream.metadata_values,
+        stream.metadata_len,
+        "stream.metadata_values",
+    )?;
+    if metadata_keys.len() != metadata_values.len() {
+        return Err(owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            "stream metadata keys and values had different lengths",
+        ));
+    }
+
+    Ok(DownloadAssetStream {
+        stream_id: read_optional_c_string(stream.stream_id, "stream.stream_id")?.ok_or_else(
+            || owned_api_error(PlayerFfiErrorCode::NullPointer, "stream.stream_id was null"),
+        )?,
+        kind: stream.kind.into(),
+        language: read_optional_c_string(stream.language, "stream.language")?,
+        codec: read_optional_c_string(stream.codec, "stream.codec")?,
+        label: read_optional_c_string(stream.label, "stream.label")?,
+        quality_rank: stream.has_quality_rank.then_some(stream.quality_rank),
+        resource_ids,
+        segment_ids,
+        metadata: metadata_keys.into_iter().zip(metadata_values).collect(),
+    })
+}
+
 fn read_download_asset_index(
     asset_index: *const PlayerFfiDownloadAssetIndex,
 ) -> Result<DownloadAssetIndex, PlayerFfiError> {
@@ -3383,6 +3461,21 @@ fn read_download_asset_index(
             .collect::<Result<Vec<_>, _>>()?
     };
 
+    let streams = if asset_index.streams_len == 0 {
+        Vec::new()
+    } else {
+        if asset_index.streams.is_null() {
+            return Err(owned_api_error(
+                PlayerFfiErrorCode::NullPointer,
+                "asset_index.streams was null",
+            ));
+        }
+        unsafe { slice::from_raw_parts(asset_index.streams, asset_index.streams_len) }
+            .iter()
+            .map(read_download_asset_stream)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
     Ok(DownloadAssetIndex {
         content_format: asset_index.content_format.into(),
         version: read_optional_c_string(asset_index.version, "asset_index.version")?,
@@ -3393,6 +3486,7 @@ fn read_download_asset_index(
             .then_some(asset_index.total_size_bytes),
         resources,
         segments,
+        streams,
         completed_path: read_optional_c_string(
             asset_index.completed_path,
             "asset_index.completed_path",
@@ -3730,6 +3824,41 @@ fn download_segment_record_to_ffi(
     }
 }
 
+fn download_asset_stream_to_ffi(stream: DownloadAssetStream) -> PlayerFfiDownloadAssetStream {
+    let (resource_ids, resource_ids_len) = into_c_string_list(stream.resource_ids);
+    let (segment_ids, segment_ids_len) = into_c_string_list(stream.segment_ids);
+    let (metadata_keys, metadata_values): (Vec<_>, Vec<_>) = stream.metadata.into_iter().unzip();
+    let (metadata_keys, metadata_len) = into_c_string_list(metadata_keys);
+    let (metadata_values, metadata_values_len) = into_c_string_list(metadata_values);
+    debug_assert_eq!(metadata_len, metadata_values_len);
+
+    PlayerFfiDownloadAssetStream {
+        stream_id: into_c_string_ptr(stream.stream_id),
+        kind: stream.kind.into(),
+        language: stream
+            .language
+            .map(into_c_string_ptr)
+            .unwrap_or(ptr::null_mut()),
+        codec: stream
+            .codec
+            .map(into_c_string_ptr)
+            .unwrap_or(ptr::null_mut()),
+        label: stream
+            .label
+            .map(into_c_string_ptr)
+            .unwrap_or(ptr::null_mut()),
+        has_quality_rank: stream.quality_rank.is_some(),
+        quality_rank: stream.quality_rank.unwrap_or_default(),
+        resource_ids,
+        resource_ids_len,
+        segment_ids,
+        segment_ids_len,
+        metadata_keys,
+        metadata_values,
+        metadata_len,
+    }
+}
+
 fn download_asset_index_to_ffi(asset_index: DownloadAssetIndex) -> PlayerFfiDownloadAssetIndex {
     let resources = asset_index
         .resources
@@ -3755,6 +3884,18 @@ fn download_asset_index_to_ffi(asset_index: DownloadAssetIndex) -> PlayerFfiDown
         Box::into_raw(segments.into_boxed_slice()) as *mut PlayerFfiDownloadSegmentRecord
     };
 
+    let streams = asset_index
+        .streams
+        .into_iter()
+        .map(download_asset_stream_to_ffi)
+        .collect::<Vec<_>>();
+    let streams_len = streams.len();
+    let streams = if streams_len == 0 {
+        ptr::null_mut()
+    } else {
+        Box::into_raw(streams.into_boxed_slice()) as *mut PlayerFfiDownloadAssetStream
+    };
+
     PlayerFfiDownloadAssetIndex {
         content_format: asset_index.content_format.into(),
         version: asset_index
@@ -3775,6 +3916,8 @@ fn download_asset_index_to_ffi(asset_index: DownloadAssetIndex) -> PlayerFfiDown
         resources_len,
         segments,
         segments_len,
+        streams,
+        streams_len,
         completed_path: asset_index
             .completed_path
             .map(|path| into_c_string_ptr(path.to_string_lossy().into_owned()))
@@ -3918,6 +4061,19 @@ fn download_segment_record_free(segment: &mut PlayerFfiDownloadSegmentRecord) {
     *segment = PlayerFfiDownloadSegmentRecord::default();
 }
 
+fn download_asset_stream_free(stream: &mut PlayerFfiDownloadAssetStream) {
+    free_c_string(&mut stream.stream_id);
+    free_c_string(&mut stream.language);
+    free_c_string(&mut stream.codec);
+    free_c_string(&mut stream.label);
+    free_c_string_list(&mut stream.resource_ids, &mut stream.resource_ids_len);
+    free_c_string_list(&mut stream.segment_ids, &mut stream.segment_ids_len);
+    let mut metadata_values_len = stream.metadata_len;
+    free_c_string_list(&mut stream.metadata_keys, &mut stream.metadata_len);
+    free_c_string_list(&mut stream.metadata_values, &mut metadata_values_len);
+    *stream = PlayerFfiDownloadAssetStream::default();
+}
+
 fn download_asset_index_free(asset_index: &mut PlayerFfiDownloadAssetIndex) {
     free_c_string(&mut asset_index.version);
     free_c_string(&mut asset_index.etag);
@@ -3946,6 +4102,18 @@ fn download_asset_index_free(asset_index: &mut PlayerFfiDownloadAssetIndex) {
         };
         for mut segment in segments {
             download_segment_record_free(&mut segment);
+        }
+    }
+    if !asset_index.streams.is_null() && asset_index.streams_len > 0 {
+        let streams = unsafe {
+            Vec::from_raw_parts(
+                asset_index.streams,
+                asset_index.streams_len,
+                asset_index.streams_len,
+            )
+        };
+        for mut stream in streams {
+            download_asset_stream_free(&mut stream);
         }
     }
     *asset_index = PlayerFfiDownloadAssetIndex::default();
@@ -4356,6 +4524,32 @@ impl From<OutputFormat> for PlayerFfiDownloadOutputFormat {
             OutputFormat::Mp4 => Self::Mp4,
             OutputFormat::Mkv => Self::Mkv,
             OutputFormat::Original => Self::Original,
+        }
+    }
+}
+
+impl From<PlayerFfiDownloadStreamKind> for DownloadStreamKind {
+    fn from(value: PlayerFfiDownloadStreamKind) -> Self {
+        match value {
+            PlayerFfiDownloadStreamKind::Combined => Self::Combined,
+            PlayerFfiDownloadStreamKind::Video => Self::Video,
+            PlayerFfiDownloadStreamKind::Audio => Self::Audio,
+            PlayerFfiDownloadStreamKind::SecondaryAudio => Self::SecondaryAudio,
+            PlayerFfiDownloadStreamKind::Subtitle => Self::Subtitle,
+            PlayerFfiDownloadStreamKind::Auxiliary => Self::Auxiliary,
+        }
+    }
+}
+
+impl From<DownloadStreamKind> for PlayerFfiDownloadStreamKind {
+    fn from(value: DownloadStreamKind) -> Self {
+        match value {
+            DownloadStreamKind::Combined => Self::Combined,
+            DownloadStreamKind::Video => Self::Video,
+            DownloadStreamKind::Audio => Self::Audio,
+            DownloadStreamKind::SecondaryAudio => Self::SecondaryAudio,
+            DownloadStreamKind::Subtitle => Self::Subtitle,
+            DownloadStreamKind::Auxiliary => Self::Auxiliary,
         }
     }
 }

@@ -732,6 +732,7 @@ private fun NativeDownloadAssetIndex.withCompletedPath(
         totalSizeBytes = totalSizeBytes,
         resources = resources,
         segments = segments,
+        streams = streams,
         completedPath = completedPath,
     )
 

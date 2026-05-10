@@ -14,7 +14,8 @@ use player_plugin::{
     DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
     PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
     ProcessorOutput, ProcessorProgress, VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
-    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
     VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
     VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
@@ -236,9 +237,15 @@ impl LoadedDynamicPlugin {
         library: Option<Arc<LibraryHolder>>,
         descriptor: &VesperPluginDescriptor,
     ) -> Result<Self, PluginLoadError> {
-        if descriptor.abi_version != VESPER_PLUGIN_ABI_VERSION_V2 {
+        let expected_abi_version = match descriptor.plugin_kind {
+            VesperPluginKind::PostDownloadProcessor => VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+            VesperPluginKind::PipelineEventHook
+            | VesperPluginKind::Decoder
+            | VesperPluginKind::BenchmarkSink => VESPER_PLUGIN_ABI_VERSION_V2,
+        };
+        if descriptor.abi_version != expected_abi_version {
             return Err(PluginLoadError::AbiVersionMismatch {
-                expected: VESPER_PLUGIN_ABI_VERSION_V2,
+                expected: expected_abi_version,
                 actual: descriptor.abi_version,
             });
         }
@@ -785,6 +792,7 @@ struct CheckedPostDownloadProcessorApi {
     capabilities_json: CapabilitiesJsonFn,
     free_bytes: FreeBytesFn,
     process_json: ProcessJsonFn,
+    assemble_json: ProcessJsonFn,
 }
 
 // SAFETY: this wrapper only stores function pointers and the opaque plugin
@@ -812,6 +820,9 @@ impl TryFrom<VesperPostDownloadProcessorApi> for CheckedPostDownloadProcessorApi
             })?,
             process_json: api.process_json.ok_or(PluginLoadError::MissingField {
                 field: "post_download_processor_api.process_json",
+            })?,
+            assemble_json: api.assemble_json.ok_or(PluginLoadError::MissingField {
+                field: "post_download_processor_api.assemble_json",
             })?,
         })
     }
@@ -1020,23 +1031,10 @@ impl DynamicPostDownloadProcessor {
             }),
         })
     }
-}
 
-impl PostDownloadProcessor for DynamicPostDownloadProcessor {
-    fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    fn supported_input_formats(&self) -> &[player_plugin::ContentFormatKind] {
-        &self.inner.capabilities.supported_input_formats
-    }
-
-    fn capabilities(&self) -> ProcessorCapabilities {
-        self.inner.capabilities.clone()
-    }
-
-    fn process(
+    fn call_json_entry(
         &self,
+        entry: ProcessJsonFn,
         input: &CompletedDownloadInfo,
         output_path: &Path,
         progress: &dyn ProcessorProgress,
@@ -1061,12 +1059,12 @@ impl PostDownloadProcessor for DynamicPostDownloadProcessor {
             is_cancelled: Some(progress_is_cancelled),
         };
 
-        // SAFETY: the validated plugin API guarantees `process_json` is present.
+        // SAFETY: the validated plugin API guarantees the JSON entry is present.
         // `input_json` and `output_path` live for the duration of the call, and
         // the ABI contract documents that `callbacks.context` is only valid
         // during this synchronous invocation.
         let result = unsafe {
-            (self.inner.api.process_json)(
+            entry(
                 self.inner.api.context,
                 input_json.as_ptr(),
                 input_json.len(),
@@ -1090,6 +1088,38 @@ impl PostDownloadProcessor for DynamicPostDownloadProcessor {
             .map_err(|error| map_plugin_payload_error(&self.inner.name, "error", error))
             .and_then(Err),
         }
+    }
+}
+
+impl PostDownloadProcessor for DynamicPostDownloadProcessor {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn supported_input_formats(&self) -> &[player_plugin::ContentFormatKind] {
+        &self.inner.capabilities.supported_input_formats
+    }
+
+    fn capabilities(&self) -> ProcessorCapabilities {
+        self.inner.capabilities.clone()
+    }
+
+    fn process(
+        &self,
+        input: &CompletedDownloadInfo,
+        output_path: &Path,
+        progress: &dyn ProcessorProgress,
+    ) -> Result<ProcessorOutput, ProcessorError> {
+        self.call_json_entry(self.inner.api.process_json, input, output_path, progress)
+    }
+
+    fn assemble(
+        &self,
+        input: &CompletedDownloadInfo,
+        output_path: &Path,
+        progress: &dyn ProcessorProgress,
+    ) -> Result<ProcessorOutput, ProcessorError> {
+        self.call_json_entry(self.inner.api.assemble_json, input, output_path, progress)
     }
 }
 
@@ -1846,19 +1876,21 @@ mod tests {
         PluginDiagnosticRecord, PluginDiagnosticStatus, PluginLoadError, PluginRegistry,
     };
     use player_plugin::{
-        BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkReport, BenchmarkSinkStatus,
-        CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DecoderBitstreamFormat,
-        DecoderCapabilities, DecoderCodecCapability, DecoderError, DecoderFrameFormat,
-        DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeDeviceContextKind,
-        DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
-        DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
+        AssemblyMode, BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkReport,
+        BenchmarkSinkStatus, CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind,
+        DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
+        DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext,
+        DecoderNativeDeviceContextKind, DecoderNativeFrameMetadata,
+        DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderNativeRequirements,
+        DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
         DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
         DecoderSessionInfo, DownloadMetadata, OutputFormat, PipelineEvent, ProcessorCapabilities,
         ProcessorError, ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
-        VESPER_PLUGIN_ABI_VERSION_V2, VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult,
-        VesperDecoderPluginApiV2, VesperDecoderReceiveNativeFrameResult,
-        VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind,
-        VesperPluginProcessResult, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+        VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+        VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+        VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
+        VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
+        VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     };
     use std::collections::BTreeMap;
     use std::env;
@@ -1902,7 +1934,7 @@ mod tests {
     fn dynamic_post_download_processor_adapter_round_trips_json() {
         let api = fixture_processor_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::PostDownloadProcessor,
             plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperPostDownloadProcessorApi).cast(),
@@ -1922,6 +1954,8 @@ mod tests {
                         path: PathBuf::from("/tmp/input.mp4"),
                     },
                     metadata: DownloadMetadata::default(),
+                    streams: Vec::new(),
+                    assembly_mode: AssemblyMode::Single,
                 },
                 PathBuf::from("/tmp/output.mp4").as_path(),
                 &progress,
@@ -1934,6 +1968,8 @@ mod tests {
                 supported_input_formats: vec![ContentFormatKind::SingleFile],
                 output_formats: vec![OutputFormat::Mp4],
                 supports_cancellation: true,
+                supports_assembly: false,
+                supported_assembly_modes: Vec::new(),
             }
         );
         assert_eq!(
@@ -1944,6 +1980,94 @@ mod tests {
             }
         );
         assert_eq!(progress.ratios(), vec![0.5, 1.0]);
+    }
+
+    #[test]
+    fn dynamic_post_download_processor_assembly_adapter_round_trips_json() {
+        let api = fixture_processor_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+            plugin_kind: VesperPluginKind::PostDownloadProcessor,
+            plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperPostDownloadProcessorApi).cast(),
+        };
+
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load plugin");
+        let processor = plugin
+            .post_download_processor()
+            .expect("processor should be available");
+        let progress = RecordingProgress::default();
+        let output = processor
+            .assemble(
+                &CompletedDownloadInfo {
+                    asset_id: "asset-a".to_owned(),
+                    task_id: Some("1".to_owned()),
+                    content_format: CompletedContentFormat::SingleFile {
+                        path: PathBuf::from("/tmp/input.mp4"),
+                    },
+                    metadata: DownloadMetadata::default(),
+                    streams: Vec::new(),
+                    assembly_mode: AssemblyMode::Single,
+                },
+                PathBuf::from("/tmp/assembled.mp4").as_path(),
+                &progress,
+            )
+            .expect("assemble should succeed");
+
+        assert_eq!(
+            output,
+            ProcessorOutput::MuxedFile {
+                path: PathBuf::from("/tmp/assembled.mp4"),
+                format: OutputFormat::Mp4,
+            }
+        );
+        assert_eq!(progress.ratios(), vec![0.5, 1.0]);
+    }
+
+    #[test]
+    fn dynamic_post_download_processor_rejects_v2_descriptor() {
+        let api = fixture_processor_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::PostDownloadProcessor,
+            plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperPostDownloadProcessorApi).cast(),
+        };
+
+        let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect_err("post-download processors require ABI v3");
+
+        assert!(matches!(
+            error,
+            PluginLoadError::AbiVersionMismatch {
+                expected: 3,
+                actual: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn dynamic_post_download_processor_rejects_missing_assembly_entry() {
+        let api = VesperPostDownloadProcessorApi {
+            assemble_json: None,
+            ..fixture_processor_api()
+        };
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+            plugin_kind: VesperPluginKind::PostDownloadProcessor,
+            plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperPostDownloadProcessorApi).cast(),
+        };
+
+        let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect_err("post-download ABI v3 requires assemble_json");
+
+        assert!(matches!(
+            error,
+            PluginLoadError::MissingField {
+                field: "post_download_processor_api.assemble_json"
+            }
+        ));
     }
 
     #[test]
@@ -2401,7 +2525,7 @@ mod tests {
     fn plugin_registry_reports_non_decoder_plugin() {
         let api = fixture_processor_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::PostDownloadProcessor,
             plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperPostDownloadProcessorApi).cast(),
@@ -2505,7 +2629,7 @@ mod tests {
             LoadedDynamicPlugin::from_descriptor(None, &decoder_descriptor).expect("load decoder");
         let processor_api = fixture_processor_api();
         let processor_descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::PostDownloadProcessor,
             plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
             api: (&processor_api as *const VesperPostDownloadProcessorApi).cast(),
@@ -2602,7 +2726,7 @@ mod tests {
             ..fixture_processor_api()
         };
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::PostDownloadProcessor,
             plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperPostDownloadProcessorApi).cast(),
@@ -2621,6 +2745,8 @@ mod tests {
                         path: PathBuf::from("/tmp/input.mp4"),
                     },
                     metadata: DownloadMetadata::default(),
+                    streams: Vec::new(),
+                    assembly_mode: AssemblyMode::Single,
                 },
                 Path::new("/tmp/output.mp4"),
                 &RecordingProgress::default(),
@@ -2638,7 +2764,7 @@ mod tests {
             ..fixture_processor_api()
         };
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::PostDownloadProcessor,
             plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperPostDownloadProcessorApi).cast(),
@@ -2657,6 +2783,8 @@ mod tests {
                         path: PathBuf::from("/tmp/input.mp4"),
                     },
                     metadata: DownloadMetadata::default(),
+                    streams: Vec::new(),
+                    assembly_mode: AssemblyMode::Single,
                 },
                 Path::new("/tmp/output.mp4"),
                 &RecordingProgress::default(),
@@ -2697,6 +2825,13 @@ mod tests {
                 ],
                 output_formats: vec![OutputFormat::Mp4],
                 supports_cancellation: true,
+                supports_assembly: true,
+                supported_assembly_modes: vec![
+                    AssemblyMode::SeparateAudioVideo,
+                    AssemblyMode::MultiAudio,
+                    AssemblyMode::WithSubtitles,
+                    AssemblyMode::Generic,
+                ],
             }
         );
 
@@ -2710,6 +2845,8 @@ mod tests {
                         path: PathBuf::from("/tmp/input.mp4"),
                     },
                     metadata: DownloadMetadata::default(),
+                    streams: Vec::new(),
+                    assembly_mode: AssemblyMode::Single,
                 },
                 Path::new("/tmp/output.mp4"),
                 &progress,
@@ -2846,6 +2983,7 @@ mod tests {
             capabilities_json: Some(fixture_processor_capabilities_json),
             free_bytes: Some(fixture_free_bytes),
             process_json: Some(fixture_processor_process_json),
+            assemble_json: Some(fixture_processor_process_json),
         }
     }
 
@@ -2954,6 +3092,8 @@ mod tests {
             supported_input_formats: vec![ContentFormatKind::SingleFile],
             output_formats: vec![OutputFormat::Mp4],
             supports_cancellation: true,
+            supports_assembly: false,
+            supported_assembly_modes: Vec::new(),
         };
         let payload = serde_json::to_vec(&capabilities).expect("serialize capabilities");
         VesperPluginBytes::from_vec(payload)

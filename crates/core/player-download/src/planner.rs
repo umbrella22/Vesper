@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::{
-    DownloadAssetIndex, DownloadByteRange, DownloadContentFormat, DownloadProfile,
-    DownloadResourceRecord, DownloadSegmentRecord, DownloadSource, PlayerRuntimeError,
-    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+    DownloadAssetIndex, DownloadAssetStream, DownloadByteRange, DownloadContentFormat,
+    DownloadProfile, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
+    DownloadStreamKind, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+    PlayerRuntimeResult,
 };
 
 pub trait DownloadPlanningClient {
@@ -437,10 +438,13 @@ where
         checksum: None,
     }];
     let mut segments = Vec::new();
-    let mut map_paths = HashMap::<String, PathBuf>::new();
+    let mut streams = Vec::new();
+    let mut map_resources = HashMap::<String, (String, PathBuf)>::new();
     let mut total_size_bytes = 0_u64;
 
     for (media_id, playlist) in &media_playlists {
+        let mut stream_resource_ids = Vec::new();
+        let mut stream_segment_ids = Vec::new();
         let playlist_path = if media_playlists.len() == 1 && manifest_path == "index.m3u8" {
             PathBuf::from("index.m3u8")
         } else {
@@ -449,8 +453,9 @@ where
         let mut local_maps = HashMap::<String, PathBuf>::new();
         for (map_index, map) in playlist.maps.iter().enumerate() {
             let key = format!("{}:{:?}", map.uri, map.byte_range);
-            if let Some(relative_path) = map_paths.get(&key) {
+            if let Some((resource_id, relative_path)) = map_resources.get(&key) {
                 local_maps.insert(key, relative_path.clone());
+                stream_resource_ids.push(resource_id.clone());
             } else {
                 let size = planner.probe_required_size(&map.uri, map.byte_range)?;
                 total_size_bytes += size;
@@ -458,8 +463,9 @@ where
                     "segments/{media_id}-init-{map_index}.{}",
                     extension_from_uri(&map.uri, "mp4")
                 ));
+                let resource_id = format!("hls-{media_id}-init-{map_index}");
                 resources.push(DownloadResourceRecord {
-                    resource_id: format!("hls-{media_id}-init-{map_index}"),
+                    resource_id: resource_id.clone(),
                     uri: map.uri.clone(),
                     relative_path: Some(relative_path.clone()),
                     byte_range: map.byte_range,
@@ -468,7 +474,8 @@ where
                     etag: None,
                     checksum: None,
                 });
-                map_paths.insert(key.clone(), relative_path.clone());
+                stream_resource_ids.push(resource_id.clone());
+                map_resources.insert(key.clone(), (resource_id, relative_path.clone()));
                 local_maps.insert(key, relative_path);
             }
         }
@@ -476,8 +483,9 @@ where
         for segment in &playlist.segments {
             let size = planner.probe_required_size(&segment.uri, segment.byte_range)?;
             total_size_bytes += size;
+            let segment_id = format!("hls-{media_id}-{}", segment.sequence);
             segments.push(DownloadSegmentRecord {
-                segment_id: format!("hls-{media_id}-{}", segment.sequence),
+                segment_id: segment_id.clone(),
                 uri: segment.uri.clone(),
                 relative_path: Some(PathBuf::from(format!(
                     "segments/{media_id}-{:05}.{}",
@@ -489,11 +497,13 @@ where
                 size_bytes: Some(size),
                 checksum: None,
             });
+            stream_segment_ids.push(segment_id);
         }
 
         let media_text = rewrite_hls_media(media_id, playlist, &local_maps);
+        let playlist_resource_id = format!("hls-{media_id}-playlist");
         resources.push(DownloadResourceRecord {
-            resource_id: format!("hls-{media_id}-playlist"),
+            resource_id: playlist_resource_id.clone(),
             uri: format!("vesper-generated://hls/{}", playlist_path.display()),
             relative_path: Some(playlist_path),
             byte_range: None,
@@ -501,6 +511,18 @@ where
             size_bytes: None,
             etag: None,
             checksum: None,
+        });
+        stream_resource_ids.push(playlist_resource_id);
+        streams.push(DownloadAssetStream {
+            stream_id: (*media_id).to_owned(),
+            kind: hls_stream_kind(media_id, media_playlists.len()),
+            language: None,
+            codec: None,
+            label: Some((*media_id).to_owned()),
+            quality_rank: None,
+            resource_ids: stream_resource_ids,
+            segment_ids: stream_segment_ids,
+            metadata: HashMap::new(),
         });
     }
 
@@ -510,7 +532,15 @@ where
             .position(|resource| resource.resource_id.ends_with("-playlist"))
     {
         let media_resource = resources.remove(media_playlist);
+        let media_resource_id = media_resource.resource_id;
         resources[0].generated_text = media_resource.generated_text;
+        for stream in &mut streams {
+            for resource_id in &mut stream.resource_ids {
+                if resource_id == &media_resource_id {
+                    *resource_id = "hls-master".to_owned();
+                }
+            }
+        }
     }
 
     Ok(DownloadAssetIndex {
@@ -518,8 +548,22 @@ where
         total_size_bytes: Some(total_size_bytes),
         resources,
         segments,
+        streams,
         ..DownloadAssetIndex::default()
     })
+}
+
+fn hls_stream_kind(media_id: &str, media_count: usize) -> DownloadStreamKind {
+    if media_count == 1 {
+        return DownloadStreamKind::Combined;
+    }
+    if media_id.eq_ignore_ascii_case("audio") {
+        DownloadStreamKind::Audio
+    } else if media_id.eq_ignore_ascii_case("video") {
+        DownloadStreamKind::Video
+    } else {
+        DownloadStreamKind::Auxiliary
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1181,7 +1225,7 @@ mod tests {
     use super::{DownloadPlanner, DownloadPlanningClient};
     use crate::{
         DownloadByteRange, DownloadContentFormat, DownloadProfile, DownloadSource,
-        PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+        DownloadStreamKind, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
     };
     use player_model::MediaSource;
     use std::collections::HashMap;
@@ -1252,6 +1296,13 @@ mod tests {
                 .expect("manifest"),
             "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegments/media-00001.ts\n#EXTINF:4,\nsegments/media-00002.ts\n#EXT-X-ENDLIST\n"
         );
+        assert_eq!(index.streams.len(), 1);
+        assert_eq!(index.streams[0].kind, DownloadStreamKind::Combined);
+        assert!(
+            index.streams[0]
+                .resource_ids
+                .contains(&"hls-master".to_owned())
+        );
     }
 
     #[test]
@@ -1293,6 +1344,19 @@ mod tests {
                 .generated_text
                 .as_ref()
                 .is_some_and(|text| text.contains("AUDIO=\"audio\""))
+        );
+        assert_eq!(index.streams.len(), 2);
+        assert!(
+            index
+                .streams
+                .iter()
+                .any(|stream| stream.kind == DownloadStreamKind::Video)
+        );
+        assert!(
+            index
+                .streams
+                .iter()
+                .any(|stream| stream.kind == DownloadStreamKind::Audio)
         );
     }
 
@@ -1344,6 +1408,12 @@ mod tests {
                 "{playlist_name} should reference the shared init segment"
             );
         }
+        assert!(
+            index
+                .streams
+                .iter()
+                .all(|stream| stream.resource_ids.iter().any(|id| id.contains("-init-")))
+        );
     }
 
     #[test]

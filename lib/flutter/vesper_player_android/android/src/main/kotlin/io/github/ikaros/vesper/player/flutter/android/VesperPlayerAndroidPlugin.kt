@@ -39,6 +39,7 @@ import io.github.ikaros.vesper.player.android.VesperBufferingPreset
 import io.github.ikaros.vesper.player.android.VesperCachePolicy
 import io.github.ikaros.vesper.player.android.VesperCachePreset
 import io.github.ikaros.vesper.player.android.VesperDownloadAssetIndex
+import io.github.ikaros.vesper.player.android.VesperDownloadAssetStream
 import io.github.ikaros.vesper.player.android.VesperDownloadByteRange
 import io.github.ikaros.vesper.player.android.VesperDownloadConfiguration
 import io.github.ikaros.vesper.player.android.VesperDownloadContentFormat
@@ -54,6 +55,7 @@ import io.github.ikaros.vesper.player.android.VesperDownloadResourceRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSegmentRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadState
+import io.github.ikaros.vesper.player.android.VesperDownloadStreamKind
 import io.github.ikaros.vesper.player.android.VesperDownloadStaleResource
 import io.github.ikaros.vesper.player.android.VesperDownloadStaleResourcePlanRecoverer
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskProgressPatch
@@ -1536,6 +1538,12 @@ private fun Map<String, Any?>.toDownloadAssetIndex(): VesperDownloadAssetIndex =
                     (value as? Map<*, *>)?.stringMap()?.toDownloadSegmentRecord()
                 }
                 ?: emptyList(),
+        streams =
+            (this["streams"] as? List<*>)
+                ?.mapNotNull { value ->
+                    (value as? Map<*, *>)?.stringMap()?.toDownloadAssetStream()
+                }
+                ?: emptyList(),
         completedPath = this["completedPath"] as? String,
     )
 
@@ -1560,6 +1568,30 @@ private fun Map<String, Any?>.toDownloadSegmentRecord(): VesperDownloadSegmentRe
         byteRange = (this["byteRange"] as? Map<*, *>)?.stringMap()?.toDownloadByteRange(),
         sizeBytes = (this["sizeBytes"] as? Number)?.toLong(),
         checksum = this["checksum"] as? String,
+    )
+
+private fun Map<String, Any?>.toDownloadAssetStream(): VesperDownloadAssetStream =
+    VesperDownloadAssetStream(
+        streamId = this["streamId"] as? String ?: "",
+        kind =
+            (this["kind"] as? String)?.let { wire ->
+                VesperDownloadStreamKind.entries.find { it.name.equals(wire, ignoreCase = true) }
+            } ?: VesperDownloadStreamKind.Combined,
+        language = this["language"] as? String,
+        codec = this["codec"] as? String,
+        label = this["label"] as? String,
+        qualityRank = (this["qualityRank"] as? Number)?.toInt(),
+        resourceIds = (this["resourceIds"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        segmentIds = (this["segmentIds"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        metadata =
+            (this["metadata"] as? Map<*, *>)
+                ?.mapNotNull { (key, value) ->
+                    val name = key as? String ?: return@mapNotNull null
+                    val text = value as? String ?: return@mapNotNull null
+                    name to text
+                }
+                ?.toMap()
+                ?: emptyMap(),
     )
 
 private fun Map<String, Any?>.toDownloadByteRange(): VesperDownloadByteRange =
@@ -2033,6 +2065,7 @@ private fun VesperDownloadAssetIndex.toMap(): Map<String, Any?> =
         "totalSizeBytes" to totalSizeBytes,
         "resources" to resources.map(VesperDownloadResourceRecord::toMap),
         "segments" to segments.map(VesperDownloadSegmentRecord::toMap),
+        "streams" to streams.map(VesperDownloadAssetStream::toMap),
         "completedPath" to completedPath,
     )
 
@@ -2069,6 +2102,19 @@ private fun VesperDownloadSegmentRecord.toMap(): Map<String, Any?> =
         "byteRange" to byteRange?.toMap(),
         "sizeBytes" to sizeBytes,
         "checksum" to checksum,
+    )
+
+private fun VesperDownloadAssetStream.toMap(): Map<String, Any?> =
+    mapOf(
+        "streamId" to streamId,
+        "kind" to kind.name.replaceFirstChar { it.lowercase() },
+        "language" to language,
+        "codec" to codec,
+        "label" to label,
+        "qualityRank" to qualityRank,
+        "resourceIds" to resourceIds,
+        "segmentIds" to segmentIds,
+        "metadata" to metadata,
     )
 
 private fun VesperDownloadByteRange.toMap(): Map<String, Any?> =

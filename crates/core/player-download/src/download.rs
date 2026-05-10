@@ -8,8 +8,9 @@ use std::time::Instant;
 
 use player_model::MediaSource;
 use player_plugin::{
-    CompletedContentFormat, CompletedDownloadInfo, DownloadMetadata, OutputFormat, PipelineEvent,
-    PipelineEventHook, PostDownloadProcessor, ProcessorError, ProcessorOutput, ProcessorProgress,
+    AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
+    OutputFormat, PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorError,
+    ProcessorOutput, ProcessorProgress, StreamKind,
 };
 
 use crate::{
@@ -138,6 +139,29 @@ pub struct DownloadSegmentRecord {
     pub checksum: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DownloadStreamKind {
+    Combined,
+    Video,
+    Audio,
+    SecondaryAudio,
+    Subtitle,
+    Auxiliary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadAssetStream {
+    pub stream_id: String,
+    pub kind: DownloadStreamKind,
+    pub language: Option<String>,
+    pub codec: Option<String>,
+    pub label: Option<String>,
+    pub quality_rank: Option<u32>,
+    pub resource_ids: Vec<String>,
+    pub segment_ids: Vec<String>,
+    pub metadata: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadAssetIndex {
     pub content_format: DownloadContentFormat,
@@ -147,6 +171,7 @@ pub struct DownloadAssetIndex {
     pub total_size_bytes: Option<u64>,
     pub resources: Vec<DownloadResourceRecord>,
     pub segments: Vec<DownloadSegmentRecord>,
+    pub streams: Vec<DownloadAssetStream>,
     pub completed_path: Option<PathBuf>,
 }
 
@@ -160,6 +185,7 @@ impl Default for DownloadAssetIndex {
             total_size_bytes: None,
             resources: Vec::new(),
             segments: Vec::new(),
+            streams: Vec::new(),
             completed_path: None,
         }
     }
@@ -198,6 +224,32 @@ impl DownloadAssetIndex {
         } else {
             Some(self.segments.len() as u32)
         }
+    }
+
+    pub fn ensure_default_streams(&mut self) {
+        if !self.streams.is_empty() {
+            return;
+        }
+
+        self.streams.push(DownloadAssetStream {
+            stream_id: "combined".to_owned(),
+            kind: DownloadStreamKind::Combined,
+            language: None,
+            codec: None,
+            label: None,
+            quality_rank: None,
+            resource_ids: self
+                .resources
+                .iter()
+                .map(|resource| resource.resource_id.clone())
+                .collect(),
+            segment_ids: self
+                .segments
+                .iter()
+                .map(|segment| segment.segment_id.clone())
+                .collect(),
+            metadata: HashMap::new(),
+        });
     }
 }
 
@@ -583,6 +635,7 @@ where
         self.next_task_id += 1;
 
         asset_index.content_format = source.content_format;
+        asset_index.ensure_default_streams();
 
         let snapshot = DownloadTaskSnapshot {
             task_id,
@@ -635,6 +688,7 @@ where
                 .progress
                 .total_segments
                 .or_else(|| task.asset_index.total_segment_count());
+            task.asset_index.ensure_default_streams();
             task.updated_at = now;
 
             max_task_id = max_task_id.max(task.task_id.get());
@@ -718,6 +772,7 @@ where
         }
 
         asset_index.content_format = source.content_format;
+        asset_index.ensure_default_streams();
         let mut replaced = snapshot;
         replaced.source = source;
         replaced.profile = profile;
@@ -982,6 +1037,7 @@ where
         };
 
         asset_index.content_format = snapshot.source.content_format;
+        asset_index.ensure_default_streams();
         snapshot.progress = DownloadProgressSnapshot::from_index(&asset_index);
         snapshot.asset_index = asset_index;
         snapshot.updated_at = now;
@@ -1080,16 +1136,32 @@ where
         snapshot: &DownloadTaskSnapshot,
     ) -> PlayerRuntimeResult<Option<PathBuf>> {
         if self.config.post_processors.is_empty() {
+            if download_streams_require_assembly(&snapshot.asset_index.streams) {
+                let assembly_mode =
+                    infer_assembly_mode_from_download_streams(&snapshot.asset_index.streams);
+                return Err(assembly_required_error_for_mode(
+                    snapshot,
+                    assembly_mode,
+                    false,
+                ));
+            }
             return Ok(snapshot.asset_index.completed_path.clone());
         }
 
         let mut current_input = self.completed_download_info(snapshot)?;
         let mut current_completed_path = snapshot.asset_index.completed_path.clone();
+        let mut required_assembly = completed_info_requires_assembly(&current_input);
+        let mut ran_processor = false;
         let progress = NoopProcessorProgress;
 
         for processor in &self.config.post_processors {
             let input_kind = current_input.content_format.kind();
-            if !processor.supported_input_formats().contains(&input_kind) {
+            let can_process = if completed_info_requires_assembly(&current_input) {
+                processor_can_assemble(processor, &current_input)
+            } else {
+                processor.supported_input_formats().contains(&input_kind)
+            };
+            if !can_process {
                 continue;
             }
 
@@ -1103,19 +1175,26 @@ where
                 processor: processor.name().to_owned(),
             });
 
-            match processor.process(&current_input, &output_path, &progress) {
+            ran_processor = true;
+            let result = if completed_info_requires_assembly(&current_input) {
+                processor.assemble(&current_input, &output_path, &progress)
+            } else {
+                processor.process(&current_input, &output_path, &progress)
+            };
+
+            match result {
                 Ok(ProcessorOutput::MuxedFile { path, .. }) => {
                     self.dispatch_pipeline_event(PipelineEvent::PostProcessCompleted {
                         task_id: snapshot.task_id.get().to_string(),
                         output_path: path.display().to_string(),
                     });
                     current_completed_path = Some(path.clone());
-                    current_input = CompletedDownloadInfo {
-                        asset_id: snapshot.asset_id.as_str().to_owned(),
-                        task_id: Some(snapshot.task_id.get().to_string()),
-                        content_format: CompletedContentFormat::SingleFile { path },
-                        metadata: current_input.metadata.clone(),
-                    };
+                    current_input = completed_info_for_processed_output(
+                        snapshot,
+                        path,
+                        current_input.metadata.clone(),
+                    );
+                    required_assembly = completed_info_requires_assembly(&current_input);
                 }
                 Ok(ProcessorOutput::Skipped) => {}
                 Err(error) => {
@@ -1126,6 +1205,14 @@ where
                     return Err(map_processor_error(processor.name(), error));
                 }
             }
+        }
+
+        if required_assembly {
+            return Err(assembly_required_error(
+                snapshot,
+                &current_input,
+                ran_processor,
+            ));
         }
 
         Ok(current_completed_path)
@@ -1140,10 +1227,16 @@ where
         let mut current_input = self.completed_download_info(snapshot)?;
         let mut current_completed_path = snapshot.asset_index.completed_path.clone();
         let mut ran_processor = false;
+        let mut required_assembly = completed_info_requires_assembly(&current_input);
 
         for processor in &self.config.post_processors {
             let input_kind = current_input.content_format.kind();
-            if !processor.supported_input_formats().contains(&input_kind) {
+            let can_process = if completed_info_requires_assembly(&current_input) {
+                processor_can_assemble(processor, &current_input)
+            } else {
+                processor.supported_input_formats().contains(&input_kind)
+            };
+            if !can_process {
                 continue;
             }
 
@@ -1169,19 +1262,25 @@ where
                 processor: processor.name().to_owned(),
             });
 
-            match processor.process(&current_input, &resolved_output_path, progress) {
+            let result = if completed_info_requires_assembly(&current_input) {
+                processor.assemble(&current_input, &resolved_output_path, progress)
+            } else {
+                processor.process(&current_input, &resolved_output_path, progress)
+            };
+
+            match result {
                 Ok(ProcessorOutput::MuxedFile { path, .. }) => {
                     self.dispatch_pipeline_event(PipelineEvent::PostProcessCompleted {
                         task_id: snapshot.task_id.get().to_string(),
                         output_path: path.display().to_string(),
                     });
                     current_completed_path = Some(path.clone());
-                    current_input = CompletedDownloadInfo {
-                        asset_id: snapshot.asset_id.as_str().to_owned(),
-                        task_id: Some(snapshot.task_id.get().to_string()),
-                        content_format: CompletedContentFormat::SingleFile { path },
-                        metadata: current_input.metadata.clone(),
-                    };
+                    current_input = completed_info_for_processed_output(
+                        snapshot,
+                        path,
+                        current_input.metadata.clone(),
+                    );
+                    required_assembly = completed_info_requires_assembly(&current_input);
                 }
                 Ok(ProcessorOutput::Skipped) => {}
                 Err(error) => {
@@ -1192,6 +1291,14 @@ where
                     return Err(map_processor_error(processor.name(), error));
                 }
             }
+        }
+
+        if required_assembly {
+            return Err(assembly_required_error(
+                snapshot,
+                &current_input,
+                ran_processor,
+            ));
         }
 
         if ran_processor && let Some(path) = current_completed_path {
@@ -1274,6 +1381,8 @@ where
             task_id: Some(snapshot.task_id.get().to_string()),
             content_format,
             metadata,
+            streams: completed_streams_for_snapshot(snapshot)?,
+            assembly_mode: infer_assembly_mode_from_download_streams(&snapshot.asset_index.streams),
         })
     }
 }
@@ -1282,6 +1391,326 @@ struct NoopProcessorProgress;
 
 impl ProcessorProgress for NoopProcessorProgress {
     fn on_progress(&self, _ratio: f32) {}
+}
+
+fn completed_info_requires_assembly(input: &CompletedDownloadInfo) -> bool {
+    input.assembly_mode != AssemblyMode::Single && input.streams.len() > 1
+}
+
+fn download_streams_require_assembly(streams: &[DownloadAssetStream]) -> bool {
+    infer_assembly_mode_from_download_streams(streams) != AssemblyMode::Single && streams.len() > 1
+}
+
+fn processor_can_assemble(
+    processor: &Arc<dyn PostDownloadProcessor>,
+    input: &CompletedDownloadInfo,
+) -> bool {
+    if !processor.supports_assembly() {
+        return false;
+    }
+    let capabilities = processor.capabilities();
+    capabilities
+        .supported_assembly_modes
+        .contains(&input.assembly_mode)
+        && input.streams.iter().all(|stream| {
+            capabilities
+                .supported_input_formats
+                .contains(&stream.content_format.kind())
+        })
+}
+
+fn assembly_required_error(
+    snapshot: &DownloadTaskSnapshot,
+    input: &CompletedDownloadInfo,
+    ran_processor: bool,
+) -> PlayerRuntimeError {
+    assembly_required_error_for_mode(snapshot, input.assembly_mode, ran_processor)
+}
+
+fn assembly_required_error_for_mode(
+    snapshot: &DownloadTaskSnapshot,
+    assembly_mode: AssemblyMode,
+    ran_processor: bool,
+) -> PlayerRuntimeError {
+    let detail = if ran_processor {
+        "no processor produced an assembled output"
+    } else {
+        "no processor supports this assembly mode"
+    };
+    PlayerRuntimeError::with_category(
+        PlayerRuntimeErrorCode::Unsupported,
+        PlayerRuntimeErrorCategory::Capability,
+        format!(
+            "download task {} requires post-download assembly for {:?}: {detail}",
+            snapshot.task_id.get(),
+            assembly_mode
+        ),
+    )
+}
+
+fn completed_info_for_processed_output(
+    snapshot: &DownloadTaskSnapshot,
+    path: PathBuf,
+    metadata: DownloadMetadata,
+) -> CompletedDownloadInfo {
+    let content_format = CompletedContentFormat::SingleFile { path: path.clone() };
+    CompletedDownloadInfo {
+        asset_id: snapshot.asset_id.as_str().to_owned(),
+        task_id: Some(snapshot.task_id.get().to_string()),
+        content_format: content_format.clone(),
+        metadata: metadata.clone(),
+        streams: vec![CompletedStream {
+            stream_id: Some("combined".to_owned()),
+            kind: StreamKind::Combined,
+            content_format,
+            language: None,
+            codec: None,
+            label: None,
+            metadata,
+            quality_rank: None,
+        }],
+        assembly_mode: AssemblyMode::Single,
+    }
+}
+
+fn completed_streams_for_snapshot(
+    snapshot: &DownloadTaskSnapshot,
+) -> PlayerRuntimeResult<Vec<CompletedStream>> {
+    let streams = effective_asset_streams(&snapshot.asset_index);
+    streams
+        .iter()
+        .map(|stream| {
+            Ok(CompletedStream {
+                stream_id: Some(stream.stream_id.clone()),
+                kind: download_stream_kind_to_plugin(stream.kind),
+                content_format: content_format_for_stream(snapshot, stream)?,
+                language: stream.language.clone(),
+                codec: stream.codec.clone(),
+                label: stream.label.clone(),
+                metadata: DownloadMetadata {
+                    source_uri: None,
+                    manifest_uri: None,
+                    total_bytes: None,
+                    version: None,
+                    etag: None,
+                    checksum: None,
+                    mime_type: None,
+                    custom: stream.metadata.clone().into_iter().collect(),
+                },
+                quality_rank: stream.quality_rank,
+            })
+        })
+        .collect()
+}
+
+fn effective_asset_streams(asset_index: &DownloadAssetIndex) -> Vec<DownloadAssetStream> {
+    if !asset_index.streams.is_empty() {
+        return asset_index.streams.clone();
+    }
+    vec![DownloadAssetStream {
+        stream_id: "combined".to_owned(),
+        kind: DownloadStreamKind::Combined,
+        language: None,
+        codec: None,
+        label: None,
+        quality_rank: None,
+        resource_ids: asset_index
+            .resources
+            .iter()
+            .map(|resource| resource.resource_id.clone())
+            .collect(),
+        segment_ids: asset_index
+            .segments
+            .iter()
+            .map(|segment| segment.segment_id.clone())
+            .collect(),
+        metadata: HashMap::new(),
+    }]
+}
+
+fn content_format_for_stream(
+    snapshot: &DownloadTaskSnapshot,
+    stream: &DownloadAssetStream,
+) -> PlayerRuntimeResult<CompletedContentFormat> {
+    match snapshot.source.content_format {
+        DownloadContentFormat::HlsSegments => Ok(CompletedContentFormat::HlsSegments {
+            manifest_path: resolve_stream_manifest_path(snapshot, stream, "m3u8")?,
+            segment_paths: resolve_stream_segment_paths(snapshot, stream),
+        }),
+        DownloadContentFormat::DashSegments => Ok(CompletedContentFormat::DashSegments {
+            manifest_path: resolve_stream_manifest_path(snapshot, stream, "mpd")?,
+            segment_paths: resolve_stream_segment_paths(snapshot, stream),
+        }),
+        DownloadContentFormat::FlvSegments => Ok(CompletedContentFormat::FlvSegments {
+            manifest_path: resolve_stream_manifest_path(snapshot, stream, "ffconcat")?,
+            segment_paths: resolve_stream_segment_paths(snapshot, stream),
+        }),
+        DownloadContentFormat::SingleFile => Ok(CompletedContentFormat::SingleFile {
+            path: resolve_stream_single_file_path(snapshot, stream)?,
+        }),
+        DownloadContentFormat::Unknown => Err(PlayerRuntimeError::with_category(
+            PlayerRuntimeErrorCode::Unsupported,
+            PlayerRuntimeErrorCategory::Capability,
+            format!(
+                "download task {} has unknown content format for stream assembly",
+                snapshot.task_id.get()
+            ),
+        )),
+    }
+}
+
+fn resolve_stream_manifest_path(
+    snapshot: &DownloadTaskSnapshot,
+    stream: &DownloadAssetStream,
+    extension: &str,
+) -> PlayerRuntimeResult<PathBuf> {
+    let target_directory = target_directory_for_snapshot(snapshot)?;
+    stream
+        .resource_ids
+        .iter()
+        .filter_map(|resource_id| {
+            snapshot
+                .asset_index
+                .resources
+                .iter()
+                .find(|resource| &resource.resource_id == resource_id)
+        })
+        .find_map(|resource| {
+            let relative_path = resource.relative_path.as_ref()?;
+            relative_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+                .then(|| target_directory.join(relative_path))
+        })
+        .or_else(|| resolve_manifest_path(snapshot).ok())
+        .ok_or_else(|| {
+            PlayerRuntimeError::with_category(
+                PlayerRuntimeErrorCode::InvalidState,
+                PlayerRuntimeErrorCategory::Playback,
+                format!(
+                    "download task {} is missing a stream manifest for `{}`",
+                    snapshot.task_id.get(),
+                    stream.stream_id
+                ),
+            )
+        })
+}
+
+fn resolve_stream_segment_paths(
+    snapshot: &DownloadTaskSnapshot,
+    stream: &DownloadAssetStream,
+) -> Vec<PathBuf> {
+    let Some(target_directory) = snapshot.profile.target_directory.as_ref() else {
+        return Vec::new();
+    };
+    if stream.segment_ids.is_empty() {
+        return resolve_segment_paths(snapshot);
+    }
+    stream
+        .segment_ids
+        .iter()
+        .filter_map(|segment_id| {
+            snapshot
+                .asset_index
+                .segments
+                .iter()
+                .find(|segment| &segment.segment_id == segment_id)
+                .and_then(|segment| segment.relative_path.as_ref())
+                .map(|relative_path| target_directory.join(relative_path))
+        })
+        .collect()
+}
+
+fn resolve_stream_single_file_path(
+    snapshot: &DownloadTaskSnapshot,
+    stream: &DownloadAssetStream,
+) -> PlayerRuntimeResult<PathBuf> {
+    let target_directory = target_directory_for_snapshot(snapshot)?;
+    stream
+        .resource_ids
+        .iter()
+        .filter_map(|resource_id| {
+            snapshot
+                .asset_index
+                .resources
+                .iter()
+                .find(|resource| &resource.resource_id == resource_id)
+        })
+        .find_map(|resource| {
+            resource
+                .relative_path
+                .as_ref()
+                .map(|relative_path| target_directory.join(relative_path))
+        })
+        .or_else(|| resolve_single_file_path(snapshot).ok())
+        .ok_or_else(|| {
+            PlayerRuntimeError::with_category(
+                PlayerRuntimeErrorCode::InvalidState,
+                PlayerRuntimeErrorCategory::Playback,
+                format!(
+                    "download task {} is missing a stream file for `{}`",
+                    snapshot.task_id.get(),
+                    stream.stream_id
+                ),
+            )
+        })
+}
+
+fn target_directory_for_snapshot(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult<&Path> {
+    snapshot.profile.target_directory.as_deref().ok_or_else(|| {
+        PlayerRuntimeError::with_category(
+            PlayerRuntimeErrorCode::InvalidState,
+            PlayerRuntimeErrorCategory::Playback,
+            format!(
+                "download task {} is missing target directory",
+                snapshot.task_id.get()
+            ),
+        )
+    })
+}
+
+fn infer_assembly_mode_from_download_streams(streams: &[DownloadAssetStream]) -> AssemblyMode {
+    if streams.len() <= 1 {
+        return AssemblyMode::Single;
+    }
+
+    let has_video = streams
+        .iter()
+        .any(|stream| matches!(stream.kind, DownloadStreamKind::Video));
+    let audio_count = streams
+        .iter()
+        .filter(|stream| {
+            matches!(
+                stream.kind,
+                DownloadStreamKind::Audio | DownloadStreamKind::SecondaryAudio
+            )
+        })
+        .count();
+    let has_subtitle = streams
+        .iter()
+        .any(|stream| matches!(stream.kind, DownloadStreamKind::Subtitle));
+
+    if has_subtitle {
+        AssemblyMode::WithSubtitles
+    } else if has_video && audio_count > 1 {
+        AssemblyMode::MultiAudio
+    } else if has_video && audio_count == 1 {
+        AssemblyMode::SeparateAudioVideo
+    } else {
+        AssemblyMode::Generic
+    }
+}
+
+fn download_stream_kind_to_plugin(kind: DownloadStreamKind) -> StreamKind {
+    match kind {
+        DownloadStreamKind::Combined => StreamKind::Combined,
+        DownloadStreamKind::Video => StreamKind::Video,
+        DownloadStreamKind::Audio => StreamKind::Audio,
+        DownloadStreamKind::SecondaryAudio => StreamKind::SecondaryAudio,
+        DownloadStreamKind::Subtitle => StreamKind::Subtitle,
+        DownloadStreamKind::Auxiliary => StreamKind::Auxiliary,
+    }
 }
 
 fn derive_processor_output_path(
@@ -1628,14 +2057,16 @@ mod tests {
     };
     use crate::download::NoopProcessorProgress;
     use crate::{
-        PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+        DownloadAssetStream, DownloadStreamKind, PlayerRuntimeError, PlayerRuntimeErrorCategory,
+        PlayerRuntimeErrorCode, PlayerRuntimeResult,
     };
     use player_model::MediaSource;
     use player_plugin::{
-        CompletedDownloadInfo, ContentFormatKind, OutputFormat, PipelineEvent, PipelineEventHook,
-        PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,
-        ProcessorProgress,
+        AssemblyMode, CompletedDownloadInfo, ContentFormatKind, OutputFormat, PipelineEvent,
+        PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
+        ProcessorOutput, ProcessorProgress,
     };
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -1675,6 +2106,8 @@ mod tests {
                 supported_input_formats: vec![ContentFormatKind::HlsSegments],
                 output_formats: vec![OutputFormat::Mp4],
                 supports_cancellation: false,
+                supports_assembly: true,
+                supported_assembly_modes: vec![AssemblyMode::SeparateAudioVideo],
             }
         }
 
@@ -1696,10 +2129,22 @@ mod tests {
                 format: OutputFormat::Mp4,
             })
         }
+
+        fn assemble(
+            &self,
+            input: &CompletedDownloadInfo,
+            output_path: &std::path::Path,
+            progress: &dyn ProcessorProgress,
+        ) -> Result<ProcessorOutput, ProcessorError> {
+            self.process(input, output_path, progress)
+        }
     }
 
     #[derive(Debug, Default)]
     struct FailingProcessor;
+
+    #[derive(Debug, Default)]
+    struct SkippingAssemblyProcessor;
 
     #[derive(Debug, Default)]
     struct RecordingProgress {
@@ -1738,6 +2183,8 @@ mod tests {
                 supported_input_formats: vec![ContentFormatKind::HlsSegments],
                 output_formats: vec![OutputFormat::Mp4],
                 supports_cancellation: false,
+                supports_assembly: false,
+                supported_assembly_modes: Vec::new(),
             }
         }
 
@@ -1748,6 +2195,45 @@ mod tests {
             _progress: &dyn ProcessorProgress,
         ) -> Result<ProcessorOutput, ProcessorError> {
             Err(ProcessorError::MuxFailed("ffmpeg remux failed".to_owned()))
+        }
+    }
+
+    impl PostDownloadProcessor for SkippingAssemblyProcessor {
+        fn name(&self) -> &str {
+            "skipping-assembly-processor"
+        }
+
+        fn supported_input_formats(&self) -> &[ContentFormatKind] {
+            static SUPPORTED: [ContentFormatKind; 1] = [ContentFormatKind::HlsSegments];
+            &SUPPORTED
+        }
+
+        fn capabilities(&self) -> ProcessorCapabilities {
+            ProcessorCapabilities {
+                supported_input_formats: vec![ContentFormatKind::HlsSegments],
+                output_formats: vec![OutputFormat::Mp4],
+                supports_cancellation: false,
+                supports_assembly: true,
+                supported_assembly_modes: vec![AssemblyMode::SeparateAudioVideo],
+            }
+        }
+
+        fn process(
+            &self,
+            _input: &CompletedDownloadInfo,
+            _output_path: &std::path::Path,
+            _progress: &dyn ProcessorProgress,
+        ) -> Result<ProcessorOutput, ProcessorError> {
+            Ok(ProcessorOutput::Skipped)
+        }
+
+        fn assemble(
+            &self,
+            _input: &CompletedDownloadInfo,
+            _output_path: &std::path::Path,
+            _progress: &dyn ProcessorProgress,
+        ) -> Result<ProcessorOutput, ProcessorError> {
+            Ok(ProcessorOutput::Skipped)
         }
     }
 
@@ -1851,6 +2337,79 @@ mod tests {
                     byte_range: None,
                     size_bytes: Some(512),
                     checksum: None,
+                },
+            ],
+            ..DownloadAssetIndex::default()
+        }
+    }
+
+    fn multi_stream_hls_asset_index(total_size_bytes: u64) -> DownloadAssetIndex {
+        DownloadAssetIndex {
+            total_size_bytes: Some(total_size_bytes),
+            resources: vec![
+                DownloadResourceRecord {
+                    resource_id: "video-playlist".to_owned(),
+                    uri: "video.m3u8".to_owned(),
+                    relative_path: Some(PathBuf::from("video.m3u8")),
+                    byte_range: None,
+                    generated_text: None,
+                    size_bytes: None,
+                    etag: None,
+                    checksum: None,
+                },
+                DownloadResourceRecord {
+                    resource_id: "audio-playlist".to_owned(),
+                    uri: "audio.m3u8".to_owned(),
+                    relative_path: Some(PathBuf::from("audio.m3u8")),
+                    byte_range: None,
+                    generated_text: None,
+                    size_bytes: None,
+                    etag: None,
+                    checksum: None,
+                },
+            ],
+            segments: vec![
+                DownloadSegmentRecord {
+                    segment_id: "video-seg-1".to_owned(),
+                    uri: "video-1.ts".to_owned(),
+                    relative_path: Some(PathBuf::from("video-1.ts")),
+                    sequence: Some(1),
+                    byte_range: None,
+                    size_bytes: Some(768),
+                    checksum: None,
+                },
+                DownloadSegmentRecord {
+                    segment_id: "audio-seg-1".to_owned(),
+                    uri: "audio-1.aac".to_owned(),
+                    relative_path: Some(PathBuf::from("audio-1.aac")),
+                    sequence: Some(1),
+                    byte_range: None,
+                    size_bytes: Some(256),
+                    checksum: None,
+                },
+            ],
+            streams: vec![
+                DownloadAssetStream {
+                    stream_id: "video".to_owned(),
+                    kind: DownloadStreamKind::Video,
+                    language: None,
+                    codec: Some("avc1.640028".to_owned()),
+                    label: Some("1080p".to_owned()),
+                    quality_rank: Some(0),
+                    resource_ids: vec!["video-playlist".to_owned()],
+                    segment_ids: vec!["video-seg-1".to_owned()],
+                    metadata: HashMap::new(),
+                },
+                DownloadAssetStream {
+                    stream_id: "audio".to_owned(),
+                    kind: DownloadStreamKind::Audio,
+                    language: Some("en".to_owned()),
+                    codec: Some("mp4a.40.2".to_owned()),
+                    label: Some("English".to_owned()),
+                    quality_rank: None,
+                    resource_ids: vec!["audio-playlist".to_owned()],
+                    segment_ids: vec!["audio-seg-1".to_owned()],
+                    metadata: HashMap::new(),
                 },
             ],
             ..DownloadAssetIndex::default()
@@ -2464,6 +3023,146 @@ mod tests {
             PipelineEvent::DownloadTaskFailed { error, .. }
                 if error.contains("failing-processor")
         )));
+    }
+
+    #[test]
+    fn manager_assembles_multi_stream_downloads_with_capable_processor() {
+        let processor = Arc::new(RecordingProcessor::default());
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            post_processors: vec![processor.clone()],
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = InMemoryDownloadExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/master.m3u8"),
+                DownloadProfile {
+                    target_directory: Some(PathBuf::from("/tmp/offline")),
+                    ..DownloadProfile::default()
+                },
+                multi_stream_hls_asset_index(1024),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let completed = manager
+            .complete_task(
+                task_id,
+                Some(PathBuf::from("/tmp/offline/master.m3u8")),
+                now,
+            )
+            .expect("complete should succeed")
+            .expect("task should exist");
+
+        assert_eq!(completed.status, DownloadTaskStatus::Completed);
+        assert_eq!(
+            completed.asset_index.completed_path,
+            Some(PathBuf::from("/tmp/offline/master.mp4"))
+        );
+
+        let invocations = processor.invocations();
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(
+            invocations[0].0.assembly_mode,
+            AssemblyMode::SeparateAudioVideo
+        );
+        assert_eq!(invocations[0].0.streams.len(), 2);
+    }
+
+    #[test]
+    fn manager_fails_multi_stream_completion_without_assembly_processor() {
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = InMemoryDownloadExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/master.m3u8"),
+                DownloadProfile {
+                    target_directory: Some(PathBuf::from("/tmp/offline")),
+                    ..DownloadProfile::default()
+                },
+                multi_stream_hls_asset_index(1024),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let failed = manager
+            .complete_task(
+                task_id,
+                Some(PathBuf::from("/tmp/offline/master.m3u8")),
+                now,
+            )
+            .expect("complete should return failed state")
+            .expect("task should exist");
+
+        assert_eq!(failed.status, DownloadTaskStatus::Failed);
+        let message = failed
+            .error_summary
+            .as_ref()
+            .map(|error| error.message.as_str())
+            .unwrap_or_default();
+        assert!(message.contains("requires post-download assembly"));
+        assert!(message.contains("no processor supports this assembly mode"));
+    }
+
+    #[test]
+    fn manager_fails_multi_stream_completion_when_assembly_processor_skips() {
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            post_processors: vec![Arc::new(SkippingAssemblyProcessor)],
+            ..DownloadManagerConfig::default()
+        };
+        let store = InMemoryDownloadStore::default();
+        let executor = InMemoryDownloadExecutor::default();
+        let mut manager = DownloadManager::new(config, store, executor);
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/master.m3u8"),
+                DownloadProfile {
+                    target_directory: Some(PathBuf::from("/tmp/offline")),
+                    ..DownloadProfile::default()
+                },
+                multi_stream_hls_asset_index(1024),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let failed = manager
+            .complete_task(
+                task_id,
+                Some(PathBuf::from("/tmp/offline/master.m3u8")),
+                now,
+            )
+            .expect("complete should return failed state")
+            .expect("task should exist");
+
+        assert_eq!(failed.status, DownloadTaskStatus::Failed);
+        let message = failed
+            .error_summary
+            .as_ref()
+            .map(|error| error.message.as_str())
+            .unwrap_or_default();
+        assert!(message.contains("requires post-download assembly"));
+        assert!(message.contains("no processor produced an assembled output"));
     }
 
     #[test]

@@ -16,8 +16,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use player_download::{DownloadPlanner, DownloadPlanningClient};
 use player_model::{MediaSource, MediaSourceProtocol};
 use player_plugin::{
-    CompletedContentFormat, CompletedDownloadInfo, DownloadMetadata, OutputFormat,
-    PostDownloadProcessor, ProcessorOutput, ProcessorProgress,
+    AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
+    OutputFormat, PostDownloadProcessor, ProcessorOutput, ProcessorProgress, StreamKind,
 };
 use player_remux_ffmpeg::FfmpegRemuxProcessor;
 use player_runtime::{
@@ -1391,8 +1391,19 @@ fn completed_download_info(
     Ok(CompletedDownloadInfo {
         asset_id: snapshot.asset_id.as_str().to_owned(),
         task_id: Some(snapshot.task_id.get().to_string()),
-        content_format,
-        metadata,
+        content_format: content_format.clone(),
+        metadata: metadata.clone(),
+        streams: vec![CompletedStream {
+            stream_id: Some("combined".to_owned()),
+            kind: StreamKind::Combined,
+            content_format,
+            language: None,
+            codec: None,
+            label: None,
+            metadata,
+            quality_rank: None,
+        }],
+        assembly_mode: AssemblyMode::Single,
     })
 }
 

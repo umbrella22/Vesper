@@ -223,6 +223,15 @@ typedef enum VesperRuntimeDownloadOutputFormat {
   VesperRuntimeDownloadOutputFormatOriginal = 2,
 } VesperRuntimeDownloadOutputFormat;
 
+typedef enum VesperRuntimeDownloadStreamKind {
+  VesperRuntimeDownloadStreamKindCombined = 0,
+  VesperRuntimeDownloadStreamKindVideo = 1,
+  VesperRuntimeDownloadStreamKindAudio = 2,
+  VesperRuntimeDownloadStreamKindSecondaryAudio = 3,
+  VesperRuntimeDownloadStreamKindSubtitle = 4,
+  VesperRuntimeDownloadStreamKindAuxiliary = 5,
+} VesperRuntimeDownloadStreamKind;
+
 typedef struct VesperRuntimeDownloadSource {
   char *source_uri;
   VesperRuntimeDownloadContentFormat content_format;
@@ -275,6 +284,23 @@ typedef struct VesperRuntimeDownloadSegmentRecord {
   char *checksum;
 } VesperRuntimeDownloadSegmentRecord;
 
+typedef struct VesperRuntimeDownloadAssetStream {
+  char *stream_id;
+  VesperRuntimeDownloadStreamKind kind;
+  char *language;
+  char *codec;
+  char *label;
+  bool has_quality_rank;
+  uint32_t quality_rank;
+  char **resource_ids;
+  uintptr_t resource_ids_len;
+  char **segment_ids;
+  uintptr_t segment_ids_len;
+  char **metadata_keys;
+  char **metadata_values;
+  uintptr_t metadata_len;
+} VesperRuntimeDownloadAssetStream;
+
 typedef struct VesperRuntimeDownloadAssetIndex {
   VesperRuntimeDownloadContentFormat content_format;
   char *version;
@@ -286,6 +312,8 @@ typedef struct VesperRuntimeDownloadAssetIndex {
   uintptr_t resources_len;
   VesperRuntimeDownloadSegmentRecord *segments;
   uintptr_t segments_len;
+  VesperRuntimeDownloadAssetStream *streams;
+  uintptr_t streams_len;
   char *completed_path;
 } VesperRuntimeDownloadAssetIndex;
 
@@ -356,16 +384,17 @@ typedef enum VesperRuntimeDownloadEventKind {
 
 typedef struct VesperRuntimeDownloadEvent {
   VesperRuntimeDownloadEventKind kind;
-  VesperRuntimeDownloadTask task;
+  VesperRuntimeDownloadTask *task;
   uint64_t task_id;
-  VesperRuntimeDownloadTaskStatus status;
+  VesperRuntimeDownloadTaskStatus state_status;
+  VesperRuntimeDownloadProgressSnapshot state_progress;
+  bool state_has_error;
+  uint32_t state_error_code;
+  uint32_t state_error_category;
+  bool state_error_retriable;
+  char *state_error_message;
+  char *state_completed_path;
   VesperRuntimeDownloadProgressSnapshot progress;
-  bool has_error;
-  uint32_t error_code;
-  uint32_t error_category;
-  bool error_retriable;
-  char *error_message;
-  char *completed_path;
 } VesperRuntimeDownloadEvent;
 
 typedef struct VesperRuntimeDownloadEventList {

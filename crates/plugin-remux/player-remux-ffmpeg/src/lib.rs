@@ -4,9 +4,10 @@ mod muxer;
 use std::ffi::{CStr, c_char, c_void};
 
 use player_plugin::{
-    CompletedDownloadInfo, PostDownloadProcessor, ProcessorError, VESPER_PLUGIN_ABI_VERSION_V2,
-    VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
-    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    CompletedDownloadInfo, PostDownloadProcessor, ProcessorError,
+    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperPluginBytes, VesperPluginDescriptor,
+    VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
+    VesperPluginResultStatus, VesperPostDownloadProcessorApi,
 };
 
 pub use muxer::FfmpegRemuxProcessor;
@@ -31,9 +32,10 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
             capabilities_json: Some(processor_capabilities_json),
             free_bytes: Some(free_plugin_bytes),
             process_json: Some(processor_process_json),
+            assemble_json: Some(processor_assemble_json),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::PostDownloadProcessor,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
@@ -75,20 +77,50 @@ unsafe extern "C" fn processor_process_json(
 ) -> VesperPluginProcessResult {
     let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
     let result = decode_input(input_json, input_json_len).and_then(|input| {
-        if output_path.is_null() {
-            return Err(ProcessorError::AbiViolation(
-                "plugin output path pointer must not be null".to_owned(),
-            ));
-        }
-        let output_path = unsafe { CStr::from_ptr(output_path) }
-            .to_str()
-            .map_err(|error| ProcessorError::AbiViolation(error.to_string()))?;
+        let output_path = decode_output_path(output_path)?;
         let progress = CallbackProgress {
             callbacks: progress,
         };
-        processor.process(&input, std::path::Path::new(output_path), &progress)
+        processor.process(&input, std::path::Path::new(&output_path), &progress)
     });
 
+    encode_processor_result(result)
+}
+
+unsafe extern "C" fn processor_assemble_json(
+    context: *mut c_void,
+    input_json: *const u8,
+    input_json_len: usize,
+    output_path: *const c_char,
+    progress: VesperPluginProgressCallbacks,
+) -> VesperPluginProcessResult {
+    let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
+    let result = decode_input(input_json, input_json_len).and_then(|input| {
+        let output_path = decode_output_path(output_path)?;
+        let progress = CallbackProgress {
+            callbacks: progress,
+        };
+        processor.assemble(&input, std::path::Path::new(&output_path), &progress)
+    });
+
+    encode_processor_result(result)
+}
+
+fn decode_output_path(output_path: *const c_char) -> Result<String, ProcessorError> {
+    if output_path.is_null() {
+        return Err(ProcessorError::AbiViolation(
+            "plugin output path pointer must not be null".to_owned(),
+        ));
+    }
+    unsafe { CStr::from_ptr(output_path) }
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|error| ProcessorError::AbiViolation(error.to_string()))
+}
+
+fn encode_processor_result(
+    result: Result<player_plugin::ProcessorOutput, ProcessorError>,
+) -> VesperPluginProcessResult {
     match result {
         Ok(output) => VesperPluginProcessResult {
             status: VesperPluginResultStatus::Success,
@@ -144,13 +176,18 @@ impl player_plugin::ProcessorProgress for CallbackProgress {
 #[cfg(test)]
 mod tests {
     use super::{decode_input, vesper_plugin_entry};
-    use player_plugin::{ProcessorError, VESPER_PLUGIN_ABI_VERSION_V2, VesperPluginKind};
+    use player_plugin::{
+        ProcessorError, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperPluginKind,
+    };
 
     #[test]
     fn exported_descriptor_matches_expected_plugin_metadata() {
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
-        assert_eq!(descriptor.abi_version, VESPER_PLUGIN_ABI_VERSION_V2);
+        assert_eq!(
+            descriptor.abi_version,
+            VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3
+        );
         assert_eq!(
             descriptor.plugin_kind,
             VesperPluginKind::PostDownloadProcessor

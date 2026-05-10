@@ -9,7 +9,8 @@ mod processor;
 
 pub use abi::{
     VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
-    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
     VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
     VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
@@ -30,6 +31,7 @@ pub use decoder::{
 };
 pub use hook::{PipelineEvent, PipelineEventHook};
 pub use processor::{
-    CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind, DownloadMetadata,
-    OutputFormat, PostDownloadProcessor, ProcessorError, ProcessorOutput, ProcessorProgress,
+    AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream,
+    ContentFormatKind, DownloadMetadata, OutputFormat, PostDownloadProcessor, ProcessorError,
+    ProcessorOutput, ProcessorProgress, StreamKind,
 };

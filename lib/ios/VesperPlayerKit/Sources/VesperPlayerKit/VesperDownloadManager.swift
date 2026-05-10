@@ -251,6 +251,49 @@ public struct VesperDownloadSegmentRecord: Equatable, Codable {
     }
 }
 
+public enum VesperDownloadStreamKind: String, Equatable, Codable {
+    case combined
+    case video
+    case audio
+    case secondaryAudio
+    case subtitle
+    case auxiliary
+}
+
+public struct VesperDownloadAssetStream: Equatable, Codable {
+    public let streamId: String
+    public let kind: VesperDownloadStreamKind
+    public let language: String?
+    public let codec: String?
+    public let label: String?
+    public let qualityRank: UInt32?
+    public let resourceIds: [String]
+    public let segmentIds: [String]
+    public let metadata: [String: String]
+
+    public init(
+        streamId: String,
+        kind: VesperDownloadStreamKind = .combined,
+        language: String? = nil,
+        codec: String? = nil,
+        label: String? = nil,
+        qualityRank: UInt32? = nil,
+        resourceIds: [String] = [],
+        segmentIds: [String] = [],
+        metadata: [String: String] = [:]
+    ) {
+        self.streamId = streamId
+        self.kind = kind
+        self.language = language
+        self.codec = codec
+        self.label = label
+        self.qualityRank = qualityRank
+        self.resourceIds = resourceIds
+        self.segmentIds = segmentIds
+        self.metadata = metadata
+    }
+}
+
 public struct VesperDownloadAssetIndex: Equatable, Codable {
     public let contentFormat: VesperDownloadContentFormat
     public let version: String?
@@ -259,6 +302,7 @@ public struct VesperDownloadAssetIndex: Equatable, Codable {
     public let totalSizeBytes: UInt64?
     public let resources: [VesperDownloadResourceRecord]
     public let segments: [VesperDownloadSegmentRecord]
+    public let streams: [VesperDownloadAssetStream]
     public let completedPath: String?
 
     public init(
@@ -269,6 +313,7 @@ public struct VesperDownloadAssetIndex: Equatable, Codable {
         totalSizeBytes: UInt64? = nil,
         resources: [VesperDownloadResourceRecord] = [],
         segments: [VesperDownloadSegmentRecord] = [],
+        streams: [VesperDownloadAssetStream] = [],
         completedPath: String? = nil
     ) {
         self.contentFormat = contentFormat
@@ -278,6 +323,7 @@ public struct VesperDownloadAssetIndex: Equatable, Codable {
         self.totalSizeBytes = totalSizeBytes
         self.resources = resources
         self.segments = segments
+        self.streams = streams
         self.completedPath = completedPath
     }
 }
@@ -4655,11 +4701,56 @@ private func duplicateDownloadCStringArray(_ values: [String]) -> UnsafeMutableP
     return pointer
 }
 
+private func freeDownloadCStringArray(
+    _ values: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    count: Int
+) {
+    guard let values, count > 0 else {
+        return
+    }
+    for index in 0..<count {
+        freeDownloadCString(values[index])
+    }
+    values.deallocate()
+}
+
 private func stringFromRuntimeCString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
     guard let pointer else {
         return nil
     }
     return String(cString: pointer)
+}
+
+private func stringArrayFromRuntimeCStringArray(
+    _ pointer: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    count: Int
+) -> [String] {
+    guard let pointer, count > 0 else {
+        return []
+    }
+    return (0..<count).compactMap { index in
+        stringFromRuntimeCString(pointer[index])
+    }
+}
+
+private func stringDictionaryFromRuntimeCStringArrays(
+    keys: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    values: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    count: Int
+) -> [String: String] {
+    guard let keys, let values, count > 0 else {
+        return [:]
+    }
+    var result: [String: String] = [:]
+    for index in 0..<count {
+        guard let key = stringFromRuntimeCString(keys[index]),
+              let value = stringFromRuntimeCString(values[index])
+        else {
+            continue
+        }
+        result[key] = value
+    }
+    return result
 }
 
 private func freeDownloadCString(_ pointer: UnsafeMutablePointer<CChar>?) {
@@ -4757,6 +4848,19 @@ private func freeRuntimeDownloadAssetIndex(_ assetIndex: inout VesperRuntimeDown
         }
         segments.deallocate()
     }
+    if let streams = assetIndex.streams, assetIndex.streams_len > 0 {
+        for index in 0..<Int(assetIndex.streams_len) {
+            freeDownloadCString(streams[index].stream_id)
+            freeDownloadCString(streams[index].language)
+            freeDownloadCString(streams[index].codec)
+            freeDownloadCString(streams[index].label)
+            freeDownloadCStringArray(streams[index].resource_ids, count: Int(streams[index].resource_ids_len))
+            freeDownloadCStringArray(streams[index].segment_ids, count: Int(streams[index].segment_ids_len))
+            freeDownloadCStringArray(streams[index].metadata_keys, count: Int(streams[index].metadata_len))
+            freeDownloadCStringArray(streams[index].metadata_values, count: Int(streams[index].metadata_len))
+        }
+        streams.deallocate()
+    }
     freeDownloadCString(assetIndex.completed_path)
     assetIndex = VesperRuntimeDownloadAssetIndex(
         content_format: VesperRuntimeDownloadContentFormatUnknown,
@@ -4769,6 +4873,8 @@ private func freeRuntimeDownloadAssetIndex(_ assetIndex: inout VesperRuntimeDown
         resources_len: 0,
         segments: nil,
         segments_len: 0,
+        streams: nil,
+        streams_len: 0,
         completed_path: nil
     )
 }
@@ -4821,6 +4927,8 @@ private func freeRuntimeDownloadTask(_ task: inout VesperRuntimeDownloadTask) {
             resources_len: 0,
             segments: nil,
             segments_len: 0,
+            streams: nil,
+            streams_len: 0,
             completed_path: nil
         ),
         has_error: false,
@@ -4969,6 +5077,47 @@ private extension VesperDownloadSegmentRecord {
     }
 }
 
+private extension VesperDownloadAssetStream {
+    func toRuntimeBridgePayload() -> VesperRuntimeDownloadAssetStream {
+        let metadataPairs = metadata.sorted { lhs, rhs in lhs.key < rhs.key }
+        return VesperRuntimeDownloadAssetStream(
+            stream_id: duplicateDownloadCString(streamId),
+            kind: kind.toRuntimeBridgePayload(),
+            language: language.flatMap(duplicateDownloadCString),
+            codec: codec.flatMap(duplicateDownloadCString),
+            label: label.flatMap(duplicateDownloadCString),
+            has_quality_rank: qualityRank != nil,
+            quality_rank: qualityRank ?? 0,
+            resource_ids: duplicateDownloadCStringArray(resourceIds),
+            resource_ids_len: UInt(resourceIds.count),
+            segment_ids: duplicateDownloadCStringArray(segmentIds),
+            segment_ids_len: UInt(segmentIds.count),
+            metadata_keys: duplicateDownloadCStringArray(metadataPairs.map(\.key)),
+            metadata_values: duplicateDownloadCStringArray(metadataPairs.map(\.value)),
+            metadata_len: UInt(metadataPairs.count)
+        )
+    }
+}
+
+private extension VesperDownloadStreamKind {
+    func toRuntimeBridgePayload() -> VesperRuntimeDownloadStreamKind {
+        switch self {
+        case .combined:
+            return VesperRuntimeDownloadStreamKindCombined
+        case .video:
+            return VesperRuntimeDownloadStreamKindVideo
+        case .audio:
+            return VesperRuntimeDownloadStreamKindAudio
+        case .secondaryAudio:
+            return VesperRuntimeDownloadStreamKindSecondaryAudio
+        case .subtitle:
+            return VesperRuntimeDownloadStreamKindSubtitle
+        case .auxiliary:
+            return VesperRuntimeDownloadStreamKindAuxiliary
+        }
+    }
+}
+
 private extension VesperDownloadAssetIndex {
     func toRuntimeBridgePayload() -> VesperRuntimeDownloadAssetIndex {
         let resourcePointer: UnsafeMutablePointer<VesperRuntimeDownloadResourceRecord>?
@@ -4991,6 +5140,16 @@ private extension VesperDownloadAssetIndex {
             }
         }
 
+        let streamPointer: UnsafeMutablePointer<VesperRuntimeDownloadAssetStream>?
+        if streams.isEmpty {
+            streamPointer = nil
+        } else {
+            streamPointer = .allocate(capacity: streams.count)
+            for (index, item) in streams.enumerated() {
+                streamPointer?[index] = item.toRuntimeBridgePayload()
+            }
+        }
+
         return VesperRuntimeDownloadAssetIndex(
             content_format: VesperRuntimeDownloadContentFormat(rawValue: contentFormat.rawValue)
                 ?? VesperRuntimeDownloadContentFormatUnknown,
@@ -5003,6 +5162,8 @@ private extension VesperDownloadAssetIndex {
             resources_len: UInt(resources.count),
             segments: segmentPointer,
             segments_len: UInt(segments.count),
+            streams: streamPointer,
+            streams_len: UInt(streams.count),
             completed_path: completedPath.flatMap(duplicateDownloadCString)
         )
     }
@@ -5136,6 +5297,16 @@ private extension VesperRuntimeDownloadAssetIndex {
             publicSegments = []
         }
 
+        let publicStreams: [VesperDownloadAssetStream]
+        if let streamsPointer = self.streams, self.streams_len > 0 {
+            publicStreams = Array(
+                UnsafeBufferPointer(start: streamsPointer, count: Int(self.streams_len))
+            )
+                .map { $0.toPublic() }
+        } else {
+            publicStreams = []
+        }
+
         return VesperDownloadAssetIndex(
             contentFormat: VesperDownloadContentFormat(rawValue: Int(content_format.rawValue)) ?? .unknown,
             version: stringFromRuntimeCString(version),
@@ -5144,6 +5315,7 @@ private extension VesperRuntimeDownloadAssetIndex {
             totalSizeBytes: has_total_size_bytes ? total_size_bytes : nil,
             resources: publicResources,
             segments: publicSegments,
+            streams: publicStreams,
             completedPath: stringFromRuntimeCString(completed_path)
         )
     }
@@ -5175,6 +5347,45 @@ private extension VesperRuntimeDownloadSegmentRecord {
             sizeBytes: has_size_bytes ? size_bytes : nil,
             checksum: stringFromRuntimeCString(checksum)
         )
+    }
+}
+
+private extension VesperRuntimeDownloadAssetStream {
+    func toPublic() -> VesperDownloadAssetStream {
+        VesperDownloadAssetStream(
+            streamId: stringFromRuntimeCString(stream_id) ?? "",
+            kind: kind.toPublic(),
+            language: stringFromRuntimeCString(language),
+            codec: stringFromRuntimeCString(codec),
+            label: stringFromRuntimeCString(label),
+            qualityRank: has_quality_rank ? quality_rank : nil,
+            resourceIds: stringArrayFromRuntimeCStringArray(resource_ids, count: Int(resource_ids_len)),
+            segmentIds: stringArrayFromRuntimeCStringArray(segment_ids, count: Int(segment_ids_len)),
+            metadata: stringDictionaryFromRuntimeCStringArrays(
+                keys: metadata_keys,
+                values: metadata_values,
+                count: Int(metadata_len)
+            )
+        )
+    }
+}
+
+private extension VesperRuntimeDownloadStreamKind {
+    func toPublic() -> VesperDownloadStreamKind {
+        switch self {
+        case VesperRuntimeDownloadStreamKindVideo:
+            return .video
+        case VesperRuntimeDownloadStreamKindAudio:
+            return .audio
+        case VesperRuntimeDownloadStreamKindSecondaryAudio:
+            return .secondaryAudio
+        case VesperRuntimeDownloadStreamKindSubtitle:
+            return .subtitle
+        case VesperRuntimeDownloadStreamKindAuxiliary:
+            return .auxiliary
+        default:
+            return .combined
+        }
     }
 }
 
@@ -5228,19 +5439,25 @@ private extension VesperRuntimeDownloadEventList {
         return buffer.compactMap { event in
             switch event.kind {
             case .created:
-                return .created(event.task.toPublic())
+                guard let task = event.task else {
+                    return nil
+                }
+                return .created(task.pointee.toPublic())
             case .stateChanged:
                 return .stateChanged(
                     VesperDownloadTaskStatePatch(
                         taskId: event.task_id,
-                        state: VesperDownloadState(rawValue: Int(event.status.rawValue)) ?? .queued,
-                        progress: event.progress.toPublic(),
-                        error: event.has_error ? event.toDownloadError() : nil,
-                        completedPath: stringFromRuntimeCString(event.completed_path)
+                        state: VesperDownloadState(rawValue: Int(event.state_status.rawValue)) ?? .queued,
+                        progress: event.state_progress.toPublic(),
+                        error: event.state_has_error ? event.toDownloadError() : nil,
+                        completedPath: stringFromRuntimeCString(event.state_completed_path)
                     )
                 )
             case .assetIndexUpdated:
-                return .assetIndexUpdated(event.task.toPublic())
+                guard let task = event.task else {
+                    return nil
+                }
+                return .assetIndexUpdated(task.pointee.toPublic())
             case .progressUpdated:
                 return .progressUpdated(
                     VesperDownloadTaskProgressPatch(
@@ -5258,10 +5475,10 @@ private extension VesperRuntimeDownloadEventList {
 private extension VesperRuntimeDownloadEvent {
     func toDownloadError() -> VesperDownloadError {
         VesperDownloadError(
-            codeOrdinal: error_code,
-            categoryOrdinal: error_category,
-            retriable: error_retriable,
-            message: stringFromRuntimeCString(error_message) ?? ""
+            codeOrdinal: state_error_code,
+            categoryOrdinal: state_error_category,
+            retriable: state_error_retriable,
+            message: stringFromRuntimeCString(state_error_message) ?? ""
         )
     }
 }

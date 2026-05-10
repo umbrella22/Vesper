@@ -280,6 +280,15 @@ typedef enum PlayerFfiDownloadOutputFormat {
   PlayerFfiDownloadOutputFormatOriginal = 2,
 } PlayerFfiDownloadOutputFormat;
 
+typedef enum PlayerFfiDownloadStreamKind {
+  PlayerFfiDownloadStreamKindCombined = 0,
+  PlayerFfiDownloadStreamKindVideo = 1,
+  PlayerFfiDownloadStreamKindAudio = 2,
+  PlayerFfiDownloadStreamKindSecondaryAudio = 3,
+  PlayerFfiDownloadStreamKindSubtitle = 4,
+  PlayerFfiDownloadStreamKindAuxiliary = 5,
+} PlayerFfiDownloadStreamKind;
+
 typedef struct PlayerFfiDownloadSource {
   char *source_uri;
   PlayerFfiDownloadContentFormat content_format;
@@ -332,6 +341,23 @@ typedef struct PlayerFfiDownloadSegmentRecord {
   char *checksum;
 } PlayerFfiDownloadSegmentRecord;
 
+typedef struct PlayerFfiDownloadAssetStream {
+  char *stream_id;
+  PlayerFfiDownloadStreamKind kind;
+  char *language;
+  char *codec;
+  char *label;
+  bool has_quality_rank;
+  uint32_t quality_rank;
+  char **resource_ids;
+  uintptr_t resource_ids_len;
+  char **segment_ids;
+  uintptr_t segment_ids_len;
+  char **metadata_keys;
+  char **metadata_values;
+  uintptr_t metadata_len;
+} PlayerFfiDownloadAssetStream;
+
 typedef struct PlayerFfiDownloadAssetIndex {
   PlayerFfiDownloadContentFormat content_format;
   char *version;
@@ -343,6 +369,8 @@ typedef struct PlayerFfiDownloadAssetIndex {
   uintptr_t resources_len;
   PlayerFfiDownloadSegmentRecord *segments;
   uintptr_t segments_len;
+  PlayerFfiDownloadAssetStream *streams;
+  uintptr_t streams_len;
   char *completed_path;
 } PlayerFfiDownloadAssetIndex;
 
@@ -841,12 +869,34 @@ static PlayerFfiDownloadSegmentRecord ffi_download_segment_from_runtime(
   return ffi_segment;
 }
 
+static PlayerFfiDownloadAssetStream ffi_download_stream_from_runtime(
+    const VesperRuntimeDownloadAssetStream *stream) {
+  PlayerFfiDownloadAssetStream ffi_stream = {
+      .stream_id = stream->stream_id,
+      .kind = (PlayerFfiDownloadStreamKind)stream->kind,
+      .language = stream->language,
+      .codec = stream->codec,
+      .label = stream->label,
+      .has_quality_rank = stream->has_quality_rank,
+      .quality_rank = stream->quality_rank,
+      .resource_ids = stream->resource_ids,
+      .resource_ids_len = stream->resource_ids_len,
+      .segment_ids = stream->segment_ids,
+      .segment_ids_len = stream->segment_ids_len,
+      .metadata_keys = stream->metadata_keys,
+      .metadata_values = stream->metadata_values,
+      .metadata_len = stream->metadata_len,
+  };
+  return ffi_stream;
+}
+
 static void free_borrowed_ffi_download_asset_index(PlayerFfiDownloadAssetIndex *asset_index) {
   if (asset_index == NULL) {
     return;
   }
   free(asset_index->resources);
   free(asset_index->segments);
+  free(asset_index->streams);
   memset(asset_index, 0, sizeof(*asset_index));
 }
 
@@ -904,6 +954,33 @@ static bool copy_runtime_download_segments_to_ffi(
   return true;
 }
 
+static bool copy_runtime_download_streams_to_ffi(
+    const VesperRuntimeDownloadAssetStream *streams,
+    uintptr_t len,
+    PlayerFfiDownloadAssetStream **out_streams) {
+  if (out_streams == NULL) {
+    return false;
+  }
+  *out_streams = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (streams == NULL || !can_allocate_items(len, sizeof(PlayerFfiDownloadAssetStream))) {
+    return false;
+  }
+
+  PlayerFfiDownloadAssetStream *ffi_streams =
+      calloc((size_t)len, sizeof(PlayerFfiDownloadAssetStream));
+  if (ffi_streams == NULL) {
+    return false;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    ffi_streams[index] = ffi_download_stream_from_runtime(&streams[index]);
+  }
+  *out_streams = ffi_streams;
+  return true;
+}
+
 static bool ffi_download_asset_index_from_runtime(
     const VesperRuntimeDownloadAssetIndex *asset_index,
     PlayerFfiDownloadAssetIndex *out_asset_index) {
@@ -920,6 +997,7 @@ static bool ffi_download_asset_index_from_runtime(
   out_asset_index->total_size_bytes = asset_index->total_size_bytes;
   out_asset_index->resources_len = asset_index->resources_len;
   out_asset_index->segments_len = asset_index->segments_len;
+  out_asset_index->streams_len = asset_index->streams_len;
   out_asset_index->completed_path = asset_index->completed_path;
 
   if (!copy_runtime_download_resources_to_ffi(
@@ -929,7 +1007,11 @@ static bool ffi_download_asset_index_from_runtime(
       !copy_runtime_download_segments_to_ffi(
           asset_index->segments,
           asset_index->segments_len,
-          &out_asset_index->segments)) {
+          &out_asset_index->segments) ||
+      !copy_runtime_download_streams_to_ffi(
+          asset_index->streams,
+          asset_index->streams_len,
+          &out_asset_index->streams)) {
     free_borrowed_ffi_download_asset_index(out_asset_index);
     return false;
   }
@@ -1070,6 +1152,21 @@ static void free_runtime_download_segment_strings(VesperRuntimeDownloadSegmentRe
   memset(segment, 0, sizeof(*segment));
 }
 
+static void free_runtime_download_stream_strings(VesperRuntimeDownloadAssetStream *stream) {
+  if (stream == NULL) {
+    return;
+  }
+  free(stream->stream_id);
+  free(stream->language);
+  free(stream->codec);
+  free(stream->label);
+  free_runtime_string_list(stream->resource_ids, stream->resource_ids_len);
+  free_runtime_string_list(stream->segment_ids, stream->segment_ids_len);
+  free_runtime_string_list(stream->metadata_keys, stream->metadata_len);
+  free_runtime_string_list(stream->metadata_values, stream->metadata_len);
+  memset(stream, 0, sizeof(*stream));
+}
+
 static void free_runtime_download_asset_index_strings(VesperRuntimeDownloadAssetIndex *asset_index) {
   if (asset_index == NULL) {
     return;
@@ -1088,6 +1185,12 @@ static void free_runtime_download_asset_index_strings(VesperRuntimeDownloadAsset
       free_runtime_download_segment_strings(&asset_index->segments[index]);
     }
     free(asset_index->segments);
+  }
+  if (asset_index->streams != NULL) {
+    for (uintptr_t index = 0; index < asset_index->streams_len; index += 1) {
+      free_runtime_download_stream_strings(&asset_index->streams[index]);
+    }
+    free(asset_index->streams);
   }
   free(asset_index->completed_path);
   memset(asset_index, 0, sizeof(*asset_index));
@@ -1117,9 +1220,12 @@ static void free_runtime_download_event_strings(VesperRuntimeDownloadEvent *even
   if (event == NULL) {
     return;
   }
-  free_runtime_download_task_strings(&event->task);
-  free(event->error_message);
-  free(event->completed_path);
+  if (event->task != NULL) {
+    free_runtime_download_task_strings(event->task);
+    free(event->task);
+  }
+  free(event->state_error_message);
+  free(event->state_completed_path);
   memset(event, 0, sizeof(*event));
 }
 
@@ -1224,6 +1330,45 @@ static bool runtime_download_segment_from_ffi(
   return true;
 }
 
+static bool runtime_download_stream_from_ffi(
+    const PlayerFfiDownloadAssetStream *stream,
+    VesperRuntimeDownloadAssetStream *out_stream) {
+  if (stream == NULL || out_stream == NULL) {
+    return false;
+  }
+  memset(out_stream, 0, sizeof(*out_stream));
+  out_stream->kind = (VesperRuntimeDownloadStreamKind)stream->kind;
+  out_stream->has_quality_rank = stream->has_quality_rank;
+  out_stream->quality_rank = stream->quality_rank;
+  out_stream->resource_ids_len = stream->resource_ids_len;
+  out_stream->segment_ids_len = stream->segment_ids_len;
+  out_stream->metadata_len = stream->metadata_len;
+  if (!duplicate_runtime_string(stream->stream_id, &out_stream->stream_id) ||
+      !duplicate_runtime_string(stream->language, &out_stream->language) ||
+      !duplicate_runtime_string(stream->codec, &out_stream->codec) ||
+      !duplicate_runtime_string(stream->label, &out_stream->label) ||
+      !copy_ffi_string_list_to_runtime(
+          stream->resource_ids,
+          stream->resource_ids_len,
+          &out_stream->resource_ids) ||
+      !copy_ffi_string_list_to_runtime(
+          stream->segment_ids,
+          stream->segment_ids_len,
+          &out_stream->segment_ids) ||
+      !copy_ffi_string_list_to_runtime(
+          stream->metadata_keys,
+          stream->metadata_len,
+          &out_stream->metadata_keys) ||
+      !copy_ffi_string_list_to_runtime(
+          stream->metadata_values,
+          stream->metadata_len,
+          &out_stream->metadata_values)) {
+    free_runtime_download_stream_strings(out_stream);
+    return false;
+  }
+  return true;
+}
+
 static bool copy_ffi_download_resources_to_runtime(
     const PlayerFfiDownloadResourceRecord *resources,
     uintptr_t len,
@@ -1290,6 +1435,39 @@ static bool copy_ffi_download_segments_to_runtime(
   return true;
 }
 
+static bool copy_ffi_download_streams_to_runtime(
+    const PlayerFfiDownloadAssetStream *streams,
+    uintptr_t len,
+    VesperRuntimeDownloadAssetStream **out_streams) {
+  if (out_streams == NULL) {
+    return false;
+  }
+  *out_streams = NULL;
+  if (len == 0) {
+    return true;
+  }
+  if (streams == NULL || !can_allocate_items(len, sizeof(VesperRuntimeDownloadAssetStream))) {
+    return false;
+  }
+
+  VesperRuntimeDownloadAssetStream *runtime_streams =
+      calloc((size_t)len, sizeof(VesperRuntimeDownloadAssetStream));
+  if (runtime_streams == NULL) {
+    return false;
+  }
+  for (uintptr_t index = 0; index < len; index += 1) {
+    if (!runtime_download_stream_from_ffi(&streams[index], &runtime_streams[index])) {
+      for (uintptr_t cleanup_index = 0; cleanup_index < len; cleanup_index += 1) {
+        free_runtime_download_stream_strings(&runtime_streams[cleanup_index]);
+      }
+      free(runtime_streams);
+      return false;
+    }
+  }
+  *out_streams = runtime_streams;
+  return true;
+}
+
 static bool runtime_download_asset_index_from_ffi(
     const PlayerFfiDownloadAssetIndex *asset_index,
     VesperRuntimeDownloadAssetIndex *out_asset_index) {
@@ -1303,6 +1481,7 @@ static bool runtime_download_asset_index_from_ffi(
   out_asset_index->total_size_bytes = asset_index->total_size_bytes;
   out_asset_index->resources_len = asset_index->resources_len;
   out_asset_index->segments_len = asset_index->segments_len;
+  out_asset_index->streams_len = asset_index->streams_len;
   if (!duplicate_runtime_string(asset_index->version, &out_asset_index->version) ||
       !duplicate_runtime_string(asset_index->etag, &out_asset_index->etag) ||
       !duplicate_runtime_string(asset_index->checksum, &out_asset_index->checksum) ||
@@ -1314,6 +1493,10 @@ static bool runtime_download_asset_index_from_ffi(
           asset_index->segments,
           asset_index->segments_len,
           &out_asset_index->segments) ||
+      !copy_ffi_download_streams_to_runtime(
+          asset_index->streams,
+          asset_index->streams_len,
+          &out_asset_index->streams) ||
       !duplicate_runtime_string(asset_index->completed_path, &out_asset_index->completed_path)) {
     free_runtime_download_asset_index_strings(out_asset_index);
     return false;
@@ -1383,29 +1566,30 @@ static bool runtime_download_event_from_ffi(
   }
   memset(out_event, 0, sizeof(*out_event));
   out_event->kind = (VesperRuntimeDownloadEventKind)event->kind;
-  out_event->task_id = event->task_id;
-  out_event->status = (VesperRuntimeDownloadTaskStatus)event->status;
-  out_event->progress.received_bytes = event->progress.received_bytes;
-  out_event->progress.has_total_bytes = event->progress.has_total_bytes;
-  out_event->progress.total_bytes = event->progress.total_bytes;
-  out_event->progress.received_segments = event->progress.received_segments;
-  out_event->progress.has_total_segments = event->progress.has_total_segments;
-  out_event->progress.total_segments = event->progress.total_segments;
-  out_event->has_error = event->has_error;
-  out_event->error_code = event->error_code;
-  out_event->error_category = event->error_category;
-  out_event->error_retriable = event->error_retriable;
-  if (!duplicate_runtime_string(event->error_message, &out_event->error_message) ||
-      !duplicate_runtime_string(event->completed_path, &out_event->completed_path)) {
-    free_runtime_download_event_strings(out_event);
-    return false;
-  }
   if (event->kind == PlayerFfiDownloadEventKindCreated ||
       event->kind == PlayerFfiDownloadEventKindAssetIndexUpdated) {
-    if (!runtime_download_task_from_ffi(&event->task, &out_event->task)) {
+    out_event->task = calloc(1, sizeof(VesperRuntimeDownloadTask));
+    if (out_event->task == NULL ||
+        !runtime_download_task_from_ffi(&event->task, out_event->task)) {
       free_runtime_download_event_strings(out_event);
       return false;
     }
+  } else if (event->kind == PlayerFfiDownloadEventKindStateChanged) {
+    out_event->task_id = event->task_id;
+    out_event->state_status = (VesperRuntimeDownloadTaskStatus)event->status;
+    out_event->state_progress = runtime_download_progress_from_ffi(event->progress);
+    out_event->state_has_error = event->has_error;
+    out_event->state_error_code = event->error_code;
+    out_event->state_error_category = event->error_category;
+    out_event->state_error_retriable = event->error_retriable;
+    if (!duplicate_runtime_string(event->error_message, &out_event->state_error_message) ||
+        !duplicate_runtime_string(event->completed_path, &out_event->state_completed_path)) {
+      free_runtime_download_event_strings(out_event);
+      return false;
+    }
+  } else if (event->kind == PlayerFfiDownloadEventKindProgressUpdated) {
+    out_event->task_id = event->task_id;
+    out_event->progress = runtime_download_progress_from_ffi(event->progress);
   }
   return true;
 }

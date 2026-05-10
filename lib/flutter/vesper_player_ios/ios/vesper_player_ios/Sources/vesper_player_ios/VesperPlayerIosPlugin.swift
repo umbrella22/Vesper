@@ -1597,6 +1597,10 @@ private extension Dictionary where Key == String, Value == Any {
                 (self["segments"] as? [Any])?.compactMap { value in
                     stringKeyedMap(value)?.toDownloadSegmentRecord()
                 } ?? [],
+            streams:
+                (self["streams"] as? [Any])?.compactMap { value in
+                    stringKeyedMap(value)?.toDownloadAssetStream()
+                } ?? [],
             completedPath: self["completedPath"] as? String
         )
     }
@@ -1623,6 +1627,20 @@ private extension Dictionary where Key == String, Value == Any {
             byteRange: stringKeyedMap(self["byteRange"])?.toDownloadByteRange(),
             sizeBytes: (self["sizeBytes"] as? NSNumber)?.uint64Value,
             checksum: self["checksum"] as? String
+        )
+    }
+
+    func toDownloadAssetStream() -> VesperDownloadAssetStream {
+        VesperDownloadAssetStream(
+            streamId: self["streamId"] as? String ?? "",
+            kind: downloadStreamKind(from: self["kind"] as? String),
+            language: self["language"] as? String,
+            codec: self["codec"] as? String,
+            label: self["label"] as? String,
+            qualityRank: (self["qualityRank"] as? NSNumber)?.uint32Value,
+            resourceIds: (self["resourceIds"] as? [String]) ?? [],
+            segmentIds: (self["segmentIds"] as? [String]) ?? [],
+            metadata: (self["metadata"] as? [String: String]) ?? [:]
         )
     }
 
@@ -1952,6 +1970,7 @@ private extension VesperDownloadAssetIndex {
             "totalSizeBytes": flutterValue(totalSizeBytes),
             "resources": resources.map(\.toMap),
             "segments": segments.map(\.toMap),
+            "streams": streams.map(\.toMap),
             "completedPath": flutterValue(completedPath),
         ]
     }
@@ -1997,6 +2016,22 @@ private extension VesperDownloadSegmentRecord {
             "byteRange": flutterValue(byteRange?.toMap),
             "sizeBytes": flutterValue(sizeBytes),
             "checksum": flutterValue(checksum),
+        ]
+    }
+}
+
+private extension VesperDownloadAssetStream {
+    var toMap: [String: Any] {
+        [
+            "streamId": streamId,
+            "kind": kind.toWireName(),
+            "language": flutterValue(language),
+            "codec": flutterValue(codec),
+            "label": flutterValue(label),
+            "qualityRank": flutterValue(qualityRank),
+            "resourceIds": resourceIds,
+            "segmentIds": segmentIds,
+            "metadata": metadata,
         ]
     }
 }
@@ -2085,6 +2120,23 @@ private func downloadOutputFormat(from raw: String?) -> VesperDownloadOutputForm
         return .original
     default:
         return nil
+    }
+}
+
+private func downloadStreamKind(from raw: String?) -> VesperDownloadStreamKind {
+    switch raw {
+    case "video":
+        return .video
+    case "audio":
+        return .audio
+    case "secondaryAudio":
+        return .secondaryAudio
+    case "subtitle":
+        return .subtitle
+    case "auxiliary":
+        return .auxiliary
+    default:
+        return .combined
     }
 }
 
@@ -2298,6 +2350,25 @@ private extension VesperDownloadOutputFormat {
             "mkv"
         case .original:
             "original"
+        }
+    }
+}
+
+private extension VesperDownloadStreamKind {
+    func toWireName() -> String {
+        switch self {
+        case .combined:
+            "combined"
+        case .video:
+            "video"
+        case .audio:
+            "audio"
+        case .secondaryAudio:
+            "secondaryAudio"
+        case .subtitle:
+            "subtitle"
+        case .auxiliary:
+            "auxiliary"
         }
     }
 }

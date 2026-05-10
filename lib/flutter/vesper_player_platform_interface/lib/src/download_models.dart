@@ -347,6 +347,68 @@ final class VesperDownloadSegmentRecord {
   }
 }
 
+enum VesperDownloadStreamKind {
+  combined,
+  video,
+  audio,
+  secondaryAudio,
+  subtitle,
+  auxiliary,
+}
+
+final class VesperDownloadAssetStream {
+  const VesperDownloadAssetStream({
+    required this.streamId,
+    this.kind = VesperDownloadStreamKind.combined,
+    this.language,
+    this.codec,
+    this.label,
+    this.qualityRank,
+    this.resourceIds = const <String>[],
+    this.segmentIds = const <String>[],
+    this.metadata = const <String, String>{},
+  });
+
+  factory VesperDownloadAssetStream.fromMap(Map<Object?, Object?> map) {
+    final normalized = vesperDecodeMap(map);
+    return VesperDownloadAssetStream(
+      streamId: normalized['streamId'] as String? ?? '',
+      kind: _decodeStreamKind(normalized['kind']),
+      language: normalized['language'] as String?,
+      codec: normalized['codec'] as String?,
+      label: normalized['label'] as String?,
+      qualityRank: _decodeInt(normalized['qualityRank']),
+      resourceIds: _decodeStringList(normalized['resourceIds']),
+      segmentIds: _decodeStringList(normalized['segmentIds']),
+      metadata: _decodeStringMap(normalized['metadata']),
+    );
+  }
+
+  final String streamId;
+  final VesperDownloadStreamKind kind;
+  final String? language;
+  final String? codec;
+  final String? label;
+  final int? qualityRank;
+  final List<String> resourceIds;
+  final List<String> segmentIds;
+  final Map<String, String> metadata;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'streamId': streamId,
+      'kind': kind.name,
+      'language': language,
+      'codec': codec,
+      'label': label,
+      'qualityRank': qualityRank,
+      'resourceIds': resourceIds,
+      'segmentIds': segmentIds,
+      'metadata': metadata,
+    };
+  }
+}
+
 final class VesperDownloadAssetIndex {
   const VesperDownloadAssetIndex({
     this.contentFormat = VesperDownloadContentFormat.unknown,
@@ -356,6 +418,7 @@ final class VesperDownloadAssetIndex {
     this.totalSizeBytes,
     this.resources = const <VesperDownloadResourceRecord>[],
     this.segments = const <VesperDownloadSegmentRecord>[],
+    this.streams = const <VesperDownloadAssetStream>[],
     this.completedPath,
   });
 
@@ -363,6 +426,7 @@ final class VesperDownloadAssetIndex {
     final normalized = vesperDecodeMap(map);
     final rawResources = normalized['resources'];
     final rawSegments = normalized['segments'];
+    final rawStreams = normalized['streams'];
     return VesperDownloadAssetIndex(
       contentFormat: _decodeContentFormat(normalized['contentFormat']),
       version: normalized['version'] as String?,
@@ -391,6 +455,17 @@ final class VesperDownloadAssetIndex {
             .toList(growable: false),
         _ => const <VesperDownloadSegmentRecord>[],
       },
+      streams: switch (rawStreams) {
+        final List<dynamic> values => values
+            .whereType<Map>()
+            .map(
+              (value) => VesperDownloadAssetStream.fromMap(
+                Map<Object?, Object?>.from(value),
+              ),
+            )
+            .toList(growable: false),
+        _ => const <VesperDownloadAssetStream>[],
+      },
       completedPath: normalized['completedPath'] as String?,
     );
   }
@@ -402,6 +477,7 @@ final class VesperDownloadAssetIndex {
   final int? totalSizeBytes;
   final List<VesperDownloadResourceRecord> resources;
   final List<VesperDownloadSegmentRecord> segments;
+  final List<VesperDownloadAssetStream> streams;
   final String? completedPath;
 
   Map<String, Object?> toMap() {
@@ -413,6 +489,7 @@ final class VesperDownloadAssetIndex {
       'totalSizeBytes': totalSizeBytes,
       'resources': resources.map((value) => value.toMap()).toList(),
       'segments': segments.map((value) => value.toMap()).toList(),
+      'streams': streams.map((value) => value.toMap()).toList(),
       'completedPath': completedPath,
     };
   }
@@ -778,6 +855,17 @@ VesperDownloadOutputFormat? _decodeOutputFormat(Object? raw) {
   return null;
 }
 
+VesperDownloadStreamKind _decodeStreamKind(Object? raw) {
+  if (raw is String) {
+    for (final value in VesperDownloadStreamKind.values) {
+      if (value.name == raw) {
+        return value;
+      }
+    }
+  }
+  return VesperDownloadStreamKind.combined;
+}
+
 VesperDownloadState _decodeDownloadState(Object? raw) {
   if (raw is String) {
     for (final value in VesperDownloadState.values) {
@@ -805,4 +893,22 @@ int? _decodeInt(Object? raw) {
     final int value => value,
     _ => null,
   };
+}
+
+List<String> _decodeStringList(Object? raw) {
+  return switch (raw) {
+    final List<dynamic> values =>
+      values.whereType<String>().toList(growable: false),
+    _ => const <String>[],
+  };
+}
+
+Map<String, String> _decodeStringMap(Object? raw) {
+  if (raw == null) {
+    return const <String, String>{};
+  }
+  final normalized = vesperDecodeMap(raw);
+  return normalized.map(
+    (key, value) => MapEntry(key.toString(), value?.toString() ?? ''),
+  );
 }

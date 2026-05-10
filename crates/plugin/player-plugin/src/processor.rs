@@ -22,6 +22,31 @@ pub enum OutputFormat {
     Original,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StreamKind {
+    Combined,
+    Video,
+    Audio,
+    SecondaryAudio,
+    Subtitle,
+    Auxiliary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AssemblyMode {
+    Single,
+    SeparateAudioVideo,
+    MultiAudio,
+    WithSubtitles,
+    Generic,
+}
+
+impl Default for AssemblyMode {
+    fn default() -> Self {
+        Self::Single
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DownloadMetadata {
     pub source_uri: Option<String>,
@@ -40,6 +65,22 @@ pub struct CompletedDownloadInfo {
     pub task_id: Option<String>,
     pub content_format: CompletedContentFormat,
     pub metadata: DownloadMetadata,
+    #[serde(default)]
+    pub streams: Vec<CompletedStream>,
+    #[serde(default)]
+    pub assembly_mode: AssemblyMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletedStream {
+    pub stream_id: Option<String>,
+    pub kind: StreamKind,
+    pub content_format: CompletedContentFormat,
+    pub language: Option<String>,
+    pub codec: Option<String>,
+    pub label: Option<String>,
+    pub metadata: DownloadMetadata,
+    pub quality_rank: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +153,8 @@ pub trait PostDownloadProcessor: Send + Sync {
             supported_input_formats: self.supported_input_formats().to_vec(),
             output_formats: Vec::new(),
             supports_cancellation: true,
+            supports_assembly: false,
+            supported_assembly_modes: Vec::new(),
         }
     }
 
@@ -121,4 +164,19 @@ pub trait PostDownloadProcessor: Send + Sync {
         output_path: &Path,
         progress: &dyn ProcessorProgress,
     ) -> Result<ProcessorOutput, ProcessorError>;
+
+    fn supports_assembly(&self) -> bool {
+        self.capabilities().supports_assembly
+    }
+
+    fn assemble(
+        &self,
+        input: &CompletedDownloadInfo,
+        _output_path: &Path,
+        _progress: &dyn ProcessorProgress,
+    ) -> Result<ProcessorOutput, ProcessorError> {
+        Err(ProcessorError::UnsupportedFormat(
+            input.content_format.kind(),
+        ))
+    }
 }

@@ -150,11 +150,11 @@ impl Default for VesperPluginProcessResult {
 #[derive(Debug, Clone, Copy)]
 /// C ABI exposed by a post-download processor plugin.
 ///
-/// `capabilities_json` and `process_json` must return `VesperPluginBytes`
-/// values that are reclaimed with the matching `free_bytes` callback from the
-/// same dynamic library. `process_json` must complete synchronously and must
-/// not retain the `VesperPluginProgressCallbacks::context` pointer after it
-/// returns.
+/// `capabilities_json`, `process_json`, and `assemble_json` must return
+/// `VesperPluginBytes` values that are reclaimed with the matching `free_bytes`
+/// callback from the same dynamic library. `process_json` and `assemble_json`
+/// must complete synchronously and must not retain the
+/// `VesperPluginProgressCallbacks::context` pointer after returning.
 pub struct VesperPostDownloadProcessorApi {
     pub context: *mut c_void,
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
@@ -162,6 +162,15 @@ pub struct VesperPostDownloadProcessorApi {
     pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
     pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
     pub process_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            input_json: *const u8,
+            input_json_len: usize,
+            output_path: *const c_char,
+            progress: VesperPluginProgressCallbacks,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub assemble_json: Option<
         unsafe extern "C" fn(
             context: *mut c_void,
             input_json: *const u8,
@@ -371,9 +380,11 @@ pub struct VesperPluginDescriptor {
 /// Entry point exported by every plugin dynamic library.
 pub type VesperPluginEntryPoint = unsafe extern "C" fn() -> *const VesperPluginDescriptor;
 
-/// Current ABI version shared by every plugin kind.
+/// ABI version used by non post-download plugin kinds.
 pub const VESPER_PLUGIN_ABI_VERSION_V2: u32 = 2;
 /// Native-frame decoder plugins use the same v2 descriptor version as every other plugin kind.
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = VESPER_PLUGIN_ABI_VERSION_V2;
+/// ABI version used by post-download processors with assembly support.
+pub const VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3: u32 = 3;
 /// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

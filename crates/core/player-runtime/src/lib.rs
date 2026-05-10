@@ -16,13 +16,14 @@ pub use adapter::{
 };
 pub use clock::{MediaClock, PlaybackClock};
 pub use player_download::{
-    DownloadAssetId, DownloadAssetIndex, DownloadByteRange, DownloadContentFormat,
-    DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager, DownloadManagerConfig,
-    DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord,
-    DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore, DownloadTaskId,
-    DownloadTaskProgressPatch, DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatePatch,
-    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore, PlayerRuntimeError,
-    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+    DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
+    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager,
+    DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot,
+    DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore,
+    DownloadStreamKind, DownloadTaskId, DownloadTaskProgressPatch, DownloadTaskSnapshot,
+    DownloadTaskState, DownloadTaskStatePatch, DownloadTaskStatus, InMemoryDownloadExecutor,
+    InMemoryDownloadStore, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+    PlayerRuntimeResult,
 };
 pub use player_model::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
@@ -49,12 +50,12 @@ pub use player_preload::{
 
 pub mod download {
     pub use player_download::{
-        DownloadAssetId, DownloadAssetIndex, DownloadByteRange, DownloadContentFormat,
-        DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager,
-        DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot,
-        DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot, DownloadSource,
-        DownloadStore, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatus,
-        InMemoryDownloadExecutor, InMemoryDownloadStore,
+        DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
+        DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor,
+        DownloadManager, DownloadManagerConfig, DownloadPrepareResult, DownloadProfile,
+        DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot,
+        DownloadSource, DownloadStore, DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot,
+        DownloadTaskState, DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
     };
 }
 

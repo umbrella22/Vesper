@@ -898,24 +898,33 @@ private func makeRuntimeEventList(from events: [StoredRuntimeEvent]) -> VesperRu
 private func makeRuntimeEvent(from event: StoredRuntimeEvent) -> VesperRuntimeDownloadEvent {
     let task = event.task
     let error = task.error
-    let fullTask: VesperRuntimeDownloadTask
+    let taskPayload: UnsafeMutablePointer<VesperRuntimeDownloadTask>?
     if event.kind == .created || event.kind == .assetIndexUpdated {
-        fullTask = makeRuntimeTask(from: task)
+        let pointer = UnsafeMutablePointer<VesperRuntimeDownloadTask>.allocate(capacity: 1)
+        pointer.initialize(to: makeRuntimeTask(from: task))
+        taskPayload = pointer
     } else {
-        fullTask = emptyRuntimeTask()
+        taskPayload = nil
     }
+    let stateErrorMessage: UnsafeMutablePointer<CChar>? = event.kind == .stateChanged
+        ? error.flatMap { duplicateRuntimeCString($0.message) }
+        : nil
+    let stateCompletedPath: UnsafeMutablePointer<CChar>? = event.kind == .stateChanged
+        ? task.completedPath.flatMap(duplicateRuntimeCString)
+        : nil
     return VesperRuntimeDownloadEvent(
         kind: event.kind,
-        task: fullTask,
+        task: taskPayload,
         task_id: task.taskId,
-        status: task.status.toRuntimeStatus(),
-        progress: makeRuntimeProgress(from: task),
-        has_error: error != nil,
-        error_code: error?.code ?? 0,
-        error_category: error?.category ?? 0,
-        error_retriable: error?.retriable ?? false,
-        error_message: error.map { duplicateRuntimeCString($0.message) } ?? nil,
-        completed_path: task.completedPath.map(duplicateRuntimeCString) ?? nil
+        state_status: task.status.toRuntimeStatus(),
+        state_progress: makeRuntimeProgress(from: task),
+        state_has_error: event.kind == .stateChanged && error != nil,
+        state_error_code: event.kind == .stateChanged ? (error?.code ?? 0) : 0,
+        state_error_category: event.kind == .stateChanged ? (error?.category ?? 0) : 0,
+        state_error_retriable: event.kind == .stateChanged ? (error?.retriable ?? false) : false,
+        state_error_message: stateErrorMessage,
+        state_completed_path: stateCompletedPath,
+        progress: makeRuntimeProgress(from: task)
     )
 }
 
@@ -975,6 +984,8 @@ private func makeRuntimeTask(from task: StoredDownloadTask) -> VesperRuntimeDown
             resources_len: 0,
             segments: nil,
             segments_len: 0,
+            streams: nil,
+            streams_len: 0,
             completed_path: task.completedPath.flatMap(duplicateRuntimeCString)
         ),
         has_error: task.error != nil,
@@ -1028,6 +1039,8 @@ private func emptyRuntimeTask() -> VesperRuntimeDownloadTask {
             resources_len: 0,
             segments: nil,
             segments_len: 0,
+            streams: nil,
+            streams_len: 0,
             completed_path: nil
         ),
         has_error: false,
@@ -1070,9 +1083,14 @@ private func freeRuntimeEventList(_ events: inout VesperRuntimeDownloadEventList
     }
     for index in 0..<Int(events.len) {
         var event = eventPointer[index]
-        freeRuntimeTask(&event.task)
-        freeRuntimeCString(event.error_message)
-        freeRuntimeCString(event.completed_path)
+        if let taskPointer = event.task {
+            var task = taskPointer.pointee
+            freeRuntimeTask(&task)
+            taskPointer.deinitialize(count: 1)
+            taskPointer.deallocate()
+        }
+        freeRuntimeCString(event.state_error_message)
+        freeRuntimeCString(event.state_completed_path)
     }
     eventPointer.deinitialize(count: Int(events.len))
     eventPointer.deallocate()
@@ -1163,6 +1181,20 @@ private func freeRuntimeDownloadAssetIndex(_ assetIndex: inout VesperRuntimeDown
         segments.deinitialize(count: Int(assetIndex.segments_len))
         segments.deallocate()
     }
+    if let streams = assetIndex.streams {
+        for index in 0..<Int(assetIndex.streams_len) {
+            freeRuntimeCString(streams[index].stream_id)
+            freeRuntimeCString(streams[index].language)
+            freeRuntimeCString(streams[index].codec)
+            freeRuntimeCString(streams[index].label)
+            freeRuntimeCStringArray(streams[index].resource_ids, count: Int(streams[index].resource_ids_len))
+            freeRuntimeCStringArray(streams[index].segment_ids, count: Int(streams[index].segment_ids_len))
+            freeRuntimeCStringArray(streams[index].metadata_keys, count: Int(streams[index].metadata_len))
+            freeRuntimeCStringArray(streams[index].metadata_values, count: Int(streams[index].metadata_len))
+        }
+        streams.deinitialize(count: Int(assetIndex.streams_len))
+        streams.deallocate()
+    }
     freeRuntimeCString(assetIndex.completed_path)
     assetIndex = VesperRuntimeDownloadAssetIndex(
         content_format: VesperRuntimeDownloadContentFormatUnknown,
@@ -1175,12 +1207,28 @@ private func freeRuntimeDownloadAssetIndex(_ assetIndex: inout VesperRuntimeDown
         resources_len: 0,
         segments: nil,
         segments_len: 0,
+        streams: nil,
+        streams_len: 0,
         completed_path: nil
     )
 }
 
 private func duplicateRuntimeCString(_ value: String) -> UnsafeMutablePointer<CChar>? {
     strdup(value)
+}
+
+private func freeRuntimeCStringArray(
+    _ values: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    count: Int
+) {
+    guard let values else {
+        return
+    }
+    for index in 0..<count {
+        freeRuntimeCString(values[index])
+    }
+    values.deinitialize(count: count)
+    values.deallocate()
 }
 
 private func duplicateRuntimeCStringArray(_ values: [String]) -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>? {

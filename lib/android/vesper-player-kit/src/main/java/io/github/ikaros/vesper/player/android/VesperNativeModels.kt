@@ -266,6 +266,20 @@ class NativeDownloadSegmentRecord(
     @JvmField val checksum: String?,
 )
 
+class NativeDownloadAssetStream(
+    @JvmField val streamId: String,
+    @JvmField val kindOrdinal: Int,
+    @JvmField val language: String?,
+    @JvmField val codec: String?,
+    @JvmField val label: String?,
+    @JvmField val hasQualityRank: Boolean,
+    @JvmField val qualityRank: Int,
+    @JvmField val resourceIds: Array<String>,
+    @JvmField val segmentIds: Array<String>,
+    @JvmField val metadataKeys: Array<String>,
+    @JvmField val metadataValues: Array<String>,
+)
+
 class NativeDownloadAssetIndex(
     @JvmField val contentFormatOrdinal: Int,
     @JvmField val version: String?,
@@ -275,6 +289,7 @@ class NativeDownloadAssetIndex(
     @JvmField val totalSizeBytes: Long,
     @JvmField val resources: Array<NativeDownloadResourceRecord>,
     @JvmField val segments: Array<NativeDownloadSegmentRecord>,
+    @JvmField val streams: Array<NativeDownloadAssetStream>,
     @JvmField val completedPath: String?,
 )
 

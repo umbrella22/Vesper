@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -10,10 +11,11 @@ use player_model::MediaSource;
 use player_platform_android::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
 use player_plugin::{OutputFormat, ProcessorProgress};
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadByteRange, DownloadContentFormat,
-    DownloadErrorSummary, DownloadEvent, DownloadProfile, DownloadProgressSnapshot,
-    DownloadResourceRecord, DownloadSegmentRecord, DownloadSource, DownloadTaskId,
-    DownloadTaskSnapshot, DownloadTaskStatus, PlayerRuntimeError,
+    DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
+    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadProfile,
+    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
+    DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus,
+    PlayerRuntimeError,
 };
 
 use crate::{
@@ -421,6 +423,65 @@ fn download_segment_records_from_java(
     Ok(segments)
 }
 
+fn download_asset_stream_from_java(
+    env: &mut Env<'_>,
+    stream: JObject<'_>,
+) -> JniResult<DownloadAssetStream> {
+    let metadata_keys = string_array_field(env, &stream, "metadataKeys")?;
+    let metadata_values = string_array_field(env, &stream, "metadataValues")?;
+    let metadata = metadata_keys
+        .into_iter()
+        .zip(metadata_values)
+        .collect::<HashMap<_, _>>();
+    Ok(DownloadAssetStream {
+        stream_id: string_field(env, &stream, "streamId")?.unwrap_or_default(),
+        kind: match int_field(env, &stream, "kindOrdinal")? {
+            1 => DownloadStreamKind::Video,
+            2 => DownloadStreamKind::Audio,
+            3 => DownloadStreamKind::SecondaryAudio,
+            4 => DownloadStreamKind::Subtitle,
+            5 => DownloadStreamKind::Auxiliary,
+            _ => DownloadStreamKind::Combined,
+        },
+        language: string_field(env, &stream, "language")?,
+        codec: string_field(env, &stream, "codec")?,
+        label: string_field(env, &stream, "label")?,
+        quality_rank: bool_field(env, &stream, "hasQualityRank")?
+            .then_some(int_field(env, &stream, "qualityRank")?.max(0) as u32),
+        resource_ids: string_array_field(env, &stream, "resourceIds")?,
+        segment_ids: string_array_field(env, &stream, "segmentIds")?,
+        metadata,
+    })
+}
+
+fn download_asset_streams_from_java(
+    env: &mut Env<'_>,
+    object: &JObject<'_>,
+) -> JniResult<Vec<DownloadAssetStream>> {
+    let value = env
+        .get_field(
+            object,
+            jni_name("streams"),
+            field_sig(format!("[L{PKG}/NativeDownloadAssetStream;")).field_signature(),
+        )?
+        .l()?;
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let array =
+        unsafe { JObjectArray::<JObject<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
+    let len = array.len(env)?;
+    let mut streams = Vec::with_capacity(len);
+    for index in 0..len {
+        let stream = array.get_element(env, index)?;
+        if !stream.is_null() {
+            streams.push(download_asset_stream_from_java(env, stream)?);
+        }
+    }
+    Ok(streams)
+}
+
 fn download_asset_index_from_java(
     env: &mut Env<'_>,
     asset_index: JObject<'_>,
@@ -440,6 +501,7 @@ fn download_asset_index_from_java(
             .then_some(long_field(env, &asset_index, "totalSizeBytes")?.max(0) as u64),
         resources: download_resource_records_from_java(env, &asset_index)?,
         segments: download_segment_records_from_java(env, &asset_index)?,
+        streams: download_asset_streams_from_java(env, &asset_index)?,
         completed_path: string_field(env, &asset_index, "completedPath")?.map(PathBuf::from),
     })
 }
@@ -722,6 +784,57 @@ fn optional_download_byte_range_object<'local>(
     )
 }
 
+fn download_stream_kind_ordinal(kind: DownloadStreamKind) -> jint {
+    match kind {
+        DownloadStreamKind::Combined => 0,
+        DownloadStreamKind::Video => 1,
+        DownloadStreamKind::Audio => 2,
+        DownloadStreamKind::SecondaryAudio => 3,
+        DownloadStreamKind::Subtitle => 4,
+        DownloadStreamKind::Auxiliary => 5,
+    }
+}
+
+fn download_asset_stream_object<'local>(
+    env: &mut Env<'local>,
+    stream: &DownloadAssetStream,
+) -> JniResult<JObject<'local>> {
+    let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadAssetStream")))?;
+    let stream_id = optional_java_string(env, Some(stream.stream_id.as_str()))?;
+    let language = optional_java_string(env, stream.language.as_deref())?;
+    let codec = optional_java_string(env, stream.codec.as_deref())?;
+    let label = optional_java_string(env, stream.label.as_deref())?;
+    let resource_ids = java_string_array_object(env, &stream.resource_ids)?;
+    let segment_ids = java_string_array_object(env, &stream.segment_ids)?;
+    let (metadata_keys, metadata_values): (Vec<_>, Vec<_>) = stream
+        .metadata
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .unzip();
+    let metadata_keys = java_string_array_object(env, &metadata_keys)?;
+    let metadata_values = java_string_array_object(env, &metadata_values)?;
+    env.new_object(
+        class,
+        method_sig(
+            "(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ZI[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V",
+        )
+        .method_signature(),
+        &[
+            JValue::Object(&stream_id),
+            JValue::Int(download_stream_kind_ordinal(stream.kind)),
+            JValue::Object(&language),
+            JValue::Object(&codec),
+            JValue::Object(&label),
+            JValue::Bool(stream.quality_rank.is_some()),
+            JValue::Int(stream.quality_rank.unwrap_or_default() as jint),
+            JValue::Object(&resource_ids),
+            JValue::Object(&segment_ids),
+            JValue::Object(&metadata_keys),
+            JValue::Object(&metadata_values),
+        ],
+    )
+}
+
 fn download_asset_index_object<'local>(
     env: &mut Env<'local>,
     asset_index: &DownloadAssetIndex,
@@ -748,6 +861,17 @@ fn download_asset_index_object<'local>(
         segments_array.set_element(env, index, object)?;
     }
 
+    let stream_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadAssetStream")))?;
+    let streams_array: JObjectArray<'_> = env.new_object_array(
+        asset_index.streams.len() as i32,
+        stream_class,
+        JObject::null(),
+    )?;
+    for (index, stream) in asset_index.streams.iter().enumerate() {
+        let object = download_asset_stream_object(env, stream)?;
+        streams_array.set_element(env, index, object)?;
+    }
+
     let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadAssetIndex")))?;
     let version = optional_java_string(env, asset_index.version.as_deref())?;
     let etag = optional_java_string(env, asset_index.etag.as_deref())?;
@@ -762,7 +886,7 @@ fn download_asset_index_object<'local>(
     env.new_object(
         class,
         method_sig(&format!(
-            "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ZJ[L{PKG}/NativeDownloadResourceRecord;[L{PKG}/NativeDownloadSegmentRecord;Ljava/lang/String;)V"
+            "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ZJ[L{PKG}/NativeDownloadResourceRecord;[L{PKG}/NativeDownloadSegmentRecord;[L{PKG}/NativeDownloadAssetStream;Ljava/lang/String;)V"
         ))
         .method_signature(),
         &[
@@ -782,6 +906,7 @@ fn download_asset_index_object<'local>(
             )),
             JValue::Object(&resources_array),
             JValue::Object(&segments_array),
+            JValue::Object(&streams_array),
             JValue::Object(&completed_path),
         ],
     )
