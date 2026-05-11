@@ -9,17 +9,22 @@ artifacts and consumable from any Android app or library.
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `vesper-player-kit`            | Core Android library: `VesperPlayerController`, `VesperPlayerSource`, `VesperTrackSelection`, `VesperDownloadManager`, JNI-backed `ExoPlayer` bridge, `libvesper_player_android.so` |
 | `vesper-player-kit-cast`       | Optional Google Cast sender integration, media route button support, and default Cast options provider                                                                               |
+| `vesper-player-kit-relay`      | Optional local HTTP relay for external playback receivers that cannot send app-owned request headers or read local media directly                                                    |
+| `vesper-player-kit-dlna`       | Optional DLNA / UPnP AV discovery and media renderer control built on top of the relay module                                                                                        |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
-The Cast module, Compose adapter, and higher-level Compose UI are optional.
+The Cast, relay, DLNA, Compose adapter, and higher-level Compose UI modules are optional.
 View-based or non-Compose hosts can depend on `vesper-player-kit` alone without
-pulling in Google Play Services, Cast Framework, Compose, or Material3.
+pulling in Google Play Services, Cast Framework, DLNA discovery, Compose, or
+Material3.
 
 Kotlin namespaces:
 
 - `io.github.ikaros.vesper.player.android`
 - `io.github.ikaros.vesper.player.android.cast`
+- `io.github.ikaros.vesper.player.android.relay`
+- `io.github.ikaros.vesper.player.android.dlna`
 - `io.github.ikaros.vesper.player.android.compose`
 - `io.github.ikaros.vesper.player.android.compose.ui`
 
@@ -83,6 +88,17 @@ Cast (`vesper-player-kit-cast`):
 
 - `VesperCastController` — load, play, pause, stop, and seek the active Cast session
 - `VesperCastOptionsProvider` — default Cast options provider using Google's Default Media Receiver unless the host overrides the receiver application ID in manifest meta-data
+
+Relay (`vesper-player-kit-relay`):
+
+- `VesperRelayServer` — local HTTP relay with tokenized media URLs, `GET` / `HEAD` / `Range`, request-header injection, and token invalidation
+- `VesperExternalPlaybackSourcePreparer` — shared direct-vs-relay source selection for Cast and DLNA
+
+DLNA (`vesper-player-kit-dlna`):
+
+- `VesperDlnaDiscovery` — SSDP discovery for UPnP AV media renderers
+- `VesperDlnaSession` — `SetAVTransportURI`, `Play`, `Pause`, `Stop`, and `Seek` control
+- `VesperDlnaDeviceDescriptionParser`, `VesperSsdpParser`, `VesperDlnaDidlBuilder`, and SOAP helpers for host-side testing and diagnostics
 
 Compose adapter (`vesper-player-kit-compose`):
 

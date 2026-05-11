@@ -40,6 +40,10 @@ plugins {
 include(":app")
 include(":vesper-player-kit")
 include(":vesper-player-kit-cast")
+include(":vesper-player-kit-relay")
+include(":vesper-player-kit-dlna")
 
 project(":vesper-player-kit").projectDir = file("../../../lib/android/vesper-player-kit")
 project(":vesper-player-kit-cast").projectDir = file("../../../lib/android/vesper-player-kit-cast")
+project(":vesper-player-kit-relay").projectDir = file("../../../lib/android/vesper-player-kit-relay")
+project(":vesper-player-kit-dlna").projectDir = file("../../../lib/android/vesper-player-kit-dlna")

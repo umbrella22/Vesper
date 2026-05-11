@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vesper_player/vesper_player.dart';
 import 'package:vesper_player_cast/vesper_player_cast.dart';
+import 'package:vesper_player_external_playback/vesper_player_external_playback.dart';
 import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
 import 'example_player_helpers.dart';
@@ -295,14 +296,20 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
     required this.controller,
     required this.permissionStatus,
     required this.onRequestPermission,
+    required this.externalRoutes,
+    required this.onExternalRouteSelected,
     this.castMessage,
+    this.externalPlaybackMessage,
   });
 
   final ExampleHostPalette palette;
   final VesperPlayerController controller;
   final VesperSystemPlaybackPermissionStatus permissionStatus;
   final VoidCallback onRequestPermission;
+  final List<VesperExternalPlaybackRoute> externalRoutes;
+  final ValueChanged<VesperExternalPlaybackRoute> onExternalRouteSelected;
   final String? castMessage;
+  final String? externalPlaybackMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -330,6 +337,10 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
                 palette: palette,
                 child: const VesperCastButton(),
               ),
+              _RouteButtonFrame(
+                palette: palette,
+                child: const VesperExternalRouteButton(),
+              ),
               OutlinedButton(
                 onPressed: onRequestPermission,
                 child: Text('通知权限：${permissionStatus.name}'),
@@ -340,6 +351,33 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               castMessage!,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.body),
+            ),
+          ],
+          if (externalRoutes.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: externalRoutes
+                  .map(
+                    (route) => OutlinedButton(
+                      onPressed: () => onExternalRouteSelected(route),
+                      child: Text(
+                        '${route.kind.name}: ${route.name}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ],
+          if (externalPlaybackMessage != null) ...<Widget>[
+            const SizedBox(height: 12),
+            Text(
+              externalPlaybackMessage!,
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.body),

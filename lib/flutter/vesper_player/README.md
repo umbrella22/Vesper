@@ -26,7 +26,7 @@ across platforms.
 | Download management      | ✅                                           | ✅                                                  | ❌                   |
 | Preload                  | ✅                                           | ✅                                                  | ❌                   |
 | System playback controls | ✅ MediaSession notification + FGS           | ✅ Now Playing / RemoteCommand                      | ❌                   |
-| External playback        | ✅ Optional `vesper_player_cast` package     | ✅ AirPlay route picker via `vesper_player_ui`      | ❌                   |
+| External playback        | ✅ Optional `vesper_player_cast` or `vesper_player_external_playback` package | ✅ AirPlay route picker via `vesper_player_ui`      | ❌                   |
 
 > `vesper_player_macos` exists as an experimental federated package stub. The
 > main package currently registers Android and iOS implementations only.
@@ -44,6 +44,9 @@ dependencies:
   # Optional Android Cast sender integration.
   vesper_player_cast:
     path: path/to/rust-player-sdk/lib/flutter/vesper_player_cast
+  # Optional unified Android Cast / DLNA external playback.
+  vesper_player_external_playback:
+    path: path/to/rust-player-sdk/lib/flutter/vesper_player_external_playback
   # Optional stage controls and AirPlay route button.
   vesper_player_ui:
     path: path/to/rust-player-sdk/lib/flutter/vesper_player_ui
@@ -229,10 +232,29 @@ final result = await cast.loadFromPlayer(
 );
 ```
 
-Cast V2 supports remote `http` / `https` HLS, DASH, and progressive sources
-with the default Google receiver. Local files, `content://` sources, DRM,
-custom request headers, offline assets, and custom receiver flows are outside
-the V2 scope and return an unsupported result without changing local playback.
+For unified Android Cast / DLNA control, depend on the optional
+`vesper_player_external_playback` package. It keeps discovery and relay
+dependencies outside the default player package:
+
+```dart
+final external = VesperExternalPlaybackController();
+await external.startDiscovery();
+await external.connect(route.routeId);
+await external.load(
+  VesperExternalPlaybackMediaItem(
+    sources: <VesperPlayerSource>[source],
+    metadata: const VesperSystemPlaybackMetadata(title: 'Sample video'),
+  ),
+);
+```
+
+Cast route selection still uses the system Cast route button. DLNA routes are
+reported through `VesperExternalPlaybackController.routes`. Sources with
+headers, local files, and `content://` inputs are served through a tokenized
+local HTTP relay when the proxy policy allows it. Cast V2 direct playback still
+supports remote `http` / `https` HLS, DASH, and progressive sources with the
+default Google receiver. DRM, transcoding, DASH manifest rewrite, and custom
+receiver flows are outside the MVP scope.
 
 ### `VesperPlayerSource`
 

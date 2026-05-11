@@ -1,0 +1,186 @@
+package io.github.ikaros.vesper.player.android.dlna
+
+import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
+import java.io.StringReader
+import java.net.HttpURLConnection
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
+import org.xml.sax.InputSource
+
+data class VesperDlnaSoapResponse(
+    val status: Int,
+    val body: String,
+) {
+    val fault: VesperDlnaSoapFault?
+        get() = VesperDlnaSoapFaultParser.parse(body)
+}
+
+data class VesperDlnaSoapFault(
+    val code: String?,
+    val description: String?,
+)
+
+object VesperDlnaSoapEnvelopeBuilder {
+    fun build(action: String, serviceType: String, arguments: Map<String, String>): String =
+        buildString {
+            append("""<?xml version="1.0" encoding="utf-8"?>""")
+            append("""<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" """)
+            append("""s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">""")
+            append("<s:Body><u:").append(action).append(""" xmlns:u="""")
+            append(serviceType.xmlEscaped()).append("""">""")
+            arguments.forEach { (name, value) ->
+                append("<").append(name).append(">")
+                append(value.xmlEscaped())
+                append("</").append(name).append(">")
+            }
+            append("</u:").append(action).append("></s:Body></s:Envelope>")
+        }
+}
+
+object VesperDlnaSoapFaultParser {
+    fun parse(xml: String): VesperDlnaSoapFault? {
+        if (!xml.contains("Fault", ignoreCase = true)) {
+            return null
+        }
+        val document = runCatching {
+            secureDocumentBuilderFactory()
+                .newDocumentBuilder()
+                .parse(InputSource(StringReader(xml)))
+        }.getOrNull() ?: return VesperDlnaSoapFault(null, null)
+        val fault = document.descendantsByLocalName("Fault").firstOrNull() as? Element
+        val code = fault?.childText("faultcode")
+        val description = document.descendantsByLocalName("errorDescription")
+            .firstOrNull()
+            ?.textContent
+            ?.trim()
+        return VesperDlnaSoapFault(code = code, description = description)
+    }
+}
+
+object VesperDlnaProtocolInfoParser {
+    fun supportsHls(protocolInfo: String): Boolean =
+        protocolInfo.split(',')
+            .any {
+                it.contains("application/vnd.apple.mpegurl", ignoreCase = true) ||
+                    it.contains("application/x-mpegurl", ignoreCase = true) ||
+                    it.contains("mpegurl", ignoreCase = true)
+            }
+
+    fun supportsMime(protocolInfo: String, mimeType: String): Boolean =
+        protocolInfo.split(',').any { it.contains(mimeType, ignoreCase = true) }
+}
+
+class VesperDlnaSoapClient(
+    private val timeoutMs: Int = 8_000,
+) {
+    fun setAvTransportUri(
+        device: VesperDlnaDevice,
+        source: VesperPlayerSource,
+        metadata: VesperSystemPlaybackMetadata?,
+    ): VesperDlnaSoapResponse {
+        val service = device.avTransport ?: return missingService("AVTransport")
+        return post(
+            service = service,
+            action = "SetAVTransportURI",
+            arguments = mapOf(
+                "InstanceID" to "0",
+                "CurrentURI" to source.uri,
+                "CurrentURIMetaData" to VesperDlnaDidlBuilder.build(source, metadata),
+            ),
+        )
+    }
+
+    fun play(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransport(device, "Play", mapOf("InstanceID" to "0", "Speed" to "1"))
+
+    fun pause(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransport(device, "Pause", mapOf("InstanceID" to "0"))
+
+    fun stop(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransport(device, "Stop", mapOf("InstanceID" to "0"))
+
+    fun seek(device: VesperDlnaDevice, positionMs: Long): VesperDlnaSoapResponse =
+        avTransport(
+            device,
+            "Seek",
+            mapOf(
+                "InstanceID" to "0",
+                "Unit" to "REL_TIME",
+                "Target" to positionMs.toDlnaTime(),
+            ),
+        )
+
+    fun getPositionInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransport(device, "GetPositionInfo", mapOf("InstanceID" to "0"))
+
+    fun getTransportInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransport(device, "GetTransportInfo", mapOf("InstanceID" to "0"))
+
+    fun getProtocolInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse {
+        val service = device.connectionManager ?: return missingService("ConnectionManager")
+        return post(service, "GetProtocolInfo", emptyMap())
+    }
+
+    fun getVolume(device: VesperDlnaDevice): VesperDlnaSoapResponse {
+        val service = device.renderingControl ?: return missingService("RenderingControl")
+        return post(service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
+    }
+
+    fun setVolume(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse {
+        val service = device.renderingControl ?: return missingService("RenderingControl")
+        return post(
+            service,
+            "SetVolume",
+            mapOf(
+                "InstanceID" to "0",
+                "Channel" to "Master",
+                "DesiredVolume" to volume.coerceIn(0, 100).toString(),
+            ),
+        )
+    }
+
+    private fun avTransport(
+        device: VesperDlnaDevice,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse {
+        val service = device.avTransport ?: return missingService("AVTransport")
+        return post(service, action, arguments)
+    }
+
+    private fun post(
+        service: VesperDlnaService,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse {
+        val body = VesperDlnaSoapEnvelopeBuilder.build(action, service.serviceType, arguments)
+        val connection = service.controlUrl.openConnection() as HttpURLConnection
+        connection.connectTimeout = timeoutMs
+        connection.readTimeout = timeoutMs
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
+        connection.setRequestProperty("SOAPACTION", "\"${service.serviceType}#$action\"")
+        connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val status = connection.responseCode
+        val responseBody = runCatching { connection.inputStream }
+            .getOrElse { connection.errorStream }
+            ?.bufferedReader()
+            ?.use { it.readText() }
+            .orEmpty()
+        connection.disconnect()
+        return VesperDlnaSoapResponse(status = status, body = responseBody)
+    }
+
+    private fun missingService(name: String): VesperDlnaSoapResponse =
+        VesperDlnaSoapResponse(0, "$name service is not available.")
+}
+
+private fun Long.toDlnaTime(): String {
+    val totalSeconds = (coerceAtLeast(0L) / 1000L)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d:%02d".format(hours, minutes, seconds)
+}

@@ -13,6 +13,8 @@ dependencies:
     path: ../../lib/flutter/vesper_player
   vesper_player_cast:
     path: ../../lib/flutter/vesper_player_cast
+  vesper_player_external_playback:
+    path: ../../lib/flutter/vesper_player_external_playback
   vesper_player_ui:
     path: ../../lib/flutter/vesper_player_ui
 

@@ -29,5 +29,7 @@ rootProject.name = "vesper-android-lib"
 
 include(":vesper-player-kit")
 include(":vesper-player-kit-cast")
+include(":vesper-player-kit-relay")
+include(":vesper-player-kit-dlna")
 include(":vesper-player-kit-compose")
 include(":vesper-player-kit-compose-ui")

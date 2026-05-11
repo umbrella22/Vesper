@@ -184,7 +184,7 @@ final class VesperSystemPlaybackControls {
   }
 }
 
-enum VesperExternalPlaybackRouteKind { none, airPlay, cast }
+enum VesperExternalPlaybackRouteKind { none, airPlay, cast, dlna }
 
 enum VesperMediaTrackKind { video, audio, subtitle }
 

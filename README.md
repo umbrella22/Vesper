@@ -204,6 +204,8 @@ Flutter is a federated plugin family:
 - `vesper_player_ios`: iOS implementation over `VesperPlayerKit`.
 - `vesper_player_macos`: experimental macOS package stub without a real
   playback backend yet.
+- `vesper_player_external_playback`: optional Android Cast / DLNA controller
+  with local HTTP relay support.
 - `vesper_player_ui`: optional Flutter controls and player stage widgets.
 
 The Flutter packages currently ship from source in this repository and are not

@@ -199,6 +199,7 @@ void main() {
     expect(VesperExternalPlaybackRouteKind.none.name, 'none');
     expect(VesperExternalPlaybackRouteKind.airPlay.name, 'airPlay');
     expect(VesperExternalPlaybackRouteKind.cast.name, 'cast');
+    expect(VesperExternalPlaybackRouteKind.dlna.name, 'dlna');
     expect(availability.hasAvailableRoute, isTrue);
     expect(
       VesperExternalPlaybackAvailability.fromMap(availability.toMap())

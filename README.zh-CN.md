@@ -36,6 +36,8 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 - 由 SDK 管理的离线任务恢复与断点区间传输，适用于 Android 和 iOS；同时提供适用于 macOS、Windows 和 Linux 的共享桌面端下载服务。
   该服务包括：当 HTTP 服务器忽略续传区间时按资源单独重启；针对已知大小的 HTTP 资源使用有边界的 Range 分块；
   以及资源过期错误处理——通过宿主提供的恢复钩子处理过期或被拒的媒体 URL。
+- Android 可选外部播放能力：Google Cast 控制、DLNA / UPnP AV 发现与控制，
+  以及面向带鉴权 headers、本地文件和 `content://` source 的本地 HTTP relay。
 - 在 Android、iOS 和 Flutter 移动端播放处于活动状态时，支持可配置的屏幕常亮处理。
 - 移动端使用平台原生 surface，而不是通过帧拷贝方式回传画面。
 - 可选的 remux / codec plugin 架构，覆盖更高级的媒体工作流。
@@ -60,6 +62,7 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 | 韧性策略               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
 | 预加载预算             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
 | 下载管理器             | ✅                     | ✅                                            | ✅ 桌面 demo 中的 planner / executor | ✅ Android / iOS               |
+| 外部播放               | ✅ Cast / DLNA 可选    | ✅ AirPlay route picker                      | ❌                                   | ✅ Android Cast / DLNA、iOS AirPlay |
 | 硬件解码探测           | `VesperDecoderBackend` | `VesperCodecSupport`                          | macOS VideoToolbox v2 可选启用       | 通过移动端 capability 上报体现 |
 
 Flutter macOS package 目前只是实验性占位实现，尚未提供真实播放后端。产品 UI
@@ -70,9 +73,9 @@ Flutter macOS package 目前只是实验性占位实现，尚未提供真实播�
 ```text
 crates/      Rust workspace：共享 core、runtime、FFI、backend、render 与平台桥接代码
 lib/         可分发的平台集成层
-  android/   Android AAR modules：core kit、Compose adapter、可选 Compose UI
+  android/   Android AAR modules：core kit、Cast、relay、DLNA、Compose adapter、可选 Compose UI
   ios/       VesperPlayerKit Swift Package / XCFramework 项目
-  flutter/   Federated Flutter packages：主 API、平台包、可选 UI
+  flutter/   Federated Flutter packages：主 API、平台包、可选外部播放、可选 UI
 examples/    Android、iOS、Flutter、桌面 Rust 与 C 的可运行 host app
 include/     生成的 C header：player_ffi.h
 scripts/     构建、打包、验证与发布辅助脚本
@@ -159,6 +162,12 @@ Android 以 AAR modules 分发：
 
 - `vesper-player-kit`：core controller、source model、JNI bridge、download manager
   和 native video surface selection。
+- `vesper-player-kit-cast`：可选 Google Cast sender integration、media route button
+  和默认 Cast options provider。
+- `vesper-player-kit-relay`：可选本地 HTTP relay，供 Cast / DLNA 接收端访问
+  需要 headers、本地文件或 `content://` 的媒体源。
+- `vesper-player-kit-dlna`：可选 DLNA / UPnP AV SSDP discovery、device description
+  parser 与 SOAP playback control。
 - `vesper-player-kit-compose`：Compose adapter，提供 `VesperPlayerSurface` 和
   controller / state helpers。
 - `vesper-player-kit-compose-ui`：可选的 opinionated Compose player stage。
@@ -181,6 +190,8 @@ Flutter 是 federated plugin family：
 - `vesper_player_android`：基于 Android host kit 的 Android 实现。
 - `vesper_player_ios`：基于 `VesperPlayerKit` 的 iOS 实现。
 - `vesper_player_macos`：实验性 macOS package stub，尚未接入真实 playback backend。
+- `vesper_player_external_playback`：可选 Android Cast / DLNA 统一控制器，支持本地
+  HTTP relay；现有 `vesper_player_cast` 仍保留作为兼容的 Cast-only package。
 - `vesper_player_ui`：可选 Flutter 控件与 player stage widgets。
 
 Flutter packages 目前从本仓库源码分发，尚未发布到 pub.dev。
@@ -210,6 +221,8 @@ cargo check --workspace
 
 Android 和 Flutter Android 构建会使用对应项目中提交的 Gradle wrapper，因此本地构建
 会与示例和脚本使用同一套 Gradle / Android Gradle Plugin 版本。
+如果 `lib/android` 没有独立 wrapper，Android 构建脚本会优先使用示例项目 wrapper，
+并可回退到仓库本地 `.gradle/wrapper/dists` 下已下载的 Gradle distribution。
 
 ## Desktop FFmpeg
 
