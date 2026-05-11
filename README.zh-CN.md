@@ -191,7 +191,7 @@ Flutter 是 federated plugin family：
 - `vesper_player_ios`：基于 `VesperPlayerKit` 的 iOS 实现。
 - `vesper_player_macos`：实验性 macOS package stub，尚未接入真实 playback backend。
 - `vesper_player_external_playback`：可选 Android Cast / DLNA 统一控制器，支持本地
-  HTTP relay；现有 `vesper_player_cast` 仍保留作为兼容的 Cast-only package。
+  HTTP relay 和系统 Cast route button。
 - `vesper_player_ui`：可选 Flutter 控件与 player stage widgets。
 
 Flutter packages 目前从本仓库源码分发，尚未发布到 pub.dev。

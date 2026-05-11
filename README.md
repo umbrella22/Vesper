@@ -46,6 +46,8 @@ reference.
   with host-provided recovery hooks for expired or rejected media URLs.
 - Configurable screen-awake handling while playback is active on Android, iOS,
   and Flutter mobile hosts.
+- Optional Android external playback through Google Cast, DLNA / UPnP AV, and a
+  local HTTP relay for protected headers, local files, and `content://` sources.
 - Platform-native surfaces instead of frame-copy rendering paths for mobile
   playback.
 - Optional remux / codec plugin architecture for advanced media workflows.
@@ -83,7 +85,7 @@ than assuming every row above is available on every backend.
 ```text
 crates/      Rust workspace: shared core, runtime, FFI, backends, render, platform glue
 lib/         Distributable platform integration layers
-  android/   Android AAR modules: core kit, Compose adapter, optional Compose UI
+  android/   Android AAR modules: core kit, Cast, relay, DLNA, Compose adapter, optional Compose UI
   ios/       VesperPlayerKit Swift Package / XCFramework project
   flutter/   Federated Flutter packages: main API, platform packages, optional UI
 examples/    Runnable host apps for Android, iOS, Flutter, desktop Rust, and C

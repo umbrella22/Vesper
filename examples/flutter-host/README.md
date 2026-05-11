@@ -9,6 +9,7 @@ Use this example as a reference for:
 - Routing playback through the Android and iOS host kits
 - Source selection, quality / audio / subtitle / speed sheets
 - Configuring `VesperPlaybackResiliencePolicy`
+- Exercising Android external playback through Cast / DLNA and iOS AirPlay
 
 ## Requirements
 

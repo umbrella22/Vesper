@@ -24,6 +24,36 @@ allprojects {
 apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
+def sdkRootDir = projectDir.parentFile.parentFile.parentFile.parentFile
+def androidKitDir = new File(sdkRootDir, "lib/android")
+def fallbackSourceDirs = []
+
+def requireProjectOrSource = { String projectPath, String moduleName ->
+    def includedProject = findProject(projectPath)
+    if (includedProject != null) {
+        return includedProject
+    }
+    def moduleDir = new File(androidKitDir, moduleName)
+    def sourceDir = new File(moduleDir, "src/main/java")
+    if (!sourceDir.isDirectory()) {
+        throw new GradleException(
+            "vesper_player_external_playback requires '${projectPath}' or " +
+            "the SDK source module at ${moduleDir.absolutePath}."
+        )
+    }
+    fallbackSourceDirs.add(sourceDir)
+    return null
+}
+
+def hostKitProject = findProject(":vesper-player-kit")
+def flutterAndroidProject = findProject(":vesper_player_android")
+def castProject = findProject(":vesper-player-kit-cast")
+if (castProject == null) {
+    castProject = requireProjectOrSource(":vesper-player-kit-cast", "vesper-player-kit-cast")
+}
+def relayProject = requireProjectOrSource(":vesper-player-kit-relay", "vesper-player-kit-relay")
+def dlnaProject = requireProjectOrSource(":vesper-player-kit-dlna", "vesper-player-kit-dlna")
+
 android {
     namespace = "io.github.ikaros.vesper.player.flutter.externalplayback"
     compileSdk = 36
@@ -41,19 +71,36 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    sourceSets {
+        main.java.srcDirs += fallbackSourceDirs
+    }
 }
 
 dependencies {
-    def castProject = findProject(":vesper-player-kit-cast")
-    def relayProject = findProject(":vesper-player-kit-relay")
-    def dlnaProject = findProject(":vesper-player-kit-dlna")
-    if (castProject == null || relayProject == null || dlnaProject == null) {
+    if (hostKitProject != null) {
+        implementation hostKitProject
+    } else if (flutterAndroidProject != null) {
+        implementation flutterAndroidProject
+    } else {
         throw new GradleException(
-            "vesper_player_external_playback requires ':vesper-player-kit-cast', " +
-            "':vesper-player-kit-relay', and ':vesper-player-kit-dlna' to be included in the Android build."
+            "vesper_player_external_playback requires ':vesper-player-kit' or " +
+            "the Flutter ':vesper_player_android' project to be included in the Android build."
         )
     }
-    implementation castProject
-    implementation relayProject
-    implementation dlnaProject
+
+    def media3Version = "1.9.3"
+    implementation "androidx.media3:media3-cast:$media3Version"
+    implementation "androidx.mediarouter:mediarouter:1.8.1"
+    implementation "com.google.android.gms:play-services-cast-framework:22.3.1"
+
+    if (castProject != null) {
+        implementation castProject
+    }
+    if (relayProject != null) {
+        implementation relayProject
+    }
+    if (dlnaProject != null) {
+        implementation dlnaProject
+    }
 }

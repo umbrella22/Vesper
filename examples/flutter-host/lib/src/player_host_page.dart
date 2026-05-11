@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vesper_player/vesper_player.dart';
-import 'package:vesper_player_cast/vesper_player_cast.dart';
 import 'package:vesper_player_external_playback/vesper_player_external_playback.dart';
 
 import 'example_device_controls.dart';
@@ -35,7 +34,6 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   late final TextEditingController _remoteUrlController;
   late final TextEditingController _downloadUrlController;
   final ExampleDeviceControls _deviceControls = ExampleDeviceControls();
-  final VesperCastController _castController = VesperCastController();
   final VesperExternalPlaybackController _externalPlaybackController =
       VesperExternalPlaybackController();
   late Future<VesperPlayerController> _controllerFuture;
@@ -44,7 +42,6 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   VesperPlayerController? _controller;
   VesperDownloadManager? _downloadManager;
   StreamSubscription<VesperDownloadManagerEvent>? _downloadEventsSubscription;
-  StreamSubscription<VesperCastSessionEvent>? _castEventsSubscription;
   StreamSubscription<List<VesperExternalPlaybackRoute>>?
   _externalRoutesSubscription;
   StreamSubscription<VesperExternalPlaybackSessionEvent>?
@@ -57,10 +54,9 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   List<String> _playlistItemIds = <String>[flutterHlsPlaylistItemId];
   String? _activePlaylistItemId = flutterHlsPlaylistItemId;
   String? _downloadMessage;
-  String? _castMessage;
   String? _externalPlaybackMessage;
   bool _isDownloadExportPluginInstalled = false;
-  bool _castPausedLocalPlayback = false;
+  bool _externalPlaybackPausedLocalPlayback = false;
   VesperSystemPlaybackPermissionStatus _systemPlaybackPermissionStatus =
       VesperSystemPlaybackPermissionStatus.notRequired;
   VesperPlayerSource? _queuedRemoteSource;
@@ -78,7 +74,6 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     _remoteUrlController = TextEditingController(text: flutterHlsDemoUrl);
     _downloadUrlController = TextEditingController(text: flutterHlsDemoUrl);
     if (Platform.isAndroid) {
-      _castEventsSubscription = _castController.events.listen(_handleCastEvent);
       _externalRoutesSubscription = _externalPlaybackController.routes.listen(
         _handleExternalRoutes,
       );
@@ -93,7 +88,6 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   @override
   void dispose() {
     unawaited(_downloadEventsSubscription?.cancel() ?? Future<void>.value());
-    unawaited(_castEventsSubscription?.cancel() ?? Future<void>.value());
     unawaited(_externalRoutesSubscription?.cancel() ?? Future<void>.value());
     unawaited(_externalEventsSubscription?.cancel() ?? Future<void>.value());
     if (Platform.isAndroid) {
@@ -287,62 +281,6 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     });
   }
 
-  Future<void> _handleCastEvent(VesperCastSessionEvent event) async {
-    final controller = _controller;
-    if (controller == null) {
-      return;
-    }
-
-    switch (event.kind) {
-      case VesperCastSessionEventKind.started:
-      case VesperCastSessionEventKind.resumed:
-        final source = _activePlaylistItemId == null
-            ? null
-            : _playlistSourceForItem(_activePlaylistItemId!);
-        if (source == null) {
-          return;
-        }
-        final result = await _castController.loadFromPlayer(
-          player: controller,
-          source: source,
-          metadata: _systemPlaybackMetadataForSource(source),
-        );
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _castPausedLocalPlayback = result.isSuccess;
-          _castMessage = result.isSuccess
-              ? 'Cast 已连接：${event.routeName ?? '设备'}'
-              : result.message;
-        });
-      case VesperCastSessionEventKind.ended:
-        if (_castPausedLocalPlayback) {
-          final positionMs = event.positionMs;
-          if (positionMs != null) {
-            final deltaMs =
-                positionMs - controller.snapshot.timeline.positionMs;
-            await controller.seekBy(deltaMs);
-          }
-          await controller.play();
-        }
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _castPausedLocalPlayback = false;
-          _castMessage = 'Cast 已断开，本地播放已恢复。';
-        });
-      case VesperCastSessionEventKind.suspended:
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _castMessage = 'Cast 连接已暂停。';
-        });
-    }
-  }
-
   void _handleExternalRoutes(List<VesperExternalPlaybackRoute> routes) {
     if (!mounted) {
       return;
@@ -353,35 +291,62 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   }
 
   void _handleExternalEvent(VesperExternalPlaybackSessionEvent event) {
+    unawaited(_handleExternalEventAsync(event));
+  }
+
+  Future<void> _handleExternalEventAsync(
+    VesperExternalPlaybackSessionEvent event,
+  ) async {
     if (!mounted) {
       return;
     }
-    setState(() {
-      _externalPlaybackMessage = switch (event.kind) {
-        VesperExternalPlaybackSessionEventKind.routeConnected =>
-          '外部播放已连接：${event.routeName ?? event.routeId ?? '设备'}',
-        VesperExternalPlaybackSessionEventKind.routeDisconnected => '外部播放已断开。',
-        VesperExternalPlaybackSessionEventKind.loaded => '外部播放媒体已加载。',
-        VesperExternalPlaybackSessionEventKind.playing => '外部播放已继续。',
-        VesperExternalPlaybackSessionEventKind.paused => '外部播放已暂停。',
-        VesperExternalPlaybackSessionEventKind.stopped => '外部播放已停止。',
-        VesperExternalPlaybackSessionEventKind.suspended => '外部播放连接已暂停。',
-        VesperExternalPlaybackSessionEventKind.error =>
-          event.message ?? '外部播放发生错误。',
-      };
-    });
+
+    switch (event.kind) {
+      case VesperExternalPlaybackSessionEventKind.routeConnected:
+        final routeLabel = event.routeName ?? event.routeId ?? '设备';
+        setState(() {
+          _externalPlaybackMessage = '外部播放已连接：$routeLabel';
+        });
+        if (event.routeId == VesperExternalPlaybackController.castRouteId) {
+          await _loadCurrentExternalMedia(routeLabel: routeLabel);
+        }
+      case VesperExternalPlaybackSessionEventKind.routeDisconnected:
+        await _resumeLocalPlaybackFromExternal(event.positionMs);
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _externalPlaybackPausedLocalPlayback = false;
+          _externalPlaybackMessage = '外部播放已断开，本地播放已恢复。';
+        });
+      case VesperExternalPlaybackSessionEventKind.loaded:
+        setState(() {
+          _externalPlaybackMessage = '外部播放媒体已加载。';
+        });
+      case VesperExternalPlaybackSessionEventKind.playing:
+        setState(() {
+          _externalPlaybackMessage = '外部播放已继续。';
+        });
+      case VesperExternalPlaybackSessionEventKind.paused:
+        setState(() {
+          _externalPlaybackMessage = '外部播放已暂停。';
+        });
+      case VesperExternalPlaybackSessionEventKind.stopped:
+        setState(() {
+          _externalPlaybackMessage = '外部播放已停止。';
+        });
+      case VesperExternalPlaybackSessionEventKind.suspended:
+        setState(() {
+          _externalPlaybackMessage = '外部播放连接已暂停。';
+        });
+      case VesperExternalPlaybackSessionEventKind.error:
+        setState(() {
+          _externalPlaybackMessage = event.message ?? '外部播放发生错误。';
+        });
+    }
   }
 
   Future<void> _loadExternalRoute(VesperExternalPlaybackRoute route) async {
-    final controller = _controller ?? await _controllerFuture;
-    final source = _activePlaylistItemId == null
-        ? null
-        : _playlistSourceForItem(_activePlaylistItemId!);
-    if (source == null) {
-      return;
-    }
-    final wasPlaying =
-        controller.snapshot.playbackState == VesperPlaybackState.playing;
     final connectResult = await _externalPlaybackController.connect(
       route.routeId,
     );
@@ -393,13 +358,27 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       }
       return;
     }
+    await _loadCurrentExternalMedia(routeLabel: route.name);
+  }
+
+  Future<void> _loadCurrentExternalMedia({required String routeLabel}) async {
+    final controller = _controller ?? await _controllerFuture;
+    final source = _activePlaylistItemId == null
+        ? null
+        : _playlistSourceForItem(_activePlaylistItemId!);
+    if (source == null) {
+      return;
+    }
+    final wasPlaying =
+        controller.snapshot.playbackState == VesperPlaybackState.playing;
+    final shouldAutoplay = wasPlaying || _externalPlaybackPausedLocalPlayback;
     final loadResult = await _externalPlaybackController.load(
       VesperExternalPlaybackMediaItem(
         sources: <VesperPlayerSource>[source],
         metadata: _systemPlaybackMetadataForSource(source),
       ),
       startPositionMs: controller.snapshot.timeline.positionMs,
-      autoplay: wasPlaying,
+      autoplay: shouldAutoplay,
     );
     if (loadResult.isSuccess && wasPlaying) {
       await controller.pause();
@@ -408,10 +387,28 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       return;
     }
     setState(() {
+      if (loadResult.isSuccess && shouldAutoplay) {
+        _externalPlaybackPausedLocalPlayback = true;
+      }
       _externalPlaybackMessage = loadResult.isSuccess
-          ? '外部播放已加载：${route.name}'
+          ? '外部播放已加载：$routeLabel'
           : loadResult.message;
     });
+  }
+
+  Future<void> _resumeLocalPlaybackFromExternal(int? positionMs) async {
+    if (!_externalPlaybackPausedLocalPlayback) {
+      return;
+    }
+    final controller = _controller;
+    if (controller == null) {
+      return;
+    }
+    if (positionMs != null) {
+      final deltaMs = positionMs - controller.snapshot.timeline.positionMs;
+      await controller.seekBy(deltaMs);
+    }
+    await controller.play();
   }
 
   VesperSystemPlaybackMetadata _systemPlaybackMetadataForSource(
@@ -1035,8 +1032,11 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
             palette: palette,
             controller: controller,
             permissionStatus: _systemPlaybackPermissionStatus,
-            castMessage: _castMessage,
-            externalRoutes: _externalRoutes,
+            externalRoutes: _externalRoutes
+                .where(
+                  (route) => route.kind == VesperExternalPlaybackRouteKind.dlna,
+                )
+                .toList(growable: false),
             externalPlaybackMessage: _externalPlaybackMessage,
             onExternalRouteSelected: (route) =>
                 unawaited(_loadExternalRoute(route)),

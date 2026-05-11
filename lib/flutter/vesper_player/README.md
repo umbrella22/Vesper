@@ -26,7 +26,7 @@ across platforms.
 | Download management      | ✅                                           | ✅                                                  | ❌                   |
 | Preload                  | ✅                                           | ✅                                                  | ❌                   |
 | System playback controls | ✅ MediaSession notification + FGS           | ✅ Now Playing / RemoteCommand                      | ❌                   |
-| External playback        | ✅ Optional `vesper_player_cast` or `vesper_player_external_playback` package | ✅ AirPlay route picker via `vesper_player_ui`      | ❌                   |
+| External playback        | ✅ Optional `vesper_player_external_playback` package | ✅ AirPlay route picker via `vesper_player_ui`      | ❌                   |
 
 > `vesper_player_macos` exists as an experimental federated package stub. The
 > main package currently registers Android and iOS implementations only.
@@ -41,9 +41,6 @@ package family is published:
 dependencies:
   vesper_player:
     path: path/to/rust-player-sdk/lib/flutter/vesper_player
-  # Optional Android Cast sender integration.
-  vesper_player_cast:
-    path: path/to/rust-player-sdk/lib/flutter/vesper_player_cast
   # Optional unified Android Cast / DLNA external playback.
   vesper_player_external_playback:
     path: path/to/rust-player-sdk/lib/flutter/vesper_player_external_playback
@@ -216,25 +213,9 @@ The button is backed by `AVRoutePickerView` and prioritizes video-capable
 routes by default. Users can also continue to route from Control Center.
 AirDrop is file sharing, not media playback routing.
 
-For Android Cast, depend on the optional `vesper_player_cast` package. It keeps
-Google Play Services and Cast Framework dependencies out of the default player
-package:
-
-```dart
-final cast = VesperCastController();
-final result = await cast.loadFromPlayer(
-  player: controller,
-  source: VesperPlayerSource.hls(
-    uri: 'https://example.com/stream.m3u8',
-    label: 'Sample video',
-  ),
-  metadata: const VesperSystemPlaybackMetadata(title: 'Sample video'),
-);
-```
-
 For unified Android Cast / DLNA control, depend on the optional
-`vesper_player_external_playback` package. It keeps discovery and relay
-dependencies outside the default player package:
+`vesper_player_external_playback` package. It keeps discovery, relay, and Cast
+Framework dependencies outside the default player package:
 
 ```dart
 final external = VesperExternalPlaybackController();
@@ -255,6 +236,9 @@ local HTTP relay when the proxy policy allows it. Cast V2 direct playback still
 supports remote `http` / `https` HLS, DASH, and progressive sources with the
 default Google receiver. DRM, transcoding, DASH manifest rewrite, and custom
 receiver flows are outside the MVP scope.
+
+Use `VesperExternalRouteButton()` from `vesper_player_external_playback` near
+your player controls on Android to surface the system Cast route button.
 
 ### `VesperPlayerSource`
 

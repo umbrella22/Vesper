@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:vesper_player/vesper_player.dart';
-import 'package:vesper_player_cast/vesper_player_cast.dart';
 import 'package:vesper_player_external_playback/vesper_player_external_playback.dart';
 import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
@@ -298,7 +297,6 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
     required this.onRequestPermission,
     required this.externalRoutes,
     required this.onExternalRouteSelected,
-    this.castMessage,
     this.externalPlaybackMessage,
   });
 
@@ -308,7 +306,6 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
   final VoidCallback onRequestPermission;
   final List<VesperExternalPlaybackRoute> externalRoutes;
   final ValueChanged<VesperExternalPlaybackRoute> onExternalRouteSelected;
-  final String? castMessage;
   final String? externalPlaybackMessage;
 
   @override
@@ -316,7 +313,7 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
     return ExampleSectionShell(
       palette: palette,
       title: '系统播放',
-      subtitle: '后台音频、锁屏控制、AirPlay 和 Android Cast 的宿主集成入口。',
+      subtitle: '后台音频、锁屏控制、AirPlay、Android Cast 和 DLNA 的宿主集成入口。',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -335,10 +332,6 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
               ),
               _RouteButtonFrame(
                 palette: palette,
-                child: const VesperCastButton(),
-              ),
-              _RouteButtonFrame(
-                palette: palette,
                 child: const VesperExternalRouteButton(),
               ),
               OutlinedButton(
@@ -347,15 +340,6 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
               ),
             ],
           ),
-          if (castMessage != null) ...<Widget>[
-            const SizedBox(height: 12),
-            Text(
-              castMessage!,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: palette.body),
-            ),
-          ],
           if (externalRoutes.isNotEmpty) ...<Widget>[
             const SizedBox(height: 12),
             Wrap(

@@ -23,7 +23,7 @@ directly.
 | Download management                         | ✅                                 |
 | Preload                                     | ✅                                 |
 | System playback / notification controls     | ✅ MediaSession + foreground service |
-| Android Cast                                | ✅ Optional `vesper_player_cast` package |
+| Android external playback                   | ✅ Optional `vesper_player_external_playback` package |
 
 ## Technical Notes
 
@@ -81,13 +81,16 @@ should put generic HTTP context such as `User-Agent`, `Referer`, `Origin`,
 `Cookie`, or authorization headers on `VesperPlayerSource.headers`; the SDK
 forwards them consistently and ignores empty header names or blank values.
 
-## Optional Android Cast
+## Optional Android External Playback
 
-Android Cast lives in the separate `vesper_player_cast` Flutter package and the
-optional `vesper-player-kit-cast` Android module. This keeps Google Play
-Services and Cast Framework dependencies out of the default player package.
+Android Cast and DLNA live in the separate `vesper_player_external_playback`
+Flutter package. It depends on the optional `vesper-player-kit-cast`,
+`vesper-player-kit-relay`, and `vesper-player-kit-dlna` Android modules so the
+default player package does not pull in Google Play Services, Cast Framework,
+DLNA discovery, or the local HTTP relay.
 
-For local workspace builds, include `:vesper-player-kit-cast` beside
+For local workspace builds, include `:vesper-player-kit-cast`,
+`:vesper-player-kit-relay`, and `:vesper-player-kit-dlna` beside
 `:vesper-player-kit` in the host Android Gradle settings. The Cast module
 contributes a default `VesperCastOptionsProvider` that uses Google's Default
 Media Receiver. Hosts that need a custom receiver can override the manifest
@@ -95,8 +98,10 @@ meta-data key
 `io.github.ikaros.vesper.player.android.cast.RECEIVER_APPLICATION_ID`.
 
 Cast V2 supports remote `http` / `https` HLS, DASH, and progressive sources.
-Local files, `content://` sources, DRM, request headers with the default
-receiver, offline assets, and custom receiver behavior are outside this scope.
+Sources with headers, local files, and `content://` inputs are exposed to Cast
+and DLNA receivers through the external playback package's tokenized local HTTP
+relay when the selected proxy policy allows it. DRM, transcoding, DASH manifest
+rewrite, offline assets, and custom receiver behavior are outside this scope.
 
 ## Optional `player-remux-ffmpeg` Remux Plugin
 

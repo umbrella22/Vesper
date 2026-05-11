@@ -52,6 +52,24 @@ void main() {
     expect(decodedRoute.active, isTrue);
   });
 
+  test('session event DTO decodes cast metadata and position', () {
+    final event = VesperExternalPlaybackSessionEvent.fromMap(
+      <Object?, Object?>{
+        'kind': 'routeDisconnected',
+        'routeId': VesperExternalPlaybackController.castRouteId,
+        'routeName': 'Living Room TV',
+        'message': 'Disconnected',
+        'positionMs': 1234,
+      },
+    );
+
+    expect(event.kind, VesperExternalPlaybackSessionEventKind.routeDisconnected);
+    expect(event.routeId, VesperExternalPlaybackController.castRouteId);
+    expect(event.routeName, 'Living Room TV');
+    expect(event.message, 'Disconnected');
+    expect(event.positionMs, 1234);
+  });
+
   test('load serializes media item and decodes relay result', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {

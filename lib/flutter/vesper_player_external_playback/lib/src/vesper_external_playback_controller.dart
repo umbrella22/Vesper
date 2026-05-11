@@ -177,6 +177,8 @@ final class VesperExternalPlaybackSessionEvent {
 }
 
 class VesperExternalPlaybackController {
+  static const String castRouteId = 'cast:active';
+
   VesperExternalPlaybackController({
     MethodChannel? methodChannel,
     EventChannel? routesEventChannel,
@@ -240,6 +242,33 @@ class VesperExternalPlaybackController {
       'startPositionMs': startPositionMs,
       'autoplay': autoplay,
     });
+  }
+
+  Future<VesperExternalPlaybackResult> loadFromPlayer({
+    required VesperPlayerController player,
+    required VesperPlayerSource source,
+    VesperSystemPlaybackMetadata? metadata,
+    VesperExternalProxyPolicy proxyPolicy = VesperExternalProxyPolicy.auto,
+  }) async {
+    final wasPlaying =
+        player.snapshot.playbackState == VesperPlaybackState.playing;
+    final result = await load(
+      VesperExternalPlaybackMediaItem(
+        sources: <VesperPlayerSource>[source],
+        metadata: metadata ??
+            VesperSystemPlaybackMetadata(
+              title: source.label,
+              contentUri: source.uri,
+            ),
+        proxyPolicy: proxyPolicy,
+      ),
+      startPositionMs: player.snapshot.timeline.positionMs,
+      autoplay: wasPlaying,
+    );
+    if (result.isSuccess && wasPlaying) {
+      await player.pause();
+    }
+    return result;
   }
 
   Future<VesperExternalPlaybackResult> play() => _invokeResult('play');

@@ -62,7 +62,12 @@ class VesperPlayerExternalPlaybackPlugin :
             activeRouteId = CAST_ROUTE_ID
             activeCastRouteName = session.castDevice?.friendlyName
             emitRoutes()
-            emitSessionEvent("routeConnected", CAST_ROUTE_ID, activeCastRouteName)
+            emitSessionEvent(
+                "routeConnected",
+                CAST_ROUTE_ID,
+                activeCastRouteName,
+                positionMs = session.remoteMediaClient?.approximateStreamPosition,
+            )
         },
         onEnded = { session ->
             if (activeRouteId == CAST_ROUTE_ID) {
@@ -71,11 +76,21 @@ class VesperPlayerExternalPlaybackPlugin :
             }
             activeCastRouteName = session.castDevice?.friendlyName
             emitRoutes()
-            emitSessionEvent("routeDisconnected", CAST_ROUTE_ID, activeCastRouteName)
+            emitSessionEvent(
+                "routeDisconnected",
+                CAST_ROUTE_ID,
+                activeCastRouteName,
+                positionMs = session.remoteMediaClient?.approximateStreamPosition,
+            )
         },
         onSuspended = { session ->
             activeCastRouteName = session.castDevice?.friendlyName
-            emitSessionEvent("suspended", CAST_ROUTE_ID, activeCastRouteName)
+            emitSessionEvent(
+                "suspended",
+                CAST_ROUTE_ID,
+                activeCastRouteName,
+                positionMs = session.remoteMediaClient?.approximateStreamPosition,
+            )
         },
     )
 
@@ -453,6 +468,7 @@ class VesperPlayerExternalPlaybackPlugin :
         routeId: String? = null,
         routeName: String? = null,
         message: String? = null,
+        positionMs: Long? = null,
     ) {
         sessionSink?.success(
             mapOf(
@@ -460,6 +476,7 @@ class VesperPlayerExternalPlaybackPlugin :
                 "routeId" to routeId,
                 "routeName" to routeName,
                 "message" to message,
+                "positionMs" to positionMs,
             ),
         )
     }
