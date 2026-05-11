@@ -192,20 +192,29 @@ class VesperExternalPlaybackController {
   final EventChannel _routesEventChannel;
   final EventChannel _sessionEventChannel;
 
-  Stream<List<VesperExternalPlaybackRoute>>? _routes;
+  Stream<List<VesperExternalPlaybackRoute>>? _nativeRoutes;
   Stream<VesperExternalPlaybackSessionEvent>? _events;
+  List<VesperExternalPlaybackRoute>? _latestRoutes;
 
   Stream<List<VesperExternalPlaybackRoute>> get routes {
-    return _routes ??=
-        _routesEventChannel.receiveBroadcastStream().map((event) {
-      if (event is! Iterable) {
-        return const <VesperExternalPlaybackRoute>[];
+    final nativeRoutes = _nativeRoutes ??= _routesEventChannel
+        .receiveBroadcastStream()
+        .map(_decodeRoutes)
+        .map((routes) {
+      _latestRoutes = routes;
+      return routes;
+    }).asBroadcastStream();
+    return Stream<List<VesperExternalPlaybackRoute>>.multi((controller) {
+      final latestRoutes = _latestRoutes;
+      if (latestRoutes != null) {
+        controller.add(latestRoutes);
       }
-      return event
-          .map(_rawMap)
-          .whereType<Map<Object?, Object?>>()
-          .map(VesperExternalPlaybackRoute.fromMap)
-          .toList(growable: false);
+      final subscription = nativeRoutes.listen(
+        controller.add,
+        onError: controller.addError,
+        onDone: controller.close,
+      );
+      controller.onCancel = subscription.cancel;
     });
   }
 
@@ -356,6 +365,17 @@ Map<Object?, Object?>? _rawMap(Object? raw) {
     return Map<Object?, Object?>.from(raw);
   }
   return null;
+}
+
+List<VesperExternalPlaybackRoute> _decodeRoutes(Object? event) {
+  if (event is! Iterable) {
+    return const <VesperExternalPlaybackRoute>[];
+  }
+  return event
+      .map(_rawMap)
+      .whereType<Map<Object?, Object?>>()
+      .map(VesperExternalPlaybackRoute.fromMap)
+      .toList(growable: false);
 }
 
 const MethodChannel _defaultMethodChannel = MethodChannel(

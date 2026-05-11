@@ -21,6 +21,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
@@ -29,13 +30,16 @@ data class VesperRelayHandle(
     val url: String,
 )
 
-class VesperRelayServer(
+class VesperRelayServer @JvmOverloads constructor(
     context: Context? = null,
     private val advertisedAddressProvider: () -> InetAddress? = ::findLanIpv4Address,
     private val bindAddressProvider: () -> InetAddress = { InetAddress.getByName("0.0.0.0") },
+    private val tokenTtlMillis: Long? = DEFAULT_TOKEN_TTL_MILLIS,
+    private val nowMillisProvider: () -> Long = System::currentTimeMillis,
 ) {
     private val appContext = context?.applicationContext
-    private val entries = ConcurrentHashMap<String, VesperPlayerSource>()
+    private val entries = ConcurrentHashMap<String, RelayEntry>()
+    private val activeClients = ConcurrentHashMap.newKeySet<Socket>()
     private val random = SecureRandom()
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
@@ -59,14 +63,7 @@ class VesperRelayServer(
             Thread(runnable, "vesper-relay-accept").apply { isDaemon = true }
         }
         running.set(true)
-        acceptExecutor?.execute {
-            while (running.get()) {
-                runCatching {
-                    val client = socket.accept()
-                    requestExecutor?.execute { handleClient(client) }
-                }
-            }
-        }
+        acceptExecutor?.execute { runAcceptLoop(socket) }
     }
 
     @Synchronized
@@ -74,6 +71,8 @@ class VesperRelayServer(
         running.set(false)
         entries.clear()
         runCatching { serverSocket?.close() }
+        activeClients.forEach { client -> runCatching { client.close() } }
+        activeClients.clear()
         serverSocket = null
         acceptExecutor?.shutdownNow()
         requestExecutor?.shutdownNow()
@@ -83,12 +82,16 @@ class VesperRelayServer(
     }
 
     fun register(source: VesperPlayerSource): VesperRelayHandle {
+        pruneExpiredEntries()
         start()
         val socket = serverSocket ?: throw IllegalStateException("Relay server is not running.")
         val host = advertisedAddress?.hostAddress
             ?: throw IllegalStateException("No LAN address is available for relay.")
         val token = nextToken()
-        entries[token] = source
+        entries[token] = RelayEntry(
+            source = source,
+            expiresAtMillis = tokenExpiresAtMillis(),
+        )
         return VesperRelayHandle(
             token = token,
             url = "http://$host:${socket.localPort}/media/$token",
@@ -101,6 +104,77 @@ class VesperRelayServer(
 
     fun invalidateAll() {
         entries.clear()
+    }
+
+    private fun sourceForToken(token: String): VesperPlayerSource? {
+        val entry = entries[token] ?: return null
+        val expiresAtMillis = entry.expiresAtMillis ?: return entry.source
+        if (expiresAtMillis <= nowMillisProvider()) {
+            entries.remove(token, entry)
+            return null
+        }
+        return entry.source
+    }
+
+    private fun pruneExpiredEntries() {
+        val now = nowMillisProvider()
+        entries.entries.removeIf { (_, entry) ->
+            entry.expiresAtMillis?.let { it <= now } ?: false
+        }
+    }
+
+    private fun tokenExpiresAtMillis(): Long? {
+        val ttl = tokenTtlMillis?.takeIf { it > 0L } ?: return null
+        return nowMillisProvider() + ttl
+    }
+
+    private fun runAcceptLoop(socket: ServerSocket) {
+        while (running.get() && !Thread.currentThread().isInterrupted) {
+            val client = try {
+                socket.accept()
+            } catch (error: Exception) {
+                if (error is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+                if (!running.get() || socket.isClosed) {
+                    break
+                }
+                continue
+            }
+            if (!running.get()) {
+                runCatching { client.close() }
+                continue
+            }
+            val executor = requestExecutor
+            if (executor == null || executor.isShutdown) {
+                runCatching { client.close() }
+                continue
+            }
+            try {
+                executor.execute { handleClientSafely(client) }
+            } catch (_: RejectedExecutionException) {
+                runCatching { client.close() }
+            }
+        }
+    }
+
+    private fun handleClientSafely(socket: Socket) {
+        activeClients.add(socket)
+        try {
+            if (running.get()) {
+                handleClient(socket)
+            } else {
+                runCatching { socket.close() }
+            }
+        } catch (error: Exception) {
+            if (error is InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            runCatching { socket.close() }
+        } finally {
+            activeClients.remove(socket)
+        }
     }
 
     private fun handleClient(socket: Socket) {
@@ -133,7 +207,7 @@ class VesperRelayServer(
                 return
             }
             val token = path.removePrefix("/media/").takeIf { path.startsWith("/media/") }
-            val source = token?.let(entries::get)
+            val source = token?.let(::sourceForToken)
             if (source == null) {
                 output.writeSimpleResponse(404, "Not Found")
                 return
@@ -302,6 +376,13 @@ class VesperRelayServer(
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 }
+
+private data class RelayEntry(
+    val source: VesperPlayerSource,
+    val expiresAtMillis: Long?,
+)
+
+private const val DEFAULT_TOKEN_TTL_MILLIS = 30 * 60 * 1000L
 
 data class ByteRangeRequest(
     val start: Long?,

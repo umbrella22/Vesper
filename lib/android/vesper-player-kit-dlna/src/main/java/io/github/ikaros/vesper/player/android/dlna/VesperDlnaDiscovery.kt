@@ -55,14 +55,31 @@ class VesperDlnaDiscovery(
     }
 
     private fun runDiscoveryLoop() {
-        while (running.get()) {
-            runCatching {
+        while (running.get() && !Thread.currentThread().isInterrupted) {
+            val keepRunning = runCatching {
                 pruneExpired()
                 searchOnce()
-            }.onFailure { error ->
-                listener.onDiscoveryError(error.message ?: "DLNA discovery failed.")
+                true
+            }.getOrElse { error ->
+                if (error is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    false
+                } else {
+                    if (running.get()) {
+                        listener.onDiscoveryError(error.message ?: "DLNA discovery failed.")
+                    }
+                    true
+                }
             }
-            Thread.sleep(8_000)
+            if (!keepRunning || !running.get()) {
+                break
+            }
+            try {
+                Thread.sleep(DISCOVERY_INTERVAL_MS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
         }
     }
 
@@ -78,7 +95,7 @@ class VesperDlnaDiscovery(
                 val payload = mSearchPayload(target).toByteArray(Charsets.UTF_8)
                 socket.send(DatagramPacket(payload, payload.size, address, SSDP_PORT))
             }
-            val buffer = ByteArray(16 * 1024)
+            val buffer = ByteArray(SSDP_BUFFER_BYTES)
             val deadline = System.currentTimeMillis() + 2_500
             while (running.get() && System.currentTimeMillis() < deadline) {
                 val packet = DatagramPacket(buffer, buffer.size)
@@ -92,6 +109,9 @@ class VesperDlnaDiscovery(
     }
 
     private fun handleSsdp(raw: String) {
+        if (!running.get()) {
+            return
+        }
         val message = VesperSsdpParser.parse(raw) ?: return
         if (message.isByebyeNotify) {
             val usn = message.usn ?: return
@@ -104,6 +124,9 @@ class VesperDlnaDiscovery(
         }
         val request = message.toDescriptionRequest(System.currentTimeMillis()) ?: return
         val device = fetchDevice(request) ?: return
+        if (!running.get()) {
+            return
+        }
         devices[device.usn] = device
         emitRoutes()
     }
@@ -163,3 +186,5 @@ private fun mSearchPayload(target: String): String =
 
 private const val SSDP_ADDRESS = "239.255.255.250"
 private const val SSDP_PORT = 1900
+private const val SSDP_BUFFER_BYTES = 65_535
+private const val DISCOVERY_INTERVAL_MS = 8_000L

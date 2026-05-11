@@ -98,6 +98,32 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun expiresTokensByTtlLazily() {
+        var nowMillis = 1_000L
+        val ttlRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            tokenTtlMillis = 50L,
+            nowMillisProvider = { nowMillis },
+        )
+        try {
+            val file = File.createTempFile("vesper-relay", ".mp4")
+            file.writeText("data")
+            file.deleteOnExit()
+            val handle = ttlRelay.register(
+                VesperPlayerSource.local(uri = file.absolutePath, label = "Local"),
+            )
+
+            assertEquals(200, request(handle.url).status)
+            nowMillis += 51L
+
+            assertEquals(404, request(handle.url).status)
+        } finally {
+            ttlRelay.stop()
+        }
+    }
+
+    @Test
     fun handlesConcurrentRangeRequests() {
         val file = File.createTempFile("vesper-relay", ".mp4")
         file.writeText("abcdefghijklmnopqrstuvwxyz")
