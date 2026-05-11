@@ -3,6 +3,7 @@ package io.github.ikaros.vesper.player.flutter.externalplayback
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.view.ContextThemeWrapper
 import android.view.View
 import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.cast.framework.CastButtonFactory
@@ -153,9 +154,13 @@ class VesperPlayerExternalPlaybackPlugin :
     }
 
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-        val button = MediaRouteButton(context)
+        val themedContext = ContextThemeWrapper(
+            context,
+            R.style.VesperPlayerExternalRouteButtonTheme,
+        )
+        val button = MediaRouteButton(themedContext)
         runCatching {
-            CastButtonFactory.setUpMediaRouteButton(context, button)
+            CastButtonFactory.setUpMediaRouteButton(themedContext, button)
         }
         return RouteButtonPlatformView(button)
     }
