@@ -70,6 +70,28 @@ void main() {
     expect(event.positionMs, 1234);
   });
 
+  test('session event DTO decodes discovery diagnostics', () {
+    final event = VesperExternalPlaybackSessionEvent.fromMap(
+      <Object?, Object?>{
+        'kind': 'discoveryDiagnostic',
+        'message': 'Timed out while fetching DLNA device description.',
+        'code': 'description_timeout',
+        'details': <Object?, Object?>{
+          'severity': 'warning',
+          'location': 'http://192.168.1.10:8000/desc.xml',
+        },
+      },
+    );
+
+    expect(
+      event.kind,
+      VesperExternalPlaybackSessionEventKind.discoveryDiagnostic,
+    );
+    expect(event.code, 'description_timeout');
+    expect(event.details['severity'], 'warning');
+    expect(event.details['location'], 'http://192.168.1.10:8000/desc.xml');
+  });
+
   test('load serializes media item and decodes relay result', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {

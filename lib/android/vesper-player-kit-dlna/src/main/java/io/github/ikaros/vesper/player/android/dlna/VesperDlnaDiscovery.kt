@@ -1,16 +1,41 @@
 package io.github.ikaros.vesper.player.android.dlna
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
+import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.MulticastSocket
+import java.net.NetworkInterface
+import java.net.SocketAddress
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicBoolean
+
+enum class VesperDlnaDiscoveryDiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+data class VesperDlnaDiscoveryDiagnostic(
+    val code: String,
+    val severity: VesperDlnaDiscoveryDiagnosticSeverity,
+    val message: String,
+    val details: Map<String, String> = emptyMap(),
+)
 
 class VesperDlnaDiscovery(
     context: Context,
@@ -19,12 +44,16 @@ class VesperDlnaDiscovery(
     interface Listener {
         fun onRoutesChanged(routes: List<VesperDlnaDevice>)
         fun onDiscoveryError(message: String)
+        fun onDiscoveryDiagnostic(diagnostic: VesperDlnaDiscoveryDiagnostic) = Unit
     }
 
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
     private val devices = ConcurrentHashMap<String, VesperDlnaDevice>()
     private var executor: ExecutorService? = null
+    private var notifyExecutor: ExecutorService? = null
+    private var notifySocket: MulticastSocket? = null
+    private var notifyBindingKey: String? = null
     private var multicastLock: WifiManager.MulticastLock? = null
 
     fun start() {
@@ -40,6 +69,7 @@ class VesperDlnaDiscovery(
 
     fun stop() {
         running.set(false)
+        stopNotifyListener()
         executor?.shutdownNow()
         executor = null
         multicastLock?.let { lock ->
@@ -58,7 +88,17 @@ class VesperDlnaDiscovery(
         while (running.get() && !Thread.currentThread().isInterrupted) {
             val keepRunning = runCatching {
                 pruneExpired()
-                searchOnce()
+                val binding = resolveWifiBinding()
+                if (binding == null) {
+                    emitDiagnostic(
+                        code = "wifi_network_unavailable",
+                        severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                        message = "No Wi-Fi network with an IPv4 address is available for DLNA discovery.",
+                    )
+                } else {
+                    ensureNotifyListener(binding)
+                    searchOnce(binding)
+                }
                 true
             }.getOrElse { error ->
                 if (error is InterruptedException) {
@@ -66,7 +106,13 @@ class VesperDlnaDiscovery(
                     false
                 } else {
                     if (running.get()) {
-                        listener.onDiscoveryError(error.message ?: "DLNA discovery failed.")
+                        val message = error.message ?: "DLNA discovery failed."
+                        listener.onDiscoveryError(message)
+                        emitDiagnostic(
+                            code = "discovery_loop_failed",
+                            severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
+                            message = message,
+                        )
                     }
                     true
                 }
@@ -83,68 +129,183 @@ class VesperDlnaDiscovery(
         }
     }
 
-    private fun searchOnce() {
-        DatagramSocket().use { socket ->
-            socket.soTimeout = 2_000
+    private fun searchOnce(binding: WifiNetworkBinding) {
+        DatagramSocket(null as SocketAddress?).use { socket ->
+            socket.reuseAddress = true
+            socket.bind(InetSocketAddress(binding.localAddress, 0))
+            binding.network.bindSocket(socket)
+            socket.soTimeout = SSDP_RECEIVE_TIMEOUT_MS
             val address = InetAddress.getByName(SSDP_ADDRESS)
-            val targets = listOf(
-                "urn:schemas-upnp-org:device:MediaRenderer:1",
-                "ssdp:all",
-            )
-            for (target in targets) {
-                val payload = mSearchPayload(target).toByteArray(Charsets.UTF_8)
-                socket.send(DatagramPacket(payload, payload.size, address, SSDP_PORT))
-            }
-            val buffer = ByteArray(SSDP_BUFFER_BYTES)
-            val deadline = System.currentTimeMillis() + 2_500
-            while (running.get() && System.currentTimeMillis() < deadline) {
-                val packet = DatagramPacket(buffer, buffer.size)
-                runCatching {
-                    socket.receive(packet)
-                    val raw = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
-                    handleSsdp(raw)
+            repeat(M_SEARCH_ROUNDS) { round ->
+                val mx = ThreadLocalRandom.current().nextInt(1, 4)
+                for (target in M_SEARCH_TARGETS) {
+                    val payload = mSearchPayload(target, mx).toByteArray(Charsets.UTF_8)
+                    socket.send(DatagramPacket(payload, payload.size, address, SSDP_PORT))
                 }
+                emitDiagnostic(
+                    code = "m_search_sent",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                    message = "DLNA M-SEARCH probes were sent on Wi-Fi.",
+                    details = mapOf(
+                        "interface" to binding.interfaceName.orEmpty(),
+                        "localAddress" to binding.localAddress.hostAddress.orEmpty(),
+                        "round" to (round + 1).toString(),
+                    ),
+                )
+                receiveSearchResponses(socket, binding)
             }
         }
     }
 
-    private fun handleSsdp(raw: String) {
+    private fun receiveSearchResponses(
+        socket: DatagramSocket,
+        binding: WifiNetworkBinding,
+    ) {
+        val buffer = ByteArray(SSDP_BUFFER_BYTES)
+        val deadline = System.currentTimeMillis() + SSDP_RECEIVE_WINDOW_MS
+        while (running.get() && System.currentTimeMillis() < deadline) {
+            val packet = DatagramPacket(buffer, buffer.size)
+            try {
+                socket.receive(packet)
+                val raw = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
+                handleSsdp(raw, binding)
+            } catch (_: SocketTimeoutException) {
+                break
+            } catch (error: IOException) {
+                if (running.get()) {
+                    emitDiagnostic(
+                        code = "ssdp_receive_failed",
+                        severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                        message = error.message ?: "Failed to receive an SSDP response.",
+                    )
+                }
+                break
+            }
+        }
+    }
+
+    private fun handleSsdp(raw: String, binding: WifiNetworkBinding) {
         if (!running.get()) {
             return
         }
         val message = VesperSsdpParser.parse(raw) ?: return
         if (message.isByebyeNotify) {
             val usn = message.usn ?: return
-            devices.remove(usn)
-            emitRoutes()
+            val routeId = canonicalDlnaRouteId(usn)
+            if (devices.remove(routeId) != null) {
+                emitRoutes()
+                emitDiagnostic(
+                    code = "route_byebye",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                    message = "DLNA device announced that it is leaving.",
+                    details = mapOf("routeId" to routeId),
+                )
+            }
             return
         }
-        if (!message.isMediaRenderer) {
+        if (!message.shouldFetchDescription) {
             return
         }
         val request = message.toDescriptionRequest(System.currentTimeMillis()) ?: return
-        val device = fetchDevice(request) ?: return
+        val device = fetchDevice(request, binding.network) ?: return
         if (!running.get()) {
             return
         }
-        devices[device.usn] = device
+        devices[device.routeId] = device
         emitRoutes()
     }
 
-    private fun fetchDevice(request: VesperDlnaDescriptionRequest): VesperDlnaDevice? {
-        val connection = request.location.openConnection() as HttpURLConnection
-        connection.connectTimeout = 5_000
-        connection.readTimeout = 5_000
-        val xml = connection.inputStream.bufferedReader().use { it.readText() }
-        connection.disconnect()
-        return runCatching {
-            VesperDlnaDeviceDescriptionParser.parse(
-                xml = xml,
-                location = request.location,
-                usn = request.usn,
-                expiresAtMillis = request.expiresAtMillis,
+    private fun fetchDevice(
+        request: VesperDlnaDescriptionRequest,
+        network: Network,
+    ): VesperDlnaDevice? {
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = network.openConnection(request.location) as HttpURLConnection
+            connection.connectTimeout = DESCRIPTION_TIMEOUT_MS
+            connection.readTimeout = DESCRIPTION_TIMEOUT_MS
+            connection.instanceFollowRedirects = true
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                emitDiagnostic(
+                    code = "description_http_status",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                    message = "DLNA device description returned HTTP $status.",
+                    details = request.details("status" to status.toString()),
+                )
+                return null
+            }
+            val xml = connection.inputStream.bufferedReader().use { it.readText() }
+            val device = try {
+                VesperDlnaDeviceDescriptionParser.parse(
+                    xml = xml,
+                    location = request.location,
+                    usn = request.usn,
+                    expiresAtMillis = request.expiresAtMillis,
+                )
+            } catch (error: IllegalArgumentException) {
+                emitDiagnostic(
+                    code = "description_not_media_renderer",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                    message = error.message ?: "Device description is not a DLNA media renderer.",
+                    details = request.details(),
+                )
+                return null
+            } catch (error: Exception) {
+                emitDiagnostic(
+                    code = "description_parse_failed",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                    message = error.message ?: "Failed to parse DLNA device description.",
+                    details = request.details("error" to error.javaClass.simpleName),
+                )
+                return null
+            }
+            if (!device.supportsPlayback) {
+                emitDiagnostic(
+                    code = "missing_av_transport",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                    message = "DLNA media renderer does not expose AVTransport.",
+                    details = request.details("routeId" to device.routeId),
+                )
+                return null
+            }
+            emitDiagnostic(
+                code = "route_accepted",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                message = "DLNA media renderer was accepted.",
+                details = request.details(
+                    "routeId" to device.routeId,
+                    "name" to device.friendlyName,
+                ),
             )
-        }.getOrNull()
+            device
+        } catch (_: SocketTimeoutException) {
+            emitDiagnostic(
+                code = "description_timeout",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = "Timed out while fetching DLNA device description.",
+                details = request.details(),
+            )
+            null
+        } catch (error: SecurityException) {
+            emitDiagnostic(
+                code = "description_permission_denied",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
+                message = error.message ?: "Permission denied while fetching DLNA device description.",
+                details = request.details(),
+            )
+            null
+        } catch (error: IOException) {
+            emitDiagnostic(
+                code = "description_fetch_failed",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = error.message ?: "Failed to fetch DLNA device description.",
+                details = request.details("error" to error.javaClass.simpleName),
+            )
+            null
+        } finally {
+            connection?.disconnect()
+        }
     }
 
     private fun pruneExpired() {
@@ -159,32 +320,229 @@ class VesperDlnaDiscovery(
         listener.onRoutesChanged(
             devices.values
                 .filter { it.supportsPlayback }
-                .sortedBy { it.friendlyName.lowercase() },
+                .sortedBy { it.friendlyName.lowercase(Locale.US) },
         )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolveWifiBinding(): WifiNetworkBinding? {
+        val connectivityManager =
+            appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return null
+        return try {
+            connectivityManager.allNetworks
+                .asSequence()
+                .mapNotNull { network ->
+                    val capabilities = connectivityManager.getNetworkCapabilities(network)
+                        ?: return@mapNotNull null
+                    if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        return@mapNotNull null
+                    }
+                    val linkProperties = connectivityManager.getLinkProperties(network)
+                        ?: return@mapNotNull null
+                    val interfaceName = linkProperties.interfaceName
+                    val address = linkProperties.linkAddresses
+                        .asSequence()
+                        .map { it.address }
+                        .filterIsInstance<Inet4Address>()
+                        .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                        ?: interfaceName
+                            ?.let { NetworkInterface.getByName(it) }
+                            ?.inetAddresses
+                            ?.asSequence()
+                            ?.filterIsInstance<Inet4Address>()
+                            ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                        ?: return@mapNotNull null
+                    WifiNetworkBinding(
+                        network = network,
+                        interfaceName = interfaceName,
+                        localAddress = address,
+                        networkInterface = interfaceName?.let { NetworkInterface.getByName(it) },
+                    )
+                }
+                .firstOrNull()
+        } catch (error: SecurityException) {
+            emitDiagnostic(
+                code = "network_permission_denied",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
+                message = error.message ?: "Permission denied while resolving the Wi-Fi network.",
+            )
+            null
+        }
+    }
+
+    private fun ensureNotifyListener(binding: WifiNetworkBinding) {
+        val bindingKey = binding.key
+        if (notifyBindingKey == bindingKey && notifyExecutor != null) {
+            return
+        }
+        stopNotifyListener()
+        notifyBindingKey = bindingKey
+        notifyExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "vesper-dlna-notify").apply { isDaemon = true }
+        }
+        notifyExecutor?.execute { runNotifyLoop(binding) }
+    }
+
+    private fun runNotifyLoop(binding: WifiNetworkBinding) {
+        val networkInterface = binding.networkInterface
+        if (networkInterface == null) {
+            emitDiagnostic(
+                code = "notify_interface_unavailable",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = "No Wi-Fi interface is available for SSDP NOTIFY listening.",
+                details = mapOf("interface" to binding.interfaceName.orEmpty()),
+            )
+            return
+        }
+        val group = InetSocketAddress(InetAddress.getByName(SSDP_ADDRESS), SSDP_PORT)
+        var joined = false
+        try {
+            MulticastSocket(null as SocketAddress?).use { socket ->
+                socket.reuseAddress = true
+                socket.soTimeout = NOTIFY_RECEIVE_TIMEOUT_MS
+                socket.bind(InetSocketAddress(SSDP_PORT))
+                binding.network.bindSocket(socket)
+                socket.joinGroup(group, networkInterface)
+                joined = true
+                notifySocket = socket
+                emitDiagnostic(
+                    code = "notify_listener_started",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                    message = "SSDP NOTIFY listener started on the Wi-Fi interface.",
+                    details = mapOf("interface" to networkInterface.name),
+                )
+                try {
+                    val buffer = ByteArray(SSDP_BUFFER_BYTES)
+                    while (running.get() && !Thread.currentThread().isInterrupted) {
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        try {
+                            socket.receive(packet)
+                            val raw = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
+                            handleSsdp(raw, binding)
+                        } catch (_: SocketTimeoutException) {
+                        }
+                    }
+                } finally {
+                    if (joined) {
+                        runCatching {
+                            socket.leaveGroup(group, networkInterface)
+                        }
+                        joined = false
+                    }
+                }
+            }
+        } catch (error: IOException) {
+            if (running.get()) {
+                emitDiagnostic(
+                    code = "notify_listener_unavailable",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                    message = error.message ?: "SSDP NOTIFY listener could not be started.",
+                    details = mapOf(
+                        "interface" to networkInterface.name,
+                        "error" to error.javaClass.simpleName,
+                    ),
+                )
+            }
+        } finally {
+            notifySocket = null
+        }
+    }
+
+    private fun stopNotifyListener() {
+        notifyBindingKey = null
+        runCatching { notifySocket?.close() }
+        notifySocket = null
+        notifyExecutor?.shutdownNow()
+        notifyExecutor = null
     }
 
     private fun acquireMulticastLock() {
         val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        multicastLock = wifiManager
-            ?.createMulticastLock("vesper-player-dlna-discovery")
-            ?.apply {
-                setReferenceCounted(false)
-                acquire()
-            }
+        if (wifiManager == null) {
+            emitDiagnostic(
+                code = "multicast_lock_unavailable",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = "WifiManager is unavailable, so DLNA multicast lock was not acquired.",
+            )
+            return
+        }
+        try {
+            multicastLock = wifiManager
+                .createMulticastLock("vesper-player-dlna-discovery")
+                .apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+        } catch (error: SecurityException) {
+            emitDiagnostic(
+                code = "multicast_lock_permission_denied",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
+                message = error.message ?: "Permission denied while acquiring Wi-Fi multicast lock.",
+            )
+        }
+    }
+
+    private fun emitDiagnostic(
+        code: String,
+        severity: VesperDlnaDiscoveryDiagnosticSeverity,
+        message: String,
+        details: Map<String, String> = emptyMap(),
+    ) {
+        if (!running.get()) {
+            return
+        }
+        listener.onDiscoveryDiagnostic(
+            VesperDlnaDiscoveryDiagnostic(
+                code = code,
+                severity = severity,
+                message = message,
+                details = details.filterValues { it.isNotBlank() },
+            ),
+        )
     }
 }
 
-private fun mSearchPayload(target: String): String =
+private data class WifiNetworkBinding(
+    val network: Network,
+    val interfaceName: String?,
+    val localAddress: Inet4Address,
+    val networkInterface: NetworkInterface?,
+) {
+    val key: String
+        get() = "${interfaceName.orEmpty()}@${localAddress.hostAddress}"
+}
+
+private fun VesperDlnaDescriptionRequest.details(
+    vararg entries: Pair<String, String>,
+): Map<String, String> =
+    buildMap {
+        put("location", location.toString())
+        put("usn", usn)
+        entries.forEach { (key, value) -> put(key, value) }
+    }
+
+private fun mSearchPayload(target: String, mx: Int): String =
     buildString {
         append("M-SEARCH * HTTP/1.1\r\n")
         append("HOST: $SSDP_ADDRESS:$SSDP_PORT\r\n")
         append("MAN: \"ssdp:discover\"\r\n")
-        append("MX: 2\r\n")
+        append("MX: ").append(mx.coerceIn(1, 3)).append("\r\n")
         append("ST: ").append(target).append("\r\n")
         append("\r\n")
     }
 
+private val M_SEARCH_TARGETS = listOf(
+    "urn:schemas-upnp-org:device:MediaRenderer:1",
+    "ssdp:all",
+    "upnp:rootdevice",
+)
+private const val M_SEARCH_ROUNDS = 3
 private const val SSDP_ADDRESS = "239.255.255.250"
 private const val SSDP_PORT = 1900
 private const val SSDP_BUFFER_BYTES = 65_535
+private const val SSDP_RECEIVE_TIMEOUT_MS = 900
+private const val SSDP_RECEIVE_WINDOW_MS = 1_200L
+private const val NOTIFY_RECEIVE_TIMEOUT_MS = 1_000
+private const val DESCRIPTION_TIMEOUT_MS = 5_000
 private const val DISCOVERY_INTERVAL_MS = 8_000L

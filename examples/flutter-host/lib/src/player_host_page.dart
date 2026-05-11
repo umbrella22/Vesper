@@ -339,6 +339,12 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         setState(() {
           _externalPlaybackMessage = '外部播放连接已暂停。';
         });
+      case VesperExternalPlaybackSessionEventKind.discoveryDiagnostic:
+        if (event.details['severity'] != 'info') {
+          setState(() {
+            _externalPlaybackMessage = event.message ?? 'DLNA 搜索诊断事件。';
+          });
+        }
       case VesperExternalPlaybackSessionEventKind.error:
         setState(() {
           _externalPlaybackMessage = event.message ?? '外部播放发生错误。';

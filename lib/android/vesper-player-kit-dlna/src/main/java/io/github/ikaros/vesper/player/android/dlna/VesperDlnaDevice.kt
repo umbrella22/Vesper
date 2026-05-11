@@ -17,6 +17,8 @@ data class VesperDlnaDevice(
     val friendlyName: String,
     val manufacturer: String? = null,
     val modelName: String? = null,
+    val udn: String? = null,
+    val deviceType: String? = null,
     val avTransport: VesperDlnaService? = null,
     val renderingControl: VesperDlnaService? = null,
     val connectionManager: VesperDlnaService? = null,

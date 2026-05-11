@@ -17,6 +17,8 @@ data class VesperSsdpMessage(
         get() = headers["nts"]
     val server: String?
         get() = headers["server"]
+    val nt: String?
+        get() = headers["nt"]
     val cacheMaxAgeSeconds: Long?
         get() = headers["cache-control"]?.let(::parseCacheMaxAgeSeconds)
     val isAliveNotify: Boolean
@@ -24,9 +26,11 @@ data class VesperSsdpMessage(
     val isByebyeNotify: Boolean
         get() = nts.equals("ssdp:byebye", ignoreCase = true)
     val isMediaRenderer: Boolean
-        get() = listOfNotNull(st, headers["nt"]).any {
+        get() = listOfNotNull(st, nt, usn).any {
             it.contains("MediaRenderer", ignoreCase = true)
         }
+    val shouldFetchDescription: Boolean
+        get() = location != null && !isByebyeNotify
 }
 
 object VesperSsdpParser {
@@ -50,7 +54,7 @@ object VesperSsdpParser {
 
 fun VesperSsdpMessage.toDescriptionRequest(nowMillis: Long): VesperDlnaDescriptionRequest? {
     val locationValue = location ?: return null
-    val usnValue = usn ?: locationValue
+    val usnValue = usn?.takeIf { it.isNotBlank() } ?: locationValue
     val locationUrl = runCatching { URL(locationValue) }.getOrNull() ?: return null
     val maxAgeMillis = (cacheMaxAgeSeconds ?: 1800L).coerceAtLeast(1L) * 1000L
     return VesperDlnaDescriptionRequest(
@@ -73,3 +77,9 @@ private fun parseCacheMaxAgeSeconds(value: String): Long? =
         ?.substringAfter('=', missingDelimiterValue = "")
         ?.trim()
         ?.toLongOrNull()
+
+internal fun canonicalDlnaRouteId(value: String): String =
+    value.substringBefore("::")
+        .trim()
+        .takeIf { it.isNotEmpty() }
+        ?: value

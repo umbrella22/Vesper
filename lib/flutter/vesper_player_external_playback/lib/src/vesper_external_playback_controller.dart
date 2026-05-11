@@ -22,6 +22,7 @@ enum VesperExternalPlaybackSessionEventKind {
   paused,
   stopped,
   suspended,
+  discoveryDiagnostic,
   error,
 }
 
@@ -151,6 +152,8 @@ final class VesperExternalPlaybackSessionEvent {
     this.routeName,
     this.message,
     this.positionMs,
+    this.code,
+    this.details = const <String, String>{},
   });
 
   factory VesperExternalPlaybackSessionEvent.fromMap(
@@ -166,6 +169,8 @@ final class VesperExternalPlaybackSessionEvent {
       routeName: map['routeName'] as String?,
       message: map['message'] as String?,
       positionMs: (map['positionMs'] as num?)?.toInt(),
+      code: map['code'] as String?,
+      details: _decodeStringMap(map['details']),
     );
   }
 
@@ -174,6 +179,8 @@ final class VesperExternalPlaybackSessionEvent {
   final String? routeName;
   final String? message;
   final int? positionMs;
+  final String? code;
+  final Map<String, String> details;
 }
 
 class VesperExternalPlaybackController {
@@ -365,6 +372,18 @@ Map<Object?, Object?>? _rawMap(Object? raw) {
     return Map<Object?, Object?>.from(raw);
   }
   return null;
+}
+
+Map<String, String> _decodeStringMap(Object? raw) {
+  final map = _rawMap(raw);
+  if (map == null) {
+    return const <String, String>{};
+  }
+  return Map<String, String>.unmodifiable(
+    map.map(
+      (key, value) => MapEntry(key.toString(), value?.toString() ?? ''),
+    )..removeWhere((key, value) => key.isEmpty || value.isEmpty),
+  );
 }
 
 List<VesperExternalPlaybackRoute> _decodeRoutes(Object? event) {

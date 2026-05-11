@@ -4,7 +4,6 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import java.io.StringReader
 import java.net.HttpURLConnection
-import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 
@@ -44,8 +43,7 @@ object VesperDlnaSoapFaultParser {
             return null
         }
         val document = runCatching {
-            secureDocumentBuilderFactory()
-                .newDocumentBuilder()
+            secureDocumentBuilder()
                 .parse(InputSource(StringReader(xml)))
         }.getOrNull() ?: return VesperDlnaSoapFault(null, null)
         val fault = document.descendantsByLocalName("Fault").firstOrNull() as? Element

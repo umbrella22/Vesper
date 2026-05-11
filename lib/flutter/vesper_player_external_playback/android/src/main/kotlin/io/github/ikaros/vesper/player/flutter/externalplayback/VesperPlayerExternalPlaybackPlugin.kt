@@ -25,6 +25,7 @@ import io.github.ikaros.vesper.player.android.cast.VesperCastLoadRequest
 import io.github.ikaros.vesper.player.android.cast.VesperCastOperationResult
 import io.github.ikaros.vesper.player.android.dlna.VesperDlnaDevice
 import io.github.ikaros.vesper.player.android.dlna.VesperDlnaDiscovery
+import io.github.ikaros.vesper.player.android.dlna.VesperDlnaDiscoveryDiagnostic
 import io.github.ikaros.vesper.player.android.dlna.VesperDlnaOperationResult
 import io.github.ikaros.vesper.player.android.dlna.VesperDlnaProtocolInfoParser
 import io.github.ikaros.vesper.player.android.dlna.VesperDlnaSession
@@ -217,6 +218,21 @@ class VesperPlayerExternalPlaybackPlugin :
                     override fun onDiscoveryError(message: String) {
                         mainHandler.post {
                             emitSessionEvent("error", message = message)
+                        }
+                    }
+
+                    override fun onDiscoveryDiagnostic(
+                        diagnostic: VesperDlnaDiscoveryDiagnostic,
+                    ) {
+                        mainHandler.post {
+                            emitSessionEvent(
+                                "discoveryDiagnostic",
+                                message = diagnostic.message,
+                                code = diagnostic.code,
+                                details = diagnostic.details + mapOf(
+                                    "severity" to diagnostic.severity.name.lowercase(),
+                                ),
+                            )
                         }
                     }
                 },
@@ -474,6 +490,8 @@ class VesperPlayerExternalPlaybackPlugin :
         routeName: String? = null,
         message: String? = null,
         positionMs: Long? = null,
+        code: String? = null,
+        details: Map<String, String>? = null,
     ) {
         sessionSink?.success(
             mapOf(
@@ -482,6 +500,8 @@ class VesperPlayerExternalPlaybackPlugin :
                 "routeName" to routeName,
                 "message" to message,
                 "positionMs" to positionMs,
+                "code" to code,
+                "details" to details,
             ),
         )
     }
