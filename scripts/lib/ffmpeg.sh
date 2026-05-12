@@ -424,11 +424,11 @@ vesper_ffmpeg_validate_library_list() {
 
   for value in "$@"; do
     case "$value" in
-      avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample|postproc)
+      avcodec|avformat|avutil|avfilter|avdevice|swscale|swresample)
         ;;
       *)
         echo "Unsupported FFmpeg library name: $value" >&2
-        echo "Supported libraries: avcodec, avformat, avutil, avfilter, avdevice, swscale, swresample, postproc" >&2
+        echo "Supported libraries: avcodec, avformat, avutil, avfilter, avdevice, swscale, swresample" >&2
         exit 1
         ;;
     esac
@@ -598,7 +598,7 @@ vesper_ffmpeg_prepare_component_args() {
       --disable-muxers
     )
 
-    for library in avdevice avfilter swscale swresample postproc; do
+    for library in avdevice avfilter swscale swresample; do
       if ! vesper_ffmpeg_array_contains "$library" ${VESPER_FFMPEG_FINAL_LIBRARIES[@]+"${VESPER_FFMPEG_FINAL_LIBRARIES[@]}"}; then
         VESPER_FFMPEG_CONFIGURE_ARGS+=("--disable-$library")
       fi

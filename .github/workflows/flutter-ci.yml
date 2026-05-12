@@ -236,7 +236,7 @@ jobs:
 
           for pkg_dir in \
             lib/flutter/vesper_player_android \
-            lib/flutter/vesper_player_cast
+            lib/flutter/vesper_player_external_playback
           do
             echo "::group::$pkg_dir"
             (
