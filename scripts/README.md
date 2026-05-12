@@ -8,10 +8,10 @@
 scripts/
   vesper      Unified task entrypoint
   lib/        Shared Bash functions and platform constants
-  android/    Android FFmpeg、JNI、AAR、release staging、remux plugin
+  android/    Android FFmpeg, JNI, AAR, release staging, remux plugin
   apple/      Apple FFmpeg prebuilts
-  ios/        iOS FFI、XCFramework、remux plugin、embed phase、release staging
-  desktop/    desktop FFmpeg、pkg-config wrapper、desktop plugin verification
+  ios/        iOS FFI, XCFramework, remux plugin, embed phase, release staging
+  desktop/    desktop FFmpeg, pkg-config wrapper, desktop plugin verification
   ffi/        C header generation / verification and C host smoke tests
   mobile/     mobile host kit packaging verification
   release/    GitHub Release notes generation
@@ -47,6 +47,64 @@ scripts/
 ./scripts/vesper release notes <tag> [output-path]
 ```
 
+## Mobile FFmpeg Profiles
+
+Android and Apple FFmpeg prebuilt scripts support the same profile and overlay
+model. `legacy` is the default and preserves the historical behavior.
+`remux-local` is an opt-in trimmed preset for local stream-copy remuxing.
+`custom` starts from `--disable-everything` and enables only the capabilities
+provided by the caller.
+
+```sh
+./scripts/vesper android ffmpeg \
+  --ffmpeg-profile remux-local \
+  arm64-v8a
+
+./scripts/vesper apple ffmpeg \
+  --ffmpeg-profile custom \
+  --enable-libraries avcodec,avformat,avutil \
+  --enable-demuxers mov,dash,hls,concat,flv,mpegts \
+  --enable-muxers mp4,mov \
+  --enable-protocols file,pipe \
+  --tls-backend none \
+  ios-arm64 ios-simulator-arm64
+```
+
+The same FFmpeg options can be passed through remux plugin build scripts:
+
+```sh
+./scripts/vesper android remux-plugin /tmp/vesper-android-remux release \
+  --ffmpeg-profile remux-local \
+  arm64-v8a
+
+./scripts/vesper ios remux-plugin /tmp/vesper-ios-remux release \
+  --ffmpeg-profile remux-local \
+  ios-arm64 ios-simulator-arm64
+```
+
+Supported overlays are:
+
+- `--enable-libraries`
+- `--enable-demuxers`
+- `--enable-muxers`
+- `--enable-protocols`
+- `--enable-parsers`
+- `--enable-bsfs`
+- `--extra-configure-arg`
+- `--tls-backend none|openssl` for Android
+- `--tls-backend none|securetransport` for Apple
+
+Lists may be comma or space separated. The scripts also accept matching
+environment variables such as `VESPER_ANDROID_FFMPEG_PROFILE`,
+`VESPER_APPLE_FFMPEG_ENABLE_DEMUXERS`, and
+`VESPER_ANDROID_FFMPEG_EXTRA_CONFIGURE_ARGS`.
+
+Non-legacy profile outputs are written under `third_party/ffmpeg/<platform>/profiles/`
+by default, so custom builds do not overwrite legacy prebuilts. Every prebuilt
+slice writes `vesper-ffmpeg-build-metadata.txt` with the profile, overlays,
+external dependencies, license-sensitive flags, source archive, and full
+configure line.
+
 ## Conventions
 
 - The default Android ABI is `arm64-v8a`; override it with command arguments or `RUST_ANDROID_ABIS`.
@@ -55,5 +113,7 @@ scripts/
 - iOS Rust build scripts pass `--manifest-path "$ROOT_DIR/Cargo.toml"` to
   Cargo so they can be run from Xcode build phases, Flutter plugin builds, CI
   workspaces, or temporary directories.
-- FFmpeg, OpenSSL, and libxml2 version, source URL, source archive, and output directory overrides continue to use the existing `VESPER_*` environment variable semantics.
+- FFmpeg, OpenSSL, and libxml2 version, source URL, source archive, and output
+  directory overrides continue to use the existing `VESPER_*` environment
+  variable semantics.
 - `scripts/lib/` contains only shared functions and default constants. Sourcing these files must not start build work.

@@ -7,6 +7,12 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-ffmpeg-next.workspace = true
+ffmpeg-next = { workspace = true, features = [
+    "codec",
+    "filter",
+    "format",
+    "software-resampling",
+    "software-scaling",
+] }
 player-model = { path = "../../model/player-model" }
 tracing.workspace = true

@@ -16,5 +16,6 @@ Use `VesperExternalRouteIconButton` inside a player-stage action slot on Android
 to surface the system Cast route picker as a full icon-sized native hit area.
 The Android platform view follows the surrounding Flutter `Theme` brightness by
 default and passes an opaque light or dark MediaRouter theme to Cast so route
-dialog contrast calculation never depends on a transparent host background.
+button and dialog contrast calculation never depends on a transparent host
+background.
 `VesperExternalRouteButton` remains available for existing integrations.

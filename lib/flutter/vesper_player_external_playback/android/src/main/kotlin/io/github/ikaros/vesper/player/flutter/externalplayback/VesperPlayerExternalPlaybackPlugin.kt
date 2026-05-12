@@ -2,11 +2,19 @@ package io.github.ikaros.vesper.player.flutter.externalplayback
 
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.ContextThemeWrapper
 import android.view.View
 import androidx.mediarouter.app.MediaRouteButton
+import androidx.mediarouter.app.MediaRouteChooserDialog
+import androidx.mediarouter.app.MediaRouteChooserDialogFragment
+import androidx.mediarouter.app.MediaRouteControllerDialog
+import androidx.mediarouter.app.MediaRouteControllerDialogFragment
+import androidx.mediarouter.app.MediaRouteDialogFactory
+import androidx.mediarouter.app.MediaRouteDynamicChooserDialog
+import androidx.mediarouter.app.MediaRouteDynamicControllerDialog
 import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
@@ -157,27 +165,29 @@ class VesperPlayerExternalPlaybackPlugin :
 
     @Suppress("DEPRECATION")
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
+        val routeTheme = routeTheme(context, args)
         val themedContext = ContextThemeWrapper(
             context,
-            routeButtonTheme(context, args),
+            routeTheme.buttonTheme,
         )
         val button = MediaRouteButton(themedContext)
         runCatching {
             CastButtonFactory.setUpMediaRouteButton(themedContext, button)
         }
+        button.dialogFactory = VesperRouteButtonDialogFactory(routeTheme.mediaRouteTheme)
         button.setAlwaysVisible(true)
         return RouteButtonPlatformView(button)
     }
 
-    private fun routeButtonTheme(context: Context, args: Any?): Int {
+    private fun routeTheme(context: Context, args: Any?): RouteTheme {
         val brightness = (args as? Map<*, *>)?.get(ROUTE_BUTTON_BRIGHTNESS_KEY) as? String
         return when (brightness) {
-            ROUTE_BUTTON_BRIGHTNESS_DARK -> R.style.VesperPlayerExternalRouteButtonTheme_Dark
-            ROUTE_BUTTON_BRIGHTNESS_LIGHT -> R.style.VesperPlayerExternalRouteButtonTheme_Light
+            ROUTE_BUTTON_BRIGHTNESS_DARK -> RouteTheme.Dark
+            ROUTE_BUTTON_BRIGHTNESS_LIGHT -> RouteTheme.Light
             else -> if (context.resources.configuration.isNightMode) {
-                R.style.VesperPlayerExternalRouteButtonTheme_Dark
+                RouteTheme.Dark
             } else {
-                R.style.VesperPlayerExternalRouteButtonTheme_Light
+                RouteTheme.Light
             }
         }
     }
@@ -529,6 +539,89 @@ private val Configuration.isNightMode: Boolean
 private const val ROUTE_BUTTON_BRIGHTNESS_KEY = "brightness"
 private const val ROUTE_BUTTON_BRIGHTNESS_DARK = "dark"
 private const val ROUTE_BUTTON_BRIGHTNESS_LIGHT = "light"
+private const val ROUTE_DIALOG_THEME_ARGUMENT = "routeDialogTheme"
+
+private data class RouteTheme(
+    val buttonTheme: Int,
+    val mediaRouteTheme: Int,
+) {
+    companion object {
+        val Light = RouteTheme(
+            R.style.VesperPlayerExternalRouteButtonTheme_Light,
+            R.style.VesperPlayerExternalMediaRouteTheme_Light,
+        )
+        val Dark = RouteTheme(
+            R.style.VesperPlayerExternalRouteButtonTheme_Dark,
+            R.style.VesperPlayerExternalMediaRouteTheme_Dark,
+        )
+    }
+}
+
+private class VesperRouteButtonDialogFactory(
+    private val mediaRouteTheme: Int,
+) : MediaRouteDialogFactory() {
+    override fun onCreateChooserDialogFragment(): MediaRouteChooserDialogFragment =
+        VesperRouteChooserDialogFragment.newInstance(mediaRouteTheme)
+
+    override fun onCreateControllerDialogFragment(): MediaRouteControllerDialogFragment =
+        VesperRouteControllerDialogFragment.newInstance(mediaRouteTheme)
+}
+
+class VesperRouteChooserDialogFragment : MediaRouteChooserDialogFragment() {
+    override fun onCreateChooserDialog(
+        context: Context,
+        savedInstanceState: Bundle?,
+    ): MediaRouteChooserDialog =
+        MediaRouteChooserDialog(routeContext(context), routeDialogTheme())
+
+    override fun onCreateDynamicChooserDialog(context: Context): MediaRouteDynamicChooserDialog =
+        MediaRouteDynamicChooserDialog(routeContext(context), routeDialogTheme())
+
+    private fun routeContext(context: Context): Context =
+        ContextThemeWrapper(context, routeDialogTheme())
+
+    private fun routeDialogTheme(): Int =
+        arguments?.getInt(ROUTE_DIALOG_THEME_ARGUMENT, 0)
+            ?.takeIf { it != 0 }
+            ?: R.style.VesperPlayerExternalMediaRouteTheme_Light
+
+    companion object {
+        fun newInstance(mediaRouteTheme: Int): VesperRouteChooserDialogFragment =
+            VesperRouteChooserDialogFragment().apply {
+                arguments = Bundle().apply {
+                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, mediaRouteTheme)
+                }
+            }
+    }
+}
+
+class VesperRouteControllerDialogFragment : MediaRouteControllerDialogFragment() {
+    override fun onCreateControllerDialog(
+        context: Context,
+        savedInstanceState: Bundle?,
+    ): MediaRouteControllerDialog =
+        MediaRouteControllerDialog(routeContext(context), routeDialogTheme())
+
+    override fun onCreateDynamicControllerDialog(context: Context): MediaRouteDynamicControllerDialog =
+        MediaRouteDynamicControllerDialog(routeContext(context), routeDialogTheme())
+
+    private fun routeContext(context: Context): Context =
+        ContextThemeWrapper(context, routeDialogTheme())
+
+    private fun routeDialogTheme(): Int =
+        arguments?.getInt(ROUTE_DIALOG_THEME_ARGUMENT, 0)
+            ?.takeIf { it != 0 }
+            ?: R.style.VesperPlayerExternalMediaRouteTheme_Light
+
+    companion object {
+        fun newInstance(mediaRouteTheme: Int): VesperRouteControllerDialogFragment =
+            VesperRouteControllerDialogFragment().apply {
+                arguments = Bundle().apply {
+                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, mediaRouteTheme)
+                }
+            }
+    }
+}
 
 private class RouteButtonPlatformView(private val button: MediaRouteButton) : PlatformView {
     override fun getView(): View = button

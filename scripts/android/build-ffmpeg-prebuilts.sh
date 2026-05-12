@@ -13,7 +13,7 @@ FFMPEG_VERSION="${VESPER_ANDROID_FFMPEG_VERSION:-8.1}"
 FFMPEG_ARCHIVE_NAME="$(vesper_ffmpeg_archive_name "$FFMPEG_VERSION")"
 FFMPEG_SOURCE_URL="${VESPER_ANDROID_FFMPEG_SOURCE_URL:-$(vesper_ffmpeg_release_url "$FFMPEG_ARCHIVE_NAME")}"
 FFMPEG_SOURCE_ARCHIVE="${VESPER_ANDROID_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/${FFMPEG_ARCHIVE_NAME}}"
-FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/android}"
+FFMPEG_BASE_OUTPUT_DIR="$ROOT_DIR/third_party/ffmpeg/android"
 OPENSSL_VERSION="${VESPER_ANDROID_OPENSSL_VERSION:-3.6.2}"
 OPENSSL_SERIES="${OPENSSL_VERSION%.*}"
 OPENSSL_ARCHIVE_NAME="openssl-${OPENSSL_VERSION}.tar.gz"
@@ -24,10 +24,11 @@ LIBXML2_SERIES="${LIBXML2_VERSION%.*}"
 LIBXML2_ARCHIVE_NAME="libxml2-${LIBXML2_VERSION}.tar.xz"
 LIBXML2_SOURCE_URL="${VESPER_ANDROID_LIBXML2_SOURCE_URL:-https://download.gnome.org/sources/libxml2/${LIBXML2_SERIES}/${LIBXML2_ARCHIVE_NAME}}"
 LIBXML2_SOURCE_ARCHIVE="${VESPER_ANDROID_LIBXML2_SOURCE_ARCHIVE:-$ROOT_DIR/third_party/libxml2/android/prebuilt-archives/${LIBXML2_ARCHIVE_NAME}}"
-TLS_BACKEND="${VESPER_ANDROID_FFMPEG_TLS_BACKEND:-openssl}"
-ENABLE_DASH="${VESPER_ANDROID_FFMPEG_ENABLE_DASH:-1}"
 OPENSSL_ANDROID_DIR="${VESPER_ANDROID_OPENSSL_OUTPUT_DIR:-$ROOT_DIR/third_party/openssl/android}"
 LIBXML2_ANDROID_DIR="${VESPER_ANDROID_LIBXML2_OUTPUT_DIR:-$ROOT_DIR/third_party/libxml2/android}"
+
+vesper_ffmpeg_parse_common_args android "$@"
+FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-$(vesper_ffmpeg_default_output_dir android "$FFMPEG_BASE_OUTPUT_DIR")}}"
 
 ensure_dependency_dir() {
   local path="$1"
@@ -164,17 +165,30 @@ ensure_android_libxml2_prebuilt() {
   ensure_dependency_dir "$libxml2_dir/lib/pkgconfig" "Failed to provision Android libxml2 prebuilt for ABI $abi: $libxml2_dir"
 }
 
+android_pkg_config_path() {
+  local local_paths="$1"
+  local existing="${PKG_CONFIG_PATH:-}"
+
+  if [[ -n "$local_paths" && -n "$existing" ]]; then
+    printf '%s:%s\n' "$local_paths" "$existing"
+  elif [[ -n "$local_paths" ]]; then
+    printf '%s\n' "$local_paths"
+  else
+    printf '%s\n' "$existing"
+  fi
+}
+
 selected_abis=()
 while IFS= read -r abi; do
   selected_abis+=("$abi")
-done < <(vesper_android_resolve_selected_abis "$@")
+done < <(vesper_android_resolve_selected_abis ${VESPER_FFMPEG_POSITIONAL_ARGS[@]+"${VESPER_FFMPEG_POSITIONAL_ARGS[@]}"})
 
 required_targets=()
 for abi in "${selected_abis[@]}"; do
   required_targets+=("$(vesper_android_abi_to_rust_target "$abi")")
 done
 
-vesper_android_require_rust_targets "${required_targets[@]}"
+vesper_android_require_rust_targets ${required_targets[@]+"${required_targets[@]}"}
 
 if ! ANDROID_NDK_ROOT="$(vesper_android_resolve_ndk_root "$ANDROID_SDK_ROOT" "$ANDROID_NDK_ROOT" "$ANDROID_NDK_VERSION")"; then
   vesper_android_report_missing_ndk "$ANDROID_SDK_ROOT" "$ANDROID_NDK_VERSION"
@@ -193,21 +207,12 @@ if [[ ! -d "$TOOLCHAIN_BIN_DIR" ]]; then
   exit 1
 fi
 
-case "$TLS_BACKEND" in
-  openssl)
-    ;;
-  *)
-    echo "Unsupported Android FFmpeg TLS backend: $TLS_BACKEND" >&2
-    echo "Supported values: openssl" >&2
-    exit 1
-    ;;
-esac
-
-vesper_download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
-
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT
 
+mkdir -p "$FFMPEG_OUTPUT_DIR"
+
+vesper_download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
 tar -xf "$FFMPEG_SOURCE_ARCHIVE" -C "$temp_dir"
 FFMPEG_SOURCE_DIR="$(find "$temp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 
@@ -216,8 +221,6 @@ if [[ -z "$FFMPEG_SOURCE_DIR" || ! -f "$FFMPEG_SOURCE_DIR/configure" ]]; then
   echo "  $FFMPEG_SOURCE_ARCHIVE" >&2
   exit 1
 fi
-
-mkdir -p "$FFMPEG_OUTPUT_DIR"
 
 for abi in "${selected_abis[@]}"; do
   ffmpeg_arch="$(vesper_android_abi_to_ffmpeg_arch "$abi")"
@@ -230,70 +233,95 @@ for abi in "${selected_abis[@]}"; do
   build_dir="$temp_dir/build-$abi"
   openssl_dir="$OPENSSL_ANDROID_DIR/$abi"
   libxml2_dir="$LIBXML2_ANDROID_DIR/$abi"
+  metadata_path="$install_dir/vesper-ffmpeg-build-metadata.txt"
+  metadata_expected="$temp_dir/metadata-$abi.txt"
   pkg_config_paths=()
-  configure_args=()
   extra_cflags=(-fPIC)
   extra_ldflags=(-Wl,-z,max-page-size=16384)
 
-  ensure_android_openssl_prebuilt "$abi" "$toolchain_target" "$openssl_target"
-  pkg_config_paths+=("$openssl_dir/lib/pkgconfig")
-  extra_cflags+=("-I$openssl_dir/include")
-  extra_ldflags+=("-L$openssl_dir/lib")
-  configure_args+=(--enable-openssl --enable-version3)
+  if [[ "$VESPER_FFMPEG_USE_OPENSSL" == "1" ]]; then
+    ensure_android_openssl_prebuilt "$abi" "$toolchain_target" "$openssl_target"
+    pkg_config_paths+=("$openssl_dir/lib/pkgconfig")
+    extra_cflags+=("-I$openssl_dir/include")
+    extra_ldflags+=("-L$openssl_dir/lib")
+  fi
 
-  if [[ "$ENABLE_DASH" == "1" ]]; then
+  if [[ "$VESPER_FFMPEG_USE_LIBXML2" == "1" ]]; then
     ensure_android_libxml2_prebuilt "$abi" "$toolchain_target"
     pkg_config_paths+=("$libxml2_dir/lib/pkgconfig")
     extra_cflags+=("-I$libxml2_dir/include")
     extra_ldflags+=("-L$libxml2_dir/lib")
-    configure_args+=(--enable-libxml2)
+  fi
+
+  extra_cflags_value="$(IFS=' '; echo "${extra_cflags[*]}")"
+  extra_ldflags_value="$(IFS=' '; echo "${extra_ldflags[*]}")"
+
+  configure_args=(
+    "--prefix=$install_dir"
+    --target-os=android
+    "--arch=$ffmpeg_arch"
+    "--cpu=$ffmpeg_cpu"
+    "--sysroot=$SYSROOT"
+    "--cc=$cc"
+    "--cxx=$cxx"
+    "--ld=$cc"
+    "--ar=$TOOLCHAIN_BIN_DIR/llvm-ar"
+    "--nm=$TOOLCHAIN_BIN_DIR/llvm-nm"
+    "--ranlib=$TOOLCHAIN_BIN_DIR/llvm-ranlib"
+    "--strip=$TOOLCHAIN_BIN_DIR/llvm-strip"
+    "--as=$cc"
+    --enable-cross-compile
+    --disable-programs
+    --disable-doc
+    --disable-debug
+    --disable-static
+    --enable-shared
+    --disable-x86asm
+    "--extra-cflags=$extra_cflags_value"
+    "--extra-ldflags=$extra_ldflags_value"
+    ${VESPER_FFMPEG_CONFIGURE_ARGS[@]+"${VESPER_FFMPEG_CONFIGURE_ARGS[@]}"}
+  )
+
+  vesper_ffmpeg_metadata_text \
+    android \
+    "$abi" \
+    "$FFMPEG_VERSION" \
+    "$FFMPEG_SOURCE_ARCHIVE" \
+    "$FFMPEG_SOURCE_URL" \
+    ./configure \
+    "${configure_args[@]}" >"$metadata_expected"
+
+  if [[ "$VESPER_FFMPEG_FORCE" != "1" && -f "$metadata_path" && -f "$install_dir/lib/pkgconfig/libavformat.pc" ]] && cmp -s "$metadata_path" "$metadata_expected"; then
+    echo "Android FFmpeg prebuilt for $abi is up to date for profile $VESPER_FFMPEG_PROFILE."
+    continue
   fi
 
   rm -rf "$install_dir" "$build_dir"
   mkdir -p "$install_dir" "$build_dir"
 
   echo "Building Android FFmpeg prebuilt for $abi"
+  echo "  profile: $VESPER_FFMPEG_PROFILE"
+  echo "  output: $install_dir"
 
   (
+    if [[ ${#pkg_config_paths[@]} -gt 0 ]]; then
+      local_pkg_config_paths="$(IFS=:; echo "${pkg_config_paths[*]}")"
+    else
+      local_pkg_config_paths=""
+    fi
     export PKG_CONFIG_ALLOW_CROSS=1
     export PKG_CONFIG_PATH
-    PKG_CONFIG_PATH="$(IFS=:; echo "${pkg_config_paths[*]}")"
-
-    extra_cflags_value="$(IFS=' '; echo "${extra_cflags[*]}")"
-    extra_ldflags_value="$(IFS=' '; echo "${extra_ldflags[*]}")"
+    PKG_CONFIG_PATH="$(android_pkg_config_path "$local_pkg_config_paths")"
 
     cd "$build_dir"
-    "$FFMPEG_SOURCE_DIR/configure" \
-      --prefix="$install_dir" \
-      --target-os=android \
-      --arch="$ffmpeg_arch" \
-      --cpu="$ffmpeg_cpu" \
-      --sysroot="$SYSROOT" \
-      --cc="$cc" \
-      --cxx="$cxx" \
-      --ld="$cc" \
-      --ar="$TOOLCHAIN_BIN_DIR/llvm-ar" \
-      --nm="$TOOLCHAIN_BIN_DIR/llvm-nm" \
-      --ranlib="$TOOLCHAIN_BIN_DIR/llvm-ranlib" \
-      --strip="$TOOLCHAIN_BIN_DIR/llvm-strip" \
-      --as="$cc" \
-      --enable-cross-compile \
-      --disable-programs \
-      --disable-doc \
-      --disable-debug \
-      --disable-static \
-      --enable-shared \
-      --disable-x86asm \
-      --enable-network \
-      --extra-cflags="$extra_cflags_value" \
-      --extra-ldflags="$extra_ldflags_value" \
-      "${configure_args[@]}"
+    "$FFMPEG_SOURCE_DIR/configure" "${configure_args[@]}"
 
     make -j"$MAKE_JOBS"
     make install
   )
 
   rm -rf "$install_dir/bin" "$install_dir/share"
+  cp "$metadata_expected" "$metadata_path"
 done
 
 echo
@@ -301,6 +329,8 @@ echo "Built Android FFmpeg prebuilts into:"
 echo "  $FFMPEG_OUTPUT_DIR"
 echo "Using FFmpeg source archive:"
 echo "  $FFMPEG_SOURCE_ARCHIVE"
+echo "FFmpeg profile:"
+echo "  $VESPER_FFMPEG_PROFILE"
 echo "Selected Android ABIs:"
 for abi in "${selected_abis[@]}"; do
   echo "  $abi"

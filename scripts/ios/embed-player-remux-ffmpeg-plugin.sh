@@ -126,7 +126,8 @@ done < <(
       -name 'libavfilter*.dylib*' -o \
       -name 'libavdevice*.dylib*' -o \
       -name 'libswresample*.dylib*' -o \
-      -name 'libswscale*.dylib*' \
+      -name 'libswscale*.dylib*' -o \
+      -name 'libpostproc*.dylib*' \
     \) \
     -print
 )

@@ -27,13 +27,7 @@ version = "0.1.0"
 [workspace.dependencies]
 anyhow = "1.0.102"
 cpal = "0.17.3"
-ffmpeg-next = { version = "8.1.0", default-features = false, features = [
-    "codec",
-    "filter",
-    "format",
-    "software-resampling",
-    "software-scaling",
-] }
+ffmpeg-next = { version = "8.1.0", default-features = false }
 libloading = "0.8.9"
 pollster = "0.4.0"
 serde = { version = "1.0.228", features = ["derive"] }

@@ -245,6 +245,26 @@ manifest, so they can be called from Xcode build phases, Flutter plugin builds,
 CI working directories, or the repository root without depending on the current
 shell directory.
 
+## Mobile FFmpeg Profiles
+
+Android and iOS remux-plugin builds can opt into FFmpeg profile presets or
+provide explicit FFmpeg capability overlays. The default profile is `legacy`,
+which preserves the historical Android OpenSSL and iOS SecureTransport builds.
+`remux-local` trims FFmpeg for local stream-copy remuxing. `custom` starts from
+`--disable-everything` and enables only caller-provided capabilities.
+
+```sh
+./scripts/vesper android ffmpeg --ffmpeg-profile remux-local arm64-v8a
+./scripts/vesper apple ffmpeg --ffmpeg-profile remux-local ios-arm64 ios-simulator-arm64
+```
+
+Callers can add or replace capabilities with `--enable-libraries`,
+`--enable-demuxers`, `--enable-muxers`, `--enable-protocols`,
+`--enable-parsers`, `--enable-bsfs`, and repeated `--extra-configure-arg`
+flags. Non-legacy outputs are written under `third_party/ffmpeg/<platform>/profiles/`
+by default, and each ABI / slice records `vesper-ffmpeg-build-metadata.txt`
+with the exact configure line for release review.
+
 ## Desktop FFmpeg
 
 Desktop Rust builds that link FFmpeg resolve libraries in this order:
@@ -281,12 +301,14 @@ default; optional Android, iOS, and desktop workflows can build or bundle
 FFmpeg-backed artifacts when a host application explicitly opts in.
 
 The default Vesper FFmpeg scripts avoid `--enable-gpl` and
-`--enable-nonfree`. Android FFmpeg prebuilts currently use OpenSSL and pass
-`--enable-version3`, so Android remux-plugin releases should be handled as
-LGPLv3-or-later FFmpeg redistributions unless the release build is changed and
-re-reviewed. Apple prebuilts and the desktop fallback are LGPL-oriented by
-default, but static desktop redistribution still requires relinking materials
-or an equivalent LGPL-compliant mechanism.
+`--enable-nonfree`; the scripts refuse those flags unless the caller passes an
+explicit acknowledgement. The default Android `legacy` FFmpeg profile uses
+OpenSSL and passes `--enable-version3`, so Android remux-plugin releases built
+from that profile should be handled as LGPLv3-or-later FFmpeg redistributions
+unless the release build is changed and re-reviewed. Apple `legacy` prebuilts
+and the desktop fallback are LGPL-oriented by default, but static desktop
+redistribution still requires relinking materials or an equivalent
+LGPL-compliant mechanism.
 
 Before publishing an app or SDK artifact that includes FFmpeg, include FFmpeg
 notices and license text, provide the exact corresponding FFmpeg source and

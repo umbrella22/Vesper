@@ -2,15 +2,16 @@
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/apple.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
-FFMPEG_APPLE_DIR="${VESPER_APPLE_FFMPEG_OUTPUT_DIR:-$ROOT_DIR/third_party/ffmpeg/apple}"
+FFMPEG_APPLE_BASE_DIR="$ROOT_DIR/third_party/ffmpeg/apple"
 OUTPUT_DIR="${1:-}"
 
 vesper_require_rust_tools_for_xcode
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-  echo "Usage: $0 <output-dir> [debug|release] [slice...]" >&2
+  echo "Usage: $0 <output-dir> [debug|release] [ffmpeg-options...] [slice...]" >&2
   exit 1
 fi
 
@@ -21,6 +22,9 @@ if [[ $# -gt 0 && ( "$1" == "debug" || "$1" == "release" ) ]]; then
   PROFILE="$1"
   shift
 fi
+
+vesper_ffmpeg_parse_common_args apple "$@"
+FFMPEG_APPLE_DIR="${VESPER_APPLE_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-$(vesper_ffmpeg_default_output_dir apple "$FFMPEG_APPLE_BASE_DIR")}}"
 
 slice_output_path() {
   case "$1" in
@@ -34,15 +38,6 @@ slice_output_path() {
       return 1
       ;;
   esac
-}
-
-slice_needs_prebuilt() {
-  local ffmpeg_dir
-  local libdir
-
-  ffmpeg_dir="$(vesper_apple_slice_output_root "$1" "$FFMPEG_APPLE_DIR")"
-  libdir="$(vesper_apple_slice_output_libdir "$1")"
-  [[ ! -f "$ffmpeg_dir/lib/$libdir/libavcodec.a" ]]
 }
 
 ensure_loader_rpath() {
@@ -71,25 +66,16 @@ prepare_plugin_binary() {
 selected_slices=()
 while IFS= read -r slice; do
   selected_slices+=("$slice")
-done < <(vesper_apple_resolve_selected_slices "$@")
+done < <(vesper_apple_resolve_selected_slices ${VESPER_FFMPEG_POSITIONAL_ARGS[@]+"${VESPER_FFMPEG_POSITIONAL_ARGS[@]}"})
 
 required_targets=()
 for slice in "${selected_slices[@]}"; do
   required_targets+=("$(vesper_ios_slice_rust_target "$slice")")
 done
 
-vesper_apple_require_rust_targets "${required_targets[@]}"
+vesper_apple_require_rust_targets ${required_targets[@]+"${required_targets[@]}"}
 
-missing_prebuilt_slices=()
-for slice in "${selected_slices[@]}"; do
-  if slice_needs_prebuilt "$slice"; then
-    missing_prebuilt_slices+=("$slice")
-  fi
-done
-
-if [[ ${#missing_prebuilt_slices[@]} -gt 0 ]]; then
-  "$ROOT_DIR/scripts/apple/build-ffmpeg-prebuilts.sh" "${missing_prebuilt_slices[@]}"
-fi
+"$ROOT_DIR/scripts/apple/build-ffmpeg-prebuilts.sh" "$@"
 
 PROFILE_DIR="$PROFILE"
 BUILD_FLAGS=()
@@ -161,6 +147,10 @@ fi
 echo
 echo "Built iOS player-remux-ffmpeg plugin libraries into:"
 echo "  $OUTPUT_DIR"
+echo "Using Apple FFmpeg prebuilts:"
+echo "  $FFMPEG_APPLE_DIR"
+echo "FFmpeg profile:"
+echo "  $VESPER_FFMPEG_PROFILE"
 echo "Selected slices:"
 for slice in "${selected_slices[@]}"; do
   echo "  $slice"

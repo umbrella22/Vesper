@@ -63,15 +63,24 @@ Important boundary:
 Default Vesper scripts are intended to stay on the LGPL-oriented side:
 
 - `scripts/vesper android ffmpeg` builds shared FFmpeg libraries for Android
-  and does not pass `--enable-gpl` or `--enable-nonfree`; the default OpenSSL
-  backend adds `--enable-version3`, so release artifacts produced from that
-  default Android build must be treated as LGPLv3-or-later unless a release
-  owner verifies a different configuration
+  and does not pass `--enable-gpl` or `--enable-nonfree`; the default
+  `legacy` OpenSSL backend adds `--enable-version3`, so release artifacts
+  produced from that default Android build must be treated as LGPLv3-or-later
+  unless a release owner verifies a different configuration
 - `scripts/vesper apple ffmpeg` builds Apple FFmpeg static archives and
   dynamic libraries without `--enable-gpl`, `--enable-nonfree`, or
-  `--enable-version3` by default, so it should be treated as an
-  LGPLv2.1-or-later FFmpeg build unless a release owner changes those flags or
-  dependencies
+  `--enable-version3` in the default `legacy` profile, so it should be treated
+  as an LGPLv2.1-or-later FFmpeg build unless a release owner changes those
+  flags or dependencies
+- Android and Apple FFmpeg scripts support `legacy`, `remux-local`, and
+  `custom` profiles plus caller-provided capability overlays. Every generated
+  ABI / slice writes `vesper-ffmpeg-build-metadata.txt`; use that file as the
+  source of truth for the profile, external dependencies, license-sensitive
+  flags, source archive, and full configure line in release notices.
+- The scripts block `--enable-gpl` and `--enable-nonfree` unless the caller
+  passes `--acknowledge-gpl-nonfree`. Passing that acknowledgement does not
+  resolve licensing obligations; it only records an intentional release-owner
+  decision.
 - `scripts/vesper desktop ensure-ffmpeg` creates a repository-local static
   desktop fallback for development; desktop releases should prefer system or
   dynamic FFmpeg when possible, and any statically linked redistributed binary
@@ -99,8 +108,9 @@ Before shipping any artifact that includes FFmpeg libraries:
    object files or another documented mechanism that allows relinking against a
    modified LGPL FFmpeg build.
 6. Do not remove or obscure FFmpeg library names, notices, or attribution.
-7. Review external libraries compiled into FFmpeg. Android defaults currently
-   involve OpenSSL and, when DASH is enabled, libxml2; their notices and source
+7. Review external libraries compiled into FFmpeg. Android `legacy` defaults
+   currently involve OpenSSL and, when DASH is enabled, libxml2; custom
+   profiles may add or remove dependencies, and their notices and source
    obligations must be tracked alongside FFmpeg.
 8. Keep the host app's EULA, about screen, and download page consistent with
    FFmpeg's separate license and avoid terms that prohibit reverse engineering
