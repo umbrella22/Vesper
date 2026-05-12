@@ -162,7 +162,10 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     try {
       await tester.pumpWidget(const MaterialApp(
-        home: VesperExternalRouteButton(size: 42),
+        home: VesperExternalRouteButton(
+          size: 42,
+          brightness: Brightness.dark,
+        ),
       ));
 
       final iconButton = tester.widget<VesperExternalRouteIconButton>(
@@ -170,6 +173,7 @@ void main() {
       );
 
       expect(iconButton.size, 42);
+      expect(iconButton.brightness, Brightness.dark);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

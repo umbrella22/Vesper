@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.flutter.externalplayback
 
 import android.content.Context
+import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
 import android.view.ContextThemeWrapper
@@ -158,7 +159,7 @@ class VesperPlayerExternalPlaybackPlugin :
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
         val themedContext = ContextThemeWrapper(
             context,
-            R.style.VesperPlayerExternalRouteButtonTheme,
+            routeButtonTheme(context, args),
         )
         val button = MediaRouteButton(themedContext)
         runCatching {
@@ -166,6 +167,19 @@ class VesperPlayerExternalPlaybackPlugin :
         }
         button.setAlwaysVisible(true)
         return RouteButtonPlatformView(button)
+    }
+
+    private fun routeButtonTheme(context: Context, args: Any?): Int {
+        val brightness = (args as? Map<*, *>)?.get(ROUTE_BUTTON_BRIGHTNESS_KEY) as? String
+        return when (brightness) {
+            ROUTE_BUTTON_BRIGHTNESS_DARK -> R.style.VesperPlayerExternalRouteButtonTheme_Dark
+            ROUTE_BUTTON_BRIGHTNESS_LIGHT -> R.style.VesperPlayerExternalRouteButtonTheme_Light
+            else -> if (context.resources.configuration.isNightMode) {
+                R.style.VesperPlayerExternalRouteButtonTheme_Dark
+            } else {
+                R.style.VesperPlayerExternalRouteButtonTheme_Light
+            }
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -508,6 +522,13 @@ class VesperPlayerExternalPlaybackPlugin :
         )
     }
 }
+
+private val Configuration.isNightMode: Boolean
+    get() = uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+
+private const val ROUTE_BUTTON_BRIGHTNESS_KEY = "brightness"
+private const val ROUTE_BUTTON_BRIGHTNESS_DARK = "dark"
+private const val ROUTE_BUTTON_BRIGHTNESS_LIGHT = "light"
 
 private class RouteButtonPlatformView(private val button: MediaRouteButton) : PlatformView {
     override fun getView(): View = button

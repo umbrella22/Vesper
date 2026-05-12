@@ -323,31 +323,49 @@ class VesperExternalPlaybackController {
 }
 
 class VesperExternalRouteButton extends StatelessWidget {
-  const VesperExternalRouteButton({super.key, this.size = 40});
+  const VesperExternalRouteButton({
+    super.key,
+    this.size = 40,
+    this.brightness,
+  });
 
   final double size;
+  final Brightness? brightness;
 
   @override
   Widget build(BuildContext context) {
-    return VesperExternalRouteIconButton(size: size);
+    return VesperExternalRouteIconButton(
+      size: size,
+      brightness: brightness,
+    );
   }
 }
 
 class VesperExternalRouteIconButton extends StatelessWidget {
-  const VesperExternalRouteIconButton({super.key, this.size = 38});
+  const VesperExternalRouteIconButton({
+    super.key,
+    this.size = 38,
+    this.brightness,
+  });
 
   final double size;
+  final Brightness? brightness;
 
   @override
   Widget build(BuildContext context) {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return SizedBox.square(dimension: size);
     }
+    final effectiveBrightness = brightness ?? Theme.of(context).brightness;
     return SizedBox.square(
       dimension: size,
-      child: const AndroidView(
+      child: AndroidView(
+        key: ValueKey<Brightness>(effectiveBrightness),
         viewType: _routeButtonViewType,
-        creationParamsCodec: StandardMessageCodec(),
+        creationParams: <String, Object?>{
+          'brightness': effectiveBrightness.name,
+        },
+        creationParamsCodec: const StandardMessageCodec(),
       ),
     );
   }
