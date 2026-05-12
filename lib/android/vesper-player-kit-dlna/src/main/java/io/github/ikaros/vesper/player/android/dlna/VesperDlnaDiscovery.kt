@@ -194,12 +194,14 @@ class VesperDlnaDiscovery(
         while (running.get() && System.currentTimeMillis() < deadline) {
             val packet = DatagramPacket(buffer, buffer.size)
             try {
+                val remainingMs = (deadline - System.currentTimeMillis()).coerceAtLeast(1L)
+                socket.soTimeout = minOf(SSDP_RECEIVE_TIMEOUT_MS, remainingMs.toInt())
                 socket.receive(packet)
                 responseCount += 1
                 val raw = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
                 handleSsdp(raw, binding)
             } catch (_: SocketTimeoutException) {
-                break
+                continue
             } catch (error: IOException) {
                 if (running.get()) {
                     emitDiagnostic(
@@ -668,7 +670,7 @@ private const val SSDP_ADDRESS = "239.255.255.250"
 private const val SSDP_PORT = 1900
 private const val SSDP_BUFFER_BYTES = 65_535
 private const val SSDP_RECEIVE_TIMEOUT_MS = 900
-private const val SSDP_RECEIVE_WINDOW_MS = 1_200L
+private const val SSDP_RECEIVE_WINDOW_MS = 4_000L
 private const val NOTIFY_RECEIVE_TIMEOUT_MS = 1_000
 private const val DESCRIPTION_TIMEOUT_MS = 5_000
 private const val DISCOVERY_INTERVAL_MS = 8_000L
