@@ -329,6 +329,17 @@ class VesperExternalRouteButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return VesperExternalRouteIconButton(size: size);
+  }
+}
+
+class VesperExternalRouteIconButton extends StatelessWidget {
+  const VesperExternalRouteIconButton({super.key, this.size = 38});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return SizedBox.square(dimension: size);
     }

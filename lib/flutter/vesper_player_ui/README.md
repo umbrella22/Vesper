@@ -17,12 +17,16 @@ Exported from `package:vesper_player_ui/vesper_player_ui.dart`:
 
 - `VesperPlayerStage` — opinionated player stage with controls overlay,
   gestures (double-tap seek, drag scrub), fullscreen toggle, and sheet entry
-  points
+  points. Hosts can pass `topBarPrimaryAction` and `topBarSecondaryAction` for
+  Cast, AirPlay, DLNA, or custom menu buttons that should follow the stage
+  overlay
 - Stage helpers: bottom-sheet entry types, formatting helpers
 - Stage models: presentation-layer DTOs consumed by `VesperPlayerStage`
 - Stage device controls: brightness / volume gesture wiring helpers
 - `VesperAirPlayRouteButton` — iOS `AVRoutePickerView` wrapper bound to the
   active `VesperPlayerController`
+- `VesperAirPlayRouteIconButton` — stage-sized AirPlay route picker wrapper for
+  `VesperPlayerStage.topBarPrimaryAction`
 
 ## Installation
 
@@ -47,6 +51,9 @@ the actual buttons, sheet entries, and timeline receive pointer events.
 
 `VesperAirPlayRouteButton` is an iOS-only route picker. It renders an empty box
 on non-iOS platforms so shared control rows can keep a stable layout.
+
+Use `VesperAirPlayRouteIconButton` inside a stage top-bar action slot when the
+AirPlay picker should hide and show with the player controls.
 
 ## Minimum Requirements
 

@@ -203,7 +203,8 @@ the permission API only for app-controlled notification UX.
 ### AirPlay and Cast
 
 For iOS route selection, depend on `vesper_player_ui` and place
-`VesperAirPlayRouteButton` near your player controls:
+`VesperAirPlayRouteButton` near your player controls, or
+`VesperAirPlayRouteIconButton` in a `VesperPlayerStage` top-bar action slot:
 
 ```dart
 VesperAirPlayRouteButton(controller: controller)
@@ -237,8 +238,10 @@ supports remote `http` / `https` HLS, DASH, and progressive sources with the
 default Google receiver. DRM, transcoding, DASH manifest rewrite, and custom
 receiver flows are outside the MVP scope.
 
-Use `VesperExternalRouteButton()` from `vesper_player_external_playback` near
-your player controls on Android to surface the system Cast route button.
+Use `VesperExternalRouteIconButton()` from `vesper_player_external_playback` in
+a `VesperPlayerStage` top-bar action slot on Android to surface the system Cast
+route button. `VesperExternalRouteButton()` remains available for existing
+control rows.
 
 ### `VesperPlayerSource`
 

@@ -46,5 +46,34 @@ class VesperAirPlayRouteButton extends StatelessWidget {
   }
 }
 
+class VesperAirPlayRouteIconButton extends StatelessWidget {
+  const VesperAirPlayRouteIconButton({
+    super.key,
+    required this.controller,
+    this.configuration = const VesperRoutePickerConfiguration(),
+    this.tintColor = Colors.white,
+    this.activeTintColor,
+    this.size = 38,
+  });
+
+  final VesperPlayerController controller;
+  final VesperRoutePickerConfiguration configuration;
+  final Color? tintColor;
+  final Color? activeTintColor;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return VesperAirPlayRouteButton(
+      controller: controller,
+      configuration: configuration,
+      tintColor: tintColor,
+      activeTintColor: activeTintColor ?? tintColor,
+      bordered: false,
+      size: size,
+    );
+  }
+}
+
 const String _airPlayRouteButtonViewType =
     'io.github.ikaros.vesper_player/airplay_route_button';

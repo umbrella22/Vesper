@@ -12,5 +12,6 @@ The Android implementation provides:
 Cast route selection still uses the system Cast route button. DLNA devices are
 reported through `VesperExternalPlaybackController.routes`.
 
-Use `VesperExternalRouteButton` near your player controls on Android to surface
-the system Cast route picker.
+Use `VesperExternalRouteIconButton` inside a player-stage action slot on Android
+to surface the system Cast route picker as a full icon-sized native hit area.
+`VesperExternalRouteButton` remains available for existing integrations.

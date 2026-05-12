@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vesper_player/vesper_player.dart';
 import 'package:vesper_player_external_playback/vesper_player_external_playback.dart';
+import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
 import 'example_device_controls.dart';
 import 'example_download_planner.dart';
@@ -985,6 +986,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
               isPortrait: true,
               sheetOpen: _sheetOpen,
               deviceControls: _deviceControls,
+              topBarPrimaryAction: _buildStageRouteAction(controller),
               onOpenSheet: (sheet) =>
                   unawaited(_openToolSheet(controller, sheet)),
               onToggleFullscreen: () =>
@@ -1082,6 +1084,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
             isPortrait: false,
             sheetOpen: _sheetOpen,
             deviceControls: _deviceControls,
+            topBarPrimaryAction: _buildStageRouteAction(controller),
             onOpenSheet: (sheet) =>
                 unawaited(_openToolSheet(controller, sheet)),
             onToggleFullscreen: () =>
@@ -1097,6 +1100,16 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
           ),
       ],
     );
+  }
+
+  Widget? _buildStageRouteAction(VesperPlayerController controller) {
+    if (Platform.isAndroid) {
+      return const VesperExternalRouteIconButton(size: 38);
+    }
+    if (Platform.isIOS) {
+      return ui.VesperAirPlayRouteIconButton(controller: controller, size: 38);
+    }
+    return null;
   }
 
   Widget _buildDownloadFutureContent(ExampleHostPalette palette) {

@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player/vesper_player.dart';
@@ -63,7 +65,10 @@ void main() {
       },
     );
 
-    expect(event.kind, VesperExternalPlaybackSessionEventKind.routeDisconnected);
+    expect(
+      event.kind,
+      VesperExternalPlaybackSessionEventKind.routeDisconnected,
+    );
     expect(event.routeId, VesperExternalPlaybackController.castRouteId);
     expect(event.routeName, 'Living Room TV');
     expect(event.message, 'Disconnected');
@@ -150,5 +155,23 @@ void main() {
     expect(result.status, VesperExternalPlaybackResultStatus.unsupported);
     expect(result.message, contains('DASH'));
     expect(calls.single.method, 'connect');
+  });
+
+  testWidgets('route button wrapper preserves requested icon hit area',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      await tester.pumpWidget(const MaterialApp(
+        home: VesperExternalRouteButton(size: 42),
+      ));
+
+      final iconButton = tester.widget<VesperExternalRouteIconButton>(
+        find.byType(VesperExternalRouteIconButton),
+      );
+
+      expect(iconButton.size, 42);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 }

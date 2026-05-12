@@ -17,6 +17,8 @@ class VesperPlayerStage extends StatefulWidget {
     required this.onToggleFullscreen,
     this.sheetOpen = false,
     this.deviceControls,
+    this.topBarPrimaryAction,
+    this.topBarSecondaryAction,
   });
 
   final VesperPlayerController controller;
@@ -24,6 +26,8 @@ class VesperPlayerStage extends StatefulWidget {
   final bool isPortrait;
   final bool sheetOpen;
   final VesperPlayerDeviceControls? deviceControls;
+  final Widget? topBarPrimaryAction;
+  final Widget? topBarSecondaryAction;
   final ValueChanged<VesperPlayerStageSheet> onOpenSheet;
   final VoidCallback onToggleFullscreen;
 
@@ -244,15 +248,23 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           ),
         ),
         const SizedBox(width: 10),
-        VesperStageIconButton(
-          icon: Icons.more_vert_rounded,
-          label: '更多',
-          size: 38,
-          iconSize: 24,
-          containerAlpha: 0,
-          onPressed: () => widget.onOpenSheet(VesperPlayerStageSheet.menu),
-        ),
+        if (widget.topBarPrimaryAction != null) ...<Widget>[
+          widget.topBarPrimaryAction!,
+          const SizedBox(width: 4),
+        ],
+        widget.topBarSecondaryAction ?? _defaultMenuAction(),
       ],
+    );
+  }
+
+  Widget _defaultMenuAction() {
+    return VesperStageIconButton(
+      icon: Icons.more_vert_rounded,
+      label: '更多',
+      size: 38,
+      iconSize: 24,
+      containerAlpha: 0,
+      onPressed: () => widget.onOpenSheet(VesperPlayerStageSheet.menu),
     );
   }
 

@@ -154,6 +154,7 @@ class VesperPlayerExternalPlaybackPlugin :
         methodChannel.setMethodCallHandler(null)
     }
 
+    @Suppress("DEPRECATION")
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
         val themedContext = ContextThemeWrapper(
             context,
@@ -163,6 +164,7 @@ class VesperPlayerExternalPlaybackPlugin :
         runCatching {
             CastButtonFactory.setUpMediaRouteButton(themedContext, button)
         }
+        button.setAlwaysVisible(true)
         return RouteButtonPlatformView(button)
     }
 

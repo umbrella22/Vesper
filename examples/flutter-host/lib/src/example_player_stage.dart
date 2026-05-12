@@ -15,6 +15,8 @@ class ExamplePlayerStage extends StatelessWidget {
     required this.onToggleFullscreen,
     this.sheetOpen = false,
     this.deviceControls,
+    this.topBarPrimaryAction,
+    this.topBarSecondaryAction,
   });
 
   final VesperPlayerController controller;
@@ -22,6 +24,8 @@ class ExamplePlayerStage extends StatelessWidget {
   final bool isPortrait;
   final bool sheetOpen;
   final ExampleDeviceControls? deviceControls;
+  final Widget? topBarPrimaryAction;
+  final Widget? topBarSecondaryAction;
   final ValueChanged<ExamplePlayerSheet> onOpenSheet;
   final VoidCallback onToggleFullscreen;
 
@@ -33,6 +37,8 @@ class ExamplePlayerStage extends StatelessWidget {
       isPortrait: isPortrait,
       sheetOpen: sheetOpen,
       deviceControls: deviceControls,
+      topBarPrimaryAction: topBarPrimaryAction,
+      topBarSecondaryAction: topBarSecondaryAction,
       onOpenSheet: (sheet) => onOpenSheet(sheet.toExamplePlayerSheet()),
       onToggleFullscreen: onToggleFullscreen,
     );

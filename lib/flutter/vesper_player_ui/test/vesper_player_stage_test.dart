@@ -22,7 +22,11 @@ void main() {
     fullscreenToggleCount = 0;
   });
 
-  Future<void> pumpStage(WidgetTester tester) async {
+  Future<void> pumpStage(
+    WidgetTester tester, {
+    Widget? topBarPrimaryAction,
+    Widget? topBarSecondaryAction,
+  }) async {
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox.shrink());
       await controller.dispose();
@@ -40,6 +44,8 @@ void main() {
                 snapshot: _playingSnapshot,
                 isPortrait: true,
                 deviceControls: deviceControls,
+                topBarPrimaryAction: topBarPrimaryAction,
+                topBarSecondaryAction: topBarSecondaryAction,
                 onOpenSheet: openedSheets.add,
                 onToggleFullscreen: () {
                   fullscreenToggleCount += 1;
@@ -71,6 +77,39 @@ void main() {
     expect(openedSheets, <VesperPlayerStageSheet>[
       VesperPlayerStageSheet.menu,
     ]);
+  });
+
+  testWidgets('top bar action slots render primary left of secondary',
+      (tester) async {
+    const primaryKey = Key('stage-primary-action');
+    const secondaryKey = Key('stage-secondary-action');
+
+    await pumpStage(
+      tester,
+      topBarPrimaryAction: const SizedBox.square(
+        key: primaryKey,
+        dimension: 38,
+      ),
+      topBarSecondaryAction: const SizedBox.square(
+        key: secondaryKey,
+        dimension: 38,
+      ),
+    );
+
+    expect(find.byKey(primaryKey), findsOneWidget);
+    expect(find.byKey(secondaryKey), findsOneWidget);
+    expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+    expect(
+      tester.getTopLeft(find.byKey(primaryKey)).dx,
+      lessThan(tester.getTopLeft(find.byKey(secondaryKey)).dx),
+    );
+  });
+
+  testWidgets('default menu action renders when secondary slot is absent',
+      (tester) async {
+    await pumpStage(tester);
+
+    expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
   });
 
   testWidgets('empty left-side vertical drags drive brightness controls',
