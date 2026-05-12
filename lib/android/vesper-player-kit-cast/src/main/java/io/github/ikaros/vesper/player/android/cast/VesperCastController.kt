@@ -99,17 +99,19 @@ private fun VesperCastLoadRequest.toMediaInfo(): MediaInfo {
         } else {
             MediaInfo.STREAM_TYPE_BUFFERED
         }
+    val contentType = source.castContentType()
     return MediaInfo.Builder(source.uri)
         .setStreamType(streamType)
-        .setContentType(source.castContentType())
-        .setMetadata(metadata.toCastMetadata(source))
+        .setContentType(contentType)
+        .setMetadata(metadata.toCastMetadata(source, contentType))
         .build()
 }
 
 private fun VesperSystemPlaybackMetadata?.toCastMetadata(
     source: VesperPlayerSource,
+    contentType: String,
 ): MediaMetadata {
-    val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE)
+    val metadata = MediaMetadata(contentType.castMetadataType())
     metadata.putString(MediaMetadata.KEY_TITLE, this?.title?.takeIf(String::isNotBlank) ?: source.label)
     this?.artist?.takeIf(String::isNotBlank)?.let {
         metadata.putString(MediaMetadata.KEY_ARTIST, it)
@@ -126,12 +128,52 @@ private fun VesperSystemPlaybackMetadata?.toCastMetadata(
 }
 
 private fun VesperPlayerSource.castContentType(): String =
-    when (protocol) {
-        VesperPlayerSourceProtocol.Hls -> "application/x-mpegURL"
-        VesperPlayerSourceProtocol.Dash -> "application/dash+xml"
-        VesperPlayerSourceProtocol.Progressive -> "video/mp4"
-        else -> "application/octet-stream"
+    listOf(uri, label)
+        .firstNotNullOfOrNull { it.mimeTypeFromPath() }
+        ?: when (protocol) {
+            VesperPlayerSourceProtocol.Hls -> "application/x-mpegURL"
+            VesperPlayerSourceProtocol.Dash -> "application/dash+xml"
+            VesperPlayerSourceProtocol.Progressive -> "video/mp4"
+            else -> "application/octet-stream"
+        }
+
+private fun String.castMetadataType(): Int =
+    when {
+        startsWith("audio/", ignoreCase = true) -> MediaMetadata.MEDIA_TYPE_MUSIC_TRACK
+        startsWith("image/", ignoreCase = true) -> MediaMetadata.MEDIA_TYPE_PHOTO
+        else -> MediaMetadata.MEDIA_TYPE_MOVIE
     }
+
+private fun String.mimeTypeFromPath(): String? {
+    val path = substringBefore('?').substringBefore('#').lowercase()
+    return when {
+        path.endsWith(".m3u8") -> "application/x-mpegURL"
+        path.endsWith(".m3u") -> "audio/mpegurl"
+        path.endsWith(".mpd") -> "application/dash+xml"
+        path.endsWith(".mp4") || path.endsWith(".m4v") -> "video/mp4"
+        path.endsWith(".mkv") -> "video/x-matroska"
+        path.endsWith(".webm") -> "video/webm"
+        path.endsWith(".mov") -> "video/quicktime"
+        path.endsWith(".avi") -> "video/x-msvideo"
+        path.endsWith(".3gp") -> "video/3gpp"
+        path.endsWith(".mts") || path.endsWith(".ts") -> "video/mp2t"
+        path.endsWith(".mp3") -> "audio/mpeg"
+        path.endsWith(".m4a") -> "audio/mp4"
+        path.endsWith(".aac") -> "audio/aac"
+        path.endsWith(".ogg") -> "audio/ogg"
+        path.endsWith(".opus") -> "audio/opus"
+        path.endsWith(".wav") -> "audio/wav"
+        path.endsWith(".flac") -> "audio/flac"
+        path.endsWith(".wma") -> "audio/x-ms-wma"
+        path.endsWith(".jpg") || path.endsWith(".jpeg") -> "image/jpeg"
+        path.endsWith(".png") -> "image/png"
+        path.endsWith(".gif") -> "image/gif"
+        path.endsWith(".bmp") -> "image/bmp"
+        path.endsWith(".webp") -> "image/webp"
+        path.endsWith(".tif") || path.endsWith(".tiff") -> "image/tiff"
+        else -> null
+    }
+}
 
 private fun VesperPlayerSource.unsupportedCastReason(): String? {
     val parsedUri = runCatching { Uri.parse(uri) }.getOrNull()

@@ -1,6 +1,8 @@
 package io.github.ikaros.vesper.player.android.relay
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import java.io.BufferedInputStream
@@ -14,7 +16,10 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URI
 import java.net.URL
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.Locale
@@ -55,7 +60,10 @@ class VesperRelayServer @JvmOverloads constructor(
         val bindAddress = bindAddressProvider()
         val socket = ServerSocket(0, 50, bindAddress)
         serverSocket = socket
-        advertisedAddress = advertisedAddressProvider() ?: bindAddress.takeUnless { it.isAnyLocalAddress }
+        advertisedAddress =
+            appContext?.findWifiLanIpv4Address()
+                ?: advertisedAddressProvider()
+                ?: bindAddress.takeUnless { it.isAnyLocalAddress }
         requestExecutor = Executors.newCachedThreadPool { runnable ->
             Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
         }
@@ -94,7 +102,7 @@ class VesperRelayServer @JvmOverloads constructor(
         )
         return VesperRelayHandle(
             token = token,
-            url = "http://$host:${socket.localPort}/media/$token",
+            url = "http://$host:${socket.localPort}${source.relayPath(token)}",
         )
     }
 
@@ -206,7 +214,10 @@ class VesperRelayServer @JvmOverloads constructor(
                 output.writeSimpleResponse(405, "Method Not Allowed", mapOf("Allow" to "GET, HEAD"))
                 return
             }
-            val token = path.removePrefix("/media/").takeIf { path.startsWith("/media/") }
+            val token = path
+                .removePrefix("/media/")
+                .substringBefore('/')
+                .takeIf { path.startsWith("/media/") && it.isNotBlank() }
             val source = token?.let(::sourceForToken)
             if (source == null) {
                 output.writeSimpleResponse(404, "Not Found")
@@ -259,6 +270,7 @@ class VesperRelayServer @JvmOverloads constructor(
         connection.getHeaderField("Content-Length")?.let { responseHeaders["Content-Length"] = it }
         connection.getHeaderField("Content-Range")?.let { responseHeaders["Content-Range"] = it }
         responseHeaders["Accept-Ranges"] = connection.getHeaderField("Accept-Ranges") ?: "bytes"
+        responseHeaders.addDlnaPlaybackHeaders()
         output.writeStatusAndHeaders(status, connection.responseMessage ?: status.reasonPhrase(), responseHeaders)
         if (!headOnly) {
             val stream = runCatching { connection.inputStream }.getOrElse { connection.errorStream }
@@ -298,6 +310,7 @@ class VesperRelayServer @JvmOverloads constructor(
             "Accept-Ranges" to "bytes",
             "Content-Length" to length.toString(),
         )
+        headers.addDlnaPlaybackHeaders()
         if (resolved != null) {
             headers["Content-Range"] = "bytes $start-$end/$total"
         }
@@ -351,6 +364,7 @@ class VesperRelayServer @JvmOverloads constructor(
                 "Content-Type" to source.contentTypeGuess(),
                 "Accept-Ranges" to "bytes",
             )
+            headers.addDlnaPlaybackHeaders()
             length?.let { headers["Content-Length"] = it.toString() }
             if (resolved != null) {
                 headers["Content-Range"] = "bytes $start-$end/$total"
@@ -451,6 +465,37 @@ fun findLanIpv4Address(): InetAddress? =
         .filterIsInstance<Inet4Address>()
         .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
 
+private fun Context.findWifiLanIpv4Address(): InetAddress? {
+    val connectivityManager =
+        getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return null
+    return runCatching {
+        connectivityManager.allNetworks
+            .asSequence()
+            .mapNotNull { network ->
+                val capabilities = connectivityManager.getNetworkCapabilities(network)
+                    ?: return@mapNotNull null
+                if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    return@mapNotNull null
+                }
+                val linkProperties = connectivityManager.getLinkProperties(network)
+                    ?: return@mapNotNull null
+                linkProperties.linkAddresses
+                    .asSequence()
+                    .map { it.address }
+                    .filterIsInstance<Inet4Address>()
+                    .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                    ?: linkProperties.interfaceName
+                        ?.let(NetworkInterface::getByName)
+                        ?.inetAddresses
+                        ?.asSequence()
+                        ?.filterIsInstance<Inet4Address>()
+                        ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+            }
+            .firstOrNull()
+    }.getOrNull()
+}
+
 private fun OutputStream.writeSimpleResponse(
     status: Int,
     reason: String,
@@ -522,6 +567,29 @@ private fun String.isHopByHopHeader(): Boolean =
         "range",
     )
 
+private fun VesperPlayerSource.relayPath(token: String): String {
+    val fileName = listOfNotNull(uri.fileNameFromUri(), label)
+        .firstOrNull { it.contentTypeFromPath() != null }
+        ?.urlPathSegmentEncoded()
+    return if (fileName == null) {
+        "/media/$token"
+    } else {
+        "/media/$token/$fileName"
+    }
+}
+
+private fun String.fileNameFromUri(): String? {
+    val javaUriPath = runCatching { URI(this).path }.getOrNull()
+    val androidUriPath = runCatching { Uri.parse(this).lastPathSegment }.getOrNull()
+    return (javaUriPath ?: androidUriPath)
+        ?.substringAfterLast('/')
+        ?.takeIf { it.isNotBlank() }
+}
+
+private fun String.urlPathSegmentEncoded(): String =
+    URLEncoder.encode(this, StandardCharsets.UTF_8.name())
+        .replace("+", "%20")
+
 private fun String.toFile(): File =
     if (startsWith("file://", ignoreCase = true)) {
         File(Uri.parse(this).path ?: "")
@@ -530,15 +598,58 @@ private fun String.toFile(): File =
     }
 
 private fun VesperPlayerSource.contentTypeGuess(): String {
-    val path = uri.substringBefore('?').substringBefore('#').lowercase(Locale.US)
+    return listOf(uri, label)
+        .firstNotNullOfOrNull { it.contentTypeFromPath() }
+        ?: when (protocol) {
+            io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol.Hls ->
+                "application/vnd.apple.mpegurl"
+            io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol.Dash ->
+                "application/dash+xml"
+            io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol.Progressive ->
+                "video/mp4"
+            else -> "application/octet-stream"
+        }
+}
+
+private fun String.contentTypeFromPath(): String? {
+    val path = substringBefore('?').substringBefore('#').lowercase(Locale.US)
     return when {
         path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
+        path.endsWith(".m3u") -> "audio/mpegurl"
         path.endsWith(".mpd") -> "application/dash+xml"
-        path.endsWith(".mp4") -> "video/mp4"
-        path.endsWith(".m4a") -> "audio/mp4"
+        path.endsWith(".mp4") || path.endsWith(".m4v") -> "video/mp4"
+        path.endsWith(".mkv") -> "video/x-matroska"
+        path.endsWith(".webm") -> "video/webm"
+        path.endsWith(".mov") -> "video/quicktime"
+        path.endsWith(".avi") -> "video/x-msvideo"
+        path.endsWith(".3gp") -> "video/3gpp"
+        path.endsWith(".mts") || path.endsWith(".ts") -> "video/mp2t"
         path.endsWith(".mp3") -> "audio/mpeg"
-        else -> "application/octet-stream"
+        path.endsWith(".m4a") -> "audio/mp4"
+        path.endsWith(".aac") -> "audio/aac"
+        path.endsWith(".ogg") -> "audio/ogg"
+        path.endsWith(".opus") -> "audio/opus"
+        path.endsWith(".wav") -> "audio/wav"
+        path.endsWith(".flac") -> "audio/flac"
+        path.endsWith(".wma") -> "audio/x-ms-wma"
+        path.endsWith(".jpg") || path.endsWith(".jpeg") -> "image/jpeg"
+        path.endsWith(".png") -> "image/png"
+        path.endsWith(".gif") -> "image/gif"
+        path.endsWith(".bmp") -> "image/bmp"
+        path.endsWith(".webp") -> "image/webp"
+        path.endsWith(".tif") || path.endsWith(".tiff") -> "image/tiff"
+        else -> null
     }
+}
+
+private fun MutableMap<String, String>.addDlnaPlaybackHeaders() {
+    put("Access-Control-Allow-Origin", "*")
+    put("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+    put("transferMode.dlna.org", "Streaming")
+    put(
+        "contentFeatures.dlna.org",
+        "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+    )
 }
 
 private fun Long.saturatingMinusOne(): Long = if (this <= 0L) 0L else this - 1

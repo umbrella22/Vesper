@@ -7,7 +7,8 @@ import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 object VesperDlnaDidlBuilder {
     fun build(source: VesperPlayerSource, metadata: VesperSystemPlaybackMetadata?): String {
         val title = metadata?.title?.takeIf { it.isNotBlank() } ?: source.label
-        val protocolInfo = "http-get:*:${source.dlnaMimeType()}:*"
+        val mimeType = source.dlnaMimeType()
+        val protocolInfo = mimeType.dlnaProtocolInfo()
         val duration = metadata?.durationMs?.takeIf { it > 0 }?.let(::formatDuration)
         val artwork = metadata?.artworkUri?.takeIf { it.isNotBlank() }
         return buildString {
@@ -16,7 +17,7 @@ object VesperDlnaDidlBuilder {
             append("""xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">""")
             append("""<item id="0" parentID="-1" restricted="1">""")
             append("<dc:title>").append(title.xmlEscaped()).append("</dc:title>")
-            append("<upnp:class>object.item.videoItem.movie</upnp:class>")
+            append("<upnp:class>").append(mimeType.dlnaUpnpClass()).append("</upnp:class>")
             if (artwork != null) {
                 append("<upnp:albumArtURI>").append(artwork.xmlEscaped()).append("</upnp:albumArtURI>")
             }
@@ -39,16 +40,63 @@ fun VesperPlayerSource.dlnaMimeType(): String =
         VesperPlayerSourceProtocol.Content,
         VesperPlayerSourceProtocol.Unknown,
         -> {
-            val path = uri.substringBefore('?').substringBefore('#').lowercase()
-            when {
-                path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
-                path.endsWith(".mpd") -> "application/dash+xml"
-                path.endsWith(".mp3") -> "audio/mpeg"
-                path.endsWith(".m4a") -> "audio/mp4"
-                else -> "video/mp4"
-            }
+            listOf(uri, label)
+                .firstNotNullOfOrNull { it.mimeTypeFromPath() }
+                ?: "video/mp4"
         }
     }
+
+private fun String.mimeTypeFromPath(): String? {
+    val path = substringBefore('?').substringBefore('#').lowercase()
+    return when {
+        path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
+        path.endsWith(".m3u") -> "audio/mpegurl"
+        path.endsWith(".mpd") -> "application/dash+xml"
+        path.endsWith(".mp4") || path.endsWith(".m4v") -> "video/mp4"
+        path.endsWith(".mkv") -> "video/x-matroska"
+        path.endsWith(".webm") -> "video/webm"
+        path.endsWith(".mov") -> "video/quicktime"
+        path.endsWith(".avi") -> "video/x-msvideo"
+        path.endsWith(".3gp") -> "video/3gpp"
+        path.endsWith(".mts") || path.endsWith(".ts") -> "video/mp2t"
+        path.endsWith(".mp3") -> "audio/mpeg"
+        path.endsWith(".m4a") -> "audio/mp4"
+        path.endsWith(".aac") -> "audio/aac"
+        path.endsWith(".ogg") -> "audio/ogg"
+        path.endsWith(".opus") -> "audio/opus"
+        path.endsWith(".wav") -> "audio/wav"
+        path.endsWith(".flac") -> "audio/flac"
+        path.endsWith(".wma") -> "audio/x-ms-wma"
+        path.endsWith(".jpg") || path.endsWith(".jpeg") -> "image/jpeg"
+        path.endsWith(".png") -> "image/png"
+        path.endsWith(".gif") -> "image/gif"
+        path.endsWith(".bmp") -> "image/bmp"
+        path.endsWith(".webp") -> "image/webp"
+        path.endsWith(".tif") || path.endsWith(".tiff") -> "image/tiff"
+        else -> null
+    }
+}
+
+private fun String.dlnaUpnpClass(): String =
+    when {
+        startsWith("image/", ignoreCase = true) -> "object.item.imageItem.photo"
+        startsWith("audio/", ignoreCase = true) -> "object.item.audioItem.musicTrack"
+        else -> "object.item.videoItem"
+    }
+
+private fun String.dlnaProtocolInfo(): String {
+    val extras = when {
+        equals("image/jpeg", ignoreCase = true) ->
+            "DLNA.ORG_PN=JPEG_SM;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00D00000000000000000000000000000"
+        equals("image/png", ignoreCase = true) ->
+            "DLNA.ORG_PN=PNG_LRG;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00D00000000000000000000000000000"
+        startsWith("image/", ignoreCase = true) ->
+            "DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00D00000000000000000000000000000"
+        else ->
+            "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01500000000000000000000000000000"
+    }
+    return "http-get:*:$this:$extras"
+}
 
 internal fun String.xmlEscaped(): String =
     replace("&", "&amp;")

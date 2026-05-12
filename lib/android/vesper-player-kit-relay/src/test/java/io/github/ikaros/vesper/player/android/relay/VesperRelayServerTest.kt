@@ -1,17 +1,18 @@
 package io.github.ikaros.vesper.player.android.relay
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URL
 import java.util.Collections
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,7 +26,7 @@ class VesperRelayServerTest {
         advertisedAddressProvider = { loopback },
         bindAddressProvider = { loopback },
     )
-    private var upstream: HttpServer? = null
+    private var upstream: RecordingHttpServer? = null
 
     @After
     fun tearDown() {
@@ -48,11 +49,17 @@ class VesperRelayServerTest {
             ),
         )
         val handle = relay.register(source)
+        assertTrue(handle.url.endsWith("/video.mp4"))
 
         val head = request(handle.url, method = "HEAD")
         assertEquals(200, head.status)
         assertEquals("", head.body)
         assertEquals("video/mp4", head.headers["Content-Type"]?.firstOrNull())
+        assertEquals("Streaming", head.headerValue("transferMode.dlna.org"))
+        assertTrue(
+            head.headerValue("contentFeatures.dlna.org")
+                ?.contains("DLNA.ORG_OP=01") == true,
+        )
 
         val range = request(handle.url, headers = mapOf("Range" to "bytes=2-5"))
         assertEquals(206, range.status)
@@ -60,9 +67,9 @@ class VesperRelayServerTest {
         assertEquals("bytes 2-5/10", range.headers["Content-Range"]?.firstOrNull())
 
         val upstreamRange = requests.last()
-        assertEquals("bytes=2-5", upstreamRange.headers["Range"])
-        assertEquals("https://example.com/player", upstreamRange.headers["Referer"])
-        assertEquals("VesperRelayTest", upstreamRange.headers["User-agent"])
+        assertEquals("bytes=2-5", upstreamRange.headerValue("Range"))
+        assertEquals("https://example.com/player", upstreamRange.headerValue("Referer"))
+        assertEquals("VesperRelayTest", upstreamRange.headerValue("User-Agent"))
     }
 
     @Test
@@ -211,31 +218,8 @@ class VesperRelayServerTest {
         assertFalse(result is VesperExternalSourcePreparationResult.Prepared)
     }
 
-    private fun startUpstream(requests: MutableList<RecordedRequest>): HttpServer {
-        val server = HttpServer.create(InetSocketAddress(loopback, 0), 0)
-        server.createContext("/video.mp4") { exchange ->
-            requests += exchange.recordedRequest()
-            val payload = "abcdefghij".toByteArray()
-            val range = exchange.requestHeaders.getFirst("Range")
-            val body: ByteArray
-            val status: Int
-            if (range == "bytes=2-5") {
-                body = "cdef".toByteArray()
-                status = 206
-                exchange.responseHeaders.add("Content-Range", "bytes 2-5/10")
-            } else {
-                body = payload
-                status = 200
-            }
-            exchange.responseHeaders.add("Content-Type", "video/mp4")
-            exchange.responseHeaders.add("Accept-Ranges", "bytes")
-            exchange.sendResponseHeaders(status, if (exchange.requestMethod == "HEAD") -1 else body.size.toLong())
-            if (exchange.requestMethod != "HEAD") {
-                exchange.responseBody.use { it.write(body) }
-            } else {
-                exchange.close()
-            }
-        }
+    private fun startUpstream(requests: MutableList<RecordedRequest>): RecordingHttpServer {
+        val server = RecordingHttpServer(loopback, requests)
         server.start()
         return server
     }
@@ -246,19 +230,114 @@ private data class RecordedRequest(
     val headers: Map<String, String>,
 )
 
+private fun RecordedRequest.headerValue(name: String): String? = headers.valueFor(name)
+
 private data class HttpResponse(
     val status: Int,
     val headers: Map<String, List<String>>,
     val body: String,
 )
 
-private fun HttpExchange.recordedRequest(): RecordedRequest =
-    RecordedRequest(
-        method = requestMethod,
-        headers = requestHeaders.entries.associate { (key, value) ->
-            key to (value.firstOrNull() ?: "")
-        },
-    )
+private fun HttpResponse.headerValue(name: String): String? =
+    headers.entries
+        .firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }
+        ?.value
+        ?.firstOrNull()
+
+private class RecordingHttpServer(
+    bindAddress: InetAddress,
+    private val requests: MutableList<RecordedRequest>,
+) {
+    private val running = AtomicBoolean(false)
+    private val serverSocket = ServerSocket(0, 50, bindAddress)
+    private val thread = Thread(::run, "vesper-relay-test-upstream").apply { isDaemon = true }
+
+    val address: InetSocketAddress
+        get() = InetSocketAddress(serverSocket.inetAddress, serverSocket.localPort)
+
+    fun start() {
+        if (running.compareAndSet(false, true)) {
+            thread.start()
+        }
+    }
+
+    fun stop(delaySeconds: Int = 0) {
+        running.set(false)
+        serverSocket.close()
+        if (delaySeconds <= 0) {
+            thread.join(1_000)
+        }
+    }
+
+    private fun run() {
+        while (running.get()) {
+            val socket = try {
+                serverSocket.accept()
+            } catch (_: Exception) {
+                break
+            }
+            Thread({ handle(socket) }, "vesper-relay-test-upstream-request").apply {
+                isDaemon = true
+                start()
+            }
+        }
+    }
+
+    private fun handle(socket: Socket) {
+        socket.use { client ->
+            val input = client.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+            val requestLine = input.readLine() ?: return
+            val method = requestLine.substringBefore(' ')
+            val headers = linkedMapOf<String, String>()
+            while (true) {
+                val line = input.readLine() ?: break
+                if (line.isEmpty()) {
+                    break
+                }
+                val separator = line.indexOf(':')
+                if (separator > 0) {
+                    headers[line.substring(0, separator)] = line.substring(separator + 1).trim()
+                }
+            }
+            requests += RecordedRequest(method = method, headers = headers)
+
+            val payload = "abcdefghij".toByteArray()
+            val range = headers.valueFor("Range")
+            val body: ByteArray
+            val status: Int
+            val extraHeaders = linkedMapOf<String, String>()
+            if (range == "bytes=2-5") {
+                body = "cdef".toByteArray()
+                status = 206
+                extraHeaders["Content-Range"] = "bytes 2-5/10"
+            } else {
+                body = payload
+                status = 200
+            }
+
+            val responseBody = if (method == "HEAD") ByteArray(0) else body
+            val response = buildString {
+                append("HTTP/1.1 ").append(status).append(if (status == 206) " Partial Content" else " OK")
+                    .append("\r\n")
+                append("Content-Type: video/mp4\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Content-Length: ").append(body.size).append("\r\n")
+                extraHeaders.forEach { (key, value) ->
+                    append(key).append(": ").append(value).append("\r\n")
+                }
+                append("Connection: close\r\n")
+                append("\r\n")
+            }.toByteArray(Charsets.ISO_8859_1)
+            client.getOutputStream().use { output ->
+                output.write(response)
+                output.write(responseBody)
+            }
+        }
+    }
+}
+
+private fun Map<String, String>.valueFor(name: String): String? =
+    entries.firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }?.value
 
 private fun request(
     url: String,

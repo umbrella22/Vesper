@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import android.security.NetworkSecurityPolicy
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -88,16 +89,24 @@ class VesperDlnaDiscovery(
         while (running.get() && !Thread.currentThread().isInterrupted) {
             val keepRunning = runCatching {
                 pruneExpired()
-                val binding = resolveWifiBinding()
-                if (binding == null) {
+                val bindings = resolveLanBindings()
+                if (bindings.isEmpty()) {
                     emitDiagnostic(
-                        code = "wifi_network_unavailable",
+                        code = "lan_network_unavailable",
                         severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
-                        message = "No Wi-Fi network with an IPv4 address is available for DLNA discovery.",
+                        message = "No Wi-Fi or Ethernet network with an IPv4 address is available for DLNA discovery.",
                     )
                 } else {
-                    ensureNotifyListener(binding)
-                    searchOnce(binding)
+                    ensureNotifyListener(bindings.first())
+                    val responseCount = bindings.sumOf(::searchOnce)
+                    if (responseCount == 0) {
+                        emitDiagnostic(
+                            code = "ssdp_no_response",
+                            severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                            message = "No SSDP responses were received on the LAN interfaces.",
+                            details = bindings.details(),
+                        )
+                    }
                 }
                 true
             }.getOrElse { error ->
@@ -129,44 +138,64 @@ class VesperDlnaDiscovery(
         }
     }
 
-    private fun searchOnce(binding: WifiNetworkBinding) {
-        DatagramSocket(null as SocketAddress?).use { socket ->
-            socket.reuseAddress = true
-            socket.bind(InetSocketAddress(binding.localAddress, 0))
-            binding.network.bindSocket(socket)
-            socket.soTimeout = SSDP_RECEIVE_TIMEOUT_MS
-            val address = InetAddress.getByName(SSDP_ADDRESS)
-            repeat(M_SEARCH_ROUNDS) { round ->
-                val mx = ThreadLocalRandom.current().nextInt(1, 4)
-                for (target in M_SEARCH_TARGETS) {
-                    val payload = mSearchPayload(target, mx).toByteArray(Charsets.UTF_8)
-                    socket.send(DatagramPacket(payload, payload.size, address, SSDP_PORT))
+    private fun searchOnce(binding: DlnaNetworkBinding): Int {
+        try {
+            MulticastSocket(null as SocketAddress?).use { socket ->
+                socket.reuseAddress = true
+                socket.timeToLive = SSDP_TTL
+                binding.networkInterface?.let(socket::setNetworkInterface)
+                socket.bind(InetSocketAddress(binding.localAddress, 0))
+                bindSocketToNetwork(socket, binding)
+                socket.soTimeout = SSDP_RECEIVE_TIMEOUT_MS
+                val address = InetAddress.getByName(SSDP_ADDRESS)
+                var responseCount = 0
+                repeat(M_SEARCH_ROUNDS) { round ->
+                    val mx = ThreadLocalRandom.current().nextInt(1, 4)
+                    for (target in M_SEARCH_TARGETS) {
+                        val payload = mSearchPayload(target, mx).toByteArray(Charsets.UTF_8)
+                        socket.send(DatagramPacket(payload, payload.size, address, SSDP_PORT))
+                    }
+                    emitDiagnostic(
+                        code = "m_search_sent",
+                        severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                        message = "DLNA M-SEARCH probes were sent on the LAN interface.",
+                        details = binding.details("round" to (round + 1).toString()),
+                    )
+                    responseCount += receiveSearchResponses(socket, binding)
                 }
-                emitDiagnostic(
-                    code = "m_search_sent",
-                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
-                    message = "DLNA M-SEARCH probes were sent on Wi-Fi.",
-                    details = mapOf(
-                        "interface" to binding.interfaceName.orEmpty(),
-                        "localAddress" to binding.localAddress.hostAddress.orEmpty(),
-                        "round" to (round + 1).toString(),
-                    ),
-                )
-                receiveSearchResponses(socket, binding)
+                return responseCount
             }
+        } catch (error: SecurityException) {
+            emitDiagnostic(
+                code = "m_search_permission_denied",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
+                message = error.message ?: "Permission denied while sending DLNA M-SEARCH probes.",
+                details = binding.details(),
+            )
+            return 0
+        } catch (error: IOException) {
+            emitDiagnostic(
+                code = "m_search_unavailable",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = error.message ?: "DLNA M-SEARCH could not be sent on the LAN interface.",
+                details = binding.details("error" to error.javaClass.simpleName),
+            )
+            return 0
         }
     }
 
     private fun receiveSearchResponses(
         socket: DatagramSocket,
-        binding: WifiNetworkBinding,
-    ) {
+        binding: DlnaNetworkBinding,
+    ): Int {
         val buffer = ByteArray(SSDP_BUFFER_BYTES)
         val deadline = System.currentTimeMillis() + SSDP_RECEIVE_WINDOW_MS
+        var responseCount = 0
         while (running.get() && System.currentTimeMillis() < deadline) {
             val packet = DatagramPacket(buffer, buffer.size)
             try {
                 socket.receive(packet)
+                responseCount += 1
                 val raw = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
                 handleSsdp(raw, binding)
             } catch (_: SocketTimeoutException) {
@@ -182,9 +211,10 @@ class VesperDlnaDiscovery(
                 break
             }
         }
+        return responseCount
     }
 
-    private fun handleSsdp(raw: String, binding: WifiNetworkBinding) {
+    private fun handleSsdp(raw: String, binding: DlnaNetworkBinding) {
         if (!running.get()) {
             return
         }
@@ -219,6 +249,17 @@ class VesperDlnaDiscovery(
         request: VesperDlnaDescriptionRequest,
         network: Network,
     ): VesperDlnaDevice? {
+        if (request.location.protocol.equals("http", ignoreCase = true) &&
+            !NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted(request.location.host)
+        ) {
+            emitDiagnostic(
+                code = "cleartext_http_blocked",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
+                message = "Android cleartext HTTP policy blocks the DLNA device description request.",
+                details = request.details("host" to request.location.host),
+            )
+            return null
+        }
         var connection: HttpURLConnection? = null
         return try {
             connection = network.openConnection(request.location) as HttpURLConnection
@@ -325,53 +366,73 @@ class VesperDlnaDiscovery(
     }
 
     @Suppress("DEPRECATION")
-    private fun resolveWifiBinding(): WifiNetworkBinding? {
+    private fun resolveLanBindings(): List<DlnaNetworkBinding> {
         val connectivityManager =
             appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                ?: return null
+                ?: return emptyList()
+        val activeNetwork = connectivityManager.activeNetwork
         return try {
             connectivityManager.allNetworks
                 .asSequence()
                 .mapNotNull { network ->
                     val capabilities = connectivityManager.getNetworkCapabilities(network)
                         ?: return@mapNotNull null
-                    if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    val transportRank = capabilities.dlnaTransportRank()
+                    if (transportRank == null) {
                         return@mapNotNull null
                     }
                     val linkProperties = connectivityManager.getLinkProperties(network)
                         ?: return@mapNotNull null
                     val interfaceName = linkProperties.interfaceName
+                    val networkInterface = interfaceName
+                        ?.let { runCatching { NetworkInterface.getByName(it) }.getOrNull() }
                     val address = linkProperties.linkAddresses
                         .asSequence()
                         .map { it.address }
                         .filterIsInstance<Inet4Address>()
                         .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
-                        ?: interfaceName
-                            ?.let { NetworkInterface.getByName(it) }
+                        ?: networkInterface
                             ?.inetAddresses
                             ?.asSequence()
                             ?.filterIsInstance<Inet4Address>()
                             ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
                         ?: return@mapNotNull null
-                    WifiNetworkBinding(
+                    DlnaNetworkBinding(
                         network = network,
                         interfaceName = interfaceName,
                         localAddress = address,
-                        networkInterface = interfaceName?.let { NetworkInterface.getByName(it) },
+                        networkInterface = networkInterface,
+                        transportRank = transportRank,
+                        active = network == activeNetwork,
                     )
                 }
-                .firstOrNull()
+                .distinctBy { it.key }
+                .sortedWith(
+                    compareByDescending<DlnaNetworkBinding> { it.active }
+                        .thenBy { it.transportRank }
+                        .thenBy { it.interfaceName.orEmpty() }
+                        .thenBy { it.localAddress.hostAddress.orEmpty() },
+                )
+                .toList()
         } catch (error: SecurityException) {
             emitDiagnostic(
                 code = "network_permission_denied",
                 severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
-                message = error.message ?: "Permission denied while resolving the Wi-Fi network.",
+                message = error.message ?: "Permission denied while resolving the LAN network.",
             )
-            null
+            emptyList()
+        } catch (error: Exception) {
+            emitDiagnostic(
+                code = "network_resolution_failed",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = error.message ?: "Failed to resolve the LAN network for DLNA discovery.",
+                details = mapOf("error" to error.javaClass.simpleName),
+            )
+            emptyList()
         }
     }
 
-    private fun ensureNotifyListener(binding: WifiNetworkBinding) {
+    private fun ensureNotifyListener(binding: DlnaNetworkBinding) {
         val bindingKey = binding.key
         if (notifyBindingKey == bindingKey && notifyExecutor != null) {
             return
@@ -384,14 +445,14 @@ class VesperDlnaDiscovery(
         notifyExecutor?.execute { runNotifyLoop(binding) }
     }
 
-    private fun runNotifyLoop(binding: WifiNetworkBinding) {
+    private fun runNotifyLoop(binding: DlnaNetworkBinding) {
         val networkInterface = binding.networkInterface
         if (networkInterface == null) {
             emitDiagnostic(
                 code = "notify_interface_unavailable",
                 severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
-                message = "No Wi-Fi interface is available for SSDP NOTIFY listening.",
-                details = mapOf("interface" to binding.interfaceName.orEmpty()),
+                message = "No LAN interface is available for SSDP NOTIFY listening.",
+                details = binding.details(),
             )
             return
         }
@@ -402,15 +463,27 @@ class VesperDlnaDiscovery(
                 socket.reuseAddress = true
                 socket.soTimeout = NOTIFY_RECEIVE_TIMEOUT_MS
                 socket.bind(InetSocketAddress(SSDP_PORT))
-                binding.network.bindSocket(socket)
-                socket.joinGroup(group, networkInterface)
+                bindSocketToNetwork(socket, binding)
+                socket.setNetworkInterface(networkInterface)
+                try {
+                    socket.joinGroup(group, networkInterface)
+                } catch (error: IOException) {
+                    emitDiagnostic(
+                        code = "notify_join_interface_failed",
+                        severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                        message = error.message ?: "SSDP NOTIFY multicast join failed on the LAN interface.",
+                        details = binding.details("error" to error.javaClass.simpleName),
+                    )
+                    @Suppress("DEPRECATION")
+                    socket.joinGroup(group.address)
+                }
                 joined = true
                 notifySocket = socket
                 emitDiagnostic(
                     code = "notify_listener_started",
                     severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
-                    message = "SSDP NOTIFY listener started on the Wi-Fi interface.",
-                    details = mapOf("interface" to networkInterface.name),
+                    message = "SSDP NOTIFY listener started on the LAN interface.",
+                    details = binding.details(),
                 )
                 try {
                     val buffer = ByteArray(SSDP_BUFFER_BYTES)
@@ -427,10 +500,22 @@ class VesperDlnaDiscovery(
                     if (joined) {
                         runCatching {
                             socket.leaveGroup(group, networkInterface)
+                        }.onFailure {
+                            @Suppress("DEPRECATION")
+                            runCatching { socket.leaveGroup(group.address) }
                         }
                         joined = false
                     }
                 }
+            }
+        } catch (error: SecurityException) {
+            if (running.get()) {
+                emitDiagnostic(
+                    code = "notify_permission_denied",
+                    severity = VesperDlnaDiscoveryDiagnosticSeverity.Error,
+                    message = error.message ?: "Permission denied while starting SSDP NOTIFY listening.",
+                    details = binding.details(),
+                )
             }
         } catch (error: IOException) {
             if (running.get()) {
@@ -438,10 +523,7 @@ class VesperDlnaDiscovery(
                     code = "notify_listener_unavailable",
                     severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
                     message = error.message ?: "SSDP NOTIFY listener could not be started.",
-                    details = mapOf(
-                        "interface" to networkInterface.name,
-                        "error" to error.javaClass.simpleName,
-                    ),
+                    details = binding.details("error" to error.javaClass.simpleName),
                 )
             }
         } finally {
@@ -483,6 +565,22 @@ class VesperDlnaDiscovery(
         }
     }
 
+    private fun bindSocketToNetwork(
+        socket: DatagramSocket,
+        binding: DlnaNetworkBinding,
+    ) {
+        try {
+            binding.network.bindSocket(socket)
+        } catch (error: Exception) {
+            emitDiagnostic(
+                code = "network_bind_socket_failed",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = error.message ?: "Socket could not be bound to the Android network.",
+                details = binding.details("error" to error.javaClass.simpleName),
+            )
+        }
+    }
+
     private fun emitDiagnostic(
         code: String,
         severity: VesperDlnaDiscoveryDiagnosticSeverity,
@@ -503,15 +601,42 @@ class VesperDlnaDiscovery(
     }
 }
 
-private data class WifiNetworkBinding(
+private data class DlnaNetworkBinding(
     val network: Network,
     val interfaceName: String?,
     val localAddress: Inet4Address,
     val networkInterface: NetworkInterface?,
+    val transportRank: Int,
+    val active: Boolean,
 ) {
     val key: String
         get() = "${interfaceName.orEmpty()}@${localAddress.hostAddress}"
 }
+
+private fun DlnaNetworkBinding.details(
+    vararg entries: Pair<String, String>,
+): Map<String, String> =
+    buildMap {
+        put("interface", interfaceName.orEmpty())
+        put("localAddress", localAddress.hostAddress.orEmpty())
+        put("transport", if (transportRank == TRANSPORT_RANK_WIFI) "wifi" else "ethernet")
+        put("active", active.toString())
+        entries.forEach { (key, value) -> put(key, value) }
+    }
+
+private fun List<DlnaNetworkBinding>.details(): Map<String, String> =
+    buildMap {
+        put("bindingCount", size.toString())
+        put("interfaces", joinToString(",") { it.interfaceName.orEmpty() })
+        put("localAddresses", joinToString(",") { it.localAddress.hostAddress.orEmpty() })
+    }
+
+private fun NetworkCapabilities.dlnaTransportRank(): Int? =
+    when {
+        hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> TRANSPORT_RANK_WIFI
+        hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> TRANSPORT_RANK_ETHERNET
+        else -> null
+    }
 
 private fun VesperDlnaDescriptionRequest.details(
     vararg entries: Pair<String, String>,
@@ -538,6 +663,7 @@ private val M_SEARCH_TARGETS = listOf(
     "upnp:rootdevice",
 )
 private const val M_SEARCH_ROUNDS = 3
+private const val SSDP_TTL = 2
 private const val SSDP_ADDRESS = "239.255.255.250"
 private const val SSDP_PORT = 1900
 private const val SSDP_BUFFER_BYTES = 65_535
@@ -546,3 +672,5 @@ private const val SSDP_RECEIVE_WINDOW_MS = 1_200L
 private const val NOTIFY_RECEIVE_TIMEOUT_MS = 1_000
 private const val DESCRIPTION_TIMEOUT_MS = 5_000
 private const val DISCOVERY_INTERVAL_MS = 8_000L
+private const val TRANSPORT_RANK_WIFI = 0
+private const val TRANSPORT_RANK_ETHERNET = 1

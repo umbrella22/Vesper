@@ -177,9 +177,30 @@ class VesperDlnaProtocolTest {
         )
 
         assertTrue(didl.contains("<dc:title>Episode &amp; Finale</dc:title>"))
-        assertTrue(didl.contains("object.item.videoItem.movie"))
-        assertTrue(didl.contains("protocolInfo=\"http-get:*:video/mp4:*\""))
+        assertTrue(didl.contains("object.item.videoItem"))
+        assertTrue(didl.contains("protocolInfo=\"http-get:*:video/mp4:DLNA.ORG_OP=01;DLNA.ORG_CI=0;"))
+        assertTrue(didl.contains("DLNA.ORG_FLAGS=01500000000000000000000000000000"))
         assertTrue(didl.contains("duration=\"0:01:05\""))
+    }
+
+    @Test
+    fun buildsDidlLiteMetadataForAudioAndImages() {
+        val audio = VesperPlayerSource.remote(
+            uri = "http://192.168.1.2:9000/media/token/song.flac",
+            label = "Song",
+        )
+        val image = VesperPlayerSource.remote(
+            uri = "http://192.168.1.2:9000/media/token/photo",
+            label = "cover.jpg",
+        )
+
+        val audioDidl = VesperDlnaDidlBuilder.build(audio, null)
+        val imageDidl = VesperDlnaDidlBuilder.build(image, null)
+
+        assertTrue(audioDidl.contains("object.item.audioItem.musicTrack"))
+        assertTrue(audioDidl.contains("protocolInfo=\"http-get:*:audio/flac:DLNA.ORG_OP=01;"))
+        assertTrue(imageDidl.contains("object.item.imageItem.photo"))
+        assertTrue(imageDidl.contains("protocolInfo=\"http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_SM;"))
     }
 
     @Test
