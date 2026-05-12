@@ -6,7 +6,6 @@ import 'package:vesper_player_platform_interface/vesper_player_platform_interfac
 class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
   MethodChannelVesperPlayerIos() {
     VesperPlayerPlatform.instance = this;
-    _methodChannel.setMethodCallHandler(_handleMethodCall);
   }
 
   static const MethodChannel _methodChannel = MethodChannel(
@@ -37,6 +36,7 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
   final Map<String, VesperDownloadStaleResourcePlanRecoveryCallback>
       _downloadRecoveryHandlers =
       <String, VesperDownloadStaleResourcePlanRecoveryCallback>{};
+  bool _methodCallHandlerRegistered = false;
 
   @override
   Future<VesperPlatformCreateResult> createPlayer({
@@ -434,6 +434,7 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
   }
 
   Future<T?> _invokeMethod<T>(String method, [Object? arguments]) async {
+    _ensureMethodCallHandlerRegistered();
     try {
       return await _methodChannel.invokeMethod<T>(method, arguments);
     } on PlatformException catch (error) {
@@ -448,6 +449,14 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
       }
       rethrow;
     }
+  }
+
+  void _ensureMethodCallHandlerRegistered() {
+    if (_methodCallHandlerRegistered) {
+      return;
+    }
+    _methodChannel.setMethodCallHandler(_handleMethodCall);
+    _methodCallHandlerRegistered = true;
   }
 
   Future<Object?> _handleMethodCall(MethodCall call) async {

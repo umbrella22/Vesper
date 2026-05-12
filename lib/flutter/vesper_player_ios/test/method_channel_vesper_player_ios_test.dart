@@ -11,6 +11,7 @@ void main() {
 
   setUp(() {
     calls.clear();
+    channel.setMethodCallHandler(null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
@@ -22,8 +23,85 @@ void main() {
   });
 
   tearDown(() {
+    channel.setMethodCallHandler(null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  test('native method handler registers lazily before first platform call',
+      () async {
+    final platform = MethodChannelVesperPlayerIos();
+    final source = VesperDownloadSource.fromSource(
+      source: VesperPlayerSource.hls(
+        uri: 'https://example.com/archive.m3u8',
+        label: 'Archive',
+      ),
+    );
+    final task = VesperDownloadTaskSnapshot(
+      taskId: 7,
+      assetId: 'asset-7',
+      source: source,
+      profile: const VesperDownloadProfile(),
+      state: VesperDownloadState.failed,
+      progress: const VesperDownloadProgressSnapshot(receivedBytes: 128),
+      assetIndex: const VesperDownloadAssetIndex(
+        contentFormat: VesperDownloadContentFormat.hlsSegments,
+      ),
+    );
+    const staleResource = VesperDownloadStaleResource(
+      taskId: 7,
+      resourceId: 'manifest',
+      uri: 'https://example.com/archive.m3u8',
+      statusCode: 404,
+      message: 'Manifest no longer exists.',
+    );
+    final recoveredPlan = VesperDownloadRecoveredTaskPlan(
+      source: source,
+      profile: const VesperDownloadProfile(),
+      assetIndex: const VesperDownloadAssetIndex(
+        contentFormat: VesperDownloadContentFormat.hlsSegments,
+      ),
+    );
+
+    final beforeFirstPlatformCall = await _invokeNativeMethodCall(
+      MethodCall('recoverDownloadTaskPlan', <String, Object?>{
+        'downloadId': 'downloads',
+        'task': task.toMap(),
+        'staleResource': staleResource.toMap(),
+      }),
+    );
+
+    expect(beforeFirstPlatformCall, isNull);
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'createDownloadManager') {
+        return <String, Object?>{'downloadId': 'downloads'};
+      }
+      return null;
+    });
+
+    await platform.createDownloadManager(
+      staleResourceRecovery: (receivedTask, receivedStaleResource) {
+        expect(receivedTask.taskId, task.taskId);
+        expect(receivedTask.assetId, task.assetId);
+        expect(receivedStaleResource.resourceId, staleResource.resourceId);
+        expect(receivedStaleResource.statusCode, staleResource.statusCode);
+        return recoveredPlan;
+      },
+    );
+
+    final recovered = await _invokeNativeMethodCall(
+      MethodCall('recoverDownloadTaskPlan', <String, Object?>{
+        'downloadId': 'downloads',
+        'task': task.toMap(),
+        'staleResource': staleResource.toMap(),
+      }),
+    );
+
+    expect(calls.single.method, 'createDownloadManager');
+    expect(Map<Object?, Object?>.from(recovered as Map), recoveredPlan.toMap());
   });
 
   test('createPlayer forwards sparse defaults payloads', () async {
@@ -323,4 +401,16 @@ void main() {
     expect(status, VesperSystemPlaybackPermissionStatus.notRequired);
     expect(calls.single.method, 'getSystemPlaybackPermissionStatus');
   });
+}
+
+Future<Object?> _invokeNativeMethodCall(MethodCall call) async {
+  const codec = StandardMethodCodec();
+  final response = await TestDefaultBinaryMessengerBinding
+      .instance.defaultBinaryMessenger
+      .handlePlatformMessage(
+    'io.github.ikaros.vesper_player',
+    codec.encodeMethodCall(call),
+    null,
+  );
+  return response == null ? null : codec.decodeEnvelope(response);
 }

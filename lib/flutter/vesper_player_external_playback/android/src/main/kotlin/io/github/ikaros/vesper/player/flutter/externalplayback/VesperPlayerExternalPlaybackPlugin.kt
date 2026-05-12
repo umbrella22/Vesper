@@ -174,7 +174,7 @@ class VesperPlayerExternalPlaybackPlugin :
         runCatching {
             CastButtonFactory.setUpMediaRouteButton(themedContext, button)
         }
-        button.dialogFactory = VesperRouteButtonDialogFactory(routeTheme.mediaRouteTheme)
+        button.dialogFactory = VesperRouteButtonDialogFactory(routeTheme.buttonTheme)
         button.setAlwaysVisible(true)
         return RouteButtonPlatformView(button)
     }
@@ -543,28 +543,25 @@ private const val ROUTE_DIALOG_THEME_ARGUMENT = "routeDialogTheme"
 
 private data class RouteTheme(
     val buttonTheme: Int,
-    val mediaRouteTheme: Int,
 ) {
     companion object {
         val Light = RouteTheme(
             R.style.VesperPlayerExternalRouteButtonTheme_Light,
-            R.style.VesperPlayerExternalMediaRouteTheme_Light,
         )
         val Dark = RouteTheme(
             R.style.VesperPlayerExternalRouteButtonTheme_Dark,
-            R.style.VesperPlayerExternalMediaRouteTheme_Dark,
         )
     }
 }
 
 private class VesperRouteButtonDialogFactory(
-    private val mediaRouteTheme: Int,
+    private val routeDialogTheme: Int,
 ) : MediaRouteDialogFactory() {
     override fun onCreateChooserDialogFragment(): MediaRouteChooserDialogFragment =
-        VesperRouteChooserDialogFragment.newInstance(mediaRouteTheme)
+        VesperRouteChooserDialogFragment.newInstance(routeDialogTheme)
 
     override fun onCreateControllerDialogFragment(): MediaRouteControllerDialogFragment =
-        VesperRouteControllerDialogFragment.newInstance(mediaRouteTheme)
+        VesperRouteControllerDialogFragment.newInstance(routeDialogTheme)
 }
 
 class VesperRouteChooserDialogFragment : MediaRouteChooserDialogFragment() {
@@ -583,13 +580,13 @@ class VesperRouteChooserDialogFragment : MediaRouteChooserDialogFragment() {
     private fun routeDialogTheme(): Int =
         arguments?.getInt(ROUTE_DIALOG_THEME_ARGUMENT, 0)
             ?.takeIf { it != 0 }
-            ?: R.style.VesperPlayerExternalMediaRouteTheme_Light
+            ?: R.style.VesperPlayerExternalRouteButtonTheme_Light
 
     companion object {
-        fun newInstance(mediaRouteTheme: Int): VesperRouteChooserDialogFragment =
+        fun newInstance(routeDialogTheme: Int): VesperRouteChooserDialogFragment =
             VesperRouteChooserDialogFragment().apply {
                 arguments = Bundle().apply {
-                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, mediaRouteTheme)
+                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, routeDialogTheme)
                 }
             }
     }
@@ -611,13 +608,13 @@ class VesperRouteControllerDialogFragment : MediaRouteControllerDialogFragment()
     private fun routeDialogTheme(): Int =
         arguments?.getInt(ROUTE_DIALOG_THEME_ARGUMENT, 0)
             ?.takeIf { it != 0 }
-            ?: R.style.VesperPlayerExternalMediaRouteTheme_Light
+            ?: R.style.VesperPlayerExternalRouteButtonTheme_Light
 
     companion object {
-        fun newInstance(mediaRouteTheme: Int): VesperRouteControllerDialogFragment =
+        fun newInstance(routeDialogTheme: Int): VesperRouteControllerDialogFragment =
             VesperRouteControllerDialogFragment().apply {
                 arguments = Bundle().apply {
-                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, mediaRouteTheme)
+                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, routeDialogTheme)
                 }
             }
     }
