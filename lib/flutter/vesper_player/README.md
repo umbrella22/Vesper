@@ -238,6 +238,11 @@ supports remote `http` / `https` HLS, DASH, and progressive sources with the
 default Google receiver. DRM, transcoding, DASH manifest rewrite, and custom
 receiver flows are outside the MVP scope.
 
+Android hosts that use DLNA discovery or relay-backed local playback must
+declare their own cleartext HTTP policy in the app manifest or Android network
+security configuration. The SDK packages do not enable app-wide cleartext
+traffic.
+
 Use `VesperExternalRouteIconButton()` from `vesper_player_external_playback` in
 a `VesperPlayerStage` top-bar action slot on Android to surface the system Cast
 route button. `VesperExternalRouteButton()` remains available for existing

@@ -19,6 +19,7 @@ class VesperPlayerStage extends StatefulWidget {
     this.deviceControls,
     this.topBarPrimaryAction,
     this.topBarSecondaryAction,
+    this.strings = const VesperPlayerStageStrings(),
   });
 
   final VesperPlayerController controller;
@@ -28,6 +29,7 @@ class VesperPlayerStage extends StatefulWidget {
   final VesperPlayerDeviceControls? deviceControls;
   final Widget? topBarPrimaryAction;
   final Widget? topBarSecondaryAction;
+  final VesperPlayerStageStrings strings;
   final ValueChanged<VesperPlayerStageSheet> onOpenSheet;
   final VoidCallback onToggleFullscreen;
 
@@ -229,8 +231,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                   ),
                   if (snapshot.isBuffering) ...<Widget>[
                     const SizedBox(width: 8),
-                    const VesperStageChip(
-                      label: 'Buffering',
+                    VesperStageChip(
+                      label: widget.strings.buffering,
                       accent: Color(0xFFFFB454),
                       compact: true,
                     ),
@@ -239,7 +241,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               ),
               const SizedBox(height: 4),
               Text(
-                stageBadgeText(snapshot.timeline),
+                stageBadgeText(snapshot.timeline, strings: widget.strings),
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: const Color(0xFFBFC6D6)),
@@ -260,7 +262,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   Widget _defaultMenuAction() {
     return VesperStageIconButton(
       icon: Icons.more_vert_rounded,
-      label: 'More',
+      label: widget.strings.more,
       size: 38,
       iconSize: 24,
       containerAlpha: 0,
@@ -279,7 +281,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       children: <Widget>[
         VesperStageIconButton(
           icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          label: isPlaying ? 'Pause' : 'Play',
+          label: isPlaying ? widget.strings.pause : widget.strings.play,
           size: 38,
           iconSize: 24,
           containerAlpha: 0,
@@ -298,7 +300,11 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         ),
         const SizedBox(width: 8),
         Text(
-          compactTimelineSummary(snapshot.timeline, _pendingSeekRatio),
+          compactTimelineSummary(
+            snapshot.timeline,
+            _pendingSeekRatio,
+            strings: widget.strings,
+          ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -309,7 +315,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         if (snapshot.timeline.kind == VesperTimelineKind.liveDvr) ...<Widget>[
           const SizedBox(width: 8),
           VesperStagePillButton(
-            label: liveButtonLabel(snapshot.timeline),
+            label: liveButtonLabel(snapshot.timeline, strings: widget.strings),
             compact: true,
             onPressed: _seekToLiveEdge,
           ),
@@ -317,7 +323,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         const SizedBox(width: 6),
         VesperStageIconButton(
           icon: Icons.fullscreen_rounded,
-          label: 'Fullscreen',
+          label: widget.strings.fullscreen,
           size: 38,
           iconSize: 24,
           containerAlpha: 0,
@@ -338,13 +344,18 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       snapshot.trackSelection,
       effectiveVideoTrackId: snapshot.effectiveVideoTrackId,
       fixedTrackStatus: snapshot.fixedTrackStatus,
+      strings: widget.strings,
     );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Text(
-          timelineSummary(snapshot.timeline, _pendingSeekRatio),
+          timelineSummary(
+            snapshot.timeline,
+            _pendingSeekRatio,
+            strings: widget.strings,
+          ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.labelLarge?.copyWith(
@@ -366,7 +377,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           children: <Widget>[
             VesperStageIconButton(
               icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              label: isPlaying ? 'Pause' : 'Play',
+              label: isPlaying ? widget.strings.pause : widget.strings.play,
               size: 38,
               iconSize: 22,
               containerAlpha: 0,
@@ -376,7 +387,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             if (snapshot.timeline.kind ==
                 VesperTimelineKind.liveDvr) ...<Widget>[
               VesperStagePillButton(
-                label: liveButtonLabel(snapshot.timeline),
+                label:
+                    liveButtonLabel(snapshot.timeline, strings: widget.strings),
                 compact: true,
                 onPressed: _seekToLiveEdge,
               ),
@@ -397,7 +409,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             const SizedBox(width: 6),
             VesperStageIconButton(
               icon: Icons.fullscreen_exit_rounded,
-              label: 'Exit fullscreen',
+              label: widget.strings.exitFullscreen,
               size: 34,
               iconSize: 19,
               containerAlpha: 0,
@@ -1010,17 +1022,24 @@ class VesperStageIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Material(
-        color: Colors.white.withValues(alpha: containerAlpha),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onPressed,
-          child: Center(
-            child: Icon(icon, size: iconSize, color: Colors.white),
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        label: label,
+        button: true,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Material(
+            color: Colors.white.withValues(alpha: containerAlpha),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onPressed,
+              child: Center(
+                child: Icon(icon, size: iconSize, color: Colors.white),
+              ),
+            ),
           ),
         ),
       ),

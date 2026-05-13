@@ -32,6 +32,7 @@ directly.
 - View embedding: `AndroidView` with view type `io.github.ikaros.vesper_player/platform_view`
 - Render path: `VesperPlayerController.create(renderSurfaceKind: ...)` selects the Android surface for Flutter playback. `auto` maps to `TextureView` for overlay and gesture compatibility. Use `surfaceView` only when the host explicitly wants the native Android HDR / high-frame-rate fullscreen path and can keep Flutter overlays safe.
 - Runtime snapshot: exposes the currently active adaptive video variant through `controller.snapshot.effectiveVideoTrackId`
+- Backend family: runtime snapshots use the public Android `VesperPlayerController.backendFamily` facade and do not depend on Android host-kit bridge or `Native*` implementation types
 - Runtime observation: also exposes `controller.snapshot.videoVariantObservation`, derived from ExoPlayer's active `videoFormat` bitrate and rendered size
 - System playback: `configureSystemPlayback` binds the active ExoPlayer to a Media3 `MediaSessionService`, starts a media playback foreground service while audio is playing, exposes default 10-second seek back / play-pause / seek forward media actions through MediaSession button preferences, filters seek commands when `showSeekActions` is disabled, and clears the session on pause / stop / dispose
 - Screen awake: `createPlayer(keepScreenOnDuringPlayback: ...)` and `setKeepScreenOnDuringPlayback(...)` control whether the host playback view keeps the display awake while playback is active
@@ -102,6 +103,11 @@ Sources with headers, local files, and `content://` inputs are exposed to Cast
 and DLNA receivers through the external playback package's tokenized local HTTP
 relay when the selected proxy policy allows it. DRM, transcoding, DASH manifest
 rewrite, offline assets, and custom receiver behavior are outside this scope.
+
+Host apps that use DLNA discovery or relay-backed playback must configure their
+own Android cleartext policy. The Flutter external-playback package contributes
+network and Cast metadata only; it does not enable
+`android:usesCleartextTraffic` for the app.
 
 ## Optional `player-remux-ffmpeg` Remux Plugin
 

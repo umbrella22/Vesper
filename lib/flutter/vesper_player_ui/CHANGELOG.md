@@ -5,5 +5,6 @@
 ### Breaking Changes
 
 - Default visible stage labels are English. Applications that need localized
-  text should provide localized surrounding controls or wrap the shared
-  controller with their own stage presentation.
+  stage text should pass `VesperPlayerStageStrings`; the built-in
+  `VesperPlayerStageStrings.zhHans()` constructor provides Simplified Chinese
+  labels.

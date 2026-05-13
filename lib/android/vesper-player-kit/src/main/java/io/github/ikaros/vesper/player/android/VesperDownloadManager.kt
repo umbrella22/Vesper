@@ -4054,11 +4054,15 @@ private val VesperDownloadPublicCollection.relativePath: String
         }
 
 private val VesperDownloadPublicCollection.contentUri: Uri
-    get() =
-        when (this) {
+    get() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            error("MediaStore public collection output requires Android 10 or newer")
+        }
+        return when (this) {
             VesperDownloadPublicCollection.Downloads -> MediaStore.Downloads.EXTERNAL_CONTENT_URI
             VesperDownloadPublicCollection.Movies -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         }
+    }
 
 private fun NativeDownloadSource.downloadSourceHeaders(): Map<String, String> =
     sanitizeDownloadRequestHeaders(

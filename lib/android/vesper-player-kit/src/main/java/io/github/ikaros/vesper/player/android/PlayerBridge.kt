@@ -14,6 +14,12 @@ internal enum class PlayerBridgeBackend {
     VesperNativeStub,
 }
 
+internal fun PlayerBridgeBackend.toBackendFamily(): VesperPlayerBackendFamily =
+    when (this) {
+        PlayerBridgeBackend.FakeDemo -> VesperPlayerBackendFamily.FakeDemo
+        PlayerBridgeBackend.VesperNativeStub -> VesperPlayerBackendFamily.AndroidHostKit
+    }
+
 enum class TimelineKind {
     Vod,
     Live,

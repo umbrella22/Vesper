@@ -1,12 +1,17 @@
 package io.github.ikaros.vesper.player.android
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
+import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketException
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -788,29 +793,106 @@ private class BlockingDownloadReporter : VesperDownloadExecutionReporter {
     }
 }
 
-private fun headerRecordingServer(requests: MutableList<RecordedHttpRequest>): HttpServer {
-    val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-    server.createContext("/") { exchange ->
-        val request =
-            RecordedHttpRequest(
-                method = exchange.requestMethod,
-                path = exchange.requestURI.path,
-                headers =
-                    exchange.requestHeaders
-                        .mapKeys { (name, _) -> name.lowercase() }
-                        .mapValues { (_, values) -> values.joinToString(",") },
-            )
-        synchronized(requests) {
-            requests += request
-        }
-        exchange.respondForFixturePath()
+private fun headerRecordingServer(requests: MutableList<RecordedHttpRequest>): HeaderRecordingServer =
+    HeaderRecordingServer(requests)
+
+private class HeaderRecordingServer(
+    private val requests: MutableList<RecordedHttpRequest>,
+) {
+    private val serverSocket = ServerSocket()
+    private var acceptThread: Thread? = null
+
+    @Volatile
+    private var running = false
+
+    val address: InetSocketAddress
+        get() = serverSocket.localSocketAddress as InetSocketAddress
+
+    fun start() {
+        serverSocket.bind(InetSocketAddress("127.0.0.1", 0))
+        running = true
+        acceptThread =
+            thread(
+                name = "vesper-download-test-http",
+                isDaemon = true,
+            ) {
+                while (running) {
+                    try {
+                        val socket = serverSocket.accept()
+                        thread(
+                            name = "vesper-download-test-http-client",
+                            isDaemon = true,
+                        ) {
+                            socket.use(::handleSocket)
+                        }
+                    } catch (error: SocketException) {
+                        if (running) {
+                            throw error
+                        }
+                        return@thread
+                    }
+                }
+            }
     }
-    return server
+
+    fun stop(delaySeconds: Int) {
+        running = false
+        runCatching { serverSocket.close() }
+        val joinMs = delaySeconds.coerceAtLeast(0) * 1000L
+        if (joinMs > 0) {
+            acceptThread?.join(joinMs)
+        }
+    }
+
+    private fun handleSocket(socket: Socket) {
+        val reader =
+            BufferedReader(
+                InputStreamReader(socket.getInputStream(), Charsets.ISO_8859_1),
+            )
+        val requestLine = reader.readLine() ?: return
+        val requestParts = requestLine.split(" ", limit = 3)
+        if (requestParts.size < 2) {
+            return
+        }
+
+        val method = requestParts[0]
+        val path = requestParts[1].substringBefore('?')
+        val headers = linkedMapOf<String, MutableList<String>>()
+        while (true) {
+            val line = reader.readLine() ?: break
+            if (line.isEmpty()) {
+                break
+            }
+            val separator = line.indexOf(':')
+            if (separator <= 0) {
+                continue
+            }
+            val name = line.substring(0, separator).trim().lowercase()
+            val value = line.substring(separator + 1).trim()
+            headers.getOrPut(name) { mutableListOf() } += value
+        }
+
+        val requestHeaders =
+            headers.mapValues { (_, values) -> values.joinToString(",") }
+        synchronized(requests) {
+            requests +=
+                RecordedHttpRequest(
+                    method = method,
+                    path = path,
+                    headers = requestHeaders,
+                )
+        }
+        socket.getOutputStream().respondForFixturePath(method, path, requestHeaders)
+    }
 }
 
-private fun HttpExchange.respondForFixturePath() {
+private fun OutputStream.respondForFixturePath(
+    requestMethod: String,
+    requestPath: String,
+    requestHeaders: Map<String, String>,
+) {
     val body =
-        when (requestURI.path) {
+        when (requestPath) {
             "/index.m3u8" ->
                 """
                 #EXTM3U
@@ -826,30 +908,79 @@ private fun HttpExchange.respondForFixturePath() {
             else -> ByteArray(0)
         }
     if (body.isEmpty()) {
-        sendResponseHeaders(404, -1)
-        close()
+        writeHttpResponse(404, "Not Found", body = ByteArray(0), includeBody = false)
         return
     }
-    responseHeaders.add("Content-Length", body.size.toString())
     if (requestMethod.equals("HEAD", ignoreCase = true)) {
-        sendResponseHeaders(200, -1)
-    } else if (requestHeaders.getFirst("Range")?.startsWith("bytes=") == true) {
-        val range = checkNotNull(requestHeaders.getFirst("Range")).removePrefix("bytes=")
-        val start = range.substringBefore('-').toInt()
-        val end = range.substringAfter('-').toInt()
-        if (start !in body.indices || end !in body.indices || end < start) {
-            sendResponseHeaders(416, -1)
+        writeHttpResponse(
+            200,
+            "OK",
+            headers = mapOf("Content-Length" to body.size.toString()),
+            includeBody = false,
+        )
+    } else if (requestHeaders["range"]?.startsWith("bytes=") == true) {
+        val range = checkNotNull(requestHeaders["range"]).removePrefix("bytes=")
+        val start = range.substringBefore('-').toIntOrNull()
+        val requestedEnd = range.substringAfter('-', missingDelimiterValue = "")
+        val end = requestedEnd.toIntOrNull() ?: body.lastIndex
+        if (start == null || start !in body.indices || end !in body.indices || end < start) {
+            writeHttpResponse(
+                416,
+                "Range Not Satisfiable",
+                body = ByteArray(0),
+                includeBody = false,
+            )
         } else {
             val slice = body.copyOfRange(start, end + 1)
-            responseHeaders.add("Content-Range", "bytes $start-$end/${body.size}")
-            sendResponseHeaders(206, slice.size.toLong())
-            responseBody.use { it.write(slice) }
+            writeHttpResponse(
+                206,
+                "Partial Content",
+                headers =
+                    mapOf(
+                        "Content-Length" to slice.size.toString(),
+                        "Content-Range" to "bytes $start-$end/${body.size}",
+                    ),
+                body = slice,
+            )
         }
     } else {
-        sendResponseHeaders(200, body.size.toLong())
-        responseBody.use { it.write(body) }
+        writeHttpResponse(
+            200,
+            "OK",
+            headers = mapOf("Content-Length" to body.size.toString()),
+            body = body,
+        )
     }
-    close()
+}
+
+private fun OutputStream.writeHttpResponse(
+    statusCode: Int,
+    reason: String,
+    headers: Map<String, String> = emptyMap(),
+    body: ByteArray = ByteArray(0),
+    includeBody: Boolean = true,
+) {
+    val responseHeaders =
+        buildString {
+            append("HTTP/1.1 ")
+            append(statusCode)
+            append(' ')
+            append(reason)
+            append("\r\n")
+            append("Connection: close\r\n")
+            headers.forEach { (name, value) ->
+                append(name)
+                append(": ")
+                append(value)
+                append("\r\n")
+            }
+            append("\r\n")
+        }
+    write(responseHeaders.toByteArray(Charsets.ISO_8859_1))
+    if (includeBody && body.isNotEmpty()) {
+        write(body)
+    }
+    flush()
 }
 
 private fun assertRecordedHeader(

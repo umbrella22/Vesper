@@ -12,3 +12,6 @@
   `VesperExternalPlaybackResult`, and `VesperExternalPlaybackSessionEvent`.
 - The external-playback package no longer owns duplicate public DTO
   definitions.
+- The Android plugin manifest no longer enables app-wide cleartext traffic.
+  Hosts that use DLNA discovery or local relay URLs must declare their own
+  manifest or network-security cleartext policy.

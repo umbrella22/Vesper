@@ -26,6 +26,8 @@ void main() {
     WidgetTester tester, {
     Widget? topBarPrimaryAction,
     Widget? topBarSecondaryAction,
+    VesperPlayerSnapshot snapshot = _playingSnapshot,
+    VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
   }) async {
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox.shrink());
@@ -41,11 +43,12 @@ void main() {
               height: 240,
               child: VesperPlayerStage(
                 controller: controller,
-                snapshot: _playingSnapshot,
+                snapshot: snapshot,
                 isPortrait: true,
                 deviceControls: deviceControls,
                 topBarPrimaryAction: topBarPrimaryAction,
                 topBarSecondaryAction: topBarSecondaryAction,
+                strings: strings,
                 onOpenSheet: openedSheets.add,
                 onToggleFullscreen: () {
                   fullscreenToggleCount += 1;
@@ -110,6 +113,20 @@ void main() {
     await pumpStage(tester);
 
     expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
+  });
+
+  testWidgets('stage uses supplied visible strings', (tester) async {
+    await pumpStage(
+      tester,
+      snapshot: _playingSnapshot.copyWith(isBuffering: true),
+      strings: const VesperPlayerStageStrings(
+        buffering: 'Loading media',
+        vodTimelineBadge: 'On-demand asset',
+      ),
+    );
+
+    expect(find.text('Loading media'), findsOneWidget);
+    expect(find.text('On-demand asset'), findsOneWidget);
   });
 
   testWidgets('empty left-side vertical drags drive brightness controls',

@@ -11,4 +11,5 @@
   permission from the SDK manifest. Host apps that relay `http://` LAN URLs must
   configure their own manifest or network security policy.
 - Flutter UI defaults are English. Host apps that need localized stage text
-  should provide localized UI around the shared controller contracts.
+  should pass `VesperPlayerStageStrings` to `VesperPlayerStage` or provide their
+  own controls around the shared controller contracts.

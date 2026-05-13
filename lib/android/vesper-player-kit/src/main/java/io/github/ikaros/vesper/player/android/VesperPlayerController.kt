@@ -7,8 +7,11 @@ import kotlinx.coroutines.flow.StateFlow
 class VesperPlayerController internal constructor(
     private val bridge: PlayerBridge,
 ) {
-    internal val backend: PlayerBridgeBackend
-        get() = bridge.backend
+    /**
+     * Public backend family for diagnostics and federated wrapper snapshots.
+     */
+    val backendFamily: VesperPlayerBackendFamily
+        get() = bridge.backend.toBackendFamily()
 
     val uiState: StateFlow<PlayerHostUiState>
         get() = bridge.uiState

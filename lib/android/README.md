@@ -72,6 +72,7 @@ Core (`vesper-player-kit`):
 
 - `VesperPlayerController` — playback control surface (`play / pause / seek / selectSource / setPlaybackRate / setAbrPolicy / setResiliencePolicy / set*TrackSelection`)
 - `VesperPlayerControllerFactory` — `createDefault(...)` for production bridge, `createPreview(...)` for a Fake bridge
+- `VesperPlayerBackendFamily` — public backend family snapshot exposed through `VesperPlayerController.backendFamily`
 - `VesperPlayerSource` — media source DTO with `local / remote / hls / dash` factories
 - `VesperTrackSelection` — audio / subtitle / video track selection (`auto`, `disabled`, `track(id)`)
 - Reactive state on the controller: `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `resiliencePolicy` (all `StateFlow<...>`)
@@ -119,6 +120,23 @@ The library does not ship preset URLs or demo sources. Construct
 - Progressive HTTP/HTTPS
 - HLS (`.m3u8`)
 - DASH (`.mpd`)
+
+## Local-Network Cleartext HTTP
+
+Hosts that use DLNA discovery or the local relay must own Android cleartext
+policy. The SDK library manifests do not enable cleartext traffic globally.
+Apps that need local-network `http://` device descriptions or relay URLs can
+opt in at the app layer:
+
+```xml
+<application
+    android:usesCleartextTraffic="true">
+</application>
+```
+
+Hosts that do not want global cleartext should provide their own Android
+network security configuration and allow only the local hosts they use for
+discovery and relay traffic.
 
 ## Playback Screen Awake Policy
 

@@ -1,27 +1,39 @@
 import 'package:vesper_player/vesper_player.dart';
 
-String stageBadgeText(VesperTimeline timeline) {
+import 'stage_models.dart';
+
+String stageBadgeText(
+  VesperTimeline timeline, {
+  VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
+}) {
   return switch (timeline.kind) {
-    VesperTimelineKind.live => 'Live stream',
-    VesperTimelineKind.liveDvr => 'Live with DVR',
-    VesperTimelineKind.vod => 'Video on demand',
+    VesperTimelineKind.live => strings.liveTimelineBadge,
+    VesperTimelineKind.liveDvr => strings.liveDvrTimelineBadge,
+    VesperTimelineKind.vod => strings.vodTimelineBadge,
   };
 }
 
-String liveButtonLabel(VesperTimeline timeline) {
+String liveButtonLabel(
+  VesperTimeline timeline, {
+  VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
+}) {
   final liveEdge = timeline.goLivePositionMs;
   if (liveEdge == null) {
-    return 'Go live';
+    return strings.goLive;
   }
   final behindMs = (liveEdge - timeline.clampedPosition(timeline.positionMs))
       .clamp(0, 1 << 62);
   if (behindMs <= 1500) {
-    return 'Live';
+    return strings.live;
   }
-  return 'Live -${formatMillis(behindMs)}';
+  return '${strings.liveBehindPrefix}${formatMillis(behindMs)}';
 }
 
-String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
+String timelineSummary(
+  VesperTimeline timeline,
+  double? pendingSeekRatio, {
+  VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
+}) {
   final displayedPosition = pendingSeekRatio == null
       ? timeline.clampedPosition(timeline.positionMs)
       : timeline.positionForRatio(pendingSeekRatio);
@@ -30,9 +42,9 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
     case VesperTimelineKind.live:
       final liveEdge = timeline.goLivePositionMs;
       if (liveEdge == null) {
-        return 'Live';
+        return strings.live;
       }
-      return 'Live edge ${formatMillis(liveEdge)}';
+      return '${strings.liveEdge} ${formatMillis(liveEdge)}';
     case VesperTimelineKind.liveDvr:
       final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
       final rangeStart = timeline.seekableRange?.startMs ?? 0;
@@ -49,15 +61,16 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
 
 String compactTimelineSummary(
   VesperTimeline timeline,
-  double? pendingSeekRatio,
-) {
+  double? pendingSeekRatio, {
+  VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
+}) {
   final displayedPosition = pendingSeekRatio == null
       ? timeline.clampedPosition(timeline.positionMs)
       : timeline.positionForRatio(pendingSeekRatio);
 
   switch (timeline.kind) {
     case VesperTimelineKind.live:
-      return 'Live';
+      return strings.live;
     case VesperTimelineKind.liveDvr:
       final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
       final rangeStart = timeline.seekableRange?.startMs ?? 0;
@@ -77,6 +90,7 @@ String qualityButtonLabel(
   VesperTrackSelectionSnapshot trackSelection, {
   String? effectiveVideoTrackId,
   VesperFixedTrackStatus? fixedTrackStatus,
+  VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
 }) {
   final requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection);
   final effectiveTrack = effectiveVideoTrack(
@@ -94,18 +108,18 @@ String qualityButtonLabel(
     VesperAbrMode.fixedTrack
         when requestedTrack != null &&
             resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
-      'Locking · ${qualityLabel(requestedTrack)}',
+      '${strings.locking}${strings.qualitySeparator}${qualityLabel(requestedTrack)}',
     VesperAbrMode.fixedTrack
         when requestedTrack != null &&
             resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback =>
-      'Locking · ${qualityLabel(requestedTrack)}',
+      '${strings.locking}${strings.qualitySeparator}${qualityLabel(requestedTrack)}',
     VesperAbrMode.fixedTrack when requestedTrack != null =>
-      'Pinned · ${qualityLabel(requestedTrack)}',
-    VesperAbrMode.fixedTrack => 'Quality',
+      '${strings.pinned}${strings.qualitySeparator}${qualityLabel(requestedTrack)}',
+    VesperAbrMode.fixedTrack => strings.quality,
     VesperAbrMode.constrained ||
     VesperAbrMode.auto when effectiveTrack != null =>
-      'Auto · ${qualityLabel(effectiveTrack)}',
-    VesperAbrMode.constrained || VesperAbrMode.auto => 'Auto',
+      '${strings.auto}${strings.qualitySeparator}${qualityLabel(effectiveTrack)}',
+    VesperAbrMode.constrained || VesperAbrMode.auto => strings.auto,
   };
 }
 

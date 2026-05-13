@@ -8,6 +8,10 @@
   Host apps should use `VesperPlayerController`, `VesperPlayerSource`,
   `VesperTrackSelection`, `VesperVideoSurfaceKind`, and the download/preload
   facades.
+- `VesperPlayerController.backend` has been removed. Use
+  `VesperPlayerController.backendFamily` and `VesperPlayerBackendFamily` when
+  code needs to distinguish the Android host-kit backend from the fake preview
+  backend.
 - The Gradle `check` lifecycle now includes `checkPublicApiSurface`, which fails
   if bridge, JNI, or `Native*` implementation declarations are made public again.
 - `NativeVideoSurfaceKind` was replaced by `VesperVideoSurfaceKind` in public

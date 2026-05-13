@@ -22,9 +22,7 @@ import io.flutter.plugin.common.PluginRegistry
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
-import io.github.ikaros.vesper.player.android.NativeVideoSurfaceKind
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
-import io.github.ikaros.vesper.player.android.PlayerBridgeBackend
 import io.github.ikaros.vesper.player.android.TimelineUiState
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.VesperBackgroundPlaybackMode
@@ -66,6 +64,7 @@ import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
+import io.github.ikaros.vesper.player.android.VesperPlayerBackendFamily
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
@@ -82,6 +81,7 @@ import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackSelection
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionMode
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
+import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -512,7 +512,7 @@ class VesperPlayerAndroidPlugin :
                     ?.stringMap()
                     ?.toBenchmarkConfiguration()
                     ?: VesperBenchmarkConfiguration.Disabled
-            val surfaceKind = arguments["renderSurfaceKind"].toNativeVideoSurfaceKind()
+            val surfaceKind = arguments["renderSurfaceKind"].toVesperVideoSurfaceKind()
             val keepScreenOnDuringPlayback =
                 arguments["keepScreenOnDuringPlayback"] as? Boolean ?: true
 
@@ -1135,7 +1135,7 @@ class VesperPlayerAndroidPlugin :
             "timeline" to uiState.timeline.toMap(),
             "viewport" to session.viewport?.toMap(),
             "viewportHint" to session.viewportHint.toMap(),
-            "backendFamily" to session.controller.backend.toBackendFamilyWireName(),
+            "backendFamily" to session.controller.backendFamily.toBackendFamilyWireName(),
             "capabilities" to buildCapabilitiesMap(),
             "trackCatalog" to trackCatalog.toMap(),
             "trackSelection" to trackSelection.toMap(),
@@ -1372,10 +1372,10 @@ private fun Map<String, Any?>.toBenchmarkConfiguration(): VesperBenchmarkConfigu
                 ?: emptyList(),
     )
 
-private fun Any?.toNativeVideoSurfaceKind(): NativeVideoSurfaceKind =
+private fun Any?.toVesperVideoSurfaceKind(): VesperVideoSurfaceKind =
     when (this as? String ?: "auto") {
-        "auto", "textureView" -> NativeVideoSurfaceKind.TextureView
-        "surfaceView" -> NativeVideoSurfaceKind.SurfaceView
+        "auto", "textureView" -> VesperVideoSurfaceKind.TextureView
+        "surfaceView" -> VesperVideoSurfaceKind.SurfaceView
         else -> throw IllegalArgumentException("Unknown renderSurfaceKind: $this.")
     }
 
@@ -1927,10 +1927,10 @@ private fun TimelineKind.toWireName(): String =
         TimelineKind.LiveDvr -> "liveDvr"
     }
 
-private fun PlayerBridgeBackend.toBackendFamilyWireName(): String =
+private fun VesperPlayerBackendFamily.toBackendFamilyWireName(): String =
     when (this) {
-        PlayerBridgeBackend.FakeDemo -> "fakeDemo"
-        PlayerBridgeBackend.VesperNativeStub -> "androidHostKit"
+        VesperPlayerBackendFamily.FakeDemo -> "fakeDemo"
+        VesperPlayerBackendFamily.AndroidHostKit -> "androidHostKit"
     }
 
 private fun VesperPlayerSourceKind.toWireName(): String =
