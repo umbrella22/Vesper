@@ -32,19 +32,14 @@ pub enum StreamKind {
     Auxiliary,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum AssemblyMode {
+    #[default]
     Single,
     SeparateAudioVideo,
     MultiAudio,
     WithSubtitles,
     Generic,
-}
-
-impl Default for AssemblyMode {
-    fn default() -> Self {
-        Self::Single
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

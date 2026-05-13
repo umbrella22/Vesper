@@ -2,30 +2,30 @@ package io.github.ikaros.vesper.player.android
 
 import kotlin.jvm.JvmField
 
-enum class NativeVideoSurfaceKind {
+internal enum class NativeVideoSurfaceKind {
     TextureView,
     SurfaceView,
 }
 
-enum class NativeTrackKind {
+internal enum class NativeTrackKind {
     Video,
     Audio,
     Subtitle,
 }
 
-enum class NativeTrackSelectionMode {
+internal enum class NativeTrackSelectionMode {
     Auto,
     Disabled,
     Track,
 }
 
-enum class NativeAbrMode {
+internal enum class NativeAbrMode {
     Auto,
     Constrained,
     FixedTrack,
 }
 
-enum class NativeErrorCategory {
+internal enum class NativeErrorCategory {
     Input,
     Source,
     Network,
@@ -36,11 +36,11 @@ enum class NativeErrorCategory {
     Platform,
 }
 
-data class NativeBridgeStartup(
+internal data class NativeBridgeStartup(
     val subtitle: String? = null,
 )
 
-data class NativeBridgeSnapshot(
+internal data class NativeBridgeSnapshot(
     val playbackState: PlaybackStateUi,
     val playbackRate: Float,
     val isBuffering: Boolean,
@@ -48,7 +48,7 @@ data class NativeBridgeSnapshot(
     val timeline: TimelineUiState,
 )
 
-class NativeBufferingPolicy(
+internal class NativeBufferingPolicy(
     @JvmField val presetOrdinal: Int,
     @JvmField val hasMinBufferMs: Boolean,
     @JvmField val minBufferMs: Int,
@@ -60,7 +60,7 @@ class NativeBufferingPolicy(
     @JvmField val bufferForPlaybackAfterRebufferMs: Int,
 )
 
-class NativeRetryPolicy(
+internal class NativeRetryPolicy(
     @JvmField val usesDefaultMaxAttempts: Boolean,
     @JvmField val hasMaxAttempts: Boolean,
     @JvmField val maxAttempts: Int,
@@ -72,7 +72,7 @@ class NativeRetryPolicy(
     @JvmField val backoffOrdinal: Int,
 )
 
-class NativeCachePolicy(
+internal class NativeCachePolicy(
     @JvmField val presetOrdinal: Int,
     @JvmField val hasMaxMemoryBytes: Boolean,
     @JvmField val maxMemoryBytes: Long,
@@ -80,26 +80,26 @@ class NativeCachePolicy(
     @JvmField val maxDiskBytes: Long,
 )
 
-class NativeResolvedResiliencePolicy(
+internal class NativeResolvedResiliencePolicy(
     @JvmField val buffering: NativeBufferingPolicy,
     @JvmField val retry: NativeRetryPolicy,
     @JvmField val cache: NativeCachePolicy,
 )
 
-class NativeResolvedPreloadBudgetPolicy(
+internal class NativeResolvedPreloadBudgetPolicy(
     @JvmField val maxConcurrentTasks: Int,
     @JvmField val maxMemoryBytes: Long,
     @JvmField val maxDiskBytes: Long,
     @JvmField val warmupWindowMs: Long,
 )
 
-class NativeDownloadConfig(
+internal class NativeDownloadConfig(
     @JvmField val autoStart: Boolean,
     @JvmField val runPostProcessorsOnCompletion: Boolean,
     @JvmField val pluginLibraryPaths: Array<String> = emptyArray(),
 )
 
-class NativePlaylistConfig(
+internal class NativePlaylistConfig(
     @JvmField val playlistId: String,
     @JvmField val neighborPrevious: Int,
     @JvmField val neighborNext: Int,
@@ -110,7 +110,7 @@ class NativePlaylistConfig(
     @JvmField val failureStrategyOrdinal: Int,
 )
 
-class NativeTrackPreferencePolicy(
+internal class NativeTrackPreferencePolicy(
     @JvmField val preferredAudioLanguage: String?,
     @JvmField val preferredSubtitleLanguage: String?,
     @JvmField val selectSubtitlesByDefault: Boolean,
@@ -120,7 +120,7 @@ class NativeTrackPreferencePolicy(
     @JvmField val abrPolicy: NativeAbrPolicyPayload,
 )
 
-class NativeTrackInfo(
+internal class NativeTrackInfo(
     @JvmField val id: String,
     @JvmField val kindOrdinal: Int,
     @JvmField val label: String?,
@@ -142,18 +142,18 @@ class NativeTrackInfo(
     @JvmField val isForced: Boolean,
 )
 
-class NativeTrackCatalog(
+internal class NativeTrackCatalog(
     @JvmField val tracks: Array<NativeTrackInfo>,
     @JvmField val adaptiveVideo: Boolean,
     @JvmField val adaptiveAudio: Boolean,
 )
 
-class NativeTrackSelectionPayload(
+internal class NativeTrackSelectionPayload(
     @JvmField val modeOrdinal: Int,
     @JvmField val trackId: String?,
 )
 
-class NativeAbrPolicyPayload(
+internal class NativeAbrPolicyPayload(
     @JvmField val modeOrdinal: Int,
     @JvmField val trackId: String?,
     @JvmField val hasMaxBitRate: Boolean,
@@ -164,14 +164,14 @@ class NativeAbrPolicyPayload(
     @JvmField val maxHeight: Int,
 )
 
-class NativeTrackSelectionSnapshotPayload(
+internal class NativeTrackSelectionSnapshotPayload(
     @JvmField val video: NativeTrackSelectionPayload,
     @JvmField val audio: NativeTrackSelectionPayload,
     @JvmField val subtitle: NativeTrackSelectionPayload,
     @JvmField val abrPolicy: NativeAbrPolicyPayload,
 )
 
-class NativePreloadBudget(
+internal class NativePreloadBudget(
     @JvmField val hasMaxConcurrentTasks: Boolean,
     @JvmField val maxConcurrentTasks: Int,
     @JvmField val hasMaxMemoryBytes: Boolean,
@@ -182,7 +182,7 @@ class NativePreloadBudget(
     @JvmField val warmupWindowMs: Long,
 )
 
-class NativePreloadCandidate(
+internal class NativePreloadCandidate(
     @JvmField val sourceUri: String,
     @JvmField val scopeKindOrdinal: Int,
     @JvmField val scopeId: String?,
@@ -197,7 +197,7 @@ class NativePreloadCandidate(
     @JvmField val warmupWindowMs: Long,
 )
 
-class NativePlaylistQueueItem(
+internal class NativePlaylistQueueItem(
     @JvmField val itemId: String,
     @JvmField val sourceUri: String,
     @JvmField val expectedMemoryBytes: Long,
@@ -208,18 +208,18 @@ class NativePlaylistQueueItem(
     @JvmField val warmupWindowMs: Long,
 )
 
-class NativePlaylistViewportHint(
+internal class NativePlaylistViewportHint(
     @JvmField val itemId: String,
     @JvmField val kindOrdinal: Int,
     @JvmField val order: Int,
 )
 
-class NativePlaylistActiveItem(
+internal class NativePlaylistActiveItem(
     @JvmField val itemId: String,
     @JvmField val index: Int,
 )
 
-class NativeDownloadSource(
+internal class NativeDownloadSource(
     @JvmField val sourceUri: String,
     @JvmField val contentFormatOrdinal: Int,
     @JvmField val manifestUri: String?,
@@ -227,7 +227,7 @@ class NativeDownloadSource(
     @JvmField val headerValues: Array<String>,
 )
 
-class NativeDownloadProfile(
+internal class NativeDownloadProfile(
     @JvmField val variantId: String?,
     @JvmField val preferredAudioLanguage: String?,
     @JvmField val preferredSubtitleLanguage: String?,
@@ -237,12 +237,12 @@ class NativeDownloadProfile(
     @JvmField val allowMeteredNetwork: Boolean,
 )
 
-class NativeDownloadByteRange(
+internal class NativeDownloadByteRange(
     @JvmField val offset: Long,
     @JvmField val length: Long,
 )
 
-class NativeDownloadResourceRecord(
+internal class NativeDownloadResourceRecord(
     @JvmField val resourceId: String,
     @JvmField val uri: String,
     @JvmField val relativePath: String?,
@@ -254,7 +254,7 @@ class NativeDownloadResourceRecord(
     @JvmField val checksum: String?,
 )
 
-class NativeDownloadSegmentRecord(
+internal class NativeDownloadSegmentRecord(
     @JvmField val segmentId: String,
     @JvmField val uri: String,
     @JvmField val relativePath: String?,
@@ -266,7 +266,7 @@ class NativeDownloadSegmentRecord(
     @JvmField val checksum: String?,
 )
 
-class NativeDownloadAssetStream(
+internal class NativeDownloadAssetStream(
     @JvmField val streamId: String,
     @JvmField val kindOrdinal: Int,
     @JvmField val language: String?,
@@ -280,7 +280,7 @@ class NativeDownloadAssetStream(
     @JvmField val metadataValues: Array<String>,
 )
 
-class NativeDownloadAssetIndex(
+internal class NativeDownloadAssetIndex(
     @JvmField val contentFormatOrdinal: Int,
     @JvmField val version: String?,
     @JvmField val etag: String?,
@@ -293,7 +293,7 @@ class NativeDownloadAssetIndex(
     @JvmField val completedPath: String?,
 )
 
-class NativeDownloadProgress(
+internal class NativeDownloadProgress(
     @JvmField val receivedBytes: Long,
     @JvmField val hasTotalBytes: Boolean,
     @JvmField val totalBytes: Long,
@@ -302,7 +302,7 @@ class NativeDownloadProgress(
     @JvmField val totalSegments: Int,
 )
 
-class NativeDownloadTask(
+internal class NativeDownloadTask(
     @JvmField val taskId: Long,
     @JvmField val assetId: String,
     @JvmField val source: NativeDownloadSource,
@@ -317,11 +317,11 @@ class NativeDownloadTask(
     @JvmField val errorMessage: String?,
 )
 
-class NativeDownloadSnapshot(
+internal class NativeDownloadSnapshot(
     @JvmField val tasks: Array<NativeDownloadTask>,
 )
 
-class NativePreloadTask(
+internal class NativePreloadTask(
     @JvmField val taskId: Long,
     @JvmField val sourceUri: String,
     @JvmField val sourceIdentity: String,
@@ -341,13 +341,13 @@ class NativePreloadTask(
     @JvmField val errorMessage: String?,
 )
 
-data class NativeVideoLayoutInfo(
+internal data class NativeVideoLayoutInfo(
     val width: Int,
     val height: Int,
     val pixelWidthHeightRatio: Float = 1.0f,
 )
 
-sealed interface NativeBridgeEvent {
+internal sealed interface NativeBridgeEvent {
     data class PlaybackStateChanged(val state: PlaybackStateUi) : NativeBridgeEvent
     data class PlaybackRateChanged(val rate: Float) : NativeBridgeEvent
     data class BufferingChanged(val isBuffering: Boolean) : NativeBridgeEvent
@@ -364,7 +364,7 @@ sealed interface NativeBridgeEvent {
     ) : NativeBridgeEvent
 }
 
-sealed interface NativePlayerCommand {
+internal sealed interface NativePlayerCommand {
     data object Play : NativePlayerCommand
     data object Pause : NativePlayerCommand
     data class SeekTo(val positionMs: Long) : NativePlayerCommand
@@ -376,12 +376,12 @@ sealed interface NativePlayerCommand {
     data class SetAbrPolicy(val policy: NativeAbrPolicyPayload) : NativePlayerCommand
 }
 
-sealed interface NativePreloadCommand {
+internal sealed interface NativePreloadCommand {
     data class Start(val task: NativePreloadTask) : NativePreloadCommand
     data class Cancel(val taskId: Long) : NativePreloadCommand
 }
 
-sealed interface NativeDownloadCommand {
+internal sealed interface NativeDownloadCommand {
     data class Prepare(val task: NativeDownloadTask) : NativeDownloadCommand
     data class Start(val task: NativeDownloadTask) : NativeDownloadCommand
     data class Pause(val taskId: Long) : NativeDownloadCommand
@@ -389,7 +389,7 @@ sealed interface NativeDownloadCommand {
     data class Remove(val taskId: Long) : NativeDownloadCommand
 }
 
-sealed interface NativeDownloadEvent {
+internal sealed interface NativeDownloadEvent {
     data class Created(val task: NativeDownloadTask) : NativeDownloadEvent
     data class StateChanged(
         val taskId: Long,

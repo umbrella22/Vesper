@@ -1,12 +1,14 @@
 #![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+#![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::{c_char, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements,
     DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-    DecoderSessionConfig, DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+    DecoderSessionConfig, DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
@@ -21,6 +23,10 @@ struct PluginBundle {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
+    catch_unwind(AssertUnwindSafe(vesper_plugin_entry_impl)).unwrap_or(std::ptr::null())
+}
+
+fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(PluginBundle {
         api: VesperDecoderPluginApiV2 {
             context: std::ptr::null_mut(),
@@ -37,7 +43,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
             close_session: Some(decoder_close_session),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
@@ -49,15 +55,16 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 }
 
 unsafe extern "C" fn decoder_name(_context: *mut c_void) -> *const c_char {
-    PLUGIN_NAME.as_ptr().cast::<c_char>()
+    catch_unwind(AssertUnwindSafe(|| PLUGIN_NAME.as_ptr().cast::<c_char>()))
+        .unwrap_or(std::ptr::null())
 }
 
 unsafe extern "C" fn decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
-    serialize_payload(&decoder_capabilities())
+    catch_decoder_bytes(|| serialize_payload(&decoder_capabilities()))
 }
 
 unsafe extern "C" fn decoder_native_requirements_json(_context: *mut c_void) -> VesperPluginBytes {
-    serialize_payload(&decoder_native_requirements())
+    catch_decoder_bytes(|| serialize_payload(&decoder_native_requirements()))
 }
 
 unsafe extern "C" fn decoder_open_session_json(
@@ -65,17 +72,19 @@ unsafe extern "C" fn decoder_open_session_json(
     config_json: *const u8,
     config_json_len: usize,
 ) -> VesperDecoderOpenSessionResult {
-    let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
-        Ok(config) => config,
-        Err(error) => return open_error(error),
-    };
-    if !decoder_capabilities().supports_codec(&config.codec, config.media_kind) {
-        return open_error(DecoderError::UnsupportedCodec {
-            codec: config.codec,
-        });
-    }
+    catch_decoder_open(|| {
+        let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
+            Ok(config) => config,
+            Err(error) => return open_error(error),
+        };
+        if !decoder_capabilities().supports_codec(&config.codec, config.media_kind) {
+            return open_error(DecoderError::UnsupportedCodec {
+                codec: config.codec,
+            });
+        }
 
-    platform::open_session(config)
+        platform::open_session(config)
+    })
 }
 
 unsafe extern "C" fn decoder_send_packet(
@@ -86,32 +95,34 @@ unsafe extern "C" fn decoder_send_packet(
     packet_data: *const u8,
     packet_data_len: usize,
 ) -> VesperPluginProcessResult {
-    let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
-        Ok(packet) => packet,
-        Err(error) => return process_error(error),
-    };
-    if packet_data.is_null() && packet_data_len > 0 {
-        return process_error(DecoderError::abi_violation(
-            "packet data pointer was null with non-zero len",
-        ));
-    }
+    catch_decoder_process(|| {
+        let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
+            Ok(packet) => packet,
+            Err(error) => return process_error(error),
+        };
+        if packet_data.is_null() && packet_data_len > 0 {
+            return process_error(DecoderError::abi_violation(
+                "packet data pointer was null with non-zero len",
+            ));
+        }
 
-    let data = if packet_data.is_null() || packet_data_len == 0 {
-        &[]
-    } else {
-        // SAFETY: host passes a borrowed packet byte range that is valid for
-        // this call; the plugin copies it before returning when needed.
-        unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }
-    };
+        let data = if packet_data.is_null() || packet_data_len == 0 {
+            &[]
+        } else {
+            // SAFETY: host passes a borrowed packet byte range that is valid for
+            // this call; the plugin copies it before returning when needed.
+            unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }
+        };
 
-    platform::send_packet(session, &packet, data)
+        platform::send_packet(session, &packet, data)
+    })
 }
 
 unsafe extern "C" fn decoder_receive_native_frame(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperDecoderReceiveNativeFrameResult {
-    platform::receive_native_frame(session)
+    catch_decoder_native_frame(|| platform::receive_native_frame(session))
 }
 
 unsafe extern "C" fn decoder_release_native_frame(
@@ -120,21 +131,21 @@ unsafe extern "C" fn decoder_release_native_frame(
     handle_kind: u32,
     handle: usize,
 ) -> VesperPluginProcessResult {
-    platform::release_native_frame(session, handle_kind, handle)
+    catch_decoder_process(|| platform::release_native_frame(session, handle_kind, handle))
 }
 
 unsafe extern "C" fn decoder_flush_session(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
-    platform::flush_session(session)
+    catch_decoder_process(|| platform::flush_session(session))
 }
 
 unsafe extern "C" fn decoder_close_session(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
-    platform::close_session(session)
+    catch_decoder_process(|| platform::close_session(session))
 }
 
 unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
@@ -271,6 +282,32 @@ fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameRes
     }
 }
 
+fn catch_decoder_bytes(f: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| serialize_payload(&plugin_panic_error()))
+}
+
+fn catch_decoder_open(
+    f: impl FnOnce() -> VesperDecoderOpenSessionResult,
+) -> VesperDecoderOpenSessionResult {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| open_error(plugin_panic_error()))
+}
+
+fn catch_decoder_process(
+    f: impl FnOnce() -> VesperPluginProcessResult,
+) -> VesperPluginProcessResult {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| process_error(plugin_panic_error()))
+}
+
+fn catch_decoder_native_frame(
+    f: impl FnOnce() -> VesperDecoderReceiveNativeFrameResult,
+) -> VesperDecoderReceiveNativeFrameResult {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| native_frame_error(plugin_panic_error()))
+}
+
+fn plugin_panic_error() -> DecoderError {
+    DecoderError::internal("decoder plugin callback panicked")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VideoCodecKind {
     H264,
@@ -295,6 +332,7 @@ fn video_codec_kind(codec: &str) -> Option<VideoCodecKind> {
 mod platform {
     use std::collections::VecDeque;
     use std::ffi::c_void;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::ptr;
     use std::sync::{Arc, Mutex};
 
@@ -516,6 +554,8 @@ mod platform {
         packet: &DecoderPacket,
         data: &[u8],
     ) -> VesperPluginProcessResult {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
         let Some(session) = (unsafe { session.cast::<VideoToolboxDecoderSession>().as_mut() })
         else {
             return process_error(DecoderError::NotConfigured);
@@ -528,6 +568,8 @@ mod platform {
     }
 
     pub fn receive_native_frame(session: *mut c_void) -> VesperDecoderReceiveNativeFrameResult {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
         let Some(session) = (unsafe { session.cast::<VideoToolboxDecoderSession>().as_mut() })
         else {
             return native_frame_error(DecoderError::NotConfigured);
@@ -574,6 +616,8 @@ mod platform {
     }
 
     pub fn flush_session(session: *mut c_void) -> VesperPluginProcessResult {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
         let Some(session) = (unsafe { session.cast::<VideoToolboxDecoderSession>().as_mut() })
         else {
             return process_error(DecoderError::NotConfigured);
@@ -611,8 +655,8 @@ mod platform {
         closed: bool,
     }
 
-    // VideoToolbox/CoreFoundation refs are retained and released by this
-    // session; access is serialized by the host-side decoder session.
+    // SAFETY: VideoToolbox/CoreFoundation refs are retained and released by
+    // this session; access is serialized by the host-side decoder session.
     unsafe impl Send for VideoToolboxDecoderSession {}
 
     impl VideoToolboxDecoderSession {
@@ -902,6 +946,8 @@ mod platform {
         height: u32,
     }
 
+    // SAFETY: `PendingNativeFrame` owns a retained pixel buffer reference, and
+    // release is serialized by the decoder session queue.
     unsafe impl Send for PendingNativeFrame {}
 
     struct NativeFrame {
@@ -924,9 +970,29 @@ mod platform {
         presentation_time_stamp: CMTime,
         presentation_duration: CMTime,
     ) {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            decompression_output_callback_impl(
+                decompression_output_ref_con,
+                status,
+                image_buffer,
+                presentation_time_stamp,
+                presentation_duration,
+            );
+        }));
+    }
+
+    fn decompression_output_callback_impl(
+        decompression_output_ref_con: *mut c_void,
+        status: OSStatus,
+        image_buffer: CVImageBufferRef,
+        presentation_time_stamp: CMTime,
+        presentation_duration: CMTime,
+    ) {
         if status != NO_ERR || image_buffer.is_null() || decompression_output_ref_con.is_null() {
             return;
         }
+        // SAFETY: VideoToolbox passes the `CallbackState` pointer configured
+        // when creating the decompression session.
         let callback_state = unsafe { &*(decompression_output_ref_con.cast::<CallbackState>()) };
         // SAFETY: VideoToolbox provides a valid image buffer for this callback;
         // retaining transfers frame ownership into the plugin queue.
@@ -935,8 +1001,11 @@ mod platform {
             return;
         }
         let pixel_buffer = retained.cast::<c_void>();
+        // SAFETY: `pixel_buffer` is the retained CVPixelBuffer passed by
+        // VideoToolbox for this callback.
         let width =
             u32::try_from(unsafe { CVPixelBufferGetWidth(pixel_buffer) }).unwrap_or(u32::MAX);
+        // SAFETY: same retained CVPixelBuffer as above.
         let height =
             u32::try_from(unsafe { CVPixelBufferGetHeight(pixel_buffer) }).unwrap_or(u32::MAX);
         let frame = PendingNativeFrame {
@@ -1548,6 +1617,8 @@ mod tests {
     fn send_packet_rejects_null_packet_data_with_non_zero_len() {
         let packet_json = serde_json::to_vec(&DecoderPacket::default()).expect("packet json");
 
+        // SAFETY: the JSON buffer is valid for this synchronous callback and
+        // the null packet data deliberately exercises ABI validation.
         let result = unsafe {
             decoder_send_packet(
                 std::ptr::null_mut(),

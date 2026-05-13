@@ -38,7 +38,7 @@ data class VesperRelayHandle(
 class VesperRelayServer @JvmOverloads constructor(
     context: Context? = null,
     private val advertisedAddressProvider: () -> InetAddress? = ::findLanIpv4Address,
-    private val bindAddressProvider: () -> InetAddress = { InetAddress.getByName("0.0.0.0") },
+    private val bindAddressProvider: () -> InetAddress? = { context?.findWifiLanIpv4Address() },
     private val tokenTtlMillis: Long? = DEFAULT_TOKEN_TTL_MILLIS,
     private val nowMillisProvider: () -> Long = System::currentTimeMillis,
 ) {
@@ -58,12 +58,14 @@ class VesperRelayServer @JvmOverloads constructor(
             return
         }
         val bindAddress = bindAddressProvider()
+            ?: appContext?.findWifiLanIpv4Address()
+            ?: throw IllegalStateException("No Wi-Fi LAN address is available for relay.")
         val socket = ServerSocket(0, 50, bindAddress)
         serverSocket = socket
         advertisedAddress =
-            appContext?.findWifiLanIpv4Address()
+            bindAddress.takeUnless { it.isAnyLocalAddress }
+                ?: appContext?.findWifiLanIpv4Address()
                 ?: advertisedAddressProvider()
-                ?: bindAddress.takeUnless { it.isAnyLocalAddress }
         requestExecutor = Executors.newCachedThreadPool { runnable ->
             Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
         }

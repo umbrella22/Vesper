@@ -9,7 +9,7 @@ private const val MIN_SYSTEM_PLAYBACK_SEEK_OFFSET_MS = 1_000L
 private const val MAX_SYSTEM_PLAYBACK_SEEK_OFFSET_MS = 60_000L
 private const val MAX_SYSTEM_PLAYBACK_COMPACT_BUTTONS = 3
 
-enum class PlayerBridgeBackend {
+internal enum class PlayerBridgeBackend {
     FakeDemo,
     VesperNativeStub,
 }
@@ -237,7 +237,7 @@ data class VesperVideoVariantObservation(
         )
 }
 
-interface PlayerBridge {
+internal interface PlayerBridge {
     val backend: PlayerBridgeBackend
     val uiState: StateFlow<PlayerHostUiState>
     val trackCatalog: StateFlow<VesperTrackCatalog>

@@ -1,26 +1,26 @@
 import Foundation
 
 enum VesperPlayerStageStrings {
-    static let auto = "自动"
-    static let quality = "画质"
-    static let qualityButtonCapped = "受限"
-    static let qualityButtonPinned = "锁定"
-    static let qualityButtonLocking = "锁定中"
-    static let stageVideoOnDemand = "点播视频"
-    static let stageLiveStream = "直播流"
-    static let stageLiveWithDvrWindow = "带 DVR 窗口的直播"
-    static let goLive = "回到直播"
-    static let live = "直播"
-    static let buffering = "缓冲中"
-    static let play = "播放"
-    static let pause = "暂停"
+    static let auto = "Auto"
+    static let quality = "Quality"
+    static let qualityButtonCapped = "Capped"
+    static let qualityButtonPinned = "Pinned"
+    static let qualityButtonLocking = "Locking"
+    static let stageVideoOnDemand = "Video on demand"
+    static let stageLiveStream = "Live stream"
+    static let stageLiveWithDvrWindow = "Live with DVR"
+    static let goLive = "Go live"
+    static let live = "Live"
+    static let buffering = "Buffering"
+    static let play = "Play"
+    static let pause = "Pause"
 
     static func liveBehind(_ time: String) -> String {
-        "直播 -\(time)"
+        "Live -\(time)"
     }
 
     static func liveEdge(_ time: String) -> String {
-        "直播 · 实时点 \(time)"
+        "Live edge \(time)"
     }
 
     static func bitRateMbps(_ value: Double) -> String {

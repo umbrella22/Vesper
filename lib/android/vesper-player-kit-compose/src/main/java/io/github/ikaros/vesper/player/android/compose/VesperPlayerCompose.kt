@@ -1,28 +1,18 @@
 package io.github.ikaros.vesper.player.android.compose
 
-import android.graphics.Color as AndroidColor
-import android.graphics.drawable.GradientDrawable
-import android.view.ViewOutlineProvider
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.ikaros.vesper.player.android.NativeVideoSurfaceKind
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.PlayerHostUiState
 import io.github.ikaros.vesper.player.android.VesperDecoderBackend
@@ -30,6 +20,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -40,7 +31,7 @@ fun rememberVesperPlayerController(
     initialSource: VesperPlayerSource? = null,
     resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
     decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
-    surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+    surfaceKind: VesperVideoSurfaceKind = VesperVideoSurfaceKind.SurfaceView,
     keepScreenOnDuringPlayback: Boolean = true,
 ): VesperPlayerController {
     val isPreview = LocalInspectionMode.current
@@ -111,53 +102,34 @@ fun rememberVesperPlayerUiState(
 fun VesperPlayerSurface(
     controller: VesperPlayerController,
     modifier: Modifier = Modifier,
-    cornerRadiusDp: androidx.compose.ui.unit.Dp = 20.dp,
     manageControllerLifecycle: Boolean = true,
 ) {
     val surfaceHostRef = remember { arrayOfNulls<ViewGroup>(1) }
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(cornerRadiusDp))
-            .background(Color.Black, RoundedCornerShape(cornerRadiusDp)),
-    ) {
-        if (manageControllerLifecycle) {
-            DisposableEffect(controller) {
-                controller.initialize()
-                onDispose { controller.dispose() }
-            }
-        }
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                object : FrameLayout(context) {}.apply {
-                    surfaceHostRef[0] = this
-                    applyHostShape(cornerRadiusDp.value)
-                    controller.attachSurfaceHost(this)
-                }
-            },
-            update = { host ->
-                surfaceHostRef[0] = host
-                (host as FrameLayout).applyHostShape(cornerRadiusDp.value)
-                controller.attachSurfaceHost(host)
-            },
-        )
+    if (manageControllerLifecycle) {
         DisposableEffect(controller) {
-            onDispose { controller.detachSurfaceHost(surfaceHostRef[0]) }
+            controller.initialize()
+            onDispose { controller.dispose() }
+        }
+    }
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = { context ->
+            object : FrameLayout(context) {}.apply {
+                surfaceHostRef[0] = this
+                controller.attachSurfaceHost(this)
+            }
+        },
+        update = { host ->
+            surfaceHostRef[0] = host
+            controller.attachSurfaceHost(host)
+        },
+    )
+    DisposableEffect(controller) {
+        onDispose {
+            controller.detachSurfaceHost(surfaceHostRef[0])
         }
     }
 }
 
 private fun shouldRefreshProgress(uiState: PlayerHostUiState): Boolean =
     uiState.playbackState == PlaybackStateUi.Playing || uiState.isBuffering
-
-private fun android.widget.FrameLayout.applyHostShape(cornerRadiusDp: Float) {
-    val cornerRadiusPx = cornerRadiusDp * resources.displayMetrics.density
-    background =
-        GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            setColor(AndroidColor.BLACK)
-            cornerRadius = cornerRadiusPx
-        }
-    clipToOutline = cornerRadiusPx > 0f
-    outlineProvider = ViewOutlineProvider.BACKGROUND
-}

@@ -3,18 +3,21 @@
 //! This crate is an internal implementation detail of the desktop adapter. It
 //! exposes audio sink primitives rather than a stable public SDK surface.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     FromSample, OutputCallbackInfo, Sample, SampleFormat, SizedSample, Stream, StreamConfig,
 };
+use rtrb::{Consumer, Producer, RingBuffer};
+
+const AUDIO_RING_CAPACITY_SECONDS: usize = 8;
+const AUDIO_RING_MIN_CAPACITY_SAMPLES: usize = 16_384;
+const STALE_DRAIN_MULTIPLIER: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct AudioOutputConfig {
@@ -43,11 +46,38 @@ pub struct AudioSinkController {
     channels: u16,
 }
 
-#[derive(Debug)]
 struct SharedPlaybackState {
     timeline: Mutex<PlaybackTimelineState>,
+    producer: Mutex<Producer<AudioRingSample>>,
+    generation: AtomicU64,
+    ring_generation: AtomicU32,
+    completed_generation: AtomicU64,
+    queued_samples: AtomicUsize,
+    played_samples: AtomicUsize,
     paused: Arc<AtomicBool>,
     finished: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for SharedPlaybackState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedPlaybackState")
+            .field("generation", &self.generation.load(Ordering::Relaxed))
+            .field(
+                "completed_generation",
+                &self.completed_generation.load(Ordering::Relaxed),
+            )
+            .field(
+                "queued_samples",
+                &self.queued_samples.load(Ordering::Relaxed),
+            )
+            .field(
+                "played_samples",
+                &self.played_samples.load(Ordering::Relaxed),
+            )
+            .field("paused", &self.paused.load(Ordering::Relaxed))
+            .field("finished", &self.finished.load(Ordering::Relaxed))
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -55,32 +85,12 @@ struct PlaybackTimelineState {
     generation: u64,
     media_start: Duration,
     playback_rate: f32,
-    base_sample_offset: usize,
-    samples: Vec<f32>,
-    cursor: usize,
-    played_cursor: usize,
-    generation_complete: bool,
-    scheduled_buffers: VecDeque<ScheduledBuffer>,
 }
 
-#[derive(Debug, Clone)]
-struct ScheduledBuffer {
-    generation: u64,
-    start_sample: usize,
-    end_sample: usize,
-    playback_start_wall: Instant,
-    playback_end_wall: Instant,
-}
-
-enum ReservedOutput {
-    Pending,
-    Ready(ReservedOutputChunk),
-    Finished,
-}
-
-struct ReservedOutputChunk {
-    samples: Vec<f32>,
-    end_reached: bool,
+#[derive(Debug, Clone, Copy)]
+struct AudioRingSample {
+    generation: u32,
+    value: f32,
 }
 
 pub fn detect_default_output() -> AudioOutputDescriptor {
@@ -153,23 +163,25 @@ impl AudioSink {
 
         let paused = Arc::new(AtomicBool::new(start_paused));
         let finished = Arc::new(AtomicBool::new(false));
+        let ring_capacity = audio_ring_capacity_samples(output_config.sample_rate, channels);
+        let (producer, consumer) = RingBuffer::<AudioRingSample>::new(ring_capacity);
         let state = Arc::new(SharedPlaybackState {
             timeline: Mutex::new(PlaybackTimelineState {
                 generation: 0,
                 media_start,
                 playback_rate: sanitize_playback_rate(playback_rate),
-                base_sample_offset: 0,
-                samples: Vec::new(),
-                cursor: 0,
-                played_cursor: 0,
-                generation_complete: false,
-                scheduled_buffers: VecDeque::new(),
             }),
+            producer: Mutex::new(producer),
+            generation: AtomicU64::new(0),
+            ring_generation: AtomicU32::new(0),
+            completed_generation: AtomicU64::new(0),
+            queued_samples: AtomicUsize::new(0),
+            played_samples: AtomicUsize::new(0),
             paused: paused.clone(),
             finished: finished.clone(),
         });
 
-        let stream = build_output_stream(&device, &output_config, state.clone())?;
+        let stream = build_output_stream(&device, &output_config, consumer, state.clone())?;
         if !start_paused {
             stream
                 .play()
@@ -196,8 +208,6 @@ impl AudioSink {
             return;
         }
 
-        self.state
-            .freeze_played_position(self.sample_rate, self.channels);
         self.state.paused.store(true, Ordering::SeqCst);
         let _ = self._stream.pause();
     }
@@ -206,7 +216,6 @@ impl AudioSink {
         if !self.state.paused.load(Ordering::SeqCst) {
             return;
         }
-        self.state.clear_scheduled_buffers();
         self.state.paused.store(false, Ordering::SeqCst);
         let _ = self._stream.play();
     }
@@ -249,7 +258,7 @@ impl AudioSinkController {
             );
         }
 
-        Ok(self.state.append_samples(generation, samples))
+        self.state.append_samples(generation, samples)
     }
 
     pub fn finish_generation(&self, generation: u64) {
@@ -268,6 +277,7 @@ impl AudioSinkController {
 fn build_output_stream(
     device: &cpal::Device,
     output_config: &AudioOutputConfig,
+    mut consumer: Consumer<AudioRingSample>,
     state: Arc<SharedPlaybackState>,
 ) -> Result<Stream> {
     let error_callback = |error| eprintln!("audio output stream error: {error}");
@@ -281,7 +291,7 @@ fn build_output_stream(
                 {
                     let state = state.clone();
                     move |data: &mut [f32], info| {
-                        write_output_data(data, &state, sample_rate, channels, info)
+                        write_output_data(data, &mut consumer, &state, sample_rate, channels, info)
                     }
                 },
                 error_callback,
@@ -294,7 +304,7 @@ fn build_output_stream(
                 {
                     let state = state.clone();
                     move |data: &mut [i16], info| {
-                        write_output_data(data, &state, sample_rate, channels, info)
+                        write_output_data(data, &mut consumer, &state, sample_rate, channels, info)
                     }
                 },
                 error_callback,
@@ -305,7 +315,7 @@ fn build_output_stream(
             .build_output_stream(
                 &output_config.stream_config,
                 move |data: &mut [u16], info| {
-                    write_output_data(data, &state, sample_rate, channels, info)
+                    write_output_data(data, &mut consumer, &state, sample_rate, channels, info)
                 },
                 error_callback,
                 None,
@@ -317,6 +327,7 @@ fn build_output_stream(
 
 fn write_output_data<T>(
     data: &mut [T],
+    consumer: &mut Consumer<AudioRingSample>,
     state: &SharedPlaybackState,
     sample_rate: u32,
     channels: u16,
@@ -329,28 +340,40 @@ fn write_output_data<T>(
         return;
     }
 
-    match state.reserve_output(data.len(), sample_rate, channels, info) {
-        ReservedOutput::Pending => {
-            fill_silence(data);
-        }
-        ReservedOutput::Finished => {
-            fill_silence(data);
-            state.finished.store(true, Ordering::SeqCst);
-        }
-        ReservedOutput::Ready(chunk) => {
-            for (output, sample) in data.iter_mut().zip(chunk.samples.iter()) {
-                *output = T::from_sample(*sample);
-            }
+    let current_generation = state.ring_generation.load(Ordering::Acquire);
+    let max_pops = data.len().saturating_mul(STALE_DRAIN_MULTIPLIER).max(1);
+    let mut written = 0usize;
+    let mut popped = 0usize;
+    let mut played = 0usize;
 
-            for output in &mut data[chunk.samples.len()..] {
-                *output = T::EQUILIBRIUM;
-            }
-
-            if chunk.end_reached {
-                state.finished.store(true, Ordering::SeqCst);
-            }
+    while written < data.len() && popped < max_pops {
+        let Ok(sample) = consumer.pop() else {
+            break;
+        };
+        popped = popped.saturating_add(1);
+        if sample.generation != current_generation {
+            continue;
         }
+
+        data[written] = T::from_sample(sample.value);
+        written = written.saturating_add(1);
+        played = played.saturating_add(1);
     }
+
+    if played > 0 {
+        state.played_samples.fetch_add(played, Ordering::AcqRel);
+        state.finished.store(false, Ordering::SeqCst);
+    }
+
+    for output in &mut data[written..] {
+        *output = T::EQUILIBRIUM;
+    }
+
+    if state.is_current_generation_complete_and_drained() {
+        state.finished.store(true, Ordering::SeqCst);
+    }
+
+    let _ = (sample_rate, channels, info);
 }
 
 impl SharedPlaybackState {
@@ -360,13 +383,13 @@ impl SharedPlaybackState {
             timeline.generation = timeline.generation.saturating_add(1);
             timeline.media_start = media_start;
             timeline.playback_rate = sanitize_playback_rate(playback_rate);
-            timeline.base_sample_offset = 0;
-            timeline.samples.clear();
-            timeline.cursor = 0;
-            timeline.played_cursor = 0;
-            timeline.generation_complete = false;
-            timeline.scheduled_buffers.clear();
             generation = timeline.generation;
+            self.generation.store(generation, Ordering::Release);
+            self.ring_generation
+                .store(ring_generation(generation), Ordering::Release);
+            self.completed_generation.store(0, Ordering::Release);
+            self.queued_samples.store(0, Ordering::Release);
+            self.played_samples.store(0, Ordering::Release);
         }
 
         let _ = channels;
@@ -374,26 +397,66 @@ impl SharedPlaybackState {
         generation
     }
 
-    fn append_samples(&self, generation: u64, samples: Vec<f32>) -> bool {
-        if let Ok(mut timeline) = self.timeline.lock() {
-            if timeline.generation != generation {
-                return false;
-            }
-            timeline.samples.extend(samples);
-            self.finished.store(false, Ordering::SeqCst);
-            true
-        } else {
-            false
+    fn append_samples(&self, generation: u64, samples: Vec<f32>) -> Result<bool> {
+        let Ok(timeline) = self.timeline.lock() else {
+            anyhow::bail!("audio playback timeline lock is poisoned");
+        };
+        if timeline.generation != generation {
+            return Ok(false);
         }
+        let ring_generation = ring_generation(generation);
+        drop(timeline);
+
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Ok(false);
+        }
+
+        let mut producer = self
+            .producer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("audio output ring producer lock is poisoned"))?;
+        let available_slots = producer.slots();
+        if available_slots < samples.len() {
+            anyhow::bail!(
+                "audio output ring is full: {} samples requested, {} slots available",
+                samples.len(),
+                available_slots
+            );
+        }
+
+        let sample_count = samples.len();
+        let chunk = producer
+            .write_chunk_uninit(sample_count)
+            .map_err(|error| anyhow::anyhow!("audio output ring write failed: {error}"))?;
+        let written = chunk.fill_from_iter(samples.into_iter().map(|value| AudioRingSample {
+            generation: ring_generation,
+            value,
+        }));
+        if written != sample_count {
+            anyhow::bail!(
+                "audio output ring accepted {} of {} samples",
+                written,
+                sample_count
+            );
+        }
+
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Ok(false);
+        }
+
+        self.queued_samples
+            .fetch_add(sample_count, Ordering::AcqRel);
+        self.finished.store(false, Ordering::SeqCst);
+        Ok(true)
     }
 
     fn finish_generation(&self, generation: u64) {
-        if let Ok(mut timeline) = self.timeline.lock()
+        if let Ok(timeline) = self.timeline.lock()
             && timeline.generation == generation
         {
-            timeline.generation_complete = true;
-            let end_sample = timeline.end_sample_offset();
-            if timeline.cursor >= end_sample && timeline.played_cursor >= end_sample {
+            self.completed_generation
+                .store(generation, Ordering::Release);
+            if self.is_current_generation_complete_and_drained() {
                 self.finished.store(true, Ordering::SeqCst);
             }
         }
@@ -412,7 +475,11 @@ impl SharedPlaybackState {
                 return None;
             }
 
-            Some(timeline.end_sample_offset().saturating_sub(timeline.cursor))
+            Some(
+                self.queued_samples
+                    .load(Ordering::Acquire)
+                    .saturating_sub(self.played_samples.load(Ordering::Acquire)),
+            )
         })
     }
 
@@ -425,140 +492,24 @@ impl SharedPlaybackState {
 
     fn playback_position(&self, sample_rate: u32, channels: u16) -> Duration {
         let channels = usize::from(channels.max(1));
-        let Ok(mut timeline) = self.timeline.lock() else {
+        let Ok(timeline) = self.timeline.lock() else {
             return Duration::ZERO;
         };
-        let end_sample = timeline.end_sample_offset();
-        let cursor = timeline.cursor.min(end_sample);
-        let mut played_cursor = timeline.played_cursor.min(cursor);
-
-        if !self.paused.load(Ordering::SeqCst) {
-            let generation = timeline.generation;
-            while timeline
-                .scheduled_buffers
-                .front()
-                .map(|buffer| buffer.generation != generation)
-                .unwrap_or(false)
-            {
-                timeline.scheduled_buffers.pop_front();
-            }
-
-            let now = Instant::now();
-            while let Some(front) = timeline.scheduled_buffers.front() {
-                if now < front.playback_end_wall {
-                    break;
-                }
-
-                played_cursor = front.end_sample.min(cursor);
-                timeline.scheduled_buffers.pop_front();
-            }
-
-            if let Some(front) = timeline.scheduled_buffers.front() {
-                if now > front.playback_start_wall {
-                    let elapsed = now.saturating_duration_since(front.playback_start_wall);
-                    let elapsed_frames =
-                        (elapsed.as_secs_f64() * f64::from(sample_rate)).floor() as usize;
-                    let buffer_frames =
-                        (front.end_sample.saturating_sub(front.start_sample)) / channels.max(1);
-                    let played_frames = elapsed_frames.min(buffer_frames);
-                    let interpolated = front
-                        .start_sample
-                        .saturating_add(played_frames.saturating_mul(channels.max(1)));
-                    played_cursor = interpolated.min(front.end_sample).min(cursor);
-                }
-            } else if timeline.generation_complete && cursor >= end_sample {
-                played_cursor = cursor;
-            }
-        }
-
-        timeline.played_cursor = played_cursor;
-        trim_consumed_prefix(&mut timeline, channels, sample_rate);
         media_time_for_sample_offset(
             timeline.media_start,
             timeline.playback_rate,
             sample_rate,
             channels,
-            played_cursor,
+            self.played_samples.load(Ordering::Acquire),
         )
     }
 
-    fn reserve_output(
-        &self,
-        requested_samples: usize,
-        sample_rate: u32,
-        channels: u16,
-        info: &OutputCallbackInfo,
-    ) -> ReservedOutput {
-        let channels = usize::from(channels.max(1));
-        let Ok(mut timeline) = self.timeline.lock() else {
-            return ReservedOutput::Pending;
-        };
-        let end_sample = timeline.end_sample_offset();
-        let start_sample = timeline.cursor.min(end_sample);
-        let available_samples = end_sample
-            .saturating_sub(start_sample)
-            .min(requested_samples);
-
-        if available_samples == 0 {
-            return if timeline.generation_complete {
-                ReservedOutput::Finished
-            } else {
-                ReservedOutput::Pending
-            };
-        }
-
-        let chunk_end = start_sample.saturating_add(available_samples);
-        let local_start = start_sample.saturating_sub(timeline.base_sample_offset);
-        let local_end = chunk_end.saturating_sub(timeline.base_sample_offset);
-        let copied_samples = timeline.samples[local_start..local_end].to_vec();
-        let generation = timeline.generation;
-        timeline.cursor = chunk_end;
-
-        let buffer_frames = available_samples / channels.max(1);
-        if buffer_frames > 0 {
-            let timestamp = info.timestamp();
-            let playback_delay = timestamp
-                .playback
-                .duration_since(&timestamp.callback)
-                .unwrap_or(Duration::ZERO);
-            let playback_start_wall = Instant::now() + playback_delay;
-            let playback_end_wall =
-                playback_start_wall + duration_from_frames(buffer_frames as u64, sample_rate);
-            timeline.scheduled_buffers.push_back(ScheduledBuffer {
-                generation,
-                start_sample,
-                end_sample: chunk_end,
-                playback_start_wall,
-                playback_end_wall,
-            });
-        }
-
-        ReservedOutput::Ready(ReservedOutputChunk {
-            samples: copied_samples,
-            end_reached: timeline.generation_complete && chunk_end >= end_sample,
-        })
-    }
-
-    fn freeze_played_position(&self, sample_rate: u32, channels: u16) {
-        let played_position = self.playback_position(sample_rate, channels);
-        if let Ok(mut timeline) = self.timeline.lock() {
-            let sample_offset = sample_offset_for_media_time(
-                timeline.media_start,
-                timeline.playback_rate,
-                sample_rate,
-                usize::from(channels.max(1)),
-                played_position,
-            );
-            timeline.played_cursor = sample_offset.min(timeline.end_sample_offset());
-            timeline.scheduled_buffers.clear();
-            trim_consumed_prefix(&mut timeline, usize::from(channels.max(1)), sample_rate);
-        }
-    }
-
-    fn clear_scheduled_buffers(&self) {
-        if let Ok(mut timeline) = self.timeline.lock() {
-            timeline.scheduled_buffers.clear();
-        }
+    fn is_current_generation_complete_and_drained(&self) -> bool {
+        let generation = self.generation.load(Ordering::Acquire);
+        generation != 0
+            && self.completed_generation.load(Ordering::Acquire) == generation
+            && self.played_samples.load(Ordering::Acquire)
+                >= self.queued_samples.load(Ordering::Acquire)
     }
 }
 
@@ -579,6 +530,17 @@ fn duration_from_frames(frames: u64, sample_rate: u32) -> Duration {
     Duration::from_secs_f64((frames as f64) / f64::from(sample_rate))
 }
 
+fn audio_ring_capacity_samples(sample_rate: u32, channels: usize) -> usize {
+    (sample_rate as usize)
+        .saturating_mul(channels.max(1))
+        .saturating_mul(AUDIO_RING_CAPACITY_SECONDS)
+        .max(AUDIO_RING_MIN_CAPACITY_SAMPLES)
+}
+
+fn ring_generation(generation: u64) -> u32 {
+    generation as u32
+}
+
 fn media_time_for_sample_offset(
     media_start: Duration,
     playback_rate: f32,
@@ -594,50 +556,10 @@ fn media_time_for_sample_offset(
         )
 }
 
-fn sample_offset_for_media_time(
-    media_start: Duration,
-    playback_rate: f32,
-    sample_rate: u32,
-    channels: usize,
-    position: Duration,
-) -> usize {
-    if position <= media_start {
-        return 0;
-    }
-
-    let relative = position.saturating_sub(media_start);
-    let frame_offset = (relative.as_secs_f64() / f64::from(playback_rate.max(f32::EPSILON))
-        * f64::from(sample_rate))
-    .floor() as usize;
-    frame_offset.saturating_mul(channels.max(1))
-}
-
 fn sanitize_playback_rate(playback_rate: f32) -> f32 {
     if playback_rate.is_finite() && playback_rate > 0.0 {
         playback_rate
     } else {
         1.0
     }
-}
-
-impl PlaybackTimelineState {
-    fn end_sample_offset(&self) -> usize {
-        self.base_sample_offset.saturating_add(self.samples.len())
-    }
-}
-
-fn trim_consumed_prefix(timeline: &mut PlaybackTimelineState, channels: usize, sample_rate: u32) {
-    let trim_frames_threshold = sample_rate.max(1) as usize;
-    let trim_samples_threshold = trim_frames_threshold.saturating_mul(channels.max(1));
-    let consumed_samples = timeline
-        .played_cursor
-        .saturating_sub(timeline.base_sample_offset);
-    let trim_samples = consumed_samples - (consumed_samples % channels.max(1));
-
-    if trim_samples < trim_samples_threshold {
-        return;
-    }
-
-    timeline.samples.drain(..trim_samples);
-    timeline.base_sample_offset = timeline.base_sample_offset.saturating_add(trim_samples);
 }

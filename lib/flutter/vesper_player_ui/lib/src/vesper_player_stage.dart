@@ -230,7 +230,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                   if (snapshot.isBuffering) ...<Widget>[
                     const SizedBox(width: 8),
                     const VesperStageChip(
-                      label: '缓冲中',
+                      label: 'Buffering',
                       accent: Color(0xFFFFB454),
                       compact: true,
                     ),
@@ -260,7 +260,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   Widget _defaultMenuAction() {
     return VesperStageIconButton(
       icon: Icons.more_vert_rounded,
-      label: '更多',
+      label: 'More',
       size: 38,
       iconSize: 24,
       containerAlpha: 0,
@@ -279,7 +279,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       children: <Widget>[
         VesperStageIconButton(
           icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          label: isPlaying ? '暂停' : '播放',
+          label: isPlaying ? 'Pause' : 'Play',
           size: 38,
           iconSize: 24,
           containerAlpha: 0,
@@ -317,7 +317,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         const SizedBox(width: 6),
         VesperStageIconButton(
           icon: Icons.fullscreen_rounded,
-          label: '全屏',
+          label: 'Fullscreen',
           size: 38,
           iconSize: 24,
           containerAlpha: 0,
@@ -366,7 +366,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           children: <Widget>[
             VesperStageIconButton(
               icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              label: isPlaying ? '暂停' : '播放',
+              label: isPlaying ? 'Pause' : 'Play',
               size: 38,
               iconSize: 22,
               containerAlpha: 0,
@@ -397,7 +397,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             const SizedBox(width: 6),
             VesperStageIconButton(
               icon: Icons.fullscreen_exit_rounded,
-              label: '退出全屏',
+              label: 'Exit fullscreen',
               size: 34,
               iconSize: 19,
               containerAlpha: 0,

@@ -22,7 +22,7 @@ authors = ["umbrella22"]
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.94"
-version = "0.1.0"
+version = "0.2.0"
 
 [workspace.dependencies]
 anyhow = "1.0.102"
@@ -30,6 +30,7 @@ cpal = "0.17.3"
 ffmpeg-next = { version = "8.1.0", default-features = false }
 libloading = "0.8.9"
 pollster = "0.4.0"
+rtrb = "0.3.4"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.18"

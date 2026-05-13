@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -41,6 +41,16 @@ impl DownloadTaskId {
     pub fn get(self) -> u64 {
         self.0
     }
+}
+
+fn next_non_zero_task_id(current: u64) -> PlayerRuntimeResult<u64> {
+    current.checked_add(1).ok_or_else(|| {
+        PlayerRuntimeError::with_category(
+            PlayerRuntimeErrorCode::InvalidState,
+            PlayerRuntimeErrorCategory::Playback,
+            "download task id space is exhausted",
+        )
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,7 +284,16 @@ impl DownloadProgressSnapshot {
     pub fn completion_ratio(&self) -> Option<f32> {
         self.total_bytes
             .filter(|total_bytes| *total_bytes > 0)
-            .map(|total_bytes| self.received_bytes as f32 / total_bytes as f32)
+            .map(|total_bytes| (self.received_bytes as f32 / total_bytes as f32).min(1.0))
+    }
+
+    fn clamp_to_totals(&mut self) {
+        if let Some(total_bytes) = self.total_bytes {
+            self.received_bytes = self.received_bytes.min(total_bytes);
+        }
+        if let Some(total_segments) = self.total_segments {
+            self.received_segments = self.received_segments.min(total_segments);
+        }
     }
 }
 
@@ -341,6 +360,10 @@ impl DownloadTaskSnapshot {
             progress: self.progress.clone(),
         }
     }
+
+    fn set_completed_path(&mut self, completed_path: Option<PathBuf>) {
+        Arc::make_mut(&mut self.asset_index).completed_path = completed_path;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,7 +374,7 @@ pub struct DownloadTaskSnapshot {
     pub profile: DownloadProfile,
     pub status: DownloadTaskStatus,
     pub progress: DownloadProgressSnapshot,
-    pub asset_index: DownloadAssetIndex,
+    pub asset_index: Arc<DownloadAssetIndex>,
     pub created_at: Instant,
     pub updated_at: Instant,
     pub error_summary: Option<DownloadErrorSummary>,
@@ -568,6 +591,7 @@ pub struct DownloadManager<S, E> {
     executor: E,
     next_task_id: u64,
     events: Vec<DownloadEvent>,
+    pending_preparation_tasks: HashSet<DownloadTaskId>,
 }
 
 impl<S, E> DownloadManager<S, E>
@@ -582,6 +606,7 @@ where
             executor,
             next_task_id: 1,
             events: Vec::new(),
+            pending_preparation_tasks: HashSet::new(),
         }
     }
 
@@ -632,7 +657,7 @@ where
         now: Instant,
     ) -> PlayerRuntimeResult<DownloadTaskId> {
         let task_id = DownloadTaskId(self.next_task_id);
-        self.next_task_id += 1;
+        self.next_task_id = next_non_zero_task_id(self.next_task_id)?;
 
         asset_index.content_format = source.content_format;
         asset_index.ensure_default_streams();
@@ -644,7 +669,7 @@ where
             profile,
             status: DownloadTaskStatus::Queued,
             progress: DownloadProgressSnapshot::from_index(&asset_index),
-            asset_index,
+            asset_index: Arc::new(asset_index),
             created_at: now,
             updated_at: now,
             error_summary: None,
@@ -674,7 +699,8 @@ where
                 continue;
             }
 
-            task.status = match task.status {
+            let restored_status = task.status;
+            task.status = match restored_status {
                 DownloadTaskStatus::Preparing | DownloadTaskStatus::Downloading => {
                     DownloadTaskStatus::Paused
                 }
@@ -688,10 +714,14 @@ where
                 .progress
                 .total_segments
                 .or_else(|| task.asset_index.total_segment_count());
-            task.asset_index.ensure_default_streams();
+            task.progress.clamp_to_totals();
+            Arc::make_mut(&mut task.asset_index).ensure_default_streams();
             task.updated_at = now;
 
             max_task_id = max_task_id.max(task.task_id.get());
+            if restored_status == DownloadTaskStatus::Preparing {
+                self.pending_preparation_tasks.insert(task.task_id);
+            }
             self.store.save_task(task.clone())?;
             self.emit_event(DownloadEvent::StateChanged(task.state_patch()));
             restored.push(task);
@@ -718,6 +748,7 @@ where
             task.status = DownloadTaskStatus::Preparing;
             task.error_summary = None;
         })?;
+        self.pending_preparation_tasks.insert(task_id);
 
         let Some(preparing) = preparing else {
             return Ok(None);
@@ -777,11 +808,12 @@ where
         replaced.source = source;
         replaced.profile = profile;
         replaced.progress = DownloadProgressSnapshot::from_index(&asset_index);
-        replaced.asset_index = asset_index;
+        replaced.asset_index = Arc::new(asset_index);
         replaced.status = DownloadTaskStatus::Preparing;
         replaced.error_summary = None;
         replaced.updated_at = now;
 
+        self.pending_preparation_tasks.insert(task_id);
         self.store.save_task(replaced.clone())?;
         self.emit_event(DownloadEvent::AssetIndexUpdated(replaced.clone()));
         self.emit_event(DownloadEvent::StateChanged(replaced.state_patch()));
@@ -805,6 +837,9 @@ where
         }
 
         self.executor.pause(task_id)?;
+        if snapshot.status == DownloadTaskStatus::Preparing {
+            self.pending_preparation_tasks.insert(task_id);
+        }
         self.update_task(task_id, now, |task| {
             task.status = DownloadTaskStatus::Paused;
         })
@@ -823,11 +858,15 @@ where
             return Ok(Some(snapshot));
         }
 
-        if task_needs_preparation(&snapshot) {
+        let should_prepare =
+            task_needs_preparation(&snapshot) || self.pending_preparation_tasks.remove(&task_id);
+
+        if should_prepare {
             let preparing = self.update_task(task_id, now, |task| {
                 task.status = DownloadTaskStatus::Preparing;
                 task.error_summary = None;
             })?;
+            self.pending_preparation_tasks.insert(task_id);
 
             let Some(preparing) = preparing else {
                 return Ok(None);
@@ -861,6 +900,7 @@ where
 
         snapshot.progress.received_bytes = received_bytes;
         snapshot.progress.received_segments = received_segments;
+        snapshot.progress.clamp_to_totals();
         snapshot.updated_at = now;
         self.store.save_task(snapshot.clone())?;
         self.emit_event(DownloadEvent::ProgressUpdated(snapshot.progress_patch()));
@@ -878,9 +918,10 @@ where
         };
 
         let mut finalized = existing.clone();
-        finalized.asset_index.completed_path = completed_path
+        let finalized_completed_path = completed_path
             .clone()
             .or_else(|| finalized.asset_index.completed_path.clone());
+        finalized.set_completed_path(finalized_completed_path);
         if let Some(total_bytes) = finalized.progress.total_bytes {
             finalized.progress.received_bytes = total_bytes;
         }
@@ -902,9 +943,10 @@ where
         self.update_task(task_id, now, |task| {
             task.status = DownloadTaskStatus::Completed;
             task.error_summary = None;
-            task.asset_index.completed_path = processed_output_path
+            let completed_path = processed_output_path
                 .clone()
                 .or_else(|| task.asset_index.completed_path.clone());
+            task.set_completed_path(completed_path);
             if let Some(total_bytes) = task.progress.total_bytes {
                 task.progress.received_bytes = total_bytes;
             }
@@ -984,6 +1026,7 @@ where
         }
 
         let error_summary = DownloadErrorSummary::from(error);
+        self.pending_preparation_tasks.remove(&task_id);
         self.update_task(task_id, now, |task| {
             task.status = DownloadTaskStatus::Failed;
             task.error_summary = Some(error_summary.clone());
@@ -1004,6 +1047,7 @@ where
         }
 
         self.executor.remove(task_id)?;
+        self.pending_preparation_tasks.remove(&task_id);
         self.update_task(task_id, now, |task| {
             task.status = DownloadTaskStatus::Removed;
         })
@@ -1039,7 +1083,7 @@ where
         asset_index.content_format = snapshot.source.content_format;
         asset_index.ensure_default_streams();
         snapshot.progress = DownloadProgressSnapshot::from_index(&asset_index);
-        snapshot.asset_index = asset_index;
+        snapshot.asset_index = Arc::new(asset_index);
         snapshot.updated_at = now;
         self.store.save_task(snapshot.clone())?;
         self.emit_event(DownloadEvent::AssetIndexUpdated(snapshot.clone()));
@@ -1073,6 +1117,7 @@ where
             task.status = DownloadTaskStatus::Downloading;
             task.error_summary = None;
         })?;
+        self.pending_preparation_tasks.remove(&task_id);
 
         let Some(downloading) = downloading else {
             return Ok(None);
@@ -2657,6 +2702,102 @@ mod tests {
     }
 
     #[test]
+    fn manager_clamps_misreported_progress_to_known_totals() {
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let mut manager = DownloadManager::new(
+            config,
+            InMemoryDownloadStore::default(),
+            InMemoryDownloadExecutor::default(),
+        );
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                segmented_asset_index(2048),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let progress = manager
+            .update_progress(task_id, 999_999, 99, now)
+            .expect("progress update should succeed")
+            .expect("task should exist");
+
+        assert_eq!(progress.progress.received_bytes, 2048);
+        assert_eq!(progress.progress.received_segments, 2);
+        assert_eq!(progress.progress.completion_ratio(), Some(1.0));
+    }
+
+    #[test]
+    fn manager_reports_task_id_exhaustion_instead_of_wrapping() {
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let mut manager = DownloadManager::new(
+            config,
+            InMemoryDownloadStore::default(),
+            InMemoryDownloadExecutor::default(),
+        );
+        manager.next_task_id = u64::MAX;
+
+        let error = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                asset_index(2048),
+                Instant::now(),
+            )
+            .expect_err("task id exhaustion should be reported");
+
+        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidState);
+        assert!(error.message().contains("task id space is exhausted"));
+    }
+
+    #[test]
+    fn manager_snapshot_reuses_asset_index_storage() {
+        let config = DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let mut manager = DownloadManager::new(
+            config,
+            InMemoryDownloadStore::default(),
+            InMemoryDownloadExecutor::default(),
+        );
+        let now = Instant::now();
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                multi_stream_hls_asset_index(2048),
+                now,
+            )
+            .expect("create task should succeed");
+
+        let task = manager.task(task_id).expect("task should exist");
+        let snapshot = manager.snapshot();
+
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert!(Arc::ptr_eq(
+            &task.asset_index,
+            &snapshot.tasks[0].asset_index
+        ));
+    }
+
+    #[test]
     fn manager_waits_for_pending_prepare_and_starts_after_completion() {
         let config = DownloadManagerConfig {
             auto_start: true,
@@ -2749,6 +2890,53 @@ mod tests {
 
         assert_eq!(downloading.status, DownloadTaskStatus::Downloading);
         assert_eq!(manager.executor().started, vec![task_id]);
+    }
+
+    #[test]
+    fn manager_restores_preparing_tasks_as_requiring_prepare_on_resume() {
+        let config = || DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            ..DownloadManagerConfig::default()
+        };
+        let now = Instant::now();
+        let mut manager = DownloadManager::new(
+            config(),
+            InMemoryDownloadStore::default(),
+            InMemoryDownloadExecutor::default(),
+        );
+
+        let task_id = manager
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                segmented_asset_index(2048),
+                now,
+            )
+            .expect("create task should succeed");
+        let mut persisted = manager.task(task_id).expect("task should exist");
+        persisted.status = DownloadTaskStatus::Preparing;
+
+        let mut restored_manager = DownloadManager::new(
+            config(),
+            InMemoryDownloadStore::default(),
+            InMemoryDownloadExecutor::default(),
+        );
+        let restored = restored_manager
+            .restore_tasks(vec![persisted], now)
+            .expect("restore should succeed");
+        assert_eq!(restored[0].status, DownloadTaskStatus::Paused);
+
+        let resumed = restored_manager
+            .resume_task(task_id, now)
+            .expect("resume should succeed")
+            .expect("task should exist");
+
+        assert_eq!(resumed.status, DownloadTaskStatus::Downloading);
+        assert_eq!(restored_manager.executor().prepared(), &[task_id]);
+        assert_eq!(restored_manager.executor().started(), &[task_id]);
+        assert!(restored_manager.executor().resumed().is_empty());
     }
 
     #[test]

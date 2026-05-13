@@ -59,6 +59,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private let benchmarkRecorder: VesperBenchmarkRecorder
     private var fixedTrackConvergenceState: FixedTrackConvergenceState?
     private var fixedTrackIssueActive = false
+    private var audioSessionActive = false
 
     var uiState: PlayerHostUiState {
         publishedUiState
@@ -209,6 +210,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         hasAppliedDefaultTrackPreferences = false
         pendingAutoPlay = false
         tearDownActivePlayback()
+        deactivateAudioSessionIfNeeded()
         benchmarkRecorder.dispose()
     }
 
@@ -683,6 +685,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         initialize()
     }
 
+    func setAudioSessionInterrupted(_ interrupted: Bool) {
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: $0.subtitle,
+                sourceLabel: $0.sourceLabel,
+                playbackState: $0.playbackState,
+                playbackRate: $0.playbackRate,
+                isBuffering: $0.isBuffering,
+                isInterrupted: interrupted,
+                timeline: $0.timeline
+            )
+        }
+    }
+
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent] {
         benchmarkRecorder.drainEvents()
     }
@@ -1101,7 +1118,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 playbackState: playbackState,
                 playbackRate: $0.playbackRate,
                 isBuffering: buffering,
-                isInterrupted: false,
+                isInterrupted: $0.isInterrupted,
                 timeline: currentTimelineState(positionMs: positionMs)
             )
         }
@@ -2306,14 +2323,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func configureAudioSessionIfNeeded() {
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .moviePlayback, options: [])
-            try session.setActive(true)
-            iosHostLog("audio session configured")
-        } catch {
-            iosHostLog("audio session configuration failed: \(error.localizedDescription)")
+        guard !audioSessionActive else {
+            return
         }
+        if VesperSharedAudioSession.activate(owner: self) {
+            audioSessionActive = true
+            iosHostLog("audio session configured")
+        }
+    }
+
+    private func deactivateAudioSessionIfNeeded() {
+        guard audioSessionActive else {
+            return
+        }
+        VesperSharedAudioSession.deactivate(owner: self)
+        audioSessionActive = false
     }
 
     private func updateState(_ transform: (PlayerHostUiState) -> PlayerHostUiState) {

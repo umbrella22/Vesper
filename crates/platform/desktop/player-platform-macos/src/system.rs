@@ -2,6 +2,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_float, c_uchar, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -687,83 +688,98 @@ struct MacosAvFoundationCallbacks {
 
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_snapshot(context: *mut c_void, snapshot: MacosAvFoundationSnapshotRepr) {
-    let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() }) else {
-        return;
-    };
-    context
-        .controller
-        .apply_snapshot(MacosAvFoundationSnapshot {
-            item_status: match snapshot.item_status {
-                1 => MacosPlayerItemStatus::ReadyToPlay,
-                2 => MacosPlayerItemStatus::Failed,
-                _ => MacosPlayerItemStatus::Unknown,
-            },
-            time_control_status: match snapshot.time_control_status {
-                1 => MacosTimeControlStatus::WaitingToPlay,
-                2 => MacosTimeControlStatus::Playing,
-                _ => MacosTimeControlStatus::Paused,
-            },
-            playback_rate: snapshot.playback_rate,
-            position: Duration::from_millis(snapshot.position_ms),
-            duration: (snapshot.has_duration != 0)
-                .then_some(Duration::from_millis(snapshot.duration_ms)),
-            reached_end: snapshot.reached_end != 0,
-            error_message: {
-                let message = c_string_buffer_to_string(&snapshot.error_message);
-                if message.is_empty() {
-                    None
-                } else {
-                    Some(message)
-                }
-            },
-        });
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
+        else {
+            return;
+        };
+        context
+            .controller
+            .apply_snapshot(MacosAvFoundationSnapshot {
+                item_status: match snapshot.item_status {
+                    1 => MacosPlayerItemStatus::ReadyToPlay,
+                    2 => MacosPlayerItemStatus::Failed,
+                    _ => MacosPlayerItemStatus::Unknown,
+                },
+                time_control_status: match snapshot.time_control_status {
+                    1 => MacosTimeControlStatus::WaitingToPlay,
+                    2 => MacosTimeControlStatus::Playing,
+                    _ => MacosTimeControlStatus::Paused,
+                },
+                playback_rate: snapshot.playback_rate,
+                position: Duration::from_millis(snapshot.position_ms),
+                duration: (snapshot.has_duration != 0)
+                    .then_some(Duration::from_millis(snapshot.duration_ms)),
+                reached_end: snapshot.reached_end != 0,
+                error_message: {
+                    let message = c_string_buffer_to_string(&snapshot.error_message);
+                    if message.is_empty() {
+                        None
+                    } else {
+                        Some(message)
+                    }
+                },
+            });
+    }));
 }
 
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_seek_completed(context: *mut c_void, position_ms: u64) {
-    let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() }) else {
-        return;
-    };
-    context
-        .controller
-        .report_seek_completed(Duration::from_millis(position_ms));
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
+        else {
+            return;
+        };
+        context
+            .controller
+            .report_seek_completed(Duration::from_millis(position_ms));
+    }));
 }
 
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_first_frame_ready(context: *mut c_void, position_ms: u64) {
-    let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() }) else {
-        return;
-    };
-    context
-        .controller
-        .report_first_frame_ready(Duration::from_millis(position_ms));
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
+        else {
+            return;
+        };
+        context
+            .controller
+            .report_first_frame_ready(Duration::from_millis(position_ms));
+    }));
 }
 
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_interruption_changed(context: *mut c_void, interrupted: c_uchar) {
-    let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() }) else {
-        return;
-    };
-    context
-        .controller
-        .report_interruption_changed(interrupted != 0);
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
+        else {
+            return;
+        };
+        context
+            .controller
+            .report_interruption_changed(interrupted != 0);
+    }));
 }
 
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_error(context: *mut c_void, message: *const c_char) {
-    let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() }) else {
-        return;
-    };
-    let message = if message.is_null() {
-        "AVFoundation reported an unknown error".to_owned()
-    } else {
-        unsafe { CStr::from_ptr(message) }
-            .to_string_lossy()
-            .into_owned()
-    };
-    context
-        .controller
-        .report_error(PlayerRuntimeErrorCode::BackendFailure, message);
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
+        else {
+            return;
+        };
+        let message = if message.is_null() {
+            "AVFoundation reported an unknown error".to_owned()
+        } else {
+            unsafe { CStr::from_ptr(message) }
+                .to_string_lossy()
+                .into_owned()
+        };
+        context
+            .controller
+            .report_error(PlayerRuntimeErrorCode::BackendFailure, message);
+    }));
 }
 
 #[cfg(target_os = "macos")]

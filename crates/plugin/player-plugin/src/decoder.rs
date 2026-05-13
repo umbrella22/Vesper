@@ -147,9 +147,31 @@ pub enum DecoderBitstreamFormat {
 
 /// Borrowed native device/context pointer passed from host to decoder plugin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DecoderNativeDeviceContext {
-    pub kind: DecoderNativeDeviceContextKind,
-    pub handle: usize,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DecoderNativeDeviceContext {
+    #[serde(rename = "d3d11_device")]
+    D3D11Device {
+        device_ptr: usize,
+    },
+    Unknown {
+        name: String,
+    },
+}
+
+impl DecoderNativeDeviceContext {
+    pub fn kind(&self) -> DecoderNativeDeviceContextKind {
+        match self {
+            Self::D3D11Device { .. } => DecoderNativeDeviceContextKind::D3D11Device,
+            Self::Unknown { name } => DecoderNativeDeviceContextKind::Unknown(name.clone()),
+        }
+    }
+
+    pub fn d3d11_device_ptr(&self) -> Option<usize> {
+        match self {
+            Self::D3D11Device { device_ptr } => Some(*device_ptr),
+            Self::Unknown { .. } => None,
+        }
+    }
 }
 
 /// Native-frame decoder requirements advertised through ABI v2.

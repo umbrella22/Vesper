@@ -69,6 +69,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
 
   late final WidgetsBindingObserver _bindingObserver = _ViewportBindingObserver(
     onMetricsChanged: _scheduleViewportReport,
+    onLifecycleChanged: _handleLifecycleChanged,
   );
 
   @override
@@ -90,25 +91,25 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     return widget.visible
         ? switch (defaultTargetPlatform) {
             TargetPlatform.android => AndroidView(
-              key: ValueKey<String>(
-                'vesper_player_android_${widget.controller.playerId}',
+                key: ValueKey<String>(
+                  'vesper_player_android_${widget.controller.playerId}',
+                ),
+                viewType: _platformViewType,
+                creationParams: <String, Object?>{
+                  'playerId': widget.controller.playerId,
+                },
+                creationParamsCodec: const StandardMessageCodec(),
               ),
-              viewType: _platformViewType,
-              creationParams: <String, Object?>{
-                'playerId': widget.controller.playerId,
-              },
-              creationParamsCodec: const StandardMessageCodec(),
-            ),
             TargetPlatform.iOS => UiKitView(
-              key: ValueKey<String>(
-                'vesper_player_ios_${widget.controller.playerId}',
+                key: ValueKey<String>(
+                  'vesper_player_ios_${widget.controller.playerId}',
+                ),
+                viewType: _platformViewType,
+                creationParams: <String, Object?>{
+                  'playerId': widget.controller.playerId,
+                },
+                creationParamsCodec: const StandardMessageCodec(),
               ),
-              viewType: _platformViewType,
-              creationParams: <String, Object?>{
-                'playerId': widget.controller.playerId,
-              },
-              creationParamsCodec: const StandardMessageCodec(),
-            ),
             _ => const ColoredBox(color: Color(0x00000000)),
           }
         : const ColoredBox(color: Color(0x00000000));
@@ -194,6 +195,20 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     unawaited(widget.controller.clearViewport());
   }
 
+  void _handleLifecycleChanged(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _scheduleViewportReport();
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _clearViewportIfNeeded();
+        break;
+    }
+  }
+
   bool _sameViewport(
     VesperPlayerViewport? previous,
     VesperPlayerViewport next,
@@ -209,13 +224,22 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
 }
 
 final class _ViewportBindingObserver with WidgetsBindingObserver {
-  _ViewportBindingObserver({required this.onMetricsChanged});
+  _ViewportBindingObserver({
+    required this.onMetricsChanged,
+    required this.onLifecycleChanged,
+  });
 
   final VoidCallback onMetricsChanged;
+  final ValueChanged<AppLifecycleState> onLifecycleChanged;
 
   @override
   void didChangeMetrics() {
     onMetricsChanged();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    onLifecycleChanged(state);
   }
 }
 

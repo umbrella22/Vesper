@@ -12,9 +12,23 @@ public final class VesperSystemPlaybackCoordinator {
     private var artworkTask: Task<Void, Never>?
     private var artworkImage: UIImage?
     private var artworkUri: String?
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+    private var wasPlayingBeforeInterruption = false
+    private var audioSessionActive = false
 
     public init(controller: VesperPlayerController) {
         self.controller = controller
+        registerAudioSessionObservers()
+    }
+
+    deinit {
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        if let routeChangeObserver {
+            NotificationCenter.default.removeObserver(routeChangeObserver)
+        }
     }
 
     public func configure(_ configuration: VesperSystemPlaybackConfiguration) {
@@ -61,21 +75,86 @@ public final class VesperSystemPlaybackCoordinator {
         artworkUri = nil
         unregisterRemoteCommands()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        deactivatePlaybackAudioSessionIfNeeded()
     }
 
     private func activatePlaybackAudioSession() {
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(
-                .playback,
-                mode: .moviePlayback,
-                policy: .longFormVideo,
-                options: []
-            )
-            try session.setActive(true)
-        } catch {
-            iosHostLog("system playback audio session failed: \(error.localizedDescription)")
+        guard !audioSessionActive else {
+            return
+        }
+        if VesperSharedAudioSession.activate(owner: self) {
+            audioSessionActive = true
+        }
+    }
+
+    private func deactivatePlaybackAudioSessionIfNeeded() {
+        guard audioSessionActive else {
+            return
+        }
+        VesperSharedAudioSession.deactivate(owner: self)
+        audioSessionActive = false
+    }
+
+    private func registerAudioSessionObservers() {
+        let center = NotificationCenter.default
+        let session = AVAudioSession.sharedInstance()
+        interruptionObserver = center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleInterruption(notification)
+            }
+        }
+        routeChangeObserver = center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleRouteChange(notification)
+            }
+        }
+    }
+
+    private func handleInterruption(_ notification: Notification) {
+        guard
+            let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: rawType)
+        else {
+            return
+        }
+
+        switch type {
+        case .began:
+            wasPlayingBeforeInterruption = controller?.uiState.playbackState == .playing
+            controller?.setAudioSessionInterrupted(true)
+            controller?.pause()
+        case .ended:
+            controller?.setAudioSessionInterrupted(false)
+            let rawOptions =
+                notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
+            if wasPlayingBeforeInterruption && options.contains(.shouldResume) {
+                controller?.play()
+            }
+            wasPlayingBeforeInterruption = false
+        @unknown default:
+            break
+        }
+    }
+
+    private func handleRouteChange(_ notification: Notification) {
+        guard
+            let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+            let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason)
+        else {
+            return
+        }
+
+        if reason == .oldDeviceUnavailable {
+            controller?.pause()
         }
     }
 
@@ -244,6 +323,41 @@ public final class VesperSystemPlaybackCoordinator {
             }
         }
         return UIImage(contentsOfFile: uri)
+    }
+}
+
+@MainActor
+enum VesperSharedAudioSession {
+    private static var activeOwners: Set<ObjectIdentifier> = []
+
+    @discardableResult
+    static func activate(owner: AnyObject) -> Bool {
+        let ownerId = ObjectIdentifier(owner)
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true)
+            activeOwners.insert(ownerId)
+            return true
+        } catch {
+            iosHostLog("audio session activation failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    static func deactivate(owner: AnyObject) {
+        activeOwners.remove(ObjectIdentifier(owner))
+        guard activeOwners.isEmpty else {
+            return
+        }
+        do {
+            try AVAudioSession.sharedInstance().setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+        } catch {
+            iosHostLog("audio session deactivation failed: \(error.localizedDescription)")
+        }
     }
 }
 

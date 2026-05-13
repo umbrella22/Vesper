@@ -147,6 +147,8 @@ fn ensure_demuxer(
     let c_name = CString::new(name)
         .map_err(|_| FfmpegProcessorError::MissingDemuxer(name).into_processor_error())?;
 
+    // SAFETY: `c_name` is a live NUL-terminated string and FFmpeg only reads
+    // the pointer during this lookup.
     if unsafe { ffmpeg::ffi::av_find_input_format(c_name.as_ptr()).is_null() } {
         return Err(match content_format {
             ContentFormatKind::HlsSegments
@@ -232,6 +234,9 @@ fn remux_input_to_mp4(
                 .into_processor_error()
             })?;
         output_stream.set_parameters(input_stream.parameters());
+        // SAFETY: `output_stream.parameters()` returns the mutable parameters
+        // owned by this output stream; clearing `codec_tag` is the documented
+        // FFmpeg remuxing step after copying input parameters.
         unsafe {
             (*output_stream.parameters().as_mut_ptr()).codec_tag = 0;
         }
@@ -449,6 +454,9 @@ fn remux_sources_to_output(
                     .into_processor_error()
                 })?;
             output_stream.set_parameters(input_stream.parameters());
+            // SAFETY: `output_stream.parameters()` returns the mutable
+            // parameters owned by this output stream; clearing `codec_tag`
+            // avoids incompatible container tags after copying parameters.
             unsafe {
                 (*output_stream.parameters().as_mut_ptr()).codec_tag = 0;
             }

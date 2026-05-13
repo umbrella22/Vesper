@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 //! D3D11 native-frame decoder plugin.
 //!
 //! Windows builds expose the plugin ABI and route sessions into the platform
@@ -5,6 +7,7 @@
 //! loader and registry tests, but report unsupported decoder operations.
 
 use std::ffi::{c_char, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
@@ -12,7 +15,7 @@ use player_plugin::{
     DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
     DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
     DecoderReceiveNativeFrameMetadata, DecoderSessionConfig, DecoderSessionInfo,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
@@ -140,6 +143,10 @@ impl D3D11DecoderSession {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
+    catch_unwind(AssertUnwindSafe(vesper_plugin_entry_impl)).unwrap_or(std::ptr::null())
+}
+
+fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(PluginBundle {
         api: VesperDecoderPluginApiV2 {
             context: std::ptr::null_mut(),
@@ -156,7 +163,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
             close_session: Some(decoder_close_session),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
@@ -168,15 +175,16 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 }
 
 unsafe extern "C" fn decoder_name(_context: *mut c_void) -> *const c_char {
-    PLUGIN_NAME.as_ptr().cast::<c_char>()
+    catch_unwind(AssertUnwindSafe(|| PLUGIN_NAME.as_ptr().cast::<c_char>()))
+        .unwrap_or(std::ptr::null())
 }
 
 unsafe extern "C" fn decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
-    serialize_payload(&decoder_capabilities())
+    catch_decoder_bytes(|| serialize_payload(&decoder_capabilities()))
 }
 
 unsafe extern "C" fn decoder_native_requirements_json(_context: *mut c_void) -> VesperPluginBytes {
-    serialize_payload(&decoder_native_requirements())
+    catch_decoder_bytes(|| serialize_payload(&decoder_native_requirements()))
 }
 
 unsafe extern "C" fn decoder_open_session_json(
@@ -184,22 +192,24 @@ unsafe extern "C" fn decoder_open_session_json(
     config_json: *const u8,
     config_json_len: usize,
 ) -> VesperDecoderOpenSessionResult {
-    let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
-        Ok(config) => config,
-        Err(error) => return open_error(error),
-    };
+    catch_decoder_open(|| {
+        let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
+            Ok(config) => config,
+            Err(error) => return open_error(error),
+        };
 
-    match D3D11DecoderSession::open(config) {
-        Ok(session) => {
-            let info = DecoderSessionInfo {
-                decoder_name: Some("player-decoder-d3d11".to_owned()),
-                selected_hardware_backend: Some("D3D11".to_owned()),
-                output_format: Some(DecoderFrameFormat::Bgra8888),
-            };
-            open_success(Box::into_raw(Box::new(session)).cast::<c_void>(), &info)
+        match D3D11DecoderSession::open(config) {
+            Ok(session) => {
+                let info = DecoderSessionInfo {
+                    decoder_name: Some("player-decoder-d3d11".to_owned()),
+                    selected_hardware_backend: Some("D3D11".to_owned()),
+                    output_format: Some(DecoderFrameFormat::Bgra8888),
+                };
+                open_success(Box::into_raw(Box::new(session)).cast::<c_void>(), &info)
+            }
+            Err(error) => open_error(error),
         }
-        Err(error) => open_error(error),
-    }
+    })
 }
 
 unsafe extern "C" fn decoder_send_packet(
@@ -210,43 +220,53 @@ unsafe extern "C" fn decoder_send_packet(
     packet_data: *const u8,
     packet_data_len: usize,
 ) -> VesperPluginProcessResult {
-    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-        return process_error(DecoderError::NotConfigured);
-    };
-    let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
-        Ok(packet) => packet,
-        Err(error) => return process_error(error),
-    };
-    if packet_data.is_null() && packet_data_len > 0 {
-        return process_error(DecoderError::abi_violation(
-            "packet data pointer was null with non-zero len",
-        ));
-    }
+    catch_decoder_process(|| {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
+        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
+            return process_error(DecoderError::NotConfigured);
+        };
+        let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
+            Ok(packet) => packet,
+            Err(error) => return process_error(error),
+        };
+        if packet_data.is_null() && packet_data_len > 0 {
+            return process_error(DecoderError::abi_violation(
+                "packet data pointer was null with non-zero len",
+            ));
+        }
 
-    let packet_data = if packet_data.is_null() || packet_data_len == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }
-    };
+        let packet_data = if packet_data.is_null() || packet_data_len == 0 {
+            &[]
+        } else {
+            // SAFETY: the ABI caller provides a valid packet byte range for
+            // the duration of this synchronous callback.
+            unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }
+        };
 
-    match session.send_packet(packet, packet_data) {
-        Ok(result) => process_success(&result),
-        Err(error) => process_error(error),
-    }
+        match session.send_packet(packet, packet_data) {
+            Ok(result) => process_success(&result),
+            Err(error) => process_error(error),
+        }
+    })
 }
 
 unsafe extern "C" fn decoder_receive_native_frame(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperDecoderReceiveNativeFrameResult {
-    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-        return native_frame_error(DecoderError::NotConfigured);
-    };
+    catch_decoder_native_frame(|| {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
+        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
+            return native_frame_error(DecoderError::NotConfigured);
+        };
 
-    match session.receive_native_frame() {
-        Ok((metadata, handle)) => native_frame_success(&metadata, handle),
-        Err(error) => native_frame_error(error),
-    }
+        match session.receive_native_frame() {
+            Ok((metadata, handle)) => native_frame_success(&metadata, handle),
+            Err(error) => native_frame_error(error),
+        }
+    })
 }
 
 unsafe extern "C" fn decoder_release_native_frame(
@@ -255,40 +275,56 @@ unsafe extern "C" fn decoder_release_native_frame(
     handle_kind: u32,
     handle: usize,
 ) -> VesperPluginProcessResult {
-    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-        return process_error(DecoderError::NotConfigured);
-    };
+    catch_decoder_process(|| {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
+        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
+            return process_error(DecoderError::NotConfigured);
+        };
 
-    match session.release_native_frame(handle_kind, handle) {
-        Ok(()) => process_success(&DecoderOperationStatus { completed: true }),
-        Err(error) => process_error(error),
-    }
+        match session.release_native_frame(handle_kind, handle) {
+            Ok(()) => process_success(&DecoderOperationStatus { completed: true }),
+            Err(error) => process_error(error),
+        }
+    })
 }
 
 unsafe extern "C" fn decoder_flush_session(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
-    let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-        return process_error(DecoderError::NotConfigured);
-    };
-    session.flush();
-    process_success(&DecoderOperationStatus { completed: true })
+    catch_decoder_process(|| {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
+        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
+            return process_error(DecoderError::NotConfigured);
+        };
+        session.flush();
+        process_success(&DecoderOperationStatus { completed: true })
+    })
 }
 
 unsafe extern "C" fn decoder_close_session(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
-    if session.is_null() {
-        return process_error(DecoderError::NotConfigured);
-    }
-    let _ = unsafe { Box::from_raw(session.cast::<D3D11DecoderSession>()) };
-    process_success(&DecoderOperationStatus { completed: true })
+    catch_decoder_process(|| {
+        if session.is_null() {
+            return process_error(DecoderError::NotConfigured);
+        }
+        // SAFETY: `session` was allocated by `decoder_open_session_json` and is
+        // consumed exactly once by this close callback.
+        let _ = unsafe { Box::from_raw(session.cast::<D3D11DecoderSession>()) };
+        process_success(&DecoderOperationStatus { completed: true })
+    })
 }
 
 unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
-    let _ = unsafe { payload.into_vec() };
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: payloads returned by this plugin are allocated from Vec<u8>
+        // inside this dynamic library and have not been reclaimed yet.
+        let _ = unsafe { payload.into_vec() };
+    }));
 }
 
 fn decoder_capabilities() -> DecoderCapabilities {
@@ -345,6 +381,8 @@ fn decode_json<T: serde::de::DeserializeOwned>(
     let payload = if data.is_null() || len == 0 {
         &[]
     } else {
+        // SAFETY: the ABI caller provides a valid JSON byte range for the
+        // duration of this synchronous callback.
         unsafe { std::slice::from_raw_parts(data, len) }
     };
     serde_json::from_slice(payload).map_err(|error| DecoderError::payload_codec(error.to_string()))
@@ -404,6 +442,32 @@ fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameRes
         metadata: serialize_payload(&error),
         handle: 0,
     }
+}
+
+fn catch_decoder_bytes(f: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| serialize_payload(&plugin_panic_error()))
+}
+
+fn catch_decoder_open(
+    f: impl FnOnce() -> VesperDecoderOpenSessionResult,
+) -> VesperDecoderOpenSessionResult {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| open_error(plugin_panic_error()))
+}
+
+fn catch_decoder_process(
+    f: impl FnOnce() -> VesperPluginProcessResult,
+) -> VesperPluginProcessResult {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| process_error(plugin_panic_error()))
+}
+
+fn catch_decoder_native_frame(
+    f: impl FnOnce() -> VesperDecoderReceiveNativeFrameResult,
+) -> VesperDecoderReceiveNativeFrameResult {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| native_frame_error(plugin_panic_error()))
+}
+
+fn plugin_panic_error() -> DecoderError {
+    DecoderError::internal("decoder plugin callback panicked")
 }
 
 #[cfg(target_os = "windows")]
@@ -474,10 +538,13 @@ mod platform {
             let Some(context) = config.native_device_context.as_ref() else {
                 return Err(DecoderError::NotConfigured);
             };
-            if context.kind != DecoderNativeDeviceContextKind::D3D11Device || context.handle == 0 {
+            let Some(device_ptr) = context.d3d11_device_ptr() else {
+                return Err(DecoderError::NotConfigured);
+            };
+            if device_ptr == 0 {
                 return Err(DecoderError::NotConfigured);
             }
-            let raw = context.handle as *mut c_void;
+            let raw = device_ptr as *mut c_void;
             let device = unsafe {
                 ID3D11Device::from_raw_borrowed(&raw)
                     .map(|device| device.clone())
@@ -972,15 +1039,17 @@ mod tests {
         DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeDeviceContext,
         DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderNativeRequirements,
         DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
-        VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VesperDecoderPluginApiV2, VesperPluginKind,
+        VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperDecoderPluginApiV2, VesperPluginKind,
         VesperPluginResultStatus,
     };
 
     #[test]
     fn exported_descriptor_matches_native_decoder_plugin_metadata() {
+        // SAFETY: the D3D11 entry point returns a process-lifetime descriptor
+        // pointer or null; this test immediately borrows it.
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
-        assert_eq!(descriptor.abi_version, VESPER_DECODER_PLUGIN_ABI_VERSION_V2);
+        assert_eq!(descriptor.abi_version, VESPER_DECODER_PLUGIN_ABI_VERSION_V3);
         assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());
@@ -1030,12 +1099,18 @@ mod tests {
 
     #[test]
     fn exported_descriptor_exposes_native_requirements_callback() {
+        // SAFETY: the D3D11 entry point returns a process-lifetime descriptor
+        // pointer or null; this test immediately borrows it.
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
+        // SAFETY: the descriptor is expected to expose the decoder v3 ABI table
+        // for this plugin kind.
         let api = unsafe { descriptor.api.cast::<VesperDecoderPluginApiV2>().as_ref() }
             .expect("native decoder api");
         let callback = api
             .native_requirements_json
             .expect("native requirements callback");
+        // SAFETY: the callback pointer comes from the plugin ABI table and is
+        // called synchronously with its paired context.
         let payload = unsafe { callback(api.context) };
         let requirements = decode_json::<DecoderNativeRequirements>(payload.data, payload.len)
             .expect("requirements payload");
@@ -1045,6 +1120,7 @@ mod tests {
             requirements.output_handle_kinds,
             vec![DecoderNativeHandleKind::D3D11Texture2D]
         );
+        // SAFETY: `payload` was allocated by this plugin and has not been freed.
         unsafe { super::free_plugin_bytes(api.context, payload) };
     }
 
@@ -1058,6 +1134,8 @@ mod tests {
         };
         let payload = serde_json::to_vec(&config).expect("config json");
 
+        // SAFETY: all pointers passed to the callback are valid for this
+        // synchronous test call.
         let result = unsafe {
             super::decoder_open_session_json(std::ptr::null_mut(), payload.as_ptr(), payload.len())
         };
@@ -1067,6 +1145,8 @@ mod tests {
         let error = decode_json::<DecoderError>(result.payload.data, result.payload.len)
             .expect("error payload");
         assert_eq!(error, DecoderError::NotConfigured);
+        // SAFETY: `result.payload` was allocated by this plugin and has not
+        // been freed.
         unsafe { super::free_plugin_bytes(std::ptr::null_mut(), result.payload) };
     }
 
@@ -1081,17 +1161,16 @@ mod tests {
             .expect("metadata payload");
 
         assert_eq!(decoded.status, DecoderReceiveFrameStatus::Eof);
+        // SAFETY: `payload` was allocated by this plugin and has not been freed.
         unsafe { super::free_plugin_bytes(std::ptr::null_mut(), payload) };
     }
 
     #[test]
     fn device_context_kind_uses_d3d11_device_contract() {
-        let context = DecoderNativeDeviceContext {
-            kind: DecoderNativeDeviceContextKind::D3D11Device,
-            handle: 42,
-        };
+        let context = DecoderNativeDeviceContext::D3D11Device { device_ptr: 42 };
 
-        assert_eq!(context.kind, DecoderNativeDeviceContextKind::D3D11Device);
+        assert_eq!(context.kind(), DecoderNativeDeviceContextKind::D3D11Device);
+        assert_eq!(context.d3d11_device_ptr(), Some(42));
         assert_eq!(HANDLE_KIND_D3D11_TEXTURE_2D, 6);
     }
 }

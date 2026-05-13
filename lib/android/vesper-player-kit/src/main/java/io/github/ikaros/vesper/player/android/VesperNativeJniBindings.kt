@@ -39,7 +39,7 @@ import java.net.URI
 import kotlin.math.pow
 import kotlin.math.roundToLong
 
-class VesperNativeJniBindings(
+internal class VesperNativeJniBindings(
     context: Context,
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,

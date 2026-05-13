@@ -1,5 +1,5 @@
 group = "io.github.ikaros.vesper.player.flutter.android"
-version = "0.1.0"
+version = "0.2.0"
 
 buildscript {
     ext.kotlin_version = "2.3.10"

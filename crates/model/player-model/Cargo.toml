@@ -7,5 +7,3 @@ rust-version.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-tokio.workspace = true
-tracing.workspace = true

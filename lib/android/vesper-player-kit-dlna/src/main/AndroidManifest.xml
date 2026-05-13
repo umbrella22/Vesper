@@ -7,5 +7,5 @@
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
 
-    <application android:usesCleartextTraffic="true" />
+    <application />
 </manifest>

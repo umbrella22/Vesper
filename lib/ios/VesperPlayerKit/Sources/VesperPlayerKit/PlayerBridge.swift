@@ -403,6 +403,7 @@ protocol PlayerBridge: AnyObject {
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection)
     func setAbrPolicy(_ policy: VesperAbrPolicy)
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy)
+    func setAudioSessionInterrupted(_ interrupted: Bool)
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent]
     func benchmarkSummary() -> VesperBenchmarkSummary
 }

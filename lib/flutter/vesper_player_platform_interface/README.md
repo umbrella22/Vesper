@@ -16,6 +16,8 @@ authors. Application code should usually depend on `vesper_player` directly.
 - `VesperPlayerRenderSurfaceKind`: Flutter-facing Android render surface preference forwarded by `createPlayer`
 - `VesperSystemPlaybackConfiguration`: optional system media session and background audio integration
 - `VesperExternalPlaybackAvailability`: AirPlay / Cast route availability DTOs for optional UI and platform packages
+- External playback DTOs used by optional Cast / DLNA packages, including route,
+  media item, result, and session event models
 
 ### Player data models
 
@@ -44,6 +46,10 @@ authors. Application code should usually depend on `vesper_player` directly.
 | `VesperSystemPlaybackMetadata`   | Now Playing / notification metadata such as title, artist, artwork, content URI, duration, and live flag                                                                                                      |
 | `VesperExternalPlaybackAvailability` | External route availability for AirPlay and Cast                                                                                                                                                          |
 | `VesperExternalPlaybackRouteSnapshot` | Active external route identity and state                                                                                                                                                                  |
+| `VesperExternalPlaybackRoute` | External route identity reported by optional Cast / DLNA plugins                                                                                                                                              |
+| `VesperExternalPlaybackMediaItem` | Media item payload for optional external playback plugins                                                                                                                                                  |
+| `VesperExternalPlaybackResult` | Result returned by external playback operations                                                                                                                                                               |
+| `VesperExternalPlaybackSessionEvent` | Session event emitted by external playback plugins                                                                                                                                                      |
 | `VesperRoutePickerConfiguration`  | Route picker preferences shared by optional UI packages                                                                                                                                                      |
 | `VesperPlayerViewport`           | Normalized viewport rectangle used for viewport hints                                                                                                                                                          |
 | `VesperViewportHint`             | Visibility hint: visible, near visible, prefetch only, or hidden                                                                                                                                               |

@@ -11,9 +11,10 @@ use player_audio_cpal::{
     AudioOutputConfig, AudioOutputDescriptor, AudioSink, AudioSinkController, detect_default_output,
 };
 use player_backend_ffmpeg::{
-    AudioStreamProbe, BufferedFramePoll, BufferedVideoSource, BufferedVideoSourceBootstrap,
-    DecodedAudioTrack, FfmpegBackend, MediaProbe, VideoDecodeInfo as BackendVideoDecodeInfo,
-    VideoDecoderMode as BackendVideoDecoderMode, VideoStreamProbe,
+    AudioMasterClock, AudioStreamProbe, BufferedFramePoll, BufferedVideoSource,
+    BufferedVideoSourceBootstrap, DecodedAudioTrack, FfmpegBackend, MasterClock, MediaProbe,
+    VideoDecodeInfo as BackendVideoDecodeInfo, VideoDecoderMode as BackendVideoDecoderMode,
+    VideoStreamProbe,
 };
 use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol, PlaybackSessionModel};
 
@@ -320,6 +321,7 @@ pub struct SoftwarePlayerRuntime {
     audio_sink: Option<AudioSink>,
     audio_sink_controller: Option<AudioSinkController>,
     playback_clock: Option<PlaybackClock>,
+    master_clock: AudioMasterClock,
     video_playback_start_buffer_frames: usize,
     video_rebuffer_frames: usize,
     video_buffering_window: VideoBufferingWindow,
@@ -992,6 +994,7 @@ impl SoftwarePlayerRuntime {
             audio_sink: None,
             audio_sink_controller: None,
             playback_clock: None,
+            master_clock: AudioMasterClock::new(),
             video_playback_start_buffer_frames,
             video_rebuffer_frames,
             video_buffering_window: VideoBufferingWindow::Startup,
@@ -1437,7 +1440,7 @@ impl SoftwarePlayerRuntime {
     }
 
     fn playback_position(&self) -> Option<Duration> {
-        select_playback_position(
+        self.master_clock.playback_position(
             self.audio_sink
                 .as_ref()
                 .map(|audio_sink| AudioSinkClock(audio_sink).playback_position()),
@@ -2757,18 +2760,6 @@ fn should_disable_audio_output_after_open_error(error: &anyhow::Error) -> bool {
     })
 }
 
-fn select_playback_position(
-    audio_position: Option<Duration>,
-    clock_position: Option<Duration>,
-) -> Option<Duration> {
-    match (audio_position, clock_position) {
-        (Some(audio_position), Some(_)) => Some(audio_position),
-        (Some(audio_position), None) => Some(audio_position),
-        (None, Some(clock_position)) => Some(clock_position),
-        (None, None) => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2840,23 +2831,6 @@ mod tests {
 
         assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
         assert!(error.message().contains("'dash' demuxer"));
-    }
-
-    #[test]
-    fn playback_position_keeps_audio_clock_as_master() {
-        let selected = select_playback_position(
-            Some(Duration::from_millis(0)),
-            Some(Duration::from_millis(600)),
-        );
-
-        assert_eq!(selected, Some(Duration::from_millis(0)));
-    }
-
-    #[test]
-    fn playback_position_falls_back_to_clock_without_audio() {
-        let selected = select_playback_position(None, Some(Duration::from_millis(600)));
-
-        assert_eq!(selected, Some(Duration::from_millis(600)));
     }
 
     #[test]
@@ -3336,6 +3310,7 @@ mod tests {
             audio_sink: None,
             audio_sink_controller: None,
             playback_clock: None,
+            master_clock: AudioMasterClock::new(),
             video_playback_start_buffer_frames: 1,
             video_rebuffer_frames: 1,
             video_buffering_window: VideoBufferingWindow::Startup,

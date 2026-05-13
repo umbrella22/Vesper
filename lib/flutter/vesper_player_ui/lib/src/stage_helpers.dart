@@ -2,23 +2,23 @@ import 'package:vesper_player/vesper_player.dart';
 
 String stageBadgeText(VesperTimeline timeline) {
   return switch (timeline.kind) {
-    VesperTimelineKind.live => '直播流',
-    VesperTimelineKind.liveDvr => '带 DVR 窗口的直播',
-    VesperTimelineKind.vod => '点播视频',
+    VesperTimelineKind.live => 'Live stream',
+    VesperTimelineKind.liveDvr => 'Live with DVR',
+    VesperTimelineKind.vod => 'Video on demand',
   };
 }
 
 String liveButtonLabel(VesperTimeline timeline) {
   final liveEdge = timeline.goLivePositionMs;
   if (liveEdge == null) {
-    return '回到直播';
+    return 'Go live';
   }
   final behindMs = (liveEdge - timeline.clampedPosition(timeline.positionMs))
       .clamp(0, 1 << 62);
   if (behindMs <= 1500) {
-    return '直播';
+    return 'Live';
   }
-  return '直播 -${formatMillis(behindMs)}';
+  return 'Live -${formatMillis(behindMs)}';
 }
 
 String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
@@ -30,9 +30,9 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
     case VesperTimelineKind.live:
       final liveEdge = timeline.goLivePositionMs;
       if (liveEdge == null) {
-        return '直播';
+        return 'Live';
       }
-      return '直播 • 实时点 ${formatMillis(liveEdge)}';
+      return 'Live edge ${formatMillis(liveEdge)}';
     case VesperTimelineKind.liveDvr:
       final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
       final rangeStart = timeline.seekableRange?.startMs ?? 0;
@@ -57,7 +57,7 @@ String compactTimelineSummary(
 
   switch (timeline.kind) {
     case VesperTimelineKind.live:
-      return '直播';
+      return 'Live';
     case VesperTimelineKind.liveDvr:
       final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
       final rangeStart = timeline.seekableRange?.startMs ?? 0;
@@ -94,18 +94,18 @@ String qualityButtonLabel(
     VesperAbrMode.fixedTrack
         when requestedTrack != null &&
             resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
-      '锁定中 · ${qualityLabel(requestedTrack)}',
+      'Locking · ${qualityLabel(requestedTrack)}',
     VesperAbrMode.fixedTrack
         when requestedTrack != null &&
             resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback =>
-      '锁定中 · ${qualityLabel(requestedTrack)}',
+      'Locking · ${qualityLabel(requestedTrack)}',
     VesperAbrMode.fixedTrack when requestedTrack != null =>
-      '锁定 · ${qualityLabel(requestedTrack)}',
-    VesperAbrMode.fixedTrack => '画质',
-    VesperAbrMode.constrained || VesperAbrMode.auto
-        when effectiveTrack != null =>
-      '自动 · ${qualityLabel(effectiveTrack)}',
-    VesperAbrMode.constrained || VesperAbrMode.auto => '自动',
+      'Pinned · ${qualityLabel(requestedTrack)}',
+    VesperAbrMode.fixedTrack => 'Quality',
+    VesperAbrMode.constrained ||
+    VesperAbrMode.auto when effectiveTrack != null =>
+      'Auto · ${qualityLabel(effectiveTrack)}',
+    VesperAbrMode.constrained || VesperAbrMode.auto => 'Auto',
   };
 }
 

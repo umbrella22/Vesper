@@ -11,7 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 
-class VesperNativeSurfaceHost(
+internal class VesperNativeSurfaceHost(
     private val bindings: VesperNativeBindings,
     private val surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
 ) {

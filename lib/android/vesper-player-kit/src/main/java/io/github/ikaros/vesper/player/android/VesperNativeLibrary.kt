@@ -1,6 +1,6 @@
 package io.github.ikaros.vesper.player.android
 
-object VesperNativeLibrary {
+internal object VesperNativeLibrary {
     private const val LIB_NAME = "vesper_player_android"
 
     private val loadAttempt: Result<Unit> by lazy {

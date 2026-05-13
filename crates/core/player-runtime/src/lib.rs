@@ -2,6 +2,7 @@
 
 mod adapter;
 mod clock;
+mod controller;
 pub mod policy;
 
 use std::path::PathBuf;
@@ -15,6 +16,7 @@ pub use adapter::{
     PlayerRuntimeAdapterInitializer,
 };
 pub use clock::{MediaClock, PlaybackClock};
+pub use controller::{PlaybackCommand, Player, PlayerConfig, PlayerEvent, PlayerHandle};
 pub use player_download::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
     DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager,
@@ -86,6 +88,19 @@ pub mod playlist {
         PlaylistItemPreloadProfile, PlaylistNeighborWindow, PlaylistPreloadWindow,
         PlaylistQueueItem, PlaylistQueueItemId, PlaylistQueueItemSnapshot, PlaylistRepeatMode,
         PlaylistSnapshot, PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
+    };
+}
+
+pub mod defaults {
+    pub use super::{
+        DEFAULT_PLAYBACK_RATE, DEFAULT_RETRY_BASE_DELAY, DEFAULT_RETRY_MAX_DELAY,
+        DEFAULT_VIDEO_IDLE_POLL_INTERVAL, DEFAULT_VIDEO_PREFETCH_CAPACITY,
+        DEFAULT_VIDEO_PRESENT_EARLY_TOLERANCE, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE,
+        NATURAL_PLAYBACK_RATE_MAX,
+    };
+    pub use player_preload::{
+        DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
+        DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW,
     };
 }
 
@@ -1089,6 +1104,9 @@ impl PlayerTimelineSnapshot {
     }
 
     pub fn position_for_ratio(&self, ratio: f64) -> Option<Duration> {
+        if !ratio.is_finite() {
+            return None;
+        }
         let range = self.seekable_range?;
         let total = range.duration()?;
         if total.is_zero() {

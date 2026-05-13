@@ -2,7 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 import android.content.Context
 
-object PlayerBridgeFactory {
+internal object PlayerBridgeFactory {
     private val defaultBackend = PlayerBridgeBackend.VesperNativeStub
 
     fun createDefault(

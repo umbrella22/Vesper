@@ -10,3 +10,5 @@ player-model = { path = "../../model/player-model" }
 player-download = { path = "../player-download" }
 player-playlist = { path = "../player-playlist" }
 player-preload = { path = "../player-preload" }
+tokio.workspace = true
+tracing.workspace = true

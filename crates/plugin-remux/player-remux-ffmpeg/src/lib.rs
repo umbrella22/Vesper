@@ -1,7 +1,10 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 mod error;
 mod muxer;
 
 use std::ffi::{CStr, c_char, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use player_plugin::{
     CompletedDownloadInfo, PostDownloadProcessor, ProcessorError,
@@ -21,6 +24,10 @@ struct PluginBundle {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
+    catch_unwind(AssertUnwindSafe(vesper_plugin_entry_impl)).unwrap_or(std::ptr::null())
+}
+
+fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let processor = Box::new(FfmpegRemuxProcessor::new());
     let processor = Box::into_raw(processor);
 
@@ -47,11 +54,19 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 }
 
 unsafe extern "C" fn destroy_processor(context: *mut c_void) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        destroy_processor_impl(context);
+    }));
+}
+
+fn destroy_processor_impl(context: *mut c_void) {
     if context.is_null() {
         return;
     }
 
     let processor = context.cast::<FfmpegRemuxProcessor>();
+    // SAFETY: `context` was created by `vesper_plugin_entry_impl` from
+    // `Box<FfmpegRemuxProcessor>` and is destroyed at most once by the host.
     let _ = unsafe { Box::from_raw(processor) };
 }
 
@@ -60,12 +75,21 @@ unsafe extern "C" fn processor_name(_context: *mut c_void) -> *const c_char {
 }
 
 unsafe extern "C" fn processor_capabilities_json(context: *mut c_void) -> VesperPluginBytes {
-    let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
-    serialize_payload(&processor.capabilities())
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `context` is the processor pointer stored in the exported API
+        // table and remains valid until the host invokes `destroy`.
+        let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
+        serialize_payload(&processor.capabilities())
+    }))
+    .unwrap_or_else(|_| serialize_payload(&plugin_panic_error()))
 }
 
 unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
-    let _ = unsafe { payload.into_vec() };
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the payload was produced by this dynamic library and has not
+        // been reclaimed yet.
+        let _ = unsafe { payload.into_vec() };
+    }));
 }
 
 unsafe extern "C" fn processor_process_json(
@@ -75,16 +99,21 @@ unsafe extern "C" fn processor_process_json(
     output_path: *const c_char,
     progress: VesperPluginProgressCallbacks,
 ) -> VesperPluginProcessResult {
-    let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
-    let result = decode_input(input_json, input_json_len).and_then(|input| {
-        let output_path = decode_output_path(output_path)?;
-        let progress = CallbackProgress {
-            callbacks: progress,
-        };
-        processor.process(&input, std::path::Path::new(&output_path), &progress)
-    });
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `context` is the processor pointer stored in the exported API
+        // table and remains valid until the host invokes `destroy`.
+        let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
+        let result = decode_input(input_json, input_json_len).and_then(|input| {
+            let output_path = decode_output_path(output_path)?;
+            let progress = CallbackProgress {
+                callbacks: progress,
+            };
+            processor.process(&input, std::path::Path::new(&output_path), &progress)
+        });
 
-    encode_processor_result(result)
+        encode_processor_result(result)
+    }))
+    .unwrap_or_else(|_| encode_processor_result(Err(plugin_panic_error())))
 }
 
 unsafe extern "C" fn processor_assemble_json(
@@ -94,16 +123,21 @@ unsafe extern "C" fn processor_assemble_json(
     output_path: *const c_char,
     progress: VesperPluginProgressCallbacks,
 ) -> VesperPluginProcessResult {
-    let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
-    let result = decode_input(input_json, input_json_len).and_then(|input| {
-        let output_path = decode_output_path(output_path)?;
-        let progress = CallbackProgress {
-            callbacks: progress,
-        };
-        processor.assemble(&input, std::path::Path::new(&output_path), &progress)
-    });
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `context` is the processor pointer stored in the exported API
+        // table and remains valid until the host invokes `destroy`.
+        let processor = unsafe { &*(context.cast::<FfmpegRemuxProcessor>()) };
+        let result = decode_input(input_json, input_json_len).and_then(|input| {
+            let output_path = decode_output_path(output_path)?;
+            let progress = CallbackProgress {
+                callbacks: progress,
+            };
+            processor.assemble(&input, std::path::Path::new(&output_path), &progress)
+        });
 
-    encode_processor_result(result)
+        encode_processor_result(result)
+    }))
+    .unwrap_or_else(|_| encode_processor_result(Err(plugin_panic_error())))
 }
 
 fn decode_output_path(output_path: *const c_char) -> Result<String, ProcessorError> {
@@ -112,6 +146,8 @@ fn decode_output_path(output_path: *const c_char) -> Result<String, ProcessorErr
             "plugin output path pointer must not be null".to_owned(),
         ));
     }
+    // SAFETY: `output_path` has been checked for null and the plugin ABI
+    // requires a NUL-terminated UTF-8 path for this synchronous callback.
     unsafe { CStr::from_ptr(output_path) }
         .to_str()
         .map(str::to_owned)
@@ -143,6 +179,8 @@ fn decode_input(
         ));
     }
 
+    // SAFETY: `input_json` has been checked for null and the ABI caller keeps
+    // the byte range alive for this synchronous callback.
     let payload = unsafe { std::slice::from_raw_parts(input_json, input_json_len) };
     serde_json::from_slice(payload).map_err(|error| ProcessorError::PayloadCodec(error.to_string()))
 }
@@ -154,6 +192,10 @@ fn serialize_payload<T: serde::Serialize>(value: &T) -> VesperPluginBytes {
     }
 }
 
+fn plugin_panic_error() -> ProcessorError {
+    ProcessorError::AbiViolation("plugin callback panicked".to_owned())
+}
+
 struct CallbackProgress {
     callbacks: VesperPluginProgressCallbacks,
 }
@@ -161,15 +203,23 @@ struct CallbackProgress {
 impl player_plugin::ProcessorProgress for CallbackProgress {
     fn on_progress(&self, ratio: f32) {
         if let Some(on_progress) = self.callbacks.on_progress {
-            unsafe { on_progress(self.callbacks.context, ratio) };
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: callback pointers and context are borrowed from the
+                // host for the duration of this synchronous plugin invocation.
+                unsafe { on_progress(self.callbacks.context, ratio) };
+            }));
         }
     }
 
     fn is_cancelled(&self) -> bool {
-        self.callbacks
-            .is_cancelled
-            .map(|is_cancelled| unsafe { is_cancelled(self.callbacks.context) })
-            .unwrap_or(false)
+        self.callbacks.is_cancelled.is_some_and(|is_cancelled| {
+            catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: callback pointers and context are borrowed from the
+                // host for the duration of this synchronous plugin invocation.
+                unsafe { is_cancelled(self.callbacks.context) }
+            }))
+            .unwrap_or(true)
+        })
     }
 }
 
@@ -182,6 +232,8 @@ mod tests {
 
     #[test]
     fn exported_descriptor_matches_expected_plugin_metadata() {
+        // SAFETY: the remux entry point returns a process-lifetime descriptor
+        // pointer or null; this test immediately borrows it.
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
         assert_eq!(

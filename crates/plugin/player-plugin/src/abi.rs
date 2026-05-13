@@ -382,8 +382,10 @@ pub type VesperPluginEntryPoint = unsafe extern "C" fn() -> *const VesperPluginD
 
 /// ABI version used by non post-download plugin kinds.
 pub const VESPER_PLUGIN_ABI_VERSION_V2: u32 = 2;
-/// Native-frame decoder plugins use the same v2 descriptor version as every other plugin kind.
+/// Legacy native-frame decoder ABI version.
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = VESPER_PLUGIN_ABI_VERSION_V2;
+/// Native-frame decoder ABI with typed native context payloads.
+pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V3: u32 = 3;
 /// ABI version used by post-download processors with assembly support.
 pub const VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3: u32 = 3;
 /// Exported symbol name used to locate the plugin descriptor entry point.

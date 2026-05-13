@@ -149,7 +149,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "basic-player"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -1563,15 +1563,16 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player-audio-cpal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cpal",
+ "rtrb",
 ]
 
 [[package]]
 name = "player-backend-ffmpeg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ffmpeg-next",
@@ -1581,7 +1582,7 @@ dependencies = [
 
 [[package]]
 name = "player-dash-hls-bridge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1590,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-d3d11"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1600,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-fixture"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1609,7 +1610,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-videotoolbox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1618,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "player-download"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-model",
  "player-plugin",
@@ -1626,7 +1627,7 @@ dependencies = [
 
 [[package]]
 name = "player-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-backend-ffmpeg",
  "player-model",
@@ -1638,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "player-ffi-ios"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-dash-hls-bridge",
  "player-model",
@@ -1650,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "player-host-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "player-model",
@@ -1665,7 +1666,7 @@ dependencies = [
 
 [[package]]
 name = "player-jni-android"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jni 0.22.4",
  "player-model",
@@ -1677,16 +1678,14 @@ dependencies = [
 
 [[package]]
 name = "player-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]
 name = "player-platform-android"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-model",
  "player-plugin",
@@ -1696,11 +1695,11 @@ dependencies = [
 
 [[package]]
 name = "player-platform-apple"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "player-platform-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "player-audio-cpal",
@@ -1716,7 +1715,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-ios"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-model",
  "player-plugin",
@@ -1726,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-linux"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-model",
  "player-platform-desktop",
@@ -1735,7 +1734,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-macos"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -1749,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-windows"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -1763,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "player-playlist"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -1772,7 +1771,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1780,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-loader"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libloading",
  "player-plugin",
@@ -1791,7 +1790,7 @@ dependencies = [
 
 [[package]]
 name = "player-preload"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -1799,7 +1798,7 @@ dependencies = [
 
 [[package]]
 name = "player-remux-ffmpeg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ffmpeg-next",
  "player-plugin",
@@ -1810,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "player-render-wgpu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "wgpu",
@@ -1819,12 +1818,14 @@ dependencies = [
 
 [[package]]
 name = "player-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "player-download",
  "player-model",
  "player-playlist",
  "player-preload",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2001,6 +2002,12 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
+
+[[package]]
+name = "rtrb"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ade083ccbb4bf536df69d1f6432cc23deb7acccff86b183f3923a6fd56a1153"
 
 [[package]]
 name = "rustc-hash"

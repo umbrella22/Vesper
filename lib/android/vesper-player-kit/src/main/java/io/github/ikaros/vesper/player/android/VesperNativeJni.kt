@@ -2,7 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 import android.view.Surface
 
-object VesperNativeJni {
+internal object VesperNativeJni {
     init {
         VesperNativeLibrary.ensureLoaded()
     }

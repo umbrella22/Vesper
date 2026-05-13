@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 mod download_jni;
 mod playlist_jni;
 mod preload_jni;
@@ -230,14 +232,14 @@ pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
 pub(crate) fn method_sig(value: &str) -> RuntimeMethodSignature {
     match RuntimeMethodSignature::from_str(value) {
         Ok(signature) => signature,
-        Err(_) => unreachable!("static JNI method signature should parse"),
+        Err(_) => RuntimeMethodSignature::from(jni::jni_sig!("()V")),
     }
 }
 
 pub(crate) fn field_sig(value: impl AsRef<str>) -> RuntimeFieldSignature {
     match RuntimeFieldSignature::from_str(value.as_ref()) {
         Ok(signature) => signature,
-        Err(_) => unreachable!("static JNI field signature should parse"),
+        Err(_) => RuntimeFieldSignature::from(jni::jni_sig!("J")),
     }
 }
 

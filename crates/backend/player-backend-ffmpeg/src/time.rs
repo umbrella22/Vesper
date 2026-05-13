@@ -13,11 +13,7 @@ pub(crate) fn duration_from_micros(duration: i64) -> Option<Duration> {
 }
 
 pub(crate) fn duration_to_av_timestamp(duration: Duration) -> i64 {
-    duration
-        .as_micros()
-        .min(i64::MAX as u128)
-        .try_into()
-        .expect("value clamped to i64")
+    duration.as_micros().min(i64::MAX as u128) as i64
 }
 
 pub(crate) fn rational_to_f64(value: ffmpeg::Rational) -> Option<f64> {

@@ -5,6 +5,8 @@
 //! discovery, diagnostics, and API shape can stabilize before presenter work
 //! is completed.
 
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -599,9 +601,8 @@ mod windows_d3d11_presenter {
         }
 
         fn decoder_device_context(&self) -> Option<DecoderNativeDeviceContext> {
-            Some(DecoderNativeDeviceContext {
-                kind: DecoderNativeDeviceContextKind::D3D11Device,
-                handle: self.device.as_raw() as usize,
+            Some(DecoderNativeDeviceContext::D3D11Device {
+                device_ptr: self.device.as_raw() as usize,
             })
         }
 
@@ -827,6 +828,12 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
             let fallback_diagnostics = windows_runtime_diagnostics(&media_info, &options, None);
             let fallback_source = source.clone();
             let fallback_options = options.clone();
+            let video_surface = fallback_options.video_surface.clone().ok_or_else(|| {
+                PlayerRuntimeError::new(
+                    PlayerRuntimeErrorCode::InvalidArgument,
+                    "windows native-frame selection requires a video surface",
+                )
+            })?;
             let native_inner = probe_platform_desktop_source_with_video_source_factory_and_options(
                 WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
                 source,
@@ -834,9 +841,7 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
                 Arc::new(WindowsNativeFrameVideoSourceFactory {
                     plugin_path: selection.plugin_path.clone(),
                     preferred_backend: selection.preferred_backend,
-                    video_surface: fallback_options
-                        .video_surface
-                        .expect("windows native-frame selection requires a video surface"),
+                    video_surface,
                 }),
                 windows_native_frame_decoder_capabilities(selection.preferred_backend),
             )?;

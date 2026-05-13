@@ -85,6 +85,7 @@ public final class VesperPlayerController: ObservableObject {
     private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
+    private let setAudioSessionInterruptedImpl: (Bool) -> Void
     private let drainBenchmarkEventsImpl: () -> [VesperBenchmarkEvent]
     private let benchmarkSummaryImpl: () -> VesperBenchmarkSummary
     private let routePickerPlayerImpl: () -> AVPlayer?
@@ -131,6 +132,7 @@ public final class VesperPlayerController: ObservableObject {
         setSubtitleTrackSelectionImpl = bridge.setSubtitleTrackSelection
         setAbrPolicyImpl = bridge.setAbrPolicy
         setResiliencePolicyImpl = bridge.setResiliencePolicy
+        setAudioSessionInterruptedImpl = bridge.setAudioSessionInterrupted
         drainBenchmarkEventsImpl = bridge.drainBenchmarkEvents
         benchmarkSummaryImpl = bridge.benchmarkSummary
         routePickerPlayerImpl = { bridge.routePickerPlayer }
@@ -240,6 +242,10 @@ public final class VesperPlayerController: ObservableObject {
 
     public func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
         setResiliencePolicyImpl(policy)
+    }
+
+    func setAudioSessionInterrupted(_ interrupted: Bool) {
+        setAudioSessionInterruptedImpl(interrupted)
     }
 
     public func setKeepScreenOnDuringPlayback(_ enabled: Bool) {

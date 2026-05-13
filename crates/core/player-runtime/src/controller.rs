@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::{MediaSource, PlaybackState, PlayerError};
+use player_model::{MediaSource, PlaybackState, PlayerError};
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;
 

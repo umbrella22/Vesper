@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 enum class VesperDlnaDiscoveryDiagnosticSeverity {
     Info,
@@ -50,6 +51,8 @@ class VesperDlnaDiscovery(
 
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
+    private val discoveryGeneration = AtomicLong(0)
+    private val routeLock = Any()
     private val devices = ConcurrentHashMap<String, VesperDlnaDevice>()
     private var executor: ExecutorService? = null
     private var notifyExecutor: ExecutorService? = null
@@ -61,15 +64,17 @@ class VesperDlnaDiscovery(
         if (!running.compareAndSet(false, true)) {
             return
         }
+        val generation = discoveryGeneration.incrementAndGet()
         acquireMulticastLock()
         executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "vesper-dlna-discovery").apply { isDaemon = true }
         }
-        executor?.execute(::runDiscoveryLoop)
+        executor?.execute { runDiscoveryLoop(generation) }
     }
 
     fun stop() {
         running.set(false)
+        discoveryGeneration.incrementAndGet()
         stopNotifyListener()
         executor?.shutdownNow()
         executor = null
@@ -81,14 +86,16 @@ class VesperDlnaDiscovery(
             }
         }
         multicastLock = null
-        devices.clear()
-        listener.onRoutesChanged(emptyList())
+        synchronized(routeLock) {
+            devices.clear()
+            listener.onRoutesChanged(emptyList())
+        }
     }
 
-    private fun runDiscoveryLoop() {
-        while (running.get() && !Thread.currentThread().isInterrupted) {
+    private fun runDiscoveryLoop(generation: Long) {
+        while (isDiscoveryActive(generation) && !Thread.currentThread().isInterrupted) {
             val keepRunning = runCatching {
-                pruneExpired()
+                pruneExpired(generation)
                 val bindings = resolveLanBindings()
                 if (bindings.isEmpty()) {
                     emitDiagnostic(
@@ -97,8 +104,8 @@ class VesperDlnaDiscovery(
                         message = "No Wi-Fi or Ethernet network with an IPv4 address is available for DLNA discovery.",
                     )
                 } else {
-                    ensureNotifyListener(bindings.first())
-                    val responseCount = bindings.sumOf(::searchOnce)
+                    ensureNotifyListener(bindings.first(), generation)
+                    val responseCount = bindings.sumOf { binding -> searchOnce(binding, generation) }
                     if (responseCount == 0) {
                         emitDiagnostic(
                             code = "ssdp_no_response",
@@ -138,7 +145,7 @@ class VesperDlnaDiscovery(
         }
     }
 
-    private fun searchOnce(binding: DlnaNetworkBinding): Int {
+    private fun searchOnce(binding: DlnaNetworkBinding, generation: Long): Int {
         try {
             MulticastSocket(null as SocketAddress?).use { socket ->
                 socket.reuseAddress = true
@@ -161,7 +168,7 @@ class VesperDlnaDiscovery(
                         message = "DLNA M-SEARCH probes were sent on the LAN interface.",
                         details = binding.details("round" to (round + 1).toString()),
                     )
-                    responseCount += receiveSearchResponses(socket, binding)
+                    responseCount += receiveSearchResponses(socket, binding, generation)
                 }
                 return responseCount
             }
@@ -187,11 +194,12 @@ class VesperDlnaDiscovery(
     private fun receiveSearchResponses(
         socket: DatagramSocket,
         binding: DlnaNetworkBinding,
+        generation: Long,
     ): Int {
         val buffer = ByteArray(SSDP_BUFFER_BYTES)
         val deadline = System.currentTimeMillis() + SSDP_RECEIVE_WINDOW_MS
         var responseCount = 0
-        while (running.get() && System.currentTimeMillis() < deadline) {
+        while (isDiscoveryActive(generation) && System.currentTimeMillis() < deadline) {
             val packet = DatagramPacket(buffer, buffer.size)
             try {
                 val remainingMs = (deadline - System.currentTimeMillis()).coerceAtLeast(1L)
@@ -199,7 +207,7 @@ class VesperDlnaDiscovery(
                 socket.receive(packet)
                 responseCount += 1
                 val raw = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
-                handleSsdp(raw, binding)
+                handleSsdp(raw, binding, generation)
             } catch (_: SocketTimeoutException) {
                 continue
             } catch (error: IOException) {
@@ -216,16 +224,15 @@ class VesperDlnaDiscovery(
         return responseCount
     }
 
-    private fun handleSsdp(raw: String, binding: DlnaNetworkBinding) {
-        if (!running.get()) {
+    private fun handleSsdp(raw: String, binding: DlnaNetworkBinding, generation: Long) {
+        if (!isDiscoveryActive(generation)) {
             return
         }
         val message = VesperSsdpParser.parse(raw) ?: return
         if (message.isByebyeNotify) {
             val usn = message.usn ?: return
             val routeId = canonicalDlnaRouteId(usn)
-            if (devices.remove(routeId) != null) {
-                emitRoutes()
+            if (removeDevice(routeId, generation)) {
                 emitDiagnostic(
                     code = "route_byebye",
                     severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
@@ -239,18 +246,18 @@ class VesperDlnaDiscovery(
             return
         }
         val request = message.toDescriptionRequest(System.currentTimeMillis()) ?: return
-        val device = fetchDevice(request, binding.network) ?: return
-        if (!running.get()) {
-            return
-        }
-        devices[device.routeId] = device
-        emitRoutes()
+        val device = fetchDevice(request, binding.network, generation) ?: return
+        upsertDevice(device, generation)
     }
 
     private fun fetchDevice(
         request: VesperDlnaDescriptionRequest,
         network: Network,
+        generation: Long,
     ): VesperDlnaDevice? {
+        if (!isDiscoveryActive(generation)) {
+            return null
+        }
         if (request.location.protocol.equals("http", ignoreCase = true) &&
             !NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted(request.location.host)
         ) {
@@ -269,6 +276,9 @@ class VesperDlnaDiscovery(
             connection.readTimeout = DESCRIPTION_TIMEOUT_MS
             connection.instanceFollowRedirects = true
             val status = connection.responseCode
+            if (!isDiscoveryActive(generation)) {
+                return null
+            }
             if (status !in 200..299) {
                 emitDiagnostic(
                     code = "description_http_status",
@@ -279,6 +289,9 @@ class VesperDlnaDiscovery(
                 return null
             }
             val xml = connection.inputStream.bufferedReader().use { it.readText() }
+            if (!isDiscoveryActive(generation)) {
+                return null
+            }
             val device = try {
                 VesperDlnaDeviceDescriptionParser.parse(
                     xml = xml,
@@ -301,6 +314,9 @@ class VesperDlnaDiscovery(
                     message = error.message ?: "Failed to parse DLNA device description.",
                     details = request.details("error" to error.javaClass.simpleName),
                 )
+                return null
+            }
+            if (!isDiscoveryActive(generation)) {
                 return null
             }
             if (!device.supportsPlayback) {
@@ -351,15 +367,42 @@ class VesperDlnaDiscovery(
         }
     }
 
-    private fun pruneExpired() {
+    private fun pruneExpired(generation: Long) {
         val now = System.currentTimeMillis()
-        val removed = devices.entries.removeIf { it.value.expiresAtMillis <= now }
-        if (removed) {
-            emitRoutes()
+        synchronized(routeLock) {
+            if (!isDiscoveryActive(generation)) {
+                return
+            }
+            val removed = devices.entries.removeIf { it.value.expiresAtMillis <= now }
+            if (removed) {
+                emitRoutesLocked()
+            }
         }
     }
 
-    private fun emitRoutes() {
+    private fun upsertDevice(device: VesperDlnaDevice, generation: Long) {
+        synchronized(routeLock) {
+            if (!isDiscoveryActive(generation)) {
+                return
+            }
+            devices[device.routeId] = device
+            emitRoutesLocked()
+        }
+    }
+
+    private fun removeDevice(routeId: String, generation: Long): Boolean =
+        synchronized(routeLock) {
+            if (!isDiscoveryActive(generation)) {
+                return@synchronized false
+            }
+            val removed = devices.remove(routeId) != null
+            if (removed) {
+                emitRoutesLocked()
+            }
+            removed
+        }
+
+    private fun emitRoutesLocked() {
         listener.onRoutesChanged(
             devices.values
                 .filter { it.supportsPlayback }
@@ -434,7 +477,7 @@ class VesperDlnaDiscovery(
         }
     }
 
-    private fun ensureNotifyListener(binding: DlnaNetworkBinding) {
+    private fun ensureNotifyListener(binding: DlnaNetworkBinding, generation: Long) {
         val bindingKey = binding.key
         if (notifyBindingKey == bindingKey && notifyExecutor != null) {
             return
@@ -444,10 +487,10 @@ class VesperDlnaDiscovery(
         notifyExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "vesper-dlna-notify").apply { isDaemon = true }
         }
-        notifyExecutor?.execute { runNotifyLoop(binding) }
+        notifyExecutor?.execute { runNotifyLoop(binding, generation) }
     }
 
-    private fun runNotifyLoop(binding: DlnaNetworkBinding) {
+    private fun runNotifyLoop(binding: DlnaNetworkBinding, generation: Long) {
         val networkInterface = binding.networkInterface
         if (networkInterface == null) {
             emitDiagnostic(
@@ -464,7 +507,7 @@ class VesperDlnaDiscovery(
             MulticastSocket(null as SocketAddress?).use { socket ->
                 socket.reuseAddress = true
                 socket.soTimeout = NOTIFY_RECEIVE_TIMEOUT_MS
-                socket.bind(InetSocketAddress(SSDP_PORT))
+                val boundPort = bindNotifySocket(socket, binding)
                 bindSocketToNetwork(socket, binding)
                 socket.setNetworkInterface(networkInterface)
                 try {
@@ -485,16 +528,16 @@ class VesperDlnaDiscovery(
                     code = "notify_listener_started",
                     severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
                     message = "SSDP NOTIFY listener started on the LAN interface.",
-                    details = binding.details(),
+                    details = binding.details("port" to boundPort.toString()),
                 )
                 try {
                     val buffer = ByteArray(SSDP_BUFFER_BYTES)
-                    while (running.get() && !Thread.currentThread().isInterrupted) {
+                    while (isDiscoveryActive(generation) && !Thread.currentThread().isInterrupted) {
                         val packet = DatagramPacket(buffer, buffer.size)
                         try {
                             socket.receive(packet)
                             val raw = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
-                            handleSsdp(raw, binding)
+                            handleSsdp(raw, binding, generation)
                         } catch (_: SocketTimeoutException) {
                         }
                     }
@@ -532,6 +575,26 @@ class VesperDlnaDiscovery(
             notifySocket = null
         }
     }
+
+    private fun bindNotifySocket(socket: MulticastSocket, binding: DlnaNetworkBinding): Int {
+        try {
+            socket.bind(InetSocketAddress(SSDP_PORT))
+            return SSDP_PORT
+        } catch (error: IOException) {
+            emitDiagnostic(
+                code = "notify_port_unavailable",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Warning,
+                message = error.message ?: "SSDP NOTIFY port 1900 is already in use; falling back to an ephemeral listener.",
+                details = binding.details("error" to error.javaClass.simpleName),
+            )
+        }
+
+        socket.bind(InetSocketAddress(0))
+        return socket.localPort
+    }
+
+    private fun isDiscoveryActive(generation: Long): Boolean =
+        running.get() && discoveryGeneration.get() == generation
 
     private fun stopNotifyListener() {
         notifyBindingKey = null

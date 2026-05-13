@@ -9,3 +9,4 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 cpal.workspace = true
+rtrb.workspace = true

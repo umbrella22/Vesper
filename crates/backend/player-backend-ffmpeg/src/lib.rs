@@ -1,7 +1,9 @@
 #![allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
+#![warn(clippy::undocumented_unsafe_blocks)]
 
 mod audio;
 mod buffered;
+mod clock;
 mod hls;
 mod input;
 mod packet;
@@ -24,6 +26,7 @@ use tracing::warn;
 use video::{VideoFrameOutput, create_video_frame_output, open_video_decoder};
 
 pub use buffered::{BufferedFramePoll, BufferedVideoSource, BufferedVideoSourceBootstrap};
+pub use clock::{AudioMasterClock, MasterClock};
 pub use player_model::{DecodedVideoFrame, VideoPixelFormat};
 
 #[derive(Debug, Clone, Copy)]

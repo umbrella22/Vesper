@@ -81,7 +81,7 @@ Core (`vesper-player-kit`):
 - `VesperPreloadBudgetPolicy` — caps for concurrent preload tasks, memory, disk, warm-up window
 - `VesperTrackPreferencePolicy` — preferred audio / subtitle languages
 - `VesperDecoderBackend` — `SystemOnly` / `SystemPreferred` / `ExtensionPreferred`
-- `NativeVideoSurfaceKind` — `SurfaceView` (default, HDR / high frame rate) or `TextureView` (scrolling / animated stages)
+- `VesperVideoSurfaceKind` — `SurfaceView` (default, HDR / high frame rate) or `TextureView` (scrolling / animated stages)
 - `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput`
 
 Cast (`vesper-player-kit-cast`):

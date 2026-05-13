@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 class VesperPlayerController internal constructor(
     private val bridge: PlayerBridge,
 ) {
-    val backend: PlayerBridgeBackend
+    internal val backend: PlayerBridgeBackend
         get() = bridge.backend
 
     val uiState: StateFlow<PlayerHostUiState>
@@ -98,7 +98,7 @@ object VesperPlayerControllerFactory {
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
         decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
-        surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+        surfaceKind: VesperVideoSurfaceKind = VesperVideoSurfaceKind.SurfaceView,
         keepScreenOnDuringPlayback: Boolean = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     ): VesperPlayerController =
@@ -110,7 +110,7 @@ object VesperPlayerControllerFactory {
                 trackPreferencePolicy = trackPreferencePolicy,
                 preloadBudgetPolicy = preloadBudgetPolicy,
                 decoderBackend = decoderBackend,
-                surfaceKind = surfaceKind,
+                surfaceKind = surfaceKind.toNativeSurfaceKind(),
                 keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                 benchmarkConfiguration = benchmarkConfiguration,
             )

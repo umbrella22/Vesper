@@ -559,11 +559,10 @@ fn copy_interleaved_f32_samples(frame: &Audio) -> Result<Vec<f32>> {
 
     let mut samples = Vec::with_capacity(total_samples);
     for chunk in bytes.chunks_exact(size_of::<f32>()) {
-        let sample = f32::from_ne_bytes(
-            chunk
-                .try_into()
-                .expect("chunks_exact always yields 4-byte slices"),
-        );
+        let [a, b, c, d] = chunk else {
+            continue;
+        };
+        let sample = f32::from_ne_bytes([*a, *b, *c, *d]);
         samples.push(sample);
     }
 

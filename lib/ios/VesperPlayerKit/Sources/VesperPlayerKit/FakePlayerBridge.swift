@@ -329,6 +329,21 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedResiliencePolicy = policy
     }
 
+    func setAudioSessionInterrupted(_ interrupted: Bool) {
+        update { current in
+            PlayerHostUiState(
+                title: current.title,
+                subtitle: current.subtitle,
+                sourceLabel: current.sourceLabel,
+                playbackState: current.playbackState,
+                playbackRate: current.playbackRate,
+                isBuffering: current.isBuffering,
+                isInterrupted: interrupted,
+                timeline: current.timeline
+            )
+        }
+    }
+
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent] {
         benchmarkRecorder.drainEvents()
     }

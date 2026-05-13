@@ -576,7 +576,7 @@ fn download_task_from_java<'local>(
             _ => DownloadTaskStatus::Queued,
         },
         progress: download_progress_from_java(env, progress)?,
-        asset_index: download_asset_index_from_java(env, asset_index)?,
+        asset_index: Arc::new(download_asset_index_from_java(env, asset_index)?),
         created_at: now,
         updated_at: now,
         error_summary,

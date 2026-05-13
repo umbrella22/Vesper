@@ -1,6 +1,7 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -13,7 +14,8 @@ use player_plugin::{
     DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput,
     DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
     PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
-    ProcessorOutput, ProcessorProgress, VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
+    ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
     VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
@@ -239,9 +241,10 @@ impl LoadedDynamicPlugin {
     ) -> Result<Self, PluginLoadError> {
         let expected_abi_version = match descriptor.plugin_kind {
             VesperPluginKind::PostDownloadProcessor => VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-            VesperPluginKind::PipelineEventHook
-            | VesperPluginKind::Decoder
-            | VesperPluginKind::BenchmarkSink => VESPER_PLUGIN_ABI_VERSION_V2,
+            VesperPluginKind::PipelineEventHook | VesperPluginKind::BenchmarkSink => {
+                VESPER_PLUGIN_ABI_VERSION_V2
+            }
+            VesperPluginKind::Decoder => VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
         };
         if descriptor.abi_version != expected_abi_version {
             return Err(PluginLoadError::AbiVersionMismatch {
@@ -1740,17 +1743,22 @@ struct ProgressAdapter<'a> {
 }
 
 unsafe extern "C" fn progress_on_progress(context: *mut c_void, ratio: f32) {
-    // SAFETY: `context` is created from `ProgressAdapter` immediately before the
-    // synchronous `process_json` call and remains valid until that call returns.
-    let adapter = unsafe { &*(context.cast::<ProgressAdapter<'_>>()) };
-    adapter.progress.on_progress(ratio);
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `context` is created from `ProgressAdapter` immediately before the
+        // synchronous `process_json` call and remains valid until that call returns.
+        let adapter = unsafe { &*(context.cast::<ProgressAdapter<'_>>()) };
+        adapter.progress.on_progress(ratio);
+    }));
 }
 
 unsafe extern "C" fn progress_is_cancelled(context: *mut c_void) -> bool {
-    // SAFETY: `context` is created from `ProgressAdapter` immediately before the
-    // synchronous `process_json` call and remains valid until that call returns.
-    let adapter = unsafe { &*(context.cast::<ProgressAdapter<'_>>()) };
-    adapter.progress.is_cancelled()
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `context` is created from `ProgressAdapter` immediately before the
+        // synchronous `process_json` call and remains valid until that call returns.
+        let adapter = unsafe { &*(context.cast::<ProgressAdapter<'_>>()) };
+        adapter.progress.is_cancelled()
+    }))
+    .unwrap_or(true)
 }
 
 fn c_string_field(pointer: *const c_char, field: &'static str) -> Result<String, PluginLoadError> {
@@ -1885,7 +1893,7 @@ mod tests {
         DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
         DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
         DecoderSessionInfo, DownloadMetadata, OutputFormat, PipelineEvent, ProcessorCapabilities,
-        ProcessorError, ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+        ProcessorError, ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
         VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
         VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
         VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
@@ -2182,7 +2190,7 @@ mod tests {
         assert!(matches!(
             error,
             PluginLoadError::AbiVersionMismatch {
-                expected: 2,
+                expected: 3,
                 actual: 1
             }
         ));
@@ -2192,7 +2200,7 @@ mod tests {
     fn dynamic_decoder_plugin_surfaces_error_payloads() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2219,7 +2227,7 @@ mod tests {
     fn dynamic_native_decoder_plugin_adapter_round_trips_native_frame() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2287,7 +2295,7 @@ mod tests {
     fn dynamic_native_decoder_plugin_close_releases_unreturned_native_frames() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2338,7 +2346,7 @@ mod tests {
     fn dynamic_native_decoder_plugin_rejects_duplicate_native_frame_release() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2392,7 +2400,7 @@ mod tests {
     fn dynamic_native_decoder_plugin_exposes_native_requirements() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2417,7 +2425,7 @@ mod tests {
     fn dynamic_native_decoder_plugin_receives_native_device_context() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2435,9 +2443,8 @@ mod tests {
                 media_kind: DecoderMediaKind::Video,
                 prefer_hardware: true,
                 require_cpu_output: false,
-                native_device_context: Some(DecoderNativeDeviceContext {
-                    kind: DecoderNativeDeviceContextKind::D3D11Device,
-                    handle: 42,
+                native_device_context: Some(DecoderNativeDeviceContext::D3D11Device {
+                    device_ptr: 42,
                 }),
                 ..DecoderSessionConfig::default()
             })
@@ -2456,7 +2463,7 @@ mod tests {
             ..fixture_native_decoder_api()
         };
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2487,7 +2494,7 @@ mod tests {
     fn dynamic_native_decoder_plugin_rejects_old_v2_abi_revision() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: 3,
+            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2498,7 +2505,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            PluginLoadError::AbiVersionMismatch { actual: 3, .. }
+            PluginLoadError::AbiVersionMismatch { actual: 2, .. }
         ));
     }
 
@@ -2552,7 +2559,7 @@ mod tests {
     fn plugin_registry_reports_decoder_codec_match() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2593,7 +2600,7 @@ mod tests {
     fn plugin_registry_reports_decoder_codec_mismatch() {
         let api = fixture_native_decoder_api();
         let descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2620,7 +2627,7 @@ mod tests {
     fn plugin_registry_report_counts_and_best_decoder_are_stable() {
         let api = fixture_native_decoder_api();
         let decoder_descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&api as *const VesperDecoderPluginApiV2).cast(),
@@ -2690,7 +2697,7 @@ mod tests {
     fn plugin_registry_prefers_native_decoder_candidates_when_requested() {
         let native_api = fixture_native_decoder_api();
         let native_descriptor = VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
             api: (&native_api as *const VesperDecoderPluginApiV2).cast(),
@@ -3195,8 +3202,8 @@ mod tests {
 
         let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
         let selected_hardware_backend = match config.native_device_context.as_ref() {
-            Some(context) if context.kind == DecoderNativeDeviceContextKind::D3D11Device => {
-                Some(format!("fixture-native-d3d11-device-{}", context.handle))
+            Some(DecoderNativeDeviceContext::D3D11Device { device_ptr }) => {
+                Some(format!("fixture-native-d3d11-device-{device_ptr}"))
             }
             _ => Some("fixture-native".to_owned()),
         };

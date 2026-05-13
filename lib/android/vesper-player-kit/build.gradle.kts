@@ -82,6 +82,52 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
+val checkPublicApiSurface by tasks.registering {
+    group = "verification"
+    description = "Fails when bridge, JNI, or Native* implementation types leak into the Kotlin public API."
+    val kotlinSources = fileTree("src/main/java") {
+        include("**/*.kt")
+    }
+    inputs.files(kotlinSources)
+
+    doLast {
+        val declarationPattern =
+            Regex("^(?:public\\s+)?(?:(?:data|sealed|enum|value)\\s+)*(class|interface|object|typealias)\\s+([A-Za-z_][A-Za-z0-9_]*)")
+        val forbiddenNamePattern = Regex("(?:^Native|^VesperNative|Bridge|Jni)")
+        val leaks = kotlinSources.files.flatMap { file ->
+            file.readLines().mapIndexedNotNull { index, line ->
+                val trimmed = line.trim()
+                if (
+                    trimmed.startsWith("internal ") ||
+                    trimmed.startsWith("private ") ||
+                    trimmed.startsWith("@")
+                ) {
+                    return@mapIndexedNotNull null
+                }
+
+                val match = declarationPattern.find(trimmed) ?: return@mapIndexedNotNull null
+                val declarationName = match.groupValues[2]
+                if (!forbiddenNamePattern.containsMatchIn(declarationName)) {
+                    return@mapIndexedNotNull null
+                }
+
+                "${file.relativeTo(projectDir)}:${index + 1}: $trimmed"
+            }
+        }
+
+        if (leaks.isNotEmpty()) {
+            throw GradleException(
+                "Internal Android bridge/JNI/native declarations leaked into the public API:\n" +
+                    leaks.joinToString(separator = "\n"),
+            )
+        }
+    }
+}
+
+tasks.named("check").configure {
+    dependsOn(checkPublicApiSurface)
+}
+
 tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn(buildRustAndroidHostDebug)
 }

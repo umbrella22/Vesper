@@ -356,7 +356,7 @@ interface VesperDownloadExecutionReporter {
     )
 }
 
-interface NativeDownloadExportProgressCallback {
+internal interface NativeDownloadExportProgressCallback {
     fun onProgress(ratio: Float)
 
     fun isCancelled(): Boolean = false

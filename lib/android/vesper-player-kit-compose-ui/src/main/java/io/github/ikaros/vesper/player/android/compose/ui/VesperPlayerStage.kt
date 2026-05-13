@@ -140,7 +140,6 @@ fun VesperPlayerStage(
         VesperPlayerSurface(
             controller = controller,
             modifier = Modifier.fillMaxSize(),
-            cornerRadiusDp = if (isPortrait) 20.dp else 0.dp,
             manageControllerLifecycle = false,
         )
 

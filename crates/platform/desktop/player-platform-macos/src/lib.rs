@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::collections::VecDeque;
 mod native;
 mod system;
