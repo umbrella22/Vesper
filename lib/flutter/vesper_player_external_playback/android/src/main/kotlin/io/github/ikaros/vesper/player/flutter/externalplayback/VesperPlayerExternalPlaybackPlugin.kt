@@ -62,7 +62,9 @@ class VesperPlayerExternalPlaybackPlugin :
     private var sessionSink: EventChannel.EventSink? = null
     private var dlnaDiscovery: VesperDlnaDiscovery? = null
     private val dlnaDevices = linkedMapOf<String, VesperDlnaDevice>()
+    private val recentlySeenDlnaDevices = linkedMapOf<String, RecentDlnaDevice>()
     private val activeRelayTokens = mutableSetOf<String>()
+    private var discoveryGeneration = 0
     private var activeRouteId: String? = null
     private var activeCastRouteName: String? = null
     private var dlnaSession: VesperDlnaSession? = null
@@ -230,19 +232,33 @@ class VesperPlayerExternalPlaybackPlugin :
 
     private fun startDiscovery() {
         if (dlnaDiscovery == null) {
+            val generation = ++discoveryGeneration
             dlnaDiscovery = VesperDlnaDiscovery(
                 applicationContext,
                 object : VesperDlnaDiscovery.Listener {
                     override fun onRoutesChanged(routes: List<VesperDlnaDevice>) {
                         mainHandler.post {
+                            if (generation != discoveryGeneration) {
+                                return@post
+                            }
+                            pruneRecentlySeenDlnaDevices()
                             dlnaDevices.clear()
-                            routes.forEach { dlnaDevices[it.routeId] = it }
+                            routes.forEach { device ->
+                                dlnaDevices[device.routeId] = device
+                                recentlySeenDlnaDevices[device.routeId] = RecentDlnaDevice(
+                                    device = device,
+                                    expiresAtMillis = System.currentTimeMillis() + RECENT_DLNA_ROUTE_GRACE_MS,
+                                )
+                            }
                             emitRoutes()
                         }
                     }
 
                     override fun onDiscoveryError(message: String) {
                         mainHandler.post {
+                            if (generation != discoveryGeneration) {
+                                return@post
+                            }
                             emitSessionEvent("error", message = message)
                         }
                     }
@@ -251,6 +267,9 @@ class VesperPlayerExternalPlaybackPlugin :
                         diagnostic: VesperDlnaDiscoveryDiagnostic,
                     ) {
                         mainHandler.post {
+                            if (generation != discoveryGeneration) {
+                                return@post
+                            }
                             emitSessionEvent(
                                 "discoveryDiagnostic",
                                 message = diagnostic.message,
@@ -269,9 +288,11 @@ class VesperPlayerExternalPlaybackPlugin :
     }
 
     private fun stopDiscovery() {
+        discoveryGeneration += 1
         dlnaDiscovery?.stop()
         dlnaDiscovery = null
         dlnaDevices.clear()
+        recentlySeenDlnaDevices.clear()
         emitRoutes()
     }
 
@@ -288,13 +309,47 @@ class VesperPlayerExternalPlaybackPlugin :
                 ExternalOperationResult.Unavailable("Select a Cast route with the system route button first.")
             }
         }
-        val device = dlnaDevices[routeId]
-            ?: return ExternalOperationResult.Unavailable("DLNA route is no longer available.")
+        val device = dlnaDevices[routeId] ?: recentlySeenDlnaDevice(routeId)
+        if (device == null) {
+            emitSessionEvent(
+                "discoveryDiagnostic",
+                message = "DLNA route is no longer available.",
+                code = "dlna_route_cache_miss",
+                details = mapOf(
+                    "severity" to "warning",
+                    "routeId" to routeId,
+                    "availableRouteIds" to dlnaDevices.keys.joinToString(","),
+                    "recentRouteIds" to recentlySeenDlnaDevices.keys.joinToString(","),
+                ),
+            )
+            return ExternalOperationResult.Unavailable("DLNA route is no longer available.")
+        }
         dlnaSession = VesperDlnaSession(device)
         activeRouteId = routeId
         emitRoutes()
         emitSessionEvent("routeConnected", routeId, device.friendlyName)
         return ExternalOperationResult.Success(routeId = routeId)
+    }
+
+    private fun recentlySeenDlnaDevice(routeId: String): VesperDlnaDevice? {
+        pruneRecentlySeenDlnaDevices()
+        val recent = recentlySeenDlnaDevices[routeId] ?: return null
+        emitSessionEvent(
+            "discoveryDiagnostic",
+            message = "Using a recently discovered DLNA route during discovery refresh.",
+            code = "dlna_route_recent_cache_used",
+            details = mapOf(
+                "severity" to "info",
+                "routeId" to routeId,
+                "routeName" to recent.device.friendlyName,
+            ),
+        )
+        return recent.device
+    }
+
+    private fun pruneRecentlySeenDlnaDevices() {
+        val now = System.currentTimeMillis()
+        recentlySeenDlnaDevices.entries.removeIf { it.value.expiresAtMillis <= now }
     }
 
     private fun load(arguments: Map<String, Any?>): ExternalOperationResult {
@@ -648,6 +703,11 @@ private data class ExternalMediaItem(
     val proxyPolicy: VesperExternalProxyPolicy,
 )
 
+private data class RecentDlnaDevice(
+    val device: VesperDlnaDevice,
+    val expiresAtMillis: Long,
+)
+
 private sealed class ExternalOperationResult {
     data class Success(
         val routeId: String? = null,
@@ -768,3 +828,4 @@ private const val ROUTES_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player_ex
 private const val SESSION_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player_external_playback/events"
 private const val ROUTE_BUTTON_VIEW_TYPE =
     "io.github.ikaros.vesper_player_external_playback/route_button"
+private const val RECENT_DLNA_ROUTE_GRACE_MS = 120_000L

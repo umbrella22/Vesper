@@ -56,7 +56,8 @@ fun VesperSsdpMessage.toDescriptionRequest(nowMillis: Long): VesperDlnaDescripti
     val locationValue = location ?: return null
     val usnValue = usn?.takeIf { it.isNotBlank() } ?: locationValue
     val locationUrl = runCatching { URL(locationValue) }.getOrNull() ?: return null
-    val maxAgeMillis = (cacheMaxAgeSeconds ?: 1800L).coerceAtLeast(1L) * 1000L
+    val maxAgeMillis = (cacheMaxAgeSeconds ?: DEFAULT_ROUTE_TTL_SECONDS)
+        .coerceAtLeast(MIN_ROUTE_TTL_SECONDS) * 1000L
     return VesperDlnaDescriptionRequest(
         location = locationUrl,
         usn = usnValue,
@@ -83,3 +84,6 @@ internal fun canonicalDlnaRouteId(value: String): String =
         .trim()
         .takeIf { it.isNotEmpty() }
         ?: value
+
+private const val DEFAULT_ROUTE_TTL_SECONDS = 1800L
+private const val MIN_ROUTE_TTL_SECONDS = 120L

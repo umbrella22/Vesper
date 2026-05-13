@@ -33,6 +33,21 @@ class VesperDlnaProtocolTest {
     }
 
     @Test
+    fun appliesMinimumSsdpRouteTtl() {
+        val raw = """
+            HTTP/1.1 200 OK
+            CACHE-CONTROL: max-age=1
+            LOCATION: http://192.168.1.10:8000/desc.xml
+            ST: urn:schemas-upnp-org:device:MediaRenderer:1
+            USN: uuid:device-1::urn:schemas-upnp-org:device:MediaRenderer:1
+        """.trimIndent()
+
+        val request = VesperSsdpParser.parse(raw)!!.toDescriptionRequest(nowMillis = 1000L)
+
+        assertEquals(121000L, request?.expiresAtMillis)
+    }
+
+    @Test
     fun parsesDeviceDescriptionServices() {
         val device = VesperDlnaDeviceDescriptionParser.parse(
             xml = DEVICE_XML,
