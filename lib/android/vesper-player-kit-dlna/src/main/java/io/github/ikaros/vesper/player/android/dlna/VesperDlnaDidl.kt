@@ -33,7 +33,7 @@ object VesperDlnaDidlBuilder {
 
 fun VesperPlayerSource.dlnaMimeType(): String =
     when (protocol) {
-        VesperPlayerSourceProtocol.Hls -> "application/vnd.apple.mpegurl"
+        VesperPlayerSourceProtocol.Hls -> "application/x-mpegURL"
         VesperPlayerSourceProtocol.Dash -> "application/dash+xml"
         VesperPlayerSourceProtocol.Progressive,
         VesperPlayerSourceProtocol.File,
@@ -49,7 +49,7 @@ fun VesperPlayerSource.dlnaMimeType(): String =
 private fun String.mimeTypeFromPath(): String? {
     val path = substringBefore('?').substringBefore('#').lowercase()
     return when {
-        path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
+        path.endsWith(".m3u8") -> "application/x-mpegURL"
         path.endsWith(".m3u") -> "audio/mpegurl"
         path.endsWith(".mpd") -> "application/dash+xml"
         path.endsWith(".mp4") || path.endsWith(".m4v") -> "video/mp4"

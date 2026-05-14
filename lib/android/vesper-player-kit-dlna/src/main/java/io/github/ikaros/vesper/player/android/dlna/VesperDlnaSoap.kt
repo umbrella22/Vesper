@@ -4,6 +4,7 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import java.io.StringReader
 import java.net.HttpURLConnection
+import java.util.Locale
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 
@@ -60,9 +61,11 @@ object VesperDlnaProtocolInfoParser {
     fun supportsHls(protocolInfo: String): Boolean =
         protocolInfo.split(',')
             .any {
-                it.contains("application/vnd.apple.mpegurl", ignoreCase = true) ||
-                    it.contains("application/x-mpegurl", ignoreCase = true) ||
-                    it.contains("mpegurl", ignoreCase = true)
+                val entry = it.lowercase(Locale.US)
+                entry.contains("application/vnd.apple.mpegurl") ||
+                    entry.contains("application/x-mpegurl") ||
+                    entry.contains("mpegurl") ||
+                    entry.contains(".m3u8")
             }
 
     fun supportsDash(protocolInfo: String): Boolean =
@@ -71,9 +74,14 @@ object VesperDlnaProtocolInfoParser {
     fun supportsMpegTs(protocolInfo: String): Boolean =
         protocolInfo.split(',')
             .any {
-                it.contains("video/mp2t", ignoreCase = true) ||
-                    it.contains("video/mpeg", ignoreCase = true) ||
-                    it.contains("mpegts", ignoreCase = true)
+                val entry = it.lowercase(Locale.US)
+                entry.contains("video/mp2t") ||
+                    entry.contains("video/mpeg-ts") ||
+                    entry.contains("video/mpeg") ||
+                    entry.contains("mpegts") ||
+                    entry.contains("mpeg_ts") ||
+                    entry.contains("mp2t") ||
+                    entry.contains("dlna.org_pn=mpeg_ts")
             }
 
     fun supportsMime(protocolInfo: String, mimeType: String): Boolean =

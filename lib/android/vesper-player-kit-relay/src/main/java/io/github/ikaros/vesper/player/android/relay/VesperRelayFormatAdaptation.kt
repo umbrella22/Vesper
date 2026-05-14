@@ -107,7 +107,7 @@ fun ByteArray.asRelayAdaptedStream(
 fun VesperRelayFallbackFormat.contentType(): String =
     when (this) {
         VesperRelayFallbackFormat.MpegTs -> "video/mp2t"
-        VesperRelayFallbackFormat.Hls -> "application/vnd.apple.mpegurl"
+        VesperRelayFallbackFormat.Hls -> "application/x-mpegURL"
     }
 
 fun VesperRelayFallbackFormat.urlExtension(): String =

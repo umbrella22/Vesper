@@ -306,6 +306,34 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun relayServerServesHlsAdaptedPlaylistWithCompatibleMime() {
+        val adaptedRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            formatAdapter = RecordingFormatAdapter(),
+        )
+        try {
+            val handle = adaptedRelay.register(
+                VesperPlayerSource.dash(
+                    uri = "https://example.com/video.mpd",
+                    label = "Episode",
+                ),
+                VesperRelayFormatAdaptationRegistration(
+                    fallbackFormat = VesperRelayFallbackFormat.Hls,
+                    config = VesperRelayFormatAdaptationConfig(enabled = true),
+                ),
+            )
+
+            val response = request(handle.url)
+
+            assertEquals(200, response.status)
+            assertEquals("application/x-mpegURL", response.headers["Content-Type"]?.firstOrNull())
+        } finally {
+            adaptedRelay.stop()
+        }
+    }
+
+    @Test
     fun sourcePreparerHonorsProxyNever() {
         val preparer = VesperExternalPlaybackSourcePreparer(relay)
         val source = VesperPlayerSource.remote(

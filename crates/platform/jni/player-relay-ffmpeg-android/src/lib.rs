@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use ffmpeg::{Rational, codec, encoder, format, media};
 use ffmpeg_next as ffmpeg;
@@ -22,8 +23,12 @@ use serde::Deserialize;
 const PKG: &str = "io/github/ikaros/vesper/player/android/relay/ffmpeg";
 const MAX_MANIFEST_PROBE_BYTES: usize = 1024 * 1024;
 const DEFAULT_REMUX_TIMEOUT: Duration = Duration::from_secs(90);
+const MPEG_TS_RANGE_WAIT: Duration = Duration::from_secs(5);
+const HLS_SEGMENT_WAIT: Duration = Duration::from_secs(10);
+const STALE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/x-mpegURL";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenRequest {
     session_id: String,
@@ -71,7 +76,7 @@ struct ResolvedRange {
     end: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RelayError {
     code: &'static str,
     status: i32,
@@ -86,18 +91,85 @@ struct SessionCache {
 
 #[derive(Default)]
 struct SessionState {
-    mpeg_ts_path: Option<PathBuf>,
-    hls_playlist_path: Option<PathBuf>,
+    mpeg_ts_cache: Option<Arc<GrowingCache>>,
+    hls_cache: Option<Arc<GrowingCache>>,
+}
+
+struct GrowingCache {
+    path: PathBuf,
+    state: Mutex<GrowingCacheState>,
+    ready: Condvar,
+}
+
+struct GrowingCacheState {
+    available_len: u64,
+    complete: bool,
+    error: Option<RelayError>,
+    last_progress: Instant,
+}
+
+impl GrowingCache {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            state: Mutex::new(GrowingCacheState {
+                available_len: 0,
+                complete: false,
+                error: None,
+                last_progress: Instant::now(),
+            }),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn refresh_available_len(&self) {
+        let Ok(metadata) = fs::metadata(&self.path) else {
+            return;
+        };
+        let available_len = metadata.len();
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if available_len > state.available_len {
+            state.available_len = available_len;
+            state.last_progress = Instant::now();
+            self.ready.notify_all();
+        }
+    }
+
+    fn mark_complete(&self) {
+        self.refresh_available_len();
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.complete = true;
+        state.last_progress = Instant::now();
+        self.ready.notify_all();
+    }
+
+    fn mark_error(&self, error: RelayError) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.error = Some(error);
+        state.last_progress = Instant::now();
+        self.ready.notify_all();
+    }
 }
 
 enum NativeStream {
+    Bytes(Cursor<Vec<u8>>),
     File(File),
-    LimitedFile { file: File, remaining: u64 },
+    LimitedFile {
+        file: File,
+        remaining: u64,
+    },
+    GrowingFile {
+        file: File,
+        cache: Arc<GrowingCache>,
+        position: u64,
+        remaining: Option<u64>,
+    },
 }
 
 impl Read for NativeStream {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         match self {
+            NativeStream::Bytes(cursor) => cursor.read(buffer),
             NativeStream::File(file) => file.read(buffer),
             NativeStream::LimitedFile { file, remaining } => {
                 if *remaining == 0 {
@@ -108,7 +180,64 @@ impl Read for NativeStream {
                 *remaining = remaining.saturating_sub(read as u64);
                 Ok(read)
             }
+            NativeStream::GrowingFile {
+                file,
+                cache,
+                position,
+                remaining,
+            } => read_growing_file(file, cache, position, remaining, buffer),
         }
+    }
+}
+
+fn read_growing_file(
+    file: &mut File,
+    cache: &GrowingCache,
+    position: &mut u64,
+    remaining: &mut Option<u64>,
+    buffer: &mut [u8],
+) -> std::io::Result<usize> {
+    if buffer.is_empty() || remaining.as_ref().is_some_and(|remaining| *remaining == 0) {
+        return Ok(0);
+    }
+
+    loop {
+        cache.refresh_available_len();
+        let mut state = cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let readable_end = remaining
+            .map(|remaining| position.saturating_add(remaining))
+            .map(|end| end.min(state.available_len))
+            .unwrap_or(state.available_len);
+        if *position < readable_end {
+            let max_read = (readable_end - *position) as usize;
+            let max_read = max_read.min(buffer.len());
+            file.seek(SeekFrom::Start(*position))?;
+            drop(state);
+            let read = file.read(&mut buffer[..max_read])?;
+            if read > 0 {
+                *position += read as u64;
+                if let Some(remaining_bytes) = remaining.as_mut() {
+                    *remaining_bytes = remaining_bytes.saturating_sub(read as u64);
+                }
+                return Ok(read);
+            }
+            return Ok(0);
+        } else if state.complete || state.error.is_some() {
+            return Ok(0);
+        }
+
+        if Instant::now().duration_since(state.last_progress) >= DEFAULT_REMUX_TIMEOUT {
+            return Ok(0);
+        }
+        let (next_state, _) = cache
+            .ready
+            .wait_timeout(state, Duration::from_millis(250))
+            .unwrap_or_else(|error| error.into_inner());
+        state = next_state;
+        drop(state);
     }
 }
 
@@ -323,20 +452,28 @@ fn open_stream(request: &OpenRequest) -> Result<OpenedStream, RelayError> {
     reject_encrypted_dash(request)?;
 
     let session = session_cache(request)?;
-    let path = {
-        let mut state = session
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        match request.fallback_format {
-            FallbackFormat::MpegTs => ensure_mpeg_ts_cache(request, &session.root_dir, &mut state)?,
-            FallbackFormat::Hls => ensure_hls_cache(request, &session.root_dir, &mut state)?,
+    match request.fallback_format {
+        FallbackFormat::MpegTs => {
+            let cache = {
+                let mut state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                ensure_mpeg_ts_cache(request, &session.root_dir, &mut state)?
+            };
+            open_growing_cache_file(request, cache, "video/mp2t")
         }
-    };
-
-    let target_path = target_resource_path(request, &session.root_dir, &path)?;
-    let content_type = content_type_for_request(request, &target_path);
-    open_cached_file(request, target_path, content_type)
+        FallbackFormat::Hls => {
+            let cache = {
+                let mut state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                ensure_hls_cache(request, &session.root_dir, &mut state)?
+            };
+            open_hls_cache_resource(request, &session.root_dir, cache)
+        }
+    }
 }
 
 fn validate_request(request: &OpenRequest) -> Result<(), RelayError> {
@@ -379,14 +516,14 @@ fn initialize_ffmpeg() -> Result<(), RelayError> {
 }
 
 fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError> {
+    cleanup_stale_caches_once();
+
     let mut sessions = sessions().lock().unwrap_or_else(|error| error.into_inner());
     if let Some(existing) = sessions.get(&request.session_id) {
         return Ok(existing.clone());
     }
 
-    let root_dir = std::env::temp_dir()
-        .join("vesper-relay-ffmpeg")
-        .join(safe_file_component(&request.session_id));
+    let root_dir = relay_cache_root().join(safe_file_component(&request.session_id));
     fs::create_dir_all(&root_dir).map_err(|error| {
         relay_error(
             "ffmpeg_open_failed",
@@ -411,110 +548,114 @@ fn ensure_mpeg_ts_cache(
     request: &OpenRequest,
     root_dir: &Path,
     state: &mut SessionState,
-) -> Result<PathBuf, RelayError> {
-    if let Some(path) = state.mpeg_ts_path.as_ref().filter(|path| path.is_file()) {
-        return Ok(path.clone());
+) -> Result<Arc<GrowingCache>, RelayError> {
+    if let Some(cache) = state.mpeg_ts_cache.as_ref() {
+        return Ok(cache.clone());
     }
 
     ensure_muxer("mpegts", request)?;
     ensure_demuxer_if_needed("dash", request)?;
     let output_path = root_dir.join("media.ts");
-    let started_at = Instant::now();
-    remux_to_file(request, &output_path, OutputKind::MpegTs)?;
-    if started_at.elapsed() > DEFAULT_REMUX_TIMEOUT {
-        return Err(relay_error(
-            "remux_timeout",
-            504,
-            "FFmpeg relay remux exceeded the timeout budget.",
-            request.base_details().into_iter().chain([(
-                "elapsedMillis".to_owned(),
-                started_at.elapsed().as_millis().to_string(),
-            )]),
-        ));
-    }
-    state.mpeg_ts_path = Some(output_path.clone());
-    Ok(output_path)
+    let cache = Arc::new(GrowingCache::new(output_path));
+    spawn_remux_worker(request.clone(), cache.clone(), OutputKind::MpegTs)?;
+    state.mpeg_ts_cache = Some(cache.clone());
+    Ok(cache)
 }
 
 fn ensure_hls_cache(
     request: &OpenRequest,
     root_dir: &Path,
     state: &mut SessionState,
-) -> Result<PathBuf, RelayError> {
-    if let Some(path) = state
-        .hls_playlist_path
-        .as_ref()
-        .filter(|path| path.is_file())
-    {
-        return Ok(path.clone());
+) -> Result<Arc<GrowingCache>, RelayError> {
+    if let Some(cache) = state.hls_cache.as_ref() {
+        return Ok(cache.clone());
     }
 
     ensure_muxer("hls", request)?;
     ensure_demuxer_if_needed("dash", request)?;
     clean_hls_outputs(root_dir);
     let output_path = root_dir.join("playlist.m3u8");
-    let started_at = Instant::now();
-    remux_to_file(request, &output_path, OutputKind::Hls)?;
-    rewrite_hls_playlist(&output_path, root_dir, request)?;
-    if started_at.elapsed() > DEFAULT_REMUX_TIMEOUT {
-        return Err(relay_error(
-            "remux_timeout",
-            504,
-            "FFmpeg relay HLS fallback exceeded the timeout budget.",
-            request.base_details().into_iter().chain([(
-                "elapsedMillis".to_owned(),
-                started_at.elapsed().as_millis().to_string(),
-            )]),
-        ));
-    }
-    state.hls_playlist_path = Some(output_path.clone());
-    Ok(output_path)
+    let cache = Arc::new(GrowingCache::new(output_path));
+    spawn_remux_worker(request.clone(), cache.clone(), OutputKind::Hls)?;
+    state.hls_cache = Some(cache.clone());
+    Ok(cache)
 }
 
-fn rewrite_hls_playlist(
-    playlist_path: &Path,
-    root_dir: &Path,
-    request: &OpenRequest,
+fn spawn_remux_worker(
+    request: OpenRequest,
+    cache: Arc<GrowingCache>,
+    kind: OutputKind,
 ) -> Result<(), RelayError> {
-    let playlist = fs::read_to_string(playlist_path).map_err(|error| {
-        relay_error(
-            "ffmpeg_open_failed",
-            503,
-            "Failed to read generated HLS fallback playlist.",
-            request
-                .base_details()
-                .into_iter()
-                .chain([("ioError".to_owned(), error.to_string())]),
-        )
-    })?;
-    let root = root_dir.to_string_lossy();
-    let rewritten = playlist
-        .lines()
-        .map(|line| {
-            if line.starts_with('#') || line.trim().is_empty() {
-                return line.to_owned();
+    let request_for_error = request.clone();
+    thread::Builder::new()
+        .name("vesper-relay-ffmpeg-remux".to_owned())
+        .spawn(move || {
+            let result = remux_to_file(&request, &cache.path, kind, Some(cache.as_ref()));
+            match result {
+                Ok(()) => cache.mark_complete(),
+                Err(error) => cache.mark_error(error),
             }
-            let without_root = line.strip_prefix(root.as_ref()).unwrap_or(line);
-            Path::new(without_root)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(without_root)
-                .trim_start_matches('/')
-                .to_owned()
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(playlist_path, format!("{rewritten}\n")).map_err(|error| {
-        relay_error(
-            "ffmpeg_open_failed",
-            503,
-            "Failed to rewrite generated HLS fallback playlist.",
-            request
-                .base_details()
-                .into_iter()
-                .chain([("ioError".to_owned(), error.to_string())]),
-        )
-    })
+        .map(|_| ())
+        .map_err(|error| {
+            relay_error(
+                "ffmpeg_open_failed",
+                503,
+                "Failed to start FFmpeg relay remux worker.",
+                request_for_error
+                    .base_details()
+                    .into_iter()
+                    .chain([("ioError".to_owned(), error.to_string())]),
+            )
+        })
+}
+
+fn relay_cache_root() -> PathBuf {
+    std::env::temp_dir().join("vesper-relay-ffmpeg")
+}
+
+fn cleanup_stale_caches_once() {
+    static CLEANED: OnceLock<()> = OnceLock::new();
+    CLEANED.get_or_init(|| {
+        let active_sessions = sessions()
+            .lock()
+            .map(|sessions| {
+                sessions
+                    .keys()
+                    .map(|session_id| safe_file_component(session_id))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        cleanup_stale_caches_in(&relay_cache_root(), STALE_CACHE_TTL, &active_sessions);
+    });
+}
+
+fn cleanup_stale_caches_in(root: &Path, ttl: Duration, active_sessions: &[String]) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if active_sessions.iter().any(|active| active == name) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if now.duration_since(modified).is_ok_and(|age| age >= ttl) {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
 }
 
 fn clean_hls_outputs(root_dir: &Path) {
@@ -544,6 +685,7 @@ fn remux_to_file(
     request: &OpenRequest,
     output_path: &Path,
     kind: OutputKind,
+    progress_cache: Option<&GrowingCache>,
 ) -> Result<(), RelayError> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -590,6 +732,7 @@ fn remux_to_file(
                 .chain([("ffmpegError".to_owned(), error.to_string())]),
         )
     })?;
+    enable_incremental_output(&mut output_context);
 
     let mut stream_mapping = vec![-1; input_context.nb_streams() as usize];
     let mut input_time_bases = vec![Rational(0, 1); input_context.nb_streams() as usize];
@@ -647,8 +790,9 @@ fn remux_to_file(
                 .to_string_lossy()
                 .into_owned();
             options.set("hls_segment_filename", &segment_pattern);
-            options.set("hls_time", "6");
-            options.set("hls_playlist_type", "vod");
+            options.set("hls_time", "4");
+            options.set("hls_list_size", "0");
+            options.set("hls_playlist_type", "event");
             options.set("hls_segment_type", "mpegts");
             output_context.write_header_with(options).map(|_| ())
         }
@@ -664,6 +808,10 @@ fn remux_to_file(
                 .chain([("ffmpegError".to_owned(), error.to_string())]),
         )
     })?;
+    flush_output_context(&mut output_context);
+    if let Some(cache) = progress_cache {
+        cache.refresh_available_len();
+    }
 
     for (stream, mut packet) in input_context.packets() {
         let input_stream_index = stream.index();
@@ -700,6 +848,10 @@ fn remux_to_file(
                         .chain([("ffmpegError".to_owned(), error.to_string())]),
                 )
             })?;
+        flush_output_context(&mut output_context);
+        if let Some(cache) = progress_cache {
+            cache.refresh_available_len();
+        }
     }
 
     output_context.write_trailer().map_err(|error| {
@@ -712,53 +864,525 @@ fn remux_to_file(
                 .into_iter()
                 .chain([("ffmpegError".to_owned(), error.to_string())]),
         )
-    })
+    })?;
+    flush_output_context(&mut output_context);
+    if let Some(cache) = progress_cache {
+        cache.refresh_available_len();
+    }
+    Ok(())
 }
 
-fn target_resource_path(
-    request: &OpenRequest,
-    root_dir: &Path,
-    primary_path: &Path,
-) -> Result<PathBuf, RelayError> {
-    match request.fallback_format {
-        FallbackFormat::MpegTs => Ok(primary_path.to_path_buf()),
-        FallbackFormat::Hls => {
-            let resource = request.resource_path.rsplit('/').next().unwrap_or_default();
-            if resource.ends_with(".m3u8") || resource.is_empty() {
-                return Ok(primary_path.to_path_buf());
-            }
-            let file_name = safe_file_component(resource);
-            let path = root_dir.join(file_name);
-            if path.is_file() {
-                Ok(path)
-            } else {
-                Err(relay_error(
-                    "range_not_ready",
-                    404,
-                    "Requested HLS fallback segment is not available.",
-                    request
-                        .base_details()
-                        .into_iter()
-                        .chain([("resourcePath".to_owned(), request.resource_path.clone())]),
-                ))
+fn enable_incremental_output(output_context: &mut format::context::Output) {
+    // SAFETY: `output_context` owns a live AVFormatContext. The flags changed
+    // here are public libavformat fields intended to request packet flushing.
+    unsafe {
+        let context = output_context.as_mut_ptr();
+        if !context.is_null() {
+            (*context).flags |= ffmpeg::ffi::AVFMT_FLAG_FLUSH_PACKETS;
+            (*context).flush_packets = 1;
+        }
+    }
+}
+
+fn flush_output_context(output_context: &mut format::context::Output) {
+    // SAFETY: `output_context` owns a live AVFormatContext. Its `pb` pointer is
+    // managed by FFmpeg and may be null for muxers without an AVIOContext.
+    unsafe {
+        let context = output_context.as_mut_ptr();
+        if !context.is_null() {
+            let io_context = (*context).pb;
+            if !io_context.is_null() {
+                ffmpeg::ffi::avio_flush(io_context);
             }
         }
     }
 }
 
-fn content_type_for_request(request: &OpenRequest, path: &Path) -> String {
-    if request.fallback_format == FallbackFormat::MpegTs {
-        return "video/mp2t".to_owned();
+fn open_growing_cache_file(
+    request: &OpenRequest,
+    cache: Arc<GrowingCache>,
+    content_type: &str,
+) -> Result<OpenedStream, RelayError> {
+    if let Some(range) = request.range {
+        return open_growing_cache_range(request, cache, content_type, range, MPEG_TS_RANGE_WAIT);
     }
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
-    {
-        "application/vnd.apple.mpegurl".to_owned()
-    } else {
-        "video/mp2t".to_owned()
+
+    let (available_len, complete) =
+        wait_for_initial_cache_bytes(request, &cache, DEFAULT_REMUX_TIMEOUT)?;
+    let file = File::open(&cache.path).map_err(|error| {
+        relay_error(
+            "range_not_ready",
+            416,
+            "Failed to open adapted media cache.",
+            streaming_details(request, complete, available_len, None)
+                .into_iter()
+                .chain([("ioError".to_owned(), error.to_string())]),
+        )
+    })?;
+    let handle = next_handle();
+    streams()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            handle,
+            NativeStream::GrowingFile {
+                file,
+                cache,
+                position: 0,
+                remaining: None,
+            },
+        );
+
+    Ok(OpenedStream {
+        handle,
+        status: 200,
+        content_type: content_type.to_owned(),
+        content_length: if complete { available_len as i64 } else { -1 },
+        headers: response_headers(Vec::new(), request, complete, available_len),
+    })
+}
+
+fn open_growing_cache_range(
+    request: &OpenRequest,
+    cache: Arc<GrowingCache>,
+    content_type: &str,
+    range: RangeRequest,
+    wait_timeout: Duration,
+) -> Result<OpenedStream, RelayError> {
+    let resolved = wait_for_cache_range(request, &cache, range, wait_timeout)?;
+    let mut file = File::open(&cache.path).map_err(|error| {
+        relay_error(
+            "range_not_ready",
+            416,
+            "Failed to open adapted media cache.",
+            streaming_details(
+                request,
+                resolved.complete,
+                resolved.available_len,
+                Some(range.to_header_value()),
+            )
+            .into_iter()
+            .chain([("ioError".to_owned(), error.to_string())]),
+        )
+    })?;
+    file.seek(SeekFrom::Start(resolved.range.start))
+        .map_err(|error| {
+            relay_error(
+                "range_not_ready",
+                416,
+                "Failed to seek adapted media cache.",
+                streaming_details(
+                    request,
+                    resolved.complete,
+                    resolved.available_len,
+                    Some(range.to_header_value()),
+                )
+                .into_iter()
+                .chain([("ioError".to_owned(), error.to_string())]),
+            )
+        })?;
+
+    let length = resolved.range.end - resolved.range.start + 1;
+    let total = resolved
+        .complete_len
+        .map(|total| total.to_string())
+        .unwrap_or_else(|| "*".to_owned());
+    let content_range = format!(
+        "bytes {}-{}/{}",
+        resolved.range.start, resolved.range.end, total
+    );
+    let handle = next_handle();
+    streams()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            handle,
+            NativeStream::GrowingFile {
+                file,
+                cache,
+                position: resolved.range.start,
+                remaining: Some(length),
+            },
+        );
+
+    Ok(OpenedStream {
+        handle,
+        status: 206,
+        content_type: content_type.to_owned(),
+        content_length: length as i64,
+        headers: response_headers(
+            vec![("Content-Range".to_owned(), content_range)],
+            request,
+            resolved.complete,
+            resolved.available_len,
+        ),
+    })
+}
+
+struct CacheRangeResolution {
+    range: ResolvedRange,
+    available_len: u64,
+    complete_len: Option<u64>,
+    complete: bool,
+}
+
+fn wait_for_initial_cache_bytes(
+    request: &OpenRequest,
+    cache: &GrowingCache,
+    wait_timeout: Duration,
+) -> Result<(u64, bool), RelayError> {
+    let deadline = Instant::now() + wait_timeout;
+    loop {
+        cache.refresh_available_len();
+        let mut state = cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        if state.available_len > 0 || state.complete {
+            return Ok((state.available_len, state.complete));
+        }
+        let now = Instant::now();
+        if now >= deadline || now.duration_since(state.last_progress) >= wait_timeout {
+            return Err(relay_error(
+                "remux_timeout",
+                504,
+                "FFmpeg relay remux did not produce readable output in time.",
+                streaming_details(request, state.complete, state.available_len, None),
+            ));
+        }
+        let wait_for = deadline.saturating_duration_since(now);
+        let (next_state, _) = cache
+            .ready
+            .wait_timeout(state, wait_for.min(Duration::from_secs(1)))
+            .unwrap_or_else(|error| error.into_inner());
+        state = next_state;
+        drop(state);
     }
+}
+
+fn wait_for_cache_range(
+    request: &OpenRequest,
+    cache: &GrowingCache,
+    range: RangeRequest,
+    wait_timeout: Duration,
+) -> Result<CacheRangeResolution, RelayError> {
+    let requested = range.to_header_value();
+    let deadline = Instant::now() + wait_timeout;
+    loop {
+        cache.refresh_available_len();
+        let mut state = cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        if let Some(resolution) = resolve_cache_range(range, state.available_len, state.complete) {
+            return Ok(resolution);
+        }
+        if state.complete || Instant::now() >= deadline {
+            return Err(relay_error(
+                "range_not_ready",
+                416,
+                "Requested adapted range is not available.",
+                streaming_details(
+                    request,
+                    state.complete,
+                    state.available_len,
+                    Some(requested.clone()),
+                ),
+            ));
+        }
+        let wait_for = deadline.saturating_duration_since(Instant::now());
+        let (next_state, _) = cache
+            .ready
+            .wait_timeout(state, wait_for.min(Duration::from_millis(250)))
+            .unwrap_or_else(|error| error.into_inner());
+        state = next_state;
+        drop(state);
+    }
+}
+
+fn resolve_cache_range(
+    range: RangeRequest,
+    available_len: u64,
+    complete: bool,
+) -> Option<CacheRangeResolution> {
+    if complete {
+        return resolve_range(range, available_len).map(|range| CacheRangeResolution {
+            range,
+            available_len,
+            complete_len: Some(available_len),
+            complete,
+        });
+    }
+    if available_len == 0 {
+        return None;
+    }
+    match (range.start, range.end) {
+        (Some(start), Some(end)) if end >= start && end < available_len => {
+            Some(CacheRangeResolution {
+                range: ResolvedRange { start, end },
+                available_len,
+                complete_len: None,
+                complete,
+            })
+        }
+        (Some(start), None) if start < available_len => Some(CacheRangeResolution {
+            range: ResolvedRange {
+                start,
+                end: available_len - 1,
+            },
+            available_len,
+            complete_len: None,
+            complete,
+        }),
+        _ => None,
+    }
+}
+
+fn open_hls_cache_resource(
+    request: &OpenRequest,
+    root_dir: &Path,
+    cache: Arc<GrowingCache>,
+) -> Result<OpenedStream, RelayError> {
+    let resource = request.resource_path.rsplit('/').next().unwrap_or_default();
+    if resource.is_empty() || resource.ends_with(".m3u8") {
+        let (playlist, available_len, complete) =
+            wait_for_hls_playlist_snapshot(request, root_dir, &cache, DEFAULT_REMUX_TIMEOUT)?;
+        return open_bytes_stream(
+            request,
+            playlist,
+            HLS_PLAYLIST_CONTENT_TYPE,
+            Vec::new(),
+            complete,
+            available_len,
+        );
+    }
+
+    let segment_name = safe_file_component(resource);
+    let segment_path = root_dir.join(&segment_name);
+    wait_for_hls_segment(request, &cache, &segment_path, &segment_name)?;
+    open_cached_file(request, segment_path, "video/mp2t".to_owned())
+}
+
+fn wait_for_hls_playlist_snapshot(
+    request: &OpenRequest,
+    root_dir: &Path,
+    cache: &GrowingCache,
+    wait_timeout: Duration,
+) -> Result<(Vec<u8>, u64, bool), RelayError> {
+    let deadline = Instant::now() + wait_timeout;
+    loop {
+        cache.refresh_available_len();
+        let state = cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        let available_len = state.available_len;
+        let complete = state.complete;
+        drop(state);
+        if let Some(playlist) =
+            hls_playlist_snapshot(root_dir, &cache.path, !complete).map_err(|error| {
+                relay_error(
+                    "ffmpeg_open_failed",
+                    503,
+                    "Failed to read generated HLS fallback playlist.",
+                    streaming_details(request, complete, available_len, None)
+                        .into_iter()
+                        .chain([("ioError".to_owned(), error.to_string())]),
+                )
+            })?
+        {
+            return Ok((playlist, available_len, complete));
+        }
+
+        let mut state = cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        if state.complete || Instant::now() >= deadline {
+            return Err(relay_error(
+                "remux_timeout",
+                504,
+                "FFmpeg relay HLS fallback did not produce a playlist segment in time.",
+                streaming_details(request, state.complete, state.available_len, None),
+            ));
+        }
+        let wait_for = deadline.saturating_duration_since(Instant::now());
+        let (next_state, _) = cache
+            .ready
+            .wait_timeout(state, wait_for.min(Duration::from_millis(250)))
+            .unwrap_or_else(|error| error.into_inner());
+        state = next_state;
+        drop(state);
+    }
+}
+
+fn hls_playlist_snapshot(
+    root_dir: &Path,
+    playlist_path: &Path,
+    require_first_segment: bool,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let playlist = match fs::read_to_string(playlist_path) {
+        Ok(playlist) if !playlist.trim().is_empty() => playlist,
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let root = root_dir.to_string_lossy();
+    let mut first_segment_ready = !require_first_segment;
+    let rewritten = playlist
+        .lines()
+        .map(|line| {
+            if line.starts_with('#') || line.trim().is_empty() {
+                return line.to_owned();
+            }
+            let without_root = line.strip_prefix(root.as_ref()).unwrap_or(line);
+            let file_name = Path::new(without_root)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(without_root)
+                .trim_start_matches('/')
+                .to_owned();
+            if !first_segment_ready {
+                let segment_path = root_dir.join(&file_name);
+                first_segment_ready = fs::metadata(segment_path)
+                    .map(|metadata| metadata.len() > 0)
+                    .unwrap_or(false);
+            }
+            file_name
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !first_segment_ready {
+        return Ok(None);
+    }
+    Ok(Some(format!("{rewritten}\n").into_bytes()))
+}
+
+fn wait_for_hls_segment(
+    request: &OpenRequest,
+    cache: &GrowingCache,
+    segment_path: &Path,
+    segment_name: &str,
+) -> Result<(), RelayError> {
+    let deadline = Instant::now() + HLS_SEGMENT_WAIT;
+    loop {
+        if fs::metadata(segment_path)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let mut state = cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        if state.complete || Instant::now() >= deadline {
+            return Err(relay_error(
+                "range_not_ready",
+                404,
+                "Requested HLS fallback segment is not available.",
+                streaming_details(request, state.complete, state.available_len, None)
+                    .into_iter()
+                    .chain([("segmentName".to_owned(), segment_name.to_owned())]),
+            ));
+        }
+        let wait_for = deadline.saturating_duration_since(Instant::now());
+        let (next_state, _) = cache
+            .ready
+            .wait_timeout(state, wait_for.min(Duration::from_millis(250)))
+            .unwrap_or_else(|error| error.into_inner());
+        state = next_state;
+        drop(state);
+    }
+}
+
+fn open_bytes_stream(
+    request: &OpenRequest,
+    bytes: Vec<u8>,
+    content_type: &str,
+    headers: Vec<(String, String)>,
+    complete: bool,
+    available_len: u64,
+) -> Result<OpenedStream, RelayError> {
+    let content_length = bytes.len() as i64;
+    let handle = next_handle();
+    streams()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(handle, NativeStream::Bytes(Cursor::new(bytes)));
+    Ok(OpenedStream {
+        handle,
+        status: 200,
+        content_type: content_type.to_owned(),
+        content_length,
+        headers: response_headers(headers, request, complete, available_len),
+    })
+}
+
+fn response_headers(
+    mut headers: Vec<(String, String)>,
+    request: &OpenRequest,
+    complete: bool,
+    available_len: u64,
+) -> Vec<(String, String)> {
+    headers.push((
+        "X-Vesper-FFmpeg-Profile-Hash".to_owned(),
+        profile_hash().to_owned(),
+    ));
+    headers.push((
+        "X-Vesper-Remux-Cache-State".to_owned(),
+        cache_state_name(complete).to_owned(),
+    ));
+    headers.push((
+        "X-Vesper-Remux-Available-Length".to_owned(),
+        available_len.to_string(),
+    ));
+    if request.debug_diagnostics {
+        headers.push((
+            "X-Vesper-FFmpeg-Configure-Metadata".to_owned(),
+            configure_metadata().to_owned(),
+        ));
+    }
+    headers
+}
+
+fn streaming_details(
+    request: &OpenRequest,
+    complete: bool,
+    available_len: u64,
+    requested_range: Option<String>,
+) -> Vec<(String, String)> {
+    request
+        .base_details()
+        .into_iter()
+        .chain([
+            (
+                "cacheState".to_owned(),
+                cache_state_name(complete).to_owned(),
+            ),
+            ("availableLength".to_owned(), available_len.to_string()),
+        ])
+        .chain(requested_range.map(|range| ("requestedRange".to_owned(), range)))
+        .collect()
+}
+
+fn cache_state_name(complete: bool) -> &'static str {
+    if complete { "complete" } else { "active" }
 }
 
 fn open_cached_file(
@@ -842,24 +1466,12 @@ fn open_cached_file(
         .unwrap_or_else(|error| error.into_inner())
         .insert(handle, stream);
 
-    let mut response_headers = headers;
-    response_headers.push((
-        "X-Vesper-FFmpeg-Profile-Hash".to_owned(),
-        profile_hash().to_owned(),
-    ));
-    if request.debug_diagnostics {
-        response_headers.push((
-            "X-Vesper-FFmpeg-Configure-Metadata".to_owned(),
-            configure_metadata().to_owned(),
-        ));
-    }
-
     Ok(OpenedStream {
         handle,
         status,
         content_type,
         content_length,
-        headers: response_headers,
+        headers: response_headers(headers, request, true, total),
     })
 }
 
@@ -1199,7 +1811,7 @@ fn safe_file_component(value: &str) -> String {
             output.push('_');
         }
     }
-    if output.is_empty() {
+    if output.is_empty() || output == "." || output == ".." {
         "media".to_owned()
     } else {
         output
@@ -1283,7 +1895,16 @@ fn ffmpeg_error_text(code: i32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RangeRequest, resolve_range, safe_file_component};
+    use std::fs;
+    use std::io::Read;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use super::{
+        FallbackFormat, GrowingCache, OpenRequest, RangeRequest, cleanup_stale_caches_in,
+        hls_playlist_snapshot, open_growing_cache_file, open_growing_cache_range, resolve_range,
+        safe_file_component, streams,
+    };
 
     #[test]
     fn resolves_standard_and_suffix_ranges() {
@@ -1327,5 +1948,183 @@ mod tests {
     #[test]
     fn sanitizes_session_path_components() {
         assert_eq!(safe_file_component("../abc:def"), ".._abc_def");
+        assert_eq!(safe_file_component(".."), "media");
+        assert_eq!(safe_file_component("."), "media");
+    }
+
+    #[test]
+    fn stale_cleanup_removes_old_inactive_cache_dirs() {
+        let root = unique_temp_dir("stale-cleanup");
+        let stale = root.join("stale-session");
+        let active = root.join("active-session");
+        fs::create_dir_all(&stale).expect("stale dir");
+        fs::create_dir_all(&active).expect("active dir");
+
+        cleanup_stale_caches_in(&root, Duration::ZERO, &[String::from("active-session")]);
+
+        assert!(!stale.exists());
+        assert!(active.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn growing_cache_active_get_omits_content_length_and_reads_available_bytes() {
+        let root = unique_temp_dir("growing-get");
+        let path = root.join("media.ts");
+        fs::write(&path, b"abcd").expect("media");
+        let cache = Arc::new(GrowingCache::new(path));
+        cache.refresh_available_len();
+
+        let request = test_request(None);
+        let opened = open_growing_cache_file(&request, cache, "video/mp2t").expect("open");
+
+        assert_eq!(opened.status, 200);
+        assert_eq!(opened.content_length, -1);
+        assert_eq!(
+            opened
+                .headers
+                .iter()
+                .find(|(name, _)| name == "X-Vesper-Remux-Cache-State")
+                .map(|(_, value)| value.as_str()),
+            Some("active"),
+        );
+        let mut buffer = [0u8; 4];
+        let read = streams()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(&opened.handle)
+            .expect("stream")
+            .read(&mut buffer)
+            .expect("read");
+        assert_eq!(read, 4);
+        assert_eq!(&buffer, b"abcd");
+        streams()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&opened.handle);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn growing_cache_future_range_reports_not_ready() {
+        let root = unique_temp_dir("future-range");
+        let path = root.join("media.ts");
+        fs::write(&path, b"abcd").expect("media");
+        let cache = Arc::new(GrowingCache::new(path));
+        cache.refresh_available_len();
+        let range = RangeRequest {
+            start: Some(8),
+            end: Some(9),
+        };
+        let request = test_request(Some(range));
+
+        let error = match open_growing_cache_range(
+            &request,
+            cache,
+            "video/mp2t",
+            range,
+            Duration::from_millis(1),
+        ) {
+            Ok(_) => panic!("future range should not be ready"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, "range_not_ready");
+        assert!(
+            error
+                .details
+                .contains(&("requestedRange".to_owned(), "bytes=8-9".to_owned(),))
+        );
+        assert!(
+            error
+                .details
+                .contains(&("availableLength".to_owned(), "4".to_owned(),))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn completed_growing_cache_range_returns_content_range() {
+        let root = unique_temp_dir("completed-range");
+        let path = root.join("media.ts");
+        fs::write(&path, b"abcd").expect("media");
+        let cache = Arc::new(GrowingCache::new(path));
+        cache.mark_complete();
+        let request = test_request(Some(RangeRequest {
+            start: Some(1),
+            end: Some(2),
+        }));
+
+        let opened = open_growing_cache_file(&request, cache, "video/mp2t").expect("open");
+
+        assert_eq!(opened.status, 206);
+        assert_eq!(opened.content_length, 2);
+        assert!(
+            opened
+                .headers
+                .contains(&("Content-Range".to_owned(), "bytes 1-2/4".to_owned(),))
+        );
+        streams()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&opened.handle);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hls_playlist_snapshot_uses_relative_segments_and_preserves_end_marker() {
+        let root = unique_temp_dir("hls-snapshot");
+        let segment = root.join("segment_00000.ts");
+        let playlist = root.join("playlist.m3u8");
+        fs::write(&segment, b"segment").expect("segment");
+        fs::write(
+            &playlist,
+            format!(
+                "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\n{}\n#EXT-X-ENDLIST\n",
+                segment.display()
+            ),
+        )
+        .expect("playlist");
+
+        let snapshot = hls_playlist_snapshot(&root, &playlist, true)
+            .expect("snapshot")
+            .expect("ready");
+        let snapshot = String::from_utf8(snapshot).expect("utf8");
+
+        assert!(snapshot.contains("segment_00000.ts"));
+        assert!(!snapshot.contains(root.to_string_lossy().as_ref()));
+        assert!(snapshot.contains("#EXT-X-ENDLIST"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn test_request(range: Option<RangeRequest>) -> OpenRequest {
+        OpenRequest {
+            session_id: "session".to_owned(),
+            source_uri: "https://example.com/video.mpd".to_owned(),
+            source_label: Some("Episode".to_owned()),
+            source_protocol: Some("dash".to_owned()),
+            fallback_format: FallbackFormat::MpegTs,
+            resource_path: "Episode.ts".to_owned(),
+            range,
+            source_headers: Default::default(),
+            request_headers: Default::default(),
+            enable_range_cache: true,
+            debug_diagnostics: false,
+            route_id: Some("route".to_owned()),
+            route_name: Some("Living Room".to_owned()),
+        }
+    }
+
+    fn unique_temp_dir(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "vesper-relay-ffmpeg-test-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temp dir");
+        path
     }
 }

@@ -309,6 +309,7 @@ class VesperRelayServer @JvmOverloads constructor(
                         runCatching { adapted.closeable?.close() }
                     }
                 } else {
+                    runCatching { adapted.input.close() }
                     runCatching { adapted.closeable?.close() }
                 }
                 output.flush()
@@ -730,7 +731,7 @@ private fun VesperPlayerSource.contentTypeGuess(): String {
         .firstNotNullOfOrNull { it.contentTypeFromPath() }
         ?: when (protocol) {
             io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol.Hls ->
-                "application/vnd.apple.mpegurl"
+                "application/x-mpegURL"
             io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol.Dash ->
                 "application/dash+xml"
             io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol.Progressive ->
@@ -742,7 +743,7 @@ private fun VesperPlayerSource.contentTypeGuess(): String {
 private fun String.contentTypeFromPath(): String? {
     val path = substringBefore('?').substringBefore('#').lowercase(Locale.US)
     return when {
-        path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
+        path.endsWith(".m3u8") -> "application/x-mpegURL"
         path.endsWith(".m3u") -> "audio/mpegurl"
         path.endsWith(".mpd") -> "application/dash+xml"
         path.endsWith(".mp4") || path.endsWith(".m4v") -> "video/mp4"

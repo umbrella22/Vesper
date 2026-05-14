@@ -173,6 +173,16 @@ class VesperDlnaProtocolTest {
                 "http-get:*:video/mp4:*,http-get:*:application/vnd.apple.mpegurl:*",
             ),
         )
+        assertTrue(
+            VesperDlnaProtocolInfoParser.supportsHls(
+                "http-get:*:APPLICATION/X-MPEGURL:*,http-get:*:video/mp4:*",
+            ),
+        )
+        assertTrue(
+            VesperDlnaProtocolInfoParser.supportsHls(
+                "http-get:*:video/mp4:DLNA.ORG_PN=HLS;URI=.m3u8",
+            ),
+        )
         assertFalse(VesperDlnaProtocolInfoParser.supportsHls("http-get:*:video/mp4:*"))
     }
 
@@ -182,7 +192,27 @@ class VesperDlnaProtocolTest {
 
         assertTrue(VesperDlnaProtocolInfoParser.supportsDash(protocolInfo))
         assertTrue(VesperDlnaProtocolInfoParser.supportsMpegTs(protocolInfo))
+        assertTrue(VesperDlnaProtocolInfoParser.supportsMpegTs("http-get:*:video/mpeg-ts:*"))
+        assertTrue(VesperDlnaProtocolInfoParser.supportsMpegTs("http-get:*:video/MP2T:*"))
+        assertTrue(
+            VesperDlnaProtocolInfoParser.supportsMpegTs(
+                "http-get:*:video/mpeg:DLNA.ORG_PN=MPEG_TS_HD_NA",
+            ),
+        )
         assertFalse(VesperDlnaProtocolInfoParser.supportsDash("http-get:*:video/mp4:*"))
+    }
+
+    @Test
+    fun buildsHlsDidlWithDlnaCompatibleMime() {
+        val didl = VesperDlnaDidlBuilder.build(
+            VesperPlayerSource.hls(
+                uri = "http://192.168.1.2:9000/media/token/playlist.m3u8",
+                label = "Episode",
+            ),
+            null,
+        )
+
+        assertTrue(didl.contains("protocolInfo=\"http-get:*:application/x-mpegURL:"))
     }
 
     @Test
