@@ -239,7 +239,7 @@ class VesperDownloadManagerTest {
                         runPostProcessorsOnCompletion = false,
                         pluginLibraryPaths =
                             listOf(
-                                "/data/local/tmp/libplayer_remux_ffmpeg.so",
+                                "/data/local/tmp/libvesper_remux_ffmpeg.so",
                                 "/data/local/tmp/libvesper_metrics.so",
                             ),
                     ),
@@ -250,7 +250,7 @@ class VesperDownloadManagerTest {
 
         assertEquals(
             listOf(
-                "/data/local/tmp/libplayer_remux_ffmpeg.so",
+                "/data/local/tmp/libvesper_remux_ffmpeg.so",
                 "/data/local/tmp/libvesper_metrics.so",
             ),
             bindings.createdConfig?.pluginLibraryPaths?.toList(),

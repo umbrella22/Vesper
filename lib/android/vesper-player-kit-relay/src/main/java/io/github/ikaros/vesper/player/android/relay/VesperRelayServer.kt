@@ -41,6 +41,8 @@ class VesperRelayServer @JvmOverloads constructor(
     private val bindAddressProvider: () -> InetAddress? = { context?.findWifiLanIpv4Address() },
     private val tokenTtlMillis: Long? = DEFAULT_TOKEN_TTL_MILLIS,
     private val nowMillisProvider: () -> Long = System::currentTimeMillis,
+    private val formatAdapter: VesperRelayFormatAdapter = VesperUnavailableRelayFormatAdapter(),
+    private val diagnosticListener: (VesperRelayDiagnostic) -> Unit = {},
 ) {
     private val appContext = context?.applicationContext
     private val entries = ConcurrentHashMap<String, RelayEntry>()
@@ -79,6 +81,7 @@ class VesperRelayServer @JvmOverloads constructor(
     @Synchronized
     fun stop() {
         running.set(false)
+        entries.keys.forEach(formatAdapter::invalidate)
         entries.clear()
         runCatching { serverSocket?.close() }
         activeClients.forEach { client -> runCatching { client.close() } }
@@ -91,7 +94,10 @@ class VesperRelayServer @JvmOverloads constructor(
         advertisedAddress = null
     }
 
-    fun register(source: VesperPlayerSource): VesperRelayHandle {
+    fun register(
+        source: VesperPlayerSource,
+        adaptation: VesperRelayFormatAdaptationRegistration? = null,
+    ): VesperRelayHandle {
         pruneExpiredEntries()
         start()
         val socket = serverSocket ?: throw IllegalStateException("Relay server is not running.")
@@ -100,30 +106,34 @@ class VesperRelayServer @JvmOverloads constructor(
         val token = nextToken()
         entries[token] = RelayEntry(
             source = source,
+            adaptation = adaptation,
             expiresAtMillis = tokenExpiresAtMillis(),
         )
         return VesperRelayHandle(
             token = token,
-            url = "http://$host:${socket.localPort}${source.relayPath(token)}",
+            url = "http://$host:${socket.localPort}${source.relayPath(token, adaptation)}",
         )
     }
 
     fun invalidate(token: String) {
         entries.remove(token)
+        formatAdapter.invalidate(token)
     }
 
     fun invalidateAll() {
+        entries.keys.forEach(formatAdapter::invalidate)
         entries.clear()
     }
 
-    private fun sourceForToken(token: String): VesperPlayerSource? {
+    private fun entryForToken(token: String): RelayEntry? {
         val entry = entries[token] ?: return null
-        val expiresAtMillis = entry.expiresAtMillis ?: return entry.source
+        val expiresAtMillis = entry.expiresAtMillis ?: return entry
         if (expiresAtMillis <= nowMillisProvider()) {
             entries.remove(token, entry)
+            formatAdapter.invalidate(token)
             return null
         }
-        return entry.source
+        return entry
     }
 
     private fun pruneExpiredEntries() {
@@ -220,15 +230,94 @@ class VesperRelayServer @JvmOverloads constructor(
                 .removePrefix("/media/")
                 .substringBefore('/')
                 .takeIf { path.startsWith("/media/") && it.isNotBlank() }
-            val source = token?.let(::sourceForToken)
-            if (source == null) {
+            if (token == null) {
                 output.writeSimpleResponse(404, "Not Found")
                 return
             }
+            val entry = entryForToken(token)
+            if (entry == null) {
+                output.writeSimpleResponse(404, "Not Found")
+                return
+            }
+            val resourcePath = path
+                .removePrefix("/media/$token")
+                .removePrefix("/")
 
             val range = headers["range"]?.let(::parseRangeHeader)
-            relaySource(source, method == "HEAD", range, output)
+            if (entry.adaptation != null) {
+                relayAdaptedSource(token, entry, resourcePath, method == "HEAD", range, headers, output)
+            } else {
+                relaySource(entry.source, method == "HEAD", range, output)
+            }
         }
+    }
+
+    private fun relayAdaptedSource(
+        token: String,
+        entry: RelayEntry,
+        resourcePath: String,
+        headOnly: Boolean,
+        range: ByteRangeRequest?,
+        headers: Map<String, String>,
+        output: OutputStream,
+    ) {
+        val adaptation = entry.adaptation ?: return relaySource(entry.source, headOnly, range, output)
+        val request = VesperRelayFormatAdaptationRequest(
+            sessionId = token,
+            source = entry.source,
+            fallbackFormat = adaptation.fallbackFormat,
+            resourcePath = resourcePath,
+            range = range,
+            requestHeaders = headers,
+            enableRangeCache = adaptation.config.enableRangeCache,
+            debugDiagnostics = adaptation.config.debugDiagnostics,
+            routeId = adaptation.routeId,
+            routeName = adaptation.routeName,
+        )
+        when (val result = formatAdapter.open(request)) {
+            is VesperRelayFormatAdaptationResult.Failure -> {
+                emitDiagnostic(result.diagnostic)
+                output.writeDiagnosticResponse(result.status, result.diagnostic)
+            }
+            is VesperRelayFormatAdaptationResult.Stream -> {
+                val adapted = result.stream
+                val responseHeaders = linkedMapOf(
+                    "Content-Type" to adapted.contentType,
+                    "Accept-Ranges" to "bytes",
+                )
+                adapted.contentLength?.let { responseHeaders["Content-Length"] = it.toString() }
+                responseHeaders.putAll(adapted.headers)
+                responseHeaders.addDlnaPlaybackHeaders()
+                output.writeStatusAndHeaders(
+                    adapted.status,
+                    adapted.status.reasonPhrase(),
+                    responseHeaders,
+                )
+                if (!headOnly) {
+                    try {
+                        adapted.input.use { input -> input.copyTo(output) }
+                    } catch (error: Exception) {
+                        emitDiagnostic(
+                            VesperRelayDiagnostic(
+                                code = "client_cancelled",
+                                severity = "info",
+                                message = error.message ?: "Relay client disconnected while receiving adapted media.",
+                                details = mapOf("sessionId" to token),
+                            ),
+                        )
+                    } finally {
+                        runCatching { adapted.closeable?.close() }
+                    }
+                } else {
+                    runCatching { adapted.closeable?.close() }
+                }
+                output.flush()
+            }
+        }
+    }
+
+    private fun emitDiagnostic(diagnostic: VesperRelayDiagnostic) {
+        diagnosticListener(diagnostic)
     }
 
     private fun relaySource(
@@ -395,6 +484,7 @@ class VesperRelayServer @JvmOverloads constructor(
 
 private data class RelayEntry(
     val source: VesperPlayerSource,
+    val adaptation: VesperRelayFormatAdaptationRegistration?,
     val expiresAtMillis: Long?,
 )
 
@@ -514,6 +604,29 @@ private fun OutputStream.writeSimpleResponse(
     flush()
 }
 
+private fun OutputStream.writeDiagnosticResponse(
+    status: Int,
+    diagnostic: VesperRelayDiagnostic,
+) {
+    val body = buildString {
+        append("code=").append(diagnostic.code).append('\n')
+        append("message=").append(diagnostic.message).append('\n')
+        append("severity=").append(diagnostic.severity).append('\n')
+        diagnostic.details.forEach { (key, value) ->
+            append("detail.").append(key).append('=').append(value).append('\n')
+        }
+    }.toByteArray(Charsets.UTF_8)
+    val headers = linkedMapOf(
+        "Content-Type" to "text/plain; charset=utf-8",
+        "Content-Length" to body.size.toString(),
+        "X-Vesper-Relay-Error-Code" to diagnostic.code,
+        "X-Vesper-Relay-Error-Severity" to diagnostic.severity,
+    )
+    writeStatusAndHeaders(status, status.reasonPhrase(), headers)
+    write(body)
+    flush()
+}
+
 private fun OutputStream.writeStatusAndHeaders(
     status: Int,
     reason: String,
@@ -569,7 +682,20 @@ private fun String.isHopByHopHeader(): Boolean =
         "range",
     )
 
-private fun VesperPlayerSource.relayPath(token: String): String {
+private fun VesperPlayerSource.relayPath(
+    token: String,
+    adaptation: VesperRelayFormatAdaptationRegistration?,
+): String {
+    if (adaptation != null) {
+        val rawBaseName = listOfNotNull(label, uri.fileNameFromUri())
+            .firstOrNull { it.isNotBlank() }
+            ?: "media"
+        val baseName = rawBaseName
+            .substringBeforeLast('.', missingDelimiterValue = rawBaseName)
+            .takeIf { it.isNotBlank() }
+            ?: "media"
+        return "/media/$token/${baseName.urlPathSegmentEncoded()}.${adaptation.fallbackFormat.urlExtension()}"
+    }
     val fileName = listOfNotNull(uri.fileNameFromUri(), label)
         .firstOrNull { it.contentTypeFromPath() != null }
         ?.urlPathSegmentEncoded()
@@ -663,7 +789,10 @@ private fun Int.reasonPhrase(): String =
         400 -> "Bad Request"
         404 -> "Not Found"
         405 -> "Method Not Allowed"
+        415 -> "Unsupported Media Type"
         416 -> "Range Not Satisfiable"
+        503 -> "Service Unavailable"
+        504 -> "Gateway Timeout"
         501 -> "Not Implemented"
         else -> "OK"
     }

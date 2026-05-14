@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,11 +13,21 @@ void main() {
   const channel = MethodChannel(
     'io.github.ikaros.vesper_player_external_playback_test',
   );
+  const routesChannel = EventChannel(
+    'io.github.ikaros.vesper_player_external_playback/routes',
+  );
+  const eventsChannel = EventChannel(
+    'io.github.ikaros.vesper_player_external_playback/events',
+  );
   final calls = <MethodCall>[];
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(routesChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(eventsChannel, null);
     calls.clear();
   });
 
@@ -34,6 +46,10 @@ void main() {
       sources: <VesperPlayerSource>[source],
       metadata: metadata,
       proxyPolicy: VesperExternalProxyPolicy.always,
+      formatAdaptation: const VesperExternalFormatAdaptationConfig.dlnaRemux(
+        preferredFallback: VesperExternalFallbackFormat.hls,
+        debugDiagnostics: true,
+      ),
     );
     const route = VesperExternalPlaybackRoute(
       routeId: 'uuid:tv',
@@ -49,6 +65,12 @@ void main() {
 
     expect(decodedItem.sources.single.headers, source.headers);
     expect(decodedItem.proxyPolicy, VesperExternalProxyPolicy.always);
+    expect(decodedItem.formatAdaptation.enabled, isTrue);
+    expect(
+      decodedItem.formatAdaptation.preferredFallback,
+      VesperExternalFallbackFormat.hls,
+    );
+    expect(decodedItem.formatAdaptation.debugDiagnostics, isTrue);
     expect(decodedRoute.kind, VesperExternalPlaybackRouteKind.dlna);
     expect(decodedRoute.manufacturer, 'DemoCorp');
     expect(decodedRoute.active, isTrue);
@@ -137,6 +159,88 @@ void main() {
         'autoplay': false,
       },
     );
+  });
+
+  test('default event channels are shared across controller instances',
+      () async {
+    var routeListenCount = 0;
+    var routeCancelCount = 0;
+    var eventListenCount = 0;
+    var eventCancelCount = 0;
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+      routesChannel,
+      MockStreamHandler.inline(
+        onListen: (_, events) {
+          routeListenCount += 1;
+          events.success(<Object?>[
+            <String, Object?>{
+              'routeId': 'uuid:tv',
+              'name': 'Living Room TV',
+              'kind': 'dlna',
+            },
+          ]);
+        },
+        onCancel: (_) {
+          routeCancelCount += 1;
+        },
+      ),
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+      eventsChannel,
+      MockStreamHandler.inline(
+        onListen: (_, events) {
+          eventListenCount += 1;
+          events.success(<String, Object?>{
+            'kind': 'loaded',
+            'routeId': 'uuid:tv',
+          });
+        },
+        onCancel: (_) {
+          eventCancelCount += 1;
+        },
+      ),
+    );
+
+    final first = VesperExternalPlaybackController();
+    final second = VesperExternalPlaybackController();
+    final firstRoutes = <List<VesperExternalPlaybackRoute>>[];
+    final secondRoutes = <List<VesperExternalPlaybackRoute>>[];
+    final firstEvents = <VesperExternalPlaybackSessionEvent>[];
+    final secondEvents = <VesperExternalPlaybackSessionEvent>[];
+
+    final subscriptions = <StreamSubscription<Object?>>[
+      first.routes.listen(firstRoutes.add),
+      second.routes.listen(secondRoutes.add),
+      first.events.listen(firstEvents.add),
+      second.events.listen(secondEvents.add),
+    ];
+    await Future<void>.delayed(Duration.zero);
+
+    expect(routeListenCount, 1);
+    expect(eventListenCount, 1);
+    expect(firstRoutes.single.single.routeId, 'uuid:tv');
+    expect(secondRoutes.single.single.routeId, 'uuid:tv');
+    expect(
+        firstEvents.single.kind, VesperExternalPlaybackSessionEventKind.loaded);
+    expect(secondEvents.single.kind,
+        VesperExternalPlaybackSessionEventKind.loaded);
+
+    await subscriptions[0].cancel();
+    await subscriptions[2].cancel();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(routeCancelCount, 0);
+    expect(eventCancelCount, 0);
+
+    await subscriptions[1].cancel();
+    await subscriptions[3].cancel();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(routeCancelCount, 1);
+    expect(eventCancelCount, 1);
   });
 
   test('connect decodes unsupported result', () async {

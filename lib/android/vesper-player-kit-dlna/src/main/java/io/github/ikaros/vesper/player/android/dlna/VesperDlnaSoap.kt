@@ -65,6 +65,17 @@ object VesperDlnaProtocolInfoParser {
                     it.contains("mpegurl", ignoreCase = true)
             }
 
+    fun supportsDash(protocolInfo: String): Boolean =
+        supportsMime(protocolInfo, "application/dash+xml")
+
+    fun supportsMpegTs(protocolInfo: String): Boolean =
+        protocolInfo.split(',')
+            .any {
+                it.contains("video/mp2t", ignoreCase = true) ||
+                    it.contains("video/mpeg", ignoreCase = true) ||
+                    it.contains("mpegts", ignoreCase = true)
+            }
+
     fun supportsMime(protocolInfo: String, mimeType: String): Boolean =
         protocolInfo.split(',').any { it.contains(mimeType, ignoreCase = true) }
 }

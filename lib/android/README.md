@@ -233,11 +233,31 @@ so the baseline AAR size stays unchanged when the FFmpeg extension is not
 needed. Apps that want `SystemPreferred` or `ExtensionPreferred` with the FFmpeg
 extension must add the Media3 FFmpeg dependency themselves.
 
-Adding a Media3 FFmpeg extension or bundling Vesper's optional
-`player-remux-ffmpeg` plugin makes the host responsible for FFmpeg notices,
-corresponding source, configure flags, and LGPL relinking rights. See
-[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) before publishing such
-an artifact.
+Optional Vesper FFmpeg features use a split runtime:
+
+- `vesper-player-kit-ffmpeg-runtime` is the only Android AAR that packages
+  `libav*` plus enabled external runtime dependencies such as OpenSSL or
+  libxml2.
+- `vesper-player-kit-relay-ffmpeg` contains only the DLNA relay remux JNI layer.
+- `player-remux-ffmpeg` contains only the download remux plugin `.so`.
+
+Build the runtime with the enabled consumers so the resolver can union their
+requirements into one trimmed profile:
+
+```sh
+./scripts/vesper android ffmpeg-runtime download-remux relay-remux
+```
+
+Do not use Gradle `pickFirst` to hide duplicate `libav*` payloads. If both DLNA
+relay remux and download remux are enabled, package one shared
+`vesper-player-kit-ffmpeg-runtime` profile and keep the relay/plugin artifacts
+free of FFmpeg runtime libraries.
+
+Adding a Media3 FFmpeg extension or bundling Vesper's optional FFmpeg runtime
+makes the host responsible for FFmpeg notices, corresponding source, configure
+flags, and LGPL relinking rights. See
+[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) before publishing such an
+artifact.
 
 ## JNI Artifacts
 

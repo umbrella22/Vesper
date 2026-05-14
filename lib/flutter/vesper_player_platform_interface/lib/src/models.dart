@@ -188,6 +188,8 @@ enum VesperExternalPlaybackRouteKind { none, airPlay, cast, dlna }
 
 enum VesperExternalProxyPolicy { auto, always, never }
 
+enum VesperExternalFallbackFormat { mpegTs, hls }
+
 enum VesperExternalPlaybackResultStatus {
   success,
   unavailable,
@@ -205,6 +207,69 @@ enum VesperExternalPlaybackSessionEventKind {
   suspended,
   discoveryDiagnostic,
   error,
+}
+
+final class VesperExternalFormatAdaptationConfig {
+  const VesperExternalFormatAdaptationConfig({
+    this.enabled = false,
+    this.preferredFallback = VesperExternalFallbackFormat.mpegTs,
+    this.allowHls = true,
+    this.enableRangeCache = true,
+    this.debugDiagnostics = false,
+  });
+
+  const VesperExternalFormatAdaptationConfig.disabled()
+      : enabled = false,
+        preferredFallback = VesperExternalFallbackFormat.mpegTs,
+        allowHls = true,
+        enableRangeCache = true,
+        debugDiagnostics = false;
+
+  const VesperExternalFormatAdaptationConfig.dlnaRemux({
+    this.preferredFallback = VesperExternalFallbackFormat.mpegTs,
+    this.allowHls = true,
+    this.enableRangeCache = true,
+    this.debugDiagnostics = false,
+  }) : enabled = true;
+
+  factory VesperExternalFormatAdaptationConfig.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    return VesperExternalFormatAdaptationConfig(
+      enabled: _decodeBool(map, 'enabled'),
+      preferredFallback: _decodeEnum(
+        VesperExternalFallbackFormat.values,
+        map['preferredFallback'],
+        VesperExternalFallbackFormat.mpegTs,
+      ),
+      allowHls: _decodeBool(map, 'allowHls', fallback: true),
+      enableRangeCache: _decodeBool(map, 'enableRangeCache', fallback: true),
+      debugDiagnostics: _decodeBool(map, 'debugDiagnostics'),
+    );
+  }
+
+  final bool enabled;
+  final VesperExternalFallbackFormat preferredFallback;
+  final bool allowHls;
+  final bool enableRangeCache;
+  final bool debugDiagnostics;
+
+  bool get hasOverrides =>
+      enabled ||
+      preferredFallback != VesperExternalFallbackFormat.mpegTs ||
+      !allowHls ||
+      !enableRangeCache ||
+      debugDiagnostics;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'enabled': enabled,
+      'preferredFallback': preferredFallback.name,
+      'allowHls': allowHls,
+      'enableRangeCache': enableRangeCache,
+      'debugDiagnostics': debugDiagnostics,
+    };
+  }
 }
 
 enum VesperMediaTrackKind { video, audio, subtitle }
@@ -487,6 +552,8 @@ final class VesperExternalPlaybackMediaItem {
     required this.sources,
     required this.metadata,
     this.proxyPolicy = VesperExternalProxyPolicy.auto,
+    this.formatAdaptation =
+        const VesperExternalFormatAdaptationConfig.disabled(),
   });
 
   factory VesperExternalPlaybackMediaItem.fromMap(Map<Object?, Object?> map) {
@@ -507,12 +574,18 @@ final class VesperExternalPlaybackMediaItem {
         map['proxyPolicy'],
         VesperExternalProxyPolicy.auto,
       ),
+      formatAdaptation: _rawMap(map['formatAdaptation']) == null
+          ? const VesperExternalFormatAdaptationConfig.disabled()
+          : VesperExternalFormatAdaptationConfig.fromMap(
+              _rawMap(map['formatAdaptation'])!,
+            ),
     );
   }
 
   final List<VesperPlayerSource> sources;
   final VesperSystemPlaybackMetadata metadata;
   final VesperExternalProxyPolicy proxyPolicy;
+  final VesperExternalFormatAdaptationConfig formatAdaptation;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -520,6 +593,8 @@ final class VesperExternalPlaybackMediaItem {
           sources.map((source) => source.toMap()).toList(growable: false),
       'metadata': metadata.toMap(),
       'proxyPolicy': proxyPolicy.name,
+      if (formatAdaptation.hasOverrides)
+        'formatAdaptation': formatAdaptation.toMap(),
     };
   }
 }

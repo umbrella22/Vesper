@@ -15,26 +15,31 @@ class VesperExternalPlaybackController {
   })  : _methodChannel = methodChannel ?? _defaultMethodChannel,
         _routesEventChannel = routesEventChannel ?? _defaultRoutesEventChannel,
         _sessionEventChannel =
-            sessionEventChannel ?? _defaultSessionEventChannel;
+            sessionEventChannel ?? _defaultSessionEventChannel,
+        _usesDefaultRoutesEventChannel = routesEventChannel == null,
+        _usesDefaultSessionEventChannel = sessionEventChannel == null;
 
   final MethodChannel _methodChannel;
   final EventChannel _routesEventChannel;
   final EventChannel _sessionEventChannel;
+  final bool _usesDefaultRoutesEventChannel;
+  final bool _usesDefaultSessionEventChannel;
 
   Stream<List<VesperExternalPlaybackRoute>>? _nativeRoutes;
   Stream<VesperExternalPlaybackSessionEvent>? _events;
   List<VesperExternalPlaybackRoute>? _latestRoutes;
 
+  static Stream<List<VesperExternalPlaybackRoute>>? _sharedNativeRoutes;
+  static Stream<VesperExternalPlaybackSessionEvent>? _sharedEvents;
+  static List<VesperExternalPlaybackRoute>? _sharedLatestRoutes;
+
   Stream<List<VesperExternalPlaybackRoute>> get routes {
-    final nativeRoutes = _nativeRoutes ??= _routesEventChannel
-        .receiveBroadcastStream()
-        .map(_decodeRoutes)
-        .map((routes) {
-      _latestRoutes = routes;
-      return routes;
-    }).asBroadcastStream();
+    final nativeRoutes = _usesDefaultRoutesEventChannel
+        ? _sharedRoutesStream()
+        : _instanceRoutesStream();
     return Stream<List<VesperExternalPlaybackRoute>>.multi((controller) {
-      final latestRoutes = _latestRoutes;
+      final latestRoutes =
+          _usesDefaultRoutesEventChannel ? _sharedLatestRoutes : _latestRoutes;
       if (latestRoutes != null) {
         controller.add(latestRoutes);
       }
@@ -48,6 +53,9 @@ class VesperExternalPlaybackController {
   }
 
   Stream<VesperExternalPlaybackSessionEvent> get events {
+    if (_usesDefaultSessionEventChannel) {
+      return _sharedEventsStream();
+    }
     return _events ??= _sessionEventChannel
         .receiveBroadcastStream()
         .where((event) => event is Map)
@@ -55,6 +63,44 @@ class VesperExternalPlaybackController {
           (event) => VesperExternalPlaybackSessionEvent.fromMap(
             Map<Object?, Object?>.from(event as Map),
           ),
+        );
+  }
+
+  Stream<List<VesperExternalPlaybackRoute>> _instanceRoutesStream() {
+    return _nativeRoutes ??= _routesEventChannel
+        .receiveBroadcastStream()
+        .map(_decodeRoutes)
+        .map((routes) {
+      _latestRoutes = routes;
+      return routes;
+    }).asBroadcastStream(
+      onCancel: (subscription) => subscription.cancel(),
+    );
+  }
+
+  static Stream<List<VesperExternalPlaybackRoute>> _sharedRoutesStream() {
+    return _sharedNativeRoutes ??= _defaultRoutesEventChannel
+        .receiveBroadcastStream()
+        .map(_decodeRoutes)
+        .map((routes) {
+      _sharedLatestRoutes = routes;
+      return routes;
+    }).asBroadcastStream(
+      onCancel: (subscription) => subscription.cancel(),
+    );
+  }
+
+  static Stream<VesperExternalPlaybackSessionEvent> _sharedEventsStream() {
+    return _sharedEvents ??= _defaultSessionEventChannel
+        .receiveBroadcastStream()
+        .where((event) => event is Map)
+        .map(
+          (event) => VesperExternalPlaybackSessionEvent.fromMap(
+            Map<Object?, Object?>.from(event as Map),
+          ),
+        )
+        .asBroadcastStream(
+          onCancel: (subscription) => subscription.cancel(),
         );
   }
 
@@ -87,6 +133,8 @@ class VesperExternalPlaybackController {
     required VesperPlayerSource source,
     VesperSystemPlaybackMetadata? metadata,
     VesperExternalProxyPolicy proxyPolicy = VesperExternalProxyPolicy.auto,
+    VesperExternalFormatAdaptationConfig formatAdaptation =
+        const VesperExternalFormatAdaptationConfig.disabled(),
   }) async {
     final wasPlaying =
         player.snapshot.playbackState == VesperPlaybackState.playing;
@@ -99,6 +147,7 @@ class VesperExternalPlaybackController {
               contentUri: source.uri,
             ),
         proxyPolicy: proxyPolicy,
+        formatAdaptation: formatAdaptation,
       ),
       startPositionMs: player.snapshot.timeline.positionMs,
       autoplay: wasPlaying,

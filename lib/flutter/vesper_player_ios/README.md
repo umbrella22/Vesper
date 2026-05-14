@@ -135,7 +135,7 @@ routing.
 
 If the host app wants to export downloaded HLS, DASH, or FLV content to `.mp4`, it
 must embed the `player-remux-ffmpeg` dynamic library into the app bundle and pass the
-real `libplayer_remux_ffmpeg.dylib` path through
+real `libvesper_remux_ffmpeg.dylib` path through
 `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 Typical setup:
@@ -148,7 +148,7 @@ Typical setup:
 
    For the native iOS host kit, replace the argument with `VesperPlayerKit.framework`.
 
-2. Resolve `libplayer_remux_ffmpeg.dylib` at runtime from `Bundle.main.privateFrameworksPath`
+2. Resolve `libvesper_remux_ffmpeg.dylib` at runtime from `Bundle.main.privateFrameworksPath`
    or the app `Frameworks` directory
 3. Pass the resolved absolute path into the download manager configuration
 

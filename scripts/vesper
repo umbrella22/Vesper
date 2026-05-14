@@ -9,7 +9,7 @@ Usage: scripts/vesper <group> <command> [args...]
 
 Groups:
   ffi      generate | sync | verify | c-host-smoke
-  android  ffmpeg | jni | aar | remux-plugin | stage-release
+  android  ffmpeg | ffmpeg-runtime | jni | relay-ffmpeg-jni | aar | remux-plugin | stage-release
   apple    ffmpeg
   ios      ffi | remux-plugin | kit-xcframework | embed-remux-plugin | stage-release | verify-bridge-shim
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
@@ -43,8 +43,14 @@ case "$group:$command" in
   android:ffmpeg)
     exec "$SCRIPT_DIR/android/build-ffmpeg-prebuilts.sh" "$@"
     ;;
+  android:ffmpeg-runtime)
+    exec "$SCRIPT_DIR/android/build-ffmpeg-runtime-aar.sh" "$@"
+    ;;
   android:jni)
     exec "$SCRIPT_DIR/android/build-vesper-player-kit-jni.sh" "$@"
+    ;;
+  android:relay-ffmpeg-jni)
+    exec "$SCRIPT_DIR/android/build-relay-ffmpeg-jni.sh" "$@"
     ;;
   android:aar)
     exec "$SCRIPT_DIR/android/build-vesper-player-kit-aar.sh" "$@"

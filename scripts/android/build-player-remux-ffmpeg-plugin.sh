@@ -5,13 +5,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/android.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
-FFMPEG_ANDROID_BASE_DIR="$ROOT_DIR/third_party/ffmpeg/android"
-OPENSSL_ANDROID_DIR="$ROOT_DIR/third_party/openssl/android"
-LIBXML2_ANDROID_DIR="$ROOT_DIR/third_party/libxml2/android"
 OUTPUT_DIR="${1:-}"
+CONSUMERS=(${VESPER_ANDROID_FFMPEG_CONSUMERS:-download-remux})
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-  echo "Usage: $0 <output-dir> [debug|release] [ffmpeg-options...] [abi...]" >&2
+  echo "Usage: $0 <output-dir> [debug|release]" >&2
+  echo "Android ABI selection is controlled by RUST_ANDROID_ABIS." >&2
   exit 1
 fi
 
@@ -23,8 +22,22 @@ if [[ $# -gt 0 && ( "$1" == "debug" || "$1" == "release" ) ]]; then
   shift
 fi
 
-vesper_ffmpeg_parse_common_args android "$@"
-FFMPEG_ANDROID_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-$(vesper_ffmpeg_default_output_dir android "$FFMPEG_ANDROID_BASE_DIR")}}"
+if [[ $# -gt 0 ]]; then
+  echo "Unexpected arguments: $*" >&2
+  echo "This script no longer accepts FFmpeg component overlays or ABI positional args." >&2
+  echo "Build the shared runtime with scripts/android/build-ffmpeg-runtime-aar.sh." >&2
+  exit 1
+fi
+
+FFMPEG_ARGS=()
+while IFS= read -r arg; do
+  FFMPEG_ARGS+=("$arg")
+done < <("$ROOT_DIR/scripts/android/resolve-ffmpeg-runtime-requirements.sh" "${CONSUMERS[@]}")
+vesper_ffmpeg_parse_common_args android "${FFMPEG_ARGS[@]}"
+FFMPEG_ANDROID_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-$(vesper_ffmpeg_default_output_dir android "$ROOT_DIR/third_party/ffmpeg/android")}}"
+PROFILE_HASH="$(vesper_ffmpeg_profile_key android)"
+
+"$ROOT_DIR/scripts/android/build-ffmpeg-runtime-aar.sh" "${CONSUMERS[@]}"
 
 ANDROID_SDK_ROOT="$(vesper_android_sdk_root)"
 ANDROID_NDK_VERSION="$(vesper_android_ndk_version)"
@@ -33,7 +46,7 @@ ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
 selected_abis=()
 while IFS= read -r abi; do
   selected_abis+=("$abi")
-done < <(vesper_android_resolve_selected_abis ${VESPER_FFMPEG_POSITIONAL_ARGS[@]+"${VESPER_FFMPEG_POSITIONAL_ARGS[@]}"})
+done < <(vesper_android_resolve_selected_abis)
 
 required_targets=()
 for abi in "${selected_abis[@]}"; do
@@ -51,68 +64,54 @@ fi
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
-"$ROOT_DIR/scripts/android/build-ffmpeg-prebuilts.sh" "$@"
-
 for abi in "${selected_abis[@]}"; do
   ffmpeg_abi_dir="$FFMPEG_ANDROID_DIR/$abi"
   pkgconfig_dir="$ffmpeg_abi_dir/lib/pkgconfig"
+  metadata_path="$ffmpeg_abi_dir/vesper-ffmpeg-build-metadata.txt"
 
   if [[ ! -d "$pkgconfig_dir" ]]; then
-    echo "Missing FFmpeg pkg-config directory for ABI $abi:" >&2
+    echo "Missing shared FFmpeg runtime pkg-config directory for ABI $abi:" >&2
     echo "  $pkgconfig_dir" >&2
     exit 1
   fi
 
+  configure_metadata=""
+  if [[ -f "$metadata_path" ]]; then
+    configure_metadata="$(tr '\n' ';' <"$metadata_path")"
+  fi
+
+  cargo_args=(
+    ndk
+    -o "$OUTPUT_DIR"
+    -t "$abi"
+    build
+    -p player-remux-ffmpeg
+  )
   if [[ "$PROFILE" == "release" ]]; then
-    env \
-      PKG_CONFIG_ALLOW_CROSS=1 \
-      PKG_CONFIG_PATH="$pkgconfig_dir" \
-      cargo ndk \
-        -o "$OUTPUT_DIR" \
-        -t "$abi" \
-        build \
-        -p player-remux-ffmpeg \
-        --release
-  else
-    env \
-      PKG_CONFIG_ALLOW_CROSS=1 \
-      PKG_CONFIG_PATH="$pkgconfig_dir" \
-      cargo ndk \
-        -o "$OUTPUT_DIR" \
-        -t "$abi" \
-        build \
-        -p player-remux-ffmpeg
+    cargo_args+=(--release)
   fi
 
-  mkdir -p "$OUTPUT_DIR/$abi"
-  find "$ffmpeg_abi_dir/lib" -maxdepth 1 -type f -name 'lib*.so' -exec cp {} "$OUTPUT_DIR/$abi/" \;
-
-  if [[ "$VESPER_FFMPEG_USE_OPENSSL" == "1" ]]; then
-    for runtime_dependency in \
-      "$OPENSSL_ANDROID_DIR/$abi/lib/libssl.so" \
-      "$OPENSSL_ANDROID_DIR/$abi/lib/libcrypto.so"; do
-      if [[ -f "$runtime_dependency" ]]; then
-        cp "$runtime_dependency" "$OUTPUT_DIR/$abi/"
-      fi
-    done
-  fi
-
-  if [[ "$VESPER_FFMPEG_USE_LIBXML2" == "1" ]]; then
-    runtime_dependency="$LIBXML2_ANDROID_DIR/$abi/lib/libxml2.so"
-    if [[ -f "$runtime_dependency" ]]; then
-      cp "$runtime_dependency" "$OUTPUT_DIR/$abi/"
-    fi
-  fi
+  env \
+    PKG_CONFIG_ALLOW_CROSS=1 \
+    PKG_CONFIG_PATH="$pkgconfig_dir" \
+    VESPER_FFMPEG_PROFILE_HASH="$PROFILE_HASH" \
+    VESPER_FFMPEG_CONFIGURE_METADATA="$configure_metadata" \
+    cargo "${cargo_args[@]}"
 done
+
+unexpected_runtime="$(
+  find "$OUTPUT_DIR" -type f \
+    \( -name 'libav*.so' -o -name 'libsw*.so' -o -name 'libssl*.so' -o -name 'libcrypto*.so' -o -name 'libxml2*.so' \) \
+    -print -quit
+)"
+if [[ -n "$unexpected_runtime" ]]; then
+  echo "player-remux-ffmpeg must not bundle FFmpeg runtime libraries:" >&2
+  echo "  $unexpected_runtime" >&2
+  echo "Package vesper-player-kit-ffmpeg-runtime with a union profile instead." >&2
+  exit 1
+fi
 
 echo
 echo "Built Android player-remux-ffmpeg plugin libraries into:"
 echo "  $OUTPUT_DIR"
-echo "Using Android FFmpeg prebuilts:"
-echo "  $FFMPEG_ANDROID_DIR"
-echo "FFmpeg profile:"
-echo "  $VESPER_FFMPEG_PROFILE"
-echo "Selected Android ABIs:"
-for abi in "${selected_abis[@]}"; do
-  echo "  $abi"
-done
+echo "The plugin no longer copies FFmpeg runtime libraries; package vesper-player-kit-ffmpeg-runtime instead."

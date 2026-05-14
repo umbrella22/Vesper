@@ -198,6 +198,114 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun sourcePreparerAdaptsDlnaDashWhenEnabled() {
+        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val dash = VesperPlayerSource.dash(
+            uri = "https://example.com/video.mpd",
+            label = "Episode",
+            headers = mapOf("Cookie" to "secret"),
+        )
+
+        val prepared = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(dash),
+                capabilities = VesperExternalRouteCapabilities(
+                    supportsProgressive = true,
+                    supportsHls = true,
+                    supportsMpegTs = true,
+                ),
+                formatAdaptation = VesperRelayFormatAdaptationConfig(
+                    enabled = true,
+                    preferredFallback = VesperRelayFallbackFormat.Hls,
+                ),
+                routeId = "uuid:tv",
+                routeName = "Living Room TV",
+            ),
+        ) as VesperExternalSourcePreparationResult.Prepared
+
+        assertTrue(prepared.relayEnabled)
+        assertEquals(VesperRelayFallbackFormat.Hls, prepared.adaptedFormat)
+        assertEquals(VesperPlayerSourceProtocol.Hls, prepared.source.protocol)
+        assertTrue(prepared.source.uri.endsWith(".m3u8"))
+    }
+
+    @Test
+    fun sourcePreparerReportsUnsupportedDlnaRemuxCaps() {
+        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val result = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(
+                    VesperPlayerSource.dash(
+                        uri = "https://example.com/video.mpd",
+                        label = "Episode",
+                    ),
+                ),
+                capabilities = VesperExternalRouteCapabilities(
+                    supportsHls = false,
+                    supportsMpegTs = false,
+                ),
+                formatAdaptation = VesperRelayFormatAdaptationConfig(enabled = true),
+                routeId = "uuid:tv",
+                routeName = "Living Room TV",
+            ),
+        ) as VesperExternalSourcePreparationResult.Unsupported
+
+        assertEquals("unsupported_device_caps", result.code)
+        assertEquals("false", result.details["supportsHls"])
+        assertEquals("false", result.details["supportsMpegTs"])
+        assertEquals("uuid:tv", result.details["routeId"])
+    }
+
+    @Test
+    fun relayServerServesAdaptedStreamsWithRangeAndDiagnostics() {
+        val diagnostics = Collections.synchronizedList(mutableListOf<VesperRelayDiagnostic>())
+        val adapter = RecordingFormatAdapter()
+        val adaptedRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            formatAdapter = adapter,
+            diagnosticListener = diagnostics::add,
+        )
+        try {
+            val handle = adaptedRelay.register(
+                VesperPlayerSource.dash(
+                    uri = "https://example.com/video.mpd",
+                    label = "Episode",
+                    headers = mapOf("Cookie" to "secret"),
+                ),
+                VesperRelayFormatAdaptationRegistration(
+                    fallbackFormat = VesperRelayFallbackFormat.MpegTs,
+                    config = VesperRelayFormatAdaptationConfig(
+                        enabled = true,
+                        enableRangeCache = true,
+                    ),
+                    routeId = "uuid:tv",
+                    routeName = "Living Room TV",
+                ),
+            )
+
+            val range = request(handle.url, headers = mapOf("Range" to "bytes=2-5"))
+
+            assertEquals(206, range.status)
+            assertEquals("2345", range.body)
+            assertEquals("video/mp2t", range.headers["Content-Type"]?.firstOrNull())
+            assertEquals("bytes 2-5/10", range.headers["Content-Range"]?.firstOrNull())
+            assertEquals("Episode.ts", handle.url.substringAfterLast('/'))
+            assertEquals("bytes=2-5", adapter.requests.single().range?.toHeaderValue())
+
+            val invalid = request(handle.url, headers = mapOf("Range" to "bytes=99-100"))
+
+            assertEquals(416, invalid.status)
+            assertTrue(invalid.body.contains("range_not_ready"))
+            assertEquals("range_not_ready", diagnostics.single().code)
+        } finally {
+            adaptedRelay.stop()
+        }
+    }
+
+    @Test
     fun sourcePreparerHonorsProxyNever() {
         val preparer = VesperExternalPlaybackSourcePreparer(relay)
         val source = VesperPlayerSource.remote(
@@ -222,6 +330,45 @@ class VesperRelayServerTest {
         val server = RecordingHttpServer(loopback, requests)
         server.start()
         return server
+    }
+}
+
+private class RecordingFormatAdapter : VesperRelayFormatAdapter {
+    val requests = Collections.synchronizedList(mutableListOf<VesperRelayFormatAdaptationRequest>())
+    private val payload = "0123456789".toByteArray()
+
+    override fun open(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult {
+        requests += request
+        val resolved = request.range?.resolve(payload.size.toLong())
+        if (request.range != null && resolved == null) {
+            return VesperRelayFormatAdaptationResult.Failure(
+                status = 416,
+                diagnostic = VesperRelayDiagnostic(
+                    code = "range_not_ready",
+                    message = "Requested adapted range is not available.",
+                    details = mapOf("sessionId" to request.sessionId),
+                ),
+            )
+        }
+        val body = if (resolved == null) {
+            payload
+        } else {
+            payload.copyOfRange(resolved.start.toInt(), (resolved.end + 1).toInt())
+        }
+        val headers = if (resolved == null) {
+            emptyMap()
+        } else {
+            mapOf("Content-Range" to "bytes ${resolved.start}-${resolved.end}/${payload.size}")
+        }
+        return VesperRelayFormatAdaptationResult.Stream(
+            body.asRelayAdaptedStream(
+                contentType = request.fallbackFormat.contentType(),
+                status = if (resolved == null) 200 else 206,
+                headers = headers,
+            ),
+        )
     }
 }
 

@@ -44,7 +44,12 @@ import io.github.ikaros.vesper.player.android.relay.VesperExternalProxyPolicy
 import io.github.ikaros.vesper.player.android.relay.VesperExternalRouteCapabilities
 import io.github.ikaros.vesper.player.android.relay.VesperExternalSourcePreparationRequest
 import io.github.ikaros.vesper.player.android.relay.VesperExternalSourcePreparationResult
+import io.github.ikaros.vesper.player.android.relay.VesperRelayFallbackFormat
+import io.github.ikaros.vesper.player.android.relay.VesperRelayFormatAdapter
+import io.github.ikaros.vesper.player.android.relay.VesperRelayFormatAdaptationConfig
+import io.github.ikaros.vesper.player.android.relay.VesperRelayDiagnostic
 import io.github.ikaros.vesper.player.android.relay.VesperRelayServer
+import io.github.ikaros.vesper.player.android.relay.VesperUnavailableRelayFormatAdapter
 
 class VesperPlayerExternalPlaybackPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
@@ -109,7 +114,11 @@ class VesperPlayerExternalPlaybackPlugin :
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
-        relayServer = VesperRelayServer(applicationContext)
+        relayServer = VesperRelayServer(
+            applicationContext,
+            formatAdapter = createRelayFormatAdapter(applicationContext),
+            diagnosticListener = { diagnostic -> emitRelayDiagnostic(diagnostic) },
+        )
         sourcePreparer = VesperExternalPlaybackSourcePreparer(relayServer)
         castController = VesperCastController(applicationContext)
         methodChannel = MethodChannel(binding.binaryMessenger, METHOD_CHANNEL_NAME)
@@ -382,6 +391,7 @@ class VesperPlayerExternalPlaybackPlugin :
                 supportsProgressive = true,
                 supportsHls = true,
                 supportsDash = true,
+                supportsMpegTs = true,
             ),
         ) ?: return lastPrepareFailure
         val castResult = castController.load(
@@ -413,8 +423,12 @@ class VesperPlayerExternalPlaybackPlugin :
             capabilities = VesperExternalRouteCapabilities(
                 supportsProgressive = true,
                 supportsHls = VesperDlnaProtocolInfoParser.supportsHls(protocolInfo),
-                supportsDash = false,
+                supportsDash = VesperDlnaProtocolInfoParser.supportsDash(protocolInfo),
+                supportsMpegTs = protocolInfo.isBlank() ||
+                    VesperDlnaProtocolInfoParser.supportsMpegTs(protocolInfo),
             ),
+            routeId = session.device.routeId,
+            routeName = session.device.friendlyName,
         ) ?: return lastPrepareFailure
         val dlnaResult = session.load(
             source = prepared.source,
@@ -436,6 +450,8 @@ class VesperPlayerExternalPlaybackPlugin :
         item: ExternalMediaItem,
         target: VesperExternalPlaybackTarget,
         capabilities: VesperExternalRouteCapabilities,
+        routeId: String? = null,
+        routeName: String? = null,
     ): VesperExternalSourcePreparationResult.Prepared? {
         return when (
             val prepared = sourcePreparer.prepare(
@@ -444,11 +460,24 @@ class VesperPlayerExternalPlaybackPlugin :
                     sources = item.sources,
                     proxyPolicy = item.proxyPolicy,
                     capabilities = capabilities,
+                    formatAdaptation = item.formatAdaptation,
+                    routeId = routeId,
+                    routeName = routeName,
                 ),
             )
         ) {
             is VesperExternalSourcePreparationResult.Prepared -> prepared
             is VesperExternalSourcePreparationResult.Unsupported -> {
+                prepared.code?.let { code ->
+                    emitSessionEvent(
+                        "discoveryDiagnostic",
+                        routeId = routeId,
+                        routeName = routeName,
+                        message = prepared.message,
+                        code = code,
+                        details = prepared.details + mapOf("severity" to "warning"),
+                    )
+                }
                 lastPrepareFailure = ExternalOperationResult.Unsupported(prepared.message)
                 null
             }
@@ -586,6 +615,35 @@ class VesperPlayerExternalPlaybackPlugin :
             ),
         )
     }
+
+    private fun emitRelayDiagnostic(diagnostic: VesperRelayDiagnostic) {
+        mainHandler.post {
+            emitSessionEvent(
+                "discoveryDiagnostic",
+                message = diagnostic.message,
+                code = diagnostic.code,
+                details = diagnostic.details + mapOf(
+                    "severity" to diagnostic.severity,
+                ),
+            )
+        }
+    }
+}
+
+private fun createRelayFormatAdapter(context: Context): VesperRelayFormatAdapter {
+    val className = "io.github.ikaros.vesper.player.android.relay.ffmpeg.VesperRelayFfmpegAdapter"
+    return runCatching {
+        val type = Class.forName(className)
+        runCatching {
+            type.getDeclaredConstructor(Context::class.java).newInstance(context)
+        }.getOrElse {
+            type.getDeclaredConstructor().newInstance()
+        } as VesperRelayFormatAdapter
+    }.getOrElse { error ->
+        VesperUnavailableRelayFormatAdapter(
+            error.message ?: "FFmpeg relay runtime class is not available: $className",
+        )
+    }
 }
 
 private val Configuration.isNightMode: Boolean
@@ -701,6 +759,7 @@ private data class ExternalMediaItem(
     val sources: List<VesperPlayerSource>,
     val metadata: VesperSystemPlaybackMetadata,
     val proxyPolicy: VesperExternalProxyPolicy,
+    val formatAdaptation: VesperRelayFormatAdaptationConfig,
 )
 
 private data class RecentDlnaDevice(
@@ -766,8 +825,23 @@ private fun Map<String, Any?>.toMediaItem(): ExternalMediaItem {
         "never" -> VesperExternalProxyPolicy.Never
         else -> VesperExternalProxyPolicy.Auto
     }
-    return ExternalMediaItem(sources, metadata, proxyPolicy)
+    val formatAdaptation =
+        (this["formatAdaptation"] as? Map<*, *>)?.stringMap()?.toFormatAdaptationConfig()
+            ?: VesperRelayFormatAdaptationConfig()
+    return ExternalMediaItem(sources, metadata, proxyPolicy, formatAdaptation)
 }
+
+private fun Map<String, Any?>.toFormatAdaptationConfig(): VesperRelayFormatAdaptationConfig =
+    VesperRelayFormatAdaptationConfig(
+        enabled = this["enabled"] as? Boolean ?: false,
+        preferredFallback = when (this["preferredFallback"] as? String) {
+            "hls" -> VesperRelayFallbackFormat.Hls
+            else -> VesperRelayFallbackFormat.MpegTs
+        },
+        allowHls = this["allowHls"] as? Boolean ?: true,
+        enableRangeCache = this["enableRangeCache"] as? Boolean ?: true,
+        debugDiagnostics = this["debugDiagnostics"] as? Boolean ?: false,
+    )
 
 private fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
     val uri = this["uri"] as? String ?: throw IllegalArgumentException("Missing source uri.")

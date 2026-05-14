@@ -120,6 +120,7 @@ done < <(
   find "$DESTINATION_DIRECTORY" -maxdepth 1 -type f \
     \( \
       -name 'libplayer_remux_ffmpeg*.dylib*' -o \
+      -name 'libvesper_remux_ffmpeg*.dylib*' -o \
       -name 'libavcodec*.dylib*' -o \
       -name 'libavformat*.dylib*' -o \
       -name 'libavutil*.dylib*' -o \

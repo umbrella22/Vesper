@@ -1,0 +1,16 @@
+[package]
+name = "player-relay-ffmpeg-android"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "vesper_player_relay_ffmpeg"
+
+[dependencies]
+ffmpeg-next = { workspace = true, features = ["codec", "format"] }
+jni = "0.22.4"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

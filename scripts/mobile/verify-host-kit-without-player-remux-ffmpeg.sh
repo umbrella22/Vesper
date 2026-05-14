@@ -20,6 +20,9 @@ has_ffmpeg_payload() {
     \( \
       -name 'libplayer_remux_ffmpeg*.so' -o \
       -name 'libplayer_remux_ffmpeg*.dylib' -o \
+      -name 'libvesper_remux_ffmpeg*.so' -o \
+      -name 'libvesper_remux_ffmpeg*.dylib' -o \
+      -name 'libvesper_player_relay_ffmpeg*.so' -o \
       -name 'libavcodec*.so' -o \
       -name 'libavcodec*.dylib' -o \
       -name 'libavformat*.so' -o \
@@ -88,7 +91,7 @@ verify_ios() {
   fi
 
   while IFS= read -r framework_binary; do
-    if otool -L "$framework_binary" | grep -Eq 'player_remux_ffmpeg|libav(codec|format|util|filter|device|swresample|swscale)'; then
+    if otool -L "$framework_binary" | grep -Eq '(player|vesper)_remux_ffmpeg|libav(codec|format|util|filter|device|swresample|swscale)'; then
       echo "Unexpected FFmpeg linkage found in framework binary: $framework_binary" >&2
       otool -L "$framework_binary" >&2
       exit 1

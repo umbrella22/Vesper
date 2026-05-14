@@ -6,7 +6,6 @@ import 'package:vesper_player_platform_interface/vesper_player_platform_interfac
 class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   MethodChannelVesperPlayerAndroid() {
     VesperPlayerPlatform.instance = this;
-    _methodChannel.setMethodCallHandler(_handleMethodCall);
   }
 
   static const MethodChannel _methodChannel = MethodChannel(
@@ -37,6 +36,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   final Map<String, VesperDownloadStaleResourcePlanRecoveryCallback>
       _downloadRecoveryHandlers =
       <String, VesperDownloadStaleResourcePlanRecoveryCallback>{};
+  bool _methodCallHandlerRegistered = false;
 
   @override
   Future<VesperPlatformCreateResult> createPlayer({
@@ -55,8 +55,8 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   }) async {
     final trackPreferenceMap = trackPreferencePolicy.toMap();
     final preloadBudgetMap = preloadBudgetPolicy.toMap();
-    final result = await _methodChannel
-        .invokeMethod<Object?>('createPlayer', <String, Object?>{
+    final result =
+        await _invokeMethod<Object?>('createPlayer', <String, Object?>{
       'initialSource': initialSource?.toMap(),
       'renderSurfaceKind': renderSurfaceKind.name,
       'resiliencePolicy': resiliencePolicy.toMap(),
@@ -269,7 +269,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   @override
   Future<VesperSystemPlaybackPermissionStatus>
       requestSystemPlaybackPermissions() async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'requestSystemPlaybackPermissions',
     );
     return _decodePermissionStatus(result);
@@ -278,7 +278,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   @override
   Future<VesperSystemPlaybackPermissionStatus>
       getSystemPlaybackPermissionStatus() async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'getSystemPlaybackPermissionStatus',
     );
     return _decodePermissionStatus(result);
@@ -290,7 +290,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
         const VesperDownloadConfiguration(),
     VesperDownloadStaleResourcePlanRecoveryCallback? staleResourceRecovery,
   }) async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'createDownloadManager',
       <String, Object?>{
         'configuration': configuration.toMap(),
@@ -336,7 +336,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
     VesperDownloadProfile profile = const VesperDownloadProfile(),
     VesperDownloadAssetIndex assetIndex = const VesperDownloadAssetIndex(),
   }) async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'createDownloadTask',
       <String, Object?>{
         'downloadId': downloadId,
@@ -351,7 +351,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
 
   @override
   Future<bool> startDownloadTask(String downloadId, int taskId) async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'startDownloadTask',
       <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
     );
@@ -360,7 +360,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
 
   @override
   Future<bool> pauseDownloadTask(String downloadId, int taskId) async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'pauseDownloadTask',
       <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
     );
@@ -369,7 +369,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
 
   @override
   Future<bool> resumeDownloadTask(String downloadId, int taskId) async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'resumeDownloadTask',
       <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
     );
@@ -378,7 +378,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
 
   @override
   Future<bool> removeDownloadTask(String downloadId, int taskId) async {
-    final result = await _methodChannel.invokeMethod<Object?>(
+    final result = await _invokeMethod<Object?>(
       'removeDownloadTask',
       <String, Object?>{'downloadId': downloadId, 'taskId': taskId},
     );
@@ -421,7 +421,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
     VesperDownloadPublicCollection collection =
         VesperDownloadPublicCollection.downloads,
   }) {
-    return _methodChannel.invokeMethod<String>(
+    return _invokeMethod<String>(
       'saveDownloadTask',
       <String, Object?>{
         'downloadId': downloadId,
@@ -433,7 +433,20 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   }
 
   Future<void> _invokeVoid(String method, [Object? arguments]) async {
-    await _methodChannel.invokeMethod<void>(method, arguments);
+    await _invokeMethod<void>(method, arguments);
+  }
+
+  Future<T?> _invokeMethod<T>(String method, [Object? arguments]) async {
+    _ensureMethodCallHandlerRegistered();
+    return _methodChannel.invokeMethod<T>(method, arguments);
+  }
+
+  void _ensureMethodCallHandlerRegistered() {
+    if (_methodCallHandlerRegistered) {
+      return;
+    }
+    _methodChannel.setMethodCallHandler(_handleMethodCall);
+    _methodCallHandlerRegistered = true;
   }
 
   Future<Object?> _handleMethodCall(MethodCall call) async {

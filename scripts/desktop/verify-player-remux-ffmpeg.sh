@@ -58,7 +58,7 @@ build_plugin() {
 run_loader_test() {
   cargo test \
     -p player-plugin-loader \
-    tests::dynamic_loader_opens_real_player_remux_ffmpeg_shared_library \
+    tests::dynamic_loader_opens_real_vesper_remux_ffmpeg_shared_library \
     -- \
     --ignored \
     --exact
@@ -90,7 +90,7 @@ main() {
   local target_dir
   local plugin_path
 
-  library_name="$(vesper_desktop_shared_library_name player_remux_ffmpeg)"
+  library_name="$(vesper_desktop_shared_library_name vesper_remux_ffmpeg)"
   target_dir="$(vesper_desktop_target_dir)"
 
   build_plugin

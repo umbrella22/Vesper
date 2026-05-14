@@ -132,7 +132,7 @@ final class VesperDownloadManagerTests: XCTestCase {
                 autoStart: false,
                 runPostProcessorsOnCompletion: false,
                 pluginLibraryPaths: [
-                    "/Applications/VesperPlayerKit.framework/libplayer_remux_ffmpeg.dylib",
+                    "/Applications/VesperPlayerKit.framework/libvesper_remux_ffmpeg.dylib",
                     "/Applications/VesperPlayerKit.framework/libvesper_metrics.dylib",
                 ]
             ),
@@ -144,7 +144,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(
             bindings.createdConfiguration?.pluginLibraryPaths,
             [
-                "/Applications/VesperPlayerKit.framework/libplayer_remux_ffmpeg.dylib",
+                "/Applications/VesperPlayerKit.framework/libvesper_remux_ffmpeg.dylib",
                 "/Applications/VesperPlayerKit.framework/libvesper_metrics.dylib",
             ]
         )

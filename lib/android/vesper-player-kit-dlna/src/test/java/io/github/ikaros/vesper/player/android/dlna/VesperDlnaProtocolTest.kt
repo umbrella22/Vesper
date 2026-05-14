@@ -177,6 +177,15 @@ class VesperDlnaProtocolTest {
     }
 
     @Test
+    fun parsesProtocolInfoForDashAndMpegTsSupport() {
+        val protocolInfo = "http-get:*:application/dash+xml:*,http-get:*:video/mp2t:*"
+
+        assertTrue(VesperDlnaProtocolInfoParser.supportsDash(protocolInfo))
+        assertTrue(VesperDlnaProtocolInfoParser.supportsMpegTs(protocolInfo))
+        assertFalse(VesperDlnaProtocolInfoParser.supportsDash("http-get:*:video/mp4:*"))
+    }
+
+    @Test
     fun buildsDidlLiteMetadata() {
         val source = VesperPlayerSource.remote(
             uri = "http://192.168.1.2:9000/media/token",

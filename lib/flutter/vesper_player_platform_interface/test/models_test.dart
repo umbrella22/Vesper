@@ -195,11 +195,27 @@ void main() {
       activeRoute: route,
     );
     const picker = VesperRoutePickerConfiguration();
+    const adaptation = VesperExternalFormatAdaptationConfig.dlnaRemux(
+      preferredFallback: VesperExternalFallbackFormat.hls,
+      debugDiagnostics: true,
+    );
+    final mediaItem = VesperExternalPlaybackMediaItem(
+      sources: <VesperPlayerSource>[
+        VesperPlayerSource.dash(
+          uri: 'https://example.com/video.mpd',
+          label: 'DASH',
+        ),
+      ],
+      metadata: const VesperSystemPlaybackMetadata(title: 'Episode'),
+      formatAdaptation: adaptation,
+    );
 
     expect(VesperExternalPlaybackRouteKind.none.name, 'none');
     expect(VesperExternalPlaybackRouteKind.airPlay.name, 'airPlay');
     expect(VesperExternalPlaybackRouteKind.cast.name, 'cast');
     expect(VesperExternalPlaybackRouteKind.dlna.name, 'dlna');
+    expect(VesperExternalFallbackFormat.mpegTs.name, 'mpegTs');
+    expect(VesperExternalFallbackFormat.hls.name, 'hls');
     expect(availability.hasAvailableRoute, isTrue);
     expect(
       VesperExternalPlaybackAvailability.fromMap(availability.toMap())
@@ -214,6 +230,12 @@ void main() {
       VesperRoutePickerConfiguration.fromMap(const <Object?, Object?>{})
           .prioritizesVideoDevices,
       isTrue,
+    );
+    expect(
+      VesperExternalPlaybackMediaItem.fromMap(mediaItem.toMap())
+          .formatAdaptation
+          .preferredFallback,
+      VesperExternalFallbackFormat.hls,
     );
   });
 

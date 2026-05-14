@@ -26,7 +26,9 @@ scripts/
 ./scripts/vesper ffi c-host-smoke
 
 ./scripts/vesper android ffmpeg arm64-v8a
+./scripts/vesper android ffmpeg-runtime download-remux relay-remux
 ./scripts/vesper android jni release arm64-v8a
+VESPER_ANDROID_FFMPEG_CONSUMERS="download-remux relay-remux" ./scripts/vesper android relay-ffmpeg-jni release
 ./scripts/vesper android aar
 ./scripts/vesper android stage-release
 
@@ -70,13 +72,23 @@ provided by the caller.
   ios-arm64 ios-simulator-arm64
 ```
 
-The same FFmpeg options can be passed through remux plugin build scripts:
+Android FFmpeg runtime packaging is split from FFmpeg consumers. Build
+`vesper-player-kit-ffmpeg-runtime` with the enabled consumer list first; the
+resolver unions their requirements and writes the runtime profile metadata into
+the AAR. `player-remux-ffmpeg` and `vesper-player-kit-relay-ffmpeg` must package
+only their own plugin/JNI libraries and depend on that shared runtime.
 
 ```sh
-./scripts/vesper android remux-plugin /tmp/vesper-android-remux release \
-  --ffmpeg-profile remux-local \
-  arm64-v8a
+./scripts/vesper android ffmpeg-runtime download-remux relay-remux
+VESPER_ANDROID_FFMPEG_CONSUMERS="download-remux relay-remux" \
+  ./scripts/vesper android remux-plugin /tmp/vesper-android-remux release
+VESPER_ANDROID_FFMPEG_CONSUMERS="download-remux relay-remux" \
+  ./scripts/vesper android relay-ffmpeg-jni release
+```
 
+Apple remux plugin build scripts still accept FFmpeg profile options directly:
+
+```sh
 ./scripts/vesper ios remux-plugin /tmp/vesper-ios-remux release \
   --ffmpeg-profile remux-local \
   ios-arm64 ios-simulator-arm64

@@ -19,7 +19,7 @@ use player_plugin::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
     OutputFormat, PostDownloadProcessor, ProcessorOutput, ProcessorProgress, StreamKind,
 };
-use player_remux_ffmpeg::FfmpegRemuxProcessor;
+use vesper_remux_ffmpeg::FfmpegRemuxProcessor;
 use player_runtime::{
     DownloadAssetIndex, DownloadByteRange, DownloadContentFormat, DownloadManager,
     DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot,
@@ -1658,7 +1658,7 @@ mod tests {
 
         let workspace = TestWorkspace::new("desktop-remux");
         let manifest_path = create_local_hls_fixture(workspace.path());
-        let plugin = LoadedDynamicPlugin::load(resolve_player_remux_ffmpeg_plugin_path())
+        let plugin = LoadedDynamicPlugin::load(resolve_vesper_remux_ffmpeg_plugin_path())
             .unwrap_or_else(|error| {
                 panic!("failed to load player-remux-ffmpeg plugin for desktop remux test: {error}")
             });
@@ -1867,7 +1867,7 @@ mod tests {
         assert!(status.success(), "media tool `{binary}` should be callable");
     }
 
-    fn resolve_player_remux_ffmpeg_plugin_path() -> PathBuf {
+    fn resolve_vesper_remux_ffmpeg_plugin_path() -> PathBuf {
         if let Some(path) = std::env::var_os("VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH") {
             let path = PathBuf::from(path);
             assert!(
@@ -1889,7 +1889,7 @@ mod tests {
                 }
             })
             .unwrap_or_else(|| workspace_root.join("target"));
-        let library_name = shared_library_name("player_remux_ffmpeg");
+        let library_name = shared_library_name("vesper_remux_ffmpeg");
         let candidates = [
             target_dir.join("debug").join(&library_name),
             target_dir.join("debug").join("deps").join(&library_name),

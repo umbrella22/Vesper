@@ -517,14 +517,15 @@ export flow because the SDK does not request legacy public storage permissions.
 ### Optional `.mp4` export through `player-remux-ffmpeg`
 
 `player-remux-ffmpeg` is an optional dynamic plugin that remuxes downloaded HLS,
-DASH, or FLV assets into `.mp4`. The Flutter packages do not bundle it automatically.
-Export becomes available only after the host app packages the plugin library
-and passes its absolute path through
-`VesperDownloadConfiguration.pluginLibraryPaths`.
+DASH, or FLV assets into `.mp4`. Android hosts must package the shared
+`vesper-player-kit-ffmpeg-runtime` AAR separately; the plugin `.so` does not
+bundle `libav*`. Export becomes available only after the host app packages the
+runtime, packages the plugin library, and passes the plugin absolute path
+through `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 ```dart
 final pluginLibraryPaths = <String>[
-  '/absolute/path/to/libplayer_remux_ffmpeg.so',
+  '/absolute/path/to/libvesper_remux_ffmpeg.so',
 ];
 
 final manager = await VesperDownloadManager.create(
@@ -552,7 +553,7 @@ final savedUri = await manager.saveTaskOutput(
 Key points:
 
 - `pluginLibraryPaths` must point to an already packaged and accessible
-  `libplayer_remux_ffmpeg.so` or `libplayer_remux_ffmpeg.dylib`.
+  `libvesper_remux_ffmpeg.so` or `libvesper_remux_ffmpeg.dylib`.
 - `exportTaskOutput(...)` triggers the plugin and reports progress through
   `VesperDownloadExportProgressEvent`.
 - The mobile examples in this repository already show the full host wiring:

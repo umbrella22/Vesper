@@ -1,0 +1,6 @@
+libraries=avcodec,avformat,avutil
+demuxers=hls,dash,concat,flv,mov,matroska,mpegts,aac
+muxers=mp4,mov,matroska
+protocols=file,pipe
+parsers=aac,ac3,av1,flac,h264,hevc,mpeg4video,opus,vp8,vp9
+bsfs=aac_adtstoasc,extract_extradata,h264_metadata,hevc_metadata

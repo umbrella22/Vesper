@@ -113,20 +113,35 @@ network and Cast metadata only; it does not enable
 
 To export downloaded HLS, DASH, or FLV assets as `.mp4`, the host app must package
 the optional `player-remux-ffmpeg` plugin and pass the absolute path to
-`libplayer_remux_ffmpeg.so` through
+`libvesper_remux_ffmpeg.so` through
 `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 Typical setup:
 
-1. Build the Android plugin artifact:
+1. Build the shared Android FFmpeg runtime for the enabled consumers:
 
    ```sh
-   ./scripts/vesper android remux-plugin <output-dir> [debug|release] [abi...]
+   ./scripts/vesper android ffmpeg-runtime download-remux
    ```
 
-2. Add the output directory to `sourceSets.main.jniLibs` in the host app
-3. Resolve `libplayer_remux_ffmpeg.so` from `applicationInfo.nativeLibraryDir` at runtime
-4. Pass the resolved absolute path into the download manager configuration
+2. Build the Android plugin artifact. Android ABI selection is controlled by
+   `RUST_ANDROID_ABIS`; the plugin must not copy `libav*` runtime libraries:
+
+   ```sh
+   ./scripts/vesper android remux-plugin <output-dir> [debug|release]
+   ```
+
+3. Add `vesper-player-kit-ffmpeg-runtime` and the plugin output directory to the
+   host app packaging.
+4. Resolve `libvesper_remux_ffmpeg.so` from `applicationInfo.nativeLibraryDir` at runtime.
+5. Pass the resolved absolute path into the download manager configuration.
+
+When the same app also enables DLNA relay remux, build the runtime with both
+consumers:
+
+```sh
+./scripts/vesper android ffmpeg-runtime download-remux relay-remux
+```
 
 Android FFmpeg prebuilts are generated on demand. The repository only builds
 them when the host explicitly requests the remux plugin. The current script also

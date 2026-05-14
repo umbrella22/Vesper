@@ -19,6 +19,7 @@ data class VesperExternalRouteCapabilities(
     val supportsProgressive: Boolean = true,
     val supportsHls: Boolean = false,
     val supportsDash: Boolean = false,
+    val supportsMpegTs: Boolean = true,
 )
 
 data class VesperExternalSourcePreparationRequest(
@@ -26,6 +27,9 @@ data class VesperExternalSourcePreparationRequest(
     val sources: List<VesperPlayerSource>,
     val proxyPolicy: VesperExternalProxyPolicy = VesperExternalProxyPolicy.Auto,
     val capabilities: VesperExternalRouteCapabilities = VesperExternalRouteCapabilities(),
+    val formatAdaptation: VesperRelayFormatAdaptationConfig = VesperRelayFormatAdaptationConfig(),
+    val routeId: String? = null,
+    val routeName: String? = null,
 )
 
 sealed class VesperExternalSourcePreparationResult {
@@ -33,9 +37,14 @@ sealed class VesperExternalSourcePreparationResult {
         val source: VesperPlayerSource,
         val relayToken: String? = null,
         val relayEnabled: Boolean = false,
+        val adaptedFormat: VesperRelayFallbackFormat? = null,
     ) : VesperExternalSourcePreparationResult()
 
-    data class Unsupported(val message: String) : VesperExternalSourcePreparationResult()
+    data class Unsupported(
+        val message: String,
+        val code: String? = null,
+        val details: Map<String, String> = emptyMap(),
+    ) : VesperExternalSourcePreparationResult()
 }
 
 class VesperExternalPlaybackSourcePreparer(
@@ -52,7 +61,9 @@ class VesperExternalPlaybackSourcePreparer(
                 continue
             }
 
+            val fallbackFormat = source.adaptationFallbackFormat(request)
             val requiresRelay = request.proxyPolicy == VesperExternalProxyPolicy.Always ||
+                fallbackFormat != null ||
                 source.headers.isNotEmpty() ||
                 source.kind == VesperPlayerSourceKind.Local ||
                 source.protocol == VesperPlayerSourceProtocol.File ||
@@ -68,27 +79,53 @@ class VesperExternalPlaybackSourcePreparer(
                 return VesperExternalSourcePreparationResult.Prepared(source = source)
             }
 
-            if (source.protocol == VesperPlayerSourceProtocol.Dash) {
+            if (source.protocol == VesperPlayerSourceProtocol.Dash && fallbackFormat == null) {
                 unsupportedReasons += "DASH relay manifest rewrite is not supported in this MVP."
                 continue
             }
 
-            val handle = relayServer.register(source)
+            val adaptation = fallbackFormat?.let {
+                VesperRelayFormatAdaptationRegistration(
+                    fallbackFormat = it,
+                    config = request.formatAdaptation,
+                    routeId = request.routeId,
+                    routeName = request.routeName,
+                )
+            }
+            val handle = relayServer.register(source, adaptation)
             val relayed = VesperPlayerSource.remote(
                 uri = handle.url,
                 label = source.label,
-                protocol = source.protocol.relaxedForRelay(),
+                protocol = fallbackFormat?.relayedProtocol() ?: source.protocol.relaxedForRelay(),
                 headers = emptyMap(),
             )
             return VesperExternalSourcePreparationResult.Prepared(
                 source = relayed,
                 relayToken = handle.token,
                 relayEnabled = true,
+                adaptedFormat = fallbackFormat,
             )
         }
 
+        val message = unsupportedReasons.firstOrNull()
+            ?: "No playable external playback source is available."
+        val deviceCapsCode = "unsupported_device_caps".takeIf {
+            message.contains("does not report HLS or MPEG-TS support")
+        }
         return VesperExternalSourcePreparationResult.Unsupported(
-            unsupportedReasons.firstOrNull() ?: "No playable external playback source is available.",
+            message = message,
+            code = deviceCapsCode,
+            details = if (deviceCapsCode == null) {
+                emptyMap()
+            } else {
+                mapOf(
+                    "supportsHls" to request.capabilities.supportsHls.toString(),
+                    "supportsMpegTs" to request.capabilities.supportsMpegTs.toString(),
+                ) + listOfNotNull(
+                    request.routeId?.let { "routeId" to it },
+                    request.routeName?.let { "routeName" to it },
+                ).toMap()
+            },
         )
     }
 
@@ -127,7 +164,13 @@ private fun VesperPlayerSource.unsupportedProtocolReason(
             if (capabilities.supportsHls) null else "HLS is not supported by this route."
         VesperPlayerSourceProtocol.Dash ->
             if (request.target == VesperExternalPlaybackTarget.Dlna) {
-                "DASH is not supported for DLNA in this MVP."
+                if (request.formatAdaptation.enabled && adaptationFallbackFormat(request) != null) {
+                    null
+                } else if (request.formatAdaptation.enabled) {
+                    "DASH format adaptation is enabled, but this DLNA route does not report HLS or MPEG-TS support."
+                } else {
+                    "DASH is not supported for DLNA. Enable format adaptation to remux DASH for this route."
+                }
             } else if (capabilities.supportsDash) {
                 null
             } else {
@@ -138,6 +181,39 @@ private fun VesperPlayerSource.unsupportedProtocolReason(
         -> if (capabilities.supportsProgressive) null else "Local media relay is not supported by this route."
     }
 }
+
+private fun VesperPlayerSource.adaptationFallbackFormat(
+    request: VesperExternalSourcePreparationRequest,
+): VesperRelayFallbackFormat? {
+    if (!request.formatAdaptation.enabled ||
+        request.target != VesperExternalPlaybackTarget.Dlna ||
+        protocol != VesperPlayerSourceProtocol.Dash
+    ) {
+        return null
+    }
+    val capabilities = request.capabilities
+    val preferred = request.formatAdaptation.preferredFallback
+    val candidates = buildList {
+        add(preferred)
+        if (request.formatAdaptation.allowHls) {
+            add(VesperRelayFallbackFormat.Hls)
+        }
+        add(VesperRelayFallbackFormat.MpegTs)
+    }.distinct()
+
+    return candidates.firstOrNull { candidate ->
+        when (candidate) {
+            VesperRelayFallbackFormat.Hls -> request.formatAdaptation.allowHls && capabilities.supportsHls
+            VesperRelayFallbackFormat.MpegTs -> capabilities.supportsMpegTs
+        }
+    }
+}
+
+private fun VesperRelayFallbackFormat.relayedProtocol(): VesperPlayerSourceProtocol =
+    when (this) {
+        VesperRelayFallbackFormat.Hls -> VesperPlayerSourceProtocol.Hls
+        VesperRelayFallbackFormat.MpegTs -> VesperPlayerSourceProtocol.Progressive
+    }
 
 private fun VesperPlayerSourceProtocol.relaxedForRelay(): VesperPlayerSourceProtocol =
     when (this) {

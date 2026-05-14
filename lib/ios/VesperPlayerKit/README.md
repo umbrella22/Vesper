@@ -251,7 +251,7 @@ host-provided path and keeps the original offline file in place.
 
 `exportTaskOutput(...)` uses an optional `player-remux-ffmpeg` dynamic plugin
 when the host wants to export downloaded HLS, DASH, or FLV assets to `.mp4`. The
-host must embed a signed `libplayer_remux_ffmpeg.dylib` in the app bundle and
+host must embed a signed `libvesper_remux_ffmpeg.dylib` in the app bundle and
 pass its absolute path through `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 Bundling that plugin makes the host responsible for FFmpeg notices,

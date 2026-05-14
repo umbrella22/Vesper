@@ -29,10 +29,10 @@ FFMPEG_APPLE_DIR="${VESPER_APPLE_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-
 slice_output_path() {
   case "$1" in
     ios-arm64)
-      echo "$OUTPUT_DIR/iphoneos/libplayer_remux_ffmpeg.dylib"
+      echo "$OUTPUT_DIR/iphoneos/libvesper_remux_ffmpeg.dylib"
       ;;
     ios-simulator-arm64)
-      echo "$OUTPUT_DIR/iphonesimulator/$(vesper_ios_slice_rust_target "$1")/libplayer_remux_ffmpeg.dylib"
+      echo "$OUTPUT_DIR/iphonesimulator/$(vesper_ios_slice_rust_target "$1")/libvesper_remux_ffmpeg.dylib"
       ;;
     *)
       return 1
@@ -59,7 +59,7 @@ prepare_runtime_directory() {
 
 prepare_plugin_binary() {
   local binary_path="$1"
-  install_name_tool -id "@rpath/libplayer_remux_ffmpeg.dylib" "$binary_path"
+  install_name_tool -id "@rpath/libvesper_remux_ffmpeg.dylib" "$binary_path"
   ensure_loader_rpath "$binary_path"
 }
 
@@ -111,7 +111,7 @@ for slice in "${selected_slices[@]}"; do
     CARGO_TARGET_DIR="$cargo_target_dir" \
     "${cargo_command[@]}"
 
-  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libplayer_remux_ffmpeg.dylib" "$output_path"
+  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libvesper_remux_ffmpeg.dylib" "$output_path"
   if compgen -G "$ffmpeg_dir/lib/$ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
     cp -RP "$ffmpeg_dir"/lib/"$ffmpeg_libdir"/lib*.dylib* "$(dirname "$output_path")/"
   fi
@@ -132,7 +132,7 @@ if [[ ${#simulator_slices[@]} -gt 0 ]]; then
   mkdir -p "$OUTPUT_DIR/iphonesimulator"
   cp \
     "$(slice_output_path "${simulator_slices[0]}")" \
-    "$OUTPUT_DIR/iphonesimulator/libplayer_remux_ffmpeg.dylib"
+    "$OUTPUT_DIR/iphonesimulator/libvesper_remux_ffmpeg.dylib"
   simulator_ffmpeg_dir="$(vesper_apple_slice_output_root "${simulator_slices[0]}" "$FFMPEG_APPLE_DIR")"
   simulator_ffmpeg_libdir="$(vesper_apple_slice_output_libdir "${simulator_slices[0]}")"
   if compgen -G "$simulator_ffmpeg_dir/lib/$simulator_ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
@@ -141,7 +141,7 @@ if [[ ${#simulator_slices[@]} -gt 0 ]]; then
       "$OUTPUT_DIR/iphonesimulator/"
   fi
   prepare_runtime_directory "$OUTPUT_DIR/iphonesimulator"
-  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_remux_ffmpeg.dylib"
+  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libvesper_remux_ffmpeg.dylib"
 fi
 
 echo

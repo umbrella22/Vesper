@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+name = "vesper_remux_ffmpeg"
 
 [dependencies]
 ffmpeg-next = { workspace = true, features = ["codec", "format"] }
