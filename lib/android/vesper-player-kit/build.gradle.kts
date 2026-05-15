@@ -128,8 +128,27 @@ tasks.named("check").configure {
     dependsOn(checkPublicApiSurface)
 }
 
-tasks.matching { it.name == "preBuild" }.configureEach {
+tasks.matching {
+    it.name == "preDebugBuild" ||
+        it.name == "preDebugAndroidTestBuild" ||
+        it.name == "mergeDebugJniLibFolders" ||
+        it.name == "mergeDebugAndroidTestJniLibFolders"
+}.configureEach {
     dependsOn(buildRustAndroidHostDebug)
+}
+
+tasks.matching {
+    it.name == "preReleaseBuild" ||
+        it.name == "mergeReleaseJniLibFolders"
+}.configureEach {
+    dependsOn(buildRustAndroidHostRelease)
+}
+
+buildRustAndroidHostRelease.configure {
+    mustRunAfter(tasks.matching { task ->
+        task.name == "mergeDebugJniLibFolders" ||
+            task.name == "mergeDebugAndroidTestJniLibFolders"
+    })
 }
 
 tasks.matching {

@@ -11,8 +11,10 @@ val configuredAndroidAbis =
         ?: listOf("arm64-v8a")
 
 val workspaceRootDir = rootProject.layout.projectDirectory.dir("../..")
-val ffmpegRuntimeProfileHashFile =
-    workspaceRootDir.file("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime/profile-hash.txt")
+val ffmpegRuntimeAssetsDir =
+    workspaceRootDir.dir("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime")
+val ffmpegRuntimeJniLibsDir =
+    workspaceRootDir.dir("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs")
 val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
 val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
 val playerFfmpegPluginBuildProfile =
@@ -99,7 +101,8 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
     inputs.property("abis", configuredAndroidAbis)
     inputs.property("profile", playerFfmpegPluginBuildProfile)
     outputs.dir(playerFfmpegPluginJniLibsDirFile)
-    outputs.file(ffmpegRuntimeProfileHashFile)
+    outputs.dir(ffmpegRuntimeAssetsDir)
+    outputs.dir(ffmpegRuntimeJniLibsDir)
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
@@ -116,4 +119,20 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
 
 tasks.named("preBuild").configure {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+}
+
+tasks.matching { task ->
+    task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")
+}.configureEach {
+    dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+}
+
+val ffmpegRuntimeProject = rootProject.project(":vesper-player-kit-ffmpeg-runtime")
+ffmpegRuntimeProject.plugins.withId("com.android.library") {
+    ffmpegRuntimeProject.tasks.matching { task ->
+        task.name.startsWith("merge") &&
+            (task.name.endsWith("Assets") || task.name.endsWith("JniLibFolders"))
+    }.configureEach {
+        dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+    }
 }

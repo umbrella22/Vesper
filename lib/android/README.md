@@ -248,6 +248,13 @@ requirements into one trimmed profile:
 ./scripts/vesper android ffmpeg-runtime download-remux relay-remux
 ```
 
+Hosts that consume prebuilt AARs do not need to wire these generation tasks into
+their app build; the runtime assets and JNI libraries are already packaged in
+the AAR. The explicit Gradle `merge*Assets` / `merge*JniLibFolders` dependencies
+shown in the repository examples are only needed when a host consumes these
+modules as local Gradle project dependencies and runs the repository generation
+scripts during the same build.
+
 Do not use Gradle `pickFirst` to hide duplicate `libav*` payloads. If both DLNA
 relay remux and download remux are enabled, package one shared
 `vesper-player-kit-ffmpeg-runtime` profile and keep the relay/plugin artifacts
