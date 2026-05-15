@@ -41,13 +41,12 @@ SIMULATOR_TARGETS=(
 CATALYST_TARGETS=(
   "aarch64-apple-ios-macabi"
 )
-installed_targets="$(rustup target list --installed)"
 
 vesper_apple_require_rust_targets "$DEVICE_TARGET" "${SIMULATOR_TARGETS[@]}"
 
 target_is_installed() {
   local target="$1"
-  [[ "$installed_targets" == *"$target"* ]]
+  vesper_rust_target_is_installed "$target"
 }
 
 resolve_optional_targets() {

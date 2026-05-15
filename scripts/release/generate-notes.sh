@@ -162,6 +162,8 @@ fi
   echo "- Combined Apple package: \`VesperPlayerKit.xcframework.zip\`"
   echo "- Integrity checksums: \`SHA256SUMS.txt\`"
   echo
+  echo "These downloads are prebuilt binary artifacts. Host applications that consume them do not need to run the repository's local JNI or FFmpeg generation tasks during their own Gradle / Xcode builds."
+  echo
   echo "## Release Details"
   echo
   if [[ -n "$PREVIOUS_TAG" ]]; then

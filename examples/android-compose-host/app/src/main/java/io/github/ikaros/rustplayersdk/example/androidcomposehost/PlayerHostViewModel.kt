@@ -3,8 +3,8 @@ package io.github.ikaros.vesper.example.androidcomposehost
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import dalvik.system.BaseDexClassLoader
-import io.github.ikaros.vesper.player.android.NativeVideoSurfaceKind
 import io.github.ikaros.vesper.player.android.VesperDownloadConfiguration
+import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import io.github.ikaros.vesper.player.android.VesperPlaylistConfiguration
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlaylistNeighborWindow
@@ -32,7 +32,7 @@ internal class PlayerHostViewModel(
             initialSource = null,
             resiliencePolicy = ExampleResilienceProfile.Balanced.policy,
             // TextureView is more stable than SurfaceView for tab switches and scrolling hosts.
-            surfaceKind = NativeVideoSurfaceKind.TextureView,
+            surfaceKind = VesperVideoSurfaceKind.TextureView,
             preloadBudgetPolicy =
                 VesperPreloadBudgetPolicy(
                     maxConcurrentTasks = 0,

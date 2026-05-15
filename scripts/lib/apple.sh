@@ -129,27 +129,7 @@ vesper_ios_slice_rust_target() {
 }
 
 vesper_apple_require_rust_targets() {
-  local installed_targets
-  local target
-  local -a missing_targets=()
-
-  installed_targets="$(rustup target list --installed)"
-  for target in "$@"; do
-    if [[ "$installed_targets" != *"$target"* ]]; then
-      missing_targets+=("$target")
-    fi
-  done
-
-  if [[ ${#missing_targets[@]} -gt 0 ]]; then
-    echo "Required Rust Apple targets are missing:" >&2
-    for target in "${missing_targets[@]}"; do
-      echo "  $target" >&2
-    done
-    echo >&2
-    echo "Install them with:" >&2
-    echo "  rustup target add ${missing_targets[*]}" >&2
-    exit 1
-  fi
+  vesper_require_rust_targets Apple "$@"
 }
 
 vesper_apple_extract_libxml2_version() {

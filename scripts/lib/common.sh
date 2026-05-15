@@ -37,13 +37,72 @@ vesper_require_rust_tools_for_xcode() {
   local tool
 
   vesper_source_cargo_env_for_xcode
-  for tool in rustup cargo; do
+  for tool in rustc cargo; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       echo "$tool was not found in PATH. Install Rust or expose $tool to Xcode script phases." >&2
       echo "Current PATH: $PATH" >&2
       exit 1
     fi
   done
+}
+
+vesper_rustup_is_toolchain_manager() {
+  command -v rustup >/dev/null 2>&1 &&
+    rustup --version 2>/dev/null | head -n 1 | grep -Eq '^rustup [0-9]'
+}
+
+vesper_rust_target_is_installed() {
+  local target="$1"
+  local target_libdir
+
+  if ! command -v rustc >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if ! target_libdir="$(rustc --print target-libdir --target "$target" 2>/dev/null)"; then
+    return 1
+  fi
+
+  [[ -d "$target_libdir" ]]
+}
+
+vesper_require_rust_targets() {
+  local label="$1"
+  shift
+  local target
+  local -a missing_targets=()
+
+  for target in "$@"; do
+    if ! vesper_rust_target_is_installed "$target"; then
+      missing_targets+=("$target")
+    fi
+  done
+
+  if [[ ${#missing_targets[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "Required Rust $label targets are missing:" >&2
+  for target in "${missing_targets[@]}"; do
+    echo "  $target" >&2
+  done
+  echo >&2
+
+  if vesper_rustup_is_toolchain_manager; then
+    echo "Install them with:" >&2
+    echo "  rustup target add ${missing_targets[*]}" >&2
+  else
+    echo "A usable rustup toolchain manager was not found in PATH." >&2
+    if command -v rustup >/dev/null 2>&1; then
+      echo "Current rustup path: $(command -v rustup)" >&2
+      echo "Current rustup version output:" >&2
+      rustup --version 2>&1 | sed 's/^/  /' >&2 || true
+    else
+      echo "Current PATH has no rustup command." >&2
+    fi
+    echo "Install Rust targets before running this script." >&2
+  fi
+  exit 1
 }
 
 vesper_download_if_missing() {

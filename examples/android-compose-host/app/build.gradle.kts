@@ -122,7 +122,8 @@ tasks.named("preBuild").configure {
 }
 
 tasks.matching { task ->
-    task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")
+    (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
+        (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
 }.configureEach {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
 }
@@ -130,8 +131,9 @@ tasks.matching { task ->
 val ffmpegRuntimeProject = rootProject.project(":vesper-player-kit-ffmpeg-runtime")
 ffmpegRuntimeProject.plugins.withId("com.android.library") {
     ffmpegRuntimeProject.tasks.matching { task ->
-        task.name.startsWith("merge") &&
-            (task.name.endsWith("Assets") || task.name.endsWith("JniLibFolders"))
+        (task.name.startsWith("merge") &&
+            (task.name.endsWith("Assets") || task.name.endsWith("JniLibFolders"))) ||
+            (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
     }.configureEach {
         dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     }

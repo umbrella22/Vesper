@@ -132,14 +132,16 @@ tasks.matching {
     it.name == "preDebugBuild" ||
         it.name == "preDebugAndroidTestBuild" ||
         it.name == "mergeDebugJniLibFolders" ||
-        it.name == "mergeDebugAndroidTestJniLibFolders"
+        it.name == "mergeDebugAndroidTestJniLibFolders" ||
+        (it.name.startsWith("generateDebug") && it.name.contains("Lint") && it.name.endsWith("Model"))
 }.configureEach {
     dependsOn(buildRustAndroidHostDebug)
 }
 
 tasks.matching {
     it.name == "preReleaseBuild" ||
-        it.name == "mergeReleaseJniLibFolders"
+        it.name == "mergeReleaseJniLibFolders" ||
+        (it.name.startsWith("generateRelease") && it.name.contains("Lint") && it.name.endsWith("Model"))
 }.configureEach {
     dependsOn(buildRustAndroidHostRelease)
 }

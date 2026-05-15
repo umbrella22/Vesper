@@ -353,6 +353,10 @@ name:
 Android packaging is currently `arm64-v8a` only. iOS packaging is arm64 only for
 device, Apple Silicon Simulator, and optional Catalyst slices.
 
+Release AARs / XCFrameworks are fully packaged binary artifacts. Host apps that
+consume these downloads do not run the repository's local JNI or FFmpeg
+generation tasks during their own Gradle / Xcode build.
+
 ## Current Status
 
 Vesper is still evolving and has not yet shipped as a stable 1.0 public SDK.
