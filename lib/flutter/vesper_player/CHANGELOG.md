@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+### Changed
+
+- Android external playback now uses the consolidated
+  `vesper-player-kit-external-playback` facade under the existing Dart API.
+- iOS FFmpeg remux support is documented as an optional plugin XCFramework
+  instead of part of the core iOS host kit.
+
 ## 0.2.0 - 2026-05-13
 
 ### Breaking Changes

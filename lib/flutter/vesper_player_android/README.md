@@ -85,18 +85,17 @@ forwards them consistently and ignores empty header names or blank values.
 ## Optional Android External Playback
 
 Android Cast and DLNA live in the separate `vesper_player_external_playback`
-Flutter package. It depends on the optional `vesper-player-kit-cast`,
-`vesper-player-kit-relay`, and `vesper-player-kit-dlna` Android modules so the
-default player package does not pull in Google Play Services, Cast Framework,
-DLNA discovery, or the local HTTP relay.
+Flutter package. Its Android implementation calls the
+`vesper-player-kit-external-playback` Kotlin facade, so the default player
+package does not pull in Google Play Services, Cast Framework, DLNA discovery,
+the local HTTP relay, or the optional FFmpeg runtime.
 
-For local workspace builds, include `:vesper-player-kit-cast`,
-`:vesper-player-kit-relay`, and `:vesper-player-kit-dlna` beside
-`:vesper-player-kit` in the host Android Gradle settings. The Cast module
-contributes a default `VesperCastOptionsProvider` that uses Google's Default
-Media Receiver. Hosts that need a custom receiver can override the manifest
-meta-data key
-`io.github.ikaros.vesper.player.android.cast.RECEIVER_APPLICATION_ID`.
+For local workspace builds, include `:vesper-player-kit-external-playback`
+beside `:vesper-player-kit` and `:vesper-player-kit-ffmpeg-runtime` in the host
+Android Gradle settings. The external-playback module contributes a default
+`VesperExternalCastOptionsProvider` that uses Google's Default Media Receiver.
+Hosts that need a custom receiver can override the manifest meta-data key
+`io.github.ikaros.vesper.player.android.external.RECEIVER_APPLICATION_ID`.
 
 Cast V2 supports remote `http` / `https` HLS, DASH, and progressive sources.
 Sources with headers, local files, and `content://` inputs are exposed to Cast
@@ -121,7 +120,7 @@ Typical setup:
 1. Build the shared Android FFmpeg runtime for the enabled consumers:
 
    ```sh
-   ./scripts/vesper android ffmpeg-runtime download-remux
+   ./scripts/vesper ffmpeg --platform android --profile download-remux --abi arm64-v8a
    ```
 
 2. Build the Android plugin artifact. Android ABI selection is controlled by
@@ -140,14 +139,14 @@ When the same app also enables DLNA relay remux, build the runtime with both
 consumers:
 
 ```sh
-./scripts/vesper android ffmpeg-runtime download-remux relay-remux
+./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
 ```
 
-Android FFmpeg prebuilts are generated on demand. The repository only builds
-them when the host explicitly requests the remux plugin. The current script also
-supports coarse feature gates such as `VESPER_ANDROID_FFMPEG_ENABLE_DASH=0`,
-but it does not yet support fine-grained trimming by demuxer, muxer, protocol,
-or codec.
+Android FFmpeg prebuilts are generated on demand through the root FFmpeg profile
+CLI. The `download-remux`, `relay-remux`, and `default` profiles are local-only
+and validate that network and OpenSSL remain disabled. Fine-grained capability
+overlays are available through `--extra-*` options, and validation fails when an
+overlay conflicts with the selected profile policy.
 
 Both Android examples in this repository already demonstrate the full setup:
 

@@ -3,41 +3,64 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/android.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg-profile.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg-validate.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
 OUTPUT_DIR="${1:-}"
-CONSUMERS=(${VESPER_ANDROID_FFMPEG_CONSUMERS:-download-remux})
+FFMPEG_PROFILE="download-remux"
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-  echo "Usage: $0 <output-dir> [debug|release]" >&2
+  echo "Usage: $0 <output-dir> [debug|release] [--profile <name>]" >&2
+  echo "Default FFmpeg profile: download-remux." >&2
   echo "Android ABI selection is controlled by RUST_ANDROID_ABIS." >&2
   exit 1
 fi
 
 shift || true
 
-PROFILE="debug"
+BUILD_PROFILE="debug"
 if [[ $# -gt 0 && ( "$1" == "debug" || "$1" == "release" ) ]]; then
-  PROFILE="$1"
+  BUILD_PROFILE="$1"
   shift
 fi
 
-if [[ $# -gt 0 ]]; then
-  echo "Unexpected arguments: $*" >&2
-  echo "This script no longer accepts FFmpeg component overlays or ABI positional args." >&2
-  echo "Build the shared runtime with scripts/android/build-ffmpeg-runtime-aar.sh." >&2
-  exit 1
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)
+      [[ -n "${2:-}" ]] || { echo "--profile requires a value." >&2; exit 1; }
+      FFMPEG_PROFILE="$2"
+      shift 2
+      ;;
+    --profile=*)
+      FFMPEG_PROFILE="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "Unexpected arguments: $*" >&2
+      echo "Use --profile to select a declared FFmpeg profile." >&2
+      exit 1
+      ;;
+  esac
+done
 
 FFMPEG_ARGS=()
+vesper_ffmpeg_profile_resolve "$FFMPEG_PROFILE" android
+vesper_ffmpeg_validate_resolved_profile \
+  "$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_PROTOCOLS[@]+"${VESPER_PROFILE_RESOLVED_PROTOCOLS[@]}"})" \
+  "$VESPER_PROFILE_RESOLVED_TLS_BACKEND" \
+  "${VESPER_PROFILE_VALIDATION_FORBID_NETWORK:-false}" \
+  "${VESPER_PROFILE_VALIDATION_FORBID_OPENSSL:-false}" \
+  ${VESPER_PROFILE_RESOLVED_EXTRA_CONFIGURE_ARGS[@]+"${VESPER_PROFILE_RESOLVED_EXTRA_CONFIGURE_ARGS[@]}"}
 while IFS= read -r arg; do
   FFMPEG_ARGS+=("$arg")
-done < <("$ROOT_DIR/scripts/android/resolve-ffmpeg-runtime-requirements.sh" "${CONSUMERS[@]}")
+done < <(vesper_ffmpeg_profile_emit_legacy_args)
+vesper_ffmpeg_profile_export_validation_env
 vesper_ffmpeg_parse_common_args android "${FFMPEG_ARGS[@]}"
 FFMPEG_ANDROID_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-$(vesper_ffmpeg_default_output_dir android "$ROOT_DIR/third_party/ffmpeg/android")}}"
 PROFILE_HASH="$(vesper_ffmpeg_profile_key android)"
 
-"$ROOT_DIR/scripts/android/build-ffmpeg-runtime-aar.sh" "${CONSUMERS[@]}"
+"$ROOT_DIR/scripts/vesper" ffmpeg --platform android --profile "$FFMPEG_PROFILE"
 
 ANDROID_SDK_ROOT="$(vesper_android_sdk_root)"
 ANDROID_NDK_VERSION="$(vesper_android_ndk_version)"
@@ -87,7 +110,7 @@ for abi in "${selected_abis[@]}"; do
     build
     -p player-remux-ffmpeg
   )
-  if [[ "$PROFILE" == "release" ]]; then
+  if [[ "$BUILD_PROFILE" == "release" ]]; then
     cargo_args+=(--release)
   fi
 
@@ -114,4 +137,6 @@ fi
 echo
 echo "Built Android player-remux-ffmpeg plugin libraries into:"
 echo "  $OUTPUT_DIR"
+echo "FFmpeg profile:"
+echo "  $FFMPEG_PROFILE"
 echo "The plugin no longer copies FFmpeg runtime libraries; package vesper-player-kit-ffmpeg-runtime instead."

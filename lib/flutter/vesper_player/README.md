@@ -553,17 +553,18 @@ final savedUri = await manager.saveTaskOutput(
 Key points:
 
 - `pluginLibraryPaths` must point to an already packaged and accessible
-  `libvesper_remux_ffmpeg.so` or `libvesper_remux_ffmpeg.dylib`.
+  Android `libvesper_remux_ffmpeg.so` or iOS remux plugin framework binary.
 - `exportTaskOutput(...)` triggers the plugin and reports progress through
   `VesperDownloadExportProgressEvent`.
-- The mobile examples in this repository already show the full host wiring:
-  Android builds the plugin during Gradle `preBuild`, and iOS embeds a signed
-  dylib through an Xcode build phase.
+- The mobile examples in this repository already show the full host wiring.
+  Android builds the plugin during Gradle `preBuild`; iOS can either use the
+  Xcode embed script during local development or consume the optional
+  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` release artifact.
 - Depending on `vesper_player` alone does not pull FFmpeg into your app. That
   keeps app size stable when export is not needed.
-- FFmpeg prebuilt support is still coarse-grained. The current scripts support
-  on-demand builds and environment-level feature gates such as disabling DASH,
-  but not fine-grained whitelisting by demuxer, muxer, protocol, or codec.
+- FFmpeg prebuilts are selected through `./scripts/vesper ffmpeg --platform
+  android|ios --profile <name>`. The default mobile profiles stay local-only
+  and validate that network and OpenSSL remain disabled.
 - If the host bundles the remux plugin, treat it as an FFmpeg redistribution:
   include FFmpeg license text and notices, provide corresponding FFmpeg source
   and configure flags, preserve LGPL relinking rights, and track OpenSSL /

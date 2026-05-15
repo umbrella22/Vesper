@@ -70,5 +70,10 @@ ditto -c -k --sequesterRsrc --keepParent \
   "$ARM64_XCFRAMEWORK_PATH" \
   "$OUTPUT_DIR/VesperPlayerKit.xcframework.zip"
 
+"$ROOT_DIR/scripts/ios/stage-player-remux-ffmpeg-plugin-release.sh" \
+  "$OUTPUT_DIR" \
+  --profile default \
+  ios-arm64 ios-simulator-arm64
+
 echo "Staged VesperPlayerKit iOS release assets into:"
 echo "  $OUTPUT_DIR"

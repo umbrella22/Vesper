@@ -8,8 +8,8 @@
 scripts/
   vesper      Unified task entrypoint
   lib/        Shared Bash functions and platform constants
-  android/    Android FFmpeg, JNI, AAR, release staging, remux plugin
-  apple/      Apple FFmpeg prebuilts
+  android/    Android private FFmpeg implementation details, JNI, AAR, release staging, remux plugin
+  apple/      Apple private FFmpeg prebuilt implementation details
   ios/        iOS FFI, XCFramework, remux plugin, embed phase, release staging
   desktop/    desktop FFmpeg, pkg-config wrapper, desktop plugin verification
   ffi/        C header generation / verification and C host smoke tests
@@ -25,17 +25,16 @@ scripts/
 ./scripts/vesper ffi verify
 ./scripts/vesper ffi c-host-smoke
 
-./scripts/vesper android ffmpeg arm64-v8a
-./scripts/vesper android ffmpeg-runtime download-remux relay-remux
+./scripts/vesper ffmpeg --list-profiles
+./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
+./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
 ./scripts/vesper android jni release arm64-v8a
-VESPER_ANDROID_FFMPEG_CONSUMERS="download-remux relay-remux" ./scripts/vesper android relay-ffmpeg-jni release
 ./scripts/vesper android aar
 ./scripts/vesper android stage-release
 
-./scripts/vesper apple ffmpeg ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios ffi release
 ./scripts/vesper ios verify-bridge-shim
-./scripts/vesper ios remux-plugin /tmp/vesper-ios-player-remux-ffmpeg release ios-arm64 ios-simulator-arm64
+./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios kit-xcframework
 ./scripts/vesper ios stage-release
 
@@ -51,69 +50,70 @@ VESPER_ANDROID_FFMPEG_CONSUMERS="download-remux relay-remux" ./scripts/vesper an
 
 ## Mobile FFmpeg Profiles
 
-Android and Apple FFmpeg prebuilt scripts support the same profile and overlay
-model. `legacy` is the default and preserves the historical behavior.
-`remux-local` is an opt-in trimmed preset for local stream-copy remuxing.
-`custom` starts from `--disable-everything` and enables only the capabilities
-provided by the caller.
+The public mobile FFmpeg entrypoint is the root command:
+`./scripts/vesper ffmpeg --platform android|ios|all --profile <name>`.
+Profiles are declared in `scripts/ffmpeg-profiles.toml`. The resolver supports
+profile inheritance, platform overrides, validation policy, and command-line
+overlays. `download-remux`, `relay-remux`, and `default` keep local remux
+semantics by validating `--disable-network` and `--disable-openssl`.
 
 ```sh
-./scripts/vesper android ffmpeg \
-  --ffmpeg-profile remux-local \
-  arm64-v8a
+./scripts/vesper ffmpeg \
+  --platform android \
+  --profile default \
+  --abi arm64-v8a
 
-./scripts/vesper apple ffmpeg \
-  --ffmpeg-profile custom \
-  --enable-libraries avcodec,avformat,avutil \
-  --enable-demuxers mov,dash,hls,concat,flv,mpegts \
-  --enable-muxers mp4,mov \
-  --enable-protocols file,pipe \
-  --tls-backend none \
-  ios-arm64 ios-simulator-arm64
+./scripts/vesper ffmpeg \
+  --platform ios \
+  --profile download-remux \
+  --slice ios-arm64 \
+  --slice ios-simulator-arm64
 ```
 
-Android FFmpeg runtime packaging is split from FFmpeg consumers. Build
-`vesper-player-kit-ffmpeg-runtime` with the enabled consumer list first; the
-resolver unions their requirements and writes the runtime profile metadata into
-the AAR. `player-remux-ffmpeg` and `vesper-player-kit-relay-ffmpeg` must package
-only their own plugin/JNI libraries and depend on that shared runtime.
+Android FFmpeg runtime packaging is split from consumers. The root command builds
+`vesper-player-kit-ffmpeg-runtime` by default; pass `--android-artifact prebuilts`
+only when a private flow needs raw prebuilts. `player-remux-ffmpeg` and the
+external-playback relay FFmpeg JNI library must package only their own plugin/JNI
+libraries and depend on the shared runtime AAR.
 
 ```sh
-./scripts/vesper android ffmpeg-runtime download-remux relay-remux
-VESPER_ANDROID_FFMPEG_CONSUMERS="download-remux relay-remux" \
-  ./scripts/vesper android remux-plugin /tmp/vesper-android-remux release
-VESPER_ANDROID_FFMPEG_CONSUMERS="download-remux relay-remux" \
-  ./scripts/vesper android relay-ffmpeg-jni release
+./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
+./scripts/vesper android remux-plugin /tmp/vesper-android-remux release --profile download-remux
 ```
 
-Apple remux plugin build scripts still accept FFmpeg profile options directly:
+The external-playback relay FFmpeg JNI library is built by the Android
+`vesper-player-kit-external-playback` Gradle module through its private
+`buildRelayFfmpegAndroidJni` task. Release and example builds use the `default`
+profile so the shared runtime and relay JNI profile hashes match.
+
+iOS core kit packaging does not include FFmpeg. Optional remux support is staged
+as a signable XCFramework:
 
 ```sh
-./scripts/vesper ios remux-plugin /tmp/vesper-ios-remux release \
-  --ffmpeg-profile remux-local \
+./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release \
+  --profile default \
   ios-arm64 ios-simulator-arm64
 ```
 
 Supported overlays are:
 
-- `--enable-libraries`
-- `--enable-demuxers`
-- `--enable-muxers`
-- `--enable-protocols`
-- `--enable-parsers`
-- `--enable-bsfs`
+- `--extra-libraries`
+- `--extra-demuxers`
+- `--extra-muxers`
+- `--extra-protocols`
+- `--extra-parsers`
+- `--extra-bsfs`
 - `--extra-configure-arg`
 - `--tls-backend none|openssl` for Android
 - `--tls-backend none|securetransport` for Apple
 
-Lists may be comma or space separated. The scripts also accept matching
-environment variables such as `VESPER_ANDROID_FFMPEG_PROFILE`,
-`VESPER_APPLE_FFMPEG_ENABLE_DEMUXERS`, and
-`VESPER_ANDROID_FFMPEG_EXTRA_CONFIGURE_ARGS`.
+Lists may be comma or space separated. CI and documentation should use the root
+`ffmpeg` command for runtime prebuilts; private Gradle/Xcode build phases may
+consume the resolved artifacts produced by that command.
 
-Non-legacy profile outputs are written under `third_party/ffmpeg/<platform>/profiles/`
-by default, so custom builds do not overwrite legacy prebuilts. Every prebuilt
-slice writes `vesper-ffmpeg-build-metadata.txt` with the profile, overlays,
+Resolved profile outputs are written under
+`third_party/ffmpeg/<platform>/profiles/` by default. Every prebuilt slice writes
+`vesper-ffmpeg-build-metadata.txt` with the declared profile, profile hash,
 external dependencies, license-sensitive flags, source archive, and full
 configure line.
 

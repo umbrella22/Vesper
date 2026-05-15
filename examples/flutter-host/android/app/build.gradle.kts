@@ -25,8 +25,6 @@ val ffmpegRuntimeJniLibsDir =
     workspaceRootDir.dir("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs")
 val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
 val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
-val relayFfmpegJniLibsDir =
-    workspaceRootDir.dir("lib/android/vesper-player-kit-relay-ffmpeg/src/main/jniLibs")
 val playerFfmpegPluginBuildProfile =
     providers.provider {
         if (gradle.startParameter.taskNames.any { taskName ->
@@ -102,7 +100,7 @@ flutter {
 
 dependencies {
     implementation(project(":vesper-player-kit-ffmpeg-runtime"))
-    implementation(project(":vesper-player-kit-relay-ffmpeg"))
+    implementation(project(":vesper-player-kit-external-playback"))
 }
 
 val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
@@ -125,51 +123,19 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
-    environment("VESPER_ANDROID_FFMPEG_CONSUMERS", "download-remux relay-remux")
 
     doFirst {
         commandLine(
             scriptFile.asFile.absolutePath,
             playerFfmpegPluginJniLibsDirFile.absolutePath,
             playerFfmpegPluginBuildProfile.get(),
-        )
-    }
-}
-
-val buildRelayFfmpegAndroidJni by tasks.registering(Exec::class) {
-    description = "Builds the Android relay FFmpeg JNI library used by DLNA remux fallback."
-    group = "vesper"
-
-    val scriptFile = workspaceRootDir.file("scripts/android/build-relay-ffmpeg-jni.sh")
-
-    inputs.file(scriptFile)
-    inputs.file(workspaceRootDir.file("Cargo.toml"))
-    inputs.file(workspaceRootDir.file("Cargo.lock"))
-    inputs.dir(workspaceRootDir.dir("crates/platform/jni/player-relay-ffmpeg-android"))
-    inputs.dir(workspaceRootDir.dir("third_party/ffmpeg/android"))
-    inputs.property("abis", configuredAndroidAbis)
-    inputs.property("profile", playerFfmpegPluginBuildProfile)
-    outputs.dir(relayFfmpegJniLibsDir)
-
-    workingDir = workspaceRootDir.asFile
-    environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
-    environment("VESPER_ANDROID_FFMPEG_CONSUMERS", "download-remux relay-remux")
-    environment("VESPER_ANDROID_SKIP_FFMPEG_RUNTIME_BUILD", "1")
-
-    doFirst {
-        commandLine(
-            scriptFile.asFile.absolutePath,
-            playerFfmpegPluginBuildProfile.get(),
+            "--profile",
+            "default",
         )
     }
 }
 
 tasks.named("preBuild").configure {
-    dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
-    dependsOn(buildRelayFfmpegAndroidJni)
-}
-
-buildRelayFfmpegAndroidJni.configure {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
 }
 
@@ -191,12 +157,17 @@ ffmpegRuntimeProject.plugins.withId("com.android.library") {
     }
 }
 
-val relayFfmpegProject = rootProject.project(":vesper-player-kit-relay-ffmpeg")
+val relayFfmpegProject = rootProject.project(":vesper-player-kit-external-playback")
 relayFfmpegProject.plugins.withId("com.android.library") {
+    relayFfmpegProject.tasks.matching { task ->
+        task.name == "buildRelayFfmpegAndroidJni"
+    }.configureEach {
+        dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+    }
     relayFfmpegProject.tasks.matching { task ->
         (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
             (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
     }.configureEach {
-        dependsOn(buildRelayFfmpegAndroidJni)
+        dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     }
 }

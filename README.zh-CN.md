@@ -49,21 +49,21 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 下面是粗粒度能力概览。每个平台 README 会说明更精确的行为、fallback 规则和 host app
 在暴露高级控制前应检查的 capability flags。
 
-| 能力                   | Android (Media3)       | iOS (AVPlayer)                                | 桌面 Rust                            | Flutter 移动端                 |
-| ---------------------- | ---------------------- | --------------------------------------------- | ------------------------------------ | ------------------------------ |
-| 本地文件               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
-| 渐进式 HTTP/HTTPS      | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
-| HLS (`.m3u8`)          | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
-| DASH (`.mpd`)          | ✅ 原生                | ✅ 面向 VOD / live fMP4 的 DASH-to-HLS bridge | ⚠️ 取决于 backend 的 FFmpeg demuxer  | ✅ Android 原生 / iOS bridge   |
-| 直播 / DVR             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
-| 轨道选择               | ✅ 视频 / 音频 / 字幕  | ✅ 音频 / 字幕                                | ✅                                   | ✅ 遵循各平台语义              |
-| ABR `constrained` 策略 | ✅                     | ✅ HLS + DASH bridge 变体目录                 | ✅                                   | ✅ 遵循各平台语义              |
-| ABR `fixedTrack` 策略  | ✅ 精确                | ✅ iOS 15+ 上尽力进行 HLS/DASH 固定           | ✅                                   | ✅ 遵循各平台语义              |
-| 韧性策略               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
-| 预加载预算             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS               |
-| 下载管理器             | ✅                     | ✅                                            | ✅ 桌面 demo 中的 planner / executor | ✅ Android / iOS               |
-| 外部播放               | ✅ Cast / DLNA 可选    | ✅ AirPlay route picker                      | ❌                                   | ✅ Android Cast / DLNA、iOS AirPlay |
-| 硬件解码探测           | `VesperDecoderBackend` | `VesperCodecSupport`                          | macOS VideoToolbox v2 可选启用       | 通过移动端 capability 上报体现 |
+| 能力                   | Android (Media3)       | iOS (AVPlayer)                                | 桌面 Rust                            | Flutter 移动端                      |
+| ---------------------- | ---------------------- | --------------------------------------------- | ------------------------------------ | ----------------------------------- |
+| 本地文件               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
+| 渐进式 HTTP/HTTPS      | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
+| HLS (`.m3u8`)          | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
+| DASH (`.mpd`)          | ✅ 原生                | ✅ 面向 VOD / live fMP4 的 DASH-to-HLS bridge | ⚠️ 取决于 backend 的 FFmpeg demuxer  | ✅ Android 原生 / iOS bridge        |
+| 直播 / DVR             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
+| 轨道选择               | ✅ 视频 / 音频 / 字幕  | ✅ 音频 / 字幕                                | ✅                                   | ✅ 遵循各平台语义                   |
+| ABR `constrained` 策略 | ✅                     | ✅ HLS + DASH bridge 变体目录                 | ✅                                   | ✅ 遵循各平台语义                   |
+| ABR `fixedTrack` 策略  | ✅ 精确                | ✅ iOS 15+ 上尽力进行 HLS/DASH 固定           | ✅                                   | ✅ 遵循各平台语义                   |
+| 韧性策略               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
+| 预加载预算             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
+| 下载管理器             | ✅                     | ✅                                            | ✅ 桌面 demo 中的 planner / executor | ✅ Android / iOS                    |
+| 外部播放               | ✅ Cast / DLNA 可选    | ✅ AirPlay route picker                       | ❌                                   | ✅ Android Cast / DLNA、iOS AirPlay |
+| 硬件解码探测           | `VesperDecoderBackend` | `VesperCodecSupport`                          | macOS VideoToolbox v2 可选启用       | 通过移动端 capability 上报体现      |
 
 Flutter macOS package 目前只是实验性占位实现，尚未提供真实播放后端。产品 UI
 应以运行时能力标记为准，而不是假设上表能力在每个后端上都可用。
@@ -73,9 +73,9 @@ Flutter macOS package 目前只是实验性占位实现，尚未提供真实播�
 ```text
 crates/      Rust workspace：共享 core、runtime、FFI、backend、render 与平台桥接代码
 lib/         可分发的平台集成层
-  android/   Android AAR modules：core kit、Cast、relay、DLNA、Compose adapter、可选 Compose UI
+  android/   Android AAR modules：core kit、external playback、FFmpeg runtime、Compose adapter、可选 Compose UI
   ios/       VesperPlayerKit Swift Package / XCFramework 项目
-  flutter/   Federated Flutter packages：主 API、平台包、可选外部播放、可选 UI
+  flutter/   Federated Flutter packages：主 API、平台包、可选 UI
 examples/    Android、iOS、Flutter、桌面 Rust 与 C 的可运行 host app
 include/     生成的 C header：player_ffi.h
 scripts/     构建、打包、验证与发布辅助脚本
@@ -162,15 +162,12 @@ Android 以 AAR modules 分发：
 
 - `vesper-player-kit`：core controller、source model、JNI bridge、download manager
   和 native video surface selection。
-- `vesper-player-kit-cast`：可选 Google Cast sender integration、media route button
-  和默认 Cast options provider。
-- `vesper-player-kit-relay`：可选本地 HTTP relay，供 Cast / DLNA 接收端访问
-  需要 headers、本地文件或 `content://` 的媒体源。
-- `vesper-player-kit-dlna`：可选 DLNA / UPnP AV SSDP discovery、device description
-  parser 与 SOAP playback control。
 - `vesper-player-kit-compose`：Compose adapter，提供 `VesperPlayerSurface` 和
   controller / state helpers。
 - `vesper-player-kit-compose-ui`：可选的 opinionated Compose player stage。
+
+详细的模块列表（含 external playback 与 FFmpeg runtime）及各模块 API 文档见
+[lib/android/README.md](lib/android/README.md)。
 
 最低要求：Android API 26+、Kotlin 2.x；发布的移动端产物需要 arm64 device 或 emulator。
 
@@ -224,6 +221,26 @@ Android 和 Flutter Android 构建会使用对应项目中提交的 Gradle wrapp
 如果 `lib/android` 没有独立 wrapper，Android 构建脚本会优先使用示例项目 wrapper，
 并可回退到仓库本地 `.gradle/wrapper/dists` 下已下载的 Gradle distribution。
 
+## 移动端 FFmpeg Profiles
+
+Android 和 iOS FFmpeg 构建使用根 profile CLI。公共入口为
+`./scripts/vesper ffmpeg --platform android|ios|all --profile <name>`。
+`download-remux`、`relay-remux` 和 `default` 均为本地 remux profile：仅启用本地
+file/pipe 协议，并验证网络与 OpenSSL 均已禁用。default profile 合并了 download
+和 relay remux 的能力。
+
+```sh
+./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
+./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
+```
+
+调用方可通过 `--extra-libraries`、`--extra-demuxers`、`--extra-muxers`、
+`--extra-protocols`、`--extra-parsers`、`--extra-bsfs` 以及可重复使用的
+`--extra-configure-arg` 添加受控 overlay。如果 overlay 违反所选 profile 策略，
+验证将失败。生成的 ABI 和 slice 会记录 `vesper-ffmpeg-build-metadata.txt`，包含
+声明的 profile、profile hash、源码压缩包、许可敏感标志及完整 configure 命令，
+供 release 审查。
+
 ## Desktop FFmpeg
 
 链接 FFmpeg 的 Desktop Rust 构建会按以下顺序解析库：
@@ -255,12 +272,11 @@ Vesper 采用 Apache-2.0 许可，但 FFmpeg 仍受其自身 FFmpeg 许可条款
 默认不提交生成后的 FFmpeg 二进制；仅在宿主应用明确选择启用时，可选的 Android、
 iOS 与桌面工作流才会构建或打包带 FFmpeg 的产物。
 
-默认的 Vesper FFmpeg 脚本会避免启用 `--enable-gpl` 与
-`--enable-nonfree`。Android FFmpeg 预构建当前使用 OpenSSL 并传入
-`--enable-version3`，因此除非发布构建发生变更并重新评审，否则 Android
-remux-plugin release 应按 LGPLv3-or-later 的 FFmpeg 再分发处理。Apple
-预构建与桌面 fallback 默认偏向 LGPL，但静态方式分发桌面产物仍需要提供可重新
-链接材料，或等效的 LGPL 合规机制。
+默认的 Vesper FFmpeg 脚本会避免 `--enable-gpl` 与
+`--enable-nonfree`；除非调用方显式确认，脚本将拒绝这些标志。移动端
+`download-remux`、`relay-remux` 和 `default` profiles 验证构建不含网络与
+OpenSSL。桌面 fallback 构建默认偏向 LGPL，但静态方式分发桌面产物仍需要提供
+可重新链接材料，或等效的 LGPL 合规机制。
 
 在发布任何包含 FFmpeg 的 app 或 SDK 产物前，需要附上 FFmpeg 声明与许可文本，
 提供精确对应的 FFmpeg 源码与 configure flags，保留用户重新链接权利，并在
@@ -291,12 +307,21 @@ GitHub Releases 会以 `VesperPlayerKit` 产品名发布移动端下载产物：
 
 - Android 核心包：`VesperPlayerKit-android-<abi>.aar`
 - Android Compose 适配层：`VesperPlayerKitCompose-android-<abi>.aar`
+- Android Compose UI：`VesperPlayerKitComposeUi-android-<abi>.aar`
+- Android 外部播放：`VesperPlayerKitExternalPlayback-android-<abi>.aar`
+- Android FFmpeg 运行时：`VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
 - iOS framework 切片：`VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework：`VesperPlayerKit.xcframework.zip`
+- 可选 iOS FFmpeg remux 插件：`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
 - 用于校验 release artifact 的 `SHA256SUMS.txt`
 
 Android 打包当前仅提供 `arm64-v8a`。iOS 打包仅提供 arm64 device、Apple
-Silicon Simulator 和可选 Catalyst slices。
+Silicon Simulator 和可选 Catalyst slices。iOS 核心 `VesperPlayerKit.xcframework`
+不嵌入 FFmpeg；FFmpeg-backed remux 支持以独立可选 XCFramework 形式发布，由
+host app 单独签名和嵌入。
+
+Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载物的 host app
+在其自身 Gradle / Xcode 构建中不会运行本仓库的 JNI 或 FFmpeg 生成任务。
 
 ## 当前状态
 

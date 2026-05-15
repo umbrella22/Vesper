@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+### Breaking Changes
+
+- Cast, DLNA, relay, and relay FFmpeg modules were consolidated into
+  `vesper-player-kit-external-playback`. Public APIs now live under
+  `io.github.ikaros.vesper.player.android.external`.
+
+### Added
+
+- Added release AAR staging for `vesper-player-kit-compose-ui`,
+  `vesper-player-kit-external-playback`, and
+  `vesper-player-kit-ffmpeg-runtime`.
+- Added `VesperExternalPlaybackController` with `StateFlow` routes and
+  `SharedFlow` events for unified external playback integration.
+
 ## 0.2.0 - 2026-05-13
 
 ### Breaking Changes

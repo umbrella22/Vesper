@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+### Changed
+
+- Android now calls the consolidated
+  `vesper-player-kit-external-playback` Kotlin facade while keeping the Dart API
+  unchanged.
+- The Android route button platform view now uses
+  `VesperExternalRouteButton` from the external-playback AAR.
+
 ## 0.2.0 - 2026-05-13
 
 ### Breaking Changes

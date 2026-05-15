@@ -1,4 +1,6 @@
 pluginManagement {
+    val androidGradlePluginVersion = "8.11.1"
+
     val flutterSdkPath =
         run {
             val properties = java.util.Properties()
@@ -17,7 +19,7 @@ pluginManagement {
                 "com.android.library",
                 "com.android.test",
                 "com.android.dynamic-feature", ->
-                        useModule("com.android.tools.build:gradle:${requested.version}")
+                        useModule("com.android.tools.build:gradle:${requested.version ?: androidGradlePluginVersion}")
             }
         }
     }
@@ -40,14 +42,8 @@ plugins {
 include(":app")
 include(":vesper-player-kit")
 include(":vesper-player-kit-ffmpeg-runtime")
-include(":vesper-player-kit-cast")
-include(":vesper-player-kit-relay")
-include(":vesper-player-kit-relay-ffmpeg")
-include(":vesper-player-kit-dlna")
+include(":vesper-player-kit-external-playback")
 
 project(":vesper-player-kit").projectDir = file("../../../lib/android/vesper-player-kit")
 project(":vesper-player-kit-ffmpeg-runtime").projectDir = file("../../../lib/android/vesper-player-kit-ffmpeg-runtime")
-project(":vesper-player-kit-cast").projectDir = file("../../../lib/android/vesper-player-kit-cast")
-project(":vesper-player-kit-relay").projectDir = file("../../../lib/android/vesper-player-kit-relay")
-project(":vesper-player-kit-relay-ffmpeg").projectDir = file("../../../lib/android/vesper-player-kit-relay-ffmpeg")
-project(":vesper-player-kit-dlna").projectDir = file("../../../lib/android/vesper-player-kit-dlna")
+project(":vesper-player-kit-external-playback").projectDir = file("../../../lib/android/vesper-player-kit-external-playback")

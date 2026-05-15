@@ -1,23 +1,8 @@
 package io.github.ikaros.vesper.player.flutter.externalplayback
 
 import android.content.Context
-import android.content.res.Configuration
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.view.ContextThemeWrapper
 import android.view.View
 import androidx.mediarouter.app.MediaRouteButton
-import androidx.mediarouter.app.MediaRouteChooserDialog
-import androidx.mediarouter.app.MediaRouteChooserDialogFragment
-import androidx.mediarouter.app.MediaRouteControllerDialog
-import androidx.mediarouter.app.MediaRouteControllerDialogFragment
-import androidx.mediarouter.app.MediaRouteDialogFactory
-import androidx.mediarouter.app.MediaRouteDynamicChooserDialog
-import androidx.mediarouter.app.MediaRouteDynamicControllerDialog
-import com.google.android.gms.cast.framework.CastButtonFactory
-import com.google.android.gms.cast.framework.CastSession
-import com.google.android.gms.cast.framework.SessionManagerListener
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -29,27 +14,23 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
-import io.github.ikaros.vesper.player.android.cast.VesperCastController
-import io.github.ikaros.vesper.player.android.cast.VesperCastLoadRequest
-import io.github.ikaros.vesper.player.android.cast.VesperCastOperationResult
-import io.github.ikaros.vesper.player.android.dlna.VesperDlnaDevice
-import io.github.ikaros.vesper.player.android.dlna.VesperDlnaDiscovery
-import io.github.ikaros.vesper.player.android.dlna.VesperDlnaDiscoveryDiagnostic
-import io.github.ikaros.vesper.player.android.dlna.VesperDlnaOperationResult
-import io.github.ikaros.vesper.player.android.dlna.VesperDlnaProtocolInfoParser
-import io.github.ikaros.vesper.player.android.dlna.VesperDlnaSession
-import io.github.ikaros.vesper.player.android.relay.VesperExternalPlaybackSourcePreparer
-import io.github.ikaros.vesper.player.android.relay.VesperExternalPlaybackTarget
-import io.github.ikaros.vesper.player.android.relay.VesperExternalProxyPolicy
-import io.github.ikaros.vesper.player.android.relay.VesperExternalRouteCapabilities
-import io.github.ikaros.vesper.player.android.relay.VesperExternalSourcePreparationRequest
-import io.github.ikaros.vesper.player.android.relay.VesperExternalSourcePreparationResult
-import io.github.ikaros.vesper.player.android.relay.VesperRelayFallbackFormat
-import io.github.ikaros.vesper.player.android.relay.VesperRelayFormatAdapter
-import io.github.ikaros.vesper.player.android.relay.VesperRelayFormatAdaptationConfig
-import io.github.ikaros.vesper.player.android.relay.VesperRelayDiagnostic
-import io.github.ikaros.vesper.player.android.relay.VesperRelayServer
-import io.github.ikaros.vesper.player.android.relay.VesperUnavailableRelayFormatAdapter
+import io.github.ikaros.vesper.player.android.external.VesperExternalFallbackFormat
+import io.github.ikaros.vesper.player.android.external.VesperExternalFormatAdaptationConfig
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackEvent
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackEventKind
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackMediaItem
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackResult
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRoute
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRouteKind
+import io.github.ikaros.vesper.player.android.external.VesperExternalProxyPolicy
+import io.github.ikaros.vesper.player.android.external.VesperExternalRouteButton
+import io.github.ikaros.vesper.player.android.external.VesperExternalRouteButtonBrightness
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class VesperPlayerExternalPlaybackPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
@@ -59,68 +40,16 @@ class VesperPlayerExternalPlaybackPlugin :
     private lateinit var methodChannel: MethodChannel
     private lateinit var routesEventChannel: EventChannel
     private lateinit var sessionEventChannel: EventChannel
-    private lateinit var relayServer: VesperRelayServer
-    private lateinit var sourcePreparer: VesperExternalPlaybackSourcePreparer
-    private lateinit var castController: VesperCastController
+    private lateinit var controller: VesperExternalPlaybackController
+    private lateinit var scope: CoroutineScope
 
     private var routesSink: EventChannel.EventSink? = null
     private var sessionSink: EventChannel.EventSink? = null
-    private var dlnaDiscovery: VesperDlnaDiscovery? = null
-    private val dlnaDevices = linkedMapOf<String, VesperDlnaDevice>()
-    private val recentlySeenDlnaDevices = linkedMapOf<String, RecentDlnaDevice>()
-    private val activeRelayTokens = mutableSetOf<String>()
-    private var discoveryGeneration = 0
-    private var activeRouteId: String? = null
-    private var activeCastRouteName: String? = null
-    private var dlnaSession: VesperDlnaSession? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    private val castSessionListener = VesperExternalCastSessionListener(
-        onActive = { session ->
-            activeRouteId = CAST_ROUTE_ID
-            activeCastRouteName = session.castDevice?.friendlyName
-            emitRoutes()
-            emitSessionEvent(
-                "routeConnected",
-                CAST_ROUTE_ID,
-                activeCastRouteName,
-                positionMs = session.remoteMediaClient?.approximateStreamPosition,
-            )
-        },
-        onEnded = { session ->
-            if (activeRouteId == CAST_ROUTE_ID) {
-                invalidateActiveRelay()
-                activeRouteId = null
-            }
-            activeCastRouteName = session.castDevice?.friendlyName
-            emitRoutes()
-            emitSessionEvent(
-                "routeDisconnected",
-                CAST_ROUTE_ID,
-                activeCastRouteName,
-                positionMs = session.remoteMediaClient?.approximateStreamPosition,
-            )
-        },
-        onSuspended = { session ->
-            activeCastRouteName = session.castDevice?.friendlyName
-            emitSessionEvent(
-                "suspended",
-                CAST_ROUTE_ID,
-                activeCastRouteName,
-                positionMs = session.remoteMediaClient?.approximateStreamPosition,
-            )
-        },
-    )
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
-        relayServer = VesperRelayServer(
-            applicationContext,
-            formatAdapter = createRelayFormatAdapter(applicationContext),
-            diagnosticListener = { diagnostic -> emitRelayDiagnostic(diagnostic) },
-        )
-        sourcePreparer = VesperExternalPlaybackSourcePreparer(relayServer)
-        castController = VesperCastController(applicationContext)
+        controller = VesperExternalPlaybackController(applicationContext)
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         methodChannel = MethodChannel(binding.binaryMessenger, METHOD_CHANNEL_NAME)
         routesEventChannel = EventChannel(binding.binaryMessenger, ROUTES_EVENT_CHANNEL_NAME)
         sessionEventChannel = EventChannel(binding.binaryMessenger, SESSION_EVENT_CHANNEL_NAME)
@@ -129,7 +58,7 @@ class VesperPlayerExternalPlaybackPlugin :
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                     routesSink = events
-                    emitRoutes()
+                    emitRoutes(controller.routes.value)
                 }
 
                 override fun onCancel(arguments: Any?) {
@@ -148,25 +77,18 @@ class VesperPlayerExternalPlaybackPlugin :
                 }
             },
         )
-        binding.platformViewRegistry.registerViewFactory(ROUTE_BUTTON_VIEW_TYPE, this)
-        runCatching {
-            com.google.android.gms.cast.framework.CastContext
-                .getSharedInstance(applicationContext)
-                .sessionManager
-                .addSessionManagerListener(castSessionListener, CastSession::class.java)
+        scope.launch {
+            controller.routes.collect { routes -> emitRoutes(routes) }
         }
+        scope.launch {
+            controller.events.collect { event -> sessionSink?.success(event.toMap()) }
+        }
+        binding.platformViewRegistry.registerViewFactory(ROUTE_BUTTON_VIEW_TYPE, this)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        runCatching {
-            com.google.android.gms.cast.framework.CastContext
-                .getSharedInstance(applicationContext)
-                .sessionManager
-                .removeSessionManagerListener(castSessionListener, CastSession::class.java)
-        }
-        dlnaDiscovery?.stop()
-        dlnaDiscovery = null
-        relayServer.stop()
+        scope.cancel()
+        controller.release()
         routesSink = null
         sessionSink = null
         routesEventChannel.setStreamHandler(null)
@@ -174,56 +96,47 @@ class VesperPlayerExternalPlaybackPlugin :
         methodChannel.setMethodCallHandler(null)
     }
 
-    @Suppress("DEPRECATION")
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-        val routeTheme = routeTheme(context, args)
-        val themedContext = ContextThemeWrapper(
-            context,
-            routeTheme.buttonTheme,
-        )
-        val button = MediaRouteButton(themedContext)
-        runCatching {
-            CastButtonFactory.setUpMediaRouteButton(themedContext, button)
-        }
-        button.dialogFactory = VesperRouteButtonDialogFactory(routeTheme.buttonTheme)
-        button.setAlwaysVisible(true)
-        return RouteButtonPlatformView(button)
-    }
-
-    private fun routeTheme(context: Context, args: Any?): RouteTheme {
-        val brightness = (args as? Map<*, *>)?.get(ROUTE_BUTTON_BRIGHTNESS_KEY) as? String
-        return when (brightness) {
-            ROUTE_BUTTON_BRIGHTNESS_DARK -> RouteTheme.Dark
-            ROUTE_BUTTON_BRIGHTNESS_LIGHT -> RouteTheme.Light
-            else -> if (context.resources.configuration.isNightMode) {
-                RouteTheme.Dark
-            } else {
-                RouteTheme.Light
-            }
-        }
+        val brightness = (args as? Map<*, *>)
+            ?.get(ROUTE_BUTTON_BRIGHTNESS_KEY)
+            ?.toString()
+            ?.toRouteButtonBrightness()
+        return RouteButtonPlatformView(VesperExternalRouteButton.create(context, brightness))
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         runCatching {
             when (call.method) {
                 "startDiscovery" -> {
-                    startDiscovery()
+                    controller.startDiscovery()
                     result.success(null)
                 }
                 "stopDiscovery" -> {
-                    stopDiscovery()
+                    controller.stopDiscovery()
                     result.success(null)
                 }
-                "connect" -> result.success(connect(call.argumentMap()).toMap())
-                "load" -> result.success(load(call.argumentMap()).toMap())
-                "play" -> result.success(play().toMap())
-                "pause" -> result.success(pause().toMap())
-                "stop" -> result.success(stop().toMap())
+                "connect" -> {
+                    val routeId = call.argumentMap()["routeId"] as? String
+                        ?: return result.success(
+                            VesperExternalPlaybackResult.Failed("Missing routeId.").toMap(),
+                        )
+                    result.success(controller.connect(routeId).toMap())
+                }
+                "load" -> {
+                    val arguments = call.argumentMap()
+                    val item = requireNestedMap(arguments, "item").toMediaItem()
+                    val startPositionMs = (arguments["startPositionMs"] as? Number)?.toLong() ?: 0L
+                    val autoplay = arguments["autoplay"] as? Boolean ?: true
+                    result.success(controller.load(item, startPositionMs, autoplay).toMap())
+                }
+                "play" -> result.success(controller.play().toMap())
+                "pause" -> result.success(controller.pause().toMap())
+                "stop" -> result.success(controller.stop().toMap())
                 "seekTo" -> {
                     val positionMs = (call.argumentMap()["positionMs"] as? Number)?.toLong() ?: 0L
-                    result.success(seekTo(positionMs).toMap())
+                    result.success(controller.seekTo(positionMs).toMap())
                 }
-                "disconnect" -> result.success(disconnect().toMap())
+                "disconnect" -> result.success(controller.disconnect().toMap())
                 else -> result.notImplemented()
             }
         }.onFailure { error ->
@@ -239,497 +152,8 @@ class VesperPlayerExternalPlaybackPlugin :
         }
     }
 
-    private fun startDiscovery() {
-        if (dlnaDiscovery == null) {
-            val generation = ++discoveryGeneration
-            dlnaDiscovery = VesperDlnaDiscovery(
-                applicationContext,
-                object : VesperDlnaDiscovery.Listener {
-                    override fun onRoutesChanged(routes: List<VesperDlnaDevice>) {
-                        mainHandler.post {
-                            if (generation != discoveryGeneration) {
-                                return@post
-                            }
-                            pruneRecentlySeenDlnaDevices()
-                            dlnaDevices.clear()
-                            routes.forEach { device ->
-                                dlnaDevices[device.routeId] = device
-                                recentlySeenDlnaDevices[device.routeId] = RecentDlnaDevice(
-                                    device = device,
-                                    expiresAtMillis = System.currentTimeMillis() + RECENT_DLNA_ROUTE_GRACE_MS,
-                                )
-                            }
-                            emitRoutes()
-                        }
-                    }
-
-                    override fun onDiscoveryError(message: String) {
-                        mainHandler.post {
-                            if (generation != discoveryGeneration) {
-                                return@post
-                            }
-                            emitSessionEvent("error", message = message)
-                        }
-                    }
-
-                    override fun onDiscoveryDiagnostic(
-                        diagnostic: VesperDlnaDiscoveryDiagnostic,
-                    ) {
-                        mainHandler.post {
-                            if (generation != discoveryGeneration) {
-                                return@post
-                            }
-                            emitSessionEvent(
-                                "discoveryDiagnostic",
-                                message = diagnostic.message,
-                                code = diagnostic.code,
-                                details = diagnostic.details + mapOf(
-                                    "severity" to diagnostic.severity.name.lowercase(),
-                                ),
-                            )
-                        }
-                    }
-                },
-            )
-        }
-        dlnaDiscovery?.start()
-        emitRoutes()
-    }
-
-    private fun stopDiscovery() {
-        discoveryGeneration += 1
-        dlnaDiscovery?.stop()
-        dlnaDiscovery = null
-        dlnaDevices.clear()
-        recentlySeenDlnaDevices.clear()
-        emitRoutes()
-    }
-
-    private fun connect(arguments: Map<String, Any?>): ExternalOperationResult {
-        val routeId = arguments["routeId"] as? String
-            ?: return ExternalOperationResult.Failed("Missing routeId.")
-        if (routeId == CAST_ROUTE_ID) {
-            return if (castController.isCastSessionAvailable()) {
-                activeRouteId = CAST_ROUTE_ID
-                emitRoutes()
-                emitSessionEvent("routeConnected", CAST_ROUTE_ID, activeCastRouteName)
-                ExternalOperationResult.Success(routeId = CAST_ROUTE_ID)
-            } else {
-                ExternalOperationResult.Unavailable("Select a Cast route with the system route button first.")
-            }
-        }
-        val device = dlnaDevices[routeId] ?: recentlySeenDlnaDevice(routeId)
-        if (device == null) {
-            emitSessionEvent(
-                "discoveryDiagnostic",
-                message = "DLNA route is no longer available.",
-                code = "dlna_route_cache_miss",
-                details = mapOf(
-                    "severity" to "warning",
-                    "routeId" to routeId,
-                    "availableRouteIds" to dlnaDevices.keys.joinToString(","),
-                    "recentRouteIds" to recentlySeenDlnaDevices.keys.joinToString(","),
-                ),
-            )
-            return ExternalOperationResult.Unavailable("DLNA route is no longer available.")
-        }
-        dlnaSession = VesperDlnaSession(device)
-        activeRouteId = routeId
-        emitRoutes()
-        emitSessionEvent("routeConnected", routeId, device.friendlyName)
-        return ExternalOperationResult.Success(routeId = routeId)
-    }
-
-    private fun recentlySeenDlnaDevice(routeId: String): VesperDlnaDevice? {
-        pruneRecentlySeenDlnaDevices()
-        val recent = recentlySeenDlnaDevices[routeId] ?: return null
-        emitSessionEvent(
-            "discoveryDiagnostic",
-            message = "Using a recently discovered DLNA route during discovery refresh.",
-            code = "dlna_route_recent_cache_used",
-            details = mapOf(
-                "severity" to "info",
-                "routeId" to routeId,
-                "routeName" to recent.device.friendlyName,
-            ),
-        )
-        return recent.device
-    }
-
-    private fun pruneRecentlySeenDlnaDevices() {
-        val now = System.currentTimeMillis()
-        recentlySeenDlnaDevices.entries.removeIf { it.value.expiresAtMillis <= now }
-    }
-
-    private fun load(arguments: Map<String, Any?>): ExternalOperationResult {
-        val item = requireNestedMap(arguments, "item").toMediaItem()
-        val startPositionMs = (arguments["startPositionMs"] as? Number)?.toLong() ?: 0L
-        val autoplay = arguments["autoplay"] as? Boolean ?: true
-        if (item.sources.isEmpty()) {
-            return ExternalOperationResult.Unsupported("No media sources were provided.")
-        }
-
-        return when (activeRouteId) {
-            CAST_ROUTE_ID -> loadCast(item, startPositionMs, autoplay)
-            null -> ExternalOperationResult.Unavailable("No external playback route is connected.")
-            else -> loadDlna(item, startPositionMs, autoplay)
-        }
-    }
-
-    private fun loadCast(
-        item: ExternalMediaItem,
-        startPositionMs: Long,
-        autoplay: Boolean,
-    ): ExternalOperationResult {
-        if (!castController.isCastSessionAvailable()) {
-            return ExternalOperationResult.Unavailable("No active Cast session.")
-        }
-        val prepared = prepareSource(
-            item = item,
-            target = VesperExternalPlaybackTarget.Cast,
-            capabilities = VesperExternalRouteCapabilities(
-                supportsProgressive = true,
-                supportsHls = true,
-                supportsDash = true,
-                supportsMpegTs = true,
-            ),
-        ) ?: return lastPrepareFailure
-        val castResult = castController.load(
-            VesperCastLoadRequest(
-                source = prepared.source,
-                metadata = item.metadata,
-                startPositionMs = startPositionMs,
-                autoplay = autoplay,
-            ),
-        ).toExternalResult(CAST_ROUTE_ID, prepared.relayEnabled)
-        if (castResult is ExternalOperationResult.Success) {
-            prepared.relayToken?.let(activeRelayTokens::add)
-            emitSessionEvent("loaded", CAST_ROUTE_ID, activeCastRouteName)
-        }
-        return castResult
-    }
-
-    private fun loadDlna(
-        item: ExternalMediaItem,
-        startPositionMs: Long,
-        autoplay: Boolean,
-    ): ExternalOperationResult {
-        val session = dlnaSession
-            ?: return ExternalOperationResult.Unavailable("No active DLNA session.")
-        val protocolInfo = runCatching { session.protocolInfo() }.getOrDefault("")
-        val prepared = prepareSource(
-            item = item,
-            target = VesperExternalPlaybackTarget.Dlna,
-            capabilities = VesperExternalRouteCapabilities(
-                supportsProgressive = true,
-                supportsHls = VesperDlnaProtocolInfoParser.supportsHls(protocolInfo),
-                supportsDash = VesperDlnaProtocolInfoParser.supportsDash(protocolInfo),
-                supportsMpegTs = protocolInfo.isBlank() ||
-                    VesperDlnaProtocolInfoParser.supportsMpegTs(protocolInfo),
-            ),
-            routeId = session.device.routeId,
-            routeName = session.device.friendlyName,
-        ) ?: return lastPrepareFailure
-        val dlnaResult = session.load(
-            source = prepared.source,
-            metadata = item.metadata,
-            startPositionMs = startPositionMs,
-            autoplay = autoplay,
-        ).toExternalResult(session.device.routeId, prepared.relayEnabled)
-        if (dlnaResult is ExternalOperationResult.Success) {
-            prepared.relayToken?.let(activeRelayTokens::add)
-            emitSessionEvent("loaded", session.device.routeId, session.device.friendlyName)
-        }
-        return dlnaResult
-    }
-
-    private var lastPrepareFailure: ExternalOperationResult =
-        ExternalOperationResult.Unsupported("No playable external playback source is available.")
-
-    private fun prepareSource(
-        item: ExternalMediaItem,
-        target: VesperExternalPlaybackTarget,
-        capabilities: VesperExternalRouteCapabilities,
-        routeId: String? = null,
-        routeName: String? = null,
-    ): VesperExternalSourcePreparationResult.Prepared? {
-        return when (
-            val prepared = sourcePreparer.prepare(
-                VesperExternalSourcePreparationRequest(
-                    target = target,
-                    sources = item.sources,
-                    proxyPolicy = item.proxyPolicy,
-                    capabilities = capabilities,
-                    formatAdaptation = item.formatAdaptation,
-                    routeId = routeId,
-                    routeName = routeName,
-                ),
-            )
-        ) {
-            is VesperExternalSourcePreparationResult.Prepared -> prepared
-            is VesperExternalSourcePreparationResult.Unsupported -> {
-                prepared.code?.let { code ->
-                    emitSessionEvent(
-                        "discoveryDiagnostic",
-                        routeId = routeId,
-                        routeName = routeName,
-                        message = prepared.message,
-                        code = code,
-                        details = prepared.details + mapOf("severity" to "warning"),
-                    )
-                }
-                lastPrepareFailure = ExternalOperationResult.Unsupported(prepared.message)
-                null
-            }
-        }
-    }
-
-    private fun play(): ExternalOperationResult {
-        return when (activeRouteId) {
-            CAST_ROUTE_ID -> castController.play().toExternalResult(CAST_ROUTE_ID)
-            null -> ExternalOperationResult.Unavailable("No external playback route is connected.")
-            else -> {
-                val session = dlnaSession
-                    ?: return ExternalOperationResult.Unavailable("No active DLNA session.")
-                val result = session.play().toExternalResult(session.device.routeId)
-                if (result is ExternalOperationResult.Success) {
-                    emitSessionEvent("playing", session.device.routeId, session.device.friendlyName)
-                }
-                result
-            }
-        }
-    }
-
-    private fun pause(): ExternalOperationResult {
-        return when (activeRouteId) {
-            CAST_ROUTE_ID -> castController.pause().toExternalResult(CAST_ROUTE_ID)
-            null -> ExternalOperationResult.Unavailable("No external playback route is connected.")
-            else -> {
-                val session = dlnaSession
-                    ?: return ExternalOperationResult.Unavailable("No active DLNA session.")
-                val result = session.pause().toExternalResult(session.device.routeId)
-                if (result is ExternalOperationResult.Success) {
-                    emitSessionEvent("paused", session.device.routeId, session.device.friendlyName)
-                }
-                result
-            }
-        }
-    }
-
-    private fun stop(): ExternalOperationResult {
-        val result = when (activeRouteId) {
-            CAST_ROUTE_ID -> castController.stop().toExternalResult(CAST_ROUTE_ID)
-            null -> ExternalOperationResult.Unavailable("No external playback route is connected.")
-            else -> {
-                val session = dlnaSession
-                    ?: return ExternalOperationResult.Unavailable("No active DLNA session.")
-                session.stop().toExternalResult(session.device.routeId)
-            }
-        }
-        if (result is ExternalOperationResult.Success) {
-            invalidateActiveRelay()
-            emitSessionEvent("stopped", activeRouteId)
-        }
-        return result
-    }
-
-    private fun seekTo(positionMs: Long): ExternalOperationResult {
-        return when (activeRouteId) {
-            CAST_ROUTE_ID -> castController.seekTo(positionMs).toExternalResult(CAST_ROUTE_ID)
-            null -> ExternalOperationResult.Unavailable("No external playback route is connected.")
-            else -> {
-                val session = dlnaSession
-                    ?: return ExternalOperationResult.Unavailable("No active DLNA session.")
-                session.seekTo(positionMs).toExternalResult(session.device.routeId)
-            }
-        }
-    }
-
-    private fun disconnect(): ExternalOperationResult {
-        val routeId = activeRouteId
-        if (routeId != null) {
-            runCatching {
-                if (routeId == CAST_ROUTE_ID) {
-                    castController.stop()
-                } else {
-                    dlnaSession?.stop()
-                }
-            }
-        }
-        invalidateActiveRelay()
-        activeRouteId = null
-        dlnaSession = null
-        emitRoutes()
-        emitSessionEvent("routeDisconnected", routeId)
-        return ExternalOperationResult.Success(routeId = routeId)
-    }
-
-    private fun invalidateActiveRelay() {
-        activeRelayTokens.forEach(relayServer::invalidate)
-        activeRelayTokens.clear()
-    }
-
-    private fun emitRoutes() {
-        val routes = mutableListOf<Map<String, Any?>>()
-        if (castController.isCastSessionAvailable()) {
-            routes += mapOf(
-                "routeId" to CAST_ROUTE_ID,
-                "name" to (activeCastRouteName ?: "Cast device"),
-                "kind" to "cast",
-                "active" to (activeRouteId == CAST_ROUTE_ID),
-                "available" to true,
-            )
-        }
-        routes += dlnaDevices.values.map { device ->
-            mapOf(
-                "routeId" to device.routeId,
-                "name" to device.friendlyName,
-                "kind" to "dlna",
-                "manufacturer" to device.manufacturer,
-                "modelName" to device.modelName,
-                "active" to (activeRouteId == device.routeId),
-                "available" to true,
-            )
-        }
-        routesSink?.success(routes)
-    }
-
-    private fun emitSessionEvent(
-        kind: String,
-        routeId: String? = null,
-        routeName: String? = null,
-        message: String? = null,
-        positionMs: Long? = null,
-        code: String? = null,
-        details: Map<String, String>? = null,
-    ) {
-        sessionSink?.success(
-            mapOf(
-                "kind" to kind,
-                "routeId" to routeId,
-                "routeName" to routeName,
-                "message" to message,
-                "positionMs" to positionMs,
-                "code" to code,
-                "details" to details,
-            ),
-        )
-    }
-
-    private fun emitRelayDiagnostic(diagnostic: VesperRelayDiagnostic) {
-        mainHandler.post {
-            emitSessionEvent(
-                "discoveryDiagnostic",
-                message = diagnostic.message,
-                code = diagnostic.code,
-                details = diagnostic.details + mapOf(
-                    "severity" to diagnostic.severity,
-                ),
-            )
-        }
-    }
-}
-
-private fun createRelayFormatAdapter(context: Context): VesperRelayFormatAdapter {
-    val className = "io.github.ikaros.vesper.player.android.relay.ffmpeg.VesperRelayFfmpegAdapter"
-    return runCatching {
-        val type = Class.forName(className)
-        runCatching {
-            type.getDeclaredConstructor(Context::class.java).newInstance(context)
-        }.getOrElse {
-            type.getDeclaredConstructor().newInstance()
-        } as VesperRelayFormatAdapter
-    }.getOrElse { error ->
-        VesperUnavailableRelayFormatAdapter(
-            error.message ?: "FFmpeg relay runtime class is not available: $className",
-        )
-    }
-}
-
-private val Configuration.isNightMode: Boolean
-    get() = uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-
-private const val ROUTE_BUTTON_BRIGHTNESS_KEY = "brightness"
-private const val ROUTE_BUTTON_BRIGHTNESS_DARK = "dark"
-private const val ROUTE_BUTTON_BRIGHTNESS_LIGHT = "light"
-private const val ROUTE_DIALOG_THEME_ARGUMENT = "routeDialogTheme"
-
-private data class RouteTheme(
-    val buttonTheme: Int,
-) {
-    companion object {
-        val Light = RouteTheme(
-            R.style.VesperPlayerExternalRouteButtonTheme_Light,
-        )
-        val Dark = RouteTheme(
-            R.style.VesperPlayerExternalRouteButtonTheme_Dark,
-        )
-    }
-}
-
-private class VesperRouteButtonDialogFactory(
-    private val routeDialogTheme: Int,
-) : MediaRouteDialogFactory() {
-    override fun onCreateChooserDialogFragment(): MediaRouteChooserDialogFragment =
-        VesperRouteChooserDialogFragment.newInstance(routeDialogTheme)
-
-    override fun onCreateControllerDialogFragment(): MediaRouteControllerDialogFragment =
-        VesperRouteControllerDialogFragment.newInstance(routeDialogTheme)
-}
-
-class VesperRouteChooserDialogFragment : MediaRouteChooserDialogFragment() {
-    override fun onCreateChooserDialog(
-        context: Context,
-        savedInstanceState: Bundle?,
-    ): MediaRouteChooserDialog =
-        MediaRouteChooserDialog(routeContext(context), routeDialogTheme())
-
-    override fun onCreateDynamicChooserDialog(context: Context): MediaRouteDynamicChooserDialog =
-        MediaRouteDynamicChooserDialog(routeContext(context), routeDialogTheme())
-
-    private fun routeContext(context: Context): Context =
-        ContextThemeWrapper(context, routeDialogTheme())
-
-    private fun routeDialogTheme(): Int =
-        arguments?.getInt(ROUTE_DIALOG_THEME_ARGUMENT, 0)
-            ?.takeIf { it != 0 }
-            ?: R.style.VesperPlayerExternalRouteButtonTheme_Light
-
-    companion object {
-        fun newInstance(routeDialogTheme: Int): VesperRouteChooserDialogFragment =
-            VesperRouteChooserDialogFragment().apply {
-                arguments = Bundle().apply {
-                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, routeDialogTheme)
-                }
-            }
-    }
-}
-
-class VesperRouteControllerDialogFragment : MediaRouteControllerDialogFragment() {
-    override fun onCreateControllerDialog(
-        context: Context,
-        savedInstanceState: Bundle?,
-    ): MediaRouteControllerDialog =
-        MediaRouteControllerDialog(routeContext(context), routeDialogTheme())
-
-    override fun onCreateDynamicControllerDialog(context: Context): MediaRouteDynamicControllerDialog =
-        MediaRouteDynamicControllerDialog(routeContext(context), routeDialogTheme())
-
-    private fun routeContext(context: Context): Context =
-        ContextThemeWrapper(context, routeDialogTheme())
-
-    private fun routeDialogTheme(): Int =
-        arguments?.getInt(ROUTE_DIALOG_THEME_ARGUMENT, 0)
-            ?.takeIf { it != 0 }
-            ?: R.style.VesperPlayerExternalRouteButtonTheme_Light
-
-    companion object {
-        fun newInstance(routeDialogTheme: Int): VesperRouteControllerDialogFragment =
-            VesperRouteControllerDialogFragment().apply {
-                arguments = Bundle().apply {
-                    putInt(ROUTE_DIALOG_THEME_ARGUMENT, routeDialogTheme)
-                }
-            }
+    private fun emitRoutes(routes: List<VesperExternalPlaybackRoute>) {
+        routesSink?.success(routes.map { route -> route.toMap() })
     }
 }
 
@@ -739,82 +163,57 @@ private class RouteButtonPlatformView(private val button: MediaRouteButton) : Pl
     override fun dispose() = Unit
 }
 
-private class VesperExternalCastSessionListener(
-    private val onActive: (CastSession) -> Unit,
-    private val onEnded: (CastSession) -> Unit,
-    private val onSuspended: (CastSession) -> Unit,
-) : SessionManagerListener<CastSession> {
-    override fun onSessionStarted(session: CastSession, sessionId: String) = onActive(session)
-    override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) = onActive(session)
-    override fun onSessionEnded(session: CastSession, error: Int) = onEnded(session)
-    override fun onSessionSuspended(session: CastSession, reason: Int) = onSuspended(session)
-    override fun onSessionStarting(session: CastSession) = Unit
-    override fun onSessionStartFailed(session: CastSession, error: Int) = Unit
-    override fun onSessionEnding(session: CastSession) = Unit
-    override fun onSessionResuming(session: CastSession, sessionId: String) = Unit
-    override fun onSessionResumeFailed(session: CastSession, error: Int) = Unit
-}
+private fun VesperExternalPlaybackRoute.toMap(): Map<String, Any?> =
+    mapOf(
+        "routeId" to routeId,
+        "name" to name,
+        "kind" to when (kind) {
+            VesperExternalPlaybackRouteKind.Cast -> "cast"
+            VesperExternalPlaybackRouteKind.Dlna -> "dlna"
+        },
+        "manufacturer" to manufacturer,
+        "modelName" to modelName,
+        "active" to active,
+        "available" to available,
+    )
 
-private data class ExternalMediaItem(
-    val sources: List<VesperPlayerSource>,
-    val metadata: VesperSystemPlaybackMetadata,
-    val proxyPolicy: VesperExternalProxyPolicy,
-    val formatAdaptation: VesperRelayFormatAdaptationConfig,
-)
+private fun VesperExternalPlaybackEvent.toMap(): Map<String, Any?> =
+    mapOf(
+        "kind" to when (kind) {
+            VesperExternalPlaybackEventKind.RouteConnected -> "routeConnected"
+            VesperExternalPlaybackEventKind.RouteDisconnected -> "routeDisconnected"
+            VesperExternalPlaybackEventKind.Loaded -> "loaded"
+            VesperExternalPlaybackEventKind.Playing -> "playing"
+            VesperExternalPlaybackEventKind.Paused -> "paused"
+            VesperExternalPlaybackEventKind.Stopped -> "stopped"
+            VesperExternalPlaybackEventKind.Suspended -> "suspended"
+            VesperExternalPlaybackEventKind.Error -> "error"
+            VesperExternalPlaybackEventKind.DiscoveryDiagnostic -> "discoveryDiagnostic"
+        },
+        "routeId" to routeId,
+        "routeName" to routeName,
+        "message" to message,
+        "positionMs" to positionMs,
+        "code" to code,
+        "details" to details,
+    )
 
-private data class RecentDlnaDevice(
-    val device: VesperDlnaDevice,
-    val expiresAtMillis: Long,
-)
-
-private sealed class ExternalOperationResult {
-    data class Success(
-        val routeId: String? = null,
-        val relayEnabled: Boolean = false,
-    ) : ExternalOperationResult()
-
-    data class Unavailable(val message: String) : ExternalOperationResult()
-    data class Unsupported(val message: String) : ExternalOperationResult()
-    data class Failed(val message: String) : ExternalOperationResult()
-}
-
-private fun ExternalOperationResult.toMap(): Map<String, Any?> =
+private fun VesperExternalPlaybackResult.toMap(): Map<String, Any?> =
     when (this) {
-        is ExternalOperationResult.Success -> mapOf(
+        is VesperExternalPlaybackResult.Success -> mapOf(
             "status" to "success",
             "routeId" to routeId,
             "relayEnabled" to relayEnabled,
         )
-        is ExternalOperationResult.Unavailable ->
+        is VesperExternalPlaybackResult.Unavailable ->
             mapOf("status" to "unavailable", "message" to message)
-        is ExternalOperationResult.Unsupported ->
+        is VesperExternalPlaybackResult.Unsupported ->
             mapOf("status" to "unsupported", "message" to message)
-        is ExternalOperationResult.Failed ->
+        is VesperExternalPlaybackResult.Failed ->
             mapOf("status" to "failed", "message" to message)
     }
 
-private fun VesperCastOperationResult.toExternalResult(
-    routeId: String? = null,
-    relayEnabled: Boolean = false,
-): ExternalOperationResult =
-    when (this) {
-        VesperCastOperationResult.Success -> ExternalOperationResult.Success(routeId, relayEnabled)
-        is VesperCastOperationResult.Unavailable -> ExternalOperationResult.Unavailable(message)
-        is VesperCastOperationResult.Unsupported -> ExternalOperationResult.Unsupported(message)
-    }
-
-private fun VesperDlnaOperationResult.toExternalResult(
-    routeId: String? = null,
-    relayEnabled: Boolean = false,
-): ExternalOperationResult =
-    when (this) {
-        VesperDlnaOperationResult.Success -> ExternalOperationResult.Success(routeId, relayEnabled)
-        is VesperDlnaOperationResult.Unavailable -> ExternalOperationResult.Unavailable(message)
-        is VesperDlnaOperationResult.Unsupported -> ExternalOperationResult.Unsupported(message)
-        is VesperDlnaOperationResult.Failed -> ExternalOperationResult.Failed(message)
-    }
-
-private fun Map<String, Any?>.toMediaItem(): ExternalMediaItem {
+private fun Map<String, Any?>.toMediaItem(): VesperExternalPlaybackMediaItem {
     val rawSources = this["sources"] as? List<*> ?: emptyList<Any?>()
     val sources = rawSources
         .mapNotNull { (it as? Map<*, *>)?.stringMap()?.toVesperPlayerSource() }
@@ -827,16 +226,16 @@ private fun Map<String, Any?>.toMediaItem(): ExternalMediaItem {
     }
     val formatAdaptation =
         (this["formatAdaptation"] as? Map<*, *>)?.stringMap()?.toFormatAdaptationConfig()
-            ?: VesperRelayFormatAdaptationConfig()
-    return ExternalMediaItem(sources, metadata, proxyPolicy, formatAdaptation)
+            ?: VesperExternalFormatAdaptationConfig()
+    return VesperExternalPlaybackMediaItem(sources, metadata, proxyPolicy, formatAdaptation)
 }
 
-private fun Map<String, Any?>.toFormatAdaptationConfig(): VesperRelayFormatAdaptationConfig =
-    VesperRelayFormatAdaptationConfig(
+private fun Map<String, Any?>.toFormatAdaptationConfig(): VesperExternalFormatAdaptationConfig =
+    VesperExternalFormatAdaptationConfig(
         enabled = this["enabled"] as? Boolean ?: false,
         preferredFallback = when (this["preferredFallback"] as? String) {
-            "hls" -> VesperRelayFallbackFormat.Hls
-            else -> VesperRelayFallbackFormat.MpegTs
+            "hls" -> VesperExternalFallbackFormat.Hls
+            else -> VesperExternalFallbackFormat.MpegTs
         },
         allowHls = this["allowHls"] as? Boolean ?: true,
         enableRangeCache = this["enableRangeCache"] as? Boolean ?: true,
@@ -896,10 +295,18 @@ private fun Any?.stringStringMap(): Map<String, String> =
         ?.toMap()
         ?: emptyMap()
 
-private const val CAST_ROUTE_ID = "cast:active"
+private fun String.toRouteButtonBrightness(): VesperExternalRouteButtonBrightness? =
+    when (this) {
+        ROUTE_BUTTON_BRIGHTNESS_DARK -> VesperExternalRouteButtonBrightness.Dark
+        ROUTE_BUTTON_BRIGHTNESS_LIGHT -> VesperExternalRouteButtonBrightness.Light
+        else -> null
+    }
+
+private const val ROUTE_BUTTON_BRIGHTNESS_KEY = "brightness"
+private const val ROUTE_BUTTON_BRIGHTNESS_DARK = "dark"
+private const val ROUTE_BUTTON_BRIGHTNESS_LIGHT = "light"
 private const val METHOD_CHANNEL_NAME = "io.github.ikaros.vesper_player_external_playback"
 private const val ROUTES_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player_external_playback/routes"
 private const val SESSION_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player_external_playback/events"
 private const val ROUTE_BUTTON_VIEW_TYPE =
     "io.github.ikaros.vesper_player_external_playback/route_button"
-private const val RECENT_DLNA_ROUTE_GRACE_MS = 120_000L

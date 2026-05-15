@@ -1,0 +1,39 @@
+[profile.base]
+libraries = ["avcodec", "avformat", "avutil"]
+protocols = ["file", "pipe"]
+
+[profile.relay-remux]
+extends = "base"
+demuxers = ["mov", "mpegts", "aac"]
+muxers = ["hls", "mpegts", "mp4", "mov"]
+protocols = ["file", "pipe"]
+parsers = ["aac", "ac3", "h264", "hevc", "mpeg4video", "av1"]
+bsfs = ["aac_adtstoasc", "h264_mp4toannexb", "hevc_mp4toannexb", "extract_extradata"]
+tls = "none"
+
+[profile.relay-remux.validation]
+forbid_network = true
+forbid_openssl = true
+
+# --- download-remux：宿主负责网络下载，FFmpeg 仅做本地文件 remux，不需要网络和 TLS ---
+[profile.download-remux]
+extends = "base"
+demuxers = ["hls", "dash", "concat", "flv", "mov", "matroska", "mpegts", "aac"]
+muxers = ["mp4", "mov", "matroska"]
+protocols = ["file", "pipe"]
+parsers = ["aac", "ac3", "av1", "flac", "h264", "hevc", "mpeg4video", "opus", "vp8", "vp9"]
+bsfs = ["aac_adtstoasc", "extract_extradata", "h264_metadata", "hevc_metadata"]
+tls = "none"
+
+[profile.download-remux.validation]
+forbid_network = true
+forbid_openssl = true
+
+[profile.default]
+extends = ["download-remux", "relay-remux"]
+libraries = ["avcodec", "avformat", "avutil"]
+tls = "none"
+
+[profile.default.validation]
+forbid_network = true
+forbid_openssl = true

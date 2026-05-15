@@ -106,13 +106,14 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
-    environment("VESPER_ANDROID_FFMPEG_CONSUMERS", "download-remux")
 
     doFirst {
         commandLine(
             scriptFile.asFile.absolutePath,
             playerFfmpegPluginJniLibsDirFile.absolutePath,
             playerFfmpegPluginBuildProfile.get(),
+            "--profile",
+            "download-remux",
         )
     }
 }

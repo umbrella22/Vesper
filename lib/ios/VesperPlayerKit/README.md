@@ -250,9 +250,20 @@ host-provided path and keeps the original offline file in place.
 ## Optional FFmpeg Remux Plugin
 
 `exportTaskOutput(...)` uses an optional `player-remux-ffmpeg` dynamic plugin
-when the host wants to export downloaded HLS, DASH, or FLV assets to `.mp4`. The
-host must embed a signed `libvesper_remux_ffmpeg.dylib` in the app bundle and
-pass its absolute path through `VesperDownloadConfiguration.pluginLibraryPaths`.
+when the host wants to export downloaded HLS, DASH, or FLV assets to `.mp4`.
+FFmpeg is not embedded in the core `VesperPlayerKit.xcframework`. Release builds
+stage the optional plugin as `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
+which the host app signs and embeds explicitly.
+
+For repository builds:
+
+```sh
+./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
+./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
+```
+
+At runtime, pass the framework binary path through
+`VesperDownloadConfiguration.pluginLibraryPaths`.
 
 Bundling that plugin makes the host responsible for FFmpeg notices,
 corresponding source, configure flags, and LGPL relinking rights. See

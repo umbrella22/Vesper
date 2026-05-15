@@ -3,6 +3,7 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/android.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg-validate.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/android"
@@ -13,14 +14,17 @@ PROJECT_GRADLEW="$PROJECT_DIR/gradlew"
 LOCAL_GRADLE="$(find "$PROJECT_DIR/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
 FALLBACK_GRADLEW="$ROOT_DIR/examples/android-compose-host/gradlew"
 
-FFMPEG_ARGS=()
-while IFS= read -r arg; do
-  FFMPEG_ARGS+=("$arg")
-done < <("$ROOT_DIR/scripts/android/resolve-ffmpeg-runtime-requirements.sh" "$@")
-BUILD_CONSUMERS=("$@")
-if [[ ${#BUILD_CONSUMERS[@]} -eq 0 ]]; then
-  BUILD_CONSUMERS=(download-remux relay-remux)
+if [[ $# -eq 0 || "${1:0:2}" != "--" ]]; then
+  cat <<EOF >&2
+Android FFmpeg runtime AAR builds require resolved FFmpeg arguments.
+
+Use the root profile CLI instead:
+  ./scripts/vesper ffmpeg --platform android --profile default
+EOF
+  exit 1
 fi
+
+FFMPEG_ARGS=("$@")
 
 vesper_ffmpeg_parse_common_args android "${FFMPEG_ARGS[@]}"
 FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-$(vesper_ffmpeg_default_output_dir android "$ROOT_DIR/third_party/ffmpeg/android")}}"
@@ -67,14 +71,14 @@ fi
 
 "${GRADLE_CMD[@]}" -p "$PROJECT_DIR" :vesper-player-kit-ffmpeg-runtime:assembleRelease
 
-for consumer in "${BUILD_CONSUMERS[@]}"; do
-  if [[ "$consumer" == "relay-remux" ]]; then
-    "$ROOT_DIR/scripts/android/verify-relay-ffmpeg-runtime-no-network.sh" "${BUILD_CONSUMERS[@]}"
-    break
-  fi
-done
+if [[ "${VESPER_FFMPEG_VALIDATION_FORBID_NETWORK:-false}" == "true" || "${VESPER_FFMPEG_VALIDATION_FORBID_OPENSSL:-false}" == "true" ]]; then
+  vesper_ffmpeg_validate_android_runtime_artifacts \
+    "$RUNTIME_MODULE_DIR" \
+    "${VESPER_FFMPEG_VALIDATION_FORBID_NETWORK:-false}" \
+    "${VESPER_FFMPEG_VALIDATION_FORBID_OPENSSL:-false}"
+fi
 
 echo
-echo "Built Android FFmpeg runtime AAR with consumers: ${*:-download-remux relay-remux}"
+echo "Built Android FFmpeg runtime AAR for resolved profile: ${VESPER_DECLARED_FFMPEG_PROFILE:-$VESPER_FFMPEG_PROFILE}"
 echo "Runtime JNI libs:"
 echo "  $JNI_LIBS_DIR"

@@ -8,15 +8,20 @@ usage() {
 Usage: scripts/vesper <group> <command> [args...]
 
 Groups:
+  ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
-  android  ffmpeg | ffmpeg-runtime | jni | relay-ffmpeg-jni | aar | remux-plugin | stage-release
-  apple    ffmpeg
-  ios      ffi | remux-plugin | kit-xcframework | embed-remux-plugin | stage-release | verify-bridge-shim
+  android  jni | aar | remux-plugin | stage-release
+  ios      ffi | remux-plugin | stage-remux-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | verify-bridge-shim
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
   release  notes
 EOF
 }
+
+if [[ "${1:-}" == "ffmpeg" ]]; then
+  shift
+  exec "$SCRIPT_DIR/ffmpeg/build.sh" "$@"
+fi
 
 if [[ $# -lt 2 ]]; then
   usage
@@ -40,17 +45,8 @@ case "$group:$command" in
   ffi:c-host-smoke)
     exec "$SCRIPT_DIR/ffi/run-c-host-smoke.sh" "$@"
     ;;
-  android:ffmpeg)
-    exec "$SCRIPT_DIR/android/build-ffmpeg-prebuilts.sh" "$@"
-    ;;
-  android:ffmpeg-runtime)
-    exec "$SCRIPT_DIR/android/build-ffmpeg-runtime-aar.sh" "$@"
-    ;;
   android:jni)
     exec "$SCRIPT_DIR/android/build-vesper-player-kit-jni.sh" "$@"
-    ;;
-  android:relay-ffmpeg-jni)
-    exec "$SCRIPT_DIR/android/build-relay-ffmpeg-jni.sh" "$@"
     ;;
   android:aar)
     exec "$SCRIPT_DIR/android/build-vesper-player-kit-aar.sh" "$@"
@@ -61,14 +57,14 @@ case "$group:$command" in
   android:stage-release)
     exec "$SCRIPT_DIR/android/stage-vesper-player-kit-release.sh" "$@"
     ;;
-  apple:ffmpeg)
-    exec "$SCRIPT_DIR/apple/build-ffmpeg-prebuilts.sh" "$@"
-    ;;
   ios:ffi)
     exec "$SCRIPT_DIR/ios/build-player-ffi-xcframework.sh" "$@"
     ;;
   ios:remux-plugin)
     exec "$SCRIPT_DIR/ios/build-player-remux-ffmpeg-plugin.sh" "$@"
+    ;;
+  ios:stage-remux-plugin-release)
+    exec "$SCRIPT_DIR/ios/stage-player-remux-ffmpeg-plugin-release.sh" "$@"
     ;;
   ios:kit-xcframework)
     exec "$SCRIPT_DIR/ios/build-vesper-player-kit-xcframework.sh" "$@"

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+### Added
+
+- Added release staging for the optional
+  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` artifact.
+
+### Changed
+
+- The core `VesperPlayerKit.xcframework` remains FFmpeg-free; FFmpeg-backed
+  remux support is distributed as a separate signable XCFramework.
+
 ## 0.2.0 - 2026-05-13
 
 ### Breaking Changes

@@ -1,4 +1,6 @@
 pluginManagement {
+    val androidGradlePluginVersion = "9.1.0"
+
     repositories {
         google()
         mavenCentral()
@@ -11,7 +13,7 @@ pluginManagement {
                 "com.android.library",
                 "com.android.test",
                 "com.android.dynamic-feature", ->
-                        useModule("com.android.tools.build:gradle:${requested.version}")
+                        useModule("com.android.tools.build:gradle:${requested.version ?: androidGradlePluginVersion}")
             }
         }
     }
@@ -28,10 +30,7 @@ dependencyResolutionManagement {
 rootProject.name = "vesper-android-lib"
 
 include(":vesper-player-kit")
-include(":vesper-player-kit-cast")
-include(":vesper-player-kit-relay")
 include(":vesper-player-kit-ffmpeg-runtime")
-include(":vesper-player-kit-relay-ffmpeg")
-include(":vesper-player-kit-dlna")
+include(":vesper-player-kit-external-playback")
 include(":vesper-player-kit-compose")
 include(":vesper-player-kit-compose-ui")

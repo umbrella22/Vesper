@@ -26,33 +26,10 @@ apply plugin: "kotlin-android"
 
 def sdkRootDir = projectDir.parentFile.parentFile.parentFile.parentFile
 def androidKitDir = new File(sdkRootDir, "lib/android")
-def fallbackSourceDirs = []
-
-def requireProjectOrSource = { String projectPath, String moduleName ->
-    def includedProject = findProject(projectPath)
-    if (includedProject != null) {
-        return includedProject
-    }
-    def moduleDir = new File(androidKitDir, moduleName)
-    def sourceDir = new File(moduleDir, "src/main/java")
-    if (!sourceDir.isDirectory()) {
-        throw new GradleException(
-            "vesper_player_external_playback requires '${projectPath}' or " +
-            "the SDK source module at ${moduleDir.absolutePath}."
-        )
-    }
-    fallbackSourceDirs.add(sourceDir)
-    return null
-}
 
 def hostKitProject = findProject(":vesper-player-kit")
 def flutterAndroidProject = findProject(":vesper_player_android")
-def castProject = findProject(":vesper-player-kit-cast")
-if (castProject == null) {
-    castProject = requireProjectOrSource(":vesper-player-kit-cast", "vesper-player-kit-cast")
-}
-def relayProject = requireProjectOrSource(":vesper-player-kit-relay", "vesper-player-kit-relay")
-def dlnaProject = requireProjectOrSource(":vesper-player-kit-dlna", "vesper-player-kit-dlna")
+def externalPlaybackProject = findProject(":vesper-player-kit-external-playback")
 
 android {
     namespace = "io.github.ikaros.vesper.player.flutter.externalplayback"
@@ -72,9 +49,6 @@ android {
         jvmTarget = "17"
     }
 
-    sourceSets {
-        main.java.srcDirs += fallbackSourceDirs
-    }
 }
 
 dependencies {
@@ -89,19 +63,15 @@ dependencies {
         )
     }
 
-    def media3Version = "1.9.3"
-    implementation "androidx.appcompat:appcompat:1.6.1"
-    implementation "androidx.media3:media3-cast:$media3Version"
-    implementation "androidx.mediarouter:mediarouter:1.8.1"
-    implementation "com.google.android.gms:play-services-cast-framework:22.3.1"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
 
-    if (castProject != null) {
-        implementation castProject
+    if (externalPlaybackProject == null) {
+        throw new GradleException(
+            "vesper_player_external_playback requires ':vesper-player-kit-external-playback' " +
+            "to be included in the Android build. Expected source module under " +
+            new File(androidKitDir, "vesper-player-kit-external-playback").absolutePath + "."
+        )
     }
-    if (relayProject != null) {
-        implementation relayProject
-    }
-    if (dlnaProject != null) {
-        implementation dlnaProject
-    }
+
+    implementation externalPlaybackProject
 }

@@ -189,13 +189,13 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      - name: Build Android FFmpeg prebuilts
-        run: ./scripts/vesper android ffmpeg ${{ matrix.abi }}
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.0"
+
+      - name: Build Android FFmpeg runtime AAR
+        run: ./scripts/vesper ffmpeg --platform android --profile default --abi ${{ matrix.abi }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -221,6 +221,8 @@ jobs:
           android.useAndroidX=true
           vesper.player.android.abis=${{ matrix.abi }}
           vesper.player.android.app.abis=${{ matrix.abi }}
+          vesper.player.android.ffmpegProfile=default
+          vesper.player.android.external.ffmpegProfile=default
           EOF
 
       - name: Check Android bridge crates

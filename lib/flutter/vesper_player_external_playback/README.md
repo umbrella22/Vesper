@@ -8,9 +8,14 @@ The Android implementation provides:
 - DLNA / UPnP AV device discovery and playback control.
 - Local HTTP relay for local media, content URIs, and sources that require
   request headers.
+- Optional relay FFmpeg adaptation through the Android
+  `vesper-player-kit-external-playback` facade and shared
+  `vesper-player-kit-ffmpeg-runtime` AAR.
 
 Cast route selection still uses the system Cast route button. DLNA devices are
-reported through `VesperExternalPlaybackController.routes`.
+reported through `VesperExternalPlaybackController.routes`, which delegates to
+the Kotlin facade at
+`io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController`.
 
 Use `VesperExternalRouteIconButton` inside a player-stage action slot on Android
 to surface the system Cast route picker as a full icon-sized native hit area.

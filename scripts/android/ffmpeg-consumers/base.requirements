@@ -1,6 +1,0 @@
-libraries=avcodec,avformat,avutil
-demuxers=
-muxers=
-protocols=file,pipe
-parsers=
-bsfs=

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+### Changed
+
+- Optional Android external playback is now provided by
+  `vesper-player-kit-external-playback` instead of separate Cast, DLNA, and
+  relay host-kit modules.
+
 ## 0.2.0 - 2026-05-13
 
 ### Breaking Changes

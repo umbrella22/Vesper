@@ -157,12 +157,16 @@ fi
   echo
   echo "- Android core AAR for devices: \`VesperPlayerKit-android-arm64-v8a.aar\`"
   echo "- Android Compose adapter AAR for devices: \`VesperPlayerKitCompose-android-arm64-v8a.aar\`"
+  echo "- Android Compose UI AAR for devices: \`VesperPlayerKitComposeUi-android-arm64-v8a.aar\`"
+  echo "- Android external playback AAR for devices: \`VesperPlayerKitExternalPlayback-android-arm64-v8a.aar\`"
+  echo "- Android FFmpeg runtime AAR for devices: \`VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar\`"
   echo "- iOS device framework: \`VesperPlayerKit-ios-arm64.framework.zip\`"
   echo "- iOS simulator framework for Apple Silicon: \`VesperPlayerKit-ios-simulator-arm64.framework.zip\`"
   echo "- Combined Apple package: \`VesperPlayerKit.xcframework.zip\`"
+  echo "- Optional iOS FFmpeg remux plugin: \`VesperPlayerRemuxFfmpegPlugin.xcframework.zip\`"
   echo "- Integrity checksums: \`SHA256SUMS.txt\`"
   echo
-  echo "These downloads are prebuilt binary artifacts. Host applications that consume them do not need to run the repository's local JNI or FFmpeg generation tasks during their own Gradle / Xcode builds."
+  echo "These downloads are prebuilt binary artifacts. Host applications that consume them do not need to run the repository's local JNI or FFmpeg generation tasks during their own Gradle / Xcode builds. FFmpeg-backed artifacts keep FFmpeg's license, notices, corresponding source, configure flags, and LGPL relinking boundary separate from Vesper's Apache-2.0 source license."
   echo
   echo "## Release Details"
   echo

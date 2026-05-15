@@ -85,7 +85,7 @@ than assuming every row above is available on every backend.
 ```text
 crates/      Rust workspace: shared core, runtime, FFI, backends, render, platform glue
 lib/         Distributable platform integration layers
-  android/   Android AAR modules: core kit, Cast, relay, DLNA, Compose adapter, optional Compose UI
+  android/   Android AAR modules: core kit, external playback, FFmpeg runtime, Compose adapter, optional Compose UI
   ios/       VesperPlayerKit Swift Package / XCFramework project
   flutter/   Federated Flutter packages: main API, platform packages, optional UI
 examples/    Runnable host apps for Android, iOS, Flutter, desktop Rust, and C
@@ -247,23 +247,24 @@ shell directory.
 
 ## Mobile FFmpeg Profiles
 
-Android and iOS remux-plugin builds can opt into FFmpeg profile presets or
-provide explicit FFmpeg capability overlays. The default profile is `legacy`,
-which preserves the historical Android OpenSSL and iOS SecureTransport builds.
-`remux-local` trims FFmpeg for local stream-copy remuxing. `custom` starts from
-`--disable-everything` and enables only caller-provided capabilities.
+Android and iOS FFmpeg builds use the root profile CLI. The public entrypoint is
+`./scripts/vesper ffmpeg --platform android|ios|all --profile <name>`.
+`download-remux`, `relay-remux`, and `default` are local remux profiles: they
+enable only local file/pipe protocols and validate that network and OpenSSL are
+disabled. The default profile unions download and relay remux capabilities.
 
 ```sh
-./scripts/vesper android ffmpeg --ffmpeg-profile remux-local arm64-v8a
-./scripts/vesper apple ffmpeg --ffmpeg-profile remux-local ios-arm64 ios-simulator-arm64
+./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
+./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
 ```
 
-Callers can add or replace capabilities with `--enable-libraries`,
-`--enable-demuxers`, `--enable-muxers`, `--enable-protocols`,
-`--enable-parsers`, `--enable-bsfs`, and repeated `--extra-configure-arg`
-flags. Non-legacy outputs are written under `third_party/ffmpeg/<platform>/profiles/`
-by default, and each ABI / slice records `vesper-ffmpeg-build-metadata.txt`
-with the exact configure line for release review.
+Callers can add controlled overlays with `--extra-libraries`,
+`--extra-demuxers`, `--extra-muxers`, `--extra-protocols`,
+`--extra-parsers`, `--extra-bsfs`, and repeated `--extra-configure-arg` flags.
+Validation fails if an overlay violates the selected profile policy. Generated
+ABIs and slices record `vesper-ffmpeg-build-metadata.txt` with the declared
+profile, profile hash, source archive, license-sensitive flags, and exact
+configure line for release review.
 
 ## Desktop FFmpeg
 
@@ -302,13 +303,10 @@ FFmpeg-backed artifacts when a host application explicitly opts in.
 
 The default Vesper FFmpeg scripts avoid `--enable-gpl` and
 `--enable-nonfree`; the scripts refuse those flags unless the caller passes an
-explicit acknowledgement. The default Android `legacy` FFmpeg profile uses
-OpenSSL and passes `--enable-version3`, so Android remux-plugin releases built
-from that profile should be handled as LGPLv3-or-later FFmpeg redistributions
-unless the release build is changed and re-reviewed. Apple `legacy` prebuilts
-and the desktop fallback are LGPL-oriented by default, but static desktop
-redistribution still requires relinking materials or an equivalent
-LGPL-compliant mechanism.
+explicit acknowledgement. The mobile `download-remux`, `relay-remux`, and
+`default` profiles validate no-network/no-OpenSSL builds. Desktop fallback
+builds are LGPL-oriented by default, but static desktop redistribution still
+requires relinking materials or an equivalent LGPL-compliant mechanism.
 
 Before publishing an app or SDK artifact that includes FFmpeg, include FFmpeg
 notices and license text, provide the exact corresponding FFmpeg source and
@@ -346,12 +344,18 @@ name:
 
 - Android core: `VesperPlayerKit-android-<abi>.aar`
 - Android Compose adapter: `VesperPlayerKitCompose-android-<abi>.aar`
+- Android Compose UI: `VesperPlayerKitComposeUi-android-<abi>.aar`
+- Android external playback: `VesperPlayerKitExternalPlayback-android-<abi>.aar`
+- Android FFmpeg runtime: `VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
 - iOS framework slices: `VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework: `VesperPlayerKit.xcframework.zip`
+- Optional iOS FFmpeg remux plugin: `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
 - `SHA256SUMS.txt` for release artifact verification
 
 Android packaging is currently `arm64-v8a` only. iOS packaging is arm64 only for
-device, Apple Silicon Simulator, and optional Catalyst slices.
+device, Apple Silicon Simulator, and optional Catalyst slices. The iOS core
+`VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
+is shipped as a separate optional XCFramework that the host app signs and embeds.
 
 Release AARs / XCFrameworks are fully packaged binary artifacts. Host apps that
 consume these downloads do not run the repository's local JNI or FFmpeg

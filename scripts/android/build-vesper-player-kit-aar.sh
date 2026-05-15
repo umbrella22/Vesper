@@ -37,10 +37,7 @@ fi
 
 exec "${GRADLE_CMD[@]}" -p "$PROJECT_DIR" \
     ":vesper-player-kit:$MODULE_TASK" \
-    ":vesper-player-kit-cast:$MODULE_TASK" \
-    ":vesper-player-kit-relay:$MODULE_TASK" \
     ":vesper-player-kit-ffmpeg-runtime:$MODULE_TASK" \
-    ":vesper-player-kit-relay-ffmpeg:$MODULE_TASK" \
-    ":vesper-player-kit-dlna:$MODULE_TASK" \
+    ":vesper-player-kit-external-playback:$MODULE_TASK" \
     ":vesper-player-kit-compose:$MODULE_TASK" \
     ":vesper-player-kit-compose-ui:$MODULE_TASK"

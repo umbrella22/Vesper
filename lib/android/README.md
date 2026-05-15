@@ -8,23 +8,20 @@ artifacts and consumable from any Android app or library.
 | Module                         | Purpose                                                                                                                                                                             |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `vesper-player-kit`            | Core Android library: `VesperPlayerController`, `VesperPlayerSource`, `VesperTrackSelection`, `VesperDownloadManager`, JNI-backed `ExoPlayer` bridge, `libvesper_player_android.so` |
-| `vesper-player-kit-cast`       | Optional Google Cast sender integration, media route button support, and default Cast options provider                                                                               |
-| `vesper-player-kit-relay`      | Optional local HTTP relay for external playback receivers that cannot send app-owned request headers or read local media directly                                                    |
-| `vesper-player-kit-dlna`       | Optional DLNA / UPnP AV discovery and media renderer control built on top of the relay module                                                                                        |
+| `vesper-player-kit-external-playback` | Optional Google Cast, DLNA / UPnP AV discovery, local HTTP relay, relay FFmpeg adaptation JNI, route button, and default Cast options provider                              |
+| `vesper-player-kit-ffmpeg-runtime`    | Optional FFmpeg runtime AAR used by download remux and external playback relay remux                                                                                        |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
-The Cast, relay, DLNA, Compose adapter, and higher-level Compose UI modules are optional.
-View-based or non-Compose hosts can depend on `vesper-player-kit` alone without
-pulling in Google Play Services, Cast Framework, DLNA discovery, Compose, or
-Material3.
+The external playback, FFmpeg runtime, Compose adapter, and higher-level Compose
+UI modules are optional. View-based or non-Compose hosts can depend on
+`vesper-player-kit` alone without pulling in Google Play Services, Cast
+Framework, DLNA discovery, FFmpeg, Compose, or Material3.
 
 Kotlin namespaces:
 
 - `io.github.ikaros.vesper.player.android`
-- `io.github.ikaros.vesper.player.android.cast`
-- `io.github.ikaros.vesper.player.android.relay`
-- `io.github.ikaros.vesper.player.android.dlna`
+- `io.github.ikaros.vesper.player.android.external`
 - `io.github.ikaros.vesper.player.android.compose`
 - `io.github.ikaros.vesper.player.android.compose.ui`
 
@@ -37,13 +34,16 @@ GitHub Releases publish the following artifacts via
 
 - `VesperPlayerKit-android-arm64-v8a.aar`
 - `VesperPlayerKitCompose-android-arm64-v8a.aar`
+- `VesperPlayerKitComposeUi-android-arm64-v8a.aar`
+- `VesperPlayerKitExternalPlayback-android-arm64-v8a.aar`
+- `VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar`
 
 Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
 emulator. See [Release Downloads](../../README.md#release-downloads) for the
 public package names and artifact-selection notes.
 
-The optional `vesper-player-kit-compose-ui` module is built from source in this
-project. It does not currently have a separate release download artifact.
+The optional `vesper-player-kit-compose-ui` module remains available both as a
+source module and as a release AAR.
 
 ## Minimum Requirements
 
@@ -63,6 +63,8 @@ From the repository root:
 Without a Gradle CLI, open `lib/android` in Android Studio and run:
 
 - `:vesper-player-kit:assembleRelease`
+- `:vesper-player-kit-external-playback:assembleRelease`
+- `:vesper-player-kit-ffmpeg-runtime:assembleRelease`
 - `:vesper-player-kit-compose:assembleRelease`
 - `:vesper-player-kit-compose-ui:assembleRelease`
 
@@ -85,21 +87,14 @@ Core (`vesper-player-kit`):
 - `VesperVideoSurfaceKind` — `SurfaceView` (default, HDR / high frame rate) or `TextureView` (scrolling / animated stages)
 - `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput`
 
-Cast (`vesper-player-kit-cast`):
+External playback (`vesper-player-kit-external-playback`):
 
-- `VesperCastController` — load, play, pause, stop, and seek the active Cast session
-- `VesperCastOptionsProvider` — default Cast options provider using Google's Default Media Receiver unless the host overrides the receiver application ID in manifest meta-data
-
-Relay (`vesper-player-kit-relay`):
-
-- `VesperRelayServer` — local HTTP relay with tokenized media URLs, `GET` / `HEAD` / `Range`, request-header injection, and token invalidation
-- `VesperExternalPlaybackSourcePreparer` — shared direct-vs-relay source selection for Cast and DLNA
-
-DLNA (`vesper-player-kit-dlna`):
-
-- `VesperDlnaDiscovery` — SSDP discovery for UPnP AV media renderers
-- `VesperDlnaSession` — `SetAVTransportURI`, `Play`, `Pause`, `Stop`, and `Seek` control
-- `VesperDlnaDeviceDescriptionParser`, `VesperSsdpParser`, `VesperDlnaDidlBuilder`, and SOAP helpers for host-side testing and diagnostics
+- `VesperExternalPlaybackController` — unified Cast/DLNA route discovery and playback control
+- `routes: StateFlow<List<VesperExternalPlaybackRoute>>` — route snapshots
+- `events: SharedFlow<VesperExternalPlaybackEvent>` — route, playback, and diagnostic events
+- `VesperExternalPlaybackMediaItem`, route/media/result/event DTOs, proxy policy, and format adaptation config
+- `VesperExternalRouteButton` — Cast route button view backed by the Cast framework
+- `VesperExternalCastOptionsProvider` — default Cast options provider using Google's Default Media Receiver unless the host overrides `io.github.ikaros.vesper.player.android.external.RECEIVER_APPLICATION_ID`
 
 Compose adapter (`vesper-player-kit-compose`):
 
@@ -236,16 +231,16 @@ extension must add the Media3 FFmpeg dependency themselves.
 Optional Vesper FFmpeg features use a split runtime:
 
 - `vesper-player-kit-ffmpeg-runtime` is the only Android AAR that packages
-  `libav*` plus enabled external runtime dependencies such as OpenSSL or
-  libxml2.
-- `vesper-player-kit-relay-ffmpeg` contains only the DLNA relay remux JNI layer.
+  `libav*` plus enabled external runtime dependencies such as libxml2.
+- `vesper-player-kit-external-playback` contains the Cast, DLNA, relay, and
+  relay FFmpeg adaptation APIs/JNI, but it must not carry its own `libav*`
+  copies.
 - `player-remux-ffmpeg` contains only the download remux plugin `.so`.
 
-Build the runtime with the enabled consumers so the resolver can union their
-requirements into one trimmed profile:
+Build the runtime through the root FFmpeg profile CLI:
 
 ```sh
-./scripts/vesper android ffmpeg-runtime download-remux relay-remux
+./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
 ```
 
 Hosts that consume prebuilt AARs do not need to wire these generation tasks into
@@ -262,7 +257,10 @@ free of FFmpeg runtime libraries.
 
 Adding a Media3 FFmpeg extension or bundling Vesper's optional FFmpeg runtime
 makes the host responsible for FFmpeg notices, corresponding source, configure
-flags, and LGPL relinking rights. See
+flags, and LGPL relinking rights. The default Vesper `download-remux`,
+`relay-remux`, and `default` profiles validate no-network/no-OpenSSL builds; any
+overlay that enables GPL, nonfree, OpenSSL, or network capability must be
+reviewed before release. See
 [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) before publishing such an
 artifact.
 

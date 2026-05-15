@@ -133,10 +133,11 @@ routing.
 
 ## Optional `player-remux-ffmpeg` Remux Plugin
 
-If the host app wants to export downloaded HLS, DASH, or FLV content to `.mp4`, it
-must embed the `player-remux-ffmpeg` dynamic library into the app bundle and pass the
-real `libvesper_remux_ffmpeg.dylib` path through
-`VesperDownloadConfiguration.pluginLibraryPaths`.
+If the host app wants to export downloaded HLS, DASH, or FLV content to `.mp4`,
+it must embed the optional `player-remux-ffmpeg` runtime and pass the real
+plugin framework binary path through
+`VesperDownloadConfiguration.pluginLibraryPaths`. FFmpeg is not embedded in the
+core iOS host kit.
 
 Typical setup:
 
@@ -148,13 +149,19 @@ Typical setup:
 
    For the native iOS host kit, replace the argument with `VesperPlayerKit.framework`.
 
-2. Resolve `libvesper_remux_ffmpeg.dylib` at runtime from `Bundle.main.privateFrameworksPath`
-   or the app `Frameworks` directory
-3. Pass the resolved absolute path into the download manager configuration
+2. For release downloads, embed and sign
+   `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` instead of shipping bare
+   `.dylib` files.
+3. Resolve the plugin framework binary at runtime from
+   `Bundle.main.privateFrameworksPath` or the app `Frameworks` directory.
+4. Pass the resolved absolute path into the download manager configuration.
 
-Apple FFmpeg prebuilts are also built on demand. The current scripts support
-coarse feature gates such as `VESPER_APPLE_FFMPEG_ENABLE_DASH=0`, but not
-fine-grained trimming by demuxer, muxer, protocol, or codec.
+Apple FFmpeg prebuilts are built on demand through the root profile CLI:
+
+```sh
+./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
+./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
+```
 
 Both iOS examples in this repository already embed the plugin that way:
 
@@ -164,10 +171,10 @@ Both iOS examples in this repository already embed the plugin that way:
 Note that iOS only allows signed dynamic libraries that are already inside the
 app bundle. Loading unsigned or remotely downloaded plugins is not supported.
 
-When the host bundles the plugin, treat the shipped `.dylib` files as FFmpeg
-redistribution. Include FFmpeg license text and notices, provide the exact
-corresponding FFmpeg source and configure flags, and preserve LGPL relinking
-rights. The repository-level release checklist is in
+When the host bundles the plugin, treat the optional XCFramework contents as
+FFmpeg redistribution. Include FFmpeg license text and notices, provide the
+exact corresponding FFmpeg source and configure flags, and preserve LGPL
+relinking rights. The repository-level release checklist is in
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
 ## Minimum Requirements
