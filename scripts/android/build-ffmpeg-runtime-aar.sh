@@ -17,6 +17,10 @@ FFMPEG_ARGS=()
 while IFS= read -r arg; do
   FFMPEG_ARGS+=("$arg")
 done < <("$ROOT_DIR/scripts/android/resolve-ffmpeg-runtime-requirements.sh" "$@")
+BUILD_CONSUMERS=("$@")
+if [[ ${#BUILD_CONSUMERS[@]} -eq 0 ]]; then
+  BUILD_CONSUMERS=(download-remux relay-remux)
+fi
 
 vesper_ffmpeg_parse_common_args android "${FFMPEG_ARGS[@]}"
 FFMPEG_OUTPUT_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-$(vesper_ffmpeg_default_output_dir android "$ROOT_DIR/third_party/ffmpeg/android")}}"
@@ -62,6 +66,13 @@ else
 fi
 
 "${GRADLE_CMD[@]}" -p "$PROJECT_DIR" :vesper-player-kit-ffmpeg-runtime:assembleRelease
+
+for consumer in "${BUILD_CONSUMERS[@]}"; do
+  if [[ "$consumer" == "relay-remux" ]]; then
+    "$ROOT_DIR/scripts/android/verify-relay-ffmpeg-runtime-no-network.sh" "${BUILD_CONSUMERS[@]}"
+    break
+  fi
+done
 
 echo
 echo "Built Android FFmpeg runtime AAR with consumers: ${*:-download-remux relay-remux}"

@@ -88,6 +88,16 @@ join_csv() {
   done
 }
 
+array_contains() {
+  local needle="$1"
+  local value
+  shift
+  for value in "$@"; do
+    [[ "$value" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
 consumers=("$@")
 if [[ ${#consumers[@]} -eq 0 ]]; then
   consumers=(download-remux relay-remux)
@@ -99,10 +109,23 @@ for consumer in "${consumers[@]}"; do
   load_manifest "$consumer"
 done
 
+tls_backend="none"
+for protocol in "${protocols[@]}"; do
+  case "$protocol" in
+    https|tls|rtmps|rtmpts)
+      tls_backend="openssl"
+      ;;
+  esac
+done
+
+enable_dash=0
+if array_contains dash "${demuxers[@]}"; then
+  enable_dash=1
+fi
+
 resolved_args=(
   "--ffmpeg-profile" "custom"
-  "--tls-backend" "openssl"
-  "--enable-dash"
+  "--tls-backend" "$tls_backend"
   "--enable-libraries" "$(join_csv "${libraries[@]}")"
   "--enable-demuxers" "$(join_csv "${demuxers[@]}")"
   "--enable-muxers" "$(join_csv "${muxers[@]}")"
@@ -110,6 +133,11 @@ resolved_args=(
   "--enable-parsers" "$(join_csv "${parsers[@]}")"
   "--enable-bsfs" "$(join_csv "${bsfs[@]}")"
 )
+if [[ "$enable_dash" == "1" ]]; then
+  resolved_args+=("--enable-dash")
+else
+  resolved_args+=("--disable-dash")
+fi
 
 if [[ "$PRINT_METADATA" == "1" ]]; then
   # shellcheck source=../lib/ffmpeg.sh
@@ -117,14 +145,14 @@ if [[ "$PRINT_METADATA" == "1" ]]; then
   vesper_ffmpeg_parse_common_args android "${resolved_args[@]}"
   printf 'consumers=%s\n' "${consumers[*]}"
   printf 'profile_hash=%s\n' "$(vesper_ffmpeg_profile_key android)"
-  printf 'libraries=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_FINAL_LIBRARIES[@]}")"
-  printf 'demuxers=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_FINAL_DEMUXERS[@]}")"
-  printf 'muxers=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_FINAL_MUXERS[@]}")"
-  printf 'protocols=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_FINAL_PROTOCOLS[@]}")"
-  printf 'parsers=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_FINAL_PARSERS[@]}")"
-  printf 'bitstream_filters=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_FINAL_BSFS[@]}")"
-  printf 'external_dependencies=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_EXTERNAL_DEPS[@]}")"
-  printf 'license_flags=%s\n' "$(vesper_ffmpeg_join_csv "${VESPER_FFMPEG_LICENSE_FLAGS[@]}")"
+  printf 'libraries=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_LIBRARIES[@]+"${VESPER_FFMPEG_FINAL_LIBRARIES[@]}"})"
+  printf 'demuxers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_DEMUXERS[@]+"${VESPER_FFMPEG_FINAL_DEMUXERS[@]}"})"
+  printf 'muxers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_MUXERS[@]+"${VESPER_FFMPEG_FINAL_MUXERS[@]}"})"
+  printf 'protocols=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_PROTOCOLS[@]+"${VESPER_FFMPEG_FINAL_PROTOCOLS[@]}"})"
+  printf 'parsers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_PARSERS[@]+"${VESPER_FFMPEG_FINAL_PARSERS[@]}"})"
+  printf 'bitstream_filters=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_BSFS[@]+"${VESPER_FFMPEG_FINAL_BSFS[@]}"})"
+  printf 'external_dependencies=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_EXTERNAL_DEPS[@]+"${VESPER_FFMPEG_EXTERNAL_DEPS[@]}"})"
+  printf 'license_flags=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_LICENSE_FLAGS[@]+"${VESPER_FFMPEG_LICENSE_FLAGS[@]}"})"
   exit 0
 fi
 

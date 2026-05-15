@@ -21,7 +21,7 @@ use jni::{Env, EnvUnowned};
 use serde::Deserialize;
 
 const PKG: &str = "io/github/ikaros/vesper/player/android/relay/ffmpeg";
-const MAX_MANIFEST_PROBE_BYTES: usize = 1024 * 1024;
+const HOST_PREPARED_DASH_INPUT_MODE: &str = "host_prepared_dash_fmp4_tracks";
 const DEFAULT_REMUX_TIMEOUT: Duration = Duration::from_secs(90);
 const MPEG_TS_RANGE_WAIT: Duration = Duration::from_secs(5);
 const HLS_SEGMENT_WAIT: Duration = Duration::from_secs(10);
@@ -32,20 +32,19 @@ const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/x-mpegURL";
 #[serde(rename_all = "camelCase")]
 struct OpenRequest {
     session_id: String,
-    source_uri: String,
+    #[serde(default)]
+    input_mode: Option<String>,
+    #[serde(default)]
+    tracks: Vec<PreparedTrack>,
+    #[serde(default)]
+    source_uri_hash: Option<String>,
     #[serde(default)]
     source_label: Option<String>,
-    #[serde(default)]
-    source_protocol: Option<String>,
     fallback_format: FallbackFormat,
     #[serde(default)]
     resource_path: String,
     #[serde(default)]
     range: Option<RangeRequest>,
-    #[serde(default)]
-    source_headers: HashMap<String, String>,
-    #[serde(default)]
-    request_headers: HashMap<String, String>,
     #[serde(default = "default_true")]
     enable_range_cache: bool,
     #[serde(default)]
@@ -54,6 +53,18 @@ struct OpenRequest {
     route_id: Option<String>,
     #[serde(default)]
     route_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedTrack {
+    kind: String,
+    pipe_path: String,
+    media_id: String,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    codecs: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -449,7 +460,6 @@ fn decode_request(env: &mut Env<'_>, request_json: JString<'_>) -> Result<OpenRe
 fn open_stream(request: &OpenRequest) -> Result<OpenedStream, RelayError> {
     validate_request(request)?;
     initialize_ffmpeg()?;
-    reject_encrypted_dash(request)?;
 
     let session = session_cache(request)?;
     match request.fallback_format {
@@ -485,13 +495,31 @@ fn validate_request(request: &OpenRequest) -> Result<(), RelayError> {
             Vec::<(String, String)>::new(),
         ));
     }
-    if request.source_uri.trim().is_empty() {
+    if request.input_mode.as_deref() != Some(HOST_PREPARED_DASH_INPUT_MODE) {
         return Err(relay_error(
-            "ffmpeg_open_failed",
-            400,
-            "Relay remux request did not include a source URI.",
+            "unsupported_dash_layout",
+            415,
+            "Relay remux requires host-prepared DASH fMP4 track input.",
             request.base_details(),
         ));
+    }
+    if request.tracks.is_empty() {
+        return Err(relay_error(
+            "unsupported_dash_layout",
+            415,
+            "Relay remux request did not include host-prepared tracks.",
+            request.base_details(),
+        ));
+    }
+    for track in &request.tracks {
+        if track.pipe_path.trim().is_empty() || track.kind.trim().is_empty() {
+            return Err(relay_error(
+                "unsupported_dash_layout",
+                415,
+                "Relay remux host-prepared track is missing a kind or FIFO path.",
+                request.base_details().into_iter().chain(track.details()),
+            ));
+        }
     }
     if matches!(request.fallback_format, FallbackFormat::MpegTs) && !request.enable_range_cache {
         return Err(relay_error(
@@ -554,7 +582,6 @@ fn ensure_mpeg_ts_cache(
     }
 
     ensure_muxer("mpegts", request)?;
-    ensure_demuxer_if_needed("dash", request)?;
     let output_path = root_dir.join("media.ts");
     let cache = Arc::new(GrowingCache::new(output_path));
     spawn_remux_worker(request.clone(), cache.clone(), OutputKind::MpegTs)?;
@@ -572,7 +599,6 @@ fn ensure_hls_cache(
     }
 
     ensure_muxer("hls", request)?;
-    ensure_demuxer_if_needed("dash", request)?;
     clean_hls_outputs(root_dir);
     let output_path = root_dir.join("playlist.m3u8");
     let cache = Arc::new(GrowingCache::new(output_path));
@@ -681,6 +707,21 @@ enum OutputKind {
     Hls,
 }
 
+struct PreparedInput {
+    context: format::context::Input,
+    track: PreparedTrack,
+    stream_mapping: Vec<i32>,
+    input_time_bases: Vec<Rational>,
+    pending: Option<PendingPacket>,
+    eof: bool,
+}
+
+struct PendingPacket {
+    packet: ffmpeg::Packet,
+    input_stream_index: usize,
+    sort_ts_us: i128,
+}
+
 fn remux_to_file(
     request: &OpenRequest,
     output_path: &Path,
@@ -702,20 +743,6 @@ fn remux_to_file(
     }
     let _ = fs::remove_file(output_path);
 
-    let input_options = input_dictionary(request);
-    let mut input_context = format::input_with_dictionary(&request.source_uri, input_options)
-        .map_err(|error| {
-            relay_error(
-                "ffmpeg_open_failed",
-                503,
-                "Failed to open DASH source with FFmpeg.",
-                request
-                    .base_details()
-                    .into_iter()
-                    .chain([("ffmpegError".to_owned(), error.to_string())]),
-            )
-        })?;
-
     let output_path_string = output_path.to_string_lossy().into_owned();
     let mut output_context = match kind {
         OutputKind::MpegTs => format::output_as(&output_path_string, "mpegts"),
@@ -734,39 +761,45 @@ fn remux_to_file(
     })?;
     enable_incremental_output(&mut output_context);
 
-    let mut stream_mapping = vec![-1; input_context.nb_streams() as usize];
-    let mut input_time_bases = vec![Rational(0, 1); input_context.nb_streams() as usize];
+    let mut inputs = open_prepared_inputs(request)?;
     let mut output_stream_index = 0;
 
-    for (input_stream_index, input_stream) in input_context.streams().enumerate() {
-        let medium = input_stream.parameters().medium();
-        if medium != media::Type::Audio && medium != media::Type::Video {
-            continue;
-        }
+    for input in &mut inputs {
+        let mut stream_mapping = vec![-1; input.context.nb_streams() as usize];
+        let mut input_time_bases = vec![Rational(0, 1); input.context.nb_streams() as usize];
+        for (input_stream_index, input_stream) in input.context.streams().enumerate() {
+            let medium = input_stream.parameters().medium();
+            if medium != media::Type::Audio && medium != media::Type::Video {
+                continue;
+            }
 
-        stream_mapping[input_stream_index] = output_stream_index;
-        input_time_bases[input_stream_index] = input_stream.time_base();
-        output_stream_index += 1;
+            stream_mapping[input_stream_index] = output_stream_index;
+            input_time_bases[input_stream_index] = input_stream.time_base();
+            output_stream_index += 1;
 
-        let mut output_stream = output_context
-            .add_stream(encoder::find(codec::Id::None))
-            .map_err(|error| {
-                relay_error(
-                    "ffmpeg_open_failed",
-                    503,
-                    "Failed to add FFmpeg relay output stream.",
-                    request
-                        .base_details()
-                        .into_iter()
-                        .chain([("ffmpegError".to_owned(), error.to_string())]),
-                )
-            })?;
-        output_stream.set_parameters(input_stream.parameters());
-        // SAFETY: FFmpeg requires codec_tag to be cleared after copying codec
-        // parameters into a different muxer; the stream owns these parameters.
-        unsafe {
-            (*output_stream.parameters().as_mut_ptr()).codec_tag = 0;
+            let mut output_stream = output_context
+                .add_stream(encoder::find(codec::Id::None))
+                .map_err(|error| {
+                    relay_error(
+                        "ffmpeg_open_failed",
+                        503,
+                        "Failed to add FFmpeg relay output stream.",
+                        request
+                            .base_details()
+                            .into_iter()
+                            .chain(input.track.details())
+                            .chain([("ffmpegError".to_owned(), error.to_string())]),
+                    )
+                })?;
+            output_stream.set_parameters(input_stream.parameters());
+            // SAFETY: FFmpeg requires codec_tag to be cleared after copying codec
+            // parameters into a different muxer; the stream owns these parameters.
+            unsafe {
+                (*output_stream.parameters().as_mut_ptr()).codec_tag = 0;
+            }
         }
+        input.stream_mapping = stream_mapping;
+        input.input_time_bases = input_time_bases;
     }
 
     if output_stream_index == 0 {
@@ -778,7 +811,9 @@ fn remux_to_file(
         ));
     }
 
-    output_context.set_metadata(input_context.metadata().to_owned());
+    if let Some(first_input) = inputs.first() {
+        output_context.set_metadata(first_input.context.metadata().to_owned());
+    }
     match kind {
         OutputKind::MpegTs => output_context.write_header(),
         OutputKind::Hls => {
@@ -813,45 +848,40 @@ fn remux_to_file(
         cache.refresh_available_len();
     }
 
-    for (stream, mut packet) in input_context.packets() {
-        let input_stream_index = stream.index();
-        let output_stream_index = stream_mapping[input_stream_index];
-        if output_stream_index < 0 {
-            continue;
-        }
-        let output_stream = output_context
-            .stream(output_stream_index as usize)
-            .ok_or_else(|| {
-                relay_error(
-                    "ffmpeg_open_failed",
-                    503,
-                    "FFmpeg relay output stream disappeared during remux.",
-                    request.base_details(),
-                )
-            })?;
-        packet.rescale_ts(
-            input_time_bases[input_stream_index],
-            output_stream.time_base(),
-        );
-        packet.set_position(-1);
-        packet.set_stream(output_stream_index as usize);
-        packet
-            .write_interleaved(&mut output_context)
-            .map_err(|error| {
-                relay_error(
-                    "ffmpeg_open_failed",
-                    503,
-                    "Failed to write FFmpeg relay packet.",
-                    request
-                        .base_details()
-                        .into_iter()
-                        .chain([("ffmpegError".to_owned(), error.to_string())]),
-                )
-            })?;
+    let output_time_bases = (0..output_stream_index)
+        .map(|index| {
+            output_context
+                .stream(index as usize)
+                .map(|stream| stream.time_base())
+                .unwrap_or(Rational(0, 1))
+        })
+        .collect::<Vec<_>>();
+
+    for input in &mut inputs {
+        read_next_pending_packet(request, input)?;
+    }
+
+    while let Some(input_index) = select_next_input(&inputs) {
+        let pending = inputs[input_index].pending.take().ok_or_else(|| {
+            relay_error(
+                "ffmpeg_open_failed",
+                503,
+                "FFmpeg relay packet scheduler lost a pending packet.",
+                request.base_details(),
+            )
+        })?;
+        write_pending_packet(
+            request,
+            &mut inputs[input_index],
+            pending,
+            &output_time_bases,
+            &mut output_context,
+        )?;
         flush_output_context(&mut output_context);
         if let Some(cache) = progress_cache {
             cache.refresh_available_len();
         }
+        read_next_pending_packet(request, &mut inputs[input_index])?;
     }
 
     output_context.write_trailer().map_err(|error| {
@@ -870,6 +900,142 @@ fn remux_to_file(
         cache.refresh_available_len();
     }
     Ok(())
+}
+
+fn open_prepared_inputs(request: &OpenRequest) -> Result<Vec<PreparedInput>, RelayError> {
+    let mut inputs = Vec::with_capacity(request.tracks.len());
+    for track in &request.tracks {
+        let input_context = format::input(&track.pipe_path).map_err(|error| {
+            relay_error(
+                "ffmpeg_open_failed",
+                503,
+                "Failed to open host-prepared DASH track with FFmpeg.",
+                request
+                    .base_details()
+                    .into_iter()
+                    .chain(track.details())
+                    .chain([("ffmpegError".to_owned(), error.to_string())]),
+            )
+        })?;
+        inputs.push(PreparedInput {
+            context: input_context,
+            track: track.clone(),
+            stream_mapping: Vec::new(),
+            input_time_bases: Vec::new(),
+            pending: None,
+            eof: false,
+        });
+    }
+    Ok(inputs)
+}
+
+fn read_next_pending_packet(
+    request: &OpenRequest,
+    input: &mut PreparedInput,
+) -> Result<(), RelayError> {
+    if input.eof {
+        return Ok(());
+    }
+
+    loop {
+        let mut packet = ffmpeg::Packet::empty();
+        match packet.read(&mut input.context) {
+            Ok(()) => {
+                let input_stream_index = packet.stream();
+                if input_stream_index >= input.stream_mapping.len() {
+                    continue;
+                }
+                if input.stream_mapping[input_stream_index] < 0 {
+                    continue;
+                }
+                let sort_ts_us =
+                    packet_sort_timestamp_us(&packet, input.input_time_bases[input_stream_index]);
+                input.pending = Some(PendingPacket {
+                    packet,
+                    input_stream_index,
+                    sort_ts_us,
+                });
+                return Ok(());
+            }
+            Err(ffmpeg::Error::Eof) => {
+                input.eof = true;
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(relay_error(
+                    "ffmpeg_open_failed",
+                    503,
+                    "Failed to read host-prepared DASH packet with FFmpeg.",
+                    request
+                        .base_details()
+                        .into_iter()
+                        .chain(input.track.details())
+                        .chain([("ffmpegError".to_owned(), error.to_string())]),
+                ));
+            }
+        }
+    }
+}
+
+fn select_next_input(inputs: &[PreparedInput]) -> Option<usize> {
+    inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, input)| {
+            input
+                .pending
+                .as_ref()
+                .map(|pending| (index, pending.sort_ts_us))
+        })
+        .min_by_key(|(index, sort_ts_us)| (*sort_ts_us, *index))
+        .map(|(index, _)| index)
+}
+
+fn write_pending_packet(
+    request: &OpenRequest,
+    input: &mut PreparedInput,
+    pending: PendingPacket,
+    output_time_bases: &[Rational],
+    output_context: &mut format::context::Output,
+) -> Result<(), RelayError> {
+    let output_stream_index = input.stream_mapping[pending.input_stream_index];
+    if output_stream_index < 0 {
+        return Ok(());
+    }
+    let output_stream_index = output_stream_index as usize;
+    let output_time_base = output_time_bases
+        .get(output_stream_index)
+        .copied()
+        .unwrap_or(Rational(0, 1));
+    let mut packet = pending.packet;
+    packet.rescale_ts(
+        input.input_time_bases[pending.input_stream_index],
+        output_time_base,
+    );
+    packet.set_position(-1);
+    packet.set_stream(output_stream_index);
+    packet.write_interleaved(output_context).map_err(|error| {
+        relay_error(
+            "ffmpeg_open_failed",
+            503,
+            "Failed to write FFmpeg relay packet.",
+            request
+                .base_details()
+                .into_iter()
+                .chain(input.track.details())
+                .chain([("ffmpegError".to_owned(), error.to_string())]),
+        )
+    })
+}
+
+fn packet_sort_timestamp_us(packet: &ffmpeg::Packet, time_base: Rational) -> i128 {
+    let timestamp = packet.dts().or_else(|| packet.pts()).unwrap_or(0) as i128;
+    let numerator = time_base.0 as i128;
+    let denominator = (time_base.1 as i128).max(1);
+    timestamp
+        .saturating_mul(numerator)
+        .saturating_mul(1_000_000)
+        / denominator
 }
 
 fn enable_incremental_output(output_context: &mut format::context::Output) {
@@ -1521,185 +1687,6 @@ fn ensure_muxer(name: &'static str, request: &OpenRequest) -> Result<(), RelayEr
     Ok(())
 }
 
-fn ensure_demuxer_if_needed(name: &'static str, request: &OpenRequest) -> Result<(), RelayError> {
-    if !request
-        .source_protocol
-        .as_deref()
-        .is_some_and(|protocol| protocol.eq_ignore_ascii_case("dash"))
-        && !request.source_uri.to_ascii_lowercase().contains(".mpd")
-    {
-        return Ok(());
-    }
-    let c_name = CString::new(name).map_err(|_| {
-        relay_error(
-            "ffmpeg_open_failed",
-            503,
-            "FFmpeg demuxer name is invalid.",
-            request.base_details(),
-        )
-    })?;
-    // SAFETY: `c_name` is a live NUL-terminated string and FFmpeg only reads
-    // it during this lookup.
-    let demuxer = unsafe { ffmpeg::ffi::av_find_input_format(c_name.as_ptr()) };
-    if demuxer.is_null() {
-        return Err(relay_error(
-            "ffmpeg_open_failed",
-            503,
-            "Required FFmpeg DASH demuxer is missing from the runtime profile.",
-            request
-                .base_details()
-                .into_iter()
-                .chain([("demuxer".to_owned(), name.to_owned())]),
-        ));
-    }
-    Ok(())
-}
-
-fn reject_encrypted_dash(request: &OpenRequest) -> Result<(), RelayError> {
-    let looks_like_dash = request
-        .source_protocol
-        .as_deref()
-        .is_some_and(|protocol| protocol.eq_ignore_ascii_case("dash"))
-        || request.source_uri.to_ascii_lowercase().contains(".mpd");
-    if !looks_like_dash {
-        return Ok(());
-    }
-
-    let manifest = fetch_text_resource(request)?;
-    let normalized = manifest.to_ascii_lowercase();
-    if normalized.contains("<contentprotection")
-        || normalized.contains("cenc:default_kid")
-        || normalized.contains("urn:mpeg:dash:mp4protection")
-        || normalized.contains("com.widevine.alpha")
-        || normalized.contains("com.microsoft.playready")
-    {
-        return Err(relay_error(
-            "unsupported_encrypted_dash",
-            415,
-            "Encrypted DASH content cannot be remuxed for DLNA fallback.",
-            request.base_details(),
-        ));
-    }
-    Ok(())
-}
-
-fn fetch_text_resource(request: &OpenRequest) -> Result<String, RelayError> {
-    if !request.source_uri.starts_with("http://") && !request.source_uri.starts_with("https://") {
-        return fs::read_to_string(&request.source_uri).map_err(|error| {
-            relay_error(
-                "ffmpeg_open_failed",
-                503,
-                "Failed to read DASH manifest for encryption detection.",
-                request
-                    .base_details()
-                    .into_iter()
-                    .chain([("ioError".to_owned(), error.to_string())]),
-            )
-        });
-    }
-
-    let uri_cstr = CString::new(request.source_uri.as_str()).map_err(|_| {
-        relay_error(
-            "ffmpeg_open_failed",
-            400,
-            "Source URI contained an interior NUL byte.",
-            request.base_details(),
-        )
-    })?;
-    let mut io_context = std::ptr::null_mut();
-    let options = input_dictionary(request);
-    // SAFETY: the dictionary is passed to FFmpeg exactly once and reclaimed
-    // with `Dictionary::own` immediately after `avio_open2` returns.
-    let mut raw_options = unsafe { options.disown() };
-
-    // SAFETY: all pointers passed to FFmpeg are either owned local variables or
-    // FFmpeg-allocated output slots. They remain valid for the duration of the
-    // synchronous avio open/read/close sequence below.
-    unsafe {
-        let open_result = ffmpeg::ffi::avio_open2(
-            &mut io_context,
-            uri_cstr.as_ptr(),
-            ffmpeg::ffi::AVIO_FLAG_READ,
-            std::ptr::null(),
-            &mut raw_options,
-        );
-        let _ = ffmpeg::Dictionary::own(raw_options);
-        if open_result < 0 {
-            return Err(relay_error(
-                "ffmpeg_open_failed",
-                503,
-                "Failed to open DASH manifest for encryption detection.",
-                request.base_details().into_iter().chain([(
-                    "ffmpegError".to_owned(),
-                    ffmpeg::Error::from(open_result).to_string(),
-                )]),
-            ));
-        }
-
-        let mut bytes = Vec::new();
-        let mut buffer = [0u8; 8192];
-        while bytes.len() < MAX_MANIFEST_PROBE_BYTES {
-            let read =
-                ffmpeg::ffi::avio_read(io_context, buffer.as_mut_ptr().cast(), buffer.len() as i32);
-            if read == 0 || read == ffmpeg::ffi::AVERROR_EOF {
-                break;
-            }
-            if read < 0 {
-                ffmpeg::ffi::avio_closep(&mut io_context);
-                return Err(relay_error(
-                    "ffmpeg_open_failed",
-                    503,
-                    "Failed to read DASH manifest for encryption detection.",
-                    request.base_details().into_iter().chain([(
-                        "ffmpegError".to_owned(),
-                        ffmpeg::Error::from(read).to_string(),
-                    )]),
-                ));
-            }
-            bytes.extend_from_slice(&buffer[..read as usize]);
-        }
-        ffmpeg::ffi::avio_closep(&mut io_context);
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }
-}
-
-fn input_dictionary(request: &OpenRequest) -> ffmpeg::Dictionary<'static> {
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("rw_timeout", "15000000");
-    options.set("reconnect", "1");
-    options.set("reconnect_streamed", "1");
-    options.set("reconnect_delay_max", "2");
-
-    let headers = http_headers_for_ffmpeg(request);
-    if !headers.is_empty() {
-        options.set("headers", &headers);
-    }
-    options
-}
-
-fn http_headers_for_ffmpeg(request: &OpenRequest) -> String {
-    let mut headers = String::new();
-    for (name, value) in request
-        .source_headers
-        .iter()
-        .chain(request.request_headers.iter())
-    {
-        if name.is_empty()
-            || value.is_empty()
-            || name.eq_ignore_ascii_case("range")
-            || name.eq_ignore_ascii_case("host")
-            || name.eq_ignore_ascii_case("connection")
-        {
-            continue;
-        }
-        headers.push_str(name);
-        headers.push_str(": ");
-        headers.push_str(value);
-        headers.push_str("\r\n");
-    }
-    headers
-}
-
 fn open_result_object<'local>(
     env: &mut Env<'local>,
     fields: OpenResultFields<'_>,
@@ -1839,8 +1826,16 @@ impl OpenRequest {
                 format!("{:?}", self.fallback_format),
             ),
             ("resourcePath".to_owned(), self.resource_path.clone()),
-            ("sourceUri".to_owned(), self.source_uri.clone()),
+            (
+                "inputMode".to_owned(),
+                self.input_mode
+                    .clone()
+                    .unwrap_or_else(|| "missing".to_owned()),
+            ),
         ];
+        if let Some(source_uri_hash) = self.source_uri_hash.as_ref() {
+            details.push(("sourceUriHash".to_owned(), source_uri_hash.clone()));
+        }
         if let Some(label) = self.source_label.as_ref() {
             details.push(("sourceLabel".to_owned(), label.clone()));
         }
@@ -1849,6 +1844,23 @@ impl OpenRequest {
         }
         if let Some(route_name) = self.route_name.as_ref() {
             details.push(("routeName".to_owned(), route_name.clone()));
+        }
+        details
+    }
+}
+
+impl PreparedTrack {
+    fn details(&self) -> Vec<(String, String)> {
+        let mut details = vec![
+            ("trackKind".to_owned(), self.kind.clone()),
+            ("mediaId".to_owned(), self.media_id.clone()),
+            ("pipePath".to_owned(), self.pipe_path.clone()),
+        ];
+        if let Some(mime_type) = self.mime_type.as_ref() {
+            details.push(("mimeType".to_owned(), mime_type.clone()));
+        }
+        if let Some(codecs) = self.codecs.as_ref() {
+            details.push(("codecs".to_owned(), codecs.clone()));
         }
         details
     }
@@ -1879,7 +1891,7 @@ fn method_sig(value: &str) -> RuntimeMethodSignature {
 
 #[allow(dead_code)]
 fn ffmpeg_error_text(code: i32) -> String {
-    let mut buffer = [0i8; 256];
+    let mut buffer = [0 as std::ffi::c_char; 256];
     // SAFETY: `buffer` is a valid writable stack buffer and FFmpeg writes a
     // NUL-terminated error string of at most the provided length.
     let result = unsafe { ffmpeg::ffi::av_strerror(code, buffer.as_mut_ptr(), buffer.len()) };
@@ -1901,9 +1913,10 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        FallbackFormat, GrowingCache, OpenRequest, RangeRequest, cleanup_stale_caches_in,
-        hls_playlist_snapshot, open_growing_cache_file, open_growing_cache_range, resolve_range,
-        safe_file_component, streams,
+        FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, OpenRequest, PreparedTrack,
+        RangeRequest, cleanup_stale_caches_in, hls_playlist_snapshot, open_growing_cache_file,
+        open_growing_cache_range, packet_sort_timestamp_us, resolve_range, safe_file_component,
+        streams, validate_request,
     };
 
     #[test]
@@ -2097,17 +2110,68 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn host_prepared_request_json_round_trips() {
+        let request: OpenRequest = serde_json::from_str(
+            r#"{
+              "sessionId":"session",
+              "inputMode":"host_prepared_dash_fmp4_tracks",
+              "tracks":[{"kind":"video","pipePath":"/tmp/video.fifo","mediaId":"video0","mimeType":"video/mp4","codecs":"avc1.640028"}],
+              "sourceUriHash":"abc123",
+              "fallbackFormat":"mpeg_ts",
+              "resourcePath":"Episode.ts",
+              "enableRangeCache":true
+            }"#,
+        )
+        .expect("request");
+
+        assert_eq!(
+            request.input_mode.as_deref(),
+            Some(HOST_PREPARED_DASH_INPUT_MODE)
+        );
+        assert_eq!(request.tracks.len(), 1);
+        assert_eq!(request.tracks[0].pipe_path, "/tmp/video.fifo");
+        validate_request(&request).expect("valid");
+    }
+
+    #[test]
+    fn rejects_missing_host_prepared_tracks() {
+        let mut request = test_request(None);
+        request.tracks.clear();
+
+        let error = validate_request(&request).expect_err("invalid");
+
+        assert_eq!(error.code, "unsupported_dash_layout");
+    }
+
+    #[test]
+    fn packet_sort_timestamp_uses_dts_before_pts() {
+        let mut packet = ffmpeg_next::Packet::empty();
+        packet.set_pts(Some(90));
+        packet.set_dts(Some(45));
+
+        assert_eq!(
+            packet_sort_timestamp_us(&packet, ffmpeg_next::Rational(1, 90)),
+            500_000
+        );
+    }
+
     fn test_request(range: Option<RangeRequest>) -> OpenRequest {
         OpenRequest {
             session_id: "session".to_owned(),
-            source_uri: "https://example.com/video.mpd".to_owned(),
+            input_mode: Some(HOST_PREPARED_DASH_INPUT_MODE.to_owned()),
+            tracks: vec![PreparedTrack {
+                kind: "video".to_owned(),
+                pipe_path: "/tmp/video.fifo".to_owned(),
+                media_id: "video0".to_owned(),
+                mime_type: Some("video/mp4".to_owned()),
+                codecs: Some("avc1.640028".to_owned()),
+            }],
+            source_uri_hash: Some("sourcehash".to_owned()),
             source_label: Some("Episode".to_owned()),
-            source_protocol: Some("dash".to_owned()),
             fallback_format: FallbackFormat::MpegTs,
             resource_path: "Episode.ts".to_owned(),
             range,
-            source_headers: Default::default(),
-            request_headers: Default::default(),
             enable_range_cache: true,
             debug_diagnostics: false,
             route_id: Some("route".to_owned()),

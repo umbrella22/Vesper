@@ -26,6 +26,13 @@ PROFILE_HASH="$(vesper_ffmpeg_profile_key android)"
 
 if [[ "${VESPER_ANDROID_SKIP_FFMPEG_RUNTIME_BUILD:-0}" != "1" ]]; then
   "$ROOT_DIR/scripts/android/build-ffmpeg-runtime-aar.sh" "${CONSUMERS[@]}"
+else
+  for consumer in "${CONSUMERS[@]}"; do
+    if [[ "$consumer" == "relay-remux" ]]; then
+      "$ROOT_DIR/scripts/android/verify-relay-ffmpeg-runtime-no-network.sh" "${CONSUMERS[@]}"
+      break
+    fi
+  done
 fi
 
 ANDROID_SDK_ROOT="$(vesper_android_sdk_root)"

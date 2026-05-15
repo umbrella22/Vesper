@@ -34,6 +34,7 @@ data class VesperRelayFormatAdaptationRequest(
     val requestHeaders: Map<String, String>,
     val enableRangeCache: Boolean,
     val debugDiagnostics: Boolean,
+    val headOnly: Boolean = false,
     val routeId: String? = null,
     val routeName: String? = null,
 )

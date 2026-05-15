@@ -271,6 +271,7 @@ class VesperRelayServer @JvmOverloads constructor(
             requestHeaders = headers,
             enableRangeCache = adaptation.config.enableRangeCache,
             debugDiagnostics = adaptation.config.debugDiagnostics,
+            headOnly = headOnly,
             routeId = adaptation.routeId,
             routeName = adaptation.routeName,
         )
@@ -293,10 +294,12 @@ class VesperRelayServer @JvmOverloads constructor(
                     adapted.status.reasonPhrase(),
                     responseHeaders,
                 )
+                var clientCancelled = false
                 if (!headOnly) {
                     try {
                         adapted.input.use { input -> input.copyTo(output) }
                     } catch (error: Exception) {
+                        clientCancelled = true
                         emitDiagnostic(
                             VesperRelayDiagnostic(
                                 code = "client_cancelled",
@@ -306,7 +309,9 @@ class VesperRelayServer @JvmOverloads constructor(
                             ),
                         )
                     } finally {
-                        runCatching { adapted.closeable?.close() }
+                        if (clientCancelled) {
+                            runCatching { adapted.closeable?.close() }
+                        }
                     }
                 } else {
                     runCatching { adapted.input.close() }
