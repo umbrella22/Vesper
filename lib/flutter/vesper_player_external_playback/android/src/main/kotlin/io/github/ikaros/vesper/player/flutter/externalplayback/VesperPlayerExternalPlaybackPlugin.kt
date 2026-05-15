@@ -140,12 +140,14 @@ class VesperPlayerExternalPlaybackPlugin :
                 else -> result.notImplemented()
             }
         }.onFailure { error ->
+            val message = error.message ?: "External playback operation failed."
             result.error(
                 "vesper_external_playback_error",
-                error.message ?: "External playback operation failed.",
+                message,
                 mapOf(
-                    "message" to (error.message ?: "External playback operation failed."),
+                    "message" to message,
                     "category" to "platform",
+                    "exception" to error.javaClass.name,
                     "retriable" to false,
                 ),
             )

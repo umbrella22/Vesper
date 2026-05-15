@@ -5,6 +5,8 @@ import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import java.io.StringReader
 import java.net.HttpURLConnection
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 
@@ -170,6 +172,22 @@ class VesperDlnaSoapClient(
         service: VesperDlnaService,
         action: String,
         arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse =
+        runCatching {
+            runBlocking(Dispatchers.IO) {
+                postBlocking(service, action, arguments)
+            }
+        }.getOrElse { error ->
+            VesperDlnaSoapResponse(
+                status = 0,
+                body = error.toDlnaControlFailureMessage(action, service.controlUrl.toString()),
+            )
+        }
+
+    private fun postBlocking(
+        service: VesperDlnaService,
+        action: String,
+        arguments: Map<String, String>,
     ): VesperDlnaSoapResponse {
         val body = VesperDlnaSoapEnvelopeBuilder.build(action, service.serviceType, arguments)
         val connection = service.controlUrl.openConnection() as HttpURLConnection
@@ -192,6 +210,11 @@ class VesperDlnaSoapClient(
 
     private fun missingService(name: String): VesperDlnaSoapResponse =
         VesperDlnaSoapResponse(0, "$name service is not available.")
+}
+
+private fun Throwable.toDlnaControlFailureMessage(action: String, controlUrl: String): String {
+    val cause = message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName
+    return "DLNA $action request failed for $controlUrl: $cause"
 }
 
 private fun Long.toDlnaTime(): String {
