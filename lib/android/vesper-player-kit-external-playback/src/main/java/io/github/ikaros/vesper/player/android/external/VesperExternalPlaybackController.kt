@@ -215,6 +215,22 @@ class VesperExternalPlaybackController(context: Context) {
         }
     }
 
+    suspend fun loadAsync(
+        item: VesperExternalPlaybackMediaItem,
+        startPositionMs: Long = 0,
+        autoplay: Boolean = true,
+    ): VesperExternalPlaybackResult {
+        checkNotReleased()
+        if (item.sources.isEmpty()) {
+            return VesperExternalPlaybackResult.Unsupported("No media sources were provided.")
+        }
+        return when (activeRouteId) {
+            CAST_ROUTE_ID -> loadCast(item, startPositionMs, autoplay)
+            null -> VesperExternalPlaybackResult.Unavailable("No external playback route is connected.")
+            else -> loadDlnaAsync(item, startPositionMs, autoplay)
+        }
+    }
+
     fun play(): VesperExternalPlaybackResult {
         checkNotReleased()
         return when (activeRouteId) {
@@ -232,6 +248,23 @@ class VesperExternalPlaybackController(context: Context) {
         }
     }
 
+    suspend fun playAsync(): VesperExternalPlaybackResult {
+        checkNotReleased()
+        return when (activeRouteId) {
+            CAST_ROUTE_ID -> castController.play().toExternalResult(CAST_ROUTE_ID)
+            null -> VesperExternalPlaybackResult.Unavailable("No external playback route is connected.")
+            else -> {
+                val session = dlnaSession
+                    ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
+                val result = session.playAsync().toExternalResult(session.device.routeId)
+                if (result is VesperExternalPlaybackResult.Success) {
+                    emitEvent(VesperExternalPlaybackEventKind.Playing, session.device.routeId, session.device.friendlyName)
+                }
+                result
+            }
+        }
+    }
+
     fun pause(): VesperExternalPlaybackResult {
         checkNotReleased()
         return when (activeRouteId) {
@@ -241,6 +274,23 @@ class VesperExternalPlaybackController(context: Context) {
                 val session = dlnaSession
                     ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
                 val result = session.pause().toExternalResult(session.device.routeId)
+                if (result is VesperExternalPlaybackResult.Success) {
+                    emitEvent(VesperExternalPlaybackEventKind.Paused, session.device.routeId, session.device.friendlyName)
+                }
+                result
+            }
+        }
+    }
+
+    suspend fun pauseAsync(): VesperExternalPlaybackResult {
+        checkNotReleased()
+        return when (activeRouteId) {
+            CAST_ROUTE_ID -> castController.pause().toExternalResult(CAST_ROUTE_ID)
+            null -> VesperExternalPlaybackResult.Unavailable("No external playback route is connected.")
+            else -> {
+                val session = dlnaSession
+                    ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
+                val result = session.pauseAsync().toExternalResult(session.device.routeId)
                 if (result is VesperExternalPlaybackResult.Success) {
                     emitEvent(VesperExternalPlaybackEventKind.Paused, session.device.routeId, session.device.friendlyName)
                 }
@@ -267,6 +317,24 @@ class VesperExternalPlaybackController(context: Context) {
         return result
     }
 
+    suspend fun stopAsync(): VesperExternalPlaybackResult {
+        checkNotReleased()
+        val result = when (activeRouteId) {
+            CAST_ROUTE_ID -> castController.stop().toExternalResult(CAST_ROUTE_ID)
+            null -> VesperExternalPlaybackResult.Unavailable("No external playback route is connected.")
+            else -> {
+                val session = dlnaSession
+                    ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
+                session.stopAsync().toExternalResult(session.device.routeId)
+            }
+        }
+        if (result is VesperExternalPlaybackResult.Success) {
+            invalidateActiveRelay()
+            emitEvent(VesperExternalPlaybackEventKind.Stopped, activeRouteId)
+        }
+        return result
+    }
+
     fun seekTo(positionMs: Long): VesperExternalPlaybackResult {
         checkNotReleased()
         return when (activeRouteId) {
@@ -280,6 +348,19 @@ class VesperExternalPlaybackController(context: Context) {
         }
     }
 
+    suspend fun seekToAsync(positionMs: Long): VesperExternalPlaybackResult {
+        checkNotReleased()
+        return when (activeRouteId) {
+            CAST_ROUTE_ID -> castController.seekTo(positionMs).toExternalResult(CAST_ROUTE_ID)
+            null -> VesperExternalPlaybackResult.Unavailable("No external playback route is connected.")
+            else -> {
+                val session = dlnaSession
+                    ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
+                session.seekToAsync(positionMs).toExternalResult(session.device.routeId)
+            }
+        }
+    }
+
     fun disconnect(): VesperExternalPlaybackResult {
         checkNotReleased()
         val routeId = activeRouteId
@@ -289,6 +370,26 @@ class VesperExternalPlaybackController(context: Context) {
                     castController.stop()
                 } else {
                     dlnaSession?.stop()
+                }
+            }
+        }
+        invalidateActiveRelay()
+        activeRouteId = null
+        dlnaSession = null
+        emitRoutes()
+        emitEvent(VesperExternalPlaybackEventKind.RouteDisconnected, routeId)
+        return VesperExternalPlaybackResult.Success(routeId = routeId)
+    }
+
+    suspend fun disconnectAsync(): VesperExternalPlaybackResult {
+        checkNotReleased()
+        val routeId = activeRouteId
+        if (routeId != null) {
+            runCatching {
+                if (routeId == CAST_ROUTE_ID) {
+                    castController.stop()
+                } else {
+                    dlnaSession?.stopAsync()
                 }
             }
         }
@@ -371,6 +472,40 @@ class VesperExternalPlaybackController(context: Context) {
             routeName = session.device.friendlyName,
         ) ?: return lastPrepareFailure
         val dlnaResult = session.load(
+            source = prepared.source,
+            metadata = item.metadata,
+            startPositionMs = startPositionMs,
+            autoplay = autoplay,
+        ).toExternalResult(session.device.routeId, prepared.relayEnabled)
+        if (dlnaResult is VesperExternalPlaybackResult.Success) {
+            prepared.relayToken?.let(activeRelayTokens::add)
+            emitEvent(VesperExternalPlaybackEventKind.Loaded, session.device.routeId, session.device.friendlyName)
+        }
+        return dlnaResult
+    }
+
+    private suspend fun loadDlnaAsync(
+        item: VesperExternalPlaybackMediaItem,
+        startPositionMs: Long,
+        autoplay: Boolean,
+    ): VesperExternalPlaybackResult {
+        val session = dlnaSession
+            ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
+        val protocolInfo = runCatching { session.protocolInfoAsync() }.getOrDefault("")
+        val prepared = prepareSource(
+            item = item,
+            target = VesperExternalPlaybackTarget.Dlna,
+            capabilities = VesperExternalRouteCapabilities(
+                supportsProgressive = true,
+                supportsHls = VesperDlnaProtocolInfoParser.supportsHls(protocolInfo),
+                supportsDash = VesperDlnaProtocolInfoParser.supportsDash(protocolInfo),
+                supportsMpegTs = protocolInfo.isBlank() ||
+                    VesperDlnaProtocolInfoParser.supportsMpegTs(protocolInfo),
+            ),
+            routeId = session.device.routeId,
+            routeName = session.device.friendlyName,
+        ) ?: return lastPrepareFailure
+        val dlnaResult = session.loadAsync(
             source = prepared.source,
             metadata = item.metadata,
             startPositionMs = startPositionMs,

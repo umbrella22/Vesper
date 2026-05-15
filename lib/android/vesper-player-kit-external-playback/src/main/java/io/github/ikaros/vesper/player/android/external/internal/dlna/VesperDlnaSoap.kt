@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 
@@ -102,22 +103,40 @@ class VesperDlnaSoapClient(
         return post(
             service = service,
             action = "SetAVTransportURI",
-            arguments = mapOf(
-                "InstanceID" to "0",
-                "CurrentURI" to source.uri,
-                "CurrentURIMetaData" to VesperDlnaDidlBuilder.build(source, metadata),
-            ),
+            arguments = avTransportUriArguments(source, metadata),
+        )
+    }
+
+    suspend fun setAvTransportUriAsync(
+        device: VesperDlnaDevice,
+        source: VesperPlayerSource,
+        metadata: VesperSystemPlaybackMetadata?,
+    ): VesperDlnaSoapResponse {
+        val service = device.avTransport ?: return missingService("AVTransport")
+        return postAsync(
+            service = service,
+            action = "SetAVTransportURI",
+            arguments = avTransportUriArguments(source, metadata),
         )
     }
 
     fun play(device: VesperDlnaDevice): VesperDlnaSoapResponse =
         avTransport(device, "Play", mapOf("InstanceID" to "0", "Speed" to "1"))
 
+    suspend fun playAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransportAsync(device, "Play", mapOf("InstanceID" to "0", "Speed" to "1"))
+
     fun pause(device: VesperDlnaDevice): VesperDlnaSoapResponse =
         avTransport(device, "Pause", mapOf("InstanceID" to "0"))
 
+    suspend fun pauseAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransportAsync(device, "Pause", mapOf("InstanceID" to "0"))
+
     fun stop(device: VesperDlnaDevice): VesperDlnaSoapResponse =
         avTransport(device, "Stop", mapOf("InstanceID" to "0"))
+
+    suspend fun stopAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransportAsync(device, "Stop", mapOf("InstanceID" to "0"))
 
     fun seek(device: VesperDlnaDevice, positionMs: Long): VesperDlnaSoapResponse =
         avTransport(
@@ -130,15 +149,37 @@ class VesperDlnaSoapClient(
             ),
         )
 
+    suspend fun seekAsync(device: VesperDlnaDevice, positionMs: Long): VesperDlnaSoapResponse =
+        avTransportAsync(
+            device,
+            "Seek",
+            mapOf(
+                "InstanceID" to "0",
+                "Unit" to "REL_TIME",
+                "Target" to positionMs.toDlnaTime(),
+            ),
+        )
+
     fun getPositionInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse =
         avTransport(device, "GetPositionInfo", mapOf("InstanceID" to "0"))
+
+    suspend fun getPositionInfoAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransportAsync(device, "GetPositionInfo", mapOf("InstanceID" to "0"))
 
     fun getTransportInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse =
         avTransport(device, "GetTransportInfo", mapOf("InstanceID" to "0"))
 
+    suspend fun getTransportInfoAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        avTransportAsync(device, "GetTransportInfo", mapOf("InstanceID" to "0"))
+
     fun getProtocolInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse {
         val service = device.connectionManager ?: return missingService("ConnectionManager")
         return post(service, "GetProtocolInfo", emptyMap())
+    }
+
+    suspend fun getProtocolInfoAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse {
+        val service = device.connectionManager ?: return missingService("ConnectionManager")
+        return postAsync(service, "GetProtocolInfo", emptyMap())
     }
 
     fun getVolume(device: VesperDlnaDevice): VesperDlnaSoapResponse {
@@ -146,9 +187,27 @@ class VesperDlnaSoapClient(
         return post(service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
     }
 
+    suspend fun getVolumeAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse {
+        val service = device.renderingControl ?: return missingService("RenderingControl")
+        return postAsync(service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
+    }
+
     fun setVolume(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse {
         val service = device.renderingControl ?: return missingService("RenderingControl")
         return post(
+            service,
+            "SetVolume",
+            mapOf(
+                "InstanceID" to "0",
+                "Channel" to "Master",
+                "DesiredVolume" to volume.coerceIn(0, 100).toString(),
+            ),
+        )
+    }
+
+    suspend fun setVolumeAsync(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse {
+        val service = device.renderingControl ?: return missingService("RenderingControl")
+        return postAsync(
             service,
             "SetVolume",
             mapOf(
@@ -168,6 +227,15 @@ class VesperDlnaSoapClient(
         return post(service, action, arguments)
     }
 
+    private suspend fun avTransportAsync(
+        device: VesperDlnaDevice,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse {
+        val service = device.avTransport ?: return missingService("AVTransport")
+        return postAsync(service, action, arguments)
+    }
+
     private fun post(
         service: VesperDlnaService,
         action: String,
@@ -175,6 +243,22 @@ class VesperDlnaSoapClient(
     ): VesperDlnaSoapResponse =
         runCatching {
             runBlocking(Dispatchers.IO) {
+                postBlocking(service, action, arguments)
+            }
+        }.getOrElse { error ->
+            VesperDlnaSoapResponse(
+                status = 0,
+                body = error.toDlnaControlFailureMessage(action, service.controlUrl.toString()),
+            )
+        }
+
+    private suspend fun postAsync(
+        service: VesperDlnaService,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse =
+        runCatching {
+            withContext(Dispatchers.IO) {
                 postBlocking(service, action, arguments)
             }
         }.getOrElse { error ->
@@ -211,6 +295,16 @@ class VesperDlnaSoapClient(
     private fun missingService(name: String): VesperDlnaSoapResponse =
         VesperDlnaSoapResponse(0, "$name service is not available.")
 }
+
+private fun avTransportUriArguments(
+    source: VesperPlayerSource,
+    metadata: VesperSystemPlaybackMetadata?,
+): Map<String, String> =
+    mapOf(
+        "InstanceID" to "0",
+        "CurrentURI" to source.uri,
+        "CurrentURIMetaData" to VesperDlnaDidlBuilder.build(source, metadata),
+    )
 
 private fun Throwable.toDlnaControlFailureMessage(action: String, controlUrl: String): String {
     val cause = message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName

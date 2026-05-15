@@ -33,20 +33,54 @@ class VesperDlnaSession(
         return if (autoplay) play() else VesperDlnaOperationResult.Success
     }
 
+    suspend fun loadAsync(
+        source: VesperPlayerSource,
+        metadata: VesperSystemPlaybackMetadata?,
+        startPositionMs: Long = 0,
+        autoplay: Boolean = true,
+    ): VesperDlnaOperationResult {
+        val setUri = soapClient.setAvTransportUriAsync(device, source, metadata).toOperationResult()
+        if (setUri !is VesperDlnaOperationResult.Success) {
+            return setUri
+        }
+        if (startPositionMs > 0) {
+            val seek = seekToAsync(startPositionMs)
+            if (seek is VesperDlnaOperationResult.Failed) {
+                return seek
+            }
+        }
+        return if (autoplay) playAsync() else VesperDlnaOperationResult.Success
+    }
+
     fun play(): VesperDlnaOperationResult =
         soapClient.play(device).toOperationResult()
+
+    suspend fun playAsync(): VesperDlnaOperationResult =
+        soapClient.playAsync(device).toOperationResult()
 
     fun pause(): VesperDlnaOperationResult =
         soapClient.pause(device).toOperationResult(unsupportedOnFault = true)
 
+    suspend fun pauseAsync(): VesperDlnaOperationResult =
+        soapClient.pauseAsync(device).toOperationResult(unsupportedOnFault = true)
+
     fun stop(): VesperDlnaOperationResult =
         soapClient.stop(device).toOperationResult()
+
+    suspend fun stopAsync(): VesperDlnaOperationResult =
+        soapClient.stopAsync(device).toOperationResult()
 
     fun seekTo(positionMs: Long): VesperDlnaOperationResult =
         soapClient.seek(device, positionMs).toOperationResult(unsupportedOnFault = true)
 
+    suspend fun seekToAsync(positionMs: Long): VesperDlnaOperationResult =
+        soapClient.seekAsync(device, positionMs).toOperationResult(unsupportedOnFault = true)
+
     fun protocolInfo(): String =
         soapClient.getProtocolInfo(device).body
+
+    suspend fun protocolInfoAsync(): String =
+        soapClient.getProtocolInfoAsync(device).body
 }
 
 private fun VesperDlnaSoapResponse.toOperationResult(

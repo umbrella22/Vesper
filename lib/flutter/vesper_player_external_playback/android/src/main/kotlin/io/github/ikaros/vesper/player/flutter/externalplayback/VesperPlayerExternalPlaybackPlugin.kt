@@ -105,52 +105,54 @@ class VesperPlayerExternalPlaybackPlugin :
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        runCatching {
-            when (call.method) {
-                "startDiscovery" -> {
-                    controller.startDiscovery()
-                    result.success(null)
+        scope.launch {
+            runCatching {
+                when (call.method) {
+                    "startDiscovery" -> {
+                        controller.startDiscovery()
+                        result.success(null)
+                    }
+                    "stopDiscovery" -> {
+                        controller.stopDiscovery()
+                        result.success(null)
+                    }
+                    "connect" -> {
+                        val routeId = call.argumentMap()["routeId"] as? String
+                            ?: return@launch result.success(
+                                VesperExternalPlaybackResult.Failed("Missing routeId.").toMap(),
+                            )
+                        result.success(controller.connect(routeId).toMap())
+                    }
+                    "load" -> {
+                        val arguments = call.argumentMap()
+                        val item = requireNestedMap(arguments, "item").toMediaItem()
+                        val startPositionMs = (arguments["startPositionMs"] as? Number)?.toLong() ?: 0L
+                        val autoplay = arguments["autoplay"] as? Boolean ?: true
+                        result.success(controller.loadAsync(item, startPositionMs, autoplay).toMap())
+                    }
+                    "play" -> result.success(controller.playAsync().toMap())
+                    "pause" -> result.success(controller.pauseAsync().toMap())
+                    "stop" -> result.success(controller.stopAsync().toMap())
+                    "seekTo" -> {
+                        val positionMs = (call.argumentMap()["positionMs"] as? Number)?.toLong() ?: 0L
+                        result.success(controller.seekToAsync(positionMs).toMap())
+                    }
+                    "disconnect" -> result.success(controller.disconnectAsync().toMap())
+                    else -> result.notImplemented()
                 }
-                "stopDiscovery" -> {
-                    controller.stopDiscovery()
-                    result.success(null)
-                }
-                "connect" -> {
-                    val routeId = call.argumentMap()["routeId"] as? String
-                        ?: return result.success(
-                            VesperExternalPlaybackResult.Failed("Missing routeId.").toMap(),
-                        )
-                    result.success(controller.connect(routeId).toMap())
-                }
-                "load" -> {
-                    val arguments = call.argumentMap()
-                    val item = requireNestedMap(arguments, "item").toMediaItem()
-                    val startPositionMs = (arguments["startPositionMs"] as? Number)?.toLong() ?: 0L
-                    val autoplay = arguments["autoplay"] as? Boolean ?: true
-                    result.success(controller.load(item, startPositionMs, autoplay).toMap())
-                }
-                "play" -> result.success(controller.play().toMap())
-                "pause" -> result.success(controller.pause().toMap())
-                "stop" -> result.success(controller.stop().toMap())
-                "seekTo" -> {
-                    val positionMs = (call.argumentMap()["positionMs"] as? Number)?.toLong() ?: 0L
-                    result.success(controller.seekTo(positionMs).toMap())
-                }
-                "disconnect" -> result.success(controller.disconnect().toMap())
-                else -> result.notImplemented()
+            }.onFailure { error ->
+                val message = error.message ?: "External playback operation failed."
+                result.error(
+                    "vesper_external_playback_error",
+                    message,
+                    mapOf(
+                        "message" to message,
+                        "category" to "platform",
+                        "exception" to error.javaClass.name,
+                        "retriable" to false,
+                    ),
+                )
             }
-        }.onFailure { error ->
-            val message = error.message ?: "External playback operation failed."
-            result.error(
-                "vesper_external_playback_error",
-                message,
-                mapOf(
-                    "message" to message,
-                    "category" to "platform",
-                    "exception" to error.javaClass.name,
-                    "retriable" to false,
-                ),
-            )
         }
     }
 
