@@ -56,6 +56,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   String? _activePlaylistItemId = flutterHlsPlaylistItemId;
   String? _downloadMessage;
   String? _externalPlaybackMessage;
+  bool _externalPlaybackMessageIsDiagnostic = false;
   bool _isDownloadExportPluginInstalled = false;
   bool _externalPlaybackPausedLocalPlayback = false;
   VesperSystemPlaybackPermissionStatus _systemPlaybackPermissionStatus =
@@ -306,7 +307,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       case VesperExternalPlaybackSessionEventKind.routeConnected:
         final routeLabel = event.routeName ?? event.routeId ?? '设备';
         setState(() {
-          _externalPlaybackMessage = '外部播放已连接：$routeLabel';
+          _setExternalPlaybackMessage('外部播放已连接：$routeLabel', force: true);
         });
         if (event.routeId == VesperExternalPlaybackController.castRouteId) {
           await _loadCurrentExternalMedia(routeLabel: routeLabel);
@@ -318,49 +319,60 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         }
         setState(() {
           _externalPlaybackPausedLocalPlayback = false;
-          _externalPlaybackMessage = '外部播放已断开，本地播放已恢复。';
+          _setExternalPlaybackMessage('外部播放已断开，本地播放已恢复。', force: true);
         });
       case VesperExternalPlaybackSessionEventKind.loaded:
         setState(() {
-          _externalPlaybackMessage = '外部播放媒体已加载。';
+          _setExternalPlaybackMessage('外部播放媒体已加载。');
         });
       case VesperExternalPlaybackSessionEventKind.playing:
         setState(() {
-          _externalPlaybackMessage = '外部播放已继续。';
+          _setExternalPlaybackMessage('外部播放已继续。');
         });
       case VesperExternalPlaybackSessionEventKind.paused:
         setState(() {
-          _externalPlaybackMessage = '外部播放已暂停。';
+          _setExternalPlaybackMessage('外部播放已暂停。');
         });
       case VesperExternalPlaybackSessionEventKind.stopped:
         setState(() {
-          _externalPlaybackMessage = '外部播放已停止。';
+          _setExternalPlaybackMessage('外部播放已停止。');
         });
       case VesperExternalPlaybackSessionEventKind.suspended:
         setState(() {
-          _externalPlaybackMessage = '外部播放连接已暂停。';
+          _setExternalPlaybackMessage('外部播放连接已暂停。');
         });
       case VesperExternalPlaybackSessionEventKind.discoveryDiagnostic:
         if (event.details['severity'] != 'info') {
           setState(() {
-            _externalPlaybackMessage = event.message ?? 'DLNA 搜索诊断事件。';
+            _setExternalPlaybackMessage(
+              _formatExternalPlaybackDiagnostic(event),
+              diagnostic: true,
+            );
           });
         }
       case VesperExternalPlaybackSessionEventKind.error:
         setState(() {
-          _externalPlaybackMessage = event.message ?? '外部播放发生错误。';
+          _setExternalPlaybackMessage(
+            event.message ?? '外部播放发生错误。',
+            diagnostic: true,
+          );
         });
     }
   }
 
   Future<void> _loadExternalRoute(VesperExternalPlaybackRoute route) async {
+    if (mounted) {
+      setState(() {
+        _setExternalPlaybackMessage('正在连接外部播放：${route.name}', force: true);
+      });
+    }
     final connectResult = await _externalPlaybackController.connect(
       route.routeId,
     );
     if (!connectResult.isSuccess) {
       if (mounted) {
         setState(() {
-          _externalPlaybackMessage = connectResult.message;
+          _setExternalPlaybackMessage(connectResult.message, diagnostic: true);
         });
       }
       return;
@@ -383,6 +395,9 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       VesperExternalPlaybackMediaItem(
         sources: <VesperPlayerSource>[source],
         metadata: _systemPlaybackMetadataForSource(source),
+        formatAdaptation: const VesperExternalFormatAdaptationConfig.dlnaRemux(
+          debugDiagnostics: true,
+        ),
       ),
       startPositionMs: controller.snapshot.timeline.positionMs,
       autoplay: shouldAutoplay,
@@ -397,9 +412,10 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       if (loadResult.isSuccess && shouldAutoplay) {
         _externalPlaybackPausedLocalPlayback = true;
       }
-      _externalPlaybackMessage = loadResult.isSuccess
-          ? '外部播放已加载：$routeLabel'
-          : loadResult.message;
+      _setExternalPlaybackMessage(
+        loadResult.isSuccess ? '外部播放已加载：$routeLabel' : loadResult.message,
+        diagnostic: !loadResult.isSuccess,
+      );
     });
   }
 
@@ -416,6 +432,34 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       await controller.seekBy(deltaMs);
     }
     await controller.play();
+  }
+
+  void _setExternalPlaybackMessage(
+    String? message, {
+    bool diagnostic = false,
+    bool force = false,
+  }) {
+    if (!force && !diagnostic && _externalPlaybackMessageIsDiagnostic) {
+      return;
+    }
+    _externalPlaybackMessage = message;
+    _externalPlaybackMessageIsDiagnostic = diagnostic;
+  }
+
+  String _formatExternalPlaybackDiagnostic(
+    VesperExternalPlaybackSessionEvent event,
+  ) {
+    final labels = <String>[
+      if (event.code != null) 'code=${event.code}',
+      if (event.details['httpStatus'] != null)
+        "http=${event.details['httpStatus']}",
+      if (event.details['fallbackFormat'] != null)
+        "fallback=${event.details['fallbackFormat']}",
+      if (event.details['inputMode'] != null)
+        "mode=${event.details['inputMode']}",
+    ];
+    final suffix = labels.isEmpty ? '' : ' (${labels.join(', ')})';
+    return '${event.message ?? '外部播放诊断事件。'}$suffix';
   }
 
   VesperSystemPlaybackMetadata _systemPlaybackMetadataForSource(

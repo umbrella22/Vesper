@@ -300,6 +300,8 @@ class VesperRelayServerTest {
             assertEquals(416, invalid.status)
             assertTrue(invalid.body.contains("range_not_ready"))
             assertEquals("range_not_ready", diagnostics.single().code)
+            assertEquals("416", diagnostics.single().details["httpStatus"])
+            assertTrue(invalid.body.contains("detail.httpStatus=416"))
         } finally {
             adaptedRelay.stop()
         }

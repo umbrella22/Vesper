@@ -277,8 +277,9 @@ class VesperRelayServer @JvmOverloads constructor(
         )
         when (val result = formatAdapter.open(request)) {
             is VesperRelayFormatAdaptationResult.Failure -> {
-                emitDiagnostic(result.diagnostic)
-                output.writeDiagnosticResponse(result.status, result.diagnostic)
+                val diagnostic = result.diagnostic.withHttpStatus(result.status)
+                emitDiagnostic(diagnostic)
+                output.writeDiagnosticResponse(result.status, diagnostic)
             }
             is VesperRelayFormatAdaptationResult.Stream -> {
                 val adapted = result.stream
@@ -494,6 +495,9 @@ private data class RelayEntry(
     val expiresAtMillis: Long?,
 )
 
+private fun VesperRelayDiagnostic.withHttpStatus(status: Int): VesperRelayDiagnostic =
+    copy(details = details + ("httpStatus" to status.toString()))
+
 private const val DEFAULT_TOKEN_TTL_MILLIS = 30 * 60 * 1000L
 
 data class ByteRangeRequest(
@@ -563,6 +567,7 @@ fun findLanIpv4Address(): InetAddress? =
         .filterIsInstance<Inet4Address>()
         .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
 
+@Suppress("DEPRECATION")
 private fun Context.findWifiLanIpv4Address(): InetAddress? {
     val connectivityManager =
         getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
