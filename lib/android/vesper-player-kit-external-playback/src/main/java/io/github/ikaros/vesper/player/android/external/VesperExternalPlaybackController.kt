@@ -15,6 +15,8 @@ import io.github.ikaros.vesper.player.android.external.internal.dlna.VesperDlnaD
 import io.github.ikaros.vesper.player.android.external.internal.dlna.VesperDlnaOperationResult
 import io.github.ikaros.vesper.player.android.external.internal.dlna.VesperDlnaProtocolInfoParser
 import io.github.ikaros.vesper.player.android.external.internal.dlna.VesperDlnaSession
+import io.github.ikaros.vesper.player.android.external.internal.dlna.dlnaRouteIdentityKey
+import io.github.ikaros.vesper.player.android.external.internal.dlna.matchesRouteId
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperExternalPlaybackSourcePreparer
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperExternalPlaybackTarget
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperExternalRouteCapabilities
@@ -163,7 +165,7 @@ class VesperExternalPlaybackController(context: Context) {
         dlnaDiscovery?.stop()
         dlnaDiscovery = null
         dlnaDevices.clear()
-        recentlySeenDlnaDevices.clear()
+        pruneRecentlySeenDlnaDevices()
         emitRoutes()
     }
 
@@ -180,26 +182,21 @@ class VesperExternalPlaybackController(context: Context) {
             }
         }
 
-        val device = dlnaDevices[routeId] ?: recentlySeenDlnaDevice(routeId)
+        val device = findDlnaDevice(routeId)
         if (device == null) {
             emitEvent(
                 VesperExternalPlaybackEventKind.DiscoveryDiagnostic,
                 message = "DLNA route is no longer available.",
                 code = "dlna_route_cache_miss",
-                details = mapOf(
-                    "severity" to "warning",
-                    "routeId" to routeId,
-                    "availableRouteIds" to dlnaDevices.keys.joinToString(","),
-                    "recentRouteIds" to recentlySeenDlnaDevices.keys.joinToString(","),
-                ),
+                details = dlnaRouteCacheMissDetails(routeId),
             )
             return VesperExternalPlaybackResult.Unavailable("DLNA route is no longer available.")
         }
         dlnaSession = VesperDlnaSession(device)
-        activeRouteId = routeId
+        activeRouteId = device.routeId
         emitRoutes()
-        emitEvent(VesperExternalPlaybackEventKind.RouteConnected, routeId, device.friendlyName)
-        return VesperExternalPlaybackResult.Success(routeId = routeId)
+        emitEvent(VesperExternalPlaybackEventKind.RouteConnected, device.routeId, device.friendlyName)
+        return VesperExternalPlaybackResult.Success(routeId = device.routeId)
     }
 
     fun load(
@@ -427,21 +424,42 @@ class VesperExternalPlaybackController(context: Context) {
         }
     }
 
+    private fun findDlnaDevice(routeId: String): VesperDlnaDevice? {
+        dlnaDevices[routeId]?.let { return it }
+        dlnaDevices.values
+            .firstOrNull { device -> device.matchesRouteId(routeId) }
+            ?.let { return it }
+        return recentlySeenDlnaDevice(routeId)
+    }
+
     private fun recentlySeenDlnaDevice(routeId: String): VesperDlnaDevice? {
         pruneRecentlySeenDlnaDevices()
-        val recent = recentlySeenDlnaDevices[routeId] ?: return null
+        val recent = recentlySeenDlnaDevices[routeId]
+            ?: recentlySeenDlnaDevices.values
+                .firstOrNull { recent -> recent.device.matchesRouteId(routeId) }
+            ?: return null
         emitEvent(
             VesperExternalPlaybackEventKind.DiscoveryDiagnostic,
             message = "Using a recently discovered DLNA route during discovery refresh.",
             code = "dlna_route_recent_cache_used",
             details = mapOf(
                 "severity" to "info",
-                "routeId" to routeId,
+                "requestedRouteId" to routeId,
+                "routeId" to recent.device.routeId,
                 "routeName" to recent.device.friendlyName,
             ),
         )
         return recent.device
     }
+
+    private fun dlnaRouteCacheMissDetails(routeId: String): Map<String, String> =
+        buildMap {
+            put("severity", "warning")
+            put("routeId", routeId)
+            put("routeIdentity", dlnaRouteIdentityKey(routeId))
+            put("availableRouteIds", dlnaDevices.keys.joinToString(","))
+            put("recentRouteIds", recentlySeenDlnaDevices.keys.joinToString(","))
+        }
 
     private fun pruneRecentlySeenDlnaDevices() {
         val now = System.currentTimeMillis()

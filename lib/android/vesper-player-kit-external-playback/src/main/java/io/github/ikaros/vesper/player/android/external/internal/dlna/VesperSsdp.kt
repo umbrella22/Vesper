@@ -85,5 +85,17 @@ internal fun canonicalDlnaRouteId(value: String): String =
         .takeIf { it.isNotEmpty() }
         ?: value
 
+internal fun dlnaRouteIdentityKey(value: String): String =
+    canonicalDlnaRouteId(value)
+        .withoutUuidPrefix()
+        .lowercase(Locale.US)
+
+private fun String.withoutUuidPrefix(): String =
+    when {
+        startsWith("uuid:", ignoreCase = true) -> substring("uuid:".length)
+        startsWith("urn:uuid:", ignoreCase = true) -> substring("urn:uuid:".length)
+        else -> this
+    }
+
 private const val DEFAULT_ROUTE_TTL_SECONDS = 1800L
 private const val MIN_ROUTE_TTL_SECONDS = 120L

@@ -395,7 +395,16 @@ class VesperDlnaDiscovery(
             if (!isDiscoveryActive(generation)) {
                 return@synchronized false
             }
-            val removed = devices.remove(routeId) != null
+            val directRemoved = devices.remove(routeId) != null
+            val aliasKey = if (directRemoved) {
+                null
+            } else {
+                devices.entries
+                    .firstOrNull { (_, device) -> device.matchesRouteId(routeId) }
+                    ?.key
+            }
+            val aliasRemoved = aliasKey?.let { devices.remove(it) != null } == true
+            val removed = directRemoved || aliasRemoved
             if (removed) {
                 emitRoutesLocked()
             }

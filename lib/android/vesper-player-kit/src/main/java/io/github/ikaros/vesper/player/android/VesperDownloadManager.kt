@@ -114,6 +114,22 @@ interface VesperDownloadStaleResourcePlanRecoverer {
     ): VesperDownloadRecoveredTaskPlan?
 }
 
+@Suppress("DEPRECATION")
+private fun VesperDownloadStaleResourceRecoverer.asPlanRecoverer(): VesperDownloadStaleResourcePlanRecoverer =
+    object : VesperDownloadStaleResourcePlanRecoverer {
+        override suspend fun recoverPlan(
+            task: VesperDownloadTaskSnapshot,
+            staleResource: VesperDownloadStaleResource,
+        ): VesperDownloadRecoveredTaskPlan? {
+            val recoveredSource = recoverSource(task, staleResource) ?: return null
+            return VesperDownloadRecoveredTaskPlan(
+                source = recoveredSource,
+                profile = task.profile,
+                assetIndex = VesperDownloadAssetIndex(),
+            )
+        }
+    }
+
 data class VesperDownloadSource(
     val source: VesperPlayerSource,
     val contentFormat: VesperDownloadContentFormat = inferContentFormat(source),
@@ -408,6 +424,7 @@ class VesperDownloadManager internal constructor(
 
     val snapshot: StateFlow<VesperDownloadSnapshot> = _snapshot.asStateFlow()
 
+    @Suppress("DEPRECATION")
     public constructor(
         context: Context,
         configuration: VesperDownloadConfiguration = VesperDownloadConfiguration(),
@@ -424,8 +441,8 @@ class VesperDownloadManager internal constructor(
                 rangeChunkBytes = configuration.rangeChunkBytes,
                 minProgressBytes = configuration.minProgressBytes,
                 minProgressIntervalMs = configuration.minProgressIntervalMs,
-                staleResourceRecoverer = staleResourceRecoverer,
-                staleResourcePlanRecoverer = staleResourcePlanRecoverer,
+                staleResourcePlanRecoverer =
+                    staleResourcePlanRecoverer ?: staleResourceRecoverer?.asPlanRecoverer(),
             ),
         bindings = NativeDownloadBindings,
         stateStore =
@@ -1331,7 +1348,6 @@ internal class VesperForegroundDownloadExecutor(
     rangeChunkBytes: Long? = null,
     private val minProgressBytes: Long = ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_BYTES,
     private val minProgressIntervalMs: Long = ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_INTERVAL_MS,
-    private val staleResourceRecoverer: VesperDownloadStaleResourceRecoverer? = null,
     private val staleResourcePlanRecoverer: VesperDownloadStaleResourcePlanRecoverer? = null,
 ) : VesperDownloadExecutor {
     private val appContext = context?.applicationContext
@@ -1395,15 +1411,8 @@ internal class VesperForegroundDownloadExecutor(
     private suspend fun recoverTaskPlan(
         task: VesperDownloadTaskSnapshot,
         staleResource: VesperDownloadStaleResource,
-    ): VesperDownloadRecoveredTaskPlan? {
-        staleResourcePlanRecoverer?.recoverPlan(task, staleResource)?.let { return it }
-        val recoveredSource = staleResourceRecoverer?.recoverSource(task, staleResource) ?: return null
-        return VesperDownloadRecoveredTaskPlan(
-            source = recoveredSource,
-            profile = task.profile,
-            assetIndex = VesperDownloadAssetIndex(),
-        )
-    }
+    ): VesperDownloadRecoveredTaskPlan? =
+        staleResourcePlanRecoverer?.recoverPlan(task, staleResource)
 
     private fun materializeGeneratedResources(
         assetId: VesperDownloadAssetId,

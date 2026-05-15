@@ -306,6 +306,38 @@ class VesperDlnaProtocolTest {
     }
 
     @Test
+    fun normalizesDlnaRouteIdentityAliases() {
+        assertEquals(
+            "dlna-debug-renderer-001",
+            dlnaRouteIdentityKey(
+                "uuid:dlna-debug-renderer-001::urn:schemas-upnp-org:device:MediaRenderer:1",
+            ),
+        )
+        assertEquals("dlna-debug-renderer-001", dlnaRouteIdentityKey("dlna-debug-renderer-001"))
+        assertEquals("device-1", dlnaRouteIdentityKey("URN:UUID:DEVICE-1"))
+    }
+
+    @Test
+    fun matchesDlnaDeviceRouteAliases() {
+        val device = VesperDlnaDevice(
+            routeId = "uuid:dlna-debug-renderer-001",
+            location = URL("http://192.168.1.10:8000/desc.xml"),
+            usn = "uuid:dlna-debug-renderer-001::urn:schemas-upnp-org:device:MediaRenderer:1",
+            friendlyName = "Debug Renderer",
+            udn = "uuid:dlna-debug-renderer-001",
+        )
+
+        assertTrue(device.matchesRouteId("uuid:dlna-debug-renderer-001"))
+        assertTrue(device.matchesRouteId("dlna-debug-renderer-001"))
+        assertTrue(
+            device.matchesRouteId(
+                "UUID:DLNA-DEBUG-RENDERER-001::urn:schemas-upnp-org:device:MediaRenderer:1",
+            ),
+        )
+        assertFalse(device.matchesRouteId("uuid:another-renderer"))
+    }
+
+    @Test
     fun parsesSsdpByebyeNotify() {
         val message = VesperSsdpParser.parse(
             """

@@ -28,6 +28,16 @@ data class VesperDlnaDevice(
         get() = avTransport != null
 }
 
+internal fun VesperDlnaDevice.matchesRouteId(candidate: String): Boolean {
+    val candidateKey = dlnaRouteIdentityKey(candidate)
+    if (candidateKey.isBlank()) {
+        return false
+    }
+    return sequenceOf(routeId, udn, usn)
+        .filterNotNull()
+        .any { alias -> dlnaRouteIdentityKey(alias) == candidateKey }
+}
+
 internal fun String.isAvTransportService(): Boolean =
     startsWith("urn:schemas-upnp-org:service:AVTransport:", ignoreCase = true)
 
