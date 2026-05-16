@@ -822,6 +822,20 @@ final class VesperPlayerSource {
     );
   }
 
+  factory VesperPlayerSource.localDash({
+    required String uri,
+    String? label,
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    return VesperPlayerSource(
+      uri: uri,
+      label: label ?? uri,
+      kind: VesperPlayerSourceKind.local,
+      protocol: VesperPlayerSourceProtocol.dash,
+      headers: headers,
+    );
+  }
+
   factory VesperPlayerSource.remote({
     required String uri,
     String? label,

@@ -338,6 +338,50 @@ class VesperDlnaProtocolTest {
     }
 
     @Test
+    fun matchesKnownDeviceDescriptionRequests() {
+        val device = VesperDlnaDevice(
+            routeId = "uuid:dlna-debug-renderer-001",
+            location = URL("http://192.168.1.10:8000/description.xml"),
+            usn = "uuid:dlna-debug-renderer-001::urn:schemas-upnp-org:device:MediaRenderer:1",
+            friendlyName = "Debug Renderer",
+            udn = "uuid:dlna-debug-renderer-001",
+        )
+        val sameLocation = VesperDlnaDescriptionRequest(
+            location = URL("http://192.168.1.10:8000/description.xml"),
+            usn = "uuid:other-response::upnp:rootdevice",
+            expiresAtMillis = 42L,
+        )
+        val sameIdentity = VesperDlnaDescriptionRequest(
+            location = URL("http://192.168.1.10:8000/other.xml"),
+            usn = "UUID:DLNA-DEBUG-RENDERER-001::upnp:rootdevice",
+            expiresAtMillis = 42L,
+        )
+        val different = VesperDlnaDescriptionRequest(
+            location = URL("http://192.168.1.11:8000/description.xml"),
+            usn = "uuid:another-renderer::upnp:rootdevice",
+            expiresAtMillis = 42L,
+        )
+
+        assertTrue(device.matchesDescriptionRequest(sameLocation))
+        assertTrue(device.matchesDescriptionRequest(sameIdentity))
+        assertFalse(device.matchesDescriptionRequest(different))
+    }
+
+    @Test
+    fun descriptionFetchKeyIncludesLocationAndIdentity() {
+        val request = VesperDlnaDescriptionRequest(
+            location = URL("http://192.168.1.10:8000/description.xml"),
+            usn = "UUID:DLNA-DEBUG-RENDERER-001::upnp:rootdevice",
+            expiresAtMillis = 42L,
+        )
+
+        assertEquals(
+            "http://192.168.1.10:8000/description.xml|dlna-debug-renderer-001",
+            request.descriptionFetchKey(),
+        )
+    }
+
+    @Test
     fun parsesSsdpByebyeNotify() {
         val message = VesperSsdpParser.parse(
             """

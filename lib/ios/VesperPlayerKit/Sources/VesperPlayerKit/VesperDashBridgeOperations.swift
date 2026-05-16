@@ -43,6 +43,44 @@ private enum VesperDashRustBridge {
         }
     }
 
+    static func parseSidx(data: Data) throws -> VesperDashSidxBox {
+        var outputPointer: UnsafeMutablePointer<CChar>?
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let ok = data.withUnsafeBytes { bytes in
+            vesper_dash_bridge_parse_sidx(
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                UInt(bytes.count),
+                &outputPointer,
+                &errorPointer
+            )
+        }
+        defer {
+            if let outputPointer {
+                vesper_dash_bridge_string_free(outputPointer)
+            }
+            if let errorPointer {
+                vesper_dash_bridge_string_free(errorPointer)
+            }
+        }
+
+        guard ok, let outputPointer else {
+            let message = errorPointer.map { String(cString: $0) } ?? "Rust DASH bridge call failed"
+            throw bridgeError(fromRustMessage: message)
+        }
+
+        let responseJson = String(cString: outputPointer)
+        guard let responseData = responseJson.data(using: .utf8) else {
+            throw VesperDashBridgeError.invalidManifest("failed to decode DASH bridge response")
+        }
+        do {
+            return try JSONDecoder().decode(VesperDashSidxBox.self, from: responseData)
+        } catch {
+            throw VesperDashBridgeError.invalidManifest(
+                "invalid DASH bridge response: \(error.localizedDescription)"
+            )
+        }
+    }
+
     private static func bridgeError(fromRustMessage message: String) -> VesperDashBridgeError {
         if message.hasPrefix("unsupported MPD:") {
             return .unsupportedManifest(message)
@@ -169,10 +207,7 @@ enum VesperDashManifestParser {
 
 enum VesperDashSidxParser {
     static func parse(data: Data) throws -> VesperDashSidxBox {
-        try VesperDashRustBridge.execute(
-            VesperDashParseSidxRequest(data: [UInt8](data)),
-            response: VesperDashSidxBox.self
-        )
+        try VesperDashRustBridge.parseSidx(data: data)
     }
 }
 

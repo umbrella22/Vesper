@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg
 
 import android.content.Context
+import android.net.Uri
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
@@ -10,6 +11,7 @@ import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRela
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayFormatAdaptationRequest
 import java.io.Closeable
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -49,9 +51,8 @@ internal class VesperRelayHostInputException(
 internal class VesperRelayHostInputSession private constructor(
     private val rootDir: File,
     private val plannedTracks: List<VesperRelayDashTrackPlan>,
-    private val requestHeaders: Map<String, String>,
     private val baseDetails: Map<String, String>,
-    private val fetcher: VesperRelayRemoteFetcher,
+    private val resolver: VesperRelayDashResourceResolver,
 ) : Closeable {
     val tracks: List<VesperRelayPreparedTrack> =
         plannedTracks.map { track ->
@@ -66,7 +67,6 @@ internal class VesperRelayHostInputSession private constructor(
 
     private val cancelled = AtomicBoolean(false)
     private val failure = AtomicReference<VesperRelayDiagnostic?>()
-    private val activeConnections = Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
     private val activeOutputs = Collections.synchronizedSet(mutableSetOf<Closeable>())
     private val executor =
         Executors.newFixedThreadPool(plannedTracks.size.coerceAtLeast(1), VesperHostInputThreadFactory())
@@ -83,9 +83,7 @@ internal class VesperRelayHostInputSession private constructor(
         if (!cancelled.compareAndSet(false, true)) {
             return
         }
-        activeConnections.toList().forEach { connection ->
-            runCatching { connection.disconnect() }
-        }
+        resolver.cancel()
         activeOutputs.toList().forEach { output ->
             runCatching { output.close() }
         }
@@ -103,12 +101,10 @@ internal class VesperRelayHostInputSession private constructor(
                 output.use { stream ->
                     track.initializationUri?.let { uri ->
                         currentSegmentDetails = track.segmentDetails("init", uri)
-                        fetcher.fetchTo(
+                        resolver.copyTo(
                             uri = uri,
-                            headers = requestHeaders,
                             output = stream,
                             cancellation = cancelled,
-                            activeConnections = activeConnections,
                         )
                     }
                     track.segments.forEach { segment ->
@@ -116,12 +112,10 @@ internal class VesperRelayHostInputSession private constructor(
                             throw HostInputCancelledException()
                         }
                         currentSegmentDetails = track.segmentDetails(segment.index.toString(), segment.uri)
-                        fetcher.fetchTo(
+                        resolver.copyTo(
                             uri = segment.uri,
-                            headers = requestHeaders,
                             output = stream,
                             cancellation = cancelled,
-                            activeConnections = activeConnections,
                         )
                     }
                     stream.flush()
@@ -163,10 +157,10 @@ internal class VesperRelayHostInputSession private constructor(
                 details = track.baseTrackDetails() + mapOf("errno" to error.errno.toString()),
             )
         } catch (error: IOException) {
-            val code = if (cancelled.get()) "host_input_cancelled" else "host_fetch_failed"
+            val code = if (cancelled.get()) "host_input_cancelled" else error.dashResourceErrorCode()
             markFailure(
                 code = code,
-                status = if (cancelled.get()) 499 else 502,
+                status = if (cancelled.get()) 499 else error.dashResourceHttpStatus(),
                 message = if (cancelled.get()) {
                     "Host-prepared DASH input was cancelled."
                 } else {
@@ -227,7 +221,7 @@ internal class VesperRelayHostInputSession private constructor(
         fun create(
             context: Context,
             request: VesperRelayFormatAdaptationRequest,
-            fetcher: VesperRelayRemoteFetcher = VesperRelayHttpFetcher(),
+            resolverFactory: VesperRelayDashResourceResolverFactory = VesperRelayDashResourceResolverFactory(),
         ): VesperRelayHostInputSession {
             if (request.source.protocol != VesperPlayerSourceProtocol.Dash) {
                 throw request.hostInputException(
@@ -237,41 +231,31 @@ internal class VesperRelayHostInputSession private constructor(
                     details = mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
                 )
             }
-            if (!request.source.uri.startsWith("http://", ignoreCase = true) &&
-                !request.source.uri.startsWith("https://", ignoreCase = true)
-            ) {
-                throw request.hostInputException(
-                    code = "unsupported_dash_layout",
-                    status = 415,
-                    message = "Host-prepared relay remux v1 only accepts remote HTTP(S) DASH sources.",
-                    details = mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
-                )
-            }
-            val headers = mergedRemoteHeaders(request.source, request.requestHeaders)
+            val resolver = resolverFactory.create(context, request)
             val manifestText =
                 try {
-                    fetcher.fetchText(request.source.uri, headers)
+                    resolver.readManifest()
                 } catch (error: SocketTimeoutException) {
                     throw request.hostInputException(
                         code = "host_fetch_timeout",
                         status = 504,
                         message = "Timed out while fetching DASH MPD for relay remux.",
-                        details = mapOf("segmentUriHash" to hashForDiagnostic(request.source.uri)),
+                        details = resolverDetails(request, resolver).withSegmentHash(request.source.uri),
                     )
                 } catch (error: IOException) {
                     throw request.hostInputException(
-                        code = "host_fetch_failed",
-                        status = 502,
+                        code = error.dashResourceErrorCode(),
+                        status = error.dashResourceHttpStatus(),
                         message = "Failed to fetch DASH MPD for relay remux.",
-                        details = mapOf(
-                            "segmentUriHash" to hashForDiagnostic(request.source.uri),
-                            "hostError" to (error.message ?: error.javaClass.simpleName),
-                        ),
+                        details = resolverDetails(request, resolver)
+                            .withSegmentHash(request.source.uri)
+                            .withHostError(error.message ?: error.javaClass.simpleName),
                     )
                 }
             val plan = planHostPreparedDash(
                 manifestText = manifestText,
-                manifestUri = request.source.uri,
+                manifestUri = resolver.manifestLogicalUri,
+                sourceOrigin = resolver.origin,
                 baseDetails = request.hostInputBaseDetails(),
             )
             val rootDir = File(
@@ -310,37 +294,82 @@ internal class VesperRelayHostInputSession private constructor(
             return VesperRelayHostInputSession(
                 rootDir = rootDir,
                 plannedTracks = plannedTracks,
-                requestHeaders = headers,
                 baseDetails = request.hostInputBaseDetails(),
-                fetcher = fetcher,
+                resolver = resolver,
             )
         }
     }
 }
 
-internal interface VesperRelayRemoteFetcher {
+internal data class VesperRelayDashSourceOrigin(
+    val kind: String,
+    val manifestUri: String,
+    val rootUri: String,
+)
+
+internal open class VesperRelayDashResourceResolver(
+    val origin: VesperRelayDashSourceOrigin,
+    val manifestLogicalUri: String,
+) {
     @Throws(IOException::class)
-    fun fetchText(
-        uri: String,
-        headers: Map<String, String>,
-    ): String
+    open fun readManifest(): String = throw UnsupportedOperationException()
 
     @Throws(IOException::class, HostInputCancelledException::class)
-    fun fetchTo(
+    open fun copyTo(
         uri: String,
-        headers: Map<String, String>,
         output: FileOutputStream,
         cancellation: AtomicBoolean,
-        activeConnections: MutableSet<HttpURLConnection>,
-    )
+    ) {
+        throw UnsupportedOperationException()
+    }
+
+    open fun cancel() = Unit
 }
 
-internal class VesperRelayHttpFetcher : VesperRelayRemoteFetcher {
-    override fun fetchText(
-        uri: String,
-        headers: Map<String, String>,
-    ): String {
-        val connection = openConnection(uri, headers)
+internal class VesperRelayDashResourceResolverFactory {
+    fun create(
+        context: Context,
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayDashResourceResolver {
+        val uri = request.source.uri
+        return when {
+            uri.startsWith("http://", ignoreCase = true) ||
+                uri.startsWith("https://", ignoreCase = true) ->
+                VesperRelayHttpDashResourceResolver(
+                    source = request.source,
+                    requestHeaders = request.requestHeaders,
+                )
+            uri.startsWith("content://", ignoreCase = true) ->
+                VesperRelayContentDashResourceResolver(
+                    context = context,
+                    source = request.source,
+                )
+            else ->
+                fileDashResolver(request.source)
+        }
+    }
+}
+
+private fun fileDashResolver(source: VesperPlayerSource): VesperRelayFileDashResourceResolver =
+    VesperRelayFileDashResourceResolver(origin = source.uri.toFileDashOrigin())
+
+internal class VesperRelayHttpDashResourceResolver(
+    source: VesperPlayerSource,
+    requestHeaders: Map<String, String>,
+) : VesperRelayDashResourceResolver(
+    origin = VesperRelayDashSourceOrigin(
+        kind = "remote",
+        manifestUri = source.uri,
+        rootUri = source.uri,
+    ),
+    manifestLogicalUri = source.uri,
+) {
+    private val headers = mergedRemoteHeaders(source, requestHeaders)
+    private val activeConnections = Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
+
+    override fun readManifest(): String {
+        val connection = openConnection(manifestLogicalUri, headers)
+        activeConnections += connection
         return try {
             val status = connection.responseCode
             if (status >= 400) {
@@ -350,16 +379,15 @@ internal class VesperRelayHttpFetcher : VesperRelayRemoteFetcher {
                 input.readBytes().toString(Charsets.UTF_8)
             }
         } finally {
+            activeConnections -= connection
             connection.disconnect()
         }
     }
 
-    override fun fetchTo(
+    override fun copyTo(
         uri: String,
-        headers: Map<String, String>,
         output: FileOutputStream,
         cancellation: AtomicBoolean,
-        activeConnections: MutableSet<HttpURLConnection>,
     ) {
         if (cancellation.get()) {
             throw HostInputCancelledException()
@@ -381,6 +409,12 @@ internal class VesperRelayHttpFetcher : VesperRelayRemoteFetcher {
         }
     }
 
+    override fun cancel() {
+        activeConnections.toList().forEach { connection ->
+            runCatching { connection.disconnect() }
+        }
+    }
+
     private fun openConnection(
         uri: String,
         headers: Map<String, String>,
@@ -396,6 +430,107 @@ internal class VesperRelayHttpFetcher : VesperRelayRemoteFetcher {
             }
         }
         return connection
+    }
+}
+
+internal class VesperRelayFileDashResourceResolver internal constructor(
+    origin: VesperRelayDashSourceOrigin,
+) : VesperRelayDashResourceResolver(
+    origin = origin,
+    manifestLogicalUri = origin.manifestUri,
+) {
+    private val rootDirectory = File(URI(origin.rootUri)).canonicalFile
+
+    override fun readManifest(): String {
+        val file = fileForLogicalUri(manifestLogicalUri)
+        return file.readText(Charsets.UTF_8)
+    }
+
+    override fun copyTo(
+        uri: String,
+        output: FileOutputStream,
+        cancellation: AtomicBoolean,
+    ) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        fileForLogicalUri(uri).inputStream().use { input ->
+            input.copyToCancellable(output, cancellation)
+        }
+    }
+
+    private fun fileForLogicalUri(uri: String): File {
+        val file =
+            try {
+                File(URI(uri)).canonicalFile
+            } catch (error: Exception) {
+                throw DashResourceException(
+                    code = "unsupported_dash_source_origin",
+                    status = 415,
+                    message = "DASH file resource URI is invalid: ${error.message ?: error.javaClass.simpleName}",
+                )
+            }
+        if (!file.toPath().startsWith(rootDirectory.toPath())) {
+            throw DashResourceException(
+                code = "unsupported_mixed_dash_origin",
+                status = 415,
+                message = "DASH file resource escapes the manifest directory.",
+            )
+        }
+        if (!file.exists()) {
+            throw FileNotFoundException(file.absolutePath)
+        }
+        return file
+    }
+}
+
+internal class VesperRelayContentDashResourceResolver(
+    context: Context,
+    source: VesperPlayerSource,
+) : VesperRelayDashResourceResolver(
+    origin = source.uri.toContentDashOrigin(),
+    manifestLogicalUri = source.uri,
+) {
+    private val resolver = context.contentResolver
+    private val rootUri = Uri.parse(origin.rootUri)
+
+    override fun readManifest(): String {
+        return openInput(manifestLogicalUri).use { input ->
+            input.readBytes().toString(Charsets.UTF_8)
+        }
+    }
+
+    override fun copyTo(
+        uri: String,
+        output: FileOutputStream,
+        cancellation: AtomicBoolean,
+    ) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        openInput(uri).use { input ->
+            input.copyToCancellable(output, cancellation)
+        }
+    }
+
+    private fun openInput(uri: String): InputStream {
+        val parsed = Uri.parse(uri)
+        if (parsed.scheme?.equals("content", ignoreCase = true) != true ||
+            parsed.authority != rootUri.authority ||
+            !parsed.path.orEmpty().startsWith(rootUri.path.orEmpty())
+        ) {
+            throw DashResourceException(
+                code = "unsupported_mixed_dash_origin",
+                status = 415,
+                message = "DASH content resource is outside the manifest provider root.",
+            )
+        }
+        return resolver.openInputStream(parsed)
+            ?: throw DashResourceException(
+                code = "dash_resource_not_found",
+                status = 404,
+                message = "DASH content resource is not available.",
+            )
     }
 }
 
@@ -431,6 +566,7 @@ private data class DashTemplate(
 internal fun planHostPreparedDash(
     manifestText: String,
     manifestUri: String,
+    sourceOrigin: VesperRelayDashSourceOrigin = remoteDashOrigin(manifestUri),
     baseDetails: Map<String, String> = emptyMap(),
 ): VesperRelayDashPlan {
     val document =
@@ -503,12 +639,12 @@ internal fun planHostPreparedDash(
     }
 
     val mpdBase = firstBaseUrl(document.documentElement)
-        ?.let { resolveRemoteReference(manifestUri, it) }
+        ?.let { resolveDashReference(manifestUri, it, sourceOrigin, baseDetails) }
         ?: manifestUri
     val period = periods.firstOrNull()
     val periodBase = period
         ?.let { firstBaseUrl(it) }
-        ?.let { resolveRemoteReference(mpdBase, it) }
+        ?.let { resolveDashReference(mpdBase, it, sourceOrigin, baseDetails) }
         ?: mpdBase
     val adaptationSets =
         if (period != null) {
@@ -548,25 +684,29 @@ internal fun planHostPreparedDash(
             )
         }
         val adaptationBase = firstBaseUrl(adaptation)
-            ?.let { resolveRemoteReference(periodBase, it) }
+            ?.let { resolveDashReference(periodBase, it, sourceOrigin, baseDetails) }
             ?: periodBase
         val representationBase = firstBaseUrl(selectedRepresentation)
-            ?.let { resolveRemoteReference(adaptationBase, it) }
+            ?.let { resolveDashReference(adaptationBase, it, sourceOrigin, baseDetails) }
             ?: adaptationBase
         val mediaId = "$kind$index"
         val initializationUri = template.initialization?.let { initialization ->
-            resolveRemoteReference(
+            resolveDashReference(
                 representationBase,
                 expandDashTemplate(initialization, representationId, template.startNumber),
+                sourceOrigin,
+                baseDetails,
             )
         }
         val segments = (0 until segmentCount).map { offset ->
             val number = template.startNumber + offset
             VesperRelayDashSegment(
                 index = number,
-                uri = resolveRemoteReference(
+                uri = resolveDashReference(
                     representationBase,
                     expandDashTemplate(template.media, representationId, number),
+                    sourceOrigin,
+                    baseDetails,
                 ),
             )
         }
@@ -632,6 +772,24 @@ private fun unsupportedDashLayout(
             code = "unsupported_dash_layout",
             message = message,
             details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE) + details,
+        ),
+    )
+
+private fun unsupportedMixedDashOrigin(
+    baseDetails: Map<String, String>,
+    origin: VesperRelayDashSourceOrigin,
+    resolvedUri: String,
+): VesperRelayHostInputException =
+    VesperRelayHostInputException(
+        status = 415,
+        diagnostic = VesperRelayDiagnostic(
+            code = "unsupported_mixed_dash_origin",
+            message = "DASH references must stay within the source origin for relay remux.",
+            details = baseDetails + mapOf(
+                "inputMode" to HOST_PREPARED_DASH_INPUT_MODE,
+                "sourceOrigin" to origin.kind,
+                "resourceUriHash" to hashForDiagnostic(resolvedUri),
+            ),
         ),
     )
 
@@ -745,18 +903,53 @@ private fun expandDashTemplate(
             }
         }
 
-private fun resolveRemoteReference(
+private fun resolveDashReference(
     baseUri: String,
     reference: String,
-): String =
-    runCatching {
-        val ref = URI(reference)
-        if (ref.isAbsolute || baseUri.isBlank()) {
-            ref.toString()
-        } else {
-            URI(baseUri).resolve(ref).toString()
+    origin: VesperRelayDashSourceOrigin,
+    baseDetails: Map<String, String>,
+): String {
+    val resolved =
+        runCatching {
+            val ref = URI(reference)
+            if (ref.isAbsolute || baseUri.isBlank()) {
+                ref.toString()
+            } else {
+                URI(baseUri).resolve(ref).normalize().toString()
+            }
+        }.getOrElse { reference }
+    val scheme = resolved.substringBefore(':', missingDelimiterValue = "").lowercase(Locale.US)
+    return when (origin.kind) {
+        "remote" -> {
+            if (scheme == "http" || scheme == "https") {
+                resolved
+            } else {
+                throw unsupportedMixedDashOrigin(baseDetails, origin, resolved)
+            }
         }
-    }.getOrElse { reference }
+        "file" -> {
+            if (scheme == "file") {
+                val root = File(URI(origin.rootUri)).canonicalFile.toPath()
+                val candidate = File(URI(resolved)).canonicalFile.toPath()
+                if (candidate.startsWith(root)) {
+                    resolved
+                } else {
+                    throw unsupportedMixedDashOrigin(baseDetails, origin, resolved)
+                }
+            } else {
+                throw unsupportedMixedDashOrigin(baseDetails, origin, resolved)
+            }
+        }
+        "content" -> {
+            if (scheme == "content" && contentUriWithinRoot(resolved, origin.rootUri)) {
+                resolved
+            } else {
+                throw unsupportedMixedDashOrigin(baseDetails, origin, resolved)
+            }
+        }
+        else -> throw unsupportedMixedDashOrigin(baseDetails, origin, resolved)
+    }
+}
 
 private fun mergedRemoteHeaders(
     source: VesperPlayerSource,
@@ -790,6 +983,105 @@ private fun String.isRemoteFetchHeaderAllowed(): Boolean =
         "range",
     )
 
+private class DashResourceException(
+    val code: String,
+    val status: Int,
+    override val message: String,
+) : IOException(message)
+
+private fun IOException.dashResourceErrorCode(): String =
+    when (this) {
+        is DashResourceException -> code
+        is FileNotFoundException -> "dash_resource_not_found"
+        else -> message?.httpErrorCode() ?: "host_fetch_failed"
+    }
+
+private fun IOException.dashResourceHttpStatus(): Int =
+    when (this) {
+        is DashResourceException -> status
+        is FileNotFoundException -> 404
+        else -> message?.httpErrorStatus() ?: 502
+    }
+
+private fun String.httpErrorStatus(): Int? =
+    Regex("""HTTP\s+(\d{3})""", RegexOption.IGNORE_CASE)
+        .find(this)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toIntOrNull()
+
+private fun String.httpErrorCode(): String? =
+    httpErrorStatus()?.let { status ->
+        if (status == 401 || status == 403) {
+            "dash_resource_permission_denied"
+        } else if (status == 404) {
+            "dash_resource_not_found"
+        } else {
+            "host_fetch_failed"
+        }
+    }
+
+private fun resolverDetails(
+    request: VesperRelayFormatAdaptationRequest,
+    resolver: VesperRelayDashResourceResolver,
+): Map<String, String> =
+    request.hostInputBaseDetails() + mapOf(
+        "sourceOrigin" to resolver.origin.kind,
+        "sourceKind" to request.source.kind.name,
+        "sourceProtocol" to request.source.protocol.name,
+        "uriScheme" to request.source.uri.substringBefore(':', missingDelimiterValue = "").lowercase(Locale.US),
+    )
+
+private fun Map<String, String>.withSegmentHash(uri: String): Map<String, String> =
+    this + mapOf("segmentUriHash" to hashForDiagnostic(uri))
+
+private fun Map<String, String>.withHostError(message: String?): Map<String, String> =
+    this + listOfNotNull(message?.takeIf { it.isNotBlank() }?.let { "hostError" to it }).toMap()
+
+private fun remoteDashOrigin(uri: String): VesperRelayDashSourceOrigin =
+    VesperRelayDashSourceOrigin(
+        kind = "remote",
+        manifestUri = uri,
+        rootUri = uri,
+    )
+
+private fun String.toFileDashOrigin(): VesperRelayDashSourceOrigin {
+    val manifestFile = toLocalDashFile().canonicalFile
+    val root = manifestFile.parentFile?.canonicalFile ?: manifestFile.canonicalFile
+    return VesperRelayDashSourceOrigin(
+        kind = "file",
+        manifestUri = manifestFile.toURI().toString(),
+        rootUri = root.toURI().toString(),
+    )
+}
+
+private fun String.toLocalDashFile(): File =
+    if (startsWith("file://", ignoreCase = true)) {
+        File(URI(this))
+    } else {
+        File(this)
+    }
+
+private fun String.toContentDashOrigin(): VesperRelayDashSourceOrigin {
+    val uri = URI(this)
+    val path = uri.path.orEmpty()
+    val rootPath = path.substringBeforeLast('/', missingDelimiterValue = "")
+    val rootUri = URI(uri.scheme, uri.authority, rootPath, null, null).toString()
+    return VesperRelayDashSourceOrigin(
+        kind = "content",
+        manifestUri = this,
+        rootUri = rootUri,
+    )
+}
+
+private fun contentUriWithinRoot(uri: String, rootUri: String): Boolean {
+    val parsed = runCatching { URI(uri) }.getOrNull() ?: return false
+    val root = runCatching { URI(rootUri) }.getOrNull() ?: return false
+    return parsed.scheme?.equals("content", ignoreCase = true) == true &&
+        parsed.authority == root.authority &&
+        parsed.path.orEmpty().startsWith(root.path.orEmpty())
+}
+
 internal fun VesperRelayFormatAdaptationRequest.hostInputBaseDetails(): Map<String, String> =
     mapOf(
         "sessionId" to sessionId,
@@ -797,6 +1089,9 @@ internal fun VesperRelayFormatAdaptationRequest.hostInputBaseDetails(): Map<Stri
         "resourcePath" to resourcePath,
         "inputMode" to HOST_PREPARED_DASH_INPUT_MODE,
         "sourceUriHash" to hashForDiagnostic(source.uri),
+        "sourceKind" to source.kind.name,
+        "sourceProtocol" to source.protocol.name,
+        "uriScheme" to source.uri.substringBefore(':', missingDelimiterValue = "").lowercase(Locale.US),
     ) + listOfNotNull(
         routeId?.let { "routeId" to it },
         routeName?.let { "routeName" to it },

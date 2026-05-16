@@ -3174,6 +3174,71 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_execute_json(
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
 /// handle access according to the host binding contract.
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_dash_bridge_parse_sidx(
+    data: *const u8,
+    data_len: usize,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if data.is_null() && data_len > 0 {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "data was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+
+        let data = if data_len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(data, data_len) }
+        };
+        let sidx = match player_dash_hls_bridge::mp4::parse_sidx(data) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let response_json = match serde_json::to_string(&sidx) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::BackendFailure,
+                        &format!("failed to encode SIDX response: {error}"),
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(response_json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
+/// the parameter is documented as optional or point to valid objects allocated by the
+/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
+/// handle access according to the host binding contract.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_dash_bridge_string_free(value: *mut c_char) {
     ffi_void(|| {
         let mut value = value;

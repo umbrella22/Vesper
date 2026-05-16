@@ -138,8 +138,11 @@ class VesperRelayServer @JvmOverloads constructor(
 
     private fun pruneExpiredEntries() {
         val now = nowMillisProvider()
-        entries.entries.removeIf { (_, entry) ->
-            entry.expiresAtMillis?.let { it <= now } ?: false
+        entries.forEach { (token, entry) ->
+            val expired = entry.expiresAtMillis?.let { it <= now } ?: false
+            if (expired && entries.remove(token, entry)) {
+                formatAdapter.invalidate(token)
+            }
         }
     }
 

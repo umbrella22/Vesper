@@ -135,6 +135,17 @@ final class VesperDashBridgeTests: XCTestCase {
         XCTAssertEqual(sidx.references[1].referencedSize, 150)
     }
 
+    func testSidxParserMapsInvalidMp4Errors() {
+        let truncated = Data([0, 0, 0, 16, 0x73, 0x69, 0x64, 0x78])
+
+        XCTAssertThrowsError(try VesperDashSidxParser.parse(data: truncated)) { error in
+            guard case VesperDashBridgeError.invalidMp4 = error else {
+                XCTFail("unexpected error \(error)")
+                return
+            }
+        }
+    }
+
     func testMp4BoxFilterRemovesTopLevelSidxBox() throws {
         var data = mp4Box(type: "styp", payload: Data([0x01]))
         data.append(mp4Box(type: "sidx", payload: Data([0x02, 0x03])))

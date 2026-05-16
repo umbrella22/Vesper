@@ -131,6 +131,44 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun pruneInvalidatesExpiredAdaptedEntriesOnNextRegister() {
+        var nowMillis = 1_000L
+        val adapter = RecordingFormatAdapter()
+        val ttlRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            tokenTtlMillis = 50L,
+            nowMillisProvider = { nowMillis },
+            formatAdapter = adapter,
+        )
+        try {
+            val expired = ttlRelay.register(
+                VesperPlayerSource.dash(
+                    uri = "https://example.com/video.mpd",
+                    label = "Episode",
+                ),
+                VesperRelayFormatAdaptationRegistration(
+                    fallbackFormat = VesperRelayFallbackFormat.MpegTs,
+                    config = VesperRelayFormatAdaptationConfig(enabled = true),
+                ),
+            )
+            nowMillis += 51L
+
+            ttlRelay.register(
+                VesperPlayerSource.remote(
+                    uri = "https://example.com/video.mp4",
+                    label = "Remote",
+                    protocol = VesperPlayerSourceProtocol.Progressive,
+                ),
+            )
+
+            assertEquals(listOf(expired.token), adapter.invalidated)
+        } finally {
+            ttlRelay.stop()
+        }
+    }
+
+    @Test
     fun handlesConcurrentRangeRequests() {
         val file = File.createTempFile("vesper-relay", ".mp4")
         file.writeText("abcdefghijklmnopqrstuvwxyz")
@@ -259,6 +297,88 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun sourcePreparerAdaptsLocalDashBeforeRelayRegistration() {
+        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val prepared = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(
+                    VesperPlayerSource.localDash(
+                        uri = "content://media/video/1.mpd",
+                        label = "Local DASH",
+                    ),
+                ),
+                capabilities = VesperExternalRouteCapabilities(
+                    supportsMpegTs = true,
+                ),
+                formatAdaptation = VesperRelayFormatAdaptationConfig(enabled = true),
+                routeId = "uuid:tv",
+                routeName = "Living Room TV",
+            ),
+        ) as VesperExternalSourcePreparationResult.Prepared
+
+        assertTrue(prepared.relayEnabled)
+        assertEquals(VesperRelayFallbackFormat.MpegTs, prepared.adaptedFormat)
+        assertEquals(VesperPlayerSourceProtocol.Progressive, prepared.source.protocol)
+        assertTrue(prepared.source.uri.endsWith(".ts"))
+    }
+
+    @Test
+    fun sourcePreparerFallsBackToMpegTsWhenPreferredHlsIsUnavailable() {
+        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val prepared = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(
+                    VesperPlayerSource.dash(
+                        uri = "https://example.com/video.mpd",
+                        label = "Episode",
+                    ),
+                ),
+                capabilities = VesperExternalRouteCapabilities(
+                    supportsHls = false,
+                    supportsMpegTs = true,
+                ),
+                formatAdaptation = VesperRelayFormatAdaptationConfig(
+                    enabled = true,
+                    preferredFallback = VesperRelayFallbackFormat.Hls,
+                ),
+            ),
+        ) as VesperExternalSourcePreparationResult.Prepared
+
+        assertEquals(VesperRelayFallbackFormat.MpegTs, prepared.adaptedFormat)
+        assertEquals(VesperPlayerSourceProtocol.Progressive, prepared.source.protocol)
+    }
+
+    @Test
+    fun sourcePreparerHonorsAllowHlsFalse() {
+        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val prepared = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(
+                    VesperPlayerSource.dash(
+                        uri = "https://example.com/video.mpd",
+                        label = "Episode",
+                    ),
+                ),
+                capabilities = VesperExternalRouteCapabilities(
+                    supportsHls = true,
+                    supportsMpegTs = true,
+                ),
+                formatAdaptation = VesperRelayFormatAdaptationConfig(
+                    enabled = true,
+                    preferredFallback = VesperRelayFallbackFormat.Hls,
+                    allowHls = false,
+                ),
+            ),
+        ) as VesperExternalSourcePreparationResult.Prepared
+
+        assertEquals(VesperRelayFallbackFormat.MpegTs, prepared.adaptedFormat)
+        assertEquals(VesperPlayerSourceProtocol.Progressive, prepared.source.protocol)
+    }
+
+    @Test
     fun relayServerServesAdaptedStreamsWithRangeAndDiagnostics() {
         val diagnostics = Collections.synchronizedList(mutableListOf<VesperRelayDiagnostic>())
         val adapter = RecordingFormatAdapter()
@@ -365,6 +485,7 @@ class VesperRelayServerTest {
 
 private class RecordingFormatAdapter : VesperRelayFormatAdapter {
     val requests = Collections.synchronizedList(mutableListOf<VesperRelayFormatAdaptationRequest>())
+    val invalidated = Collections.synchronizedList(mutableListOf<String>())
     private val payload = "0123456789".toByteArray()
 
     override fun open(
@@ -399,6 +520,10 @@ private class RecordingFormatAdapter : VesperRelayFormatAdapter {
                 headers = headers,
             ),
         )
+    }
+
+    override fun invalidate(sessionId: String) {
+        invalidated += sessionId
     }
 }
 

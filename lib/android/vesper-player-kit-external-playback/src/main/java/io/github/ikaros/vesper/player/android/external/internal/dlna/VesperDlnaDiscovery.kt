@@ -54,6 +54,7 @@ class VesperDlnaDiscovery(
     private val discoveryGeneration = AtomicLong(0)
     private val routeLock = Any()
     private val devices = ConcurrentHashMap<String, VesperDlnaDevice>()
+    private val pendingDescriptionFetches = ConcurrentHashMap.newKeySet<String>()
     private var executor: ExecutorService? = null
     private var notifyExecutor: ExecutorService? = null
     private var notifySocket: MulticastSocket? = null
@@ -76,6 +77,7 @@ class VesperDlnaDiscovery(
         running.set(false)
         discoveryGeneration.incrementAndGet()
         stopNotifyListener()
+        pendingDescriptionFetches.clear()
         executor?.shutdownNow()
         executor = null
         multicastLock?.let { lock ->
@@ -246,8 +248,25 @@ class VesperDlnaDiscovery(
             return
         }
         val request = message.toDescriptionRequest(System.currentTimeMillis()) ?: return
-        val device = fetchDevice(request, binding.network, generation) ?: return
-        upsertDevice(device, generation)
+        if (refreshKnownDevice(request, generation)) {
+            return
+        }
+        val fetchKey = request.descriptionFetchKey()
+        if (!pendingDescriptionFetches.add(fetchKey)) {
+            emitDiagnostic(
+                code = "description_fetch_coalesced",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                message = "A duplicate DLNA device description fetch is already in progress.",
+                details = request.details("fetchKey" to fetchKey),
+            )
+            return
+        }
+        try {
+            val device = fetchDevice(request, binding.network, generation) ?: return
+            upsertDevice(device, generation)
+        } finally {
+            pendingDescriptionFetches.remove(fetchKey)
+        }
     }
 
     private fun fetchDevice(
@@ -389,6 +408,32 @@ class VesperDlnaDiscovery(
             emitRoutesLocked()
         }
     }
+
+    private fun refreshKnownDevice(
+        request: VesperDlnaDescriptionRequest,
+        generation: Long,
+    ): Boolean =
+        synchronized(routeLock) {
+            if (!isDiscoveryActive(generation)) {
+                return@synchronized false
+            }
+            val entry = devices.entries.firstOrNull { (_, device) ->
+                device.matchesDescriptionRequest(request)
+            } ?: return@synchronized false
+            val refreshed = entry.value.copy(
+                usn = request.usn,
+                expiresAtMillis = maxOf(entry.value.expiresAtMillis, request.expiresAtMillis),
+            )
+            devices[entry.key] = refreshed
+            emitRoutesLocked()
+            emitDiagnostic(
+                code = "description_fetch_skipped_known_route",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                message = "Known DLNA route was refreshed from SSDP without refetching its description.",
+                details = request.details("routeId" to refreshed.routeId),
+            )
+            true
+        }
 
     private fun removeDevice(routeId: String, generation: Long): Boolean =
         synchronized(routeLock) {
@@ -720,6 +765,15 @@ private fun VesperDlnaDescriptionRequest.details(
         put("usn", usn)
         entries.forEach { (key, value) -> put(key, value) }
     }
+
+internal fun VesperDlnaDescriptionRequest.descriptionFetchKey(): String =
+    "${location.toExternalForm()}|${dlnaRouteIdentityKey(usn)}"
+
+internal fun VesperDlnaDevice.matchesDescriptionRequest(
+    request: VesperDlnaDescriptionRequest,
+): Boolean =
+    location.sameFile(request.location) ||
+        matchesRouteId(request.usn)
 
 private fun mSearchPayload(target: String, mx: Int): String =
     buildString {

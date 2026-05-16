@@ -395,9 +395,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       VesperExternalPlaybackMediaItem(
         sources: <VesperPlayerSource>[source],
         metadata: _systemPlaybackMetadataForSource(source),
-        formatAdaptation: const VesperExternalFormatAdaptationConfig.dlnaRemux(
-          debugDiagnostics: true,
-        ),
+        formatAdaptation: _externalFormatAdaptationForSource(source),
       ),
       startPositionMs: controller.snapshot.timeline.positionMs,
       autoplay: shouldAutoplay,
@@ -470,6 +468,17 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       artist: 'Vesper Player SDK',
       contentUri: source.uri,
     );
+  }
+
+  VesperExternalFormatAdaptationConfig _externalFormatAdaptationForSource(
+    VesperPlayerSource source,
+  ) {
+    if (source.protocol == VesperPlayerSourceProtocol.dash) {
+      return const VesperExternalFormatAdaptationConfig.dlnaRemux(
+        debugDiagnostics: true,
+      );
+    }
+    return const VesperExternalFormatAdaptationConfig.disabled();
   }
 
   VesperPlayerSource? _playlistSourceForItem(String itemId) {

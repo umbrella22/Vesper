@@ -341,11 +341,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
     _class: JClass<'_>,
     handle: jlong,
     buffer: jni::sys::jbyteArray,
+    offset: jint,
     length: jint,
 ) -> jint {
     let mut output = -1;
     let _ = unowned_env.with_env(|env| -> JniResult<()> {
         if handle == 0 || length <= 0 || buffer.is_null() {
+            output = 0;
+            return Ok(());
+        }
+        if offset < 0 {
             output = 0;
             return Ok(());
         }
@@ -356,7 +361,17 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
             unsafe { JByteArray::from_raw(env, buffer) }
         };
         let array_length = array.len(env).unwrap_or(0);
-        let target_length = (length as usize).min(array_length);
+        let offset = offset as usize;
+        let length = length as usize;
+        let Some(end) = offset.checked_add(length) else {
+            output = 0;
+            return Ok(());
+        };
+        if end > array_length {
+            output = 0;
+            return Ok(());
+        }
+        let target_length = length;
         if target_length == 0 {
             output = 0;
             return Ok(());
@@ -378,7 +393,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
         }
 
         let jbytes: Vec<i8> = bytes[..read].iter().map(|byte| *byte as i8).collect();
-        array.set_region(env, 0, &jbytes)?;
+        array.set_region(env, offset as jint, &jbytes)?;
         output = read as jint;
         Ok(())
     });

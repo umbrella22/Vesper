@@ -259,6 +259,20 @@ void main() {
     expect(restored.protocol, VesperPlayerSourceProtocol.dash);
   });
 
+  test('local DASH source keeps local kind and DASH protocol', () {
+    final source = VesperPlayerSource.localDash(
+      uri: 'content://media/video/demo/manifest.mpd',
+      label: 'Local DASH',
+    );
+
+    expect(source.kind, VesperPlayerSourceKind.local);
+    expect(source.protocol, VesperPlayerSourceProtocol.dash);
+
+    final restored = VesperPlayerSource.fromMap(source.toMap());
+    expect(restored.kind, VesperPlayerSourceKind.local);
+    expect(restored.protocol, VesperPlayerSourceProtocol.dash);
+  });
+
   test('live dvr timeline helpers fall back to seekable window end', () {
     const timeline = VesperTimeline(
       kind: VesperTimelineKind.liveDvr,

@@ -1,10 +1,41 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg
 
+import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class VesperRelayHostPreparedDashTest {
+    @Test
+    fun ffmpegInputStreamReadsIntoRequestedOffset() {
+        val native = RecordingFfmpegNativeApi(byteArrayOf(1, 2, 3))
+        val input = VesperRelayFfmpegInputStream(handle = 7L, native = native)
+        val buffer = byteArrayOf(9, 9, 9, 9, 9)
+
+        val read = input.read(buffer, 1, 3)
+
+        assertEquals(3, read)
+        assertEquals(listOf(ReadCall(handle = 7L, offset = 1, length = 3)), native.readCalls)
+        assertEquals(listOf(9, 1, 2, 3, 9), buffer.map(Byte::toInt))
+    }
+
+    @Test
+    fun ffmpegInputStreamHandlesZeroLengthClosedAndBoundsContract() {
+        val native = RecordingFfmpegNativeApi(byteArrayOf(1))
+        val input = VesperRelayFfmpegInputStream(handle = 7L, native = native)
+
+        assertEquals(0, input.read(ByteArray(4), 2, 0))
+        input.close()
+        assertEquals(0, input.read(ByteArray(4), 2, 0))
+        assertEquals(-1, input.read(ByteArray(4), 0, 1))
+
+        assertThrowsIndexOutOfBounds { input.read(ByteArray(4), -1, 1) }
+        assertThrowsIndexOutOfBounds { input.read(ByteArray(4), 0, -1) }
+        assertThrowsIndexOutOfBounds { input.read(ByteArray(4), 3, 2) }
+    }
+
     @Test
     fun plansStaticSegmentTemplateVideoAndAudioTracks() {
         val plan = planHostPreparedDash(
@@ -44,6 +75,129 @@ class VesperRelayHostPreparedDashTest {
         val audio = plan.tracks.last()
         assertEquals("audio-a1-init.mp4", audio.initializationUri?.substringAfterLast('/'))
         assertEquals("audio-7.m4s", audio.segments.first().uri.substringAfterLast('/'))
+    }
+
+    @Test
+    fun plansFileDashWithRelativeSegmentsUnderManifestDirectory() {
+        val root = Files.createTempDirectory("vesper-dash-plan").toFile()
+        val manifest = File(root, "manifest.mpd")
+        manifest.writeText("")
+
+        val plan = planHostPreparedDash(
+            manifestText = """
+                <MPD type="static" mediaPresentationDuration="PT4S">
+                  <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                      <Representation id="v1" codecs="avc1.640028">
+                        <SegmentTemplate timescale="1" duration="4" startNumber="1"
+                          initialization="init.mp4"
+                          media="segments/chunk-${'$'}Number${'$'}.m4s" />
+                      </Representation>
+                    </AdaptationSet>
+                  </Period>
+                </MPD>
+            """.trimIndent(),
+            manifestUri = manifest.toURI().toString(),
+            sourceOrigin = VesperRelayDashSourceOrigin(
+                kind = "file",
+                manifestUri = manifest.toURI().toString(),
+                rootUri = root.canonicalFile.toURI().toString(),
+            ),
+        )
+
+        assertEquals(File(root, "init.mp4").toURI().toString(), plan.tracks.first().initializationUri)
+        assertEquals(File(root, "segments/chunk-1.m4s").toURI().toString(), plan.tracks.first().segments.first().uri)
+    }
+
+    @Test
+    fun rejectsFileDashReferencesOutsideManifestDirectory() {
+        val root = Files.createTempDirectory("vesper-dash-plan").toFile()
+        val manifest = File(root, "manifest.mpd")
+        manifest.writeText("")
+
+        val error = unsupported {
+            planHostPreparedDash(
+                manifestText = """
+                    <MPD type="static" mediaPresentationDuration="PT4S">
+                      <Period>
+                        <AdaptationSet mimeType="video/mp4">
+                          <Representation id="v1" codecs="avc1.640028">
+                            <SegmentTemplate timescale="1" duration="4" startNumber="1"
+                              initialization="../init.mp4"
+                              media="chunk-${'$'}Number${'$'}.m4s" />
+                          </Representation>
+                        </AdaptationSet>
+                      </Period>
+                    </MPD>
+                """.trimIndent(),
+                manifestUri = manifest.toURI().toString(),
+                sourceOrigin = VesperRelayDashSourceOrigin(
+                    kind = "file",
+                    manifestUri = manifest.toURI().toString(),
+                    rootUri = root.canonicalFile.toURI().toString(),
+                ),
+            )
+        }
+
+        assertEquals("unsupported_mixed_dash_origin", error.diagnostic.code)
+    }
+
+    @Test
+    fun plansContentDashWithRelativeSegmentsUnderProviderRoot() {
+        val plan = planHostPreparedDash(
+            manifestText = """
+                <MPD type="static" mediaPresentationDuration="PT4S">
+                  <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                      <Representation id="v1" codecs="avc1.640028">
+                        <SegmentTemplate timescale="1" duration="4" startNumber="1"
+                          initialization="init.mp4"
+                          media="segments/chunk-${'$'}Number${'$'}.m4s" />
+                      </Representation>
+                    </AdaptationSet>
+                  </Period>
+                </MPD>
+            """.trimIndent(),
+            manifestUri = "content://media/video/demo/manifest.mpd",
+            sourceOrigin = VesperRelayDashSourceOrigin(
+                kind = "content",
+                manifestUri = "content://media/video/demo/manifest.mpd",
+                rootUri = "content://media/video/demo",
+            ),
+        )
+
+        assertEquals("content://media/video/demo/init.mp4", plan.tracks.first().initializationUri)
+        assertEquals("content://media/video/demo/segments/chunk-1.m4s", plan.tracks.first().segments.first().uri)
+    }
+
+    @Test
+    fun rejectsRemoteReferenceFromContentDash() {
+        val error = unsupported {
+            planHostPreparedDash(
+                manifestText = """
+                    <MPD type="static" mediaPresentationDuration="PT4S">
+                      <BaseURL>https://cdn.example/video/</BaseURL>
+                      <Period>
+                        <AdaptationSet mimeType="video/mp4">
+                          <Representation id="v1" codecs="avc1.640028">
+                            <SegmentTemplate timescale="1" duration="4" startNumber="1"
+                              initialization="init.mp4"
+                              media="chunk-${'$'}Number${'$'}.m4s" />
+                          </Representation>
+                        </AdaptationSet>
+                      </Period>
+                    </MPD>
+                """.trimIndent(),
+                manifestUri = "content://media/video/demo/manifest.mpd",
+                sourceOrigin = VesperRelayDashSourceOrigin(
+                    kind = "content",
+                    manifestUri = "content://media/video/demo/manifest.mpd",
+                    rootUri = "content://media/video/demo",
+                ),
+            )
+        }
+
+        assertEquals("unsupported_mixed_dash_origin", error.diagnostic.code)
     }
 
     @Test
@@ -133,5 +287,37 @@ class VesperRelayHostPreparedDashTest {
             throw AssertionError("Expected host input exception")
         } catch (error: VesperRelayHostInputException) {
             error
-        }
+    }
+}
+
+private data class ReadCall(
+    val handle: Long,
+    val offset: Int,
+    val length: Int,
+)
+
+private class RecordingFfmpegNativeApi(
+    private val payload: ByteArray,
+) : VesperRelayFfmpegNativeApi {
+    val readCalls = mutableListOf<ReadCall>()
+    var closedHandle: Long? = null
+
+    override fun read(handle: Long, buffer: ByteArray, offset: Int, length: Int): Int {
+        readCalls += ReadCall(handle, offset, length)
+        val count = minOf(length, payload.size)
+        payload.copyInto(buffer, destinationOffset = offset, endIndex = count)
+        return count
+    }
+
+    override fun close(handle: Long) {
+        closedHandle = handle
+    }
+}
+
+private fun assertThrowsIndexOutOfBounds(block: () -> Unit) {
+    try {
+        block()
+        fail("expected IndexOutOfBoundsException")
+    } catch (_: IndexOutOfBoundsException) {
+    }
 }

@@ -35,6 +35,19 @@ data class VesperPlayerSource(
                 headers = headers,
             )
 
+        fun localDash(
+            uri: String,
+            label: String,
+            headers: Map<String, String> = emptyMap(),
+        ): VesperPlayerSource =
+            VesperPlayerSource(
+                uri = uri,
+                label = label,
+                kind = VesperPlayerSourceKind.Local,
+                protocol = VesperPlayerSourceProtocol.Dash,
+                headers = headers,
+            )
+
         fun remote(
             uri: String,
             label: String,

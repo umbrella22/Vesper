@@ -657,6 +657,12 @@ bool vesper_dash_bridge_execute_json(
     char **out_json,
     char **out_error_message);
 
+bool vesper_dash_bridge_parse_sidx(
+    const uint8_t *data,
+    uintptr_t data_len,
+    char **out_json,
+    char **out_error_message);
+
 void vesper_dash_bridge_string_free(char *value);
 
 #endif

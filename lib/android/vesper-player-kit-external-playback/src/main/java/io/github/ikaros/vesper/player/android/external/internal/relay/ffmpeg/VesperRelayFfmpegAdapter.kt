@@ -168,8 +168,9 @@ data class VesperRelayFfmpegOpenResult(
     val errorDetails: Map<String, String>,
 )
 
-private class VesperRelayFfmpegInputStream(
+internal class VesperRelayFfmpegInputStream(
     private var handle: Long,
+    private val native: VesperRelayFfmpegNativeApi = VesperRelayFfmpegNativeBridge,
 ) : InputStream() {
     override fun read(): Int {
         val buffer = ByteArray(1)
@@ -178,31 +179,33 @@ private class VesperRelayFfmpegInputStream(
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        if (handle == 0L) {
-            return -1
+        if (offset < 0 || length < 0 || length > buffer.size - offset) {
+            throw IndexOutOfBoundsException(
+                "offset=$offset length=$length bufferSize=${buffer.size}",
+            )
         }
         if (length == 0) {
             return 0
         }
-        val target = if (offset == 0 && length == buffer.size) {
-            buffer
-        } else {
-            ByteArray(length)
+        if (handle == 0L) {
+            return -1
         }
-        val read = VesperRelayFfmpegNative.read(handle, target, length)
-        if (read > 0 && target !== buffer) {
-            System.arraycopy(target, 0, buffer, offset, read)
-        }
-        return read
+        return native.read(handle, buffer, offset, length)
     }
 
     override fun close() {
         val current = handle
         handle = 0
         if (current != 0L) {
-            VesperRelayFfmpegNative.close(current)
+            native.close(current)
         }
     }
+}
+
+internal interface VesperRelayFfmpegNativeApi {
+    fun read(handle: Long, buffer: ByteArray, offset: Int, length: Int): Int
+
+    fun close(handle: Long)
 }
 
 private object VesperRelayFfmpegNative {
@@ -228,13 +231,22 @@ private object VesperRelayFfmpegNative {
     external fun open(requestJson: String): VesperRelayFfmpegOpenResult
 
     @JvmStatic
-    external fun read(handle: Long, buffer: ByteArray, length: Int): Int
+    external fun read(handle: Long, buffer: ByteArray, offset: Int, length: Int): Int
 
     @JvmStatic
     external fun close(handle: Long)
 
     @JvmStatic
     external fun invalidate(sessionId: String)
+}
+
+private object VesperRelayFfmpegNativeBridge : VesperRelayFfmpegNativeApi {
+    override fun read(handle: Long, buffer: ByteArray, offset: Int, length: Int): Int =
+        VesperRelayFfmpegNative.read(handle, buffer, offset, length)
+
+    override fun close(handle: Long) {
+        VesperRelayFfmpegNative.close(handle)
+    }
 }
 
 private fun VesperRelayFormatAdaptationRequest.toNativeJson(

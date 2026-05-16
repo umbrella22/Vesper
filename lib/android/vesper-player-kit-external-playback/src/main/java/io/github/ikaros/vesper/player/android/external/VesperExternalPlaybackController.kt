@@ -624,7 +624,7 @@ class VesperExternalPlaybackController(context: Context) {
                 kind = VesperExternalPlaybackRouteKind.Dlna,
                 manufacturer = device.manufacturer,
                 modelName = device.modelName,
-                active = activeRouteId == device.routeId,
+                active = activeRouteId?.let(device::matchesRouteId) == true,
                 available = true,
             )
         }
