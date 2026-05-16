@@ -35,6 +35,11 @@ data class VesperRelayHandle(
     val url: String,
 )
 
+class VesperRelayRegistrationException(
+    val status: Int,
+    val diagnostic: VesperRelayDiagnostic,
+) : Exception(diagnostic.message)
+
 class VesperRelayServer @JvmOverloads constructor(
     context: Context? = null,
     private val advertisedAddressProvider: () -> InetAddress? = ::findLanIpv4Address,
@@ -99,19 +104,60 @@ class VesperRelayServer @JvmOverloads constructor(
         adaptation: VesperRelayFormatAdaptationRegistration? = null,
     ): VesperRelayHandle {
         pruneExpiredEntries()
+        val token = nextToken()
+        adaptation?.let { registration ->
+            val validationRequest = source.toFormatAdaptationRequest(
+                token = token,
+                adaptation = registration,
+                resourcePath = "",
+                headOnly = false,
+                range = null,
+                requestHeaders = emptyMap(),
+            )
+            formatAdapter.validate(validationRequest)?.let { failure ->
+                val diagnostic = failure.diagnostic.withHttpStatus(failure.status)
+                emitDiagnostic(diagnostic)
+                throw VesperRelayRegistrationException(failure.status, diagnostic)
+            }
+        }
         start()
         val socket = serverSocket ?: throw IllegalStateException("Relay server is not running.")
         val host = advertisedAddress?.hostAddress
             ?: throw IllegalStateException("No LAN address is available for relay.")
-        val token = nextToken()
+        val relayPath = source.relayPath(token, adaptation)
         entries[token] = RelayEntry(
             source = source,
             adaptation = adaptation,
             expiresAtMillis = tokenExpiresAtMillis(),
         )
+        try {
+            adaptation?.let { registration ->
+                val prewarmRequest = source.toFormatAdaptationRequest(
+                    token = token,
+                    adaptation = registration,
+                    resourcePath = relayPath.substringAfterLast('/', missingDelimiterValue = ""),
+                    headOnly = false,
+                    range = null,
+                    requestHeaders = emptyMap(),
+                )
+                formatAdapter.prewarm(prewarmRequest)?.let { failure ->
+                    val diagnostic = failure.diagnostic.withHttpStatus(failure.status)
+                    emitDiagnostic(diagnostic)
+                    throw VesperRelayRegistrationException(failure.status, diagnostic)
+                }
+            }
+        } catch (error: VesperRelayRegistrationException) {
+            entries.remove(token)
+            formatAdapter.invalidate(token)
+            throw error
+        } catch (error: RuntimeException) {
+            entries.remove(token)
+            formatAdapter.invalidate(token)
+            throw error
+        }
         return VesperRelayHandle(
             token = token,
-            url = "http://$host:${socket.localPort}${source.relayPath(token, adaptation)}",
+            url = "http://$host:${socket.localPort}$relayPath",
         )
     }
 
@@ -265,18 +311,13 @@ class VesperRelayServer @JvmOverloads constructor(
         output: OutputStream,
     ) {
         val adaptation = entry.adaptation ?: return relaySource(entry.source, headOnly, range, output)
-        val request = VesperRelayFormatAdaptationRequest(
-            sessionId = token,
-            source = entry.source,
-            fallbackFormat = adaptation.fallbackFormat,
+        val request = entry.source.toFormatAdaptationRequest(
+            token = token,
+            adaptation = adaptation,
             resourcePath = resourcePath,
+            headOnly = headOnly,
             range = range,
             requestHeaders = headers,
-            enableRangeCache = adaptation.config.enableRangeCache,
-            debugDiagnostics = adaptation.config.debugDiagnostics,
-            headOnly = headOnly,
-            routeId = adaptation.routeId,
-            routeName = adaptation.routeName,
         )
         when (val result = formatAdapter.open(request)) {
             is VesperRelayFormatAdaptationResult.Failure -> {
@@ -497,6 +538,28 @@ private data class RelayEntry(
     val adaptation: VesperRelayFormatAdaptationRegistration?,
     val expiresAtMillis: Long?,
 )
+
+private fun VesperPlayerSource.toFormatAdaptationRequest(
+    token: String,
+    adaptation: VesperRelayFormatAdaptationRegistration,
+    resourcePath: String,
+    headOnly: Boolean,
+    range: ByteRangeRequest?,
+    requestHeaders: Map<String, String>,
+): VesperRelayFormatAdaptationRequest =
+    VesperRelayFormatAdaptationRequest(
+        sessionId = token,
+        source = this,
+        fallbackFormat = adaptation.fallbackFormat,
+        resourcePath = resourcePath,
+        range = range,
+        requestHeaders = requestHeaders,
+        enableRangeCache = adaptation.config.enableRangeCache,
+        debugDiagnostics = adaptation.config.debugDiagnostics,
+        headOnly = headOnly,
+        routeId = adaptation.routeId,
+        routeName = adaptation.routeName,
+    )
 
 private fun VesperRelayDiagnostic.withHttpStatus(status: Int): VesperRelayDiagnostic =
     copy(details = details + ("httpStatus" to status.toString()))

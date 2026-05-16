@@ -218,46 +218,24 @@ internal class VesperRelayHostInputSession private constructor(
         ).toMap()
 
     companion object {
+        fun validate(
+            context: Context,
+            request: VesperRelayFormatAdaptationRequest,
+            resolverFactory: VesperRelayDashResourceResolverFactory = VesperRelayDashResourceResolverFactory(),
+        ) {
+            validateDashSourceProtocol(request)
+            val resolver = resolverFactory.create(context, request)
+            planHostPreparedDash(request, resolver)
+        }
+
         fun create(
             context: Context,
             request: VesperRelayFormatAdaptationRequest,
             resolverFactory: VesperRelayDashResourceResolverFactory = VesperRelayDashResourceResolverFactory(),
         ): VesperRelayHostInputSession {
-            if (request.source.protocol != VesperPlayerSourceProtocol.Dash) {
-                throw request.hostInputException(
-                    code = "unsupported_dash_layout",
-                    status = 415,
-                    message = "Host-prepared relay remux v1 only accepts DASH sources.",
-                    details = mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
-                )
-            }
+            validateDashSourceProtocol(request)
             val resolver = resolverFactory.create(context, request)
-            val manifestText =
-                try {
-                    resolver.readManifest()
-                } catch (error: SocketTimeoutException) {
-                    throw request.hostInputException(
-                        code = "host_fetch_timeout",
-                        status = 504,
-                        message = "Timed out while fetching DASH MPD for relay remux.",
-                        details = resolverDetails(request, resolver).withSegmentHash(request.source.uri),
-                    )
-                } catch (error: IOException) {
-                    throw request.hostInputException(
-                        code = error.dashResourceErrorCode(),
-                        status = error.dashResourceHttpStatus(),
-                        message = "Failed to fetch DASH MPD for relay remux.",
-                        details = resolverDetails(request, resolver)
-                            .withSegmentHash(request.source.uri)
-                            .withHostError(error.message ?: error.javaClass.simpleName),
-                    )
-                }
-            val plan = planHostPreparedDash(
-                manifestText = manifestText,
-                manifestUri = resolver.manifestLogicalUri,
-                sourceOrigin = resolver.origin,
-                baseDetails = request.hostInputBaseDetails(),
-            )
+            val plan = planHostPreparedDash(request, resolver)
             val rootDir = File(
                 context.cacheDir,
                 "vesper-relay-ffmpeg-host-input/${safeFileComponent(request.sessionId)}",
@@ -296,6 +274,49 @@ internal class VesperRelayHostInputSession private constructor(
                 plannedTracks = plannedTracks,
                 baseDetails = request.hostInputBaseDetails(),
                 resolver = resolver,
+            )
+        }
+
+        private fun validateDashSourceProtocol(request: VesperRelayFormatAdaptationRequest) {
+            if (request.source.protocol != VesperPlayerSourceProtocol.Dash) {
+                throw request.hostInputException(
+                    code = "unsupported_dash_layout",
+                    status = 415,
+                    message = "Host-prepared relay remux v1 only accepts DASH sources.",
+                    details = mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
+                )
+            }
+        }
+
+        private fun planHostPreparedDash(
+            request: VesperRelayFormatAdaptationRequest,
+            resolver: VesperRelayDashResourceResolver,
+        ): VesperRelayDashPlan {
+            val manifestText =
+                try {
+                    resolver.readManifest()
+                } catch (error: SocketTimeoutException) {
+                    throw request.hostInputException(
+                        code = "host_fetch_timeout",
+                        status = 504,
+                        message = "Timed out while fetching DASH MPD for relay remux.",
+                        details = resolverDetails(request, resolver).withSegmentHash(request.source.uri),
+                    )
+                } catch (error: IOException) {
+                    throw request.hostInputException(
+                        code = error.dashResourceErrorCode(),
+                        status = error.dashResourceHttpStatus(),
+                        message = "Failed to fetch DASH MPD for relay remux.",
+                        details = resolverDetails(request, resolver)
+                            .withSegmentHash(request.source.uri)
+                            .withHostError(error.message ?: error.javaClass.simpleName),
+                    )
+                }
+            return planHostPreparedDash(
+                manifestText = manifestText,
+                manifestUri = resolver.manifestLogicalUri,
+                sourceOrigin = resolver.origin,
+                baseDetails = request.hostInputBaseDetails(),
             )
         }
     }

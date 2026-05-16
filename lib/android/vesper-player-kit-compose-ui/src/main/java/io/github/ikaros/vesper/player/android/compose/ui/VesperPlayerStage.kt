@@ -86,6 +86,11 @@ fun VesperPlayerStage(
     onPendingSeekRatioChange: (Float?) -> Unit,
     onOpenSheet: (VesperPlayerStageSheet) -> Unit,
     onToggleFullscreen: () -> Unit,
+    onTogglePlayback: () -> Unit = { controller.togglePause() },
+    onSeekToRatio: (Float) -> Unit = controller::seekToRatio,
+    onSeekToLiveEdge: () -> Unit = controller::seekToLiveEdge,
+    onSetPlaybackRate: (Float) -> Unit = controller::setPlaybackRate,
+    playbackRateControlsEnabled: Boolean = true,
     currentBrightnessRatio: () -> Float? = { null },
     onSetBrightnessRatio: (Float) -> Float? = { null },
     currentVolumeRatio: () -> Float? = { null },
@@ -106,7 +111,7 @@ fun VesperPlayerStage(
     fun endTemporarySpeedGesture() {
         val restoreRate = speedGestureRestoreRate ?: return
         speedGestureRestoreRate = null
-        controller.setPlaybackRate(restoreRate)
+        onSetPlaybackRate(restoreRate)
     }
 
     LaunchedEffect(gestureFeedback) {
@@ -152,13 +157,16 @@ fun VesperPlayerStage(
                             onControlsVisibilityChange(!latestControlsVisible)
                         },
                         onDoubleTap = { _ ->
-                            controller.togglePause()
+                            onTogglePlayback()
                             onControlsVisibilityChange(true)
                         },
                         onLongPress = {
+                            if (!playbackRateControlsEnabled) {
+                                return@detectTapGestures
+                            }
                             if (speedGestureRestoreRate == null) {
                                 speedGestureRestoreRate = latestPlaybackRate
-                                controller.setPlaybackRate(2f)
+                                onSetPlaybackRate(2f)
                             }
                             gestureFeedback =
                                 StageGestureFeedback(
@@ -293,7 +301,7 @@ fun VesperPlayerStage(
                         },
                         onDragEnd = {
                             if (gestureKind == StageAreaGestureKind.Seek) {
-                                controller.seekToRatio(seekGestureRatio)
+                                onSeekToRatio(seekGestureRatio)
                                 onPendingSeekRatioChange(null)
                                 onControlsVisibilityChange(true)
                             }
@@ -398,7 +406,7 @@ fun VesperPlayerStage(
                             iconSize = 24.dp,
                             containerAlpha = 0f,
                             onClick = {
-                                controller.togglePause()
+                                onTogglePlayback()
                                 onControlsVisibilityChange(true)
                             },
                         )
@@ -412,7 +420,7 @@ fun VesperPlayerStage(
                                 onControlsVisibilityChange(true)
                             },
                             onSeekCommit = { ratio ->
-                                controller.seekToRatio(ratio)
+                                onSeekToRatio(ratio)
                                 onPendingSeekRatioChange(null)
                                 onControlsVisibilityChange(true)
                             },
@@ -432,7 +440,7 @@ fun VesperPlayerStage(
                                 label = liveButtonLabel(uiState.timeline),
                                 compact = true,
                                 onClick = {
-                                    controller.seekToLiveEdge()
+                                    onSeekToLiveEdge()
                                     onControlsVisibilityChange(true)
                                 },
                             )
@@ -470,7 +478,7 @@ fun VesperPlayerStage(
                                 onControlsVisibilityChange(true)
                             },
                             onSeekCommit = { ratio ->
-                                controller.seekToRatio(ratio)
+                                onSeekToRatio(ratio)
                                 onPendingSeekRatioChange(null)
                                 onControlsVisibilityChange(true)
                             },
@@ -496,7 +504,7 @@ fun VesperPlayerStage(
                                 iconSize = 22.dp,
                                 containerAlpha = 0f,
                                 onClick = {
-                                    controller.togglePause()
+                                    onTogglePlayback()
                                     onControlsVisibilityChange(true)
                                 },
                             )
@@ -509,18 +517,20 @@ fun VesperPlayerStage(
                                         label = liveButtonLabel(uiState.timeline),
                                         compact = true,
                                         onClick = {
-                                            controller.seekToLiveEdge()
+                                            onSeekToLiveEdge()
                                             onControlsVisibilityChange(true)
                                         },
                                     )
                                 }
-                                StagePillButton(
-                                    label = speedLabel,
-                                    compact = true,
-                                    onClick = {
-                                        onOpenSheet(VesperPlayerStageSheet.Speed)
-                                    },
-                                )
+                                if (playbackRateControlsEnabled) {
+                                    StagePillButton(
+                                        label = speedLabel,
+                                        compact = true,
+                                        onClick = {
+                                            onOpenSheet(VesperPlayerStageSheet.Speed)
+                                        },
+                                    )
+                                }
                                 StagePillButton(
                                     label = qualityLabel,
                                     compact = true,

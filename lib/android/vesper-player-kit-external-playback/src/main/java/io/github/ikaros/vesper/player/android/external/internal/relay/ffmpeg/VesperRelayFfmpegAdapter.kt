@@ -31,6 +31,107 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
                 .takeIf { it.isNotBlank() }
         }.getOrNull()
 
+    override fun validate(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult.Failure? {
+        val context = appContext
+            ?: return VesperRelayFormatAdaptationResult.Failure(
+                status = 503,
+                diagnostic = VesperRelayDiagnostic(
+                    code = "missing_runtime",
+                    message = "Android context is required for host-prepared relay remux input.",
+                    details = request.baseDiagnosticDetails(),
+                ),
+            )
+        return try {
+            VesperRelayHostInputSession.validate(context, request)
+            null
+        } catch (error: VesperRelayHostInputException) {
+            VesperRelayFormatAdaptationResult.Failure(
+                status = error.status,
+                diagnostic = error.diagnostic,
+            )
+        }
+    }
+
+    override fun prewarm(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult.Failure? {
+        val pluginProfileHash = profileHash
+        val runtimeHash = runtimeProfileHash
+        if (!runtimeHash.isNullOrBlank() && runtimeHash != pluginProfileHash) {
+            return VesperRelayFormatAdaptationResult.Failure(
+                status = 500,
+                diagnostic = VesperRelayDiagnostic(
+                    code = "profile_mismatch",
+                    message = "FFmpeg relay runtime profile does not match the relay JNI profile.",
+                    details = request.baseDiagnosticDetails() + mapOf(
+                        "runtimeProfileHash" to runtimeHash,
+                        "pluginProfileHash" to (pluginProfileHash ?: "unknown"),
+                    ),
+                ),
+            )
+        }
+
+        val context = appContext
+            ?: return VesperRelayFormatAdaptationResult.Failure(
+                status = 503,
+                diagnostic = VesperRelayDiagnostic(
+                    code = "missing_runtime",
+                    message = "Android context is required for host-prepared relay remux input.",
+                    details = request.baseDiagnosticDetails(),
+                ),
+            )
+        val hostSession =
+            try {
+                hostInputSession(context, request)
+            } catch (error: VesperRelayHostInputException) {
+                return VesperRelayFormatAdaptationResult.Failure(
+                    status = error.status,
+                    diagnostic = error.diagnostic,
+                )
+            }
+
+        val nativeRequest = request.toNativeJson(hostSession.tracks)
+        val opened = runCatching {
+            VesperRelayFfmpegNative.prewarm(nativeRequest)
+        }.getOrElse { error ->
+            hostInputSessions.remove(request.sessionId, hostSession)
+            hostSession.close()
+            return VesperRelayFormatAdaptationResult.Failure(
+                status = 503,
+                diagnostic = VesperRelayDiagnostic(
+                    code = "missing_runtime",
+                    message = error.message ?: "Failed to prewarm FFmpeg relay runtime.",
+                    details = request.baseDiagnosticDetails(),
+                ),
+            )
+        }
+
+        val errorCode = opened.errorCode
+        if (!errorCode.isNullOrBlank()) {
+            val hostDiagnostic = hostSession.failureDiagnostic()
+            hostInputSessions.remove(request.sessionId, hostSession)
+            hostSession.close()
+            if (hostDiagnostic != null) {
+                return VesperRelayFormatAdaptationResult.Failure(
+                    status = hostDiagnosticStatus(hostDiagnostic),
+                    diagnostic = hostDiagnostic,
+                )
+            }
+            return VesperRelayFormatAdaptationResult.Failure(
+                status = opened.status.takeIf { it > 0 } ?: 503,
+                diagnostic = VesperRelayDiagnostic(
+                    code = errorCode,
+                    message = opened.errorMessage ?: "FFmpeg relay prewarm failed.",
+                    details = request.baseDiagnosticDetails() + opened.errorDetails,
+                ),
+            )
+        }
+
+        return null
+    }
+
     override fun open(
         request: VesperRelayFormatAdaptationRequest,
     ): VesperRelayFormatAdaptationResult {
@@ -229,6 +330,9 @@ private object VesperRelayFfmpegNative {
 
     @JvmStatic
     external fun open(requestJson: String): VesperRelayFfmpegOpenResult
+
+    @JvmStatic
+    external fun prewarm(requestJson: String): VesperRelayFfmpegOpenResult
 
     @JvmStatic
     external fun read(handle: Long, buffer: ByteArray, offset: Int, length: Int): Int

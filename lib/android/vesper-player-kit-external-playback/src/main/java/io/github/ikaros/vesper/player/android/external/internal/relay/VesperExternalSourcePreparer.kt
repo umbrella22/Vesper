@@ -99,7 +99,17 @@ class VesperExternalPlaybackSourcePreparer(
                     routeName = request.routeName,
                 )
             }
-            val handle = relayServer.register(source, adaptation)
+            val handle =
+                try {
+                    relayServer.register(source, adaptation)
+                } catch (error: VesperRelayRegistrationException) {
+                    unsupportedReasons += UnsupportedSourceReason(
+                        message = error.diagnostic.message,
+                        code = error.diagnostic.code,
+                        details = error.diagnostic.details + source.dashRelaySourceDetails(request),
+                    )
+                    continue
+                }
             val relayed = VesperPlayerSource.remote(
                 uri = handle.url,
                 label = source.label,

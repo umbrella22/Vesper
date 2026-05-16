@@ -70,6 +70,10 @@ interface VesperRelayFormatAdapter {
     val profileHash: String?
         get() = null
 
+    fun validate(request: VesperRelayFormatAdaptationRequest): VesperRelayFormatAdaptationResult.Failure? = null
+
+    fun prewarm(request: VesperRelayFormatAdaptationRequest): VesperRelayFormatAdaptationResult.Failure? = null
+
     fun open(request: VesperRelayFormatAdaptationRequest): VesperRelayFormatAdaptationResult
 
     fun invalidate(sessionId: String) = Unit
@@ -78,7 +82,15 @@ interface VesperRelayFormatAdapter {
 class VesperUnavailableRelayFormatAdapter(
     private val reason: String = "FFmpeg relay runtime is not packaged.",
 ) : VesperRelayFormatAdapter {
+    override fun prewarm(request: VesperRelayFormatAdaptationRequest): VesperRelayFormatAdaptationResult.Failure =
+        missingRuntimeFailure(request)
+
     override fun open(request: VesperRelayFormatAdaptationRequest): VesperRelayFormatAdaptationResult =
+        missingRuntimeFailure(request)
+
+    private fun missingRuntimeFailure(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult.Failure =
         VesperRelayFormatAdaptationResult.Failure(
             status = 503,
             diagnostic = VesperRelayDiagnostic(

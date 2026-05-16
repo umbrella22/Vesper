@@ -734,6 +734,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
         let player = AVPlayer(playerItem: item)
+        player.allowsExternalPlayback = true
         player.automaticallyWaitsToMinimizeStalling =
             bufferingPolicy.automaticallyWaitsToMinimizeStalling
         applyDefaultPlaybackRate(desiredPlaybackRate, to: player)

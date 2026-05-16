@@ -18,6 +18,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class VesperRelayServerTest {
@@ -26,11 +27,14 @@ class VesperRelayServerTest {
         advertisedAddressProvider = { loopback },
         bindAddressProvider = { loopback },
     )
+    private val additionalRelays = mutableListOf<VesperRelayServer>()
     private var upstream: RecordingHttpServer? = null
 
     @After
     fun tearDown() {
         relay.stop()
+        additionalRelays.forEach { it.stop() }
+        additionalRelays.clear()
         upstream?.stop(0)
         upstream = null
     }
@@ -237,7 +241,7 @@ class VesperRelayServerTest {
 
     @Test
     fun sourcePreparerAdaptsDlnaDashWhenEnabled() {
-        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val preparer = VesperExternalPlaybackSourcePreparer(relayWithAdapter(RecordingFormatAdapter()))
         val dash = VesperPlayerSource.dash(
             uri = "https://example.com/video.mpd",
             label = "Episode",
@@ -298,7 +302,7 @@ class VesperRelayServerTest {
 
     @Test
     fun sourcePreparerAdaptsLocalDashBeforeRelayRegistration() {
-        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val preparer = VesperExternalPlaybackSourcePreparer(relayWithAdapter(RecordingFormatAdapter()))
         val prepared = preparer.prepare(
             VesperExternalSourcePreparationRequest(
                 target = VesperExternalPlaybackTarget.Dlna,
@@ -324,8 +328,47 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun sourcePreparerRejectsDashWithoutSegmentTemplateBeforeRegistration() {
+        val adapter = RejectingValidationAdapter()
+        val validatingRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            formatAdapter = adapter,
+        )
+        val preparer = VesperExternalPlaybackSourcePreparer(validatingRelay)
+        val result = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(
+                    VesperPlayerSource.dash(
+                        uri = "https://example.com/video.mpd",
+                        label = "Episode",
+                    ),
+                ),
+                capabilities = VesperExternalRouteCapabilities(
+                    supportsProgressive = true,
+                    supportsHls = true,
+                    supportsMpegTs = true,
+                ),
+                formatAdaptation = VesperRelayFormatAdaptationConfig(
+                    enabled = true,
+                    preferredFallback = VesperRelayFallbackFormat.MpegTs,
+                ),
+            ),
+        )
+
+        assertTrue(result is VesperExternalSourcePreparationResult.Unsupported)
+        val unsupported = result as VesperExternalSourcePreparationResult.Unsupported
+        assertEquals("unsupported_dash_layout", unsupported.code)
+        assertTrue(unsupported.message.contains("SegmentTemplate"))
+        assertEquals(1, adapter.validateRequests.size)
+        assertTrue(adapter.prewarmRequests.isEmpty())
+        assertTrue(adapter.openRequests.isEmpty())
+    }
+
+    @Test
     fun sourcePreparerFallsBackToMpegTsWhenPreferredHlsIsUnavailable() {
-        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val preparer = VesperExternalPlaybackSourcePreparer(relayWithAdapter(RecordingFormatAdapter()))
         val prepared = preparer.prepare(
             VesperExternalSourcePreparationRequest(
                 target = VesperExternalPlaybackTarget.Dlna,
@@ -352,7 +395,7 @@ class VesperRelayServerTest {
 
     @Test
     fun sourcePreparerHonorsAllowHlsFalse() {
-        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val preparer = VesperExternalPlaybackSourcePreparer(relayWithAdapter(RecordingFormatAdapter()))
         val prepared = preparer.prepare(
             VesperExternalSourcePreparationRequest(
                 target = VesperExternalPlaybackTarget.Dlna,
@@ -406,6 +449,9 @@ class VesperRelayServerTest {
                 ),
             )
 
+            assertEquals(1, adapter.prewarmRequests.size)
+            assertEquals(0, adapter.requests.size)
+
             val range = request(handle.url, headers = mapOf("Range" to "bytes=2-5"))
 
             assertEquals(206, range.status)
@@ -422,6 +468,8 @@ class VesperRelayServerTest {
             assertEquals("range_not_ready", diagnostics.single().code)
             assertEquals("416", diagnostics.single().details["httpStatus"])
             assertTrue(invalid.body.contains("detail.httpStatus=416"))
+            assertEquals(1, adapter.prewarmRequests.size)
+            assertEquals(2, adapter.requests.size)
         } finally {
             adaptedRelay.stop()
         }
@@ -481,12 +529,27 @@ class VesperRelayServerTest {
         server.start()
         return server
     }
+
+    private fun relayWithAdapter(adapter: VesperRelayFormatAdapter): VesperRelayServer =
+        VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            formatAdapter = adapter,
+        ).also { additionalRelays += it }
 }
 
 private class RecordingFormatAdapter : VesperRelayFormatAdapter {
     val requests = Collections.synchronizedList(mutableListOf<VesperRelayFormatAdaptationRequest>())
+    val prewarmRequests = Collections.synchronizedList(mutableListOf<VesperRelayFormatAdaptationRequest>())
     val invalidated = Collections.synchronizedList(mutableListOf<String>())
     private val payload = "0123456789".toByteArray()
+
+    override fun prewarm(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult.Failure? {
+        prewarmRequests += request
+        return null
+    }
 
     override fun open(
         request: VesperRelayFormatAdaptationRequest,
@@ -524,6 +587,46 @@ private class RecordingFormatAdapter : VesperRelayFormatAdapter {
 
     override fun invalidate(sessionId: String) {
         invalidated += sessionId
+    }
+}
+
+private class RejectingValidationAdapter : VesperRelayFormatAdapter {
+    val validateRequests = mutableListOf<VesperRelayFormatAdaptationRequest>()
+    val openRequests = mutableListOf<VesperRelayFormatAdaptationRequest>()
+    val prewarmRequests = mutableListOf<VesperRelayFormatAdaptationRequest>()
+
+    override fun validate(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult.Failure? {
+        validateRequests += request
+        return VesperRelayFormatAdaptationResult.Failure(
+            status = 415,
+            diagnostic = VesperRelayDiagnostic(
+                code = "unsupported_dash_layout",
+                message = "Host-prepared relay remux v1 requires SegmentTemplate tracks.",
+                details = mapOf("sessionId" to request.sessionId),
+            ),
+        )
+    }
+
+    override fun open(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult {
+        openRequests += request
+        return VesperRelayFormatAdaptationResult.Failure(
+            status = 500,
+            diagnostic = VesperRelayDiagnostic(
+                code = "unexpected_open",
+                message = "Open should not be called after validation failure.",
+            ),
+        )
+    }
+
+    override fun prewarm(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult.Failure? {
+        prewarmRequests += request
+        return null
     }
 }
 

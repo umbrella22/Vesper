@@ -336,6 +336,69 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_prewarm(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    request_json: JString<'_>,
+) -> jobject {
+    let mut output = std::ptr::null_mut();
+    let _ = unowned_env.with_env(|env| -> JniResult<()> {
+        let request = match decode_request(env, request_json) {
+            Ok(request) => request,
+            Err(error) => {
+                output = open_result_object(
+                    env,
+                    OpenResultFields {
+                        handle: 0,
+                        status: 400,
+                        content_type: "application/octet-stream",
+                        content_length: -1,
+                        headers: Vec::new(),
+                        error_code: Some("ffmpeg_open_failed"),
+                        error_message: Some(&error.message),
+                        error_details: error.details,
+                    },
+                )?
+                .into_raw();
+                return Ok(());
+            }
+        };
+
+        output = match prewarm_stream(&request) {
+            Ok(()) => open_result_object(
+                env,
+                OpenResultFields {
+                    handle: 0,
+                    status: 202,
+                    content_type: "application/octet-stream",
+                    content_length: -1,
+                    headers: Vec::new(),
+                    error_code: None,
+                    error_message: None,
+                    error_details: Vec::new(),
+                },
+            )?,
+            Err(error) => open_result_object(
+                env,
+                OpenResultFields {
+                    handle: 0,
+                    status: error.status,
+                    content_type: "application/octet-stream",
+                    content_length: -1,
+                    headers: Vec::new(),
+                    error_code: Some(error.code),
+                    error_message: Some(&error.message),
+                    error_details: error.details,
+                },
+            )?,
+        }
+        .into_raw();
+        Ok(())
+    });
+    output
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_read(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -499,6 +562,26 @@ fn open_stream(request: &OpenRequest) -> Result<OpenedStream, RelayError> {
             open_hls_cache_resource(request, &session.root_dir, cache)
         }
     }
+}
+
+fn prewarm_stream(request: &OpenRequest) -> Result<(), RelayError> {
+    validate_request(request)?;
+    initialize_ffmpeg()?;
+
+    let session = session_cache(request)?;
+    let mut state = session
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    match request.fallback_format {
+        FallbackFormat::MpegTs => {
+            let _ = ensure_mpeg_ts_cache(request, &session.root_dir, &mut state)?;
+        }
+        FallbackFormat::Hls => {
+            let _ = ensure_hls_cache(request, &session.root_dir, &mut state)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_request(request: &OpenRequest) -> Result<(), RelayError> {
@@ -1931,7 +2014,7 @@ mod tests {
         FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, OpenRequest, PreparedTrack,
         RangeRequest, cleanup_stale_caches_in, hls_playlist_snapshot, open_growing_cache_file,
         open_growing_cache_range, packet_sort_timestamp_us, resolve_range, safe_file_component,
-        streams, validate_request,
+        prewarm_stream, sessions, streams, validate_request,
     };
 
     #[test]
@@ -2157,6 +2240,17 @@ mod tests {
         let error = validate_request(&request).expect_err("invalid");
 
         assert_eq!(error.code, "unsupported_dash_layout");
+    }
+
+    #[test]
+    fn prewarm_stream_validates_request() {
+        let request = test_request(None);
+
+        prewarm_stream(&request).expect("prewarm");
+
+        let session_key = request.session_id.clone();
+        let sessions = sessions().lock().unwrap_or_else(|error| error.into_inner());
+        assert!(sessions.contains_key(&session_key));
     }
 
     #[test]
