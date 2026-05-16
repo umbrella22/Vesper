@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.security.NetworkSecurityPolicy
+import android.util.Log
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -23,8 +24,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadLocalRandom
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 enum class VesperDlnaDiscoveryDiagnosticSeverity {
     Info,
@@ -52,6 +56,8 @@ class VesperDlnaDiscovery(
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
     private val discoveryGeneration = AtomicLong(0)
+    private val wakeLock = ReentrantLock()
+    private val wakeCondition = wakeLock.newCondition()
     private val routeLock = Any()
     private val devices = ConcurrentHashMap<String, VesperDlnaDevice>()
     private val pendingDescriptionFetches = ConcurrentHashMap.newKeySet<String>()
@@ -63,10 +69,22 @@ class VesperDlnaDiscovery(
 
     fun start() {
         if (!running.compareAndSet(false, true)) {
+            emitDiagnostic(
+                code = "discovery_refresh_requested",
+                severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+                message = "DLNA discovery refresh was requested while discovery is already running.",
+            )
+            wakeDiscoveryLoop()
             return
         }
         val generation = discoveryGeneration.incrementAndGet()
         acquireMulticastLock()
+        emitDiagnostic(
+            code = "discovery_started",
+            severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
+            message = "DLNA discovery started.",
+            details = mapOf("generation" to generation.toString()),
+        )
         executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "vesper-dlna-discovery").apply { isDaemon = true }
         }
@@ -76,6 +94,7 @@ class VesperDlnaDiscovery(
     fun stop() {
         running.set(false)
         discoveryGeneration.incrementAndGet()
+        wakeDiscoveryLoop()
         stopNotifyListener()
         pendingDescriptionFetches.clear()
         executor?.shutdownNow()
@@ -91,6 +110,12 @@ class VesperDlnaDiscovery(
         synchronized(routeLock) {
             devices.clear()
             listener.onRoutesChanged(emptyList())
+        }
+    }
+
+    private fun wakeDiscoveryLoop() {
+        wakeLock.withLock {
+            wakeCondition.signalAll()
         }
     }
 
@@ -139,7 +164,9 @@ class VesperDlnaDiscovery(
                 break
             }
             try {
-                Thread.sleep(DISCOVERY_INTERVAL_MS)
+                wakeLock.withLock {
+                    wakeCondition.await(DISCOVERY_INTERVAL_MS, TimeUnit.MILLISECONDS)
+                }
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 break
@@ -709,14 +736,37 @@ class VesperDlnaDiscovery(
         if (!running.get()) {
             return
         }
+        val filteredDetails = details.filterValues { it.isNotBlank() }
+        logDiagnostic(code, severity, message, filteredDetails)
         listener.onDiscoveryDiagnostic(
             VesperDlnaDiscoveryDiagnostic(
                 code = code,
                 severity = severity,
                 message = message,
-                details = details.filterValues { it.isNotBlank() },
+                details = filteredDetails,
             ),
         )
+    }
+
+    private fun logDiagnostic(
+        code: String,
+        severity: VesperDlnaDiscoveryDiagnosticSeverity,
+        message: String,
+        details: Map<String, String>,
+    ) {
+        val detailText = details.entries.joinToString(", ") { (key, value) -> "$key=$value" }
+        val logMessage = if (detailText.isBlank()) {
+            "[$code] $message"
+        } else {
+            "[$code] $message | $detailText"
+        }
+        runCatching {
+            when (severity) {
+                VesperDlnaDiscoveryDiagnosticSeverity.Info -> Log.d(LOG_TAG, logMessage)
+                VesperDlnaDiscoveryDiagnosticSeverity.Warning -> Log.w(LOG_TAG, logMessage)
+                VesperDlnaDiscoveryDiagnosticSeverity.Error -> Log.e(LOG_TAG, logMessage)
+            }
+        }
     }
 }
 
@@ -802,3 +852,4 @@ private const val DESCRIPTION_TIMEOUT_MS = 5_000
 private const val DISCOVERY_INTERVAL_MS = 8_000L
 private const val TRANSPORT_RANK_WIFI = 0
 private const val TRANSPORT_RANK_ETHERNET = 1
+private const val LOG_TAG = "VesperDlnaDiscovery"

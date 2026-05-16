@@ -74,7 +74,11 @@ class VesperExternalPlaybackController {
       _latestRoutes = routes;
       return routes;
     }).asBroadcastStream(
-      onCancel: (subscription) => subscription.cancel(),
+      onCancel: (subscription) {
+        _latestRoutes = null;
+        _nativeRoutes = null;
+        unawaited(subscription.cancel());
+      },
     );
   }
 
@@ -86,7 +90,11 @@ class VesperExternalPlaybackController {
       _sharedLatestRoutes = routes;
       return routes;
     }).asBroadcastStream(
-      onCancel: (subscription) => subscription.cancel(),
+      onCancel: (subscription) {
+        _sharedLatestRoutes = null;
+        _sharedNativeRoutes = null;
+        unawaited(subscription.cancel());
+      },
     );
   }
 
@@ -100,8 +108,11 @@ class VesperExternalPlaybackController {
           ),
         )
         .asBroadcastStream(
-          onCancel: (subscription) => subscription.cancel(),
-        );
+      onCancel: (subscription) {
+        _sharedEvents = null;
+        unawaited(subscription.cancel());
+      },
+    );
   }
 
   Future<void> startDiscovery() => _methodChannel.invokeMethod<void>(

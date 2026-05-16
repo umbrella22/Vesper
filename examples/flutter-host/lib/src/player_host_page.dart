@@ -292,6 +292,19 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     });
   }
 
+  Future<void> _refreshExternalRoutes() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    await _externalPlaybackController.startDiscovery();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _setExternalPlaybackMessage('正在重新扫描 DLNA 设备。', force: true);
+    });
+  }
+
   void _handleExternalEvent(VesperExternalPlaybackSessionEvent event) {
     unawaited(_handleExternalEventAsync(event));
   }
@@ -1093,6 +1106,7 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
             palette: palette,
             controller: controller,
             permissionStatus: _systemPlaybackPermissionStatus,
+            onRefreshExternalRoutes: () => unawaited(_refreshExternalRoutes()),
             externalRoutes: _externalRoutes
                 .where(
                   (route) => route.kind == VesperExternalPlaybackRouteKind.dlna,

@@ -241,6 +241,28 @@ void main() {
 
     expect(routeCancelCount, 1);
     expect(eventCancelCount, 1);
+
+    final third = VesperExternalPlaybackController();
+    final thirdRoutes = <List<VesperExternalPlaybackRoute>>[];
+    final thirdEvents = <VesperExternalPlaybackSessionEvent>[];
+    final resubscriptions = <StreamSubscription<Object?>>[
+      third.routes.listen(thirdRoutes.add),
+      third.events.listen(thirdEvents.add),
+    ];
+    await Future<void>.delayed(Duration.zero);
+
+    expect(routeListenCount, 2);
+    expect(eventListenCount, 2);
+    expect(thirdRoutes.single.single.routeId, 'uuid:tv');
+    expect(
+        thirdEvents.single.kind, VesperExternalPlaybackSessionEventKind.loaded);
+
+    await resubscriptions[0].cancel();
+    await resubscriptions[1].cancel();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(routeCancelCount, 2);
+    expect(eventCancelCount, 2);
   });
 
   test('connect decodes unsupported result', () async {

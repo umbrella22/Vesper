@@ -295,6 +295,7 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
     required this.controller,
     required this.permissionStatus,
     required this.onRequestPermission,
+    required this.onRefreshExternalRoutes,
     required this.externalRoutes,
     required this.onExternalRouteSelected,
     this.externalPlaybackMessage,
@@ -304,6 +305,7 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
   final VesperPlayerController controller;
   final VesperSystemPlaybackPermissionStatus permissionStatus;
   final VoidCallback onRequestPermission;
+  final VoidCallback onRefreshExternalRoutes;
   final List<VesperExternalPlaybackRoute> externalRoutes;
   final ValueChanged<VesperExternalPlaybackRoute> onExternalRouteSelected;
   final String? externalPlaybackMessage;
@@ -337,6 +339,11 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
               OutlinedButton(
                 onPressed: onRequestPermission,
                 child: Text('通知权限：${permissionStatus.name}'),
+              ),
+              OutlinedButton.icon(
+                onPressed: onRefreshExternalRoutes,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('重新扫描 DLNA'),
               ),
             ],
           ),
