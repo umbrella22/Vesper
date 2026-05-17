@@ -48,6 +48,8 @@ void main() {
       proxyPolicy: VesperExternalProxyPolicy.always,
       formatAdaptation: const VesperExternalFormatAdaptationConfig.dlnaRemux(
         preferredFallback: VesperExternalFallbackFormat.hls,
+        allowRemoteDashMediaReferences: true,
+        remoteDashMediaRequestHeaders: <String>{'User-Agent', 'Referer'},
         debugDiagnostics: true,
       ),
     );
@@ -69,6 +71,11 @@ void main() {
     expect(
       decodedItem.formatAdaptation.preferredFallback,
       VesperExternalFallbackFormat.hls,
+    );
+    expect(decodedItem.formatAdaptation.allowRemoteDashMediaReferences, isTrue);
+    expect(
+      decodedItem.formatAdaptation.remoteDashMediaRequestHeaders,
+      <String>{'User-Agent', 'Referer'},
     );
     expect(decodedItem.formatAdaptation.debugDiagnostics, isTrue);
     expect(decodedRoute.kind, VesperExternalPlaybackRouteKind.dlna);

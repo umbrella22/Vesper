@@ -1,8 +1,9 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg
 
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
-import java.io.File
+import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayDashRemoteMediaPolicy
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -295,6 +296,40 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
+    fun rejectsHybridFileDashWithRemoteBaseUrlByDefault() {
+        val root = Files.createTempDirectory("vesper-dash-hybrid-plan").toFile()
+        val manifest = File(root, "manifest.mpd")
+        manifest.writeText("")
+
+        val error = unsupported {
+            planHostPreparedDash(
+                manifestText = """
+                    <MPD type="static" mediaPresentationDuration="PT4S">
+                      <BaseURL>https://cdn.example/video/</BaseURL>
+                      <Period>
+                        <AdaptationSet mimeType="video/mp4">
+                          <Representation id="v1" codecs="avc1.640028">
+                            <SegmentTemplate timescale="1" duration="4" startNumber="1"
+                              initialization="init.mp4"
+                              media="chunk-${'$'}Number${'$'}.m4s" />
+                          </Representation>
+                        </AdaptationSet>
+                      </Period>
+                    </MPD>
+                """.trimIndent(),
+                manifestUri = manifest.toURI().toString(),
+                sourceOrigin = VesperRelayDashSourceOrigin(
+                    kind = "file",
+                    manifestUri = manifest.toURI().toString(),
+                    rootUri = root.canonicalFile.toURI().toString(),
+                ),
+            )
+        }
+
+        assertEquals("unsupported_mixed_dash_origin", error.diagnostic.code)
+    }
+
+    @Test
     fun plansHybridFileDashWithRemoteBaseUrl() {
         val root = Files.createTempDirectory("vesper-dash-hybrid-plan").toFile()
         val manifest = File(root, "manifest.mpd")
@@ -551,8 +586,15 @@ class VesperRelayHostPreparedDashTest {
                 ),
                 remoteHeaders = mapOf(
                     "Cookie" to "source-cookie",
+                    "Authorization" to "Bearer secret",
                     "Range" to "bytes=0-1",
                     "Referer" to "https://app.example/player",
+                    "User-Agent" to "VesperRelayTest",
+                ),
+                remoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(
+                    allowRemoteReferences = true,
+                    allowPrivateAddresses = true,
+                    allowedRequestHeaders = setOf("User-Agent", "Referer"),
                 ),
             )
             val output = ByteArrayOutputStream()
@@ -566,9 +608,87 @@ class VesperRelayHostPreparedDashTest {
 
             val headers = requests.last().headers
             assertEquals("cdef", output.toByteArray().toString(Charsets.UTF_8))
-            assertEquals("source-cookie", headers.valueFor("Cookie"))
+            assertEquals(null, headers.valueFor("Cookie"))
+            assertEquals(null, headers.valueFor("Authorization"))
+            assertEquals("VesperRelayTest", headers.valueFor("User-Agent"))
             assertEquals("https://app.example/player", headers.valueFor("Referer"))
             assertEquals("bytes=2-5", headers.valueFor("Range"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun hybridFileResolverRejectsPrivateRemoteMediaAddressesByDefault() {
+        val root = Files.createTempDirectory("vesper-dash-hybrid-range").toFile()
+        val manifest = File(root, "manifest.mpd").apply { writeText("<MPD />") }
+        val resolver = VesperRelayFileDashResourceResolver(
+            origin = VesperRelayDashSourceOrigin(
+                kind = "file",
+                manifestUri = manifest.toURI().toString(),
+                rootUri = root.canonicalFile.toURI().toString(),
+                allowRemoteMediaReferences = true,
+            ),
+            remoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(
+                allowRemoteReferences = true,
+            ),
+        )
+
+        val error = try {
+            resolver.copyRangeTo(
+                uri = "http://127.0.0.1:9/media.mp4",
+                range = VesperRelayDashByteRange(2, 5),
+                output = ByteArrayOutputStream(),
+                cancellation = AtomicBoolean(false),
+            )
+            fail("expected private address rejection")
+            return
+        } catch (error: IOException) {
+            error
+        }
+
+        assertTrue(error.message.orEmpty().contains("private or local address"))
+    }
+
+    @Test
+    fun hybridFileResolverValidatesRedirectTargets() {
+        val root = Files.createTempDirectory("vesper-dash-hybrid-redirect").toFile()
+        val manifest = File(root, "manifest.mpd").apply { writeText("<MPD />") }
+        val requests = Collections.synchronizedList(mutableListOf<RecordedRequest>())
+        val server = RangeHttpServer(
+            body = "abcdefghij".toByteArray(),
+            requests = requests,
+            redirectLocation = "file:///private.mp4",
+        )
+        server.start()
+        try {
+            val resolver = VesperRelayFileDashResourceResolver(
+                origin = VesperRelayDashSourceOrigin(
+                    kind = "file",
+                    manifestUri = manifest.toURI().toString(),
+                    rootUri = root.canonicalFile.toURI().toString(),
+                    allowRemoteMediaReferences = true,
+                ),
+                remoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(
+                    allowRemoteReferences = true,
+                    allowPrivateAddresses = true,
+                ),
+            )
+
+            val error = try {
+                resolver.copyRangeTo(
+                    uri = "http://${server.address.hostAddress}:${server.port}/redirect.mp4",
+                    range = VesperRelayDashByteRange(2, 5),
+                    output = ByteArrayOutputStream(),
+                    cancellation = AtomicBoolean(false),
+                )
+                fail("expected redirect target rejection")
+                return
+            } catch (error: IOException) {
+                error
+            }
+
+            assertTrue(error.message.orEmpty().contains("http or https"))
         } finally {
             server.stop()
         }
@@ -583,11 +703,10 @@ class VesperRelayHostPreparedDashTest {
         )
         server.start()
         try {
-            val source = VesperPlayerSource.dash(
-                uri = "http://${server.address.hostAddress}:${server.port}/manifest.mpd",
-                label = "dash",
+            val resolver = VesperRelayRemoteDashResourceClient(
+                headers = emptyMap(),
+                allowPrivateAddresses = true,
             )
-            val resolver = VesperRelayHttpDashResourceResolver(source, emptyMap())
             val output = ByteArrayOutputStream()
 
             resolver.copyRangeTo(
@@ -614,11 +733,10 @@ class VesperRelayHostPreparedDashTest {
         )
         server.start()
         try {
-            val source = VesperPlayerSource.dash(
-                uri = "http://${server.address.hostAddress}:${server.port}/manifest.mpd",
-                label = "dash",
+            val resolver = VesperRelayRemoteDashResourceClient(
+                headers = emptyMap(),
+                allowPrivateAddresses = true,
             )
-            val resolver = VesperRelayHttpDashResourceResolver(source, emptyMap())
 
             val error = try {
                 resolver.copyRangeTo(
@@ -783,6 +901,7 @@ private class RangeHttpServer(
     private val body: ByteArray,
     private val requests: MutableList<RecordedRequest>,
     private val contentRange: String = "bytes 2-5/10",
+    private val redirectLocation: String? = null,
 ) {
     private val loopback = InetAddress.getByName("127.0.0.1")
     private val running = AtomicBoolean(false)
@@ -838,6 +957,20 @@ private class RangeHttpServer(
                 }
             }
             requests += RecordedRequest(method = method, headers = headers)
+
+            if (redirectLocation != null) {
+                val response = buildString {
+                    append("HTTP/1.1 302 Found\r\n")
+                    append("Location: ").append(redirectLocation).append("\r\n")
+                    append("Content-Length: 0\r\n")
+                    append("Connection: close\r\n")
+                    append("\r\n")
+                }.toByteArray(Charsets.ISO_8859_1)
+                client.getOutputStream().use { output ->
+                    output.write(response)
+                }
+                return
+            }
 
             val range = headers.valueFor("Range")
             val responseBody =

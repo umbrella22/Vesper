@@ -555,6 +555,11 @@ private fun VesperPlayerSource.toFormatAdaptationRequest(
         range = range,
         requestHeaders = requestHeaders,
         enableRangeCache = adaptation.config.enableRangeCache,
+        dashRemoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(
+            allowRemoteReferences = adaptation.config.allowRemoteDashMediaReferences,
+            allowPrivateAddresses = adaptation.config.allowPrivateRemoteDashMediaAddresses,
+            allowedRequestHeaders = adaptation.config.remoteDashMediaRequestHeaders,
+        ),
         debugDiagnostics = adaptation.config.debugDiagnostics,
         headOnly = headOnly,
         routeId = adaptation.routeId,

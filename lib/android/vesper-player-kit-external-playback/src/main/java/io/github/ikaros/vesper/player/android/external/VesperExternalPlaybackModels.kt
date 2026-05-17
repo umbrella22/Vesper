@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.player.android.external
 
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
+import io.github.ikaros.vesper.player.android.external.internal.relay.DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperExternalProxyPolicy as InternalProxyPolicy
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayFallbackFormat as InternalFallbackFormat
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayFormatAdaptationConfig as InternalFormatAdaptationConfig
@@ -37,6 +38,9 @@ data class VesperExternalFormatAdaptationConfig(
     val preferredFallback: VesperExternalFallbackFormat = VesperExternalFallbackFormat.MpegTs,
     val allowHls: Boolean = true,
     val enableRangeCache: Boolean = true,
+    val allowRemoteDashMediaReferences: Boolean = false,
+    val allowPrivateRemoteDashMediaAddresses: Boolean = false,
+    val remoteDashMediaRequestHeaders: Set<String> = DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS,
     val debugDiagnostics: Boolean = false,
 )
 
@@ -99,5 +103,8 @@ internal fun VesperExternalFormatAdaptationConfig.toInternal(): InternalFormatAd
         preferredFallback = preferredFallback.toInternal(),
         allowHls = allowHls,
         enableRangeCache = enableRangeCache,
+        allowRemoteDashMediaReferences = allowRemoteDashMediaReferences,
+        allowPrivateRemoteDashMediaAddresses = allowPrivateRemoteDashMediaAddresses,
+        remoteDashMediaRequestHeaders = remoteDashMediaRequestHeaders,
         debugDiagnostics = debugDiagnostics,
     )

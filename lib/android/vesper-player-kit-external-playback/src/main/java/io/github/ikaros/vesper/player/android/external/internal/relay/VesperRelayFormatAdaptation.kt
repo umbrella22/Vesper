@@ -15,6 +15,9 @@ data class VesperRelayFormatAdaptationConfig(
     val preferredFallback: VesperRelayFallbackFormat = VesperRelayFallbackFormat.MpegTs,
     val allowHls: Boolean = true,
     val enableRangeCache: Boolean = true,
+    val allowRemoteDashMediaReferences: Boolean = false,
+    val allowPrivateRemoteDashMediaAddresses: Boolean = false,
+    val remoteDashMediaRequestHeaders: Set<String> = DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS,
     val debugDiagnostics: Boolean = false,
 )
 
@@ -33,11 +36,21 @@ data class VesperRelayFormatAdaptationRequest(
     val range: ByteRangeRequest?,
     val requestHeaders: Map<String, String>,
     val enableRangeCache: Boolean,
+    val dashRemoteMediaPolicy: VesperRelayDashRemoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(),
     val debugDiagnostics: Boolean,
     val headOnly: Boolean = false,
     val routeId: String? = null,
     val routeName: String? = null,
 )
+
+data class VesperRelayDashRemoteMediaPolicy(
+    val allowRemoteReferences: Boolean = false,
+    val allowPrivateAddresses: Boolean = false,
+    val allowedRequestHeaders: Set<String> = DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS,
+)
+
+val DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS: Set<String> =
+    setOf("User-Agent", "Accept", "Accept-Language")
 
 data class VesperRelayDiagnostic(
     val code: String,

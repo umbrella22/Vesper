@@ -26,6 +26,7 @@ import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRou
 import io.github.ikaros.vesper.player.android.external.VesperExternalProxyPolicy
 import io.github.ikaros.vesper.player.android.external.VesperExternalRouteButton
 import io.github.ikaros.vesper.player.android.external.VesperExternalRouteButtonBrightness
+import io.github.ikaros.vesper.player.android.external.internal.relay.DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -243,6 +244,10 @@ private fun Map<String, Any?>.toFormatAdaptationConfig(): VesperExternalFormatAd
         },
         allowHls = this["allowHls"] as? Boolean ?: true,
         enableRangeCache = this["enableRangeCache"] as? Boolean ?: true,
+        allowRemoteDashMediaReferences = this["allowRemoteDashMediaReferences"] as? Boolean ?: false,
+        allowPrivateRemoteDashMediaAddresses = this["allowPrivateRemoteDashMediaAddresses"] as? Boolean ?: false,
+        remoteDashMediaRequestHeaders =
+            this["remoteDashMediaRequestHeaders"].stringSet(DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS),
         debugDiagnostics = this["debugDiagnostics"] as? Boolean ?: false,
     )
 
@@ -298,6 +303,13 @@ private fun Any?.stringStringMap(): Map<String, String> =
         }
         ?.toMap()
         ?: emptyMap()
+
+private fun Any?.stringSet(fallback: Set<String> = emptySet()): Set<String> =
+    (this as? Iterable<*>)
+        ?.mapNotNull { value -> value as? String }
+        ?.filter(String::isNotBlank)
+        ?.toSet()
+        ?: fallback
 
 private fun String.toRouteButtonBrightness(): VesperExternalRouteButtonBrightness? =
     when (this) {

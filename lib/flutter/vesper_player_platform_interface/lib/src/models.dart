@@ -215,6 +215,10 @@ final class VesperExternalFormatAdaptationConfig {
     this.preferredFallback = VesperExternalFallbackFormat.mpegTs,
     this.allowHls = true,
     this.enableRangeCache = true,
+    this.allowRemoteDashMediaReferences = false,
+    this.allowPrivateRemoteDashMediaAddresses = false,
+    this.remoteDashMediaRequestHeaders =
+        _defaultRemoteDashMediaRequestHeaders,
     this.debugDiagnostics = false,
   });
 
@@ -223,12 +227,19 @@ final class VesperExternalFormatAdaptationConfig {
         preferredFallback = VesperExternalFallbackFormat.mpegTs,
         allowHls = true,
         enableRangeCache = true,
+        allowRemoteDashMediaReferences = false,
+        allowPrivateRemoteDashMediaAddresses = false,
+        remoteDashMediaRequestHeaders = _defaultRemoteDashMediaRequestHeaders,
         debugDiagnostics = false;
 
   const VesperExternalFormatAdaptationConfig.dlnaRemux({
     this.preferredFallback = VesperExternalFallbackFormat.mpegTs,
     this.allowHls = true,
     this.enableRangeCache = true,
+    this.allowRemoteDashMediaReferences = false,
+    this.allowPrivateRemoteDashMediaAddresses = false,
+    this.remoteDashMediaRequestHeaders =
+        _defaultRemoteDashMediaRequestHeaders,
     this.debugDiagnostics = false,
   }) : enabled = true;
 
@@ -244,6 +255,18 @@ final class VesperExternalFormatAdaptationConfig {
       ),
       allowHls: _decodeBool(map, 'allowHls', fallback: true),
       enableRangeCache: _decodeBool(map, 'enableRangeCache', fallback: true),
+      allowRemoteDashMediaReferences: _decodeBool(
+        map,
+        'allowRemoteDashMediaReferences',
+      ),
+      allowPrivateRemoteDashMediaAddresses: _decodeBool(
+        map,
+        'allowPrivateRemoteDashMediaAddresses',
+      ),
+      remoteDashMediaRequestHeaders: _decodeStringSet(
+        map['remoteDashMediaRequestHeaders'],
+        fallback: _defaultRemoteDashMediaRequestHeaders,
+      ),
       debugDiagnostics: _decodeBool(map, 'debugDiagnostics'),
     );
   }
@@ -252,6 +275,9 @@ final class VesperExternalFormatAdaptationConfig {
   final VesperExternalFallbackFormat preferredFallback;
   final bool allowHls;
   final bool enableRangeCache;
+  final bool allowRemoteDashMediaReferences;
+  final bool allowPrivateRemoteDashMediaAddresses;
+  final Set<String> remoteDashMediaRequestHeaders;
   final bool debugDiagnostics;
 
   bool get hasOverrides =>
@@ -259,6 +285,13 @@ final class VesperExternalFormatAdaptationConfig {
       preferredFallback != VesperExternalFallbackFormat.mpegTs ||
       !allowHls ||
       !enableRangeCache ||
+      allowRemoteDashMediaReferences ||
+      allowPrivateRemoteDashMediaAddresses ||
+      !remoteDashMediaRequestHeaders.containsAll(
+        _defaultRemoteDashMediaRequestHeaders,
+      ) ||
+      remoteDashMediaRequestHeaders.length !=
+          _defaultRemoteDashMediaRequestHeaders.length ||
       debugDiagnostics;
 
   Map<String, Object?> toMap() {
@@ -267,10 +300,21 @@ final class VesperExternalFormatAdaptationConfig {
       'preferredFallback': preferredFallback.name,
       'allowHls': allowHls,
       'enableRangeCache': enableRangeCache,
+      'allowRemoteDashMediaReferences': allowRemoteDashMediaReferences,
+      'allowPrivateRemoteDashMediaAddresses':
+          allowPrivateRemoteDashMediaAddresses,
+      'remoteDashMediaRequestHeaders':
+          remoteDashMediaRequestHeaders.toList(growable: false),
       'debugDiagnostics': debugDiagnostics,
     };
   }
 }
+
+const Set<String> _defaultRemoteDashMediaRequestHeaders = <String>{
+  'User-Agent',
+  'Accept',
+  'Accept-Language',
+};
 
 enum VesperMediaTrackKind { video, audio, subtitle }
 
@@ -785,6 +829,20 @@ Map<String, String> _decodeStringMap(Object? raw) {
     }
   }
   return decoded;
+}
+
+Set<String> _decodeStringSet(
+  Object? raw, {
+  Set<String> fallback = const <String>{},
+}) {
+  if (raw is! Iterable) {
+    return fallback;
+  }
+  final decoded = raw
+      .whereType<String>()
+      .where((value) => value.isNotEmpty)
+      .toSet();
+  return decoded.isEmpty ? fallback : decoded;
 }
 
 List<String> _decodeStringList(Object? raw) {

@@ -8,6 +8,7 @@ import android.system.OsConstants
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayDiagnostic
+import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayDashRemoteMediaPolicy
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayFormatAdaptationRequest
 import java.io.Closeable
 import java.io.ByteArrayOutputStream
@@ -21,6 +22,8 @@ import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.io.StringReader
 import java.net.HttpURLConnection
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URL
@@ -411,15 +414,21 @@ internal class VesperRelayDashResourceResolverFactory {
                 VesperRelayHttpDashResourceResolver(
                     source = request.source,
                     requestHeaders = request.requestHeaders,
+                    remoteMediaPolicy = request.dashRemoteMediaPolicy,
                 )
             uri.startsWith("content://", ignoreCase = true) ->
                 VesperRelayContentDashResourceResolver(
                     context = context,
                     source = request.source,
-                    remoteHeaders = mergedRemoteHeaders(request.source, request.requestHeaders),
+                    remoteHeaders = mergedRemoteHeaders(
+                        source = request.source,
+                        requestHeaders = request.requestHeaders,
+                        allowedHeaderNames = request.dashRemoteMediaPolicy.allowedRequestHeaders,
+                    ),
+                    remoteMediaPolicy = request.dashRemoteMediaPolicy,
                 )
             else ->
-                fileDashResolver(request.source, request.requestHeaders)
+                fileDashResolver(request.source, request.requestHeaders, request.dashRemoteMediaPolicy)
         }
     }
 }
@@ -427,20 +436,29 @@ internal class VesperRelayDashResourceResolverFactory {
 private fun fileDashResolver(
     source: VesperPlayerSource,
     requestHeaders: Map<String, String>,
+    remoteMediaPolicy: VesperRelayDashRemoteMediaPolicy,
 ): VesperRelayFileDashResourceResolver =
     VesperRelayFileDashResourceResolver(
-        origin = source.uri.toFileDashOrigin(allowRemoteMediaReferences = true),
-        remoteHeaders = mergedRemoteHeaders(source, requestHeaders),
+        origin = source.uri.toFileDashOrigin(
+            allowRemoteMediaReferences = remoteMediaPolicy.allowRemoteReferences,
+        ),
+        remoteHeaders = mergedRemoteHeaders(
+            source = source,
+            requestHeaders = requestHeaders,
+            allowedHeaderNames = remoteMediaPolicy.allowedRequestHeaders,
+        ),
+        remoteMediaPolicy = remoteMediaPolicy,
     )
 
 internal class VesperRelayRemoteDashResourceClient(
     headers: Map<String, String>,
+    private val allowPrivateAddresses: Boolean = false,
 ) {
     private val headers = headers.filterRemoteFetchHeaders()
     private val activeConnections = Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
 
     fun readUtf8(uri: String): String {
-        val connection = openConnection(uri, headers)
+        val connection = openValidatedConnection(uri, headers)
         activeConnections += connection
         return try {
             val status = connection.responseCode
@@ -464,7 +482,7 @@ internal class VesperRelayRemoteDashResourceClient(
         if (cancellation.get()) {
             throw HostInputCancelledException()
         }
-        val connection = openConnection(uri, headers)
+        val connection = openValidatedConnection(uri, headers)
         activeConnections += connection
         try {
             val status = connection.responseCode
@@ -490,7 +508,7 @@ internal class VesperRelayRemoteDashResourceClient(
         if (cancellation.get()) {
             throw HostInputCancelledException()
         }
-        val connection = openConnection(uri, headers + ("Range" to range.toHeaderValue()))
+        val connection = openValidatedConnection(uri, headers + ("Range" to range.toHeaderValue()))
         activeConnections += connection
         try {
             val status = connection.responseCode
@@ -534,12 +552,50 @@ internal class VesperRelayRemoteDashResourceClient(
         }
     }
 
+    private fun openValidatedConnection(
+        uri: String,
+        headers: Map<String, String>,
+    ): HttpURLConnection {
+        var current = uri
+        repeat(MAX_REMOTE_DASH_REDIRECTS + 1) { redirectCount ->
+            val connection = openConnection(current, headers)
+            val status = connection.responseCode
+            if (status !in HTTP_REDIRECT_STATUSES) {
+                return connection
+            }
+            val location = connection.getHeaderField("Location")
+            activeConnections -= connection
+            connection.disconnect()
+            if (location.isNullOrBlank()) {
+                throw DashResourceException(
+                    code = "host_fetch_failed",
+                    status = 502,
+                    message = "DASH HTTP resource redirect did not include a Location header.",
+                )
+            }
+            if (redirectCount >= MAX_REMOTE_DASH_REDIRECTS) {
+                throw DashResourceException(
+                    code = "host_fetch_failed",
+                    status = 502,
+                    message = "DASH HTTP resource exceeded the redirect limit.",
+                )
+            }
+            current = URI(current).resolve(location).toString()
+        }
+        throw DashResourceException(
+            code = "host_fetch_failed",
+            status = 502,
+            message = "DASH HTTP resource exceeded the redirect limit.",
+        )
+    }
+
     private fun openConnection(
         uri: String,
         headers: Map<String, String>,
     ): HttpURLConnection {
+        validateRemoteDashUri(uri, allowPrivateAddresses)
         val connection = URL(uri).openConnection() as HttpURLConnection
-        connection.instanceFollowRedirects = true
+        connection.instanceFollowRedirects = false
         connection.connectTimeout = 10_000
         connection.readTimeout = 20_000
         connection.requestMethod = "GET"
@@ -555,6 +611,7 @@ internal class VesperRelayRemoteDashResourceClient(
 internal class VesperRelayHttpDashResourceResolver(
     source: VesperPlayerSource,
     requestHeaders: Map<String, String>,
+    remoteMediaPolicy: VesperRelayDashRemoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(),
 ) : VesperRelayDashResourceResolver(
     origin = VesperRelayDashSourceOrigin(
         kind = "remote",
@@ -564,7 +621,8 @@ internal class VesperRelayHttpDashResourceResolver(
     manifestLogicalUri = source.uri,
 ) {
     private val remoteClient = VesperRelayRemoteDashResourceClient(
-        mergedRemoteHeaders(source, requestHeaders),
+        headers = mergedRemoteHeaders(source, requestHeaders),
+        allowPrivateAddresses = remoteMediaPolicy.allowPrivateAddresses,
     )
 
     override fun readManifest(): String =
@@ -589,12 +647,16 @@ internal class VesperRelayHttpDashResourceResolver(
 internal class VesperRelayFileDashResourceResolver internal constructor(
     origin: VesperRelayDashSourceOrigin,
     remoteHeaders: Map<String, String> = emptyMap(),
+    remoteMediaPolicy: VesperRelayDashRemoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(),
 ) : VesperRelayDashResourceResolver(
     origin = origin,
     manifestLogicalUri = origin.manifestUri,
 ) {
     private val rootDirectory = File(URI(origin.rootUri)).canonicalFile
-    private val remoteClient = origin.remoteMediaClient(remoteHeaders)
+    private val remoteClient = origin.remoteMediaClient(
+        headers = remoteHeaders.filterRemoteFetchHeaders(remoteMediaPolicy.allowedRequestHeaders),
+        remoteMediaPolicy = remoteMediaPolicy,
+    )
 
     override fun readManifest(): String {
         val file = fileForLogicalUri(manifestLogicalUri)
@@ -686,13 +748,19 @@ internal class VesperRelayContentDashResourceResolver(
     context: Context,
     source: VesperPlayerSource,
     remoteHeaders: Map<String, String> = emptyMap(),
+    remoteMediaPolicy: VesperRelayDashRemoteMediaPolicy = VesperRelayDashRemoteMediaPolicy(),
 ) : VesperRelayDashResourceResolver(
-    origin = source.uri.toContentDashOrigin(allowRemoteMediaReferences = true),
+    origin = source.uri.toContentDashOrigin(
+        allowRemoteMediaReferences = remoteMediaPolicy.allowRemoteReferences,
+    ),
     manifestLogicalUri = source.uri,
 ) {
     private val resolver = context.contentResolver
     private val rootUri = Uri.parse(origin.rootUri)
-    private val remoteClient = origin.remoteMediaClient(remoteHeaders)
+    private val remoteClient = origin.remoteMediaClient(
+        headers = remoteHeaders.filterRemoteFetchHeaders(remoteMediaPolicy.allowedRequestHeaders),
+        remoteMediaPolicy = remoteMediaPolicy,
+    )
 
     override fun readManifest(): String {
         return openInput(manifestLogicalUri).use { input ->
@@ -1398,9 +1466,13 @@ private fun resolveDashReference(
 
 private fun VesperRelayDashSourceOrigin.remoteMediaClient(
     headers: Map<String, String>,
+    remoteMediaPolicy: VesperRelayDashRemoteMediaPolicy,
 ): VesperRelayRemoteDashResourceClient? =
     if (allowRemoteMediaReferences) {
-        VesperRelayRemoteDashResourceClient(headers)
+        VesperRelayRemoteDashResourceClient(
+            headers = headers,
+            allowPrivateAddresses = remoteMediaPolicy.allowPrivateAddresses,
+        )
     } else {
         null
     }
@@ -1408,40 +1480,128 @@ private fun VesperRelayDashSourceOrigin.remoteMediaClient(
 private fun String.isRemoteDashUri(): Boolean =
     startsWith("http://", ignoreCase = true) || startsWith("https://", ignoreCase = true)
 
+private fun validateRemoteDashUri(
+    uri: String,
+    allowPrivateAddresses: Boolean,
+) {
+    val parsed =
+        try {
+            URI(uri)
+        } catch (error: Exception) {
+            throw DashResourceException(
+                code = "unsupported_mixed_dash_origin",
+                status = 415,
+                message = "DASH remote media URI is invalid: ${error.message ?: error.javaClass.simpleName}",
+            )
+        }
+    val scheme = parsed.scheme?.lowercase(Locale.US)
+    if (scheme != "http" && scheme != "https") {
+        throw DashResourceException(
+            code = "unsupported_mixed_dash_origin",
+            status = 415,
+            message = "DASH remote media URI must use http or https.",
+        )
+    }
+    val host = parsed.host?.takeIf { it.isNotBlank() }
+        ?: throw DashResourceException(
+            code = "unsupported_mixed_dash_origin",
+            status = 415,
+            message = "DASH remote media URI must include a host.",
+        )
+    if (allowPrivateAddresses) {
+        return
+    }
+    val addresses =
+        try {
+            InetAddress.getAllByName(host)
+        } catch (error: Exception) {
+            throw DashResourceException(
+                code = "host_fetch_failed",
+                status = 502,
+                message = "DASH remote media host could not be resolved: ${error.message ?: error.javaClass.simpleName}",
+            )
+        }
+    if (addresses.isEmpty() || addresses.any(InetAddress::isPrivateDashAddress)) {
+        throw DashResourceException(
+            code = "unsupported_mixed_dash_origin",
+            status = 415,
+            message = "DASH remote media URI resolves to a private or local address.",
+        )
+    }
+}
+
+private fun InetAddress.isPrivateDashAddress(): Boolean =
+    isAnyLocalAddress ||
+        isLoopbackAddress ||
+        isLinkLocalAddress ||
+        isSiteLocalAddress ||
+        isMulticastAddress ||
+        isUniqueLocalIpv6Address()
+
+private fun InetAddress.isUniqueLocalIpv6Address(): Boolean {
+    if (this !is Inet6Address) {
+        return false
+    }
+    val first = address.firstOrNull()?.toInt()?.and(0xff) ?: return false
+    return first and 0xfe == 0xfc
+}
+
 private fun mergedRemoteHeaders(
     source: VesperPlayerSource,
     requestHeaders: Map<String, String>,
+    allowedHeaderNames: Set<String>? = null,
 ): Map<String, String> {
     val merged = linkedMapOf<String, String>()
     source.headers.forEach { (name, value) ->
-        if (name.isRemoteFetchHeaderAllowed() && value.isNotBlank()) {
+        if (name.isRemoteFetchHeaderAllowed(allowedHeaderNames) && value.isNotBlank()) {
             merged[name] = value
         }
     }
     requestHeaders.forEach { (name, value) ->
-        if (name.isRemoteFetchHeaderAllowed() && value.isNotBlank()) {
+        if (name.isRemoteFetchHeaderAllowed(allowedHeaderNames) && value.isNotBlank()) {
             merged[name] = value
         }
     }
     return merged
 }
 
-private fun Map<String, String>.filterRemoteFetchHeaders(): Map<String, String> =
-    filter { (name, value) -> name.isRemoteFetchHeaderAllowed() && value.isNotBlank() }
+private fun Map<String, String>.filterRemoteFetchHeaders(
+    allowedHeaderNames: Set<String>? = null,
+): Map<String, String> =
+    filter { (name, value) -> name.isRemoteFetchHeaderAllowed(allowedHeaderNames) && value.isNotBlank() }
 
-private fun String.isRemoteFetchHeaderAllowed(): Boolean =
-    lowercase(Locale.US) !in setOf(
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-        "host",
-        "range",
-    )
+private fun String.isRemoteFetchHeaderAllowed(allowedHeaderNames: Set<String>? = null): Boolean {
+    val normalized = lowercase(Locale.US)
+    if (normalized in REMOTE_FETCH_NEVER_HEADERS) {
+        return false
+    }
+    return allowedHeaderNames == null ||
+        allowedHeaderNames.any { allowed -> allowed.equals(this, ignoreCase = true) }
+}
+
+private val REMOTE_FETCH_NEVER_HEADERS = setOf(
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "range",
+    "proxy-connection",
+)
+
+private const val MAX_REMOTE_DASH_REDIRECTS = 5
+
+private val HTTP_REDIRECT_STATUSES = setOf(
+    HttpURLConnection.HTTP_MOVED_PERM,
+    HttpURLConnection.HTTP_MOVED_TEMP,
+    HttpURLConnection.HTTP_SEE_OTHER,
+    307,
+    308,
+)
 
 private val CONTENT_RANGE_PATTERN = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""", RegexOption.IGNORE_CASE)
 

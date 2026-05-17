@@ -197,6 +197,8 @@ void main() {
     const picker = VesperRoutePickerConfiguration();
     const adaptation = VesperExternalFormatAdaptationConfig.dlnaRemux(
       preferredFallback: VesperExternalFallbackFormat.hls,
+      allowRemoteDashMediaReferences: true,
+      remoteDashMediaRequestHeaders: <String>{'User-Agent', 'Referer'},
       debugDiagnostics: true,
     );
     final mediaItem = VesperExternalPlaybackMediaItem(
@@ -236,6 +238,18 @@ void main() {
           .formatAdaptation
           .preferredFallback,
       VesperExternalFallbackFormat.hls,
+    );
+    expect(
+      VesperExternalPlaybackMediaItem.fromMap(mediaItem.toMap())
+          .formatAdaptation
+          .allowRemoteDashMediaReferences,
+      isTrue,
+    );
+    expect(
+      VesperExternalPlaybackMediaItem.fromMap(mediaItem.toMap())
+          .formatAdaptation
+          .remoteDashMediaRequestHeaders,
+      <String>{'User-Agent', 'Referer'},
     );
   });
 
