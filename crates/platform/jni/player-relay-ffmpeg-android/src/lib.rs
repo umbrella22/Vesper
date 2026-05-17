@@ -494,6 +494,38 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
     });
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayDashBridgeNative_nativeExecuteJson(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    request_json: JString<'_>,
+) -> jstring {
+    let mut output = std::ptr::null_mut();
+    let _ = unowned_env.with_env(|env| -> JniResult<()> {
+        let request = match request_json.try_to_string(env) {
+            Ok(request) => request.to_string(),
+            Err(error) => {
+                throw_dash_bridge_exception(env, &format!("Failed to decode DASH bridge request: {error}"))?;
+                return Ok(());
+            }
+        };
+        match player_dash_hls_bridge::ops::execute_json(&request) {
+            Ok(response) => {
+                output = env.new_string(response)?.into_raw();
+            }
+            Err(error) => {
+                throw_dash_bridge_exception(env, &error.to_string())?;
+            }
+        }
+        Ok(())
+    });
+    output
+}
+
+fn throw_dash_bridge_exception(env: &mut Env<'_>, message: &str) -> JniResult<()> {
+    env.throw_new(jni_name("java/lang/IllegalArgumentException"), JNIString::from(message))
+}
+
 struct OpenedStream {
     handle: i64,
     status: i32,
@@ -2010,6 +2042,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    use serde_json::json;
+
     use super::{
         FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, OpenRequest, PreparedTrack,
         RangeRequest, cleanup_stale_caches_in, hls_playlist_snapshot, open_growing_cache_file,
@@ -2233,6 +2267,85 @@ mod tests {
     }
 
     #[test]
+    fn dash_bridge_json_operations_execute_through_relay_crate() {
+        let manifest_json = player_dash_hls_bridge::ops::execute_json(
+            &json!({
+                "operation": "parse_manifest",
+                "mpd": r#"
+                    <MPD type="static" mediaPresentationDuration="PT9S">
+                      <Period>
+                        <AdaptationSet mimeType="video/mp4">
+                          <Representation id="v1" codecs="avc1.640028">
+                            <SegmentTemplate timescale="1" duration="4" startNumber="5"
+                              initialization="init-$RepresentationID$.mp4"
+                              media="seg-$Number$.m4s" />
+                          </Representation>
+                        </AdaptationSet>
+                      </Period>
+                    </MPD>
+                "#,
+                "manifestUrl": "https://example.com/video/manifest.mpd",
+            })
+            .to_string(),
+        )
+        .expect("parse manifest");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_json).expect("manifest json");
+        assert_eq!(manifest["type"], "static");
+
+        let sidx_json = player_dash_hls_bridge::ops::execute_json(
+            &json!({
+                "operation": "parse_sidx",
+                "data": sidx_box_bytes(),
+            })
+            .to_string(),
+        )
+        .expect("parse sidx");
+        let sidx: serde_json::Value = serde_json::from_str(&sidx_json).expect("sidx json");
+        assert_eq!(sidx["references"][0]["referencedSize"], 100);
+
+        let segments_json = player_dash_hls_bridge::ops::execute_json(
+            &json!({
+                "operation": "media_segments",
+                "segmentBase": {
+                    "initialization": {"start": 0, "end": 99},
+                    "indexRange": {"start": 100, "end": 199},
+                },
+                "sidx": sidx,
+            })
+            .to_string(),
+        )
+        .expect("media segments");
+        let segments: serde_json::Value =
+            serde_json::from_str(&segments_json).expect("segments json");
+        assert_eq!(segments[0]["range"]["start"], 200);
+        assert_eq!(segments[0]["range"]["end"], 299);
+
+        let template_segments_json = player_dash_hls_bridge::ops::execute_json(
+            &json!({
+                "operation": "template_segments",
+                "manifestType": "static",
+                "durationMs": 9_000,
+                "segmentTemplate": {
+                    "timescale": 1,
+                    "duration": 4,
+                    "startNumber": 5,
+                    "presentationTimeOffset": 0,
+                    "initialization": "init-$RepresentationID$.mp4",
+                    "media": "seg-$Number$.m4s",
+                    "timeline": [],
+                },
+            })
+            .to_string(),
+        )
+        .expect("template segments");
+        let template_segments: serde_json::Value =
+            serde_json::from_str(&template_segments_json).expect("template segments json");
+        assert_eq!(template_segments.as_array().expect("array").len(), 3);
+        assert_eq!(template_segments[0]["number"], 5);
+    }
+
+    #[test]
     fn rejects_missing_host_prepared_tracks() {
         let mut request = test_request(None);
         request.tracks.clear();
@@ -2299,5 +2412,25 @@ mod tests {
         ));
         fs::create_dir_all(&path).expect("temp dir");
         path
+    }
+
+    fn sidx_box_bytes() -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend([0, 0, 0, 0]);
+        payload.extend(1_u32.to_be_bytes());
+        payload.extend(1_000_u32.to_be_bytes());
+        payload.extend(0_u32.to_be_bytes());
+        payload.extend(0_u32.to_be_bytes());
+        payload.extend(0_u16.to_be_bytes());
+        payload.extend(1_u16.to_be_bytes());
+        payload.extend(100_u32.to_be_bytes());
+        payload.extend(4_000_u32.to_be_bytes());
+        payload.extend(0x9000_0000_u32.to_be_bytes());
+
+        let mut output = Vec::new();
+        output.extend((8 + payload.len() as u32).to_be_bytes());
+        output.extend(*b"sidx");
+        output.extend(payload);
+        output
     }
 }

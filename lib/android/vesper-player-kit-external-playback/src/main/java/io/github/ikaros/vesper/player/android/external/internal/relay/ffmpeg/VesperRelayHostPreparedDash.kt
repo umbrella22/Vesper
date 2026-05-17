@@ -10,12 +10,15 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayDiagnostic
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayFormatAdaptationRequest
 import java.io.Closeable
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.InterruptedIOException
+import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.io.StringReader
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
@@ -100,23 +103,46 @@ internal class VesperRelayHostInputSession private constructor(
             try {
                 output.use { stream ->
                     track.initializationUri?.let { uri ->
-                        currentSegmentDetails = track.segmentDetails("init", uri)
-                        resolver.copyTo(
-                            uri = uri,
-                            output = stream,
-                            cancellation = cancelled,
-                        )
+                        val initializationRange = track.initializationRange
+                        currentSegmentDetails = track.segmentDetails("init", uri, initializationRange)
+                        if (initializationRange == null) {
+                            resolver.copyTo(
+                                uri = uri,
+                                output = stream,
+                                cancellation = cancelled,
+                            )
+                        } else {
+                            resolver.copyRangeTo(
+                                uri = uri,
+                                range = initializationRange,
+                                output = stream,
+                                cancellation = cancelled,
+                            )
+                        }
                     }
                     track.segments.forEach { segment ->
                         if (cancelled.get()) {
                             throw HostInputCancelledException()
                         }
-                        currentSegmentDetails = track.segmentDetails(segment.index.toString(), segment.uri)
-                        resolver.copyTo(
-                            uri = segment.uri,
-                            output = stream,
-                            cancellation = cancelled,
+                        currentSegmentDetails = track.segmentDetails(
+                            segment.index.toString(),
+                            segment.uri,
+                            segment.byteRange,
                         )
+                        if (segment.byteRange == null) {
+                            resolver.copyTo(
+                                uri = segment.uri,
+                                output = stream,
+                                cancellation = cancelled,
+                            )
+                        } else {
+                            resolver.copyRangeTo(
+                                uri = segment.uri,
+                                range = segment.byteRange,
+                                output = stream,
+                                cancellation = cancelled,
+                            )
+                        }
                     }
                     stream.flush()
                 }
@@ -206,11 +232,14 @@ internal class VesperRelayHostInputSession private constructor(
     private fun VesperRelayDashTrackPlan.segmentDetails(
         segmentIndex: String,
         uri: String,
+        byteRange: VesperRelayDashByteRange?,
     ): Map<String, String> =
         baseTrackDetails() + mapOf(
             "segmentIndex" to segmentIndex,
             "segmentUriHash" to hashForDiagnostic(uri),
-        )
+        ) + listOfNotNull(
+            byteRange?.toHeaderValue()?.let { "byteRange" to it },
+        ).toMap()
 
     private fun Map<String, String>.withHostError(message: String?): Map<String, String> =
         this + listOfNotNull(
@@ -316,6 +345,7 @@ internal class VesperRelayHostInputSession private constructor(
                 manifestText = manifestText,
                 manifestUri = resolver.manifestLogicalUri,
                 sourceOrigin = resolver.origin,
+                resolver = resolver,
                 baseDetails = request.hostInputBaseDetails(),
             )
         }
@@ -338,10 +368,31 @@ internal open class VesperRelayDashResourceResolver(
     @Throws(IOException::class, HostInputCancelledException::class)
     open fun copyTo(
         uri: String,
-        output: FileOutputStream,
+        output: OutputStream,
         cancellation: AtomicBoolean,
     ) {
         throw UnsupportedOperationException()
+    }
+
+    @Throws(IOException::class, HostInputCancelledException::class)
+    open fun copyRangeTo(
+        uri: String,
+        range: VesperRelayDashByteRange,
+        output: OutputStream,
+        cancellation: AtomicBoolean,
+    ) {
+        throw UnsupportedOperationException()
+    }
+
+    @Throws(IOException::class)
+    open fun readRange(
+        uri: String,
+        range: VesperRelayDashByteRange,
+    ): ByteArray {
+        ByteArrayOutputStream(range.lengthAsInt()).use { output ->
+            copyRangeTo(uri, range, output, AtomicBoolean(false))
+            return output.toByteArray()
+        }
     }
 
     open fun cancel() = Unit
@@ -407,7 +458,7 @@ internal class VesperRelayHttpDashResourceResolver(
 
     override fun copyTo(
         uri: String,
-        output: FileOutputStream,
+        output: OutputStream,
         cancellation: AtomicBoolean,
     ) {
         if (cancellation.get()) {
@@ -424,6 +475,53 @@ internal class VesperRelayHttpDashResourceResolver(
             input.use { stream ->
                 stream.copyToCancellable(output, cancellation)
             }
+        } finally {
+            activeConnections -= connection
+            connection.disconnect()
+        }
+    }
+
+    override fun copyRangeTo(
+        uri: String,
+        range: VesperRelayDashByteRange,
+        output: OutputStream,
+        cancellation: AtomicBoolean,
+    ) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        val connection = openConnection(uri, headers + ("Range" to range.toHeaderValue()))
+        activeConnections += connection
+        try {
+            val status = connection.responseCode
+            if (status == HttpURLConnection.HTTP_PARTIAL) {
+                val contentRange = connection.getHeaderField("Content-Range")
+                if (!contentRangeMatches(contentRange, range)) {
+                    throw DashResourceException(
+                        code = "host_fetch_failed",
+                        status = 502,
+                        message = "DASH HTTP resource returned invalid Content-Range for ${range.toHeaderValue()}.",
+                    )
+                }
+                connection.inputStream.use { stream ->
+                    stream.copyLimitedToCancellable(output, range.length, cancellation)
+                }
+                return
+            }
+            if (status == HttpURLConnection.HTTP_OK && range.start == 0L) {
+                connection.inputStream.use { stream ->
+                    stream.copyLimitedToCancellable(output, range.length, cancellation)
+                }
+                return
+            }
+            if (status >= 400) {
+                throw IOException("HTTP $status")
+            }
+            throw DashResourceException(
+                code = "host_fetch_failed",
+                status = 502,
+                message = "DASH HTTP resource did not honor byte range ${range.toHeaderValue()}: HTTP $status",
+            )
         } finally {
             activeConnections -= connection
             connection.disconnect()
@@ -469,7 +567,7 @@ internal class VesperRelayFileDashResourceResolver internal constructor(
 
     override fun copyTo(
         uri: String,
-        output: FileOutputStream,
+        output: OutputStream,
         cancellation: AtomicBoolean,
     ) {
         if (cancellation.get()) {
@@ -477,6 +575,29 @@ internal class VesperRelayFileDashResourceResolver internal constructor(
         }
         fileForLogicalUri(uri).inputStream().use { input ->
             input.copyToCancellable(output, cancellation)
+        }
+    }
+
+    override fun copyRangeTo(
+        uri: String,
+        range: VesperRelayDashByteRange,
+        output: OutputStream,
+        cancellation: AtomicBoolean,
+    ) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        val file = fileForLogicalUri(uri)
+        RandomAccessFile(file, "r").use { input ->
+            if (range.end >= input.length()) {
+                throw DashResourceException(
+                    code = "dash_resource_not_found",
+                    status = 416,
+                    message = "DASH file resource is shorter than requested byte range.",
+                )
+            }
+            input.seek(range.start)
+            input.copyLimitedToCancellable(output, range.length, cancellation)
         }
     }
 
@@ -523,7 +644,7 @@ internal class VesperRelayContentDashResourceResolver(
 
     override fun copyTo(
         uri: String,
-        output: FileOutputStream,
+        output: OutputStream,
         cancellation: AtomicBoolean,
     ) {
         if (cancellation.get()) {
@@ -531,6 +652,21 @@ internal class VesperRelayContentDashResourceResolver(
         }
         openInput(uri).use { input ->
             input.copyToCancellable(output, cancellation)
+        }
+    }
+
+    override fun copyRangeTo(
+        uri: String,
+        range: VesperRelayDashByteRange,
+        output: OutputStream,
+        cancellation: AtomicBoolean,
+    ) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        openInput(uri).use { input ->
+            input.skipFullyCancellable(range.start, cancellation)
+            input.copyLimitedToCancellable(output, range.length, cancellation)
         }
     }
 
@@ -567,6 +703,7 @@ internal data class VesperRelayDashTrackPlan(
     val mimeType: String?,
     val codecs: String?,
     val initializationUri: String?,
+    val initializationRange: VesperRelayDashByteRange? = null,
     val segments: List<VesperRelayDashSegment>,
     val pipePath: String = "",
 )
@@ -574,6 +711,7 @@ internal data class VesperRelayDashTrackPlan(
 internal data class VesperRelayDashSegment(
     val index: Long,
     val uri: String,
+    val byteRange: VesperRelayDashByteRange? = null,
 )
 
 private data class DashTemplate(
@@ -584,11 +722,26 @@ private data class DashTemplate(
     val duration: Long,
 )
 
+private data class DashSegmentBase(
+    val initialization: VesperRelayDashByteRange,
+    val indexRange: VesperRelayDashByteRange,
+) {
+    fun toBridgeModel(): VesperRelayDashByteRangeSegmentBase =
+        VesperRelayDashByteRangeSegmentBase(
+            initialization = initialization,
+            indexRange = indexRange,
+        )
+}
+
 internal fun planHostPreparedDash(
     manifestText: String,
     manifestUri: String,
     sourceOrigin: VesperRelayDashSourceOrigin = remoteDashOrigin(manifestUri),
     baseDetails: Map<String, String> = emptyMap(),
+    resolver: VesperRelayDashResourceResolver = VesperRelayDashResourceResolver(
+        origin = sourceOrigin,
+        manifestLogicalUri = manifestUri,
+    ),
 ): VesperRelayDashPlan {
     val document =
         try {
@@ -604,17 +757,21 @@ internal fun planHostPreparedDash(
             )
         }
 
-    val type = document.documentElement.getAttribute("type")
-    if (type.isNotBlank() && !type.equals("static", ignoreCase = true)) {
-        throw VesperRelayHostInputException(
-            status = 415,
-            diagnostic = VesperRelayDiagnostic(
-                code = "unsupported_dynamic_dash",
-                message = "Dynamic DASH MPD is not supported by host-prepared relay remux v1.",
-                details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
-            ),
-        )
+    val manifestType = document.documentElement.getAttribute("type")
+    val isDynamic = manifestType.isNotBlank() && !manifestType.equals("static", ignoreCase = true)
+    val hasSegmentTemplate = document.hasDashElement("SegmentTemplate")
+    val hasSegmentBase = document.hasDashElement("SegmentBase")
+    if (isDynamic && !hasSegmentTemplate) {
+        if (hasSegmentBase) {
+            throw unsupportedDashLayout(
+                baseDetails = baseDetails,
+                message = "Dynamic DASH SegmentBase is not supported by host-prepared relay remux v1.",
+                details = mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
+            )
+        }
+        throw unsupportedDynamicDash(baseDetails)
     }
+
     if (document.getElementsByTagNameNS("*", "ContentProtection").length > 0) {
         throw VesperRelayHostInputException(
             status = 415,
@@ -638,13 +795,6 @@ internal fun planHostPreparedDash(
 
     val durationSeconds = parseIso8601DurationSeconds(
         document.documentElement.getAttribute("mediaPresentationDuration"),
-    ) ?: throw VesperRelayHostInputException(
-        status = 415,
-        diagnostic = VesperRelayDiagnostic(
-            code = "unsupported_dash_layout",
-            message = "Host-prepared relay remux requires a finite DASH mediaPresentationDuration.",
-            details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
-        ),
     )
 
     val periods = childElementsByTagName(document.documentElement, "Period")
@@ -678,79 +828,186 @@ internal fun planHostPreparedDash(
     val selectedKinds = mutableSetOf<String>()
     adaptationSets.forEachIndexed { index, adaptation ->
         val representations = childElementsByTagName(adaptation, "Representation")
-        val selectedRepresentation = representations.firstOrNull() ?: return@forEachIndexed
+        val selectedRepresentation = selectRepresentation(representations, isDynamic) ?: return@forEachIndexed
         val kind = dashMediaKind(adaptation, selectedRepresentation) ?: return@forEachIndexed
         if (kind in selectedKinds) {
             return@forEachIndexed
         }
         val representationId =
             selectedRepresentation.getAttribute("id").takeIf(String::isNotBlank) ?: "$kind$index"
-        val template = dashTemplateFromElement(selectedRepresentation)
-            ?: dashTemplateFromElement(adaptation)
-            ?: throw unsupportedDashLayout(
-                baseDetails = baseDetails,
-                message = "Host-prepared relay remux v1 requires SegmentTemplate tracks.",
-                details = mapOf("trackKind" to kind, "mediaId" to representationId),
-            )
-        validateTemplate(template, baseDetails, kind, representationId)
-        val segmentSeconds = template.duration.toDouble() / template.timescale.coerceAtLeast(1L).toDouble()
-        val segmentCount = kotlin.math.ceil(durationSeconds / segmentSeconds)
-            .toLong()
-            .coerceAtLeast(1L)
-        if (segmentCount > Int.MAX_VALUE) {
-            throw unsupportedDashLayout(
-                baseDetails = baseDetails,
-                message = "DASH SegmentTemplate expands to too many segments for relay remux v1.",
-                details = mapOf("trackKind" to kind, "mediaId" to representationId),
-            )
-        }
+        val mediaId = "$kind$index"
         val adaptationBase = firstBaseUrl(adaptation)
             ?.let { resolveDashReference(periodBase, it, sourceOrigin, baseDetails) }
             ?: periodBase
         val representationBase = firstBaseUrl(selectedRepresentation)
             ?.let { resolveDashReference(adaptationBase, it, sourceOrigin, baseDetails) }
             ?: adaptationBase
-        val mediaId = "$kind$index"
-        val initializationUri = template.initialization?.let { initialization ->
-            resolveDashReference(
-                representationBase,
-                expandDashTemplate(initialization, representationId, template.startNumber),
-                sourceOrigin,
-                baseDetails,
-            )
+        val template = dashTemplateFromElement(selectedRepresentation)
+            ?: dashTemplateFromElement(adaptation)
+        when {
+            template != null -> {
+                val finiteDurationSeconds = durationSeconds
+                    ?: throw VesperRelayHostInputException(
+                        status = 415,
+                        diagnostic = VesperRelayDiagnostic(
+                            code = "unsupported_dash_layout",
+                            message = "Host-prepared relay remux requires a finite DASH mediaPresentationDuration.",
+                            details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
+                        ),
+                    )
+                validateTemplate(template, baseDetails, kind, representationId)
+                val segmentSeconds = template.duration.toDouble() / template.timescale.coerceAtLeast(1L).toDouble()
+                val segmentCount = kotlin.math.ceil(finiteDurationSeconds / segmentSeconds)
+                    .toLong()
+                    .coerceAtLeast(1L)
+                if (segmentCount > Int.MAX_VALUE) {
+                    throw unsupportedDashLayout(
+                        baseDetails = baseDetails,
+                        message = "DASH SegmentTemplate expands to too many segments for relay remux v1.",
+                        details = mapOf("trackKind" to kind, "mediaId" to representationId),
+                    )
+                }
+                val initializationUri = template.initialization?.let { initialization ->
+                    resolveDashReference(
+                        representationBase,
+                        expandDashTemplate(initialization, representationId, template.startNumber),
+                        sourceOrigin,
+                        baseDetails,
+                    )
+                }
+                val segments = (0 until segmentCount).map { offset ->
+                    val number = template.startNumber + offset
+                    VesperRelayDashSegment(
+                        index = number,
+                        uri = resolveDashReference(
+                            representationBase,
+                            expandDashTemplate(template.media, representationId, number),
+                            sourceOrigin,
+                            baseDetails,
+                        ),
+                    )
+                }
+                planned += VesperRelayDashTrackPlan(
+                    kind = kind,
+                    mediaId = mediaId,
+                    mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank)
+                        ?: adaptation.getAttribute("mimeType").takeIf(String::isNotBlank),
+                    codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank)
+                        ?: adaptation.getAttribute("codecs").takeIf(String::isNotBlank),
+                    initializationUri = initializationUri,
+                    segments = segments,
+                )
+            }
+            isDynamic -> {
+                return@forEachIndexed
+            }
+            else -> {
+                val segmentBase = dashSegmentBaseFromElement(selectedRepresentation, baseDetails, kind, mediaId)
+                    ?: dashSegmentBaseFromElement(adaptation, baseDetails, kind, mediaId)
+                    ?: throw unsupportedDashLayout(
+                        baseDetails = baseDetails,
+                        message = "Host-prepared relay remux v1 requires SegmentTemplate or SegmentBase tracks.",
+                        details = mapOf("trackKind" to kind, "mediaId" to representationId),
+                    )
+                planned += planSegmentBaseTrack(
+                    kind = kind,
+                    mediaId = mediaId,
+                    mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank)
+                        ?: adaptation.getAttribute("mimeType").takeIf(String::isNotBlank),
+                    codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank)
+                        ?: adaptation.getAttribute("codecs").takeIf(String::isNotBlank),
+                    mediaUri = representationBase,
+                    segmentBase = segmentBase,
+                    baseDetails = baseDetails,
+                    resolver = resolver,
+                )
+            }
         }
-        val segments = (0 until segmentCount).map { offset ->
-            val number = template.startNumber + offset
-            VesperRelayDashSegment(
-                index = number,
-                uri = resolveDashReference(
-                    representationBase,
-                    expandDashTemplate(template.media, representationId, number),
-                    sourceOrigin,
-                    baseDetails,
-                ),
-            )
-        }
-        planned += VesperRelayDashTrackPlan(
-            kind = kind,
-            mediaId = mediaId,
-            mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank)
-                ?: adaptation.getAttribute("mimeType").takeIf(String::isNotBlank),
-            codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank),
-            initializationUri = initializationUri,
-            segments = segments,
-        )
         selectedKinds += kind
     }
 
     if (planned.none { it.kind == "video" }) {
+        if (isDynamic && hasSegmentBase) {
+            throw unsupportedDashLayout(
+                baseDetails = baseDetails,
+                message = "Dynamic DASH SegmentBase is not supported by host-prepared relay remux v1.",
+                details = mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
+            )
+        }
         throw unsupportedDashLayout(
             baseDetails = baseDetails,
-            message = "DASH MPD did not contain a supported video SegmentTemplate representation.",
+            message = "DASH MPD did not contain a supported video SegmentBase or SegmentTemplate representation.",
             details = mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
         )
     }
     return VesperRelayDashPlan(planned.sortedBy { if (it.kind == "video") 0 else 1 })
+}
+
+private fun selectRepresentation(
+    representations: List<Element>,
+    isDynamic: Boolean,
+): Element? {
+    if (!isDynamic) {
+        return representations.firstOrNull()
+    }
+    return representations.firstOrNull { dashTemplateFromElement(it) != null }
+        ?: representations.firstOrNull()
+}
+
+private fun planSegmentBaseTrack(
+    kind: String,
+    mediaId: String,
+    mimeType: String?,
+    codecs: String?,
+    mediaUri: String,
+    segmentBase: DashSegmentBase,
+    baseDetails: Map<String, String>,
+    resolver: VesperRelayDashResourceResolver,
+): VesperRelayDashTrackPlan {
+    val mediaSegments =
+        try {
+            val sidxBytes = resolver.readRange(mediaUri, segmentBase.indexRange)
+            val sidx = VesperRelayDashBridgeApiProvider.parseSidx(sidxBytes)
+            VesperRelayDashBridgeApiProvider.mediaSegments(segmentBase.toBridgeModel(), sidx)
+        } catch (error: IOException) {
+            throw VesperRelayHostInputException(
+                status = error.dashResourceHttpStatus(),
+                diagnostic = VesperRelayDiagnostic(
+                    code = error.dashResourceErrorCode(),
+                    message = "Failed to fetch DASH sidx for host-prepared relay remux.",
+                    details = baseDetails
+                        .withSegmentHash(mediaUri)
+                        .withHostError(error.message ?: error.javaClass.simpleName),
+                ),
+            )
+        } catch (error: Exception) {
+            throw unsupportedDashLayout(
+                baseDetails = baseDetails,
+                message = "DASH SegmentBase sidx could not be parsed for host-prepared relay remux.",
+                details = mapOf(
+                    "trackKind" to kind,
+                    "mediaId" to mediaId,
+                    "segmentUriHash" to hashForDiagnostic(mediaUri),
+                    "hostError" to (error.message ?: error.javaClass.simpleName),
+                ),
+            )
+        }
+
+    return VesperRelayDashTrackPlan(
+        kind = kind,
+        mediaId = mediaId,
+        mimeType = mimeType,
+        codecs = codecs,
+        initializationUri = mediaUri,
+        initializationRange = segmentBase.initialization,
+        segments = mediaSegments.mapIndexed { index, segment ->
+            VesperRelayDashSegment(
+                index = index.toLong(),
+                uri = mediaUri,
+                byteRange = segment.range,
+            )
+        },
+    )
 }
 
 private fun validateTemplate(
@@ -796,6 +1053,16 @@ private fun unsupportedDashLayout(
         ),
     )
 
+private fun unsupportedDynamicDash(baseDetails: Map<String, String>): VesperRelayHostInputException =
+    VesperRelayHostInputException(
+        status = 415,
+        diagnostic = VesperRelayDiagnostic(
+            code = "unsupported_dynamic_dash",
+            message = "Dynamic DASH MPD is not supported by host-prepared relay remux v1.",
+            details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
+        ),
+    )
+
 private fun unsupportedMixedDashOrigin(
     baseDetails: Map<String, String>,
     origin: VesperRelayDashSourceOrigin,
@@ -837,6 +1104,78 @@ private fun dashTemplateFromElement(element: Element): DashTemplate? {
     )
 }
 
+private fun dashSegmentBaseFromElement(
+    element: Element,
+    baseDetails: Map<String, String>,
+    kind: String,
+    mediaId: String,
+): DashSegmentBase? {
+    val segmentBase = childElementsByTagName(element, "SegmentBase").firstOrNull() ?: return null
+    val indexRangeValue = segmentBase.getAttribute("indexRange").takeIf(String::isNotBlank)
+        ?: throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentBase requires an indexRange.",
+            details = mapOf("trackKind" to kind, "mediaId" to mediaId),
+        )
+    val initializationRangeValue = childElementsByTagName(segmentBase, "Initialization")
+        .firstOrNull()
+        ?.getAttribute("range")
+        ?.takeIf(String::isNotBlank)
+        ?: throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentBase requires an Initialization range.",
+            details = mapOf("trackKind" to kind, "mediaId" to mediaId),
+        )
+    val indexRange = parseDashByteRange(indexRangeValue, "SegmentBase indexRange", baseDetails, kind, mediaId)
+    val initializationRange = parseDashByteRange(
+        initializationRangeValue,
+        "SegmentBase Initialization range",
+        baseDetails,
+        kind,
+        mediaId,
+    )
+    return DashSegmentBase(
+        initialization = initializationRange,
+        indexRange = indexRange,
+    )
+}
+
+private fun parseDashByteRange(
+    value: String,
+    field: String,
+    baseDetails: Map<String, String>,
+    kind: String,
+    mediaId: String,
+): VesperRelayDashByteRange {
+    val separator = value.indexOf('-')
+    if (separator <= 0 || separator == value.lastIndex) {
+        throw invalidDashByteRange(value, field, baseDetails, kind, mediaId)
+    }
+    val startText = value.substring(0, separator)
+    val endText = value.substring(separator + 1)
+    val start = startText.trim().toLongOrNull()
+        ?: throw invalidDashByteRange(value, field, baseDetails, kind, mediaId)
+    val end = endText.trim().toLongOrNull()
+        ?: throw invalidDashByteRange(value, field, baseDetails, kind, mediaId)
+    if (start < 0L || end < start) {
+        throw invalidDashByteRange(value, field, baseDetails, kind, mediaId)
+    }
+    return VesperRelayDashByteRange(start = start, end = end)
+}
+
+private fun invalidDashByteRange(
+    value: String,
+    field: String,
+    baseDetails: Map<String, String>,
+    kind: String,
+    mediaId: String,
+): VesperRelayHostInputException =
+    unsupportedDashLayout(
+        baseDetails = baseDetails,
+        message = "$field is invalid for host-prepared relay remux.",
+        details = mapOf("trackKind" to kind, "mediaId" to mediaId, "byteRange" to value),
+    )
+
 private fun dashMediaKind(
     adaptation: Element,
     representation: Element,
@@ -876,6 +1215,9 @@ private fun childElementsByTagName(
             }
         }
     }
+
+private fun Document.hasDashElement(tagName: String): Boolean =
+    getElementsByTagNameNS("*", tagName).length > 0 || getElementsByTagName(tagName).length > 0
 
 private fun firstBaseUrl(element: Element): String? =
     childElementsByTagName(element, "BaseURL")
@@ -1003,6 +1345,18 @@ private fun String.isRemoteFetchHeaderAllowed(): Boolean =
         "host",
         "range",
     )
+
+private val CONTENT_RANGE_PATTERN = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""", RegexOption.IGNORE_CASE)
+
+private fun contentRangeMatches(
+    value: String?,
+    range: VesperRelayDashByteRange,
+): Boolean {
+    val match = value?.let { CONTENT_RANGE_PATTERN.matchEntire(it.trim()) } ?: return false
+    val start = match.groupValues[1].toLongOrNull() ?: return false
+    val end = match.groupValues[2].toLongOrNull() ?: return false
+    return start == range.start && end == range.end
+}
 
 private class DashResourceException(
     val code: String,
@@ -1139,7 +1493,7 @@ internal fun hashForDiagnostic(value: String): String {
 }
 
 private fun InputStream.copyToCancellable(
-    output: FileOutputStream,
+    output: OutputStream,
     cancellation: AtomicBoolean,
 ) {
     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -1152,6 +1506,73 @@ private fun InputStream.copyToCancellable(
             return
         }
         output.write(buffer, 0, read)
+    }
+}
+
+private fun InputStream.copyLimitedToCancellable(
+    output: OutputStream,
+    length: Long,
+    cancellation: AtomicBoolean,
+) {
+    var remaining = length
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    while (remaining > 0L) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        val read = read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+        if (read < 0) {
+            return
+        }
+        output.write(buffer, 0, read)
+        remaining -= read.toLong()
+    }
+}
+
+private fun RandomAccessFile.copyLimitedToCancellable(
+    output: OutputStream,
+    length: Long,
+    cancellation: AtomicBoolean,
+) {
+    var remaining = length
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    while (remaining > 0L) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        val read = read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+        if (read < 0) {
+            return
+        }
+        output.write(buffer, 0, read)
+        remaining -= read.toLong()
+    }
+}
+
+private fun InputStream.skipFullyCancellable(
+    bytes: Long,
+    cancellation: AtomicBoolean,
+) {
+    var remaining = bytes
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    while (remaining > 0L) {
+        if (cancellation.get()) {
+            throw HostInputCancelledException()
+        }
+        val skipped = skip(remaining)
+        if (skipped > 0L) {
+            remaining -= skipped
+            continue
+        }
+        val read = read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+        if (read < 0) {
+            throw DashResourceException(
+                code = "dash_resource_not_found",
+                status = 416,
+                message = "DASH resource is shorter than requested byte range.",
+            )
+        }
+        remaining -= read.toLong()
     }
 }
 

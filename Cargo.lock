@@ -1803,6 +1803,7 @@ version = "0.2.0"
 dependencies = [
  "ffmpeg-next",
  "jni 0.22.4",
+ "player-dash-hls-bridge",
  "serde",
  "serde_json",
 ]
