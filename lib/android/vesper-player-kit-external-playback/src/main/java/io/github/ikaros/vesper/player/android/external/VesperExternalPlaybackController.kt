@@ -53,6 +53,7 @@ class VesperExternalPlaybackController(context: Context) {
     private var activeCastRouteName: String? = null
     private var dlnaDiscovery: VesperDlnaDiscovery? = null
     private var dlnaSession: VesperDlnaSession? = null
+    @Volatile
     private var released = false
     private val castContextExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "vesper-cast-context").apply { isDaemon = true }
@@ -479,30 +480,14 @@ class VesperExternalPlaybackController(context: Context) {
         val session = dlnaSession
             ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
         val protocolInfo = runCatching { session.protocolInfo() }.getOrDefault("")
-        val prepared = prepareSource(
-            item = item,
-            target = VesperExternalPlaybackTarget.Dlna,
-            capabilities = VesperExternalRouteCapabilities(
-                supportsProgressive = true,
-                supportsHls = VesperDlnaProtocolInfoParser.supportsHls(protocolInfo),
-                supportsDash = VesperDlnaProtocolInfoParser.supportsDash(protocolInfo),
-                supportsMpegTs = protocolInfo.isBlank() ||
-                    VesperDlnaProtocolInfoParser.supportsMpegTs(protocolInfo),
-            ),
-            routeId = session.device.routeId,
-            routeName = session.device.friendlyName,
-            routeLocalAddress = session.device.localAddress,
-        ) ?: return lastPrepareFailure
+        val prepared = prepareDlnaSource(item, session, protocolInfo) ?: return lastPrepareFailure
         val dlnaResult = session.load(
             source = prepared.source,
             metadata = item.metadata,
             startPositionMs = startPositionMs,
             autoplay = autoplay,
         ).toExternalResult(session.device.routeId, prepared.relayEnabled)
-        if (dlnaResult is VesperExternalPlaybackResult.Success) {
-            prepared.relayToken?.let(activeRelayTokens::add)
-            emitEvent(VesperExternalPlaybackEventKind.Loaded, session.device.routeId, session.device.friendlyName)
-        }
+        handleDlnaLoadedResult(session, prepared, dlnaResult)
         return dlnaResult
     }
 
@@ -514,7 +499,23 @@ class VesperExternalPlaybackController(context: Context) {
         val session = dlnaSession
             ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
         val protocolInfo = runCatching { session.protocolInfoAsync() }.getOrDefault("")
-        val prepared = prepareSource(
+        val prepared = prepareDlnaSource(item, session, protocolInfo) ?: return lastPrepareFailure
+        val dlnaResult = session.loadAsync(
+            source = prepared.source,
+            metadata = item.metadata,
+            startPositionMs = startPositionMs,
+            autoplay = autoplay,
+        ).toExternalResult(session.device.routeId, prepared.relayEnabled)
+        handleDlnaLoadedResult(session, prepared, dlnaResult)
+        return dlnaResult
+    }
+
+    private fun prepareDlnaSource(
+        item: VesperExternalPlaybackMediaItem,
+        session: VesperDlnaSession,
+        protocolInfo: String,
+    ): VesperExternalSourcePreparationResult.Prepared? =
+        prepareSource(
             item = item,
             target = VesperExternalPlaybackTarget.Dlna,
             capabilities = VesperExternalRouteCapabilities(
@@ -527,18 +528,17 @@ class VesperExternalPlaybackController(context: Context) {
             routeId = session.device.routeId,
             routeName = session.device.friendlyName,
             routeLocalAddress = session.device.localAddress,
-        ) ?: return lastPrepareFailure
-        val dlnaResult = session.loadAsync(
-            source = prepared.source,
-            metadata = item.metadata,
-            startPositionMs = startPositionMs,
-            autoplay = autoplay,
-        ).toExternalResult(session.device.routeId, prepared.relayEnabled)
+        )
+
+    private fun handleDlnaLoadedResult(
+        session: VesperDlnaSession,
+        prepared: VesperExternalSourcePreparationResult.Prepared,
+        dlnaResult: VesperExternalPlaybackResult,
+    ) {
         if (dlnaResult is VesperExternalPlaybackResult.Success) {
             prepared.relayToken?.let(activeRelayTokens::add)
             emitEvent(VesperExternalPlaybackEventKind.Loaded, session.device.routeId, session.device.friendlyName)
         }
-        return dlnaResult
     }
 
     private var lastPrepareFailure: VesperExternalPlaybackResult =

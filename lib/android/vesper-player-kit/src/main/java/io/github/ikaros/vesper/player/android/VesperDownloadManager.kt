@@ -910,7 +910,7 @@ class VesperDownloadManager internal constructor(
         check(!completedPath.isNullOrBlank()) {
             "download task $taskId does not have an output file"
         }
-        val uri = runCatching { Uri.parse(completedPath) }.getOrNull()
+        val uri = Uri.parse(completedPath)
         val file =
             if (uri?.scheme.equals("file", ignoreCase = true)) {
                 File(checkNotNull(uri?.path) { "download task output file URI is invalid" })

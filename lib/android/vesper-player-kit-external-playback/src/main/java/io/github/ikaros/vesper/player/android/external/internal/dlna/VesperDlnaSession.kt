@@ -19,38 +19,28 @@ class VesperDlnaSession(
         metadata: VesperSystemPlaybackMetadata?,
         startPositionMs: Long = 0,
         autoplay: Boolean = true,
-    ): VesperDlnaOperationResult {
-        val setUri = soapClient.setAvTransportUri(device, source, metadata).toOperationResult()
-        if (setUri !is VesperDlnaOperationResult.Success) {
-            return setUri
-        }
-        if (startPositionMs > 0) {
-            val seek = seekTo(startPositionMs)
-            if (seek is VesperDlnaOperationResult.Failed) {
-                return seek
-            }
-        }
-        return if (autoplay) play() else VesperDlnaOperationResult.Success
-    }
+    ): VesperDlnaOperationResult =
+        loadWithOperations(
+            startPositionMs = startPositionMs,
+            autoplay = autoplay,
+            setUri = { soapClient.setAvTransportUri(device, source, metadata).toOperationResult() },
+            seek = ::seekTo,
+            play = ::play,
+        )
 
     suspend fun loadAsync(
         source: VesperPlayerSource,
         metadata: VesperSystemPlaybackMetadata?,
         startPositionMs: Long = 0,
         autoplay: Boolean = true,
-    ): VesperDlnaOperationResult {
-        val setUri = soapClient.setAvTransportUriAsync(device, source, metadata).toOperationResult()
-        if (setUri !is VesperDlnaOperationResult.Success) {
-            return setUri
-        }
-        if (startPositionMs > 0) {
-            val seek = seekToAsync(startPositionMs)
-            if (seek is VesperDlnaOperationResult.Failed) {
-                return seek
-            }
-        }
-        return if (autoplay) playAsync() else VesperDlnaOperationResult.Success
-    }
+    ): VesperDlnaOperationResult =
+        loadWithOperationsAsync(
+            startPositionMs = startPositionMs,
+            autoplay = autoplay,
+            setUri = { soapClient.setAvTransportUriAsync(device, source, metadata).toOperationResult() },
+            seek = ::seekToAsync,
+            play = ::playAsync,
+        )
 
     fun play(): VesperDlnaOperationResult =
         soapClient.play(device).toOperationResult()
@@ -81,6 +71,46 @@ class VesperDlnaSession(
 
     suspend fun protocolInfoAsync(): String =
         soapClient.getProtocolInfoAsync(device).body
+
+    private fun loadWithOperations(
+        startPositionMs: Long,
+        autoplay: Boolean,
+        setUri: () -> VesperDlnaOperationResult,
+        seek: (Long) -> VesperDlnaOperationResult,
+        play: () -> VesperDlnaOperationResult,
+    ): VesperDlnaOperationResult {
+        val setUriResult = setUri()
+        if (setUriResult !is VesperDlnaOperationResult.Success) {
+            return setUriResult
+        }
+        if (startPositionMs > 0) {
+            val seekResult = seek(startPositionMs)
+            if (seekResult is VesperDlnaOperationResult.Failed) {
+                return seekResult
+            }
+        }
+        return if (autoplay) play() else VesperDlnaOperationResult.Success
+    }
+
+    private suspend fun loadWithOperationsAsync(
+        startPositionMs: Long,
+        autoplay: Boolean,
+        setUri: suspend () -> VesperDlnaOperationResult,
+        seek: suspend (Long) -> VesperDlnaOperationResult,
+        play: suspend () -> VesperDlnaOperationResult,
+    ): VesperDlnaOperationResult {
+        val setUriResult = setUri()
+        if (setUriResult !is VesperDlnaOperationResult.Success) {
+            return setUriResult
+        }
+        if (startPositionMs > 0) {
+            val seekResult = seek(startPositionMs)
+            if (seekResult is VesperDlnaOperationResult.Failed) {
+                return seekResult
+            }
+        }
+        return if (autoplay) play() else VesperDlnaOperationResult.Success
+    }
 }
 
 private fun VesperDlnaSoapResponse.toOperationResult(

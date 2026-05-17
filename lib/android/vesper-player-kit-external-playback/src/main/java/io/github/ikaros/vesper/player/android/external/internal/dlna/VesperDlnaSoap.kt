@@ -100,29 +100,15 @@ class VesperDlnaSoapClient(
         device: VesperDlnaDevice,
         source: VesperPlayerSource,
         metadata: VesperSystemPlaybackMetadata?,
-    ): VesperDlnaSoapResponse {
-        val service = device.avTransport ?: return missingService("AVTransport")
-        return post(
-            device = device,
-            service = service,
-            action = "SetAVTransportURI",
-            arguments = avTransportUriArguments(source, metadata),
-        )
-    }
+    ): VesperDlnaSoapResponse =
+        avTransport(device, "SetAVTransportURI", avTransportUriArguments(source, metadata))
 
     suspend fun setAvTransportUriAsync(
         device: VesperDlnaDevice,
         source: VesperPlayerSource,
         metadata: VesperSystemPlaybackMetadata?,
-    ): VesperDlnaSoapResponse {
-        val service = device.avTransport ?: return missingService("AVTransport")
-        return postAsync(
-            device = device,
-            service = service,
-            action = "SetAVTransportURI",
-            arguments = avTransportUriArguments(source, metadata),
-        )
-    }
+    ): VesperDlnaSoapResponse =
+        avTransportAsync(device, "SetAVTransportURI", avTransportUriArguments(source, metadata))
 
     fun play(device: VesperDlnaDevice): VesperDlnaSoapResponse =
         avTransport(device, "Play", mapOf("InstanceID" to "0", "Speed" to "1"))
@@ -176,53 +162,23 @@ class VesperDlnaSoapClient(
     suspend fun getTransportInfoAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
         avTransportAsync(device, "GetTransportInfo", mapOf("InstanceID" to "0"))
 
-    fun getProtocolInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse {
-        val service = device.connectionManager ?: return missingService("ConnectionManager")
-        return post(device, service, "GetProtocolInfo", emptyMap())
-    }
+    fun getProtocolInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        connectionManager(device, "GetProtocolInfo", emptyMap())
 
-    suspend fun getProtocolInfoAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse {
-        val service = device.connectionManager ?: return missingService("ConnectionManager")
-        return postAsync(device, service, "GetProtocolInfo", emptyMap())
-    }
+    suspend fun getProtocolInfoAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        connectionManagerAsync(device, "GetProtocolInfo", emptyMap())
 
-    fun getVolume(device: VesperDlnaDevice): VesperDlnaSoapResponse {
-        val service = device.renderingControl ?: return missingService("RenderingControl")
-        return post(device, service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
-    }
+    fun getVolume(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        renderingControl(device, "GetVolume", renderingControlArguments())
 
-    suspend fun getVolumeAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse {
-        val service = device.renderingControl ?: return missingService("RenderingControl")
-        return postAsync(device, service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
-    }
+    suspend fun getVolumeAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse =
+        renderingControlAsync(device, "GetVolume", renderingControlArguments())
 
-    fun setVolume(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse {
-        val service = device.renderingControl ?: return missingService("RenderingControl")
-        return post(
-            device,
-            service,
-            "SetVolume",
-            mapOf(
-                "InstanceID" to "0",
-                "Channel" to "Master",
-                "DesiredVolume" to volume.coerceIn(0, 100).toString(),
-            ),
-        )
-    }
+    fun setVolume(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse =
+        renderingControl(device, "SetVolume", renderingControlArguments(volume))
 
-    suspend fun setVolumeAsync(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse {
-        val service = device.renderingControl ?: return missingService("RenderingControl")
-        return postAsync(
-            device,
-            service,
-            "SetVolume",
-            mapOf(
-                "InstanceID" to "0",
-                "Channel" to "Master",
-                "DesiredVolume" to volume.coerceIn(0, 100).toString(),
-            ),
-        )
-    }
+    suspend fun setVolumeAsync(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse =
+        renderingControlAsync(device, "SetVolume", renderingControlArguments(volume))
 
     private fun avTransport(
         device: VesperDlnaDevice,
@@ -242,21 +198,52 @@ class VesperDlnaSoapClient(
         return postAsync(device, service, action, arguments)
     }
 
+    private fun connectionManager(
+        device: VesperDlnaDevice,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse {
+        val service = device.connectionManager ?: return missingService("ConnectionManager")
+        return post(device, service, action, arguments)
+    }
+
+    private suspend fun connectionManagerAsync(
+        device: VesperDlnaDevice,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse {
+        val service = device.connectionManager ?: return missingService("ConnectionManager")
+        return postAsync(device, service, action, arguments)
+    }
+
+    private fun renderingControl(
+        device: VesperDlnaDevice,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse {
+        val service = device.renderingControl ?: return missingService("RenderingControl")
+        return post(device, service, action, arguments)
+    }
+
+    private suspend fun renderingControlAsync(
+        device: VesperDlnaDevice,
+        action: String,
+        arguments: Map<String, String>,
+    ): VesperDlnaSoapResponse {
+        val service = device.renderingControl ?: return missingService("RenderingControl")
+        return postAsync(device, service, action, arguments)
+    }
+
     private fun post(
         device: VesperDlnaDevice,
         service: VesperDlnaService,
         action: String,
         arguments: Map<String, String>,
     ): VesperDlnaSoapResponse =
-        runCatching {
+        mapPostFailure(service, action) {
             runBlocking(Dispatchers.IO) {
                 postBlocking(device, service, action, arguments)
             }
-        }.getOrElse { error ->
-            VesperDlnaSoapResponse(
-                status = 0,
-                body = error.toDlnaControlFailureMessage(action, service.controlUrl.toString()),
-            )
         }
 
     private suspend fun postAsync(
@@ -265,10 +252,19 @@ class VesperDlnaSoapClient(
         action: String,
         arguments: Map<String, String>,
     ): VesperDlnaSoapResponse =
-        runCatching {
+        mapPostFailure(service, action) {
             withContext(Dispatchers.IO) {
                 postBlocking(device, service, action, arguments)
             }
+        }
+
+    private inline fun mapPostFailure(
+        service: VesperDlnaService,
+        action: String,
+        block: () -> VesperDlnaSoapResponse,
+    ): VesperDlnaSoapResponse =
+        runCatching {
+            block()
         }.getOrElse { error ->
             VesperDlnaSoapResponse(
                 status = 0,
@@ -323,6 +319,13 @@ private fun avTransportUriArguments(
         "CurrentURI" to source.uri,
         "CurrentURIMetaData" to VesperDlnaDidlBuilder.build(source, metadata),
     )
+
+private fun renderingControlArguments(volume: Int? = null): Map<String, String> =
+    buildMap {
+        put("InstanceID", "0")
+        put("Channel", "Master")
+        volume?.let { put("DesiredVolume", it.coerceIn(0, 100).toString()) }
+    }
 
 private fun Throwable.toDlnaControlFailureMessage(action: String, controlUrl: String): String {
     val cause = message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName

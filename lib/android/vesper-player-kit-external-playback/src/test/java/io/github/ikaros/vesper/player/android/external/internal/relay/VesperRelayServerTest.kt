@@ -2,6 +2,9 @@ package io.github.ikaros.vesper.player.android.external.internal.relay
 
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
@@ -85,10 +88,22 @@ class VesperRelayServerTest {
             VesperPlayerSource.local(uri = file.absolutePath, label = "Local"),
         )
 
+        val full = request(handle.url)
+        assertEquals(200, full.status)
+        assertEquals("0123456789", full.body)
+        assertEquals("10", full.headerValue("Content-Length"))
+
         val range = request(handle.url, headers = mapOf("Range" to "bytes=4-8"))
         assertEquals(206, range.status)
         assertEquals("45678", range.body)
         assertEquals("bytes 4-8/10", range.headers["Content-Range"]?.firstOrNull())
+        assertEquals("5", range.headerValue("Content-Length"))
+
+        val head = request(handle.url, method = "HEAD", headers = mapOf("Range" to "bytes=4-8"))
+        assertEquals(206, head.status)
+        assertEquals("", head.body)
+        assertEquals("bytes 4-8/10", head.headerValue("Content-Range"))
+        assertEquals("5", head.headerValue("Content-Length"))
 
         val invalid = request(handle.url, headers = mapOf("Range" to "bytes=100-200"))
         assertEquals(416, invalid.status)
@@ -531,6 +546,79 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun relayServerDoesNotCloseAdaptedSessionCloseableForHeadResponse() {
+        val adapter = CloseableHeadFormatAdapter()
+        val adaptedRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            formatAdapter = adapter,
+        )
+        try {
+            val handle = adaptedRelay.register(
+                VesperPlayerSource.dash(
+                    uri = "https://example.com/video.mpd",
+                    label = "Episode",
+                ),
+                VesperRelayFormatAdaptationRegistration(
+                    fallbackFormat = VesperRelayFallbackFormat.MpegTs,
+                    config = VesperRelayFormatAdaptationConfig(enabled = true),
+                ),
+            )
+
+            val response = request(handle.url, method = "HEAD")
+
+            assertEquals(200, response.status)
+            assertEquals("", response.body)
+            assertTrue(adapter.openRequests.single().headOnly)
+            assertFalse(adapter.closed.get())
+        } finally {
+            adaptedRelay.stop()
+        }
+    }
+
+    @Test
+    fun localReadableRejectsInvalidRangeWhenLengthIsKnown() {
+        val output = ByteArrayOutputStream()
+
+        relayLocalReadable(
+            source = VesperPlayerSource.local(uri = "/video.mp4", label = "Local"),
+            headOnly = false,
+            range = ByteRangeRequest(start = 99, end = 100),
+            output = output,
+            readable = LocalRelayReadable(
+                totalLength = 10,
+                openInput = { ByteArrayInputStream("0123456789".toByteArray()) },
+            ),
+        )
+
+        val response = output.toString(Charsets.ISO_8859_1.name())
+        assertTrue(response.startsWith("HTTP/1.1 416 Range Not Satisfiable\r\n"))
+        assertTrue(response.contains("Content-Range: bytes */10\r\n"))
+    }
+
+    @Test
+    fun localReadableStreamsUnknownLengthWithoutRangeRejectionOrContentLength() {
+        val output = ByteArrayOutputStream()
+
+        relayLocalReadable(
+            source = VesperPlayerSource.local(uri = "/video.mp4", label = "Local"),
+            headOnly = false,
+            range = ByteRangeRequest(start = 99, end = 100),
+            output = output,
+            readable = LocalRelayReadable(
+                totalLength = null,
+                openInput = { ByteArrayInputStream("0123456789".toByteArray()) },
+            ),
+        )
+
+        val response = output.toString(Charsets.ISO_8859_1.name())
+        assertTrue(response.startsWith("HTTP/1.1 200 OK\r\n"))
+        assertFalse(response.contains("Content-Length:"))
+        assertFalse(response.contains("Content-Range:"))
+        assertTrue(response.endsWith("\r\n\r\n0123456789"))
+    }
+
+    @Test
     fun sourcePreparerHonorsProxyNever() {
         val preparer = VesperExternalPlaybackSourcePreparer(relay)
         val source = VesperPlayerSource.remote(
@@ -614,6 +702,25 @@ private class RecordingFormatAdapter : VesperRelayFormatAdapter {
 
     override fun invalidate(sessionId: String) {
         invalidated += sessionId
+    }
+}
+
+private class CloseableHeadFormatAdapter : VesperRelayFormatAdapter {
+    val openRequests = Collections.synchronizedList(mutableListOf<VesperRelayFormatAdaptationRequest>())
+    val closed = AtomicBoolean(false)
+
+    override fun open(
+        request: VesperRelayFormatAdaptationRequest,
+    ): VesperRelayFormatAdaptationResult {
+        openRequests += request
+        return VesperRelayFormatAdaptationResult.Stream(
+            VesperRelayAdaptedStream(
+                input = ByteArrayInputStream(if (request.headOnly) ByteArray(0) else "ok".toByteArray()),
+                contentType = request.fallbackFormat.contentType(),
+                contentLength = if (request.headOnly) 0L else 2L,
+                closeable = Closeable { closed.set(true) },
+            ),
+        )
     }
 }
 

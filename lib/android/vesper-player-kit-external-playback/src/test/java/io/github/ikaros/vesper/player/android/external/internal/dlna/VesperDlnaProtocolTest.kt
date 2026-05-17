@@ -8,6 +8,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLConnection
 import java.net.URLStreamHandler
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -185,6 +186,74 @@ class VesperDlnaProtocolTest {
         assertEquals(connection.fixedLength, connection.postedBody.size)
         assertTrue(connection.postedBodyText.contains("<u:SetAVTransportURI"))
         assertTrue(connection.disconnected)
+    }
+
+    @Test
+    fun postsSoapBodyAsyncWithFixedLengthAndCloseConnection() = runBlocking {
+        val connection = RecordingSoapConnection(URL("http://192.168.1.10/control/av"))
+        val controlUrl = URL(null, "http://192.168.1.10/control/av", RecordingUrlHandler(connection))
+        val device = VesperDlnaDevice(
+            routeId = "uuid:device-1",
+            location = URL("http://192.168.1.10/description.xml"),
+            usn = "uuid:device-1",
+            friendlyName = "Living Room TV",
+            avTransport = VesperDlnaService(
+                serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+                serviceId = "urn:upnp-org:serviceId:AVTransport",
+                controlUrl = controlUrl,
+                eventSubUrl = null,
+                scpdUrl = null,
+            ),
+        )
+
+        val response = VesperDlnaSoapClient(timeoutMs = 100).setAvTransportUriAsync(
+            device = device,
+            source = VesperPlayerSource.remote(
+                uri = "http://192.168.1.2:9000/media.mp4",
+                label = "Episode",
+            ),
+            metadata = null,
+        )
+
+        assertEquals(200, response.status)
+        assertEquals("POST", connection.requestMethod)
+        assertEquals("close", connection.requestProperties["Connection"])
+        assertEquals("text/xml; charset=\"utf-8\"", connection.requestProperties["Content-Type"])
+        assertEquals(
+            "\"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI\"",
+            connection.requestProperties["SOAPACTION"],
+        )
+        assertEquals(connection.fixedLength, connection.postedBody.size)
+        assertTrue(connection.postedBodyText.contains("<u:SetAVTransportURI"))
+        assertTrue(connection.disconnected)
+    }
+
+    @Test
+    fun reportsMissingDlnaServicesConsistentlyForSyncAndAsyncCalls() = runBlocking {
+        val device = VesperDlnaDevice(
+            routeId = "uuid:device-1",
+            location = URL("http://192.168.1.10/description.xml"),
+            usn = "uuid:device-1",
+            friendlyName = "Living Room TV",
+        )
+        val client = VesperDlnaSoapClient(timeoutMs = 100)
+
+        val syncAvTransport = client.play(device)
+        val asyncAvTransport = client.playAsync(device)
+        val syncConnectionManager = client.getProtocolInfo(device)
+        val asyncConnectionManager = client.getProtocolInfoAsync(device)
+        val syncRenderingControl = client.getVolume(device)
+        val asyncRenderingControl = client.getVolumeAsync(device)
+
+        assertEquals(0, syncAvTransport.status)
+        assertEquals(syncAvTransport, asyncAvTransport)
+        assertEquals("AVTransport service is not available.", syncAvTransport.body)
+        assertEquals(0, syncConnectionManager.status)
+        assertEquals(syncConnectionManager, asyncConnectionManager)
+        assertEquals("ConnectionManager service is not available.", syncConnectionManager.body)
+        assertEquals(0, syncRenderingControl.status)
+        assertEquals(syncRenderingControl, asyncRenderingControl)
+        assertEquals("RenderingControl service is not available.", syncRenderingControl.body)
     }
 
     @Test
