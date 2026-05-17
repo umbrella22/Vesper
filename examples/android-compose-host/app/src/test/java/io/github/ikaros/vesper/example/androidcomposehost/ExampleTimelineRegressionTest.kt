@@ -3,7 +3,10 @@ package io.github.ikaros.vesper.example.androidcomposehost
 import io.github.ikaros.vesper.player.android.SeekableRangeUi
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.TimelineUiState
+import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRoute
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRouteKind
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -91,5 +94,91 @@ class ExampleTimelineRegressionTest {
             ExampleTimelineSummaryState.Window(positionMs = 30_000L, endMs = 30_000L),
             timelineSummaryState(timeline, pendingSeekRatio = null),
         )
+    }
+
+    @Test
+    fun `external route label includes kind and device metadata`() {
+        val route =
+            VesperExternalPlaybackRoute(
+                routeId = "dlna:living-room",
+                name = "Living Room",
+                kind = VesperExternalPlaybackRouteKind.Dlna,
+                manufacturer = "Acme",
+                modelName = "Panel",
+            )
+
+        assertEquals("Living Room · DLNA · Acme Panel", exampleExternalRouteLabel(route))
+    }
+
+    @Test
+    fun `external optimistic position advances only while playing and clamps to duration`() {
+        val source = VesperPlayerSource.hls(ANDROID_HLS_DEMO_URL, "HLS")
+        val session =
+            ExampleExternalPlaybackSession(
+                routeId = "cast:active",
+                routeName = "Cast device",
+                routeKind = VesperExternalPlaybackRouteKind.Cast,
+                status = ExampleExternalPlaybackStatus.Playing,
+                source = source,
+                basePositionMs = 9_000L,
+                durationMs = 10_000L,
+                seekableRange = null,
+                startedAtMillis = 1_000L,
+            )
+
+        assertEquals(10_000L, exampleEstimatedExternalPositionMs(session, nowMillis = 4_500L))
+        assertEquals(
+            9_000L,
+            exampleEstimatedExternalPositionMs(
+                session.copy(status = ExampleExternalPlaybackStatus.Paused),
+                nowMillis = 4_500L,
+            ),
+        )
+    }
+
+    @Test
+    fun `external disconnect returns latest estimated remote position`() {
+        val session =
+            ExampleExternalPlaybackSession(
+                routeId = "dlna:tv",
+                routeName = "TV",
+                routeKind = VesperExternalPlaybackRouteKind.Dlna,
+                status = ExampleExternalPlaybackStatus.Playing,
+                source = androidHlsDemoSource(context = null),
+                basePositionMs = 12_000L,
+                durationMs = 60_000L,
+                seekableRange = null,
+                startedAtMillis = 2_000L,
+            )
+
+        assertEquals(17_000L, exampleDisconnectLocalPositionMs(session, nowMillis = 7_000L))
+    }
+
+    @Test
+    fun `external timeline uses seekable range for clamped live dvr progress`() {
+        val timeline =
+            TimelineUiState(
+                kind = TimelineKind.LiveDvr,
+                isSeekable = true,
+                seekableRange = SeekableRangeUi(startMs = 40_000L, endMs = 70_000L),
+                liveEdgeMs = 70_000L,
+                positionMs = 45_000L,
+                durationMs = 120_000L,
+            )
+        val session =
+            ExampleExternalPlaybackSession(
+                routeId = "dlna:tv",
+                routeName = "TV",
+                routeKind = VesperExternalPlaybackRouteKind.Dlna,
+                status = ExampleExternalPlaybackStatus.Playing,
+                source = androidLiveDvrAcceptanceSource(context = null),
+                basePositionMs = 68_000L,
+                durationMs = 120_000L,
+                seekableRange = 40_000L to 70_000L,
+                startedAtMillis = 1_000L,
+            )
+
+        assertEquals(70_000L, exampleExternalTimeline(timeline, session, nowMillis = 6_000L).positionMs)
+        assertEquals(55_000L, exampleExternalPositionForRatio(timeline, ratio = 0.5f))
     }
 }

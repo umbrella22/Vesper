@@ -57,22 +57,31 @@ class VesperRelayServer @JvmOverloads constructor(
     private var serverSocket: ServerSocket? = null
     private var acceptExecutor: ExecutorService? = null
     private var requestExecutor: ExecutorService? = null
-    private var advertisedAddress: InetAddress? = null
+    private var boundAddress: InetAddress? = null
 
     @Synchronized
-    fun start() {
+    @JvmOverloads
+    fun start(preferredBindAddress: InetAddress? = null) {
         if (running.get()) {
-            return
+            val preferredAddress = preferredBindAddress?.takeIf { it.isBindableLanAddress() }
+            val currentAddress = boundAddress
+            if (preferredAddress == null ||
+                currentAddress == null ||
+                currentAddress.isAnyLocalAddress ||
+                currentAddress.hasSameHostAddress(preferredAddress) ||
+                entries.isNotEmpty()
+            ) {
+                return
+            }
+            stop()
         }
-        val bindAddress = bindAddressProvider()
+        val bindAddress = preferredBindAddress?.takeIf { it.isBindableLanAddress() }
+            ?: bindAddressProvider()
             ?: appContext?.findWifiLanIpv4Address()
             ?: throw IllegalStateException("No Wi-Fi LAN address is available for relay.")
         val socket = ServerSocket(0, 50, bindAddress)
         serverSocket = socket
-        advertisedAddress =
-            bindAddress.takeUnless { it.isAnyLocalAddress }
-                ?: appContext?.findWifiLanIpv4Address()
-                ?: advertisedAddressProvider()
+        boundAddress = bindAddress
         requestExecutor = Executors.newCachedThreadPool { runnable ->
             Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
         }
@@ -92,16 +101,18 @@ class VesperRelayServer @JvmOverloads constructor(
         activeClients.forEach { client -> runCatching { client.close() } }
         activeClients.clear()
         serverSocket = null
+        boundAddress = null
         acceptExecutor?.shutdownNow()
         requestExecutor?.shutdownNow()
         acceptExecutor = null
         requestExecutor = null
-        advertisedAddress = null
     }
 
+    @JvmOverloads
     fun register(
         source: VesperPlayerSource,
         adaptation: VesperRelayFormatAdaptationRegistration? = null,
+        preferredAddress: InetAddress? = null,
     ): VesperRelayHandle {
         pruneExpiredEntries()
         val token = nextToken()
@@ -120,9 +131,9 @@ class VesperRelayServer @JvmOverloads constructor(
                 throw VesperRelayRegistrationException(failure.status, diagnostic)
             }
         }
-        start()
+        start(preferredAddress)
         val socket = serverSocket ?: throw IllegalStateException("Relay server is not running.")
-        val host = advertisedAddress?.hostAddress
+        val host = advertisedHost(preferredAddress)
             ?: throw IllegalStateException("No LAN address is available for relay.")
         val relayPath = source.relayPath(token, adaptation)
         entries[token] = RelayEntry(
@@ -159,6 +170,20 @@ class VesperRelayServer @JvmOverloads constructor(
             token = token,
             url = "http://$host:${socket.localPort}$relayPath",
         )
+    }
+
+    private fun advertisedHost(preferredAddress: InetAddress?): String? {
+        val activeBind = boundAddress
+        val preferred = preferredAddress?.takeIf { it.isAdvertisableLanAddress() }
+        val address = when {
+            preferred != null &&
+                (activeBind == null ||
+                    activeBind.isAnyLocalAddress ||
+                    activeBind.hasSameHostAddress(preferred)) -> preferred
+            activeBind != null && !activeBind.isAnyLocalAddress -> activeBind
+            else -> appContext?.findWifiLanIpv4Address() ?: advertisedAddressProvider()
+        }
+        return address?.toRelayHost()
     }
 
     fun invalidate(token: String) {
@@ -633,7 +658,7 @@ fun parseRangeHeader(header: String): ByteRangeRequest? {
 fun findLanIpv4Address(): InetAddress? =
     NetworkInterface.getNetworkInterfaces()
         .asSequence()
-        .filter { it.isUp && !it.isLoopback }
+        .filter { it.isUsableLanInterface() }
         .flatMap { it.inetAddresses.asSequence() }
         .filterIsInstance<Inet4Address>()
         .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
@@ -649,18 +674,26 @@ private fun Context.findWifiLanIpv4Address(): InetAddress? {
             .mapNotNull { network ->
                 val capabilities = connectivityManager.getNetworkCapabilities(network)
                     ?: return@mapNotNull null
-                if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
+                    (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                        !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+                ) {
                     return@mapNotNull null
                 }
                 val linkProperties = connectivityManager.getLinkProperties(network)
                     ?: return@mapNotNull null
+                val interfaceName = linkProperties.interfaceName
+                val networkInterface = interfaceName
+                    ?.let { runCatching { NetworkInterface.getByName(it) }.getOrNull() }
+                if (!networkInterface.isUsableLanInterface(interfaceName)) {
+                    return@mapNotNull null
+                }
                 linkProperties.linkAddresses
                     .asSequence()
                     .map { it.address }
                     .filterIsInstance<Inet4Address>()
                     .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
-                    ?: linkProperties.interfaceName
-                        ?.let(NetworkInterface::getByName)
+                    ?: networkInterface
                         ?.inetAddresses
                         ?.asSequence()
                         ?.filterIsInstance<Inet4Address>()
@@ -669,6 +702,47 @@ private fun Context.findWifiLanIpv4Address(): InetAddress? {
             .firstOrNull()
     }.getOrNull()
 }
+
+private fun InetAddress.isBindableLanAddress(): Boolean =
+    !isLinkLocalAddress
+
+private fun InetAddress.isAdvertisableLanAddress(): Boolean =
+    isBindableLanAddress() && !isAnyLocalAddress
+
+private fun InetAddress.hasSameHostAddress(other: InetAddress): Boolean =
+    hostAddress == other.hostAddress
+
+private fun NetworkInterface.isUsableLanInterface(): Boolean =
+    isUp && !isLoopback && !isPointToPoint && !isLikelyTunnelInterface()
+
+private fun NetworkInterface?.isUsableLanInterface(interfaceName: String?): Boolean {
+    if (interfaceName?.isLikelyTunnelInterfaceName() == true) {
+        return false
+    }
+    val networkInterface = this ?: return true
+    return runCatching { networkInterface.isUsableLanInterface() }.getOrDefault(false)
+}
+
+private fun NetworkInterface.isLikelyTunnelInterface(): Boolean {
+    return name.isLikelyTunnelInterfaceName()
+}
+
+private fun String.isLikelyTunnelInterfaceName(): Boolean {
+    val normalizedName = lowercase(Locale.US)
+    return normalizedName.startsWith("tun") ||
+        normalizedName.startsWith("tap") ||
+        normalizedName.startsWith("ppp") ||
+        normalizedName.startsWith("wg")
+}
+
+private fun InetAddress.toRelayHost(): String =
+    if (address.size == IPV6_ADDRESS_BYTES) {
+        "[$hostAddress]"
+    } else {
+        hostAddress
+    }
+
+private const val IPV6_ADDRESS_BYTES = 16
 
 private fun OutputStream.writeSimpleResponse(
     status: Int,

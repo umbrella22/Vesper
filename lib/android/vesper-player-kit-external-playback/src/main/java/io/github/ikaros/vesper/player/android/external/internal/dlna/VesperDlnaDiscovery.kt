@@ -275,7 +275,7 @@ class VesperDlnaDiscovery(
             return
         }
         val request = message.toDescriptionRequest(System.currentTimeMillis()) ?: return
-        if (refreshKnownDevice(request, generation)) {
+        if (refreshKnownDevice(request, binding, generation)) {
             return
         }
         val fetchKey = request.descriptionFetchKey()
@@ -289,7 +289,7 @@ class VesperDlnaDiscovery(
             return
         }
         try {
-            val device = fetchDevice(request, binding.network, generation) ?: return
+            val device = fetchDevice(request, binding, generation) ?: return
             upsertDevice(device, generation)
         } finally {
             pendingDescriptionFetches.remove(fetchKey)
@@ -298,7 +298,7 @@ class VesperDlnaDiscovery(
 
     private fun fetchDevice(
         request: VesperDlnaDescriptionRequest,
-        network: Network,
+        binding: DlnaNetworkBinding,
         generation: Long,
     ): VesperDlnaDevice? {
         if (!isDiscoveryActive(generation)) {
@@ -317,7 +317,7 @@ class VesperDlnaDiscovery(
         }
         var connection: HttpURLConnection? = null
         return try {
-            connection = network.openConnection(request.location) as HttpURLConnection
+            connection = binding.network.openConnection(request.location) as HttpURLConnection
             connection.connectTimeout = DESCRIPTION_TIMEOUT_MS
             connection.readTimeout = DESCRIPTION_TIMEOUT_MS
             connection.instanceFollowRedirects = true
@@ -374,16 +374,23 @@ class VesperDlnaDiscovery(
                 )
                 return null
             }
+            val boundDevice = device.copy(
+                network = binding.network,
+                localAddress = binding.localAddress,
+                interfaceName = binding.interfaceName,
+            )
             emitDiagnostic(
                 code = "route_accepted",
                 severity = VesperDlnaDiscoveryDiagnosticSeverity.Info,
                 message = "DLNA media renderer was accepted.",
                 details = request.details(
-                    "routeId" to device.routeId,
-                    "name" to device.friendlyName,
+                    "routeId" to boundDevice.routeId,
+                    "name" to boundDevice.friendlyName,
+                    "interface" to binding.interfaceName.orEmpty(),
+                    "localAddress" to binding.localAddress.hostAddress.orEmpty(),
                 ),
             )
-            device
+            boundDevice
         } catch (_: SocketTimeoutException) {
             emitDiagnostic(
                 code = "description_timeout",
@@ -438,6 +445,7 @@ class VesperDlnaDiscovery(
 
     private fun refreshKnownDevice(
         request: VesperDlnaDescriptionRequest,
+        binding: DlnaNetworkBinding,
         generation: Long,
     ): Boolean =
         synchronized(routeLock) {
@@ -449,6 +457,9 @@ class VesperDlnaDiscovery(
             } ?: return@synchronized false
             val refreshed = entry.value.copy(
                 usn = request.usn,
+                network = binding.network,
+                localAddress = binding.localAddress,
+                interfaceName = binding.interfaceName,
                 expiresAtMillis = maxOf(entry.value.expiresAtMillis, request.expiresAtMillis),
             )
             devices[entry.key] = refreshed
@@ -512,6 +523,9 @@ class VesperDlnaDiscovery(
                     val interfaceName = linkProperties.interfaceName
                     val networkInterface = interfaceName
                         ?.let { runCatching { NetworkInterface.getByName(it) }.getOrNull() }
+                    if (!networkInterface.isUsableDlnaInterface(interfaceName)) {
+                        return@mapNotNull null
+                    }
                     val address = linkProperties.linkAddresses
                         .asSequence()
                         .map { it.address }
@@ -802,10 +816,32 @@ private fun List<DlnaNetworkBinding>.details(): Map<String, String> =
 
 private fun NetworkCapabilities.dlnaTransportRank(): Int? =
     when {
+        hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> null
         hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> TRANSPORT_RANK_WIFI
         hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> TRANSPORT_RANK_ETHERNET
         else -> null
     }
+
+private fun NetworkInterface?.isUsableDlnaInterface(interfaceName: String?): Boolean {
+    if (interfaceName?.isLikelyTunnelInterfaceName() == true) {
+        return false
+    }
+    val networkInterface = this ?: return true
+    return runCatching {
+        networkInterface.isUp &&
+            !networkInterface.isLoopback &&
+            !networkInterface.isPointToPoint &&
+            !networkInterface.name.isLikelyTunnelInterfaceName()
+    }.getOrDefault(false)
+}
+
+private fun String.isLikelyTunnelInterfaceName(): Boolean {
+    val normalized = lowercase(Locale.US)
+    return normalized.startsWith("tun") ||
+        normalized.startsWith("tap") ||
+        normalized.startsWith("ppp") ||
+        normalized.startsWith("wg")
+}
 
 private fun VesperDlnaDescriptionRequest.details(
     vararg entries: Pair<String, String>,

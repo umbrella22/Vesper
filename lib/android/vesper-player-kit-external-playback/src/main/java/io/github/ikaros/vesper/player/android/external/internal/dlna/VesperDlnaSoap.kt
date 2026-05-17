@@ -4,6 +4,8 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import java.io.StringReader
 import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLConnection
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -101,6 +103,7 @@ class VesperDlnaSoapClient(
     ): VesperDlnaSoapResponse {
         val service = device.avTransport ?: return missingService("AVTransport")
         return post(
+            device = device,
             service = service,
             action = "SetAVTransportURI",
             arguments = avTransportUriArguments(source, metadata),
@@ -114,6 +117,7 @@ class VesperDlnaSoapClient(
     ): VesperDlnaSoapResponse {
         val service = device.avTransport ?: return missingService("AVTransport")
         return postAsync(
+            device = device,
             service = service,
             action = "SetAVTransportURI",
             arguments = avTransportUriArguments(source, metadata),
@@ -174,27 +178,28 @@ class VesperDlnaSoapClient(
 
     fun getProtocolInfo(device: VesperDlnaDevice): VesperDlnaSoapResponse {
         val service = device.connectionManager ?: return missingService("ConnectionManager")
-        return post(service, "GetProtocolInfo", emptyMap())
+        return post(device, service, "GetProtocolInfo", emptyMap())
     }
 
     suspend fun getProtocolInfoAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse {
         val service = device.connectionManager ?: return missingService("ConnectionManager")
-        return postAsync(service, "GetProtocolInfo", emptyMap())
+        return postAsync(device, service, "GetProtocolInfo", emptyMap())
     }
 
     fun getVolume(device: VesperDlnaDevice): VesperDlnaSoapResponse {
         val service = device.renderingControl ?: return missingService("RenderingControl")
-        return post(service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
+        return post(device, service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
     }
 
     suspend fun getVolumeAsync(device: VesperDlnaDevice): VesperDlnaSoapResponse {
         val service = device.renderingControl ?: return missingService("RenderingControl")
-        return postAsync(service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
+        return postAsync(device, service, "GetVolume", mapOf("InstanceID" to "0", "Channel" to "Master"))
     }
 
     fun setVolume(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse {
         val service = device.renderingControl ?: return missingService("RenderingControl")
         return post(
+            device,
             service,
             "SetVolume",
             mapOf(
@@ -208,6 +213,7 @@ class VesperDlnaSoapClient(
     suspend fun setVolumeAsync(device: VesperDlnaDevice, volume: Int): VesperDlnaSoapResponse {
         val service = device.renderingControl ?: return missingService("RenderingControl")
         return postAsync(
+            device,
             service,
             "SetVolume",
             mapOf(
@@ -224,7 +230,7 @@ class VesperDlnaSoapClient(
         arguments: Map<String, String>,
     ): VesperDlnaSoapResponse {
         val service = device.avTransport ?: return missingService("AVTransport")
-        return post(service, action, arguments)
+        return post(device, service, action, arguments)
     }
 
     private suspend fun avTransportAsync(
@@ -233,17 +239,18 @@ class VesperDlnaSoapClient(
         arguments: Map<String, String>,
     ): VesperDlnaSoapResponse {
         val service = device.avTransport ?: return missingService("AVTransport")
-        return postAsync(service, action, arguments)
+        return postAsync(device, service, action, arguments)
     }
 
     private fun post(
+        device: VesperDlnaDevice,
         service: VesperDlnaService,
         action: String,
         arguments: Map<String, String>,
     ): VesperDlnaSoapResponse =
         runCatching {
             runBlocking(Dispatchers.IO) {
-                postBlocking(service, action, arguments)
+                postBlocking(device, service, action, arguments)
             }
         }.getOrElse { error ->
             VesperDlnaSoapResponse(
@@ -253,13 +260,14 @@ class VesperDlnaSoapClient(
         }
 
     private suspend fun postAsync(
+        device: VesperDlnaDevice,
         service: VesperDlnaService,
         action: String,
         arguments: Map<String, String>,
     ): VesperDlnaSoapResponse =
         runCatching {
             withContext(Dispatchers.IO) {
-                postBlocking(service, action, arguments)
+                postBlocking(device, service, action, arguments)
             }
         }.getOrElse { error ->
             VesperDlnaSoapResponse(
@@ -269,28 +277,38 @@ class VesperDlnaSoapClient(
         }
 
     private fun postBlocking(
+        device: VesperDlnaDevice,
         service: VesperDlnaService,
         action: String,
         arguments: Map<String, String>,
     ): VesperDlnaSoapResponse {
         val body = VesperDlnaSoapEnvelopeBuilder.build(action, service.serviceType, arguments)
-        val connection = service.controlUrl.openConnection() as HttpURLConnection
+        val bodyBytes = body.toByteArray(Charsets.UTF_8)
+        val connection = openConnection(service.controlUrl, device) as HttpURLConnection
         connection.connectTimeout = timeoutMs
         connection.readTimeout = timeoutMs
         connection.requestMethod = "POST"
         connection.doOutput = true
+        connection.setFixedLengthStreamingMode(bodyBytes.size)
         connection.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
         connection.setRequestProperty("SOAPACTION", "\"${service.serviceType}#$action\"")
-        connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        val status = connection.responseCode
-        val responseBody = runCatching { connection.inputStream }
-            .getOrElse { connection.errorStream }
-            ?.bufferedReader()
-            ?.use { it.readText() }
-            .orEmpty()
-        connection.disconnect()
-        return VesperDlnaSoapResponse(status = status, body = responseBody)
+        connection.setRequestProperty("Connection", "close")
+        try {
+            connection.outputStream.use { it.write(bodyBytes) }
+            val status = connection.responseCode
+            val responseBody = runCatching { connection.inputStream }
+                .getOrElse { connection.errorStream }
+                ?.bufferedReader()
+                ?.use { it.readText() }
+                .orEmpty()
+            return VesperDlnaSoapResponse(status = status, body = responseBody)
+        } finally {
+            connection.disconnect()
+        }
     }
+
+    private fun openConnection(url: URL, device: VesperDlnaDevice): URLConnection =
+        device.network?.openConnection(url) ?: url.openConnection()
 
     private fun missingService(name: String): VesperDlnaSoapResponse =
         VesperDlnaSoapResponse(0, "$name service is not available.")

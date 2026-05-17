@@ -15,6 +15,7 @@ Use this example as a reference for:
 - System / Light / Dark theme modes
 - Fullscreen stage
 - Quality / audio / subtitle / playback-speed bottom sheets
+- AirPlay route picker in portrait and fullscreen playback
 - Double-tap seek
 - Video-only Photos picker
 - Built-in Apple HLS sample preset
@@ -22,6 +23,14 @@ Use this example as a reference for:
 Demo URLs are owned by the example. The reusable package under
 [`lib/ios/VesperPlayerKit`](../../lib/ios/VesperPlayerKit/) only exposes
 generic `VesperPlayerSource` APIs.
+
+## AirPlay
+
+The player stage includes the SDK `VesperAirPlayRouteButton`, backed by
+`AVRoutePickerView`. Selecting an AirPlay device routes the underlying
+`AVPlayer`, so the existing play / pause / seek controls continue to operate
+the active route. The native player explicitly allows external playback when a
+source is loaded.
 
 ## Requirements
 

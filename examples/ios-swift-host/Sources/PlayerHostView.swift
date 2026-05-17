@@ -7,6 +7,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import VesperPlayerKit
+import VesperPlayerKitUI
 
 struct PlayerHostView: View {
     @Environment(\.colorScheme) private var systemColorScheme
@@ -442,7 +443,14 @@ struct PlayerHostView: View {
             currentBrightnessRatio: deviceControls.currentBrightnessRatio,
             onSetBrightnessRatio: deviceControls.setBrightnessRatio,
             currentVolumeRatio: deviceControls.currentVolumeRatio,
-            onSetVolumeRatio: deviceControls.setVolumeRatio
+            onSetVolumeRatio: deviceControls.setVolumeRatio,
+            airPlayRouteButton: AnyView(
+                VesperAirPlayRouteButton(
+                    controller: controller,
+                    tintColor: .white,
+                    activeTintColor: .systemBlue
+                )
+            )
         )
     }
 

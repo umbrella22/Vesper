@@ -1,11 +1,14 @@
 package io.github.ikaros.vesper.example.androidcomposehost
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.media.AudioManager
+import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -41,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -52,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.content.ContextCompat
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.VesperDownloadManager
 import io.github.ikaros.vesper.player.android.VesperDownloadContentFormat
@@ -65,9 +70,21 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControls
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
+import io.github.ikaros.vesper.player.android.TimelineKind
+import io.github.ikaros.vesper.player.android.TimelineUiState
 import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
+import io.github.ikaros.vesper.player.android.external.VesperExternalFallbackFormat
+import io.github.ikaros.vesper.player.android.external.VesperExternalFormatAdaptationConfig
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackEventKind
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackMediaItem
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackResult
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRoute
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRouteKind
 import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 @Composable
@@ -75,6 +92,7 @@ fun PlayerHostApp(
     controller: VesperPlayerController,
     playlistCoordinator: VesperPlaylistCoordinator,
     downloadManager: VesperDownloadManager,
+    externalPlaybackController: VesperExternalPlaybackController,
     isDownloadExportPluginInstalled: Boolean,
 ) {
     val context = LocalContext.current
@@ -120,6 +138,7 @@ fun PlayerHostApp(
     val trackSelection by controller.trackSelection.collectAsState()
     val playlistSnapshot by playlistCoordinator.snapshot.collectAsState()
     val downloadSnapshot by downloadManager.snapshot.collectAsState()
+    val externalRoutes by externalPlaybackController.routes.collectAsState()
 
     var remoteStreamUrl by rememberSaveable { mutableStateOf(ANDROID_HLS_DEMO_URL) }
     var downloadRemoteUrl by rememberSaveable { mutableStateOf(ANDROID_HLS_DEMO_URL) }
@@ -136,7 +155,52 @@ fun PlayerHostApp(
     var pendingDownloadTasks by remember { mutableStateOf<List<ExamplePendingDownloadTask>>(emptyList()) }
     var savingTaskIds by remember { mutableStateOf(setOf<Long>()) }
     var exportProgressByTaskId by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
+    var externalSession by remember { mutableStateOf<ExampleExternalPlaybackSession?>(null) }
+    var isExternalDiscoveryRunning by rememberSaveable { mutableStateOf(false) }
+    var isCastRoutePickerOpening by remember { mutableStateOf(false) }
+    var castRoutePickerRequestId by remember { mutableStateOf(0L) }
+    var externalNowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var hasNearbyWifiPermission by remember {
+        mutableStateOf(context.hasNearbyWifiPermission())
+    }
     val scope = rememberCoroutineScope()
+
+    val dlnaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        hasNearbyWifiPermission = granted || context.hasNearbyWifiPermission()
+        if (hasNearbyWifiPermission) {
+            externalPlaybackController.startDiscovery()
+            isExternalDiscoveryRunning = true
+        } else {
+            Toast
+                .makeText(
+                    context,
+                    context.getString(R.string.example_external_permission_required),
+                    Toast.LENGTH_SHORT,
+                ).show()
+        }
+    }
+
+    val activePlaylistSource =
+        playlistSnapshot.activeItem?.itemId?.let { activeItemId ->
+            playlistSnapshot.queue.firstOrNull { itemState ->
+                itemState.item.itemId == activeItemId
+            }?.item?.source
+        }
+    val latestExternalRoutes by rememberUpdatedState(externalRoutes)
+    val latestActivePlaylistSource by rememberUpdatedState(activePlaylistSource)
+    val latestUiState by rememberUpdatedState(uiState)
+
+    val displayedUiState =
+        externalSession?.let { session ->
+            uiState.copy(
+                subtitle = context.getString(R.string.example_external_connected_route, session.routeName),
+                playbackState = exampleExternalPlaybackState(session),
+                isBuffering = session.status == ExampleExternalPlaybackStatus.Loading,
+                timeline = exampleExternalTimeline(uiState.timeline, session, externalNowMillis),
+            )
+        } ?: uiState
 
     fun createDownloadTask(
         assetIdPrefix: String,
@@ -197,6 +261,276 @@ fun PlayerHostApp(
                 controls = VesperSystemPlaybackControls.videoDefault(),
             ),
         )
+    }
+
+    fun externalMediaItemFor(
+        source: VesperPlayerSource,
+        timeline: TimelineUiState = uiState.timeline,
+    ): VesperExternalPlaybackMediaItem =
+        VesperExternalPlaybackMediaItem(
+            sources = listOf(source),
+            metadata =
+                VesperSystemPlaybackMetadata(
+                    title = source.label.ifBlank { source.uri },
+                    contentUri = source.uri,
+                    durationMs = timeline.durationMs,
+                    isLive = timeline.kind != TimelineKind.Vod,
+                ),
+            formatAdaptation =
+                VesperExternalFormatAdaptationConfig(
+                    enabled = true,
+                    preferredFallback = VesperExternalFallbackFormat.MpegTs,
+                ),
+        )
+
+    fun updateExternalSessionError(message: String) {
+        externalSession =
+            externalSession?.copy(
+                status = ExampleExternalPlaybackStatus.Error,
+                message = message,
+            )
+        Toast
+            .makeText(
+                context,
+                context.getString(R.string.example_external_route_error, message),
+                Toast.LENGTH_SHORT,
+            ).show()
+    }
+
+    fun applyExternalLoadResult(
+        routeId: String,
+        routeName: String,
+        routeKind: VesperExternalPlaybackRouteKind,
+        source: VesperPlayerSource,
+        result: VesperExternalPlaybackResult,
+        timeline: TimelineUiState = uiState.timeline,
+    ) {
+        when (result) {
+            is VesperExternalPlaybackResult.Success -> {
+                val nowMillis = System.currentTimeMillis()
+                externalNowMillis = nowMillis
+                externalSession =
+                    ExampleExternalPlaybackSession(
+                        routeId = result.routeId ?: routeId,
+                        routeName = routeName,
+                        routeKind = routeKind,
+                        status = ExampleExternalPlaybackStatus.Playing,
+                        source = source,
+                        basePositionMs = timeline.externalStartPositionMs(),
+                        durationMs = timeline.durationMs,
+                        seekableRange = exampleSeekableRangePair(timeline),
+                        startedAtMillis = nowMillis,
+                        relayEnabled = result.relayEnabled,
+                    )
+                controller.pause()
+                controlsVisible = true
+            }
+
+            is VesperExternalPlaybackResult.Unavailable -> updateExternalSessionError(result.message)
+            is VesperExternalPlaybackResult.Unsupported -> updateExternalSessionError(result.message)
+            is VesperExternalPlaybackResult.Failed -> updateExternalSessionError(result.message)
+        }
+    }
+
+    fun loadCurrentSourceOnExternalRoute(
+        routeId: String,
+        routeName: String,
+        routeKind: VesperExternalPlaybackRouteKind,
+        sourceOverride: VesperPlayerSource? = null,
+        timelineOverride: TimelineUiState? = null,
+    ) {
+        val source = sourceOverride ?: activePlaylistSource
+        if (source == null) {
+            Toast
+                .makeText(
+                    context,
+                    context.getString(R.string.example_external_no_active_source),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            return
+        }
+        val timeline = timelineOverride ?: uiState.timeline
+        externalSession =
+            ExampleExternalPlaybackSession(
+                routeId = routeId,
+                routeName = routeName,
+                routeKind = routeKind,
+                status = ExampleExternalPlaybackStatus.Loading,
+                source = source,
+                basePositionMs = timeline.externalStartPositionMs(),
+                durationMs = timeline.durationMs,
+                seekableRange = exampleSeekableRangePair(timeline),
+                startedAtMillis = null,
+            )
+        scope.launch {
+            val result =
+                externalPlaybackController.loadAsync(
+                    item = externalMediaItemFor(source, timeline),
+                    startPositionMs = timeline.externalStartPositionMs(),
+                    autoplay = true,
+                )
+            applyExternalLoadResult(
+                routeId = routeId,
+                routeName = routeName,
+                routeKind = routeKind,
+                source = source,
+                result = result,
+                timeline = timeline,
+            )
+        }
+    }
+
+    fun connectExternalRoute(route: VesperExternalPlaybackRoute) {
+        externalSession =
+            ExampleExternalPlaybackSession(
+                routeId = route.routeId,
+                routeName = route.name,
+                routeKind = route.kind,
+                status = ExampleExternalPlaybackStatus.Connecting,
+                source = activePlaylistSource,
+                basePositionMs = uiState.timeline.externalStartPositionMs(),
+                durationMs = uiState.timeline.durationMs,
+                seekableRange = exampleSeekableRangePair(uiState.timeline),
+                startedAtMillis = null,
+            )
+        scope.launch {
+            when (val result = externalPlaybackController.connect(route.routeId)) {
+                is VesperExternalPlaybackResult.Success -> {
+                    externalSession =
+                        externalSession?.copy(
+                            status = ExampleExternalPlaybackStatus.Connected,
+                            routeId = result.routeId ?: route.routeId,
+                        )
+                    loadCurrentSourceOnExternalRoute(
+                        routeId = result.routeId ?: route.routeId,
+                        routeName = route.name,
+                        routeKind = route.kind,
+                    )
+                }
+                is VesperExternalPlaybackResult.Unavailable -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Unsupported -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Failed -> updateExternalSessionError(result.message)
+            }
+        }
+    }
+
+    fun loadCurrentExternalSession() {
+        val session = externalSession
+        if (session != null) {
+            loadCurrentSourceOnExternalRoute(
+                routeId = session.routeId,
+                routeName = session.routeName,
+                routeKind = session.routeKind,
+            )
+            return
+        }
+        val activeRoute = externalRoutes.firstOrNull { route -> route.active }
+        if (activeRoute != null) {
+            connectExternalRoute(activeRoute)
+        } else {
+            Toast
+                .makeText(
+                    context,
+                    context.getString(R.string.example_external_no_active_source),
+                    Toast.LENGTH_SHORT,
+                ).show()
+        }
+    }
+
+    fun openCastRoutePicker() {
+        if (isCastRoutePickerOpening) {
+            return
+        }
+        isCastRoutePickerOpening = true
+        externalPlaybackController.prepareCastAsync { available, message ->
+            if (available) {
+                castRoutePickerRequestId = System.currentTimeMillis()
+            } else {
+                Toast
+                    .makeText(
+                        context,
+                        message ?: context.getString(R.string.example_external_route_error, "Cast is unavailable."),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+            }
+            scope.launch {
+                delay(700)
+                isCastRoutePickerOpening = false
+            }
+        }
+    }
+
+    fun toggleExternalPlayback() {
+        val session = externalSession ?: return
+        scope.launch {
+            val nowMillis = System.currentTimeMillis()
+            val result =
+                if (session.status == ExampleExternalPlaybackStatus.Playing) {
+                    externalPlaybackController.pauseAsync()
+                } else {
+                    externalPlaybackController.playAsync()
+                }
+            when (result) {
+                is VesperExternalPlaybackResult.Success -> {
+                    externalNowMillis = nowMillis
+                    externalSession =
+                        if (session.status == ExampleExternalPlaybackStatus.Playing) {
+                            examplePausedExternalSession(session, nowMillis)
+                        } else {
+                            examplePlayingExternalSession(session, nowMillis)
+                        }.copy(relayEnabled = session.relayEnabled || result.relayEnabled)
+                }
+                is VesperExternalPlaybackResult.Unavailable -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Unsupported -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Failed -> updateExternalSessionError(result.message)
+            }
+        }
+    }
+
+    fun seekExternalToRatio(ratio: Float) {
+        val session = externalSession ?: return
+        val targetPosition = exampleExternalPositionForRatio(displayedUiState.timeline, ratio)
+        scope.launch {
+            when (val result = externalPlaybackController.seekToAsync(targetPosition)) {
+                is VesperExternalPlaybackResult.Success -> {
+                    val nowMillis = System.currentTimeMillis()
+                    externalNowMillis = nowMillis
+                    externalSession = exampleSeekedExternalSession(session, targetPosition, nowMillis)
+                }
+                is VesperExternalPlaybackResult.Unavailable -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Unsupported -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Failed -> updateExternalSessionError(result.message)
+            }
+        }
+    }
+
+    fun seekExternalToLiveEdge() {
+        val targetPosition = displayedUiState.timeline.goLivePositionMs ?: return
+        val session = externalSession ?: return
+        scope.launch {
+            when (val result = externalPlaybackController.seekToAsync(targetPosition)) {
+                is VesperExternalPlaybackResult.Success -> {
+                    val nowMillis = System.currentTimeMillis()
+                    externalNowMillis = nowMillis
+                    externalSession = exampleSeekedExternalSession(session, targetPosition, nowMillis)
+                }
+                is VesperExternalPlaybackResult.Unavailable -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Unsupported -> updateExternalSessionError(result.message)
+                is VesperExternalPlaybackResult.Failed -> updateExternalSessionError(result.message)
+            }
+        }
+    }
+
+    fun disconnectExternalPlayback() {
+        val resumePosition = exampleDisconnectLocalPositionMs(externalSession, System.currentTimeMillis())
+        scope.launch {
+            runCatching { externalPlaybackController.disconnectAsync() }
+            externalSession = null
+            if (resumePosition != null) {
+                controller.seekBy(resumePosition - uiState.timeline.positionMs)
+            }
+            controller.pause()
+        }
     }
 
     fun handleDownloadPrimaryAction(task: VesperDownloadTaskSnapshot) {
@@ -364,8 +698,97 @@ fun PlayerHostApp(
             playlistSnapshot.queue
                 .firstOrNull { it.item.itemId == activeItem.itemId }
                 ?.item?.source ?: return@LaunchedEffect
+        if (externalSession != null) {
+            disconnectExternalPlayback()
+        }
         selectSourceForPlayback(source)
         controlsVisible = true
+    }
+
+    LaunchedEffect(externalSession?.status) {
+        while (externalSession?.status == ExampleExternalPlaybackStatus.Playing) {
+            externalNowMillis = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        externalPlaybackController.events.collect { event ->
+            when (event.kind) {
+                VesperExternalPlaybackEventKind.RouteConnected -> {
+                    val routeId = event.routeId ?: return@collect
+                    val routeName = event.routeName ?: "External route"
+                    val route =
+                        latestExternalRoutes.firstOrNull { candidate -> candidate.routeId == routeId }
+                    val resolvedRouteKind = route?.kind ?: VesperExternalPlaybackRouteKind.Cast
+                    val resolvedRouteName = route?.name ?: routeName
+                    val currentSession = externalSession
+                    if (
+                        currentSession != null &&
+                        currentSession.routeId == routeId &&
+                        currentSession.status != ExampleExternalPlaybackStatus.Error
+                    ) {
+                        externalSession =
+                            currentSession.copy(
+                                routeName = resolvedRouteName,
+                                routeKind = resolvedRouteKind,
+                            )
+                        return@collect
+                    }
+                    val source = latestActivePlaylistSource
+                    externalSession =
+                        ExampleExternalPlaybackSession(
+                            routeId = routeId,
+                            routeName = resolvedRouteName,
+                            routeKind = resolvedRouteKind,
+                            status = ExampleExternalPlaybackStatus.Connected,
+                            source = source,
+                            basePositionMs = latestUiState.timeline.externalStartPositionMs(),
+                            durationMs = latestUiState.timeline.durationMs,
+                            seekableRange = exampleSeekableRangePair(latestUiState.timeline),
+                            startedAtMillis = null,
+                        )
+                    if (source != null) {
+                        loadCurrentSourceOnExternalRoute(
+                            routeId = routeId,
+                            routeName = resolvedRouteName,
+                            routeKind = resolvedRouteKind,
+                            sourceOverride = source,
+                            timelineOverride = latestUiState.timeline,
+                        )
+                    }
+                }
+
+                VesperExternalPlaybackEventKind.RouteDisconnected,
+                VesperExternalPlaybackEventKind.Stopped,
+                -> {
+                    externalSession = null
+                }
+
+                VesperExternalPlaybackEventKind.Error,
+                VesperExternalPlaybackEventKind.DiscoveryDiagnostic,
+                -> {
+                    event.message?.takeIf(String::isNotBlank)?.let { message ->
+                        externalSession =
+                            externalSession?.copy(
+                                status =
+                                    if (event.kind == VesperExternalPlaybackEventKind.Error) {
+                                        ExampleExternalPlaybackStatus.Error
+                                    } else {
+                                        externalSession?.status ?: ExampleExternalPlaybackStatus.Discovering
+                                    },
+                                message = message,
+                            )
+                    }
+                }
+
+                VesperExternalPlaybackEventKind.Loaded,
+                VesperExternalPlaybackEventKind.Playing,
+                VesperExternalPlaybackEventKind.Paused,
+                VesperExternalPlaybackEventKind.Suspended,
+                -> Unit
+            }
+        }
     }
 
     LaunchedEffect(uiState.playbackState, playlistSnapshot.activeItem?.itemId) {
@@ -380,15 +803,15 @@ fun PlayerHostApp(
     }
 
     LaunchedEffect(
-        uiState.playbackState,
-        uiState.isBuffering,
+        displayedUiState.playbackState,
+        displayedUiState.isBuffering,
         controlsVisible,
         activeSheet,
         pendingSeekRatio,
     ) {
         if (
-            uiState.playbackState != PlaybackStateUi.Playing ||
-            uiState.isBuffering ||
+            displayedUiState.playbackState != PlaybackStateUi.Playing ||
+            displayedUiState.isBuffering ||
             !controlsVisible ||
             activeSheet != null ||
             pendingSeekRatio != null
@@ -396,10 +819,10 @@ fun PlayerHostApp(
             return@LaunchedEffect
         }
 
-        kotlinx.coroutines.delay(3_000)
+        delay(3_000)
         if (
-            uiState.playbackState == PlaybackStateUi.Playing &&
-            !uiState.isBuffering &&
+            displayedUiState.playbackState == PlaybackStateUi.Playing &&
+            !displayedUiState.isBuffering &&
             activeSheet == null &&
             pendingSeekRatio == null
         ) {
@@ -484,7 +907,7 @@ fun PlayerHostApp(
                         immersivePlayer -> {
                             ExamplePlayerStage(
                                 controller = controller,
-                                uiState = uiState,
+                                uiState = displayedUiState,
                                 controlsVisible = controlsVisible,
                                 pendingSeekRatio = pendingSeekRatio,
                                 isPortrait = false,
@@ -498,6 +921,26 @@ fun PlayerHostApp(
                                     activity?.requestedOrientation =
                                         ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
                                 },
+                                onTogglePlayback =
+                                    if (externalSession.isActiveRemotePlayback()) {
+                                        ::toggleExternalPlayback
+                                    } else {
+                                        controller::togglePause
+                                    },
+                                onSeekToRatio =
+                                    if (externalSession.isActiveRemotePlayback()) {
+                                        ::seekExternalToRatio
+                                    } else {
+                                        controller::seekToRatio
+                                    },
+                                onSeekToLiveEdge =
+                                    if (externalSession.isActiveRemotePlayback()) {
+                                        ::seekExternalToLiveEdge
+                                    } else {
+                                        controller::seekToLiveEdge
+                                    },
+                                onSetPlaybackRate = controller::setPlaybackRate,
+                                playbackRateControlsEnabled = !externalSession.isActiveRemotePlayback(),
                                 currentBrightnessRatio = deviceControls::currentBrightnessRatio,
                                 onSetBrightnessRatio = deviceControls::setBrightnessRatio,
                                 currentVolumeRatio = deviceControls::currentVolumeRatio,
@@ -514,14 +957,14 @@ fun PlayerHostApp(
                                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(18.dp),
                             ) {
                                 ExamplePlayerHeader(
-                                    sourceLabel = uiState.sourceLabel,
-                                    subtitle = uiState.subtitle,
+                                    sourceLabel = displayedUiState.sourceLabel,
+                                    subtitle = displayedUiState.subtitle,
                                     palette = palette,
                                 )
 
                                 ExamplePlayerStage(
                                     controller = controller,
-                                    uiState = uiState,
+                                    uiState = displayedUiState,
                                     controlsVisible = controlsVisible,
                                     pendingSeekRatio = pendingSeekRatio,
                                     isPortrait = true,
@@ -537,6 +980,26 @@ fun PlayerHostApp(
                                         activity?.requestedOrientation =
                                             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                                     },
+                                    onTogglePlayback =
+                                        if (externalSession.isActiveRemotePlayback()) {
+                                            ::toggleExternalPlayback
+                                        } else {
+                                            controller::togglePause
+                                        },
+                                    onSeekToRatio =
+                                        if (externalSession.isActiveRemotePlayback()) {
+                                            ::seekExternalToRatio
+                                        } else {
+                                            controller::seekToRatio
+                                        },
+                                    onSeekToLiveEdge =
+                                        if (externalSession.isActiveRemotePlayback()) {
+                                            ::seekExternalToLiveEdge
+                                        } else {
+                                            controller::seekToLiveEdge
+                                        },
+                                    onSetPlaybackRate = controller::setPlaybackRate,
+                                    playbackRateControlsEnabled = !externalSession.isActiveRemotePlayback(),
                                     currentBrightnessRatio = deviceControls::currentBrightnessRatio,
                                     onSetBrightnessRatio = deviceControls::setBrightnessRatio,
                                     currentVolumeRatio = deviceControls::currentVolumeRatio,
@@ -610,6 +1073,37 @@ fun PlayerHostApp(
                                             controlsVisible = true
                                         }
                                     },
+                                )
+
+                                ExampleExternalPlaybackSection(
+                                    palette = palette,
+                                    routes = externalRoutes,
+                                    session = externalSession,
+                                    isDiscovering = isExternalDiscoveryRunning,
+                                    isCastRoutePickerOpening = isCastRoutePickerOpening,
+                                    castRoutePickerRequestId = castRoutePickerRequestId,
+                                    hasDlnaPermission = hasNearbyWifiPermission,
+                                    onOpenCastRoutes = ::openCastRoutePicker,
+                                    onRequestDlnaPermission = {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            dlnaPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+                                        } else {
+                                            hasNearbyWifiPermission = true
+                                            externalPlaybackController.startDiscovery()
+                                            isExternalDiscoveryRunning = true
+                                        }
+                                    },
+                                    onStartDiscovery = {
+                                        externalPlaybackController.startDiscovery()
+                                        isExternalDiscoveryRunning = true
+                                    },
+                                    onStopDiscovery = {
+                                        externalPlaybackController.stopDiscovery()
+                                        isExternalDiscoveryRunning = false
+                                    },
+                                    onConnectRoute = ::connectExternalRoute,
+                                    onLoadCurrent = ::loadCurrentExternalSession,
+                                    onDisconnect = ::disconnectExternalPlayback,
                                 )
 
                                 ExamplePlaylistSection(
@@ -717,11 +1211,16 @@ fun PlayerHostApp(
                     activeSheet?.let { sheet ->
                         ExampleSelectionSheet(
                             sheet = sheet,
-                            uiState = uiState,
+                            uiState = displayedUiState,
                             trackCatalog = trackCatalog,
                             trackSelection = trackSelection,
                             onDismiss = { activeSheet = null },
-                            onOpenSheet = { activeSheet = it },
+                            playbackRateControlsEnabled = !externalSession.isActiveRemotePlayback(),
+                            onOpenSheet = {
+                                if (it != ExamplePlayerSheet.Speed || !externalSession.isActiveRemotePlayback()) {
+                                    activeSheet = it
+                                }
+                            },
                             onSelectQuality = { policy ->
                                 controller.setAbrPolicy(policy)
                                 activeSheet = null
@@ -795,6 +1294,13 @@ private class ExampleAndroidDeviceControls(
         }.getOrNull()?.coerceIn(0f, 1f)
     }
 }
+
+private fun Context.hasNearbyWifiPermission(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ) == PackageManager.PERMISSION_GRANTED
 
 private enum class ExampleHostTab {
     Player,

@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.example.androidcomposehost
 
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -20,8 +21,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BrightnessAuto
+import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -31,6 +34,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -39,9 +45,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.mediarouter.app.MediaRouteButton
 import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItemState
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRoute
+import io.github.ikaros.vesper.player.android.external.VesperExternalRouteButton
 import kotlin.math.max
 
 @Composable
@@ -178,6 +188,257 @@ internal fun ExampleSourceSection(
             ),
         ) {
             Text(stringResource(R.string.example_sources_open_remote_url))
+        }
+    }
+}
+
+@Composable
+internal fun ExampleExternalPlaybackSection(
+    palette: ExampleHostPalette,
+    routes: List<VesperExternalPlaybackRoute>,
+    session: ExampleExternalPlaybackSession?,
+    isDiscovering: Boolean,
+    isCastRoutePickerOpening: Boolean,
+    castRoutePickerRequestId: Long,
+    hasDlnaPermission: Boolean,
+    onOpenCastRoutes: () -> Unit,
+    onRequestDlnaPermission: () -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onConnectRoute: (VesperExternalPlaybackRoute) -> Unit,
+    onLoadCurrent: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_external_title),
+        subtitle = stringResource(R.string.example_external_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            CastRoutePickerRow(
+                palette = palette,
+                requestId = castRoutePickerRequestId,
+                opening = isCastRoutePickerOpening,
+                onOpen = onOpenCastRoutes,
+            )
+
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        if (hasDlnaPermission) {
+                            if (isDiscovering) onStopDiscovery() else onStartDiscovery()
+                        } else {
+                            onRequestDlnaPermission()
+                        }
+                    },
+                ) {
+                    Text(
+                        if (isDiscovering) {
+                            stringResource(R.string.example_external_stop_scan)
+                        } else {
+                            stringResource(R.string.example_external_start_scan)
+                        },
+                    )
+                }
+                Button(
+                    onClick = onLoadCurrent,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.primaryAction,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(stringResource(R.string.example_external_load_current))
+                }
+                if (session != null) {
+                    OutlinedButton(onClick = onDisconnect) {
+                        Text(stringResource(R.string.example_external_disconnect))
+                    }
+                }
+            }
+
+            if (!hasDlnaPermission) {
+                Text(
+                    text = stringResource(R.string.example_external_permission_required),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            }
+
+            if (session != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = stringResource(R.string.example_external_connected_route, session.routeName),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.example_external_state,
+                            session.message ?: exampleExternalStatusLabel(session.status),
+                        ),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                    if (session.relayEnabled) {
+                        ExampleStatusPill(
+                            label = stringResource(R.string.example_external_relay_enabled),
+                            palette = palette,
+                        )
+                    }
+                }
+            }
+
+            if (routes.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.example_external_no_routes),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    routes.forEach { route ->
+                        ExternalRouteRow(
+                            route = route,
+                            active = route.active || route.routeId == session?.routeId,
+                            palette = palette,
+                            onConnect = { onConnectRoute(route) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CastRoutePickerRow(
+    palette: ExampleHostPalette,
+    requestId: Long,
+    opening: Boolean,
+    onOpen: () -> Unit,
+) {
+    val routeButton = remember { mutableStateOf<MediaRouteButton?>(null) }
+    LaunchedEffect(requestId) {
+        if (requestId <= 0) {
+            return@LaunchedEffect
+        }
+        routeButton.value?.post {
+            runCatching { routeButton.value?.showDialog() }
+        }
+    }
+
+    Box {
+        AndroidView(
+            factory = { context ->
+                VesperExternalRouteButton.create(context = context).apply {
+                    alpha = 0f
+                    isFocusable = false
+                    isClickable = false
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                    routeButton.value = this
+                }
+            },
+            update = { button -> routeButton.value = button },
+            modifier = Modifier.size(1.dp),
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Button(
+                enabled = !opening,
+                onClick = onOpen,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                if (opening) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.example_external_cast_searching))
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.Cast,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.example_external_cast_button))
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.example_external_cast_search_label),
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        color = palette.title,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                Text(
+                    text = stringResource(R.string.example_external_cast_search_subtitle),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExternalRouteRow(
+    route: VesperExternalPlaybackRoute,
+    active: Boolean,
+    palette: ExampleHostPalette,
+    onConnect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (active) palette.primaryAction else palette.fieldBackground,
+                RoundedCornerShape(18.dp),
+            )
+            .border(
+                width = 1.dp,
+                color = if (active) Color.Transparent else palette.sectionStroke,
+                shape = RoundedCornerShape(18.dp),
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = route.name,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    color = if (active) Color.White else palette.title,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Text(
+                text = exampleExternalRouteLabel(route),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    color = if (active) Color.White.copy(alpha = 0.82f) else palette.body,
+                ),
+            )
+        }
+        TextButton(
+            onClick = onConnect,
+            colors = ButtonDefaults.textButtonColors(
+                contentColor = if (active) Color.White else palette.primaryAction,
+            ),
+        ) {
+            Text(stringResource(R.string.example_external_connect))
         }
     }
 }

@@ -1,5 +1,7 @@
 package io.github.ikaros.vesper.player.android.external.internal.dlna
 
+import android.net.Network
+import java.net.Inet4Address
 import java.net.URL
 
 data class VesperDlnaService(
@@ -15,6 +17,9 @@ data class VesperDlnaDevice(
     val location: URL,
     val usn: String,
     val friendlyName: String,
+    val network: Network? = null,
+    val localAddress: Inet4Address? = null,
+    val interfaceName: String? = null,
     val manufacturer: String? = null,
     val modelName: String? = null,
     val udn: String? = null,

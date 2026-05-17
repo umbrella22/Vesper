@@ -13,6 +13,7 @@ import io.github.ikaros.vesper.player.android.VesperDownloadManager
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
 import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
+import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController
 import java.io.File
 
 internal class PlayerHostViewModel(
@@ -70,7 +71,11 @@ internal class PlayerHostViewModel(
     val isDownloadExportPluginInstalled: Boolean =
         bundledDownloadPluginLibraryPaths(application).isNotEmpty()
 
+    val externalPlaybackController =
+        VesperExternalPlaybackController(application.applicationContext)
+
     override fun onCleared() {
+        externalPlaybackController.release()
         downloadManager.dispose()
         playlistCoordinator.dispose()
         controller.dispose()

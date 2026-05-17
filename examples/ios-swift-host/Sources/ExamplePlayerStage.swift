@@ -24,6 +24,7 @@ struct ExamplePlayerStage: View {
     let onSetBrightnessRatio: (Double) -> Double?
     let currentVolumeRatio: () -> Double?
     let onSetVolumeRatio: (Double) -> Double?
+    let airPlayRouteButton: AnyView?
 
     init(
         surface: AnyView,
@@ -46,7 +47,8 @@ struct ExamplePlayerStage: View {
         currentBrightnessRatio: @escaping () -> Double? = { nil },
         onSetBrightnessRatio: @escaping (Double) -> Double? = { _ in nil },
         currentVolumeRatio: @escaping () -> Double? = { nil },
-        onSetVolumeRatio: @escaping (Double) -> Double? = { _ in nil }
+        onSetVolumeRatio: @escaping (Double) -> Double? = { _ in nil },
+        airPlayRouteButton: AnyView? = nil
     ) {
         self.surface = surface
         self.uiState = uiState
@@ -69,32 +71,43 @@ struct ExamplePlayerStage: View {
         self.onSetBrightnessRatio = onSetBrightnessRatio
         self.currentVolumeRatio = currentVolumeRatio
         self.onSetVolumeRatio = onSetVolumeRatio
+        self.airPlayRouteButton = airPlayRouteButton
     }
 
     var body: some View {
-        VesperPlayerStage(
-            surface: surface,
-            uiState: uiState,
-            trackCatalog: trackCatalog,
-            trackSelection: trackSelection,
-            effectiveVideoTrackId: effectiveVideoTrackId,
-            fixedTrackStatus: fixedTrackStatus,
-            controlsVisible: $controlsVisible,
-            pendingSeekRatio: $pendingSeekRatio,
-            isCompactLayout: isCompactLayout,
-            isFullscreen: isFullscreen,
-            onSeekBy: onSeekBy,
-            onTogglePause: onTogglePause,
-            onSeekToRatio: onSeekToRatio,
-            onSeekToLiveEdge: onSeekToLiveEdge,
-            onSetPlaybackRate: onSetPlaybackRate,
-            onToggleFullscreen: onToggleFullscreen,
-            onOpenSheet: { onOpenSheet($0.toExamplePlayerSheet()) },
-            currentBrightnessRatio: currentBrightnessRatio,
-            onSetBrightnessRatio: onSetBrightnessRatio,
-            currentVolumeRatio: currentVolumeRatio,
-            onSetVolumeRatio: onSetVolumeRatio
-        )
+        ZStack(alignment: .topTrailing) {
+            VesperPlayerStage(
+                surface: surface,
+                uiState: uiState,
+                trackCatalog: trackCatalog,
+                trackSelection: trackSelection,
+                effectiveVideoTrackId: effectiveVideoTrackId,
+                fixedTrackStatus: fixedTrackStatus,
+                controlsVisible: $controlsVisible,
+                pendingSeekRatio: $pendingSeekRatio,
+                isCompactLayout: isCompactLayout,
+                isFullscreen: isFullscreen,
+                onSeekBy: onSeekBy,
+                onTogglePause: onTogglePause,
+                onSeekToRatio: onSeekToRatio,
+                onSeekToLiveEdge: onSeekToLiveEdge,
+                onSetPlaybackRate: onSetPlaybackRate,
+                onToggleFullscreen: onToggleFullscreen,
+                onOpenSheet: { onOpenSheet($0.toExamplePlayerSheet()) },
+                currentBrightnessRatio: currentBrightnessRatio,
+                onSetBrightnessRatio: onSetBrightnessRatio,
+                currentVolumeRatio: currentVolumeRatio,
+                onSetVolumeRatio: onSetVolumeRatio
+            )
+
+            if (controlsVisible || uiState.playbackState != .playing),
+               let airPlayRouteButton {
+                airPlayRouteButton
+                    .frame(width: 38, height: 38)
+                    .padding(.top, 16)
+                    .padding(.trailing, 62)
+            }
+        }
     }
 }
 

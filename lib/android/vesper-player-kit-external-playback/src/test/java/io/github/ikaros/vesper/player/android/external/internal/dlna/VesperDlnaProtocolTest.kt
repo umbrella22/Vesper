@@ -2,7 +2,12 @@ package io.github.ikaros.vesper.player.android.external.internal.dlna
 
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLConnection
+import java.net.URLStreamHandler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -140,6 +145,46 @@ class VesperDlnaProtocolTest {
 
         assertTrue(envelope.contains("<u:SetAVTransportURI"))
         assertTrue(envelope.contains("https://example.com/a?b=1&amp;c=2"))
+    }
+
+    @Test
+    fun postsSoapBodyWithFixedLengthAndCloseConnection() {
+        val connection = RecordingSoapConnection(URL("http://192.168.1.10/control/av"))
+        val controlUrl = URL(null, "http://192.168.1.10/control/av", RecordingUrlHandler(connection))
+        val device = VesperDlnaDevice(
+            routeId = "uuid:device-1",
+            location = URL("http://192.168.1.10/description.xml"),
+            usn = "uuid:device-1",
+            friendlyName = "Living Room TV",
+            avTransport = VesperDlnaService(
+                serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+                serviceId = "urn:upnp-org:serviceId:AVTransport",
+                controlUrl = controlUrl,
+                eventSubUrl = null,
+                scpdUrl = null,
+            ),
+        )
+
+        val response = VesperDlnaSoapClient(timeoutMs = 100).setAvTransportUri(
+            device = device,
+            source = VesperPlayerSource.remote(
+                uri = "http://192.168.1.2:9000/media.mp4",
+                label = "Episode",
+            ),
+            metadata = null,
+        )
+
+        assertEquals(200, response.status)
+        assertEquals("POST", connection.requestMethod)
+        assertEquals("close", connection.requestProperties["Connection"])
+        assertEquals("text/xml; charset=\"utf-8\"", connection.requestProperties["Content-Type"])
+        assertEquals(
+            "\"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI\"",
+            connection.requestProperties["SOAPACTION"],
+        )
+        assertEquals(connection.fixedLength, connection.postedBody.size)
+        assertTrue(connection.postedBodyText.contains("<u:SetAVTransportURI"))
+        assertTrue(connection.disconnected)
     }
 
     @Test
@@ -396,6 +441,51 @@ class VesperDlnaProtocolTest {
         assertTrue(message?.isByebyeNotify == true)
         assertFalse(message!!.shouldFetchDescription)
     }
+}
+
+private class RecordingUrlHandler(
+    private val connection: URLConnection,
+) : URLStreamHandler() {
+    override fun openConnection(url: URL): URLConnection = connection
+}
+
+private class RecordingSoapConnection(url: URL) : HttpURLConnection(url) {
+    val requestProperties = linkedMapOf<String, String>()
+    val output = ByteArrayOutputStream()
+    var fixedLength: Int = -1
+    var disconnected: Boolean = false
+
+    val postedBody: ByteArray
+        get() = output.toByteArray()
+
+    val postedBodyText: String
+        get() = postedBody.toString(Charsets.UTF_8)
+
+    override fun disconnect() {
+        disconnected = true
+    }
+
+    override fun usingProxy(): Boolean = false
+
+    override fun connect() {
+        connected = true
+    }
+
+    override fun setFixedLengthStreamingMode(contentLength: Int) {
+        fixedLength = contentLength
+    }
+
+    override fun setRequestProperty(key: String, value: String) {
+        requestProperties[key] = value
+    }
+
+    override fun getOutputStream(): ByteArrayOutputStream = output
+
+    override fun getResponseCode(): Int = HTTP_OK
+
+    override fun getInputStream(): InputStream =
+        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body /></s:Envelope>"
+            .byteInputStream()
 }
 
 private val DEVICE_XML = """

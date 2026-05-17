@@ -46,6 +46,7 @@ internal fun ExampleSelectionSheet(
     onSelectAudio: (VesperTrackSelection) -> Unit,
     onSelectSubtitle: (VesperTrackSelection) -> Unit,
     onSelectSpeed: (Float) -> Unit,
+    playbackRateControlsEnabled: Boolean = true,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -103,13 +104,15 @@ internal fun ExampleSelectionSheet(
             ) {
                 when (sheet) {
                     ExamplePlayerSheet.Menu -> {
-                        item {
-                            SelectionRow(
-                                title = stringResource(R.string.example_common_playback_speed),
-                                subtitle = speedBadge(uiState.playbackRate),
-                                selected = false,
-                                onClick = { onOpenSheet(ExamplePlayerSheet.Speed) },
-                            )
+                        if (playbackRateControlsEnabled) {
+                            item {
+                                SelectionRow(
+                                    title = stringResource(R.string.example_common_playback_speed),
+                                    subtitle = speedBadge(uiState.playbackRate),
+                                    selected = false,
+                                    onClick = { onOpenSheet(ExamplePlayerSheet.Speed) },
+                                )
+                            }
                         }
                         item {
                             SelectionRow(

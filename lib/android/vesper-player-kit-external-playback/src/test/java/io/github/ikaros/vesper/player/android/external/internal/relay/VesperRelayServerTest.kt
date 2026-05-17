@@ -240,6 +240,33 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun sourcePreparerAdvertisesRouteLocalRelayAddress() {
+        val routeAddress = loopback
+        val routeRelay = VesperRelayServer(
+            advertisedAddressProvider = { InetAddress.getByName("127.0.0.2") },
+            bindAddressProvider = { InetAddress.getByName("0.0.0.0") },
+        ).also { additionalRelays += it }
+        val preparer = VesperExternalPlaybackSourcePreparer(routeRelay)
+        val file = File.createTempFile("vesper-relay-route", ".mp4")
+        file.writeText("data")
+        file.deleteOnExit()
+
+        val prepared = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(VesperPlayerSource.local(uri = file.absolutePath, label = "Local")),
+                capabilities = VesperExternalRouteCapabilities(supportsProgressive = true),
+                routeId = "uuid:tv",
+                routeName = "Living Room TV",
+                routeLocalAddress = routeAddress,
+            ),
+        ) as VesperExternalSourcePreparationResult.Prepared
+
+        assertTrue(prepared.relayEnabled)
+        assertTrue(prepared.source.uri.startsWith("http://127.0.0.1:"))
+    }
+
+    @Test
     fun sourcePreparerAdaptsDlnaDashWhenEnabled() {
         val preparer = VesperExternalPlaybackSourcePreparer(relayWithAdapter(RecordingFormatAdapter()))
         val dash = VesperPlayerSource.dash(

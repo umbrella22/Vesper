@@ -25,6 +25,9 @@ import io.github.ikaros.vesper.player.android.external.internal.relay.VesperExte
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayDiagnostic
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayServer
 import io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg.VesperRelayFfmpegAdapter
+import java.net.InetAddress
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -51,6 +54,9 @@ class VesperExternalPlaybackController(context: Context) {
     private var dlnaDiscovery: VesperDlnaDiscovery? = null
     private var dlnaSession: VesperDlnaSession? = null
     private var released = false
+    private val castContextExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "vesper-cast-context").apply { isDaemon = true }
+    }
 
     private val _routes = MutableStateFlow<List<VesperExternalPlaybackRoute>>(emptyList())
     val routes: StateFlow<List<VesperExternalPlaybackRoute>> = _routes.asStateFlow()
@@ -96,13 +102,27 @@ class VesperExternalPlaybackController(context: Context) {
     )
 
     init {
-        runCatching {
-            CastContext
-                .getSharedInstance(applicationContext)
-                .sessionManager
-                .addSessionManagerListener(castSessionListener, CastSession::class.java)
-        }
+        prepareCastContextAsync(
+            onSuccess = {
+                sessionManager.addSessionManagerListener(castSessionListener, CastSession::class.java)
+            },
+        )
         emitRoutes()
+    }
+
+    fun prepareCastAsync(onComplete: (Boolean, String?) -> Unit = { _, _ -> }) {
+        checkNotReleased()
+        prepareCastContextAsync(
+            onSuccess = {
+                emitRoutes()
+                mainHandler.post { onComplete(true, null) }
+            },
+            onFailure = { error ->
+                val message = error.message ?: "Cast route selection is not available."
+                emitEvent(VesperExternalPlaybackEventKind.Error, message = message)
+                mainHandler.post { onComplete(false, message) }
+            },
+        )
     }
 
     fun startDiscovery() {
@@ -412,6 +432,7 @@ class VesperExternalPlaybackController(context: Context) {
                 .sessionManager
                 .removeSessionManagerListener(castSessionListener, CastSession::class.java)
         }
+        castContextExecutor.shutdownNow()
         stopDiscovery()
         invalidateActiveRelay()
         relayServer.stop()
@@ -470,6 +491,7 @@ class VesperExternalPlaybackController(context: Context) {
             ),
             routeId = session.device.routeId,
             routeName = session.device.friendlyName,
+            routeLocalAddress = session.device.localAddress,
         ) ?: return lastPrepareFailure
         val dlnaResult = session.load(
             source = prepared.source,
@@ -504,6 +526,7 @@ class VesperExternalPlaybackController(context: Context) {
             ),
             routeId = session.device.routeId,
             routeName = session.device.friendlyName,
+            routeLocalAddress = session.device.localAddress,
         ) ?: return lastPrepareFailure
         val dlnaResult = session.loadAsync(
             source = prepared.source,
@@ -527,6 +550,7 @@ class VesperExternalPlaybackController(context: Context) {
         capabilities: VesperExternalRouteCapabilities,
         routeId: String? = null,
         routeName: String? = null,
+        routeLocalAddress: InetAddress? = null,
     ): VesperExternalSourcePreparationResult.Prepared? {
         return when (
             val prepared = sourcePreparer.prepare(
@@ -538,6 +562,7 @@ class VesperExternalPlaybackController(context: Context) {
                     formatAdaptation = item.formatAdaptation.toInternal(),
                     routeId = routeId,
                     routeName = routeName,
+                    routeLocalAddress = routeLocalAddress,
                 ),
             )
         ) {
@@ -631,6 +656,44 @@ class VesperExternalPlaybackController(context: Context) {
         _routes.value = next
     }
 
+    private fun prepareCastContextAsync(
+        onSuccess: CastContext.() -> Unit,
+        onFailure: (Throwable) -> Unit = {},
+    ) {
+        runCatching {
+            CastContext
+                .getSharedInstance(applicationContext, castContextExecutor.asExecutor())
+                .addOnSuccessListener { castContext ->
+                    if (released) {
+                        return@addOnSuccessListener
+                    }
+                    mainHandler.post {
+                        if (!released) {
+                            runCatching { castContext.onSuccess() }
+                                .onFailure(onFailure)
+                        }
+                    }
+                }
+                .addOnFailureListener { error ->
+                    if (!released) {
+                        mainHandler.post {
+                            if (!released) {
+                                onFailure(error)
+                            }
+                        }
+                    }
+                }
+        }.onFailure { error ->
+            if (!released) {
+                mainHandler.post {
+                    if (!released) {
+                        onFailure(error)
+                    }
+                }
+            }
+        }
+    }
+
     private fun emitRelayDiagnostic(diagnostic: VesperRelayDiagnostic) {
         mainHandler.post {
             emitEvent(
@@ -671,6 +734,10 @@ class VesperExternalPlaybackController(context: Context) {
     companion object {
         const val CAST_ROUTE_ID: String = "cast:active"
     }
+}
+
+private fun java.util.concurrent.ExecutorService.asExecutor(): Executor = Executor { command ->
+    execute(command)
 }
 
 private fun VesperCastOperationResult.toExternalResult(

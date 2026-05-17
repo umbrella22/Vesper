@@ -3,6 +3,7 @@ package io.github.ikaros.vesper.player.android.external.internal.relay
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
+import java.net.InetAddress
 
 enum class VesperExternalProxyPolicy {
     Auto,
@@ -30,6 +31,7 @@ data class VesperExternalSourcePreparationRequest(
     val formatAdaptation: VesperRelayFormatAdaptationConfig = VesperRelayFormatAdaptationConfig(),
     val routeId: String? = null,
     val routeName: String? = null,
+    val routeLocalAddress: InetAddress? = null,
 )
 
 sealed class VesperExternalSourcePreparationResult {
@@ -101,7 +103,7 @@ class VesperExternalPlaybackSourcePreparer(
             }
             val handle =
                 try {
-                    relayServer.register(source, adaptation)
+                    relayServer.register(source, adaptation, request.routeLocalAddress)
                 } catch (error: VesperRelayRegistrationException) {
                     unsupportedReasons += UnsupportedSourceReason(
                         message = error.diagnostic.message,

@@ -16,10 +16,32 @@ Use this example as a reference for:
 - Fullscreen stage
 - Quality / audio / subtitle / playback-speed bottom sheets
 - Double-tap seek, draggable scrubber
+- Cast route selection and DLNA external playback
 - Compose previews
 - Built-in HLS demo source
 - Built-in DASH demo source
 - Generic remote URL field with `HLS / DASH / progressive` inference
+
+## Cast and DLNA
+
+The player page includes an **External Playback** section:
+
+- Use the Cast route button to select a Google Cast receiver. The example uses
+  Google's Default Media Receiver unless the app manifest provides
+  `io.github.ikaros.vesper.player.android.external.RECEIVER_APPLICATION_ID`.
+- Use **Scan DLNA** to discover UPnP AV / DLNA renderers on the current LAN.
+  Android 13+ prompts for `NEARBY_WIFI_DEVICES`; Cast does not require that
+  permission.
+- Connecting a route loads the active playlist item on the remote device,
+  pauses local playback, and routes play / pause / seek controls to the remote
+  session. Playback-rate controls stay local-only and are hidden while remote
+  mode is active.
+
+The external playback module may use a local HTTP relay for local files,
+request-header sources, and DLNA DASH adaptation. The example enables cleartext
+traffic at the app layer so LAN device descriptions and relay URLs can be read.
+Remote progress is currently estimated by the example because the SDK does not
+yet expose Cast/DLNA status polling.
 
 The demo URLs are owned by the example app. The reusable library under
 [`lib/android/vesper-player-kit`](../../lib/android/) does not embed demo URLs
@@ -111,3 +133,4 @@ Reusable host kit (separate project):
 
 - [`lib/android/vesper-player-kit`](../../lib/android/) — `VesperPlayerController`, `VesperPlayerSource`, JNI bridge
 - [`lib/android/vesper-player-kit-compose`](../../lib/android/) — Compose helpers, reusable surface host
+- [`lib/android/vesper-player-kit-external-playback`](../../lib/android/) — Cast, DLNA, and local relay helpers
