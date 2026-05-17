@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg
 
+import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -294,6 +295,40 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
+    fun plansHybridFileDashWithRemoteBaseUrl() {
+        val root = Files.createTempDirectory("vesper-dash-hybrid-plan").toFile()
+        val manifest = File(root, "manifest.mpd")
+        manifest.writeText("")
+
+        val plan = planHostPreparedDash(
+            manifestText = """
+                <MPD type="static" mediaPresentationDuration="PT4S">
+                  <BaseURL>https://cdn.example/video/</BaseURL>
+                  <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                      <Representation id="v1" codecs="avc1.640028">
+                        <SegmentTemplate timescale="1" duration="4" startNumber="1"
+                          initialization="init.mp4"
+                          media="chunk-${'$'}Number${'$'}.m4s" />
+                      </Representation>
+                    </AdaptationSet>
+                  </Period>
+                </MPD>
+            """.trimIndent(),
+            manifestUri = manifest.toURI().toString(),
+            sourceOrigin = VesperRelayDashSourceOrigin(
+                kind = "file",
+                manifestUri = manifest.toURI().toString(),
+                rootUri = root.canonicalFile.toURI().toString(),
+                allowRemoteMediaReferences = true,
+            ),
+        )
+
+        assertEquals("https://cdn.example/video/init.mp4", plan.tracks.first().initializationUri)
+        assertEquals("https://cdn.example/video/chunk-1.m4s", plan.tracks.first().segments.first().uri)
+    }
+
+    @Test
     fun rejectsFileDashReferencesOutsideManifestDirectory() {
         val root = Files.createTempDirectory("vesper-dash-plan").toFile()
         val manifest = File(root, "manifest.mpd")
@@ -319,6 +354,7 @@ class VesperRelayHostPreparedDashTest {
                     kind = "file",
                     manifestUri = manifest.toURI().toString(),
                     rootUri = root.canonicalFile.toURI().toString(),
+                    allowRemoteMediaReferences = true,
                 ),
             )
         }
@@ -352,6 +388,36 @@ class VesperRelayHostPreparedDashTest {
 
         assertEquals("content://media/video/demo/init.mp4", plan.tracks.first().initializationUri)
         assertEquals("content://media/video/demo/segments/chunk-1.m4s", plan.tracks.first().segments.first().uri)
+    }
+
+    @Test
+    fun plansHybridContentDashWithRemoteBaseUrl() {
+        val plan = planHostPreparedDash(
+            manifestText = """
+                <MPD type="static" mediaPresentationDuration="PT4S">
+                  <BaseURL>https://cdn.example/video/</BaseURL>
+                  <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                      <Representation id="v1" codecs="avc1.640028">
+                        <SegmentTemplate timescale="1" duration="4" startNumber="1"
+                          initialization="init.mp4"
+                          media="chunk-${'$'}Number${'$'}.m4s" />
+                      </Representation>
+                    </AdaptationSet>
+                  </Period>
+                </MPD>
+            """.trimIndent(),
+            manifestUri = "content://media/video/demo/manifest.mpd",
+            sourceOrigin = VesperRelayDashSourceOrigin(
+                kind = "content",
+                manifestUri = "content://media/video/demo/manifest.mpd",
+                rootUri = "content://media/video/demo",
+                allowRemoteMediaReferences = true,
+            ),
+        )
+
+        assertEquals("https://cdn.example/video/init.mp4", plan.tracks.first().initializationUri)
+        assertEquals("https://cdn.example/video/chunk-1.m4s", plan.tracks.first().segments.first().uri)
     }
 
     @Test
@@ -466,6 +532,49 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
+    fun hybridFileResolverFetchesRemoteMediaWithHeaders() {
+        val root = Files.createTempDirectory("vesper-dash-hybrid-range").toFile()
+        val manifest = File(root, "manifest.mpd").apply { writeText("<MPD />") }
+        val requests = Collections.synchronizedList(mutableListOf<RecordedRequest>())
+        val server = RangeHttpServer(
+            body = "abcdefghij".toByteArray(),
+            requests = requests,
+        )
+        server.start()
+        try {
+            val resolver = VesperRelayFileDashResourceResolver(
+                origin = VesperRelayDashSourceOrigin(
+                    kind = "file",
+                    manifestUri = manifest.toURI().toString(),
+                    rootUri = root.canonicalFile.toURI().toString(),
+                    allowRemoteMediaReferences = true,
+                ),
+                remoteHeaders = mapOf(
+                    "Cookie" to "source-cookie",
+                    "Range" to "bytes=0-1",
+                    "Referer" to "https://app.example/player",
+                ),
+            )
+            val output = ByteArrayOutputStream()
+
+            resolver.copyRangeTo(
+                uri = "http://${server.address.hostAddress}:${server.port}/media.mp4",
+                range = VesperRelayDashByteRange(2, 5),
+                output = output,
+                cancellation = AtomicBoolean(false),
+            )
+
+            val headers = requests.last().headers
+            assertEquals("cdef", output.toByteArray().toString(Charsets.UTF_8))
+            assertEquals("source-cookie", headers.valueFor("Cookie"))
+            assertEquals("https://app.example/player", headers.valueFor("Referer"))
+            assertEquals("bytes=2-5", headers.valueFor("Range"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
     fun httpRangeResolverSendsRangeHeaderAndCopiesPartialBody() {
         val requests = Collections.synchronizedList(mutableListOf<RecordedRequest>())
         val server = RangeHttpServer(
@@ -474,7 +583,7 @@ class VesperRelayHostPreparedDashTest {
         )
         server.start()
         try {
-            val source = io.github.ikaros.vesper.player.android.VesperPlayerSource.dash(
+            val source = VesperPlayerSource.dash(
                 uri = "http://${server.address.hostAddress}:${server.port}/manifest.mpd",
                 label = "dash",
             )
@@ -505,7 +614,7 @@ class VesperRelayHostPreparedDashTest {
         )
         server.start()
         try {
-            val source = io.github.ikaros.vesper.player.android.VesperPlayerSource.dash(
+            val source = VesperPlayerSource.dash(
                 uri = "http://${server.address.hostAddress}:${server.port}/manifest.mpd",
                 label = "dash",
             )

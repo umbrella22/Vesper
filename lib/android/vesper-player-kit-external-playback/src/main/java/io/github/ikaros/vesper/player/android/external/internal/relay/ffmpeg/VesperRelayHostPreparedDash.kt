@@ -356,6 +356,7 @@ internal data class VesperRelayDashSourceOrigin(
     val kind: String,
     val manifestUri: String,
     val rootUri: String,
+    val allowRemoteMediaReferences: Boolean = false,
 )
 
 internal open class VesperRelayDashResourceResolver(
@@ -415,32 +416,31 @@ internal class VesperRelayDashResourceResolverFactory {
                 VesperRelayContentDashResourceResolver(
                     context = context,
                     source = request.source,
+                    remoteHeaders = mergedRemoteHeaders(request.source, request.requestHeaders),
                 )
             else ->
-                fileDashResolver(request.source)
+                fileDashResolver(request.source, request.requestHeaders)
         }
     }
 }
 
-private fun fileDashResolver(source: VesperPlayerSource): VesperRelayFileDashResourceResolver =
-    VesperRelayFileDashResourceResolver(origin = source.uri.toFileDashOrigin())
-
-internal class VesperRelayHttpDashResourceResolver(
+private fun fileDashResolver(
     source: VesperPlayerSource,
     requestHeaders: Map<String, String>,
-) : VesperRelayDashResourceResolver(
-    origin = VesperRelayDashSourceOrigin(
-        kind = "remote",
-        manifestUri = source.uri,
-        rootUri = source.uri,
-    ),
-    manifestLogicalUri = source.uri,
+): VesperRelayFileDashResourceResolver =
+    VesperRelayFileDashResourceResolver(
+        origin = source.uri.toFileDashOrigin(allowRemoteMediaReferences = true),
+        remoteHeaders = mergedRemoteHeaders(source, requestHeaders),
+    )
+
+internal class VesperRelayRemoteDashResourceClient(
+    headers: Map<String, String>,
 ) {
-    private val headers = mergedRemoteHeaders(source, requestHeaders)
+    private val headers = headers.filterRemoteFetchHeaders()
     private val activeConnections = Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
 
-    override fun readManifest(): String {
-        val connection = openConnection(manifestLogicalUri, headers)
+    fun readUtf8(uri: String): String {
+        val connection = openConnection(uri, headers)
         activeConnections += connection
         return try {
             val status = connection.responseCode
@@ -456,7 +456,7 @@ internal class VesperRelayHttpDashResourceResolver(
         }
     }
 
-    override fun copyTo(
+    fun copyTo(
         uri: String,
         output: OutputStream,
         cancellation: AtomicBoolean,
@@ -481,7 +481,7 @@ internal class VesperRelayHttpDashResourceResolver(
         }
     }
 
-    override fun copyRangeTo(
+    fun copyRangeTo(
         uri: String,
         range: VesperRelayDashByteRange,
         output: OutputStream,
@@ -528,7 +528,7 @@ internal class VesperRelayHttpDashResourceResolver(
         }
     }
 
-    override fun cancel() {
+    fun cancel() {
         activeConnections.toList().forEach { connection ->
             runCatching { connection.disconnect() }
         }
@@ -552,13 +552,49 @@ internal class VesperRelayHttpDashResourceResolver(
     }
 }
 
+internal class VesperRelayHttpDashResourceResolver(
+    source: VesperPlayerSource,
+    requestHeaders: Map<String, String>,
+) : VesperRelayDashResourceResolver(
+    origin = VesperRelayDashSourceOrigin(
+        kind = "remote",
+        manifestUri = source.uri,
+        rootUri = source.uri,
+    ),
+    manifestLogicalUri = source.uri,
+) {
+    private val remoteClient = VesperRelayRemoteDashResourceClient(
+        mergedRemoteHeaders(source, requestHeaders),
+    )
+
+    override fun readManifest(): String =
+        remoteClient.readUtf8(manifestLogicalUri)
+
+    override fun copyTo(
+        uri: String,
+        output: OutputStream,
+        cancellation: AtomicBoolean,
+    ) = remoteClient.copyTo(uri, output, cancellation)
+
+    override fun copyRangeTo(
+        uri: String,
+        range: VesperRelayDashByteRange,
+        output: OutputStream,
+        cancellation: AtomicBoolean,
+    ) = remoteClient.copyRangeTo(uri, range, output, cancellation)
+
+    override fun cancel() = remoteClient.cancel()
+}
+
 internal class VesperRelayFileDashResourceResolver internal constructor(
     origin: VesperRelayDashSourceOrigin,
+    remoteHeaders: Map<String, String> = emptyMap(),
 ) : VesperRelayDashResourceResolver(
     origin = origin,
     manifestLogicalUri = origin.manifestUri,
 ) {
     private val rootDirectory = File(URI(origin.rootUri)).canonicalFile
+    private val remoteClient = origin.remoteMediaClient(remoteHeaders)
 
     override fun readManifest(): String {
         val file = fileForLogicalUri(manifestLogicalUri)
@@ -572,6 +608,10 @@ internal class VesperRelayFileDashResourceResolver internal constructor(
     ) {
         if (cancellation.get()) {
             throw HostInputCancelledException()
+        }
+        if (uri.isRemoteDashUri()) {
+            remoteClientFor(uri).copyTo(uri, output, cancellation)
+            return
         }
         fileForLogicalUri(uri).inputStream().use { input ->
             input.copyToCancellable(output, cancellation)
@@ -587,6 +627,10 @@ internal class VesperRelayFileDashResourceResolver internal constructor(
         if (cancellation.get()) {
             throw HostInputCancelledException()
         }
+        if (uri.isRemoteDashUri()) {
+            remoteClientFor(uri).copyRangeTo(uri, range, output, cancellation)
+            return
+        }
         val file = fileForLogicalUri(uri)
         RandomAccessFile(file, "r").use { input ->
             if (range.end >= input.length()) {
@@ -599,6 +643,18 @@ internal class VesperRelayFileDashResourceResolver internal constructor(
             input.seek(range.start)
             input.copyLimitedToCancellable(output, range.length, cancellation)
         }
+    }
+
+    override fun cancel() {
+        remoteClient?.cancel()
+    }
+
+    private fun remoteClientFor(uri: String): VesperRelayRemoteDashResourceClient {
+        return remoteClient ?: throw DashResourceException(
+            code = "unsupported_mixed_dash_origin",
+            status = 415,
+            message = "DASH file resolver cannot fetch remote media references.",
+        )
     }
 
     private fun fileForLogicalUri(uri: String): File {
@@ -629,12 +685,14 @@ internal class VesperRelayFileDashResourceResolver internal constructor(
 internal class VesperRelayContentDashResourceResolver(
     context: Context,
     source: VesperPlayerSource,
+    remoteHeaders: Map<String, String> = emptyMap(),
 ) : VesperRelayDashResourceResolver(
-    origin = source.uri.toContentDashOrigin(),
+    origin = source.uri.toContentDashOrigin(allowRemoteMediaReferences = true),
     manifestLogicalUri = source.uri,
 ) {
     private val resolver = context.contentResolver
     private val rootUri = Uri.parse(origin.rootUri)
+    private val remoteClient = origin.remoteMediaClient(remoteHeaders)
 
     override fun readManifest(): String {
         return openInput(manifestLogicalUri).use { input ->
@@ -650,6 +708,10 @@ internal class VesperRelayContentDashResourceResolver(
         if (cancellation.get()) {
             throw HostInputCancelledException()
         }
+        if (uri.isRemoteDashUri()) {
+            remoteClientFor(uri).copyTo(uri, output, cancellation)
+            return
+        }
         openInput(uri).use { input ->
             input.copyToCancellable(output, cancellation)
         }
@@ -664,10 +726,26 @@ internal class VesperRelayContentDashResourceResolver(
         if (cancellation.get()) {
             throw HostInputCancelledException()
         }
+        if (uri.isRemoteDashUri()) {
+            remoteClientFor(uri).copyRangeTo(uri, range, output, cancellation)
+            return
+        }
         openInput(uri).use { input ->
             input.skipFullyCancellable(range.start, cancellation)
             input.copyLimitedToCancellable(output, range.length, cancellation)
         }
+    }
+
+    override fun cancel() {
+        remoteClient?.cancel()
+    }
+
+    private fun remoteClientFor(uri: String): VesperRelayRemoteDashResourceClient {
+        return remoteClient ?: throw DashResourceException(
+            code = "unsupported_mixed_dash_origin",
+            status = 415,
+            message = "DASH content resolver cannot fetch remote media references.",
+        )
     }
 
     private fun openInput(uri: String): InputStream {
@@ -1291,7 +1369,9 @@ private fun resolveDashReference(
             }
         }
         "file" -> {
-            if (scheme == "file") {
+            if (resolved.isRemoteDashUri() && origin.allowRemoteMediaReferences) {
+                resolved
+            } else if (scheme == "file") {
                 val root = File(URI(origin.rootUri)).canonicalFile.toPath()
                 val candidate = File(URI(resolved)).canonicalFile.toPath()
                 if (candidate.startsWith(root)) {
@@ -1304,7 +1384,9 @@ private fun resolveDashReference(
             }
         }
         "content" -> {
-            if (scheme == "content" && contentUriWithinRoot(resolved, origin.rootUri)) {
+            if (resolved.isRemoteDashUri() && origin.allowRemoteMediaReferences) {
+                resolved
+            } else if (scheme == "content" && contentUriWithinRoot(resolved, origin.rootUri)) {
                 resolved
             } else {
                 throw unsupportedMixedDashOrigin(baseDetails, origin, resolved)
@@ -1313,6 +1395,18 @@ private fun resolveDashReference(
         else -> throw unsupportedMixedDashOrigin(baseDetails, origin, resolved)
     }
 }
+
+private fun VesperRelayDashSourceOrigin.remoteMediaClient(
+    headers: Map<String, String>,
+): VesperRelayRemoteDashResourceClient? =
+    if (allowRemoteMediaReferences) {
+        VesperRelayRemoteDashResourceClient(headers)
+    } else {
+        null
+    }
+
+private fun String.isRemoteDashUri(): Boolean =
+    startsWith("http://", ignoreCase = true) || startsWith("https://", ignoreCase = true)
 
 private fun mergedRemoteHeaders(
     source: VesperPlayerSource,
@@ -1331,6 +1425,9 @@ private fun mergedRemoteHeaders(
     }
     return merged
 }
+
+private fun Map<String, String>.filterRemoteFetchHeaders(): Map<String, String> =
+    filter { (name, value) -> name.isRemoteFetchHeaderAllowed() && value.isNotBlank() }
 
 private fun String.isRemoteFetchHeaderAllowed(): Boolean =
     lowercase(Locale.US) !in setOf(
@@ -1420,13 +1517,16 @@ private fun remoteDashOrigin(uri: String): VesperRelayDashSourceOrigin =
         rootUri = uri,
     )
 
-private fun String.toFileDashOrigin(): VesperRelayDashSourceOrigin {
+private fun String.toFileDashOrigin(
+    allowRemoteMediaReferences: Boolean = false,
+): VesperRelayDashSourceOrigin {
     val manifestFile = toLocalDashFile().canonicalFile
     val root = manifestFile.parentFile?.canonicalFile ?: manifestFile.canonicalFile
     return VesperRelayDashSourceOrigin(
         kind = "file",
         manifestUri = manifestFile.toURI().toString(),
         rootUri = root.toURI().toString(),
+        allowRemoteMediaReferences = allowRemoteMediaReferences,
     )
 }
 
@@ -1437,7 +1537,9 @@ private fun String.toLocalDashFile(): File =
         File(this)
     }
 
-private fun String.toContentDashOrigin(): VesperRelayDashSourceOrigin {
+private fun String.toContentDashOrigin(
+    allowRemoteMediaReferences: Boolean = false,
+): VesperRelayDashSourceOrigin {
     val uri = URI(this)
     val path = uri.path.orEmpty()
     val rootPath = path.substringBeforeLast('/', missingDelimiterValue = "")
@@ -1446,6 +1548,7 @@ private fun String.toContentDashOrigin(): VesperRelayDashSourceOrigin {
         kind = "content",
         manifestUri = this,
         rootUri = rootUri,
+        allowRemoteMediaReferences = allowRemoteMediaReferences,
     )
 }
 
