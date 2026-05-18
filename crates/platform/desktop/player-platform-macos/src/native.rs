@@ -5,13 +5,13 @@ use std::time::{Duration, Instant};
 use player_model::MediaSource;
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PLAYBACK_RATE,
-    MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress, PlayerMediaInfo,
-    PlayerResilienceMetricsTracker, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot,
-    PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+    MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress, PlayerError, PlayerErrorCode,
+    PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoInfo,
+    PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
 };
 
 pub const MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_native";
@@ -74,20 +74,20 @@ pub enum MacosNativePlayerCommand {
 }
 
 pub trait MacosNativeCommandSink: Send {
-    fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerRuntimeResult<()>;
+    fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerResult<()>;
     fn attach_video_surface(
         &mut self,
         _video_surface: PlayerVideoSurfaceTarget,
-    ) -> PlayerRuntimeResult<()> {
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+    ) -> PlayerResult<()> {
+        Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "macos native command sink does not support attaching a video surface",
         ))
     }
 
-    fn detach_video_surface(&mut self) -> PlayerRuntimeResult<()> {
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+    fn detach_video_surface(&mut self) -> PlayerResult<()> {
+        Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "macos native command sink does not support detaching a video surface",
         ))
     }
@@ -97,18 +97,18 @@ impl<T> MacosNativeCommandSink for Box<T>
 where
     T: MacosNativeCommandSink + ?Sized,
 {
-    fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerRuntimeResult<()> {
+    fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerResult<()> {
         (**self).submit_command(command)
     }
 
     fn attach_video_surface(
         &mut self,
         video_surface: PlayerVideoSurfaceTarget,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         (**self).attach_video_surface(video_surface)
     }
 
-    fn detach_video_surface(&mut self) -> PlayerRuntimeResult<()> {
+    fn detach_video_surface(&mut self) -> PlayerResult<()> {
         (**self).detach_video_surface()
     }
 }
@@ -119,7 +119,7 @@ pub enum MacosNativeSessionUpdate {
     FirstFrameReady { position: Duration },
     InterruptionChanged { interrupted: bool },
     SeekCompleted { position: Duration },
-    Error(PlayerRuntimeError),
+    Error(PlayerError),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -150,7 +150,7 @@ pub trait MacosNativePlayerBridge: Send + Sync {
         &self,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<MacosNativePlayerProbe>;
+    ) -> PlayerResult<MacosNativePlayerProbe>;
 
     fn initialize_session(
         &self,
@@ -158,7 +158,7 @@ pub trait MacosNativePlayerBridge: Send + Sync {
         options: PlayerRuntimeOptions,
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
-    ) -> PlayerRuntimeResult<MacosNativePlayerSessionBootstrap>;
+    ) -> PlayerResult<MacosNativePlayerSessionBootstrap>;
 }
 
 pub trait MacosAvFoundationBridgeBindings: Send + Sync {
@@ -167,7 +167,7 @@ pub trait MacosAvFoundationBridgeBindings: Send + Sync {
         context: &MacosAvFoundationBridgeContext,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<MacosNativePlayerProbe>;
+    ) -> PlayerResult<MacosNativePlayerProbe>;
 
     fn create_command_sink(
         &self,
@@ -177,7 +177,7 @@ pub trait MacosAvFoundationBridgeBindings: Send + Sync {
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
         controller: MacosManagedNativeSessionController,
-    ) -> PlayerRuntimeResult<Box<dyn MacosNativeCommandSink>>;
+    ) -> PlayerResult<Box<dyn MacosNativeCommandSink>>;
 }
 
 pub trait MacosNativePlayerSession: Send {
@@ -194,12 +194,12 @@ pub trait MacosNativePlayerSession: Send {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult>;
+    ) -> PlayerResult<PlayerRuntimeCommandResult>;
     fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()>;
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>>;
+    ) -> PlayerResult<()>;
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>>;
     fn next_deadline(&self) -> Option<Instant>;
 }
 
@@ -311,7 +311,7 @@ impl PlayerRuntimeAdapterFactory for MacosNativePlayerRuntimeAdapterFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         let (media_info, startup) = match &self.bridge {
             Some(bridge) => {
                 let probe = bridge.probe_source(&source, &options)?;
@@ -346,7 +346,7 @@ impl PlayerRuntimeAdapterInitializer for MacosNativePlayerRuntimeInitializer {
         self.startup.clone()
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self {
             bridge,
             source,
@@ -356,8 +356,8 @@ impl PlayerRuntimeAdapterInitializer for MacosNativePlayerRuntimeInitializer {
         } = *self;
 
         let Some(bridge) = bridge else {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 macos_native_unavailable_message(),
             ));
         };
@@ -417,18 +417,18 @@ impl PlayerRuntimeAdapter for MacosNativePlayerRuntime {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.inner.dispatch(command)
     }
 
     fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         self.inner.replace_video_surface(video_surface)
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.inner.advance()
     }
 
@@ -446,8 +446,8 @@ impl MacosAvFoundationStateTracker {
         let mut emitted_events = Vec::new();
 
         if let Some(message) = snapshot.error_message.as_ref() {
-            emitted_events.push(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            emitted_events.push(PlayerRuntimeEvent::Error(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 message.clone(),
             )));
         }
@@ -571,8 +571,8 @@ impl MacosManagedNativeSessionController {
         self.push_update(MacosNativeSessionUpdate::InterruptionChanged { interrupted });
     }
 
-    pub fn report_error(&self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
-        self.push_update(MacosNativeSessionUpdate::Error(PlayerRuntimeError::new(
+    pub fn report_error(&self, code: PlayerErrorCode, message: impl Into<String>) {
+        self.push_update(MacosNativeSessionUpdate::Error(PlayerError::new(
             code,
             message.into(),
         )));
@@ -794,10 +794,10 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
         self.emit_state_change_if_needed(PresentationState::Ready);
     }
 
-    fn validate_playback_rate(&self, rate: f32) -> PlayerRuntimeResult<f32> {
+    fn validate_playback_rate(&self, rate: f32) -> PlayerResult<f32> {
         if !rate.is_finite() {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 "playback rate must be a finite number",
             ));
         }
@@ -811,8 +811,8 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
             .playback_rate_max
             .unwrap_or(MAX_PLAYBACK_RATE);
         if !(min..=max).contains(&rate) {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 format!("playback rate must be within {min:.1}x..={max:.1}x"),
             ));
         }
@@ -820,10 +820,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
         Ok(rate)
     }
 
-    fn submit_commands(
-        &mut self,
-        commands: Vec<MacosNativePlayerCommand>,
-    ) -> PlayerRuntimeResult<()> {
+    fn submit_commands(&mut self, commands: Vec<MacosNativePlayerCommand>) -> PlayerResult<()> {
         for command in commands {
             self.command_sink.submit_command(command)?;
         }
@@ -833,7 +830,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
     fn translate_command(
         &self,
         command: &PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<(bool, Vec<MacosNativePlayerCommand>)> {
+    ) -> PlayerResult<(bool, Vec<MacosNativePlayerCommand>)> {
         match command {
             PlayerRuntimeCommand::Play => match self.presentation_state {
                 PresentationState::Playing => Ok((false, Vec::new())),
@@ -853,12 +850,10 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
             PlayerRuntimeCommand::Pause => match self.presentation_state {
                 PresentationState::Playing => Ok((true, vec![MacosNativePlayerCommand::Pause])),
                 PresentationState::Paused => Ok((false, Vec::new())),
-                PresentationState::Ready | PresentationState::Finished => {
-                    Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidState,
-                        "pause is only valid after playback has started",
-                    ))
-                }
+                PresentationState::Ready | PresentationState::Finished => Err(PlayerError::new(
+                    PlayerErrorCode::InvalidState,
+                    "pause is only valid after playback has started",
+                )),
             },
             PlayerRuntimeCommand::TogglePause => match self.presentation_state {
                 PresentationState::Playing => Ok((true, vec![MacosNativePlayerCommand::Pause])),
@@ -894,8 +889,8 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
             PlayerRuntimeCommand::SetVideoTrackSelection { .. }
             | PlayerRuntimeCommand::SetAudioTrackSelection { .. }
             | PlayerRuntimeCommand::SetSubtitleTrackSelection { .. }
-            | PlayerRuntimeCommand::SetAbrPolicy { .. } => Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            | PlayerRuntimeCommand::SetAbrPolicy { .. } => Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "track selection and ABR control are not implemented for the macOS native runtime yet",
             )),
             PlayerRuntimeCommand::Stop => {
@@ -915,7 +910,7 @@ impl MacosNativePlayerBridge for MacosAvFoundationBridge {
         &self,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<MacosNativePlayerProbe> {
+    ) -> PlayerResult<MacosNativePlayerProbe> {
         self.bindings.probe_source(&self.context, source, options)
     }
 
@@ -925,7 +920,7 @@ impl MacosNativePlayerBridge for MacosAvFoundationBridge {
         options: PlayerRuntimeOptions,
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
-    ) -> PlayerRuntimeResult<MacosNativePlayerSessionBootstrap> {
+    ) -> PlayerResult<MacosNativePlayerSessionBootstrap> {
         let context = resolve_bridge_context(&self.context, &options, media_info)?;
         let capabilities = macos_native_capabilities();
         let controller = MacosManagedNativeSessionController::default();
@@ -1000,7 +995,7 @@ impl<C: MacosNativeCommandSink> MacosNativePlayerSession for MacosManagedNativeS
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.pump_pending_updates();
         let previous_state = self.presentation_state;
         let previous_buffering = self.is_buffering;
@@ -1083,7 +1078,7 @@ impl<C: MacosNativeCommandSink> MacosNativePlayerSession for MacosManagedNativeS
     fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         if self.video_surface == video_surface {
             return Ok(());
         }
@@ -1111,7 +1106,7 @@ impl<C: MacosNativeCommandSink> MacosNativePlayerSession for MacosManagedNativeS
         Ok(())
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.pump_pending_updates();
         Ok(None)
     }
@@ -1158,13 +1153,13 @@ fn resolve_bridge_context(
     base_context: &MacosAvFoundationBridgeContext,
     options: &PlayerRuntimeOptions,
     media_info: &PlayerMediaInfo,
-) -> PlayerRuntimeResult<MacosAvFoundationBridgeContext> {
+) -> PlayerResult<MacosAvFoundationBridgeContext> {
     let resolved_surface = options.video_surface.or(base_context.video_surface);
 
     if let Some(best_video) = media_info.best_video.as_ref() {
         let surface = resolved_surface.ok_or_else(|| {
-            PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 format!(
                     "macos native backend requires a video surface target for {} video playback",
                     best_video.codec
@@ -1182,14 +1177,14 @@ fn resolve_bridge_context(
 fn validate_macos_video_surface(
     surface: PlayerVideoSurfaceTarget,
     best_video: &PlayerVideoInfo,
-) -> PlayerRuntimeResult<()> {
+) -> PlayerResult<()> {
     match surface.kind {
         PlayerVideoSurfaceKind::NsView
         | PlayerVideoSurfaceKind::PlayerLayer
         | PlayerVideoSurfaceKind::MetalLayer => Ok(()),
         PlayerVideoSurfaceKind::UiView | PlayerVideoSurfaceKind::Win32Hwnd => {
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 format!(
                     "macos native backend only supports NsView/AVPlayerLayer/MetalLayer video surfaces for {} playback",
                     best_video.codec
@@ -1257,9 +1252,9 @@ mod tests {
     };
     use player_model::MediaSource;
     use player_runtime::{
-        PlayerMediaInfo, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterFactory,
-        PlayerRuntimeCommand, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-        PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoInfo, PlayerVideoSurfaceKind,
+        PlayerErrorCode, PlayerMediaInfo, PlayerResult, PlayerRuntimeAdapterBackendFamily,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeEvent,
+        PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoInfo, PlayerVideoSurfaceKind,
         PlayerVideoSurfaceTarget, PresentationState,
     };
 
@@ -1304,7 +1299,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
     }
 
     #[test]
@@ -1838,7 +1833,7 @@ mod tests {
             &self,
             source: &MediaSource,
             _options: &PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<MacosNativePlayerProbe> {
+        ) -> PlayerResult<MacosNativePlayerProbe> {
             Ok(MacosNativePlayerProbe {
                 media_info: PlayerMediaInfo {
                     source_uri: source.uri().to_owned(),
@@ -1869,7 +1864,7 @@ mod tests {
             _options: PlayerRuntimeOptions,
             media_info: &PlayerMediaInfo,
             _startup: &PlayerRuntimeStartup,
-        ) -> PlayerRuntimeResult<MacosNativePlayerSessionBootstrap> {
+        ) -> PlayerResult<MacosNativePlayerSessionBootstrap> {
             Ok(MacosNativePlayerSessionBootstrap {
                 runtime: Box::new(MacosManagedNativeSession::new(
                     source.uri(),
@@ -1888,7 +1883,7 @@ mod tests {
     }
 
     impl MacosNativeCommandSink for FakeCommandSink {
-        fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerRuntimeResult<()> {
+        fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerResult<()> {
             self.commands
                 .lock()
                 .expect("fake command list should stay lockable")
@@ -1899,7 +1894,7 @@ mod tests {
         fn attach_video_surface(
             &mut self,
             video_surface: PlayerVideoSurfaceTarget,
-        ) -> PlayerRuntimeResult<()> {
+        ) -> PlayerResult<()> {
             self.attached_surfaces
                 .lock()
                 .expect("fake surface ops should stay lockable")
@@ -1907,7 +1902,7 @@ mod tests {
             Ok(())
         }
 
-        fn detach_video_surface(&mut self) -> PlayerRuntimeResult<()> {
+        fn detach_video_surface(&mut self) -> PlayerResult<()> {
             self.attached_surfaces
                 .lock()
                 .expect("fake surface ops should stay lockable")
@@ -1927,7 +1922,7 @@ mod tests {
             _context: &MacosAvFoundationBridgeContext,
             source: &MediaSource,
             _options: &PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<MacosNativePlayerProbe> {
+        ) -> PlayerResult<MacosNativePlayerProbe> {
             Ok(MacosNativePlayerProbe {
                 media_info: PlayerMediaInfo {
                     source_uri: source.uri().to_owned(),
@@ -1965,7 +1960,7 @@ mod tests {
             _media_info: &PlayerMediaInfo,
             _startup: &PlayerRuntimeStartup,
             _controller: super::MacosManagedNativeSessionController,
-        ) -> PlayerRuntimeResult<Box<dyn MacosNativeCommandSink>> {
+        ) -> PlayerResult<Box<dyn MacosNativeCommandSink>> {
             self.contexts
                 .lock()
                 .expect("context list should stay lockable")
@@ -2047,7 +2042,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
     }
 
     #[test]

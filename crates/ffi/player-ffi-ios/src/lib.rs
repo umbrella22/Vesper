@@ -24,13 +24,13 @@ use player_runtime::{
     DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus, MediaAbrMode,
     MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
     MediaTrackSelectionMode, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
-    PlayerCachePreset, PlayerPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy,
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
-    PlayerTrackPreferencePolicy, PlaylistActiveItem, PlaylistCoordinatorConfig,
-    PlaylistFailureStrategy, PlaylistNeighborWindow, PlaylistPreloadWindow, PlaylistQueueItem,
-    PlaylistRepeatMode, PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
-    PreloadBudget, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
-    PreloadPriority, PreloadSelectionHint, PreloadTaskSnapshot,
+    PlayerCachePreset, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+    PlayerPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy,
+    PlaylistActiveItem, PlaylistCoordinatorConfig, PlaylistFailureStrategy, PlaylistNeighborWindow,
+    PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistSwitchPolicy,
+    PlaylistViewportHint, PlaylistViewportHintKind, PreloadBudget, PreloadBudgetScope,
+    PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadPriority, PreloadSelectionHint,
+    PreloadTaskSnapshot,
     policy::{
         resolve_preload_budget as resolve_preload_budget_with_runtime,
         resolve_resilience_policy as resolve_resilience_policy_with_runtime,
@@ -129,6 +129,10 @@ pub enum PlayerFfiErrorCode {
     DecodeFailure = 8,
     SeekFailure = 9,
     Unsupported = 10,
+    CommandChannelClosed = 11,
+    EventChannelClosed = 12,
+    Cancelled = 13,
+    Timeout = 14,
 }
 
 #[repr(C)]
@@ -460,8 +464,8 @@ pub struct PlayerFfiPreloadTask {
     pub expected_disk_bytes: u64,
     pub warmup_window_ms: u64,
     pub has_error: bool,
-    pub error_code: u32,
-    pub error_category: u32,
+    pub error_code: PlayerFfiErrorCode,
+    pub error_category: PlayerFfiErrorCategory,
     pub error_retriable: bool,
     pub error_message: *mut c_char,
 }
@@ -739,8 +743,8 @@ pub struct PlayerFfiDownloadTask {
     pub progress: PlayerFfiDownloadProgressSnapshot,
     pub asset_index: PlayerFfiDownloadAssetIndex,
     pub has_error: bool,
-    pub error_code: u32,
-    pub error_category: u32,
+    pub error_code: PlayerFfiErrorCode,
+    pub error_category: PlayerFfiErrorCategory,
     pub error_retriable: bool,
     pub error_message: *mut c_char,
 }
@@ -797,8 +801,8 @@ pub struct PlayerFfiDownloadEvent {
     pub status: PlayerFfiDownloadTaskStatus,
     pub progress: PlayerFfiDownloadProgressSnapshot,
     pub has_error: bool,
-    pub error_code: u32,
-    pub error_category: u32,
+    pub error_code: PlayerFfiErrorCode,
+    pub error_category: PlayerFfiErrorCategory,
     pub error_retriable: bool,
     pub error_message: *mut c_char,
     pub completed_path: *mut c_char,
@@ -1142,7 +1146,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_complete(
             return PlayerFfiCallStatus::Error;
         };
         if let Err(error) = session.complete(player_runtime::PreloadTaskId::from_raw(task_id)) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -1159,8 +1163,8 @@ pub unsafe extern "C" fn player_ffi_preload_session_complete(
 pub unsafe extern "C" fn player_ffi_preload_session_fail(
     handle: u64,
     task_id: u64,
-    code: u32,
-    category: u32,
+    code: PlayerFfiErrorCode,
+    category: PlayerFfiErrorCategory,
     retriable: bool,
     message: *const c_char,
     out_error: *mut PlayerFfiError,
@@ -1196,14 +1200,9 @@ pub unsafe extern "C" fn player_ffi_preload_session_fail(
             return PlayerFfiCallStatus::Error;
         };
 
-        let error = PlayerRuntimeError::with_taxonomy(
-            ffi_runtime_error_code(code),
-            ffi_runtime_error_category(category),
-            retriable,
-            message,
-        );
+        let error = PlayerError::with_taxonomy(code.into(), category.into(), retriable, message);
         if let Err(error) = session.fail(player_runtime::PreloadTaskId::from_raw(task_id), error) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -1270,7 +1269,7 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
         ) {
             Ok(session) => session,
             Err(error) => {
-                write_error(out_error, runtime_error_to_ffi(error));
+                write_error(out_error, player_error_to_ffi(error));
                 return PlayerFfiCallStatus::Error;
             }
         };
@@ -1426,7 +1425,7 @@ pub unsafe extern "C" fn player_ffi_download_session_create_task(
         ) {
             Ok(task_id) => task_id,
             Err(error) => {
-                write_error(out_error, runtime_error_to_ffi(error));
+                write_error(out_error, player_error_to_ffi(error));
                 return PlayerFfiCallStatus::Error;
             }
         };
@@ -1499,7 +1498,7 @@ pub unsafe extern "C" fn player_ffi_download_session_restore_tasks(
         };
 
         if let Err(error) = session.restore_tasks(restored_tasks, now) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -1514,7 +1513,7 @@ fn with_download_session_task_mutation(
         &mut IosDownloadBridgeSession,
         player_runtime::DownloadTaskId,
         std::time::Instant,
-    ) -> player_runtime::PlayerRuntimeResult<Option<DownloadTaskSnapshot>>,
+    ) -> player_runtime::PlayerResult<Option<DownloadTaskSnapshot>>,
 ) -> PlayerFfiCallStatus {
     let Ok(mut sessions) = download_sessions().lock() else {
         write_error(
@@ -1542,7 +1541,7 @@ fn with_download_session_task_mutation(
         player_runtime::DownloadTaskId::from_raw(task_id),
         std::time::Instant::now(),
     ) {
-        write_error(out_error, runtime_error_to_ffi(error));
+        write_error(out_error, player_error_to_ffi(error));
         return PlayerFfiCallStatus::Error;
     }
     PlayerFfiCallStatus::Ok
@@ -1647,7 +1646,7 @@ pub unsafe extern "C" fn player_ffi_download_session_update_progress(
             received_segments,
             std::time::Instant::now(),
         ) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -1702,7 +1701,7 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_task(
             completed_path,
             std::time::Instant::now(),
         ) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -1757,7 +1756,7 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_preparation(
             asset_index,
             std::time::Instant::now(),
         ) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -1830,7 +1829,7 @@ pub unsafe extern "C" fn player_ffi_download_session_replace_task_plan(
             asset_index,
             std::time::Instant::now(),
         ) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -1894,7 +1893,7 @@ pub unsafe extern "C" fn player_ffi_download_session_export_task(
             Some(PathBuf::from(output_path)),
             &progress,
         ) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
 
@@ -1912,8 +1911,8 @@ pub unsafe extern "C" fn player_ffi_download_session_export_task(
 pub unsafe extern "C" fn player_ffi_download_session_fail_task(
     handle: u64,
     task_id: u64,
-    code: u32,
-    category: u32,
+    code: PlayerFfiErrorCode,
+    category: PlayerFfiErrorCategory,
     retriable: bool,
     message: *const c_char,
     out_error: *mut PlayerFfiError,
@@ -1949,18 +1948,13 @@ pub unsafe extern "C" fn player_ffi_download_session_fail_task(
             return PlayerFfiCallStatus::Error;
         };
 
-        let error = PlayerRuntimeError::with_taxonomy(
-            ffi_runtime_error_code(code),
-            ffi_runtime_error_category(category),
-            retriable,
-            message,
-        );
+        let error = PlayerError::with_taxonomy(code.into(), category.into(), retriable, message);
         if let Err(error) = session.fail_task(
             player_runtime::DownloadTaskId::from_raw(task_id),
             error,
             std::time::Instant::now(),
         ) {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -2766,7 +2760,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_complete_preload_task(
         if let Err(error) =
             session.complete_preload_task(player_runtime::PreloadTaskId::from_raw(task_id))
         {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -2783,8 +2777,8 @@ pub unsafe extern "C" fn player_ffi_playlist_session_complete_preload_task(
 pub unsafe extern "C" fn player_ffi_playlist_session_fail_preload_task(
     handle: u64,
     task_id: u64,
-    code: u32,
-    category: u32,
+    code: PlayerFfiErrorCode,
+    category: PlayerFfiErrorCategory,
     retriable: bool,
     message: *const c_char,
     out_error: *mut PlayerFfiError,
@@ -2820,16 +2814,11 @@ pub unsafe extern "C" fn player_ffi_playlist_session_fail_preload_task(
             return PlayerFfiCallStatus::Error;
         };
 
-        let error = PlayerRuntimeError::with_taxonomy(
-            ffi_runtime_error_code(code),
-            ffi_runtime_error_category(category),
-            retriable,
-            message,
-        );
+        let error = PlayerError::with_taxonomy(code.into(), category.into(), retriable, message);
         if let Err(error) =
             session.fail_preload_task(player_runtime::PreloadTaskId::from_raw(task_id), error)
         {
-            write_error(out_error, runtime_error_to_ffi(error));
+            write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
@@ -3705,8 +3694,8 @@ fn read_download_task(
     })?;
     let error_summary = if task.has_error {
         Some(DownloadErrorSummary {
-            code: ffi_runtime_error_code(task.error_code),
-            category: ffi_runtime_error_category(task.error_category),
+            code: task.error_code.into(),
+            category: task.error_category.into(),
             retriable: task.error_retriable,
             message: read_optional_c_string(task.error_message, "task.error_message")?
                 .unwrap_or_else(|| "download failed".to_owned()),
@@ -3813,8 +3802,8 @@ fn read_playlist_viewport_hint(
     Ok(PlaylistViewportHint::new(item_id, kind).with_order(hint.order))
 }
 
-fn runtime_error_to_ffi(error: PlayerRuntimeError) -> PlayerFfiError {
-    let (code, category) = map_runtime_error(&error);
+fn player_error_to_ffi(error: PlayerError) -> PlayerFfiError {
+    let (code, category) = map_player_error(&error);
     PlayerFfiError {
         code,
         category,
@@ -3823,55 +3812,77 @@ fn runtime_error_to_ffi(error: PlayerRuntimeError) -> PlayerFfiError {
     }
 }
 
-fn map_runtime_error(error: &PlayerRuntimeError) -> (PlayerFfiErrorCode, PlayerFfiErrorCategory) {
-    let code = match error.code() {
-        PlayerRuntimeErrorCode::InvalidArgument => PlayerFfiErrorCode::InvalidArgument,
-        PlayerRuntimeErrorCode::InvalidState => PlayerFfiErrorCode::InvalidState,
-        PlayerRuntimeErrorCode::InvalidSource => PlayerFfiErrorCode::InvalidSource,
-        PlayerRuntimeErrorCode::BackendFailure => PlayerFfiErrorCode::BackendFailure,
-        PlayerRuntimeErrorCode::AudioOutputUnavailable => {
-            PlayerFfiErrorCode::AudioOutputUnavailable
-        }
-        PlayerRuntimeErrorCode::DecodeFailure => PlayerFfiErrorCode::DecodeFailure,
-        PlayerRuntimeErrorCode::SeekFailure => PlayerFfiErrorCode::SeekFailure,
-        PlayerRuntimeErrorCode::Unsupported => PlayerFfiErrorCode::Unsupported,
-    };
-    let category = match error.category() {
-        PlayerRuntimeErrorCategory::Input => PlayerFfiErrorCategory::Input,
-        PlayerRuntimeErrorCategory::Source => PlayerFfiErrorCategory::Source,
-        PlayerRuntimeErrorCategory::Network => PlayerFfiErrorCategory::Network,
-        PlayerRuntimeErrorCategory::Decode => PlayerFfiErrorCategory::Decode,
-        PlayerRuntimeErrorCategory::AudioOutput => PlayerFfiErrorCategory::AudioOutput,
-        PlayerRuntimeErrorCategory::Playback => PlayerFfiErrorCategory::Playback,
-        PlayerRuntimeErrorCategory::Capability => PlayerFfiErrorCategory::Capability,
-        PlayerRuntimeErrorCategory::Platform => PlayerFfiErrorCategory::Platform,
-    };
-    (code, category)
+fn map_player_error(error: &PlayerError) -> (PlayerFfiErrorCode, PlayerFfiErrorCategory) {
+    (
+        error_code_to_ffi(error.code()),
+        error_category_to_ffi(error.category()),
+    )
 }
 
-fn ffi_runtime_error_code(value: u32) -> PlayerRuntimeErrorCode {
-    match value {
-        1 => PlayerRuntimeErrorCode::InvalidState,
-        2 => PlayerRuntimeErrorCode::InvalidSource,
-        3 => PlayerRuntimeErrorCode::BackendFailure,
-        4 => PlayerRuntimeErrorCode::AudioOutputUnavailable,
-        5 => PlayerRuntimeErrorCode::DecodeFailure,
-        6 => PlayerRuntimeErrorCode::SeekFailure,
-        7 => PlayerRuntimeErrorCode::Unsupported,
-        _ => PlayerRuntimeErrorCode::InvalidArgument,
+fn error_code_to_ffi(code: PlayerErrorCode) -> PlayerFfiErrorCode {
+    match code {
+        PlayerErrorCode::InvalidArgument => PlayerFfiErrorCode::InvalidArgument,
+        PlayerErrorCode::InvalidState => PlayerFfiErrorCode::InvalidState,
+        PlayerErrorCode::InvalidSource => PlayerFfiErrorCode::InvalidSource,
+        PlayerErrorCode::BackendFailure => PlayerFfiErrorCode::BackendFailure,
+        PlayerErrorCode::AudioOutputUnavailable => PlayerFfiErrorCode::AudioOutputUnavailable,
+        PlayerErrorCode::DecodeFailure => PlayerFfiErrorCode::DecodeFailure,
+        PlayerErrorCode::SeekFailure => PlayerFfiErrorCode::SeekFailure,
+        PlayerErrorCode::Unsupported => PlayerFfiErrorCode::Unsupported,
+        PlayerErrorCode::CommandChannelClosed => PlayerFfiErrorCode::CommandChannelClosed,
+        PlayerErrorCode::EventChannelClosed => PlayerFfiErrorCode::EventChannelClosed,
+        PlayerErrorCode::Cancelled => PlayerFfiErrorCode::Cancelled,
+        PlayerErrorCode::Timeout => PlayerFfiErrorCode::Timeout,
     }
 }
 
-fn ffi_runtime_error_category(value: u32) -> PlayerRuntimeErrorCategory {
-    match value {
-        1 => PlayerRuntimeErrorCategory::Source,
-        2 => PlayerRuntimeErrorCategory::Network,
-        3 => PlayerRuntimeErrorCategory::Decode,
-        4 => PlayerRuntimeErrorCategory::AudioOutput,
-        5 => PlayerRuntimeErrorCategory::Playback,
-        6 => PlayerRuntimeErrorCategory::Capability,
-        7 => PlayerRuntimeErrorCategory::Platform,
-        _ => PlayerRuntimeErrorCategory::Input,
+fn error_category_to_ffi(category: PlayerErrorCategory) -> PlayerFfiErrorCategory {
+    match category {
+        PlayerErrorCategory::Input => PlayerFfiErrorCategory::Input,
+        PlayerErrorCategory::Source => PlayerFfiErrorCategory::Source,
+        PlayerErrorCategory::Network => PlayerFfiErrorCategory::Network,
+        PlayerErrorCategory::Decode => PlayerFfiErrorCategory::Decode,
+        PlayerErrorCategory::AudioOutput => PlayerFfiErrorCategory::AudioOutput,
+        PlayerErrorCategory::Playback => PlayerFfiErrorCategory::Playback,
+        PlayerErrorCategory::Capability => PlayerFfiErrorCategory::Capability,
+        PlayerErrorCategory::Platform => PlayerFfiErrorCategory::Platform,
+    }
+}
+
+impl From<PlayerFfiErrorCode> for PlayerErrorCode {
+    fn from(value: PlayerFfiErrorCode) -> Self {
+        match value {
+            PlayerFfiErrorCode::InvalidState => PlayerErrorCode::InvalidState,
+            PlayerFfiErrorCode::InvalidSource => PlayerErrorCode::InvalidSource,
+            PlayerFfiErrorCode::BackendFailure => PlayerErrorCode::BackendFailure,
+            PlayerFfiErrorCode::AudioOutputUnavailable => PlayerErrorCode::AudioOutputUnavailable,
+            PlayerFfiErrorCode::DecodeFailure => PlayerErrorCode::DecodeFailure,
+            PlayerFfiErrorCode::SeekFailure => PlayerErrorCode::SeekFailure,
+            PlayerFfiErrorCode::Unsupported => PlayerErrorCode::Unsupported,
+            PlayerFfiErrorCode::CommandChannelClosed => PlayerErrorCode::CommandChannelClosed,
+            PlayerFfiErrorCode::EventChannelClosed => PlayerErrorCode::EventChannelClosed,
+            PlayerFfiErrorCode::Cancelled => PlayerErrorCode::Cancelled,
+            PlayerFfiErrorCode::Timeout => PlayerErrorCode::Timeout,
+            PlayerFfiErrorCode::None
+            | PlayerFfiErrorCode::NullPointer
+            | PlayerFfiErrorCode::InvalidUtf8
+            | PlayerFfiErrorCode::InvalidArgument => PlayerErrorCode::InvalidArgument,
+        }
+    }
+}
+
+impl From<PlayerFfiErrorCategory> for PlayerErrorCategory {
+    fn from(value: PlayerFfiErrorCategory) -> Self {
+        match value {
+            PlayerFfiErrorCategory::Source => PlayerErrorCategory::Source,
+            PlayerFfiErrorCategory::Network => PlayerErrorCategory::Network,
+            PlayerFfiErrorCategory::Decode => PlayerErrorCategory::Decode,
+            PlayerFfiErrorCategory::AudioOutput => PlayerErrorCategory::AudioOutput,
+            PlayerFfiErrorCategory::Playback => PlayerErrorCategory::Playback,
+            PlayerFfiErrorCategory::Capability => PlayerErrorCategory::Capability,
+            PlayerFfiErrorCategory::Platform => PlayerErrorCategory::Platform,
+            PlayerFfiErrorCategory::Input => PlayerErrorCategory::Input,
+        }
     }
 }
 
@@ -3890,12 +3901,18 @@ fn preload_task_to_ffi(task: PreloadTaskSnapshot) -> PlayerFfiPreloadTask {
         match task.error_summary {
             Some(error) => (
                 true,
-                error.code as u32,
-                error.category as u32,
+                error_code_to_ffi(error.code),
+                error_category_to_ffi(error.category),
                 error.retriable,
                 into_c_string_ptr(error.message),
             ),
-            None => (false, 0, 0, false, ptr::null_mut()),
+            None => (
+                false,
+                PlayerFfiErrorCode::None,
+                PlayerFfiErrorCategory::Platform,
+                false,
+                ptr::null_mut(),
+            ),
         };
 
     PlayerFfiPreloadTask {
@@ -4187,16 +4204,28 @@ fn download_task_to_ffi(task: DownloadTaskSnapshot) -> PlayerFfiDownloadTask {
 
 fn download_error_to_ffi_fields(
     error: Option<DownloadErrorSummary>,
-) -> (bool, u32, u32, bool, *mut c_char) {
+) -> (
+    bool,
+    PlayerFfiErrorCode,
+    PlayerFfiErrorCategory,
+    bool,
+    *mut c_char,
+) {
     match error {
         Some(error) => (
             true,
-            error.code as u32,
-            error.category as u32,
+            error_code_to_ffi(error.code),
+            error_category_to_ffi(error.category),
             error.retriable,
             into_c_string_ptr(error.message),
         ),
-        None => (false, 0, 0, false, ptr::null_mut()),
+        None => (
+            false,
+            PlayerFfiErrorCode::None,
+            PlayerFfiErrorCategory::Platform,
+            false,
+            ptr::null_mut(),
+        ),
     }
 }
 
@@ -4473,9 +4502,12 @@ fn api_error_category(code: PlayerFfiErrorCode) -> PlayerFfiErrorCategory {
         PlayerFfiErrorCode::NullPointer
         | PlayerFfiErrorCode::InvalidUtf8
         | PlayerFfiErrorCode::InvalidArgument => PlayerFfiErrorCategory::Input,
-        PlayerFfiErrorCode::InvalidState | PlayerFfiErrorCode::SeekFailure => {
-            PlayerFfiErrorCategory::Playback
-        }
+        PlayerFfiErrorCode::InvalidState
+        | PlayerFfiErrorCode::SeekFailure
+        | PlayerFfiErrorCode::CommandChannelClosed
+        | PlayerFfiErrorCode::EventChannelClosed
+        | PlayerFfiErrorCode::Cancelled
+        | PlayerFfiErrorCode::Timeout => PlayerFfiErrorCategory::Playback,
         PlayerFfiErrorCode::InvalidSource => PlayerFfiErrorCategory::Source,
         PlayerFfiErrorCode::AudioOutputUnavailable => PlayerFfiErrorCategory::AudioOutput,
         PlayerFfiErrorCode::DecodeFailure => PlayerFfiErrorCategory::Decode,
@@ -5102,7 +5134,11 @@ fn duration_to_millis_u64(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::HandleRegistry;
+    use super::{
+        HandleRegistry, PlayerFfiErrorCategory, PlayerFfiErrorCode, map_player_error,
+        player_error_to_ffi,
+    };
+    use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode};
 
     #[test]
     fn ffi_handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle() {
@@ -5116,5 +5152,164 @@ mod tests {
         assert_ne!(first, second);
         assert!(registry.get(first).is_none());
         assert_eq!(registry.get(second), Some(&9));
+    }
+
+    #[test]
+    fn ffi_error_code_ordinals_append_new_player_error_codes() {
+        assert_eq!(PlayerFfiErrorCode::None as i32, 0);
+        assert_eq!(PlayerFfiErrorCode::NullPointer as i32, 1);
+        assert_eq!(PlayerFfiErrorCode::InvalidUtf8 as i32, 2);
+        assert_eq!(PlayerFfiErrorCode::InvalidArgument as i32, 3);
+        assert_eq!(PlayerFfiErrorCode::InvalidState as i32, 4);
+        assert_eq!(PlayerFfiErrorCode::InvalidSource as i32, 5);
+        assert_eq!(PlayerFfiErrorCode::BackendFailure as i32, 6);
+        assert_eq!(PlayerFfiErrorCode::AudioOutputUnavailable as i32, 7);
+        assert_eq!(PlayerFfiErrorCode::DecodeFailure as i32, 8);
+        assert_eq!(PlayerFfiErrorCode::SeekFailure as i32, 9);
+        assert_eq!(PlayerFfiErrorCode::Unsupported as i32, 10);
+        assert_eq!(PlayerFfiErrorCode::CommandChannelClosed as i32, 11);
+        assert_eq!(PlayerFfiErrorCode::EventChannelClosed as i32, 12);
+        assert_eq!(PlayerFfiErrorCode::Cancelled as i32, 13);
+        assert_eq!(PlayerFfiErrorCode::Timeout as i32, 14);
+    }
+
+    #[test]
+    fn player_error_mapping_preserves_legacy_and_appended_values() {
+        let cases = [
+            (
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
+                PlayerFfiErrorCode::InvalidArgument,
+                PlayerFfiErrorCategory::Input,
+            ),
+            (
+                PlayerErrorCode::InvalidState,
+                PlayerErrorCategory::Playback,
+                PlayerFfiErrorCode::InvalidState,
+                PlayerFfiErrorCategory::Playback,
+            ),
+            (
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Source,
+                PlayerFfiErrorCode::InvalidSource,
+                PlayerFfiErrorCategory::Source,
+            ),
+            (
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Platform,
+                PlayerFfiErrorCode::BackendFailure,
+                PlayerFfiErrorCategory::Platform,
+            ),
+            (
+                PlayerErrorCode::AudioOutputUnavailable,
+                PlayerErrorCategory::AudioOutput,
+                PlayerFfiErrorCode::AudioOutputUnavailable,
+                PlayerFfiErrorCategory::AudioOutput,
+            ),
+            (
+                PlayerErrorCode::DecodeFailure,
+                PlayerErrorCategory::Decode,
+                PlayerFfiErrorCode::DecodeFailure,
+                PlayerFfiErrorCategory::Decode,
+            ),
+            (
+                PlayerErrorCode::SeekFailure,
+                PlayerErrorCategory::Playback,
+                PlayerFfiErrorCode::SeekFailure,
+                PlayerFfiErrorCategory::Playback,
+            ),
+            (
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Capability,
+                PlayerFfiErrorCode::Unsupported,
+                PlayerFfiErrorCategory::Capability,
+            ),
+            (
+                PlayerErrorCode::CommandChannelClosed,
+                PlayerErrorCategory::Playback,
+                PlayerFfiErrorCode::CommandChannelClosed,
+                PlayerFfiErrorCategory::Playback,
+            ),
+            (
+                PlayerErrorCode::EventChannelClosed,
+                PlayerErrorCategory::Playback,
+                PlayerFfiErrorCode::EventChannelClosed,
+                PlayerFfiErrorCategory::Playback,
+            ),
+            (
+                PlayerErrorCode::Cancelled,
+                PlayerErrorCategory::Playback,
+                PlayerFfiErrorCode::Cancelled,
+                PlayerFfiErrorCategory::Playback,
+            ),
+            (
+                PlayerErrorCode::Timeout,
+                PlayerErrorCategory::Playback,
+                PlayerFfiErrorCode::Timeout,
+                PlayerFfiErrorCategory::Playback,
+            ),
+        ];
+
+        for (player_code, player_category, ffi_code, ffi_category) in cases {
+            let player_error = PlayerError::with_category(player_code, player_category, "error");
+            assert_eq!(map_player_error(&player_error), (ffi_code, ffi_category));
+
+            let mut ffi_error = player_error_to_ffi(player_error);
+            assert_eq!(ffi_error.code, ffi_code);
+            assert_eq!(ffi_error.category, ffi_category);
+            unsafe { super::player_ffi_error_free(&mut ffi_error) };
+        }
+    }
+
+    #[test]
+    fn ffi_error_code_direct_mapping_preserves_legacy_and_appended_values() {
+        let cases = [
+            (
+                PlayerFfiErrorCode::InvalidArgument,
+                PlayerErrorCode::InvalidArgument,
+            ),
+            (
+                PlayerFfiErrorCode::InvalidState,
+                PlayerErrorCode::InvalidState,
+            ),
+            (
+                PlayerFfiErrorCode::InvalidSource,
+                PlayerErrorCode::InvalidSource,
+            ),
+            (
+                PlayerFfiErrorCode::BackendFailure,
+                PlayerErrorCode::BackendFailure,
+            ),
+            (
+                PlayerFfiErrorCode::AudioOutputUnavailable,
+                PlayerErrorCode::AudioOutputUnavailable,
+            ),
+            (
+                PlayerFfiErrorCode::DecodeFailure,
+                PlayerErrorCode::DecodeFailure,
+            ),
+            (
+                PlayerFfiErrorCode::SeekFailure,
+                PlayerErrorCode::SeekFailure,
+            ),
+            (
+                PlayerFfiErrorCode::Unsupported,
+                PlayerErrorCode::Unsupported,
+            ),
+            (
+                PlayerFfiErrorCode::CommandChannelClosed,
+                PlayerErrorCode::CommandChannelClosed,
+            ),
+            (
+                PlayerFfiErrorCode::EventChannelClosed,
+                PlayerErrorCode::EventChannelClosed,
+            ),
+            (PlayerFfiErrorCode::Cancelled, PlayerErrorCode::Cancelled),
+            (PlayerFfiErrorCode::Timeout, PlayerErrorCode::Timeout),
+        ];
+
+        for (ffi_code, code) in cases {
+            assert_eq!(PlayerErrorCode::from(ffi_code), code);
+        }
     }
 }

@@ -3,11 +3,10 @@ use std::time::Instant;
 use player_model::MediaSource;
 
 use crate::{
-    DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot,
-    PlayerVideoSurfaceTarget, PresentationState,
+    DecodedVideoFrame, PlaybackProgress, PlayerError, PlayerErrorCode, PlayerMediaInfo,
+    PlayerResilienceMetrics, PlayerResult, PlayerRuntimeAdapterCapabilities, PlayerRuntimeCommand,
+    PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup,
+    PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoSurfaceTarget, PresentationState,
 };
 
 pub struct PlayerRuntimeAdapterBootstrap {
@@ -24,7 +23,7 @@ pub trait PlayerRuntimeAdapterInitializer: Send {
     ///
     /// Callers that run on a UI thread are responsible for moving this work to a
     /// background thread before invoking it.
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap>;
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap>;
 }
 
 pub trait PlayerRuntimeAdapterFactory: Sync + Send {
@@ -37,7 +36,7 @@ pub trait PlayerRuntimeAdapterFactory: Sync + Send {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>>;
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>>;
 }
 
 pub trait PlayerRuntimeAdapter: Send {
@@ -70,13 +69,13 @@ pub trait PlayerRuntimeAdapter: Send {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult>;
+    ) -> PlayerResult<PlayerRuntimeCommandResult>;
     fn replace_video_surface(
         &mut self,
         _video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()> {
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+    ) -> PlayerResult<()> {
+        Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "this runtime adapter does not support replacing external video surfaces",
         ))
     }
@@ -85,7 +84,7 @@ pub trait PlayerRuntimeAdapter: Send {
     /// This method must be called serially from one adapter-owner thread. It may
     /// poll worker channels and should not be invoked concurrently with command
     /// dispatch or event draining.
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>>;
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>>;
     fn next_deadline(&self) -> Option<Instant>;
 
     fn snapshot(&self) -> PlayerSnapshot {

@@ -1695,7 +1695,7 @@ private fun ExoPlayer.windowPositionForTimelinePosition(timelinePositionMs: Long
     }
 }
 
-private data class NativePlaybackError(
+internal data class NativePlaybackError(
     val codeOrdinal: Int,
     val categoryOrdinal: Int,
     val retriable: Boolean,
@@ -1729,7 +1729,7 @@ private object VesperMediaCacheStore {
     }
 }
 
-private fun classifyPlaybackException(error: PlaybackException): NativePlaybackError =
+internal fun classifyPlaybackException(error: PlaybackException): NativePlaybackError =
     if (error.hasCause(HlsPlaylistTracker.PlaylistStuckException::class.java)) {
         NativePlaybackError(
             codeOrdinal = BACKEND_FAILURE_ORDINAL,
@@ -1813,17 +1813,17 @@ private fun Throwable.hasCause(type: Class<out Throwable>): Boolean {
     return false
 }
 
-private const val INVALID_SOURCE_ORDINAL = 2
-private const val BACKEND_FAILURE_ORDINAL = 3
-private const val AUDIO_OUTPUT_UNAVAILABLE_ORDINAL = 4
-private const val DECODE_FAILURE_ORDINAL = 5
-private const val UNSUPPORTED_ORDINAL = 7
-private const val SOURCE_CATEGORY_ORDINAL = 1
-private const val NETWORK_CATEGORY_ORDINAL = 2
-private const val DECODE_CATEGORY_ORDINAL = 3
-private const val AUDIO_OUTPUT_CATEGORY_ORDINAL = 4
-private const val CAPABILITY_CATEGORY_ORDINAL = 6
-private const val PLATFORM_CATEGORY_ORDINAL = 7
+internal const val INVALID_SOURCE_ORDINAL = 2
+internal const val BACKEND_FAILURE_ORDINAL = 3
+internal const val AUDIO_OUTPUT_UNAVAILABLE_ORDINAL = 4
+internal const val DECODE_FAILURE_ORDINAL = 5
+internal const val UNSUPPORTED_ORDINAL = 7
+internal const val SOURCE_CATEGORY_ORDINAL = 1
+internal const val NETWORK_CATEGORY_ORDINAL = 2
+internal const val DECODE_CATEGORY_ORDINAL = 3
+internal const val AUDIO_OUTPUT_CATEGORY_ORDINAL = 4
+internal const val CAPABILITY_CATEGORY_ORDINAL = 6
+internal const val PLATFORM_CATEGORY_ORDINAL = 7
 private const val TAG = "VesperPlayerAndroidHost"
 private val FORMAT_NO_VALUE_FLOAT = Format.NO_VALUE.toFloat()
 

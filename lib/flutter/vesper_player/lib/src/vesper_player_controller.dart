@@ -309,10 +309,18 @@ class VesperPlayerController {
     }
 
     final vesperError = error is VesperUnsupportedError
-        ? VesperPlayerError.unsupported(error.message?.toString())
+        ? VesperPlayerError(
+            message: error.message?.toString() ??
+                'Vesper player is not supported on this platform.',
+            code: VesperPlayerErrorCode.unsupported,
+            category: VesperPlayerErrorCategory.capability,
+            retriable: false,
+          )
         : VesperPlayerError(
             message: error.toString(),
+            code: VesperPlayerErrorCode.backendFailure,
             category: VesperPlayerErrorCategory.platform,
+            retriable: false,
           );
 
     final snapshot = this.snapshot.copyWith(lastError: vesperError);

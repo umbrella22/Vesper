@@ -469,6 +469,7 @@ class VesperPlayerAndroidPlugin :
                 "A system playback permission request is already in progress.",
                 mapOf(
                     "message" to "A system playback permission request is already in progress.",
+                    "code" to "backendFailure",
                     "category" to "platform",
                     "retriable" to false,
                 ),
@@ -646,7 +647,12 @@ class VesperPlayerAndroidPlugin :
             result.error(
                 "vesper_missing_player_id",
                 "Missing playerId.",
-                mapOf("message" to "Missing playerId.", "category" to "platform", "retriable" to false),
+                mapOf(
+                    "message" to "Missing playerId.",
+                    "code" to "backendFailure",
+                    "category" to "platform",
+                    "retriable" to false,
+                ),
             )
             return
         }
@@ -658,6 +664,7 @@ class VesperPlayerAndroidPlugin :
                 "Unknown playerId: $sessionId",
                 mapOf(
                     "message" to "Unknown playerId: $sessionId",
+                    "code" to "backendFailure",
                     "category" to "platform",
                     "retriable" to false,
                 ),
@@ -691,8 +698,8 @@ class VesperPlayerAndroidPlugin :
                 "Missing downloadId.",
                 mapOf(
                     "message" to "Missing downloadId.",
-                    "codeOrdinal" to 0,
-                    "categoryOrdinal" to 0,
+                    "code" to "backendFailure",
+                    "category" to "platform",
                     "retriable" to false,
                 ),
             )
@@ -706,8 +713,8 @@ class VesperPlayerAndroidPlugin :
                 "Unknown downloadId: $sessionId",
                 mapOf(
                     "message" to "Unknown downloadId: $sessionId",
-                    "codeOrdinal" to 0,
-                    "categoryOrdinal" to 0,
+                    "code" to "backendFailure",
+                    "category" to "platform",
                     "retriable" to false,
                 ),
             )
@@ -752,8 +759,8 @@ class VesperPlayerAndroidPlugin :
                 "Missing downloadId.",
                 mapOf(
                     "message" to "Missing downloadId.",
-                    "codeOrdinal" to 0,
-                    "categoryOrdinal" to 0,
+                    "code" to "backendFailure",
+                    "category" to "platform",
                     "retriable" to false,
                 ),
             )
@@ -767,8 +774,8 @@ class VesperPlayerAndroidPlugin :
                 "Unknown downloadId: $sessionId",
                 mapOf(
                     "message" to "Unknown downloadId: $sessionId",
-                    "codeOrdinal" to 0,
-                    "categoryOrdinal" to 0,
+                    "code" to "backendFailure",
+                    "category" to "platform",
                     "retriable" to false,
                 ),
             )
@@ -784,8 +791,8 @@ class VesperPlayerAndroidPlugin :
                         "Missing taskId.",
                         mapOf(
                             "message" to "Missing taskId.",
-                            "codeOrdinal" to 0,
-                            "categoryOrdinal" to 0,
+                            "code" to "backendFailure",
+                            "category" to "platform",
                             "retriable" to false,
                         ),
                     )
@@ -799,8 +806,8 @@ class VesperPlayerAndroidPlugin :
                         "Missing outputPath.",
                         mapOf(
                             "message" to "Missing outputPath.",
-                            "codeOrdinal" to 0,
-                            "categoryOrdinal" to 0,
+                            "code" to "backendFailure",
+                            "category" to "platform",
                             "retriable" to false,
                         ),
                     )
@@ -906,8 +913,8 @@ class VesperPlayerAndroidPlugin :
                 "Missing downloadId.",
                 mapOf(
                     "message" to "Missing downloadId.",
-                    "codeOrdinal" to 0,
-                    "categoryOrdinal" to 0,
+                    "code" to "backendFailure",
+                    "category" to "platform",
                     "retriable" to false,
                 ),
             )
@@ -920,8 +927,8 @@ class VesperPlayerAndroidPlugin :
                 "Unknown downloadId: $sessionId",
                 mapOf(
                     "message" to "Unknown downloadId: $sessionId",
-                    "codeOrdinal" to 0,
-                    "categoryOrdinal" to 0,
+                    "code" to "backendFailure",
+                    "category" to "platform",
                     "retriable" to false,
                 ),
             )
@@ -934,8 +941,8 @@ class VesperPlayerAndroidPlugin :
                 "Missing taskId.",
                 mapOf(
                     "message" to "Missing taskId.",
-                    "codeOrdinal" to 0,
-                    "categoryOrdinal" to 0,
+                    "code" to "backendFailure",
+                    "category" to "platform",
                     "retriable" to false,
                 ),
             )
@@ -1833,14 +1840,15 @@ private fun VesperCachePolicy.toMap(): Map<String, Any?> =
 private fun Throwable.toErrorMap(): Map<String, Any?> =
     mapOf(
         "message" to (message ?: toString()),
+        "code" to "backendFailure",
         "category" to "platform",
         "retriable" to false,
     )
 
 private fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
     mapOf(
-        "codeOrdinal" to 0,
-        "categoryOrdinal" to 0,
+        "code" to "backendFailure",
+        "category" to "platform",
         "retriable" to false,
         "message" to (message ?: toString()),
     )
@@ -2125,8 +2133,8 @@ private fun VesperDownloadByteRange.toMap(): Map<String, Any?> =
 
 private fun VesperDownloadError.toMap(): Map<String, Any?> =
     mapOf(
-        "codeOrdinal" to codeOrdinal,
-        "categoryOrdinal" to categoryOrdinal,
+        "code" to code.wireName,
+        "category" to category.wireName,
         "retriable" to retriable,
         "message" to message,
     )

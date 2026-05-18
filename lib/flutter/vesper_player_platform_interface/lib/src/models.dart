@@ -217,8 +217,7 @@ final class VesperExternalFormatAdaptationConfig {
     this.enableRangeCache = true,
     this.allowRemoteDashMediaReferences = false,
     this.allowPrivateRemoteDashMediaAddresses = false,
-    this.remoteDashMediaRequestHeaders =
-        _defaultRemoteDashMediaRequestHeaders,
+    this.remoteDashMediaRequestHeaders = _defaultRemoteDashMediaRequestHeaders,
     this.debugDiagnostics = false,
   });
 
@@ -238,8 +237,7 @@ final class VesperExternalFormatAdaptationConfig {
     this.enableRangeCache = true,
     this.allowRemoteDashMediaReferences = false,
     this.allowPrivateRemoteDashMediaAddresses = false,
-    this.remoteDashMediaRequestHeaders =
-        _defaultRemoteDashMediaRequestHeaders,
+    this.remoteDashMediaRequestHeaders = _defaultRemoteDashMediaRequestHeaders,
     this.debugDiagnostics = false,
   }) : enabled = true;
 
@@ -755,7 +753,21 @@ enum VesperPlayerErrorCategory {
   playback,
   capability,
   platform,
+}
+
+enum VesperPlayerErrorCode {
+  invalidArgument,
+  invalidState,
+  invalidSource,
+  backendFailure,
+  audioOutputUnavailable,
+  decodeFailure,
+  seekFailure,
   unsupported,
+  commandChannelClosed,
+  eventChannelClosed,
+  cancelled,
+  timeout,
 }
 
 T _decodeEnum<T extends Enum>(Iterable<T> values, Object? raw, T fallback) {
@@ -768,6 +780,22 @@ T _decodeEnum<T extends Enum>(Iterable<T> values, Object? raw, T fallback) {
     }
   }
   return fallback;
+}
+
+T _decodeRequiredEnum<T extends Enum>(
+  Iterable<T> values,
+  Object? raw,
+  String key,
+) {
+  if (raw is! String) {
+    throw FormatException('Expected $key to be a string.');
+  }
+  for (final value in values) {
+    if (value.name == raw) {
+      return value;
+    }
+  }
+  throw FormatException('Unknown $key: $raw.');
 }
 
 bool _decodeBool(
@@ -838,10 +866,8 @@ Set<String> _decodeStringSet(
   if (raw is! Iterable) {
     return fallback;
   }
-  final decoded = raw
-      .whereType<String>()
-      .where((value) => value.isNotEmpty)
-      .toSet();
+  final decoded =
+      raw.whereType<String>().where((value) => value.isNotEmpty).toSet();
   return decoded.isEmpty ? fallback : decoded;
 }
 
@@ -2111,40 +2137,37 @@ final class VesperViewportHint {
 final class VesperPlayerError {
   const VesperPlayerError({
     required this.message,
-    this.code,
-    this.category = VesperPlayerErrorCategory.platform,
-    this.retriable = false,
+    required this.code,
+    required this.category,
+    required this.retriable,
   });
-
-  factory VesperPlayerError.unsupported([String? message]) {
-    return VesperPlayerError(
-      message: message ?? 'Vesper player is not supported on this platform.',
-      category: VesperPlayerErrorCategory.unsupported,
-    );
-  }
 
   factory VesperPlayerError.fromMap(Map<Object?, Object?> map) {
     return VesperPlayerError(
       message: map['message'] as String? ?? 'Unknown Vesper player error.',
-      code: map['code'] as String?,
-      category: _decodeEnum(
+      code: _decodeRequiredEnum(
+        VesperPlayerErrorCode.values,
+        map['code'],
+        'code',
+      ),
+      category: _decodeRequiredEnum(
         VesperPlayerErrorCategory.values,
         map['category'],
-        VesperPlayerErrorCategory.platform,
+        'category',
       ),
       retriable: _decodeBool(map, 'retriable'),
     );
   }
 
   final String message;
-  final String? code;
+  final VesperPlayerErrorCode code;
   final VesperPlayerErrorCategory category;
   final bool retriable;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'message': message,
-      'code': code,
+      'code': code.name,
       'category': category.name,
       'retriable': retriable,
     };

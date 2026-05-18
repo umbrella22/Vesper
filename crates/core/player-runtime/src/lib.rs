@@ -24,13 +24,13 @@ pub use player_download::{
     DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore,
     DownloadStreamKind, DownloadTaskId, DownloadTaskProgressPatch, DownloadTaskSnapshot,
     DownloadTaskState, DownloadTaskStatePatch, DownloadTaskStatus, InMemoryDownloadExecutor,
-    InMemoryDownloadStore, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
-    PlayerRuntimeResult,
+    InMemoryDownloadStore,
 };
 pub use player_model::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
     MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
-    MediaTrackSelectionSnapshot, PlaybackProgress, PresentationState, VideoPixelFormat,
+    MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError, PlayerErrorCategory,
+    PlayerErrorCode, PlayerResult, PresentationState, VideoPixelFormat,
 };
 pub use player_playlist::{
     PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistAdvanceOutcome,
@@ -62,9 +62,7 @@ pub mod download {
 }
 
 pub mod error {
-    pub use player_download::{
-        PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
-    };
+    pub use player_model::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 }
 
 pub mod preload {
@@ -476,7 +474,7 @@ pub enum PlayerRuntimeEvent {
     PlaybackRateChanged { rate: f32 },
     SeekCompleted { position: Duration },
     RetryScheduled { attempt: u32, delay: Duration },
-    Error(PlayerRuntimeError),
+    Error(PlayerError),
     Ended,
 }
 
@@ -1068,10 +1066,10 @@ impl PlayerTimelineSnapshot {
         false
     }
 
-    pub fn validate_position(&self, position: Duration) -> PlayerRuntimeResult<Duration> {
+    pub fn validate_position(&self, position: Duration) -> PlayerResult<Duration> {
         if self.is_position_out_of_range(position) {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::SeekFailure,
+            return Err(PlayerError::new(
+                PlayerErrorCode::SeekFailure,
                 format!(
                     "seek position {}ms is outside the current timeline window",
                     position.as_millis()
@@ -1120,7 +1118,7 @@ impl PlayerTimelineSnapshot {
 }
 
 impl PlayerRuntimeInitializer {
-    pub fn probe_uri(uri: impl Into<String>) -> PlayerRuntimeResult<Self> {
+    pub fn probe_uri(uri: impl Into<String>) -> PlayerResult<Self> {
         Self::probe_source(MediaSource::new(uri))
     }
 
@@ -1128,18 +1126,18 @@ impl PlayerRuntimeInitializer {
         uri: impl Into<String>,
         options: PlayerRuntimeOptions,
         factory: &dyn PlayerRuntimeAdapterFactory,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         Self::probe_source_with_factory(MediaSource::new(uri), options, factory)
     }
 
-    pub fn probe_source(source: MediaSource) -> PlayerRuntimeResult<Self> {
+    pub fn probe_source(source: MediaSource) -> PlayerResult<Self> {
         Self::probe_source_with_options(source, PlayerRuntimeOptions::default())
     }
 
     pub fn probe_source_with_options(
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         Self::probe_source_with_factory(source, options, default_runtime_adapter_factory()?)
     }
 
@@ -1147,7 +1145,7 @@ impl PlayerRuntimeInitializer {
         source: MediaSource,
         options: PlayerRuntimeOptions,
         factory: &dyn PlayerRuntimeAdapterFactory,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         Ok(Self {
             adapter_id: factory.adapter_id(),
             inner: factory.probe_source_with_options(source, options)?,
@@ -1170,7 +1168,7 @@ impl PlayerRuntimeInitializer {
         self.inner.startup()
     }
 
-    pub fn initialize(self) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    pub fn initialize(self) -> PlayerResult<PlayerRuntimeBootstrap> {
         let Self { adapter_id, inner } = self;
         Ok(PlayerRuntime::from_adapter_bootstrap(
             adapter_id,
@@ -1200,7 +1198,7 @@ impl PlayerRuntime {
         }
     }
 
-    pub fn open_uri(uri: impl Into<String>) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    pub fn open_uri(uri: impl Into<String>) -> PlayerResult<PlayerRuntimeBootstrap> {
         Self::open_source(MediaSource::new(uri))
     }
 
@@ -1208,18 +1206,18 @@ impl PlayerRuntime {
         uri: impl Into<String>,
         options: PlayerRuntimeOptions,
         factory: &dyn PlayerRuntimeAdapterFactory,
-    ) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    ) -> PlayerResult<PlayerRuntimeBootstrap> {
         Self::open_source_with_factory(MediaSource::new(uri), options, factory)
     }
 
-    pub fn open_source(source: MediaSource) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    pub fn open_source(source: MediaSource) -> PlayerResult<PlayerRuntimeBootstrap> {
         Self::open_source_with_options(source, PlayerRuntimeOptions::default())
     }
 
     pub fn open_source_with_options(
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    ) -> PlayerResult<PlayerRuntimeBootstrap> {
         Self::open_source_with_factory(source, options, default_runtime_adapter_factory()?)
     }
 
@@ -1227,7 +1225,7 @@ impl PlayerRuntime {
         source: MediaSource,
         options: PlayerRuntimeOptions,
         factory: &dyn PlayerRuntimeAdapterFactory,
-    ) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+    ) -> PlayerResult<PlayerRuntimeBootstrap> {
         PlayerRuntimeInitializer::probe_source_with_factory(source, options, factory)?.initialize()
     }
 
@@ -1282,53 +1280,50 @@ impl PlayerRuntime {
     pub fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.inner.dispatch(command)
     }
 
-    pub fn set_playback_rate(
-        &mut self,
-        rate: f32,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    pub fn set_playback_rate(&mut self, rate: f32) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate })
     }
 
     pub fn set_video_track_selection(
         &mut self,
         selection: MediaTrackSelection,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.dispatch(PlayerRuntimeCommand::SetVideoTrackSelection { selection })
     }
 
     pub fn set_audio_track_selection(
         &mut self,
         selection: MediaTrackSelection,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.dispatch(PlayerRuntimeCommand::SetAudioTrackSelection { selection })
     }
 
     pub fn set_subtitle_track_selection(
         &mut self,
         selection: MediaTrackSelection,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.dispatch(PlayerRuntimeCommand::SetSubtitleTrackSelection { selection })
     }
 
     pub fn set_abr_policy(
         &mut self,
         policy: MediaAbrPolicy,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.dispatch(PlayerRuntimeCommand::SetAbrPolicy { policy })
     }
 
     pub fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         self.inner.replace_video_surface(video_surface)
     }
 
-    pub fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    pub fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.inner.advance()
     }
 
@@ -1339,12 +1334,12 @@ impl PlayerRuntime {
 
 pub fn register_default_runtime_adapter_factory(
     factory: &'static dyn PlayerRuntimeAdapterFactory,
-) -> PlayerRuntimeResult<()> {
+) -> PlayerResult<()> {
     match DEFAULT_RUNTIME_ADAPTER_FACTORY.set(factory) {
         Ok(()) => Ok(()),
         Err(existing) if existing.adapter_id() == factory.adapter_id() => Ok(()),
-        Err(existing) => Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::InvalidState,
+        Err(existing) => Err(PlayerError::new(
+            PlayerErrorCode::InvalidState,
             format!(
                 "default runtime adapter factory is already registered as '{}'; cannot replace it with '{}'",
                 existing.adapter_id(),
@@ -1354,11 +1349,10 @@ pub fn register_default_runtime_adapter_factory(
     }
 }
 
-fn default_runtime_adapter_factory() -> PlayerRuntimeResult<&'static dyn PlayerRuntimeAdapterFactory>
-{
+fn default_runtime_adapter_factory() -> PlayerResult<&'static dyn PlayerRuntimeAdapterFactory> {
     DEFAULT_RUNTIME_ADAPTER_FACTORY.get().copied().ok_or_else(|| {
-        PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "no default runtime adapter factory is registered; use probe_source_with_factory/open_source_with_factory or install a platform adapter factory",
         )
     })
@@ -1371,9 +1365,9 @@ mod tests {
         DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, MediaAbrMode,
         MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
         MediaTrackSelectionMode, PlaybackProgress, PlayerBufferingPolicy, PlayerBufferingPreset,
-        PlayerCachePolicy, PlayerCachePreset, PlayerMediaInfo, PlayerPreloadBudgetPolicy,
-        PlayerResilienceMetricsTracker, PlayerResolvedPreloadBudgetPolicy, PlayerRetryBackoff,
-        PlayerRetryPolicy, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+        PlayerCachePolicy, PlayerCachePreset, PlayerErrorCategory, PlayerErrorCode,
+        PlayerMediaInfo, PlayerPreloadBudgetPolicy, PlayerResilienceMetricsTracker,
+        PlayerResolvedPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy,
         PlayerRuntimeOptions, PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
         PlayerTrackPreferencePolicy, PresentationState,
     };
@@ -1546,8 +1540,8 @@ mod tests {
         let error = timeline
             .validate_position(Duration::from_secs(10))
             .expect_err("position before live window should fail");
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::SeekFailure);
-        assert_eq!(error.category(), PlayerRuntimeErrorCategory::Playback);
+        assert_eq!(error.code(), PlayerErrorCode::SeekFailure);
+        assert_eq!(error.category(), PlayerErrorCategory::Playback);
     }
 
     #[test]

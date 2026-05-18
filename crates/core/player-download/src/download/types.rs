@@ -6,9 +6,7 @@ use std::time::Instant;
 use player_model::MediaSource;
 use player_plugin::OutputFormat;
 
-use crate::{
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
-};
+use crate::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DownloadAssetId(String);
@@ -36,11 +34,11 @@ impl DownloadTaskId {
     }
 }
 
-pub(super) fn next_non_zero_task_id(current: u64) -> PlayerRuntimeResult<u64> {
+pub(super) fn next_non_zero_task_id(current: u64) -> PlayerResult<u64> {
     current.checked_add(1).ok_or_else(|| {
-        PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::InvalidState,
-            PlayerRuntimeErrorCategory::Playback,
+        PlayerError::with_category(
+            PlayerErrorCode::InvalidState,
+            PlayerErrorCategory::Playback,
             "download task id space is exhausted",
         )
     })
@@ -319,14 +317,14 @@ impl DownloadTaskStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadErrorSummary {
-    pub code: PlayerRuntimeErrorCode,
-    pub category: PlayerRuntimeErrorCategory,
+    pub code: PlayerErrorCode,
+    pub category: PlayerErrorCategory,
     pub retriable: bool,
     pub message: String,
 }
 
-impl From<PlayerRuntimeError> for DownloadErrorSummary {
-    fn from(value: PlayerRuntimeError) -> Self {
+impl From<PlayerError> for DownloadErrorSummary {
+    fn from(value: PlayerError) -> Self {
         Self {
             code: value.code(),
             category: value.category(),

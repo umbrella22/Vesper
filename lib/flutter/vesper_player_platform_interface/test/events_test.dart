@@ -79,7 +79,8 @@ void main() {
         'lastError': <Object?, Object?>{
           'message':
               'setAbrPolicy fixedTrack is not implemented on iOS AVPlayer',
-          'category': 'unsupported',
+          'code': 'unsupported',
+          'category': 'capability',
           'retriable': false,
         },
       },
@@ -89,9 +90,11 @@ void main() {
     final snapshotEvent = event as VesperPlayerSnapshotEvent;
     expect(snapshotEvent.playerId, 'ios-player');
     expect(
-      snapshotEvent.snapshot.lastError?.category,
-      VesperPlayerErrorCategory.unsupported,
+      snapshotEvent.snapshot.lastError?.code,
+      VesperPlayerErrorCode.unsupported,
     );
+    expect(snapshotEvent.snapshot.lastError?.category,
+        VesperPlayerErrorCategory.capability);
     expect(
       snapshotEvent.snapshot.lastError?.message,
       'setAbrPolicy fixedTrack is not implemented on iOS AVPlayer',

@@ -10,14 +10,14 @@ use player_model::MediaSource;
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
     MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
-    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo,
-    PlayerResilienceMetrics, PlayerResilienceMetricsTracker, PlayerRuntimeAdapter,
+    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError,
+    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics,
+    PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
-    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineKind,
-    PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
+    PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
 };
 
 pub use download::{IosDownloadBridgeSession, IosDownloadCommand};
@@ -104,20 +104,20 @@ pub enum IosNativePlayerCommand {
 }
 
 pub trait IosNativeCommandSink: Send {
-    fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerRuntimeResult<()>;
+    fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerResult<()>;
     fn attach_video_surface(
         &mut self,
         _video_surface: PlayerVideoSurfaceTarget,
-    ) -> PlayerRuntimeResult<()> {
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+    ) -> PlayerResult<()> {
+        Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "ios native command sink does not support attaching a video surface",
         ))
     }
 
-    fn detach_video_surface(&mut self) -> PlayerRuntimeResult<()> {
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+    fn detach_video_surface(&mut self) -> PlayerResult<()> {
+        Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "ios native command sink does not support detaching a video surface",
         ))
     }
@@ -127,18 +127,18 @@ impl<T> IosNativeCommandSink for Box<T>
 where
     T: IosNativeCommandSink + ?Sized,
 {
-    fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerRuntimeResult<()> {
+    fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerResult<()> {
         (**self).submit_command(command)
     }
 
     fn attach_video_surface(
         &mut self,
         video_surface: PlayerVideoSurfaceTarget,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         (**self).attach_video_surface(video_surface)
     }
 
-    fn detach_video_surface(&mut self) -> PlayerRuntimeResult<()> {
+    fn detach_video_surface(&mut self) -> PlayerResult<()> {
         (**self).detach_video_surface()
     }
 }
@@ -160,7 +160,7 @@ pub enum IosNativeSessionUpdate {
         attempt: u32,
         delay: Duration,
     },
-    Error(PlayerRuntimeError),
+    Error(PlayerError),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -190,7 +190,7 @@ pub trait IosNativePlayerBridge: Send + Sync {
         &self,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<IosNativePlayerProbe>;
+    ) -> PlayerResult<IosNativePlayerProbe>;
 
     fn initialize_session(
         &self,
@@ -198,7 +198,7 @@ pub trait IosNativePlayerBridge: Send + Sync {
         options: PlayerRuntimeOptions,
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
-    ) -> PlayerRuntimeResult<IosNativePlayerSessionBootstrap>;
+    ) -> PlayerResult<IosNativePlayerSessionBootstrap>;
 }
 
 pub trait IosAvPlayerBridgeBindings: Send + Sync {
@@ -207,7 +207,7 @@ pub trait IosAvPlayerBridgeBindings: Send + Sync {
         context: &IosAvPlayerBridgeContext,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<IosNativePlayerProbe>;
+    ) -> PlayerResult<IosNativePlayerProbe>;
 
     fn create_command_sink(
         &self,
@@ -217,7 +217,7 @@ pub trait IosAvPlayerBridgeBindings: Send + Sync {
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
         controller: IosManagedNativeSessionController,
-    ) -> PlayerRuntimeResult<Box<dyn IosNativeCommandSink>>;
+    ) -> PlayerResult<Box<dyn IosNativeCommandSink>>;
 }
 
 pub trait IosNativePlayerSession: Send {
@@ -240,17 +240,17 @@ pub trait IosNativePlayerSession: Send {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult>;
+    ) -> PlayerResult<PlayerRuntimeCommandResult>;
     fn replace_video_surface(
         &mut self,
         _video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()> {
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+    ) -> PlayerResult<()> {
+        Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "this runtime adapter does not support replacing external video surfaces",
         ))
     }
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>>;
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>>;
     fn next_deadline(&self) -> Option<Instant>;
 }
 
@@ -309,8 +309,8 @@ pub enum IosHostEvent {
     },
     Ended,
     Error {
-        code: PlayerRuntimeErrorCode,
-        category: PlayerRuntimeErrorCategory,
+        code: PlayerErrorCode,
+        category: PlayerErrorCategory,
         retriable: bool,
         message: String,
     },
@@ -381,7 +381,7 @@ impl IosHostCommandSink {
 }
 
 impl IosNativeCommandSink for IosHostCommandSink {
-    fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerRuntimeResult<()> {
+    fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerResult<()> {
         if let Ok(mut queue) = self.queue.lock() {
             queue.push_back(command);
         }
@@ -596,7 +596,7 @@ impl IosHostBridgeSession {
     pub fn dispatch_command(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.session.dispatch(command)
     }
 
@@ -631,12 +631,12 @@ impl IosHostBridgeSession {
             .report_interruption_changed(interrupted);
     }
 
-    pub fn report_error(&mut self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
+    pub fn report_error(&mut self, code: PlayerErrorCode, message: impl Into<String>) {
         self.session.controller().report_error(code, message);
     }
 
-    pub fn report_runtime_error(&mut self, error: PlayerRuntimeError) {
-        self.session.controller().report_runtime_error(error);
+    pub fn report_player_error(&mut self, error: PlayerError) {
+        self.session.controller().report_player_error(error);
     }
 }
 
@@ -649,7 +649,7 @@ impl PlayerRuntimeAdapterFactory for IosNativePlayerRuntimeAdapterFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         let (media_info, startup) = match &self.bridge {
             Some(bridge) => {
                 let probe = bridge.probe_source(&source, &options)?;
@@ -684,7 +684,7 @@ impl PlayerRuntimeAdapterInitializer for IosNativePlayerRuntimeInitializer {
         self.startup.clone()
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self {
             bridge,
             source,
@@ -694,8 +694,8 @@ impl PlayerRuntimeAdapterInitializer for IosNativePlayerRuntimeInitializer {
         } = *self;
 
         let Some(bridge) = bridge else {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 ios_native_unavailable_message(),
             ));
         };
@@ -756,18 +756,18 @@ impl PlayerRuntimeAdapter for IosNativePlayerRuntime {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.inner.dispatch(command)
     }
 
     fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         self.inner.replace_video_surface(video_surface)
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.inner.advance()
     }
 
@@ -785,8 +785,8 @@ impl IosAvPlayerStateTracker {
         let mut emitted_events = Vec::new();
 
         if let Some(message) = snapshot.error_message.as_ref() {
-            emitted_events.push(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            emitted_events.push(PlayerRuntimeEvent::Error(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 message.clone(),
             )));
         }
@@ -921,14 +921,14 @@ impl IosManagedNativeSessionController {
         self.push_update(IosNativeSessionUpdate::RetryScheduled { attempt, delay });
     }
 
-    pub fn report_error(&self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
-        self.push_update(IosNativeSessionUpdate::Error(PlayerRuntimeError::new(
+    pub fn report_error(&self, code: PlayerErrorCode, message: impl Into<String>) {
+        self.push_update(IosNativeSessionUpdate::Error(PlayerError::new(
             code,
             message.into(),
         )));
     }
 
-    pub fn report_runtime_error(&self, error: PlayerRuntimeError) {
+    pub fn report_player_error(&self, error: PlayerError) {
         self.push_update(IosNativeSessionUpdate::Error(error));
     }
 
@@ -1202,10 +1202,10 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         self.emit_state_change_if_needed(PresentationState::Ready);
     }
 
-    fn validate_playback_rate(&self, rate: f32) -> PlayerRuntimeResult<f32> {
+    fn validate_playback_rate(&self, rate: f32) -> PlayerResult<f32> {
         if !rate.is_finite() {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 "playback rate must be a finite number",
             ));
         }
@@ -1219,8 +1219,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
             .playback_rate_max
             .unwrap_or(MAX_PLAYBACK_RATE);
         if !(min..=max).contains(&rate) {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 format!("playback rate must be within {min:.1}x..={max:.1}x"),
             ));
         }
@@ -1228,10 +1228,7 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         Ok(rate)
     }
 
-    fn submit_commands(
-        &mut self,
-        commands: Vec<IosNativePlayerCommand>,
-    ) -> PlayerRuntimeResult<()> {
+    fn submit_commands(&mut self, commands: Vec<IosNativePlayerCommand>) -> PlayerResult<()> {
         for command in commands {
             self.command_sink.submit_command(command)?;
         }
@@ -1242,14 +1239,14 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         &self,
         kind: MediaTrackKind,
         selection: &MediaTrackSelection,
-    ) -> PlayerRuntimeResult<MediaTrackSelection> {
+    ) -> PlayerResult<MediaTrackSelection> {
         match selection.mode {
             MediaTrackSelectionMode::Auto => Ok(MediaTrackSelection::auto()),
             MediaTrackSelectionMode::Disabled => Ok(MediaTrackSelection::disabled()),
             MediaTrackSelectionMode::Track => {
                 let Some(track_id) = selection.track_id.as_deref() else {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         "track selection mode=Track requires a track id",
                     ));
                 };
@@ -1261,8 +1258,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     .iter()
                     .find(|track| track.id == track_id)
                     .ok_or_else(|| {
-                        PlayerRuntimeError::new(
-                            PlayerRuntimeErrorCode::InvalidArgument,
+                        PlayerError::new(
+                            PlayerErrorCode::InvalidArgument,
                             format!(
                                 "track '{track_id}' is not present in the current track catalog"
                             ),
@@ -1270,8 +1267,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     })?;
 
                 if track.kind != kind {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         format!("track '{track_id}' is not a {:?} track", kind),
                     ));
                 }
@@ -1281,18 +1278,15 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
         }
     }
 
-    fn validate_abr_policy_request(
-        &self,
-        policy: &MediaAbrPolicy,
-    ) -> PlayerRuntimeResult<MediaAbrPolicy> {
+    fn validate_abr_policy_request(&self, policy: &MediaAbrPolicy) -> PlayerResult<MediaAbrPolicy> {
         match policy.mode {
             MediaAbrMode::Auto => Ok(MediaAbrPolicy::default()),
             MediaAbrMode::Constrained => {
                 let has_resolution_limit =
                     policy.max_width.is_some() || policy.max_height.is_some();
                 if policy.max_bit_rate.is_none() && !has_resolution_limit {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         "iOS constrained ABR requires at least one max_bit_rate or max_width/max_height limit",
                     ));
                 }
@@ -1300,8 +1294,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                 if has_resolution_limit
                     && (policy.max_width.is_none() || policy.max_height.is_none())
                 {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         "iOS constrained ABR resolution limits require both max_width and max_height",
                     ));
                 }
@@ -1314,8 +1308,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     max_height: policy.max_height,
                 })
             }
-            MediaAbrMode::FixedTrack => Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            MediaAbrMode::FixedTrack => Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "fixed-track ABR is not implemented for the iOS AVPlayer runtime",
             )),
         }
@@ -1324,7 +1318,7 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
     fn translate_command(
         &self,
         command: &PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<(bool, Vec<IosNativePlayerCommand>)> {
+    ) -> PlayerResult<(bool, Vec<IosNativePlayerCommand>)> {
         match command {
             PlayerRuntimeCommand::Play => match self.presentation_state {
                 PresentationState::Playing => Ok((false, Vec::new())),
@@ -1344,12 +1338,10 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
             PlayerRuntimeCommand::Pause => match self.presentation_state {
                 PresentationState::Playing => Ok((true, vec![IosNativePlayerCommand::Pause])),
                 PresentationState::Paused => Ok((false, Vec::new())),
-                PresentationState::Ready | PresentationState::Finished => {
-                    Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidState,
-                        "pause is only valid after playback has started",
-                    ))
-                }
+                PresentationState::Ready | PresentationState::Finished => Err(PlayerError::new(
+                    PlayerErrorCode::InvalidState,
+                    "pause is only valid after playback has started",
+                )),
             },
             PlayerRuntimeCommand::TogglePause => match self.presentation_state {
                 PresentationState::Playing => Ok((true, vec![IosNativePlayerCommand::Pause])),
@@ -1379,8 +1371,8 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                 }
                 Ok((true, vec![IosNativePlayerCommand::SetPlaybackRate { rate }]))
             }
-            PlayerRuntimeCommand::SetVideoTrackSelection { .. } => Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            PlayerRuntimeCommand::SetVideoTrackSelection { .. } => Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "fixed video-track selection is not implemented for the iOS AVPlayer runtime",
             )),
             PlayerRuntimeCommand::SetAudioTrackSelection { selection } => {
@@ -1429,7 +1421,7 @@ impl IosNativePlayerBridge for IosAvPlayerBridge {
         &self,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<IosNativePlayerProbe> {
+    ) -> PlayerResult<IosNativePlayerProbe> {
         let context = resolve_bridge_context(&self.context, options)?;
         self.bindings.probe_source(&context, source, options)
     }
@@ -1440,7 +1432,7 @@ impl IosNativePlayerBridge for IosAvPlayerBridge {
         options: PlayerRuntimeOptions,
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
-    ) -> PlayerRuntimeResult<IosNativePlayerSessionBootstrap> {
+    ) -> PlayerResult<IosNativePlayerSessionBootstrap> {
         let context = resolve_bridge_context(&self.context, &options)?;
         let capabilities = ios_native_capabilities();
         let controller = IosManagedNativeSessionController::default();
@@ -1515,7 +1507,7 @@ impl<C: IosNativeCommandSink> IosNativePlayerSession for IosManagedNativeSession
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.pump_pending_updates();
         let previous_state = self.presentation_state;
         let previous_buffering = self.is_buffering;
@@ -1609,7 +1601,7 @@ impl<C: IosNativeCommandSink> IosNativePlayerSession for IosManagedNativeSession
     fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         if self.video_surface == video_surface {
             return Ok(());
         }
@@ -1635,7 +1627,7 @@ impl<C: IosNativeCommandSink> IosNativePlayerSession for IosManagedNativeSession
         Ok(())
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.pump_pending_updates();
         Ok(None)
     }
@@ -1681,7 +1673,7 @@ fn normalize_media_info(source: &MediaSource, mut media_info: PlayerMediaInfo) -
 fn resolve_bridge_context(
     base_context: &IosAvPlayerBridgeContext,
     options: &PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<IosAvPlayerBridgeContext> {
+) -> PlayerResult<IosAvPlayerBridgeContext> {
     let resolved_surface = match options.video_surface {
         Some(surface) => Some(ios_surface_from_runtime_surface(surface)?),
         None => base_context.video_surface,
@@ -1695,14 +1687,14 @@ fn resolve_bridge_context(
 
 fn ios_surface_from_runtime_surface(
     surface: PlayerVideoSurfaceTarget,
-) -> PlayerRuntimeResult<IosVideoSurfaceTarget> {
+) -> PlayerResult<IosVideoSurfaceTarget> {
     let kind = match surface.kind {
         PlayerVideoSurfaceKind::UiView => IosVideoSurfaceKind::UiView,
         PlayerVideoSurfaceKind::PlayerLayer => IosVideoSurfaceKind::PlayerLayer,
         PlayerVideoSurfaceKind::MetalLayer => IosVideoSurfaceKind::MetalLayer,
         PlayerVideoSurfaceKind::NsView | PlayerVideoSurfaceKind::Win32Hwnd => {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 "ios native backend only supports UIKit/AVPlayerLayer/MetalLayer video surface targets",
             ));
         }
@@ -1728,14 +1720,14 @@ fn runtime_surface_from_ios_surface(surface: IosVideoSurfaceTarget) -> PlayerVid
 fn validate_ios_video_surface(
     surface: PlayerVideoSurfaceTarget,
     best_video: &player_runtime::PlayerVideoInfo,
-) -> PlayerRuntimeResult<()> {
+) -> PlayerResult<()> {
     match surface.kind {
         PlayerVideoSurfaceKind::UiView
         | PlayerVideoSurfaceKind::PlayerLayer
         | PlayerVideoSurfaceKind::MetalLayer => Ok(()),
         PlayerVideoSurfaceKind::NsView | PlayerVideoSurfaceKind::Win32Hwnd => {
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 format!(
                     "ios native backend only supports UIKit/AVPlayerLayer/MetalLayer video surfaces for {} playback",
                     best_video.codec
@@ -1825,10 +1817,10 @@ mod tests {
     use player_runtime::{
         DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
         MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,
-        PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntimeAdapterBackendFamily,
-        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
-        PlayerRuntimeCommandResult, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-        PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot,
+        PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics, PlayerResult,
+        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSnapshot,
         PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
         PresentationState,
     };
@@ -1866,7 +1858,7 @@ mod tests {
             Ok(_) => panic!("ios skeleton initialize should be unsupported"),
             Err(error) => error,
         };
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
     }
 
     #[test]
@@ -1990,7 +1982,7 @@ mod tests {
         assert!(observation.emitted_events.iter().any(|event| matches!(
             event,
             player_runtime::PlayerRuntimeEvent::Error(error)
-            if error.code() == PlayerRuntimeErrorCode::BackendFailure
+            if error.code() == PlayerErrorCode::BackendFailure
         )));
     }
 
@@ -2036,12 +2028,12 @@ mod tests {
         let pause_error = session
             .dispatch(PlayerRuntimeCommand::Pause)
             .expect_err("pause before play should be invalid");
-        assert_eq!(pause_error.code(), PlayerRuntimeErrorCode::InvalidState);
+        assert_eq!(pause_error.code(), PlayerErrorCode::InvalidState);
 
         let rate_error = session
             .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 4.0 })
             .expect_err("out-of-range playback rate should fail");
-        assert_eq!(rate_error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+        assert_eq!(rate_error.code(), PlayerErrorCode::InvalidArgument);
         assert!(commands.lock().expect("commands lock").is_empty());
     }
 
@@ -2158,7 +2150,7 @@ mod tests {
             })
             .expect_err("partial resolution abr limit should be rejected");
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
         assert!(commands.lock().expect("commands lock").is_empty());
     }
 
@@ -2174,7 +2166,7 @@ mod tests {
             })
             .expect_err("video track selection should be unsupported");
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         assert!(commands.lock().expect("commands lock").is_empty());
     }
 
@@ -2223,10 +2215,7 @@ mod tests {
         });
         controller.report_seek_completed(Duration::from_secs(3));
         controller.report_retry_scheduled(2, Duration::from_millis(1_500));
-        controller.report_error(
-            PlayerRuntimeErrorCode::BackendFailure,
-            "avplayer callback failed",
-        );
+        controller.report_error(PlayerErrorCode::BackendFailure, "avplayer callback failed");
 
         let events = session.drain_events();
         assert_eq!(session.presentation_state(), PresentationState::Playing);
@@ -2244,7 +2233,7 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::Error(error)
-            if error.code() == PlayerRuntimeErrorCode::BackendFailure
+            if error.code() == PlayerErrorCode::BackendFailure
         )));
         assert_eq!(session.snapshot().resilience_metrics.retry_count, 2);
     }
@@ -2612,14 +2601,14 @@ mod tests {
     }
 
     impl IosNativeCommandSink for RecordingIosCommandSink {
-        fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerRuntimeResult<()> {
+        fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerResult<()> {
             self.commands.lock().expect("commands lock").push(command);
             Ok(())
         }
     }
 
     impl IosNativeCommandSink for SurfaceRecordingIosCommandSink {
-        fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerRuntimeResult<()> {
+        fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerResult<()> {
             self.commands.lock().expect("commands lock").push(command);
             Ok(())
         }
@@ -2627,7 +2616,7 @@ mod tests {
         fn attach_video_surface(
             &mut self,
             video_surface: PlayerVideoSurfaceTarget,
-        ) -> PlayerRuntimeResult<()> {
+        ) -> PlayerResult<()> {
             self.surfaces
                 .lock()
                 .expect("surface lock")
@@ -2635,7 +2624,7 @@ mod tests {
             Ok(())
         }
 
-        fn detach_video_surface(&mut self) -> PlayerRuntimeResult<()> {
+        fn detach_video_surface(&mut self) -> PlayerResult<()> {
             self.surfaces.lock().expect("surface lock").push(None);
             Ok(())
         }
@@ -2647,7 +2636,7 @@ mod tests {
             _context: &IosAvPlayerBridgeContext,
             source: &MediaSource,
             _options: &PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<IosNativePlayerProbe> {
+        ) -> PlayerResult<IosNativePlayerProbe> {
             Ok(IosNativePlayerProbe {
                 media_info: PlayerMediaInfo {
                     source_uri: source.uri().to_owned(),
@@ -2680,7 +2669,7 @@ mod tests {
             _media_info: &PlayerMediaInfo,
             _startup: &PlayerRuntimeStartup,
             controller: super::IosManagedNativeSessionController,
-        ) -> PlayerRuntimeResult<Box<dyn IosNativeCommandSink>> {
+        ) -> PlayerResult<Box<dyn IosNativeCommandSink>> {
             controller.apply_snapshot(IosAvPlayerSnapshot {
                 item_status: IosPlayerItemStatus::ReadyToPlay,
                 time_control_status: IosTimeControlStatus::Paused,
@@ -2717,7 +2706,7 @@ mod tests {
             &self,
             source: &MediaSource,
             _options: &PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<IosNativePlayerProbe> {
+        ) -> PlayerResult<IosNativePlayerProbe> {
             Ok(IosNativePlayerProbe {
                 media_info: PlayerMediaInfo {
                     source_uri: source.uri().to_owned(),
@@ -2748,7 +2737,7 @@ mod tests {
             _options: PlayerRuntimeOptions,
             media_info: &PlayerMediaInfo,
             _startup: &PlayerRuntimeStartup,
-        ) -> PlayerRuntimeResult<IosNativePlayerSessionBootstrap> {
+        ) -> PlayerResult<IosNativePlayerSessionBootstrap> {
             Ok(IosNativePlayerSessionBootstrap {
                 runtime: Box::new(FakeIosSession {
                     source_uri: source.uri().to_owned(),
@@ -2859,14 +2848,14 @@ mod tests {
         fn dispatch(
             &mut self,
             _command: PlayerRuntimeCommand,
-        ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
-            Err(player_runtime::PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
+            Err(player_runtime::PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "fake ios session does not implement commands",
             ))
         }
 
-        fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+        fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
             Ok(None)
         }
 

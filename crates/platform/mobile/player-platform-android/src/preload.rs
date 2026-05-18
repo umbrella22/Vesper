@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use player_runtime::{
-    InMemoryPreloadBudgetProvider, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-    PlayerRuntimeErrorCode, PlayerRuntimeResult, PreloadCandidate, PreloadEvent, PreloadExecutor,
-    PreloadPlanner, PreloadSnapshot, PreloadTaskId, PreloadTaskSnapshot,
+    InMemoryPreloadBudgetProvider, PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult,
+    PreloadCandidate, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadSnapshot,
+    PreloadTaskId, PreloadTaskSnapshot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,11 +24,11 @@ impl AndroidPreloadExecutor {
         Self { queue }
     }
 
-    fn push_command(&self, command: AndroidPreloadCommand) -> PlayerRuntimeResult<()> {
+    fn push_command(&self, command: AndroidPreloadCommand) -> PlayerResult<()> {
         let mut queue = self.queue.lock().map_err(|_| {
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::BackendFailure,
-                PlayerRuntimeErrorCategory::Platform,
+            PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Platform,
                 "android preload command queue lock poisoned",
             )
         })?;
@@ -38,11 +38,11 @@ impl AndroidPreloadExecutor {
 }
 
 impl PreloadExecutor for AndroidPreloadExecutor {
-    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()> {
         self.push_command(AndroidPreloadCommand::Start { task: task.clone() })
     }
 
-    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerRuntimeResult<()> {
+    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()> {
         self.push_command(AndroidPreloadCommand::Cancel { task_id })
     }
 }
@@ -72,25 +72,22 @@ impl AndroidPreloadBridgeSession {
         self.planner.plan(candidates, now)
     }
 
-    pub fn cancel(
-        &mut self,
-        task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    pub fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.planner.cancel(task_id)
     }
 
     pub fn complete(
         &mut self,
         task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.planner.complete(task_id)
     }
 
     pub fn fail(
         &mut self,
         task_id: PreloadTaskId,
-        error: PlayerRuntimeError,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        error: PlayerError,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.planner.fail(task_id, error)
     }
 
@@ -119,7 +116,7 @@ mod tests {
     use super::{AndroidPreloadBridgeSession, AndroidPreloadCommand};
     use player_model::MediaSource;
     use player_runtime::{
-        InMemoryPreloadBudgetProvider, PlayerRuntimeError, PlayerRuntimeErrorCode, PreloadBudget,
+        InMemoryPreloadBudgetProvider, PlayerError, PlayerErrorCode, PreloadBudget,
         PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadEvent,
         PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
     };
@@ -224,10 +221,7 @@ mod tests {
         let failed = session
             .fail(
                 task_id,
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
-                    "android warmup failed",
-                ),
+                PlayerError::new(PlayerErrorCode::BackendFailure, "android warmup failed"),
             )
             .expect("fail should succeed")
             .expect("task should exist");

@@ -365,19 +365,19 @@ public enum VesperDownloadState: Int, Equatable, Codable {
 }
 
 public struct VesperDownloadError: Equatable, Codable {
-    public let codeOrdinal: UInt32
-    public let categoryOrdinal: UInt32
+    public let code: VesperPlayerErrorCode
+    public let category: VesperPlayerErrorCategory
     public let retriable: Bool
     public let message: String
 
     public init(
-        codeOrdinal: UInt32,
-        categoryOrdinal: UInt32,
+        code: VesperPlayerErrorCode,
+        category: VesperPlayerErrorCategory,
         retriable: Bool,
         message: String
     ) {
-        self.codeOrdinal = codeOrdinal
-        self.categoryOrdinal = categoryOrdinal
+        self.code = code
+        self.category = category
         self.retriable = retriable
         self.message = message
     }
@@ -1941,8 +1941,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 await reporter.fail(
                     taskId: task.taskId,
                     error: VesperDownloadError(
-                        codeOrdinal: 3,
-                        categoryOrdinal: 2,
+                        code: .backendFailure,
+                        category: .network,
                         retriable: false,
                         message: error.localizedDescription
                     )
@@ -2111,8 +2111,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                     await reporter.fail(
                         taskId: task.taskId,
                         error: VesperDownloadError(
-                            codeOrdinal: 3,
-                            categoryOrdinal: 2,
+                            code: .backendFailure,
+                            category: .network,
                             retriable: false,
                             message: error.localizedDescription
                         )
@@ -2122,8 +2122,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 await reporter.fail(
                     taskId: task.taskId,
                     error: VesperDownloadError(
-                        codeOrdinal: 3,
-                        categoryOrdinal: 2,
+                        code: .backendFailure,
+                        category: .network,
                         retriable: false,
                         message: staleError.localizedDescription
                     )
@@ -2132,8 +2132,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
                 await reporter.fail(
                     taskId: task.taskId,
                     error: VesperDownloadError(
-                        codeOrdinal: 3,
-                        categoryOrdinal: 2,
+                        code: .backendFailure,
+                        category: .network,
                         retriable: false,
                         message: error.localizedDescription
                     )
@@ -4640,8 +4640,8 @@ private struct NativeDownloadBindings: VesperDownloadManager.DownloadBindings {
             vesper_runtime_download_session_fail_task(
                 sessionHandle,
                 taskId,
-                error.codeOrdinal,
-                error.categoryOrdinal,
+                error.code.ffiCode,
+                error.category.ffiCategory,
                 error.retriable,
                 messagePointer
             )
@@ -4932,8 +4932,8 @@ private func freeRuntimeDownloadTask(_ task: inout VesperRuntimeDownloadTask) {
             completed_path: nil
         ),
         has_error: false,
-        error_code: 0,
-        error_category: 0,
+        error_code: PlayerFfiErrorCodeNone,
+        error_category: PlayerFfiErrorCategoryPlatform,
         error_retriable: false,
         error_message: nil
     )
@@ -4984,8 +4984,8 @@ private extension VesperDownloadTaskSnapshot {
             progress: progress.toRuntimeBridgePayload(),
             asset_index: assetIndex.toRuntimeBridgePayload(),
             has_error: error != nil,
-            error_code: error?.codeOrdinal ?? 0,
-            error_category: error?.categoryOrdinal ?? 0,
+            error_code: error?.code.ffiCode ?? PlayerFfiErrorCodeNone,
+            error_category: error?.category.ffiCategory ?? PlayerFfiErrorCategoryPlatform,
             error_retriable: error?.retriable ?? false,
             error_message: error.flatMap { duplicateDownloadCString($0.message) }
         )
@@ -5186,8 +5186,8 @@ private extension VesperRuntimeDownloadTask {
         let error: VesperDownloadError?
         if has_error {
             error = VesperDownloadError(
-                codeOrdinal: error_code,
-                categoryOrdinal: error_category,
+                code: VesperPlayerErrorCode(ffiCode: error_code),
+                category: VesperPlayerErrorCategory(ffiCategory: error_category),
                 retriable: error_retriable,
                 message: stringFromRuntimeCString(error_message) ?? "download failed"
             )
@@ -5475,8 +5475,8 @@ private extension VesperRuntimeDownloadEventList {
 private extension VesperRuntimeDownloadEvent {
     func toDownloadError() -> VesperDownloadError {
         VesperDownloadError(
-            codeOrdinal: state_error_code,
-            categoryOrdinal: state_error_category,
+            code: VesperPlayerErrorCode(ffiCode: state_error_code),
+            category: VesperPlayerErrorCategory(ffiCategory: state_error_category),
             retriable: state_error_retriable,
             message: stringFromRuntimeCString(state_error_message) ?? ""
         )

@@ -22,12 +22,12 @@ use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady,
     MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaClock, NATURAL_PLAYBACK_RATE_MAX, PlaybackClock,
     PlaybackProgress, PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy,
-    PlayerCachePolicy, PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerRetryBackoff,
-    PlayerRetryPolicy, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoInfo, PresentationState,
+    PlayerCachePolicy, PlayerError, PlayerErrorCode, PlayerMediaInfo,
+    PlayerResilienceMetricsTracker, PlayerResult, PlayerRetryBackoff, PlayerRetryPolicy,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerVideoInfo, PresentationState,
     register_default_runtime_adapter_factory,
 };
 use tracing::info;
@@ -154,8 +154,8 @@ pub fn merge_runtime_fallback_reason(
 pub fn runtime_fallback_events(runtime_error_message: &str) -> VecDeque<PlayerRuntimeEvent> {
     let mut events = VecDeque::new();
     events.push_back(PlayerRuntimeEvent::VideoSurfaceChanged { attached: false });
-    events.push_back(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-        PlayerRuntimeErrorCode::BackendFailure,
+    events.push_back(PlayerRuntimeEvent::Error(PlayerError::new(
+        PlayerErrorCode::BackendFailure,
         format!("runtime fallback activated: {}", runtime_error_message),
     )));
     events
@@ -169,7 +169,7 @@ pub fn desktop_runtime_adapter_factory() -> &'static dyn PlayerRuntimeAdapterFac
     &FACTORY
 }
 
-pub fn install_default_desktop_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_desktop_runtime_adapter_factory() -> PlayerResult<()> {
     register_default_runtime_adapter_factory(desktop_runtime_adapter_factory())
 }
 
@@ -177,7 +177,7 @@ pub fn probe_platform_desktop_source_with_options(
     adapter_id: &'static str,
     source: MediaSource,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
     Ok(Box::new(PlatformDesktopRuntimeAdapterInitializer {
         adapter_id,
         inner: Box::new(SoftwarePlayerRuntimeInitializer::probe_source_with_options(
@@ -191,7 +191,7 @@ pub fn open_platform_desktop_source_with_options_and_interrupt(
     source: MediaSource,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
     let initializer = SoftwarePlayerRuntimeInitializer::probe_source_with_options_and_interrupt(
         source,
         options,
@@ -219,7 +219,7 @@ pub fn probe_platform_desktop_source_with_video_source_factory_and_options(
     options: PlayerRuntimeOptions,
     video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
     capabilities: PlayerRuntimeAdapterCapabilities,
-) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
     Ok(Box::new(PlatformDesktopRuntimeAdapterInitializer {
         adapter_id,
         inner: Box::new(
@@ -241,7 +241,7 @@ pub fn open_platform_desktop_source_with_video_source_factory_and_options_and_in
     interrupt_flag: Arc<AtomicBool>,
     video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
     capabilities: PlayerRuntimeAdapterCapabilities,
-) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
     let initializer =
         SoftwarePlayerRuntimeInitializer::probe_source_with_options_and_video_source_factory(
             source,
@@ -490,7 +490,7 @@ impl PlayerRuntimeAdapterFactory for SoftwarePlayerRuntimeAdapterFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         Ok(Box::new(
             SoftwarePlayerRuntimeInitializer::probe_source_with_options(source, options)?,
         ))
@@ -510,7 +510,7 @@ impl PlayerRuntimeAdapterInitializer for PlatformDesktopRuntimeAdapterInitialize
         self.inner.startup()
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self { adapter_id, inner } = *self;
         let PlayerRuntimeAdapterBootstrap {
             runtime,
@@ -551,7 +551,7 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
         }
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self {
             backend,
             source,
@@ -581,8 +581,8 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
                                 interrupt_flag.clone(),
                             )
                             .map_err(|error| {
-                                runtime_error(
-                                    PlayerRuntimeErrorCode::DecodeFailure,
+                                player_error(
+                                    PlayerErrorCode::DecodeFailure,
                                     "failed to decode audio track during initialization",
                                     error,
                                 )
@@ -634,7 +634,7 @@ impl SoftwarePlayerRuntimeInitializer {
     pub fn probe_source_with_options(
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         Self::probe_source_with_options_and_interrupt(source, options, None)
     }
 
@@ -642,7 +642,7 @@ impl SoftwarePlayerRuntimeInitializer {
         source: MediaSource,
         options: PlayerRuntimeOptions,
         interrupt_flag: Option<Arc<AtomicBool>>,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         Self::probe_source_with_options_and_video_source_factory(
             source,
             options,
@@ -658,19 +658,16 @@ impl SoftwarePlayerRuntimeInitializer {
         interrupt_flag: Option<Arc<AtomicBool>>,
         video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
         capabilities: PlayerRuntimeAdapterCapabilities,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         let backend = FfmpegBackend::new().map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::BackendFailure,
+            player_error(
+                PlayerErrorCode::BackendFailure,
                 "failed to initialize ffmpeg backend",
                 error,
             )
         })?;
         if let Some(reason) = backend.unsupported_source_reason(&source) {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
-                reason,
-            ));
+            return Err(PlayerError::new(PlayerErrorCode::Unsupported, reason));
         }
         let audio_output = if options.enable_audio_output {
             detect_default_output()
@@ -687,8 +684,8 @@ impl SoftwarePlayerRuntimeInitializer {
                 backend
                     .probe_with_interrupt(source.clone(), interrupt_flag.clone())
                     .map_err(|error| {
-                        runtime_error(
-                            PlayerRuntimeErrorCode::InvalidSource,
+                        player_error(
+                            PlayerErrorCode::InvalidSource,
                             "failed to probe media source",
                             error,
                         )
@@ -770,7 +767,7 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         match self.try_dispatch(command) {
             Ok((applied, frame)) => Ok(PlayerRuntimeCommandResult {
                 applied,
@@ -781,7 +778,7 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
         }
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         match self.try_advance() {
             Ok(frame) => Ok(frame),
             Err(error) => self.fail(error),
@@ -883,11 +880,11 @@ impl PlayerRuntimeAdapter for PlatformDesktopRuntimeAdapter {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.inner.dispatch(command)
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.inner.advance()
     }
 
@@ -900,7 +897,7 @@ impl SoftwarePlayerRuntime {
     fn open_with_startup(
         config: SoftwareRuntimeConfig,
         mut startup: PlayerRuntimeStartup,
-    ) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    ) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let DesktopVideoSourceBootstrap {
             source: mut video_source,
             decode_info,
@@ -913,8 +910,8 @@ impl SoftwarePlayerRuntime {
                 config.interrupt_flag.clone(),
             )
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                player_error(
+                    PlayerErrorCode::BackendFailure,
                     "failed to create buffered video source",
                     error,
                 )
@@ -923,15 +920,15 @@ impl SoftwarePlayerRuntime {
         let initial_frame = video_source
             .recv_frame()
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::DecodeFailure,
+                player_error(
+                    PlayerErrorCode::DecodeFailure,
                     "failed to receive initial video frame from the predecode worker",
                     error,
                 )
             })?
             .ok_or_else(|| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::DecodeFailure,
+                PlayerError::new(
+                    PlayerErrorCode::DecodeFailure,
                     "video stream did not produce any frames during initialization",
                 )
             })?;
@@ -1028,8 +1025,8 @@ impl SoftwarePlayerRuntime {
         let initial_width = initial_frame.width;
         let initial_height = initial_frame.height;
         let initial_cpu_frame = initial_frame.present().map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::BackendFailure,
+            player_error(
+                PlayerErrorCode::BackendFailure,
                 "failed to present initial video frame",
                 error,
             )
@@ -1066,7 +1063,7 @@ impl SoftwarePlayerRuntime {
     fn try_dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<(bool, Option<DecodedVideoFrame>)> {
+    ) -> PlayerResult<(bool, Option<DecodedVideoFrame>)> {
         self.poll_scheduled_retries();
         self.poll_audio_output_device();
         self.poll_audio_metadata_worker();
@@ -1084,15 +1081,15 @@ impl SoftwarePlayerRuntime {
             PlayerRuntimeCommand::SetVideoTrackSelection { .. }
             | PlayerRuntimeCommand::SetAudioTrackSelection { .. }
             | PlayerRuntimeCommand::SetSubtitleTrackSelection { .. }
-            | PlayerRuntimeCommand::SetAbrPolicy { .. } => Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            | PlayerRuntimeCommand::SetAbrPolicy { .. } => Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "track selection and ABR control are not implemented for the software desktop runtime",
             )),
             PlayerRuntimeCommand::Stop => self.stop(),
         }
     }
 
-    fn play(&mut self) -> PlayerRuntimeResult<(bool, Option<DecodedVideoFrame>)> {
+    fn play(&mut self) -> PlayerResult<(bool, Option<DecodedVideoFrame>)> {
         match self.presentation_state() {
             PresentationState::Playing => Ok((false, None)),
             PresentationState::Finished => {
@@ -1125,7 +1122,7 @@ impl SoftwarePlayerRuntime {
         }
     }
 
-    fn pause(&mut self) -> PlayerRuntimeResult<bool> {
+    fn pause(&mut self) -> PlayerResult<bool> {
         match self.presentation_state() {
             PresentationState::Playing => {
                 let previous_state = self.presentation_state();
@@ -1150,7 +1147,7 @@ impl SoftwarePlayerRuntime {
         }
     }
 
-    fn try_advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn try_advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.poll_scheduled_retries();
         self.poll_audio_output_device();
         self.poll_audio_metadata_worker();
@@ -1177,8 +1174,8 @@ impl SoftwarePlayerRuntime {
                 .take()
                 .map(|frame| {
                     frame.present().map_err(|error| {
-                        runtime_error(
-                            PlayerRuntimeErrorCode::BackendFailure,
+                        player_error(
+                            PlayerErrorCode::BackendFailure,
                             "failed to present decoded video frame",
                             error,
                         )
@@ -1194,7 +1191,7 @@ impl SoftwarePlayerRuntime {
         Ok(latest_frame)
     }
 
-    fn toggle_pause(&mut self) -> PlayerRuntimeResult<(bool, Option<DecodedVideoFrame>)> {
+    fn toggle_pause(&mut self) -> PlayerResult<(bool, Option<DecodedVideoFrame>)> {
         if matches!(
             self.presentation_state(),
             PresentationState::Ready | PresentationState::Paused | PresentationState::Finished
@@ -1205,14 +1202,11 @@ impl SoftwarePlayerRuntime {
         }
     }
 
-    fn seek_to(&mut self, position: Duration) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn seek_to(&mut self, position: Duration) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.try_seek_to(position)
     }
 
-    fn try_seek_to(
-        &mut self,
-        position: Duration,
-    ) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn try_seek_to(&mut self, position: Duration) -> PlayerResult<Option<DecodedVideoFrame>> {
         let previous_state = self.presentation_state();
         let target_position = self.session.clamp_seek_position(position);
         self.next_frame = None;
@@ -1220,8 +1214,8 @@ impl SoftwarePlayerRuntime {
             .video_source
             .seek_to(target_position)
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::SeekFailure,
+                player_error(
+                    PlayerErrorCode::SeekFailure,
                     "failed to seek video source",
                     error,
                 )
@@ -1256,19 +1250,19 @@ impl SoftwarePlayerRuntime {
         self.update_buffering_state();
 
         first_frame.present().map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::BackendFailure,
+            player_error(
+                PlayerErrorCode::BackendFailure,
                 "failed to present seeked video frame",
                 error,
             )
         })
     }
 
-    fn stop(&mut self) -> PlayerRuntimeResult<(bool, Option<DecodedVideoFrame>)> {
+    fn stop(&mut self) -> PlayerResult<(bool, Option<DecodedVideoFrame>)> {
         self.try_stop()
     }
 
-    fn try_stop(&mut self) -> PlayerRuntimeResult<(bool, Option<DecodedVideoFrame>)> {
+    fn try_stop(&mut self) -> PlayerResult<(bool, Option<DecodedVideoFrame>)> {
         if self.presentation_state() == PresentationState::Ready
             && self.progress().position().is_zero()
         {
@@ -1281,11 +1275,7 @@ impl SoftwarePlayerRuntime {
         Ok((true, frame))
     }
 
-    fn ensure_audio_output(
-        &mut self,
-        position: Duration,
-        playback_rate: f32,
-    ) -> PlayerRuntimeResult<()> {
+    fn ensure_audio_output(&mut self, position: Duration, playback_rate: f32) -> PlayerResult<()> {
         if !self.audio_output_enabled {
             self.disable_audio_output_path();
             return Ok(());
@@ -1322,8 +1312,8 @@ impl SoftwarePlayerRuntime {
                     return Ok(());
                 }
                 Err(error) => {
-                    return Err(runtime_error(
-                        PlayerRuntimeErrorCode::AudioOutputUnavailable,
+                    return Err(player_error(
+                        PlayerErrorCode::AudioOutputUnavailable,
                         "failed to open default audio output",
                         error,
                     ));
@@ -1342,7 +1332,7 @@ impl SoftwarePlayerRuntime {
         Ok(())
     }
 
-    fn maybe_start_audio_decode_worker(&mut self) -> PlayerRuntimeResult<()> {
+    fn maybe_start_audio_decode_worker(&mut self) -> PlayerResult<()> {
         if !self.audio_output_enabled {
             return Ok(());
         }
@@ -1375,8 +1365,8 @@ impl SoftwarePlayerRuntime {
                 let _ = sender.send(result);
             })
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                player_error(
+                    PlayerErrorCode::BackendFailure,
                     "failed to spawn deferred audio decode worker",
                     error,
                 )
@@ -1386,7 +1376,7 @@ impl SoftwarePlayerRuntime {
         Ok(())
     }
 
-    fn maybe_start_audio_metadata_probe_worker(&mut self) -> PlayerRuntimeResult<()> {
+    fn maybe_start_audio_metadata_probe_worker(&mut self) -> PlayerResult<()> {
         if !should_defer_media_probe_for_source(&self.source)
             || should_stream_audio_source_directly(&self.source)
             || self.pending_audio_metadata_worker.is_some()
@@ -1398,7 +1388,7 @@ impl SoftwarePlayerRuntime {
         self.start_audio_metadata_probe_worker(0)
     }
 
-    fn start_audio_metadata_probe_worker(&mut self, retry_attempt: u32) -> PlayerRuntimeResult<()> {
+    fn start_audio_metadata_probe_worker(&mut self, retry_attempt: u32) -> PlayerResult<()> {
         if self.pending_audio_metadata_worker.is_some() {
             return Ok(());
         }
@@ -1416,8 +1406,8 @@ impl SoftwarePlayerRuntime {
                 let _ = sender.send(result);
             })
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                player_error(
+                    PlayerErrorCode::BackendFailure,
                     "failed to spawn deferred audio metadata probe worker",
                     error,
                 )
@@ -1474,14 +1464,14 @@ impl SoftwarePlayerRuntime {
         self.emit_state_change_if_needed(previous_state);
     }
 
-    fn fill_next_frame(&mut self) -> PlayerRuntimeResult<()> {
+    fn fill_next_frame(&mut self) -> PlayerResult<()> {
         if self.next_frame.is_some() || self.video_end_of_stream {
             return Ok(());
         }
 
         match self.video_source.try_recv_frame().map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::DecodeFailure,
+            player_error(
+                PlayerErrorCode::DecodeFailure,
                 "failed to fetch decoded video frame from buffer",
                 error,
             )
@@ -1513,22 +1503,22 @@ impl SoftwarePlayerRuntime {
     fn rewind_to_ready(
         &mut self,
         previous_state: PresentationState,
-    ) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    ) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.session.reset_to_ready();
 
         let Some(first_frame) = self
             .video_source
             .seek_to(self.initial_video_position)
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::SeekFailure,
+                player_error(
+                    PlayerErrorCode::SeekFailure,
                     "failed to seek media source to the beginning",
                     error,
                 )
             })?
         else {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::DecodeFailure,
+            return Err(PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
                 "rewind did not produce an initial frame",
             ));
         };
@@ -1545,8 +1535,8 @@ impl SoftwarePlayerRuntime {
         self.update_buffering_state();
 
         first_frame.present().map_err(|error| {
-            runtime_error(
-                PlayerRuntimeErrorCode::BackendFailure,
+            player_error(
+                PlayerErrorCode::BackendFailure,
                 "failed to present rewound video frame",
                 error,
             )
@@ -1570,16 +1560,16 @@ impl SoftwarePlayerRuntime {
         }
     }
 
-    fn fail<T>(&mut self, error: PlayerRuntimeError) -> PlayerRuntimeResult<T> {
+    fn fail<T>(&mut self, error: PlayerError) -> PlayerResult<T> {
         self.emit_event(PlayerRuntimeEvent::Error(error.clone()));
         Err(error)
     }
 
-    fn invalid_state(&self, message: &str) -> PlayerRuntimeError {
-        PlayerRuntimeError::new(PlayerRuntimeErrorCode::InvalidState, message)
+    fn invalid_state(&self, message: &str) -> PlayerError {
+        PlayerError::new(PlayerErrorCode::InvalidState, message)
     }
 
-    fn set_playback_rate(&mut self, rate: f32) -> PlayerRuntimeResult<bool> {
+    fn set_playback_rate(&mut self, rate: f32) -> PlayerResult<bool> {
         let rate = validate_playback_rate(rate)?;
         if (self.playback_rate - rate).abs() < 0.001 {
             return Ok(false);
@@ -1670,8 +1660,8 @@ impl SoftwarePlayerRuntime {
                         retry_position,
                         self.playback_rate,
                     ) {
-                        self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                            PlayerRuntimeErrorCode::DecodeFailure,
+                        self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
+                            PlayerErrorCode::DecodeFailure,
                             format!("failed to stream retimed audio for playback: {error}"),
                         )));
                     }
@@ -1694,8 +1684,8 @@ impl SoftwarePlayerRuntime {
                         retry_position,
                         self.playback_rate,
                     ) {
-                        self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                            PlayerRuntimeErrorCode::BackendFailure,
+                        self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
+                            PlayerErrorCode::BackendFailure,
                             "audio stream worker disconnected before completing playback",
                         )));
                     }
@@ -1720,8 +1710,8 @@ impl SoftwarePlayerRuntime {
             }
             Ok(Err(error)) => {
                 if !self.schedule_audio_metadata_retry(worker.retry_attempt.saturating_add(1)) {
-                    self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
+                    self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
                         format!("failed to probe remote audio metadata for playback: {error}"),
                     )));
                 }
@@ -1731,8 +1721,8 @@ impl SoftwarePlayerRuntime {
             }
             Err(TryRecvError::Disconnected) => {
                 if !self.schedule_audio_metadata_retry(worker.retry_attempt.saturating_add(1)) {
-                    self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
+                    self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
                         "audio metadata probe worker disconnected before producing playback metadata",
                     )));
                 }
@@ -1757,8 +1747,8 @@ impl SoftwarePlayerRuntime {
                 self.refresh_playback_finished();
             }
             Ok(Err(error)) => {
-                self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::DecodeFailure,
+                self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
+                    PlayerErrorCode::DecodeFailure,
                     format!("failed to decode audio track for playback: {error}"),
                 )));
                 self.refresh_playback_finished();
@@ -1767,8 +1757,8 @@ impl SoftwarePlayerRuntime {
                 self.pending_audio_decode_worker = Some(worker);
             }
             Err(TryRecvError::Disconnected) => {
-                self.emit_event(PlayerRuntimeEvent::Error(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "audio decode worker disconnected before producing playback data",
                 )));
                 self.refresh_playback_finished();
@@ -1778,11 +1768,7 @@ impl SoftwarePlayerRuntime {
         self.update_buffering_state();
     }
 
-    fn start_audio_stream(
-        &mut self,
-        position: Duration,
-        playback_rate: f32,
-    ) -> PlayerRuntimeResult<()> {
+    fn start_audio_stream(&mut self, position: Duration, playback_rate: f32) -> PlayerResult<()> {
         self.cancel_pending_audio_stream_worker();
 
         let Some(source_track) = self.source_audio_track.clone() else {
@@ -1836,8 +1822,8 @@ impl SoftwarePlayerRuntime {
                 let _ = sender.send(result);
             })
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                player_error(
+                    PlayerErrorCode::BackendFailure,
                     "failed to spawn streaming audio worker",
                     error,
                 )
@@ -1859,7 +1845,7 @@ impl SoftwarePlayerRuntime {
         &mut self,
         position: Duration,
         playback_rate: f32,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         self.start_remote_audio_stream_with_retry_attempt(position, playback_rate, 0)
     }
 
@@ -1868,7 +1854,7 @@ impl SoftwarePlayerRuntime {
         position: Duration,
         playback_rate: f32,
         retry_attempt: u32,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         self.cancel_pending_audio_stream_worker();
 
         let Some(controller) = self.audio_sink_controller.clone() else {
@@ -1926,8 +1912,8 @@ impl SoftwarePlayerRuntime {
                 let _ = sender.send(result);
             })
             .map_err(|error| {
-                runtime_error(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                player_error(
+                    PlayerErrorCode::BackendFailure,
                     "failed to spawn remote audio stream worker",
                     error,
                 )
@@ -2504,10 +2490,10 @@ where
     Ok(())
 }
 
-fn validate_playback_rate(rate: f32) -> PlayerRuntimeResult<f32> {
+fn validate_playback_rate(rate: f32) -> PlayerResult<f32> {
     if !rate.is_finite() {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::InvalidArgument,
+        return Err(PlayerError::new(
+            PlayerErrorCode::InvalidArgument,
             format!(
                 "playback rate must be a finite number between {MIN_PLAYBACK_RATE:.1}x and {MAX_PLAYBACK_RATE:.1}x"
             ),
@@ -2515,8 +2501,8 @@ fn validate_playback_rate(rate: f32) -> PlayerRuntimeResult<f32> {
     }
 
     if !(MIN_PLAYBACK_RATE..=MAX_PLAYBACK_RATE).contains(&rate) {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::InvalidArgument,
+        return Err(PlayerError::new(
+            PlayerErrorCode::InvalidArgument,
             format!(
                 "playback rate {rate:.2}x is out of range; this player accepts {MIN_PLAYBACK_RATE:.1}x to {MAX_PLAYBACK_RATE:.1}x, and {MIN_PLAYBACK_RATE:.1}x to {NATURAL_PLAYBACK_RATE_MAX:.1}x is the most natural-sounding range"
             ),
@@ -2743,12 +2729,12 @@ fn with_adapter_id(
     capabilities
 }
 
-fn runtime_error(
-    code: PlayerRuntimeErrorCode,
+fn player_error(
+    code: PlayerErrorCode,
     context: &str,
     error: impl std::fmt::Display,
-) -> PlayerRuntimeError {
-    PlayerRuntimeError::new(code, format!("{context}: {error}"))
+) -> PlayerError {
+    PlayerError::new(code, format!("{context}: {error}"))
 }
 
 fn should_disable_audio_output_after_open_error(error: &anyhow::Error) -> bool {
@@ -2829,7 +2815,7 @@ mod tests {
         )
         .expect_err("dash probe should fail when ffmpeg lacks dash demuxer");
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         assert!(error.message().contains("'dash' demuxer"));
     }
 

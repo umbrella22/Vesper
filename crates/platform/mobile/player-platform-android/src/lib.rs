@@ -10,14 +10,14 @@ use player_model::MediaSource;
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
     MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
-    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo,
-    PlayerResilienceMetrics, PlayerResilienceMetricsTracker, PlayerRuntimeAdapter,
+    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError,
+    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics,
+    PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
-    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot,
-    PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind,
+    PlayerTimelineSnapshot, PresentationState,
 };
 
 pub use download::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
@@ -80,8 +80,8 @@ pub enum AndroidHostEvent {
     },
     Ended,
     Error {
-        code: PlayerRuntimeErrorCode,
-        category: PlayerRuntimeErrorCategory,
+        code: PlayerErrorCode,
+        category: PlayerErrorCategory,
         retriable: bool,
         message: String,
     },
@@ -181,14 +181,14 @@ pub enum AndroidNativePlayerCommand {
 }
 
 pub trait AndroidNativeCommandSink: Send {
-    fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerRuntimeResult<()>;
+    fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerResult<()>;
 }
 
 impl<T> AndroidNativeCommandSink for Box<T>
 where
     T: AndroidNativeCommandSink + ?Sized,
 {
-    fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerRuntimeResult<()> {
+    fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerResult<()> {
         (**self).submit_command(command)
     }
 }
@@ -207,7 +207,7 @@ pub enum AndroidNativeSessionUpdate {
         attempt: u32,
         delay: Duration,
     },
-    Error(PlayerRuntimeError),
+    Error(PlayerError),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -243,7 +243,7 @@ pub trait AndroidNativePlayerBridge: Send + Sync {
         &self,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<AndroidNativePlayerProbe>;
+    ) -> PlayerResult<AndroidNativePlayerProbe>;
 
     fn initialize_session(
         &self,
@@ -251,7 +251,7 @@ pub trait AndroidNativePlayerBridge: Send + Sync {
         options: PlayerRuntimeOptions,
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
-    ) -> PlayerRuntimeResult<AndroidNativePlayerSessionBootstrap>;
+    ) -> PlayerResult<AndroidNativePlayerSessionBootstrap>;
 }
 
 pub trait AndroidExoPlayerBridgeBindings: Send + Sync {
@@ -260,7 +260,7 @@ pub trait AndroidExoPlayerBridgeBindings: Send + Sync {
         context: &AndroidExoPlayerBridgeContext,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<AndroidNativePlayerProbe>;
+    ) -> PlayerResult<AndroidNativePlayerProbe>;
 
     fn create_command_sink(
         &self,
@@ -270,7 +270,7 @@ pub trait AndroidExoPlayerBridgeBindings: Send + Sync {
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
         controller: AndroidManagedNativeSessionController,
-    ) -> PlayerRuntimeResult<Box<dyn AndroidNativeCommandSink>>;
+    ) -> PlayerResult<Box<dyn AndroidNativeCommandSink>>;
 }
 
 pub trait AndroidNativePlayerSession: Send {
@@ -287,8 +287,8 @@ pub trait AndroidNativePlayerSession: Send {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult>;
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>>;
+    ) -> PlayerResult<PlayerRuntimeCommandResult>;
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>>;
     fn next_deadline(&self) -> Option<Instant>;
 }
 
@@ -389,7 +389,7 @@ impl AndroidHostCommandSink {
 }
 
 impl AndroidNativeCommandSink for AndroidHostCommandSink {
-    fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerRuntimeResult<()> {
+    fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerResult<()> {
         if let Ok(mut queue) = self.queue.lock() {
             queue.push_back(command);
         }
@@ -563,7 +563,7 @@ impl AndroidHostBridgeSession {
     pub fn dispatch_command(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.session.dispatch(command)
     }
 
@@ -599,12 +599,12 @@ impl AndroidHostBridgeSession {
             .report_retry_scheduled(attempt, delay);
     }
 
-    pub fn report_error(&mut self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
+    pub fn report_error(&mut self, code: PlayerErrorCode, message: impl Into<String>) {
         self.session.controller().report_error(code, message);
     }
 
-    pub fn report_runtime_error(&mut self, error: PlayerRuntimeError) {
-        self.session.controller().report_runtime_error(error);
+    pub fn report_player_error(&mut self, error: PlayerError) {
+        self.session.controller().report_player_error(error);
     }
 }
 
@@ -617,7 +617,7 @@ impl PlayerRuntimeAdapterFactory for AndroidNativePlayerRuntimeAdapterFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         let (media_info, startup) = match &self.bridge {
             Some(bridge) => {
                 let probe = bridge.probe_source(&source, &options)?;
@@ -652,7 +652,7 @@ impl PlayerRuntimeAdapterInitializer for AndroidNativePlayerRuntimeInitializer {
         self.startup.clone()
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self {
             bridge,
             source,
@@ -662,8 +662,8 @@ impl PlayerRuntimeAdapterInitializer for AndroidNativePlayerRuntimeInitializer {
         } = *self;
 
         let Some(bridge) = bridge else {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 android_native_unavailable_message(),
             ));
         };
@@ -716,11 +716,11 @@ impl PlayerRuntimeAdapter for AndroidNativePlayerRuntime {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.inner.dispatch(command)
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.inner.advance()
     }
 
@@ -840,14 +840,14 @@ impl AndroidManagedNativeSessionController {
         self.push_update(AndroidNativeSessionUpdate::RetryScheduled { attempt, delay });
     }
 
-    pub fn report_error(&self, code: PlayerRuntimeErrorCode, message: impl Into<String>) {
-        self.push_update(AndroidNativeSessionUpdate::Error(PlayerRuntimeError::new(
+    pub fn report_error(&self, code: PlayerErrorCode, message: impl Into<String>) {
+        self.push_update(AndroidNativeSessionUpdate::Error(PlayerError::new(
             code,
             message.into(),
         )));
     }
 
-    pub fn report_runtime_error(&self, error: PlayerRuntimeError) {
+    pub fn report_player_error(&self, error: PlayerError) {
         self.push_update(AndroidNativeSessionUpdate::Error(error));
     }
 
@@ -1045,10 +1045,10 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         }
     }
 
-    fn validate_playback_rate(&self, rate: f32) -> PlayerRuntimeResult<f32> {
+    fn validate_playback_rate(&self, rate: f32) -> PlayerResult<f32> {
         if !rate.is_finite() {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 "playback rate must be a finite number",
             ));
         }
@@ -1062,8 +1062,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
             .playback_rate_max
             .unwrap_or(MAX_PLAYBACK_RATE);
         if !(min..=max).contains(&rate) {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidArgument,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
                 format!("playback rate must be within {min:.1}x..={max:.1}x"),
             ));
         }
@@ -1071,10 +1071,7 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         Ok(rate)
     }
 
-    fn submit_commands(
-        &mut self,
-        commands: Vec<AndroidNativePlayerCommand>,
-    ) -> PlayerRuntimeResult<()> {
+    fn submit_commands(&mut self, commands: Vec<AndroidNativePlayerCommand>) -> PlayerResult<()> {
         for command in commands {
             self.command_sink.submit_command(command)?;
         }
@@ -1085,14 +1082,14 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         &self,
         kind: MediaTrackKind,
         selection: &MediaTrackSelection,
-    ) -> PlayerRuntimeResult<MediaTrackSelection> {
+    ) -> PlayerResult<MediaTrackSelection> {
         match selection.mode {
             MediaTrackSelectionMode::Auto => Ok(MediaTrackSelection::auto()),
             MediaTrackSelectionMode::Disabled => Ok(MediaTrackSelection::disabled()),
             MediaTrackSelectionMode::Track => {
                 let Some(track_id) = selection.track_id.as_deref() else {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         "track selection mode=Track requires a track id",
                     ));
                 };
@@ -1104,8 +1101,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     .iter()
                     .find(|track| track.id == track_id)
                     .ok_or_else(|| {
-                        PlayerRuntimeError::new(
-                            PlayerRuntimeErrorCode::InvalidArgument,
+                        PlayerError::new(
+                            PlayerErrorCode::InvalidArgument,
                             format!(
                                 "track '{track_id}' is not present in the current track catalog"
                             ),
@@ -1113,8 +1110,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     })?;
 
                 if track.kind != kind {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         format!("track '{track_id}' is not a {:?} track", kind),
                     ));
                 }
@@ -1124,10 +1121,7 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         }
     }
 
-    fn validate_abr_policy_request(
-        &self,
-        policy: &MediaAbrPolicy,
-    ) -> PlayerRuntimeResult<MediaAbrPolicy> {
+    fn validate_abr_policy_request(&self, policy: &MediaAbrPolicy) -> PlayerResult<MediaAbrPolicy> {
         match policy.mode {
             MediaAbrMode::Auto => Ok(MediaAbrPolicy::default()),
             MediaAbrMode::Constrained => {
@@ -1135,8 +1129,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     && policy.max_width.is_none()
                     && policy.max_height.is_none()
                 {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         "constrained ABR requires at least one bitrate or size constraint",
                     ));
                 }
@@ -1151,8 +1145,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
             }
             MediaAbrMode::FixedTrack => {
                 let Some(track_id) = policy.track_id.as_deref() else {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         "fixed-track ABR requires a video track id",
                     ));
                 };
@@ -1164,8 +1158,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     .iter()
                     .find(|track| track.id == track_id)
                     .ok_or_else(|| {
-                        PlayerRuntimeError::new(
-                            PlayerRuntimeErrorCode::InvalidArgument,
+                        PlayerError::new(
+                            PlayerErrorCode::InvalidArgument,
                             format!(
                                 "track '{track_id}' is not present in the current track catalog"
                             ),
@@ -1173,8 +1167,8 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     })?;
 
                 if track.kind != MediaTrackKind::Video {
-                    return Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    return Err(PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         format!("track '{track_id}' is not a video track"),
                     ));
                 }
@@ -1193,7 +1187,7 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
     fn translate_command(
         &self,
         command: &PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<(bool, Vec<AndroidNativePlayerCommand>)> {
+    ) -> PlayerResult<(bool, Vec<AndroidNativePlayerCommand>)> {
         match command {
             PlayerRuntimeCommand::Play => match self.presentation_state {
                 PresentationState::Playing => Ok((false, Vec::new())),
@@ -1213,12 +1207,10 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
             PlayerRuntimeCommand::Pause => match self.presentation_state {
                 PresentationState::Playing => Ok((true, vec![AndroidNativePlayerCommand::Pause])),
                 PresentationState::Paused => Ok((false, Vec::new())),
-                PresentationState::Ready | PresentationState::Finished => {
-                    Err(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidState,
-                        "pause is only valid after playback has started",
-                    ))
-                }
+                PresentationState::Ready | PresentationState::Finished => Err(PlayerError::new(
+                    PlayerErrorCode::InvalidState,
+                    "pause is only valid after playback has started",
+                )),
             },
             PlayerRuntimeCommand::TogglePause => match self.presentation_state {
                 PresentationState::Playing => Ok((true, vec![AndroidNativePlayerCommand::Pause])),
@@ -1311,7 +1303,7 @@ impl AndroidNativePlayerBridge for AndroidExoPlayerBridge {
         &self,
         source: &MediaSource,
         options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<AndroidNativePlayerProbe> {
+    ) -> PlayerResult<AndroidNativePlayerProbe> {
         self.bindings.probe_source(&self.context, source, options)
     }
 
@@ -1321,7 +1313,7 @@ impl AndroidNativePlayerBridge for AndroidExoPlayerBridge {
         options: PlayerRuntimeOptions,
         media_info: &PlayerMediaInfo,
         startup: &PlayerRuntimeStartup,
-    ) -> PlayerRuntimeResult<AndroidNativePlayerSessionBootstrap> {
+    ) -> PlayerResult<AndroidNativePlayerSessionBootstrap> {
         let capabilities = android_native_capabilities();
         let controller = AndroidManagedNativeSessionController::default();
         let command_sink = self.bindings.create_command_sink(
@@ -1380,7 +1372,7 @@ impl<C: AndroidNativeCommandSink> AndroidNativePlayerSession for AndroidManagedN
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.pump_pending_updates();
         let previous_state = self.presentation_state;
         let previous_media_info = self.media_info.clone();
@@ -1491,7 +1483,7 @@ impl<C: AndroidNativeCommandSink> AndroidNativePlayerSession for AndroidManagedN
         })
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.pump_pending_updates();
         Ok(None)
     }
@@ -1669,10 +1661,10 @@ mod tests {
     use player_runtime::{
         DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
         MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,
-        PlayerMediaInfo, PlayerResilienceMetrics, PlayerRuntimeAdapterBackendFamily,
-        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
-        PlayerRuntimeCommandResult, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-        PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup, PlayerSnapshot,
+        PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics, PlayerResult,
+        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSnapshot,
         PlayerTimelineSnapshot, PresentationState,
     };
     #[test]
@@ -1708,7 +1700,7 @@ mod tests {
             Ok(_) => panic!("android skeleton initialize should be unsupported"),
             Err(error) => error,
         };
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
     }
 
     #[test]
@@ -1896,12 +1888,12 @@ mod tests {
         let pause_error = session
             .dispatch(PlayerRuntimeCommand::Pause)
             .expect_err("pause before play should be invalid");
-        assert_eq!(pause_error.code(), PlayerRuntimeErrorCode::InvalidState);
+        assert_eq!(pause_error.code(), PlayerErrorCode::InvalidState);
 
         let rate_error = session
             .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 4.0 })
             .expect_err("out-of-range playback rate should fail");
-        assert_eq!(rate_error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+        assert_eq!(rate_error.code(), PlayerErrorCode::InvalidArgument);
         assert!(commands.lock().expect("commands lock").is_empty());
     }
 
@@ -1964,10 +1956,7 @@ mod tests {
         });
         controller.report_seek_completed(Duration::from_secs(3));
         controller.report_retry_scheduled(2, Duration::from_millis(1_500));
-        controller.report_error(
-            PlayerRuntimeErrorCode::BackendFailure,
-            "bridge callback failed",
-        );
+        controller.report_error(PlayerErrorCode::BackendFailure, "bridge callback failed");
 
         let events = session.drain_events();
         assert_eq!(session.presentation_state(), PresentationState::Playing);
@@ -1985,7 +1974,7 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             PlayerRuntimeEvent::Error(error)
-            if error.code() == PlayerRuntimeErrorCode::BackendFailure
+            if error.code() == PlayerErrorCode::BackendFailure
         )));
         assert_eq!(session.snapshot().resilience_metrics.retry_count, 2);
     }
@@ -2163,7 +2152,7 @@ mod tests {
             })
             .expect_err("missing video track should fail");
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -2404,10 +2393,7 @@ mod tests {
     }
 
     impl AndroidNativeCommandSink for RecordingAndroidCommandSink {
-        fn submit_command(
-            &mut self,
-            command: AndroidNativePlayerCommand,
-        ) -> PlayerRuntimeResult<()> {
+        fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerResult<()> {
             self.commands.lock().expect("commands lock").push(command);
             Ok(())
         }
@@ -2419,7 +2405,7 @@ mod tests {
             _context: &AndroidExoPlayerBridgeContext,
             source: &MediaSource,
             _options: &PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<AndroidNativePlayerProbe> {
+        ) -> PlayerResult<AndroidNativePlayerProbe> {
             Ok(AndroidNativePlayerProbe {
                 media_info: PlayerMediaInfo {
                     source_uri: source.uri().to_owned(),
@@ -2452,7 +2438,7 @@ mod tests {
             _media_info: &PlayerMediaInfo,
             _startup: &PlayerRuntimeStartup,
             controller: super::AndroidManagedNativeSessionController,
-        ) -> PlayerRuntimeResult<Box<dyn AndroidNativeCommandSink>> {
+        ) -> PlayerResult<Box<dyn AndroidNativeCommandSink>> {
             controller.apply_snapshot(AndroidExoPlaybackSnapshot {
                 playback_state: AndroidExoPlaybackState::Ready,
                 play_when_ready: false,
@@ -2560,7 +2546,7 @@ mod tests {
             &self,
             source: &MediaSource,
             _options: &PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<AndroidNativePlayerProbe> {
+        ) -> PlayerResult<AndroidNativePlayerProbe> {
             Ok(AndroidNativePlayerProbe {
                 media_info: PlayerMediaInfo {
                     source_uri: source.uri().to_owned(),
@@ -2591,7 +2577,7 @@ mod tests {
             _options: PlayerRuntimeOptions,
             media_info: &PlayerMediaInfo,
             _startup: &PlayerRuntimeStartup,
-        ) -> PlayerRuntimeResult<AndroidNativePlayerSessionBootstrap> {
+        ) -> PlayerResult<AndroidNativePlayerSessionBootstrap> {
             Ok(AndroidNativePlayerSessionBootstrap {
                 runtime: Box::new(FakeAndroidSession {
                     source_uri: source.uri().to_owned(),
@@ -2639,14 +2625,14 @@ mod tests {
         fn dispatch(
             &mut self,
             _command: PlayerRuntimeCommand,
-        ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
-            Err(player_runtime::PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
+            Err(player_runtime::PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "fake android session does not implement commands",
             ))
         }
 
-        fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+        fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
             Ok(None)
         }
 

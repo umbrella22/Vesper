@@ -446,7 +446,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func setVideoTrackSelection(_ selection: VesperTrackSelection) {
         let trackIdText = selection.trackId ?? "nil"
         reportCommandError(
-            category: .unsupported,
+            code: .unsupported,
+            category: .capability,
             message:
                 "setVideoTrackSelection is not implemented on iOS AVPlayer (mode=\(selection.mode.rawValue), trackId=\(trackIdText))"
         )
@@ -532,7 +533,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         case .constrained:
             guard policy.maxBitRate != nil || hasResolutionLimit else {
                 reportCommandError(
-                    category: .unsupported,
+                    code: .unsupported,
+                    category: .capability,
                     message:
                         "setAbrPolicy constrained mode requires maxBitRate or maxWidth/maxHeight on iOS"
                 )
@@ -545,7 +547,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 resolvedVideoVariantPin = resolvedPin
             } else if hasResolutionLimit {
                 reportCommandError(
-                    category: .unsupported,
+                    code: .unsupported,
+                    category: .capability,
                     message:
                         "setAbrPolicy constrained mode requires a loaded iOS video variant catalog to infer a single-axis maxWidth/maxHeight limit"
                 )
@@ -560,6 +563,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         case .fixedTrack:
             guard let trackId = policy.trackId, !trackId.isEmpty else {
                 reportCommandError(
+                    code: .invalidArgument,
                     category: .input,
                     message: "setAbrPolicy fixedTrack requires a non-empty trackId on iOS"
                 )
@@ -567,7 +571,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             }
             guard let resolvedFixedTrack = resolvedFixedVideoVariantTrack(for: trackId) else {
                 reportCommandError(
-                    category: .unsupported,
+                    code: .unsupported,
+                    category: .capability,
                     message:
                         "setAbrPolicy fixedTrack requires a video variant from the current iOS track catalog (trackId=\(trackId))"
                 )
@@ -575,7 +580,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             }
             guard resolvedFixedTrack.pin.hasAnyLimit else {
                 reportCommandError(
-                    category: .unsupported,
+                    code: .unsupported,
+                    category: .capability,
                     message:
                         "setAbrPolicy fixedTrack could not derive bitrate or resolution limits for trackId=\(resolvedFixedTrack.track.id) on iOS"
                 )
@@ -2066,11 +2072,16 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         fixedTrackIssueActive = false
     }
 
-    private func reportCommandError(category: VesperPlayerErrorCategory, message: String) {
+    private func reportCommandError(
+        code: VesperPlayerErrorCode,
+        category: VesperPlayerErrorCategory,
+        message: String
+    ) {
         iosHostLog("commandError category=\(category.rawValue) message=\(message)")
         fixedTrackIssueActive = false
         publishedLastError = VesperPlayerError(
             message: message,
+            code: code,
             category: category,
             retriable: false
         )
@@ -2214,7 +2225,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let nsError = error as NSError
         if nsError.domain == "io.github.ikaros.vesper.host.ios", nsError.code == -3 {
             return ResolvedBridgeError(
-                category: .unsupported,
+                code: .unsupported,
+                category: .capability,
                 retriable: false,
                 message: nsError.localizedDescription
             )
@@ -2648,6 +2660,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         fixedTrackIssueActive = true
         publishedLastError = VesperPlayerError(
             message: message,
+            code: .invalidState,
             category: .playback,
             retriable: false
         )
@@ -2790,16 +2803,49 @@ private struct FixedTrackMismatchSignature: Equatable {
 }
 
 private struct ResolvedBridgeError {
+    let code: VesperPlayerErrorCode
     let category: VesperPlayerErrorCategory
     let retriable: Bool
     let message: String
 
+    init(
+        code: VesperPlayerErrorCode? = nil,
+        category: VesperPlayerErrorCategory,
+        retriable: Bool,
+        message: String
+    ) {
+        self.code = code ?? Self.defaultCode(for: category)
+        self.category = category
+        self.retriable = retriable
+        self.message = message
+    }
+
     func toPlayerError() -> VesperPlayerError {
         VesperPlayerError(
             message: message,
+            code: code,
             category: category,
             retriable: retriable
         )
+    }
+
+    private static func defaultCode(for category: VesperPlayerErrorCategory) -> VesperPlayerErrorCode {
+        switch category {
+        case .input:
+            return .invalidArgument
+        case .source:
+            return .invalidSource
+        case .decode:
+            return .decodeFailure
+        case .audioOutput:
+            return .audioOutputUnavailable
+        case .capability:
+            return .unsupported
+        case .playback:
+            return .invalidState
+        case .network, .platform:
+            return .backendFailure
+        }
     }
 }
 
@@ -3072,8 +3118,8 @@ private final class VesperNativePreloadCoordinator {
                 _ = vesper_runtime_preload_session_fail(
                     handle,
                     task.task_id,
-                    3,
-                    7,
+                    PlayerFfiErrorCodeBackendFailure,
+                    PlayerFfiErrorCategoryNetwork,
                     false,
                     message
                 )

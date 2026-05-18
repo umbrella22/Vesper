@@ -68,6 +68,49 @@ void main() {
     expect(task.assetIndex.segments.single.byteRange?.length, 4096);
   });
 
+  test('download error requires typed code and category strings', () {
+    final error = VesperDownloadError.fromMap(<Object?, Object?>{
+      'code': 'backendFailure',
+      'category': 'network',
+      'retriable': true,
+      'message': 'download failed',
+    });
+
+    expect(error.code, VesperPlayerErrorCode.backendFailure);
+    expect(error.category, VesperPlayerErrorCategory.network);
+    expect(error.retriable, isTrue);
+    expect(error.message, 'download failed');
+    expect(error.toMap(), <String, Object?>{
+      'code': 'backendFailure',
+      'category': 'network',
+      'retriable': true,
+      'message': 'download failed',
+    });
+
+    expect(
+      () => VesperDownloadError.fromMap(<Object?, Object?>{
+        'category': 'network',
+        'message': 'missing code',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+    expect(
+      () => VesperDownloadError.fromMap(<Object?, Object?>{
+        'code': 3,
+        'category': 'network',
+        'message': 'non-string code',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+    expect(
+      () => VesperDownloadError.fromMap(<Object?, Object?>{
+        'code': 'backendFailure',
+        'category': 'doesNotExist',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
   test('system playback DTOs keep stable defaults and wire names', () {
     const metadata = VesperSystemPlaybackMetadata(
       title: 'Episode 1',
@@ -787,7 +830,8 @@ void main() {
       'timeline': const VesperTimeline.initial().toMap(),
       'lastError': <Object?, Object?>{
         'message': 'setVideoTrackSelection is not implemented on iOS AVPlayer.',
-        'category': 'unsupported',
+        'code': 'unsupported',
+        'category': 'capability',
         'retriable': false,
       },
     });
@@ -797,10 +841,48 @@ void main() {
       'setVideoTrackSelection is not implemented on iOS AVPlayer.',
     );
     expect(
-      snapshot.lastError?.category,
-      VesperPlayerErrorCategory.unsupported,
+      snapshot.lastError?.code,
+      VesperPlayerErrorCode.unsupported,
     );
+    expect(snapshot.lastError?.category, VesperPlayerErrorCategory.capability);
     expect(snapshot.lastError?.retriable, isFalse);
+  });
+
+  test('player error requires typed code and category strings', () {
+    final error = VesperPlayerError.fromMap(<Object?, Object?>{
+      'message': 'unsupported operation',
+      'code': 'unsupported',
+      'category': 'capability',
+      'retriable': false,
+    });
+
+    expect(error.code, VesperPlayerErrorCode.unsupported);
+    expect(error.category, VesperPlayerErrorCategory.capability);
+    expect(error.message, 'unsupported operation');
+
+    expect(
+      () => VesperPlayerError.fromMap(<Object?, Object?>{
+        'message': 'missing code',
+        'category': 'platform',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+    expect(
+      () => VesperPlayerError.fromMap(<Object?, Object?>{
+        'message': 'unknown code',
+        'code': 'doesNotExist',
+        'category': 'platform',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+    expect(
+      () => VesperPlayerError.fromMap(<Object?, Object?>{
+        'message': 'unknown category',
+        'code': 'unsupported',
+        'category': 'doesNotExist',
+      }),
+      throwsA(isA<FormatException>()),
+    );
   });
 
   test('player snapshot decodes resilience policy shared semantics', () {

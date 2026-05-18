@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use player_download::{PlayerRuntimeError, PlayerRuntimeResult};
+use player_download::{PlayerError, PlayerResult};
 use player_model::MediaSource;
 use player_preload::{
     PreloadBudgetProvider, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind,
@@ -405,7 +405,7 @@ where
     pub fn complete_preload_task(
         &mut self,
         task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         let result = self.preload_planner.complete(task_id)?;
         self.collect_preload_events();
         Ok(result)
@@ -414,8 +414,8 @@ where
     pub fn fail_preload_task(
         &mut self,
         task_id: PreloadTaskId,
-        error: PlayerRuntimeError,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        error: PlayerError,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         let result = self.preload_planner.fail(task_id, error)?;
         self.collect_preload_events();
         Ok(result)

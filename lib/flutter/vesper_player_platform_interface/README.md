@@ -110,6 +110,7 @@ VesperFixedTrackStatus
 VesperBufferingPreset
 VesperRetryBackoff
 VesperCachePreset
+VesperPlayerErrorCode
 VesperPlayerErrorCategory
 VesperViewportHintKind
 VesperDownloadContentFormat
@@ -138,10 +139,11 @@ class VesperPlayerMyPlatform extends VesperPlayerPlatform {
 }
 ```
 
-Methods that remain unimplemented should report
-`VesperPlayerError.unsupported()`. That keeps capability checks explicit and
-lets apps branch on `VesperPlayerCapabilities` instead of depending on
-exceptions.
+Methods that remain unimplemented should report `VesperPlayerError` with
+`code: VesperPlayerErrorCode.unsupported` and
+`category: VesperPlayerErrorCategory.capability`. That keeps capability checks
+explicit and lets apps branch on `VesperPlayerCapabilities` instead of
+depending on exceptions.
 
 Snapshot payloads should also round-trip the backend's current
 `VesperPlaybackResiliencePolicy`, `VesperTrackSelectionSnapshot`, and

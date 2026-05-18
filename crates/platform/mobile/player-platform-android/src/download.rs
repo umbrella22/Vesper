@@ -8,8 +8,8 @@ use player_plugin_loader::LoadedDynamicPlugin;
 use player_runtime::{
     DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadManager,
     DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadSnapshot,
-    DownloadSource, DownloadTaskId, DownloadTaskSnapshot, InMemoryDownloadStore,
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
+    DownloadSource, DownloadTaskId, DownloadTaskSnapshot, InMemoryDownloadStore, PlayerError,
+    PlayerErrorCategory, PlayerErrorCode, PlayerResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,11 +31,11 @@ impl AndroidDownloadExecutor {
         Self { queue }
     }
 
-    fn push_command(&self, command: AndroidDownloadCommand) -> PlayerRuntimeResult<()> {
+    fn push_command(&self, command: AndroidDownloadCommand) -> PlayerResult<()> {
         let mut queue = self.queue.lock().map_err(|_| {
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::BackendFailure,
-                PlayerRuntimeErrorCategory::Platform,
+            PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Platform,
                 "android download command queue lock poisoned",
             )
         })?;
@@ -45,27 +45,24 @@ impl AndroidDownloadExecutor {
 }
 
 impl DownloadExecutor for AndroidDownloadExecutor {
-    fn prepare(
-        &mut self,
-        task: &DownloadTaskSnapshot,
-    ) -> PlayerRuntimeResult<DownloadPrepareResult> {
+    fn prepare(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<DownloadPrepareResult> {
         self.push_command(AndroidDownloadCommand::Prepare { task: task.clone() })?;
         Ok(DownloadPrepareResult::Pending)
     }
 
-    fn start(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn start(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
         self.push_command(AndroidDownloadCommand::Start { task: task.clone() })
     }
 
-    fn pause(&mut self, task_id: DownloadTaskId) -> PlayerRuntimeResult<()> {
+    fn pause(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
         self.push_command(AndroidDownloadCommand::Pause { task_id })
     }
 
-    fn resume(&mut self, task: &DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn resume(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
         self.push_command(AndroidDownloadCommand::Resume { task: task.clone() })
     }
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerRuntimeResult<()> {
+    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
         self.push_command(AndroidDownloadCommand::Remove { task_id })
     }
 }
@@ -97,7 +94,7 @@ impl AndroidDownloadBridgeSession {
         auto_start: bool,
         run_post_processors_on_completion: bool,
         plugin_library_paths: impl IntoIterator<Item = PathBuf>,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         let command_queue = Arc::new(Mutex::new(VecDeque::new()));
         let executor = AndroidDownloadExecutor::new(command_queue.clone());
         let config = download_manager_config(
@@ -119,7 +116,7 @@ impl AndroidDownloadBridgeSession {
         profile: DownloadProfile,
         asset_index: DownloadAssetIndex,
         now: Instant,
-    ) -> PlayerRuntimeResult<DownloadTaskId> {
+    ) -> PlayerResult<DownloadTaskId> {
         self.manager
             .create_task(asset_id, source, profile, asset_index, now)
     }
@@ -128,7 +125,7 @@ impl AndroidDownloadBridgeSession {
         &mut self,
         tasks: impl IntoIterator<Item = DownloadTaskSnapshot>,
         now: Instant,
-    ) -> PlayerRuntimeResult<Vec<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Vec<DownloadTaskSnapshot>> {
         self.manager.restore_tasks(tasks, now)
     }
 
@@ -136,7 +133,7 @@ impl AndroidDownloadBridgeSession {
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager.start_task(task_id, now)
     }
 
@@ -144,7 +141,7 @@ impl AndroidDownloadBridgeSession {
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager.pause_task(task_id, now)
     }
 
@@ -152,7 +149,7 @@ impl AndroidDownloadBridgeSession {
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager.resume_task(task_id, now)
     }
 
@@ -162,7 +159,7 @@ impl AndroidDownloadBridgeSession {
         received_bytes: u64,
         received_segments: u32,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager
             .update_progress(task_id, received_bytes, received_segments, now)
     }
@@ -172,7 +169,7 @@ impl AndroidDownloadBridgeSession {
         task_id: DownloadTaskId,
         asset_index: DownloadAssetIndex,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager.complete_preparation(task_id, asset_index, now)
     }
 
@@ -183,7 +180,7 @@ impl AndroidDownloadBridgeSession {
         profile: DownloadProfile,
         asset_index: DownloadAssetIndex,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager
             .replace_task_plan(task_id, source, profile, asset_index, now)
     }
@@ -193,16 +190,16 @@ impl AndroidDownloadBridgeSession {
         task_id: DownloadTaskId,
         completed_path: Option<std::path::PathBuf>,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager.complete_task(task_id, completed_path, now)
     }
 
     pub fn fail_task(
         &mut self,
         task_id: DownloadTaskId,
-        error: PlayerRuntimeError,
+        error: PlayerError,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager.fail_task(task_id, error, now)
     }
 
@@ -210,7 +207,7 @@ impl AndroidDownloadBridgeSession {
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         self.manager.remove_task(task_id, now)
     }
 
@@ -231,7 +228,7 @@ impl AndroidDownloadBridgeSession {
         task_id: DownloadTaskId,
         output_path: Option<PathBuf>,
         progress: &dyn ProcessorProgress,
-    ) -> PlayerRuntimeResult<PathBuf> {
+    ) -> PlayerResult<PathBuf> {
         self.manager
             .export_task_output(task_id, output_path.as_deref(), progress)
     }
@@ -252,15 +249,15 @@ fn download_manager_config(
     auto_start: bool,
     run_post_processors_on_completion: bool,
     plugin_library_paths: impl IntoIterator<Item = PathBuf>,
-) -> PlayerRuntimeResult<DownloadManagerConfig> {
+) -> PlayerResult<DownloadManagerConfig> {
     let mut post_processors = Vec::new();
     let mut event_hooks = Vec::new();
 
     for path in plugin_library_paths {
         let plugin = LoadedDynamicPlugin::load(&path).map_err(|error| {
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::InvalidArgument,
-                PlayerRuntimeErrorCategory::Input,
+            PlayerError::with_category(
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
                 format!(
                     "failed to load android download plugin `{}`: {error}",
                     path.display()
@@ -289,8 +286,7 @@ mod tests {
     use player_model::MediaSource;
     use player_runtime::{
         DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadProfile,
-        DownloadSource, DownloadTaskStatus, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-        PlayerRuntimeErrorCode,
+        DownloadSource, DownloadTaskStatus, PlayerError, PlayerErrorCategory, PlayerErrorCode,
     };
     use std::path::PathBuf;
     use std::time::Instant;
@@ -434,7 +430,7 @@ mod tests {
         let failed = session
             .fail_task(
                 task_id,
-                PlayerRuntimeError::new(PlayerRuntimeErrorCode::BackendFailure, "android failed"),
+                PlayerError::new(PlayerErrorCode::BackendFailure, "android failed"),
                 now,
             )
             .expect("fail should succeed")
@@ -465,7 +461,7 @@ mod tests {
         )
         .expect_err("missing plugin should fail");
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidArgument);
-        assert_eq!(error.category(), PlayerRuntimeErrorCategory::Input);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
+        assert_eq!(error.category(), PlayerErrorCategory::Input);
     }
 }

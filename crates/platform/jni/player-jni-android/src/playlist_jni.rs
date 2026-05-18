@@ -8,7 +8,7 @@ use jni::{Env, EnvUnowned};
 use player_model::MediaSource;
 use player_platform_android::AndroidPlaylistBridgeSession;
 use player_runtime::{
-    PlayerRuntimeError, PlaylistCoordinatorConfig, PlaylistFailureStrategy, PlaylistNeighborWindow,
+    PlayerError, PlaylistCoordinatorConfig, PlaylistFailureStrategy, PlaylistNeighborWindow,
     PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistSwitchPolicy,
     PlaylistViewportHint, PlaylistViewportHintKind, PreloadBudget, PreloadTaskId,
 };
@@ -528,7 +528,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|env| -> JniResult<jboolean> {
                 let message = message.try_to_string(env)?;
-                let error = PlayerRuntimeError::with_taxonomy(
+                let error = PlayerError::with_taxonomy(
                     error_code_from_ordinal(code_ordinal),
                     error_category_from_ordinal(category_ordinal),
                     (retriable as u8) != 0,

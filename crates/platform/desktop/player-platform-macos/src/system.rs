@@ -9,10 +9,9 @@ use std::time::Duration;
 use player_model::MediaSource;
 use player_platform_apple::{VIDEOTOOLBOX_BACKEND_NAME, probe_videotoolbox_hardware_decode};
 use player_runtime::{
-    PlayerAudioInfo, PlayerMediaInfo, PlayerRuntimeAdapterFactory, PlayerRuntimeError,
-    PlayerRuntimeErrorCode, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind,
-    PlayerVideoSurfaceTarget,
+    PlayerAudioInfo, PlayerError, PlayerErrorCode, PlayerMediaInfo, PlayerResult,
+    PlayerRuntimeAdapterFactory, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,
+    PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
 };
 
 use crate::native::{
@@ -35,7 +34,7 @@ pub fn macos_system_native_runtime_adapter_factory() -> &'static dyn PlayerRunti
     })
 }
 
-pub fn install_default_macos_system_native_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_macos_system_native_runtime_adapter_factory() -> PlayerResult<()> {
     player_runtime::register_default_runtime_adapter_factory(
         macos_system_native_runtime_adapter_factory(),
     )
@@ -90,7 +89,7 @@ impl MacosVideoLayerSurface {
     pub fn new(
         host_surface: PlayerVideoSurfaceTarget,
         frame: MacosVideoLayerFrame,
-    ) -> PlayerRuntimeResult<Self> {
+    ) -> PlayerResult<Self> {
         #[cfg(target_os = "macos")]
         {
             let host_surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(host_surface)?;
@@ -105,8 +104,8 @@ impl MacosVideoLayerSurface {
                 )
             };
             if handle.is_null() {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     c_string_buffer_to_string(&error_message),
                 ));
             }
@@ -114,8 +113,8 @@ impl MacosVideoLayerSurface {
             let target = unsafe { player_macos_video_layer_surface_target(handle) }
                 .to_runtime_surface()
                 .ok_or_else(|| {
-                    PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
                         "macOS video layer surface did not expose a valid target",
                     )
                 })?;
@@ -125,8 +124,8 @@ impl MacosVideoLayerSurface {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (host_surface, frame);
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "macOS video layer surface is only available on macOS targets",
             ))
         }
@@ -136,7 +135,7 @@ impl MacosVideoLayerSurface {
         self.target
     }
 
-    pub fn update_frame(&self, frame: MacosVideoLayerFrame) -> PlayerRuntimeResult<()> {
+    pub fn update_frame(&self, frame: MacosVideoLayerFrame) -> PlayerResult<()> {
         #[cfg(target_os = "macos")]
         {
             let frame = MacosLayerFrameRepr::from_frame(frame);
@@ -146,8 +145,8 @@ impl MacosVideoLayerSurface {
             if succeeded {
                 return Ok(());
             }
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 if error_message.is_empty() {
                     "macOS video layer surface failed to update its frame".to_owned()
                 } else {
@@ -159,8 +158,8 @@ impl MacosVideoLayerSurface {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = frame;
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "macOS video layer surface is only available on macOS targets",
             ))
         }
@@ -177,7 +176,7 @@ impl Drop for MacosVideoLayerSurface {
 }
 
 impl MacosMetalLayerPresenter {
-    pub fn new(video_surface: PlayerVideoSurfaceTarget) -> PlayerRuntimeResult<Self> {
+    pub fn new(video_surface: PlayerVideoSurfaceTarget) -> PlayerResult<Self> {
         #[cfg(target_os = "macos")]
         {
             let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface)?;
@@ -190,8 +189,8 @@ impl MacosMetalLayerPresenter {
                 )
             };
             if handle.is_null() {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     c_string_buffer_to_string(&error_message),
                 ));
             }
@@ -201,20 +200,20 @@ impl MacosMetalLayerPresenter {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = video_surface;
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "MetalLayer presenter is only available on macOS targets",
             ))
         }
     }
 
-    pub fn present_cv_pixel_buffer_handle(&mut self, handle: usize) -> PlayerRuntimeResult<()> {
+    pub fn present_cv_pixel_buffer_handle(&mut self, handle: usize) -> PlayerResult<()> {
         #[cfg(target_os = "macos")]
         {
             #[cfg(test)]
             if std::env::var_os("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE").is_some() {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "forced test presenter failure",
                 ));
             }
@@ -229,8 +228,8 @@ impl MacosMetalLayerPresenter {
             if succeeded {
                 return Ok(());
             }
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 if error_message.is_empty() {
                     "MetalLayer presenter failed to present CVPixelBuffer".to_owned()
                 } else {
@@ -242,8 +241,8 @@ impl MacosMetalLayerPresenter {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = handle;
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "MetalLayer presenter is only available on macOS targets",
             ))
         }
@@ -260,7 +259,7 @@ impl Drop for MacosMetalLayerPresenter {
 }
 
 impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
-    fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerRuntimeResult<()> {
+    fn submit_command(&mut self, command: MacosNativePlayerCommand) -> PlayerResult<()> {
         #[cfg(target_os = "macos")]
         {
             let (succeeded, error_message) = match command {
@@ -304,8 +303,8 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
             if succeeded {
                 Ok(())
             } else {
-                Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     if error_message.is_empty() {
                         "AVFoundation session command failed".to_owned()
                     } else {
@@ -318,8 +317,8 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = command;
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "AVFoundation session commands are only available on macOS targets",
             ))
         }
@@ -328,7 +327,7 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
     fn attach_video_surface(
         &mut self,
         video_surface: PlayerVideoSurfaceTarget,
-    ) -> PlayerRuntimeResult<()> {
+    ) -> PlayerResult<()> {
         #[cfg(target_os = "macos")]
         {
             let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface)?;
@@ -344,8 +343,8 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
             if succeeded {
                 Ok(())
             } else {
-                Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     if error_message.is_empty() {
                         "AVFoundation failed to attach the requested video surface".to_owned()
                     } else {
@@ -358,14 +357,14 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = video_surface;
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "AVFoundation surface attachment is only available on macOS targets",
             ))
         }
     }
 
-    fn detach_video_surface(&mut self) -> PlayerRuntimeResult<()> {
+    fn detach_video_surface(&mut self) -> PlayerResult<()> {
         #[cfg(target_os = "macos")]
         {
             let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
@@ -375,8 +374,8 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
             if succeeded {
                 Ok(())
             } else {
-                Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     if error_message.is_empty() {
                         "AVFoundation failed to detach the current video surface".to_owned()
                     } else {
@@ -388,8 +387,8 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
 
         #[cfg(not(target_os = "macos"))]
         {
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "AVFoundation surface detachment is only available on macOS targets",
             ))
         }
@@ -402,7 +401,7 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
         _context: &MacosAvFoundationBridgeContext,
         source: &MediaSource,
         _options: &PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<MacosNativePlayerProbe> {
+    ) -> PlayerResult<MacosNativePlayerProbe> {
         probe_source_with_avfoundation(source)
     }
 
@@ -414,14 +413,14 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
         media_info: &PlayerMediaInfo,
         _startup: &PlayerRuntimeStartup,
         controller: MacosManagedNativeSessionController,
-    ) -> PlayerRuntimeResult<Box<dyn MacosNativeCommandSink>> {
+    ) -> PlayerResult<Box<dyn MacosNativeCommandSink>> {
         let surface = if media_info.best_video.is_some() {
             context
                 .video_surface
                 .or(options.video_surface)
                 .ok_or_else(|| {
-                    PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::InvalidArgument,
+                    PlayerError::new(
+                        PlayerErrorCode::InvalidArgument,
                         "macos native playback requires a video surface target",
                     )
                 })?
@@ -438,8 +437,8 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
         #[cfg(target_os = "macos")]
         {
             let source_c_string = CString::new(source.uri()).map_err(|_| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::InvalidSource,
+                PlayerError::new(
+                    PlayerErrorCode::InvalidSource,
                     "media source contains an interior NUL byte and cannot be passed to AVFoundation",
                 )
             })?;
@@ -470,8 +469,8 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                 unsafe {
                     drop(Box::from_raw(callback_context));
                 }
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     c_string_buffer_to_string(&error_message),
                 ));
             }
@@ -487,8 +486,8 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
             let _ = source;
             let _ = surface;
             let _ = controller;
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "AVFoundation session wiring is only available on macOS targets",
             ))
         }
@@ -497,12 +496,12 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
 
 pub fn probe_source_with_avfoundation(
     source: &MediaSource,
-) -> PlayerRuntimeResult<MacosNativePlayerProbe> {
+) -> PlayerResult<MacosNativePlayerProbe> {
     #[cfg(target_os = "macos")]
     {
         let source_c_string = CString::new(source.uri()).map_err(|_| {
-            PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidSource,
+            PlayerError::new(
+                PlayerErrorCode::InvalidSource,
                 "media source contains an interior NUL byte and cannot be passed to AVFoundation",
             )
         })?;
@@ -512,8 +511,8 @@ pub fn probe_source_with_avfoundation(
             unsafe { player_macos_avfoundation_probe(source_c_string.as_ptr(), &mut probe) };
         if !succeeded {
             let message = c_string_buffer_to_string(&probe.error_message);
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::InvalidSource,
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidSource,
                 if message.is_empty() {
                     "AVFoundation failed to probe the media source".to_owned()
                 } else {
@@ -562,8 +561,8 @@ pub fn probe_source_with_avfoundation(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = source;
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "AVFoundation probing is only available on macOS targets",
         ))
     }
@@ -604,15 +603,15 @@ struct MacosAvFoundationSurfaceTarget {
 
 #[cfg(target_os = "macos")]
 impl MacosAvFoundationSurfaceTarget {
-    fn from_runtime_surface(surface: PlayerVideoSurfaceTarget) -> PlayerRuntimeResult<Self> {
+    fn from_runtime_surface(surface: PlayerVideoSurfaceTarget) -> PlayerResult<Self> {
         let kind = match surface.kind {
             PlayerVideoSurfaceKind::NsView => 0,
             PlayerVideoSurfaceKind::UiView => 1,
             PlayerVideoSurfaceKind::PlayerLayer => 2,
             PlayerVideoSurfaceKind::MetalLayer => 3,
             PlayerVideoSurfaceKind::Win32Hwnd => {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::InvalidArgument,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::InvalidArgument,
                     "macos AVFoundation bridge does not support Win32 HWND video surfaces",
                 ));
             }
@@ -778,7 +777,7 @@ extern "C" fn macos_on_error(context: *mut c_void, message: *const c_char) {
         };
         context
             .controller
-            .report_error(PlayerRuntimeErrorCode::BackendFailure, message);
+            .report_error(PlayerErrorCode::BackendFailure, message);
     }));
 }
 
@@ -997,8 +996,8 @@ mod tests {
     };
     use player_model::MediaSource;
     use player_runtime::{
-        PlayerRuntimeErrorCode, PlayerRuntimeOptions, PlayerVideoDecodeMode,
-        PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
+        PlayerErrorCode, PlayerRuntimeOptions, PlayerVideoDecodeMode, PlayerVideoSurfaceKind,
+        PlayerVideoSurfaceTarget,
     };
 
     #[cfg(target_os = "macos")]
@@ -1083,7 +1082,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidArgument);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
     }
 
     #[test]

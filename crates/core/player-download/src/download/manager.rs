@@ -6,9 +6,7 @@ use std::time::Instant;
 
 use player_plugin::{PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorProgress};
 
-use crate::{
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
-};
+use crate::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 
 use super::executor::{DownloadExecutor, DownloadPrepareResult};
 use super::post_processing::should_run_post_processors_on_completion;
@@ -113,7 +111,7 @@ where
         profile: DownloadProfile,
         mut asset_index: DownloadAssetIndex,
         now: Instant,
-    ) -> PlayerRuntimeResult<DownloadTaskId> {
+    ) -> PlayerResult<DownloadTaskId> {
         let task_id = DownloadTaskId(self.next_task_id);
         self.next_task_id = next_non_zero_task_id(self.next_task_id)?;
 
@@ -148,7 +146,7 @@ where
         &mut self,
         tasks: impl IntoIterator<Item = DownloadTaskSnapshot>,
         now: Instant,
-    ) -> PlayerRuntimeResult<Vec<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Vec<DownloadTaskSnapshot>> {
         let mut restored = Vec::new();
         let mut max_task_id = self.next_task_id.saturating_sub(1);
 
@@ -193,7 +191,7 @@ where
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -225,7 +223,7 @@ where
         task_id: DownloadTaskId,
         asset_index: DownloadAssetIndex,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -248,7 +246,7 @@ where
         profile: DownloadProfile,
         mut asset_index: DownloadAssetIndex,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -282,7 +280,7 @@ where
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -307,7 +305,7 @@ where
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -351,7 +349,7 @@ where
         received_bytes: u64,
         received_segments: u32,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(mut snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -370,7 +368,7 @@ where
         task_id: DownloadTaskId,
         completed_path: Option<PathBuf>,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(existing) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -419,19 +417,19 @@ where
         task_id: DownloadTaskId,
         output_path: Option<&Path>,
         progress: &dyn ProcessorProgress,
-    ) -> PlayerRuntimeResult<PathBuf> {
+    ) -> PlayerResult<PathBuf> {
         let Some(snapshot) = self.store.task(task_id) else {
-            return Err(PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::InvalidArgument,
-                PlayerRuntimeErrorCategory::Input,
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
                 format!("download task {} was not found for export", task_id.get()),
             ));
         };
 
         if snapshot.status != DownloadTaskStatus::Completed {
-            return Err(PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::InvalidState,
-                PlayerRuntimeErrorCategory::Playback,
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::InvalidState,
+                PlayerErrorCategory::Playback,
                 format!(
                     "download task {} must be completed before export",
                     snapshot.task_id.get()
@@ -453,9 +451,9 @@ where
             | DownloadContentFormat::FlvSegments => {
                 self.export_processed_output(&snapshot, output_path, progress)
             }
-            DownloadContentFormat::Unknown => Err(PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::Unsupported,
-                PlayerRuntimeErrorCategory::Capability,
+            DownloadContentFormat::Unknown => Err(PlayerError::with_category(
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Capability,
                 format!(
                     "download task {} has unknown content format for export",
                     snapshot.task_id.get()
@@ -467,9 +465,9 @@ where
     pub fn fail_task(
         &mut self,
         task_id: DownloadTaskId,
-        error: PlayerRuntimeError,
+        error: PlayerError,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -495,7 +493,7 @@ where
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -516,7 +514,7 @@ where
         task_id: DownloadTaskId,
         now: Instant,
         mut mutate: impl FnMut(&mut DownloadTaskSnapshot),
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(mut snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -533,7 +531,7 @@ where
         task_id: DownloadTaskId,
         mut asset_index: DownloadAssetIndex,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let Some(mut snapshot) = self.store.task(task_id) else {
             return Ok(None);
         };
@@ -554,7 +552,7 @@ where
         preparing: DownloadTaskSnapshot,
         prepare_result: DownloadPrepareResult,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         match prepare_result {
             DownloadPrepareResult::Ready(asset_index) => {
                 if let Some(asset_index) = asset_index {
@@ -570,7 +568,7 @@ where
         &mut self,
         task_id: DownloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<DownloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
         let downloading = self.update_task(task_id, now, |task| {
             task.status = DownloadTaskStatus::Downloading;
             task.error_summary = None;

@@ -13,10 +13,10 @@ use player_platform_desktop::{
     probe_platform_desktop_source_with_options,
 };
 use player_runtime::{
-    PlayerMediaInfo, PlayerRuntime, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeError,
-    PlayerRuntimeErrorCode, PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeResult,
-    PlayerRuntimeStartup, register_default_runtime_adapter_factory,
+    PlayerError, PlayerErrorCode, PlayerMediaInfo, PlayerResult, PlayerRuntime,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeBootstrap, PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup,
+    register_default_runtime_adapter_factory,
 };
 
 pub const LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "linux_software_desktop";
@@ -35,14 +35,14 @@ pub fn linux_runtime_adapter_factory() -> &'static dyn PlayerRuntimeAdapterFacto
     &FACTORY
 }
 
-pub fn install_default_linux_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_linux_runtime_adapter_factory() -> PlayerResult<()> {
     register_default_runtime_adapter_factory(linux_runtime_adapter_factory())
 }
 
 pub fn open_linux_host_runtime_uri_with_options(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     open_linux_host_runtime_source_with_options(MediaSource::new(uri), options)
 }
 
@@ -50,7 +50,7 @@ pub fn open_linux_host_runtime_uri_with_options_and_interrupt(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     open_linux_host_runtime_source_with_options_and_interrupt(
         MediaSource::new(uri),
         options,
@@ -61,17 +61,17 @@ pub fn open_linux_host_runtime_uri_with_options_and_interrupt(
 pub fn probe_linux_host_runtime_uri_with_options(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<LinuxHostRuntimeProbe> {
+) -> PlayerResult<LinuxHostRuntimeProbe> {
     probe_linux_host_runtime_source_with_options(MediaSource::new(uri), options)
 }
 
 pub fn probe_linux_host_runtime_source_with_options(
     source: MediaSource,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<LinuxHostRuntimeProbe> {
+) -> PlayerResult<LinuxHostRuntimeProbe> {
     if !cfg!(target_os = "linux") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "linux host runtime strategy can only be probed on Linux targets",
         ));
     }
@@ -93,10 +93,10 @@ pub fn probe_linux_host_runtime_source_with_options(
 pub fn open_linux_host_runtime_source_with_options(
     source: MediaSource,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     if !cfg!(target_os = "linux") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "linux host runtime strategy can only be initialized on Linux targets",
         ));
     }
@@ -108,10 +108,10 @@ pub fn open_linux_host_runtime_source_with_options_and_interrupt(
     source: MediaSource,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     if !cfg!(target_os = "linux") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "linux host runtime strategy can only be initialized on Linux targets",
         ));
     }
@@ -140,10 +140,10 @@ impl PlayerRuntimeAdapterFactory for LinuxSoftwarePlayerRuntimeAdapterFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         if !cfg!(target_os = "linux") {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "linux desktop adapter can only be initialized on Linux desktop targets",
             ));
         }
@@ -166,7 +166,7 @@ mod tests {
     };
     use player_model::MediaSource;
     use player_runtime::{
-        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterFactory, PlayerRuntimeErrorCode,
+        PlayerErrorCode, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterFactory,
         PlayerRuntimeOptions,
     };
 
@@ -204,7 +204,7 @@ mod tests {
                 Ok(_) => panic!("non-linux hosts should reject the linux adapter"),
                 Err(error) => error,
             };
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+            assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
     }
 
@@ -233,7 +233,7 @@ mod tests {
                 PlayerRuntimeOptions::default(),
             );
             let error = result.expect_err("non-linux hosts should reject the linux host probe");
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+            assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
     }
 
@@ -265,7 +265,7 @@ mod tests {
                 Ok(_) => panic!("non-linux hosts should reject the linux host opener"),
                 Err(error) => error,
             };
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+            assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
     }
 

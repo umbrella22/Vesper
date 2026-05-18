@@ -441,7 +441,9 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
       final details = error.details;
       if (details is Map) {
         final normalized = Map<Object?, Object?>.from(details);
-        if (normalized['category'] == 'unsupported') {
+        if (normalized['code'] == VesperPlayerErrorCode.unsupported.name &&
+            normalized['category'] ==
+                VesperPlayerErrorCategory.capability.name) {
           throw VesperUnsupportedError(
             normalized['message'] as String? ?? error.message,
           );

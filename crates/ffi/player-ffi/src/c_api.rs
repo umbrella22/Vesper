@@ -157,6 +157,10 @@ pub enum PlayerFfiErrorCode {
     DecodeFailure = 8,
     SeekFailure = 9,
     Unsupported = 10,
+    CommandChannelClosed = 11,
+    EventChannelClosed = 12,
+    Cancelled = 13,
+    Timeout = 14,
 }
 
 #[repr(C)]
@@ -866,6 +870,10 @@ impl From<BridgeErrorCode> for PlayerFfiErrorCode {
             BridgeErrorCode::DecodeFailure => Self::DecodeFailure,
             BridgeErrorCode::SeekFailure => Self::SeekFailure,
             BridgeErrorCode::Unsupported => Self::Unsupported,
+            BridgeErrorCode::CommandChannelClosed => Self::CommandChannelClosed,
+            BridgeErrorCode::EventChannelClosed => Self::EventChannelClosed,
+            BridgeErrorCode::Cancelled => Self::Cancelled,
+            BridgeErrorCode::Timeout => Self::Timeout,
         }
     }
 }
@@ -2525,9 +2533,12 @@ fn api_error_category(code: PlayerFfiErrorCode) -> PlayerFfiErrorCategory {
         PlayerFfiErrorCode::NullPointer
         | PlayerFfiErrorCode::InvalidUtf8
         | PlayerFfiErrorCode::InvalidArgument => PlayerFfiErrorCategory::Input,
-        PlayerFfiErrorCode::InvalidState | PlayerFfiErrorCode::SeekFailure => {
-            PlayerFfiErrorCategory::Playback
-        }
+        PlayerFfiErrorCode::InvalidState
+        | PlayerFfiErrorCode::SeekFailure
+        | PlayerFfiErrorCode::CommandChannelClosed
+        | PlayerFfiErrorCode::EventChannelClosed
+        | PlayerFfiErrorCode::Cancelled
+        | PlayerFfiErrorCode::Timeout => PlayerFfiErrorCategory::Playback,
         PlayerFfiErrorCode::InvalidSource => PlayerFfiErrorCategory::Source,
         PlayerFfiErrorCode::AudioOutputUnavailable => PlayerFfiErrorCategory::AudioOutput,
         PlayerFfiErrorCode::DecodeFailure => PlayerFfiErrorCategory::Decode,
@@ -3044,15 +3055,17 @@ mod tests {
         player_ffi_player_drain_events, player_ffi_player_set_playback_rate,
         player_ffi_snapshot_free, player_ffi_startup_free, player_ffi_video_frame_free,
     };
+    use crate::FfiErrorCode;
     use player_runtime::{
         DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
         MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
         MediaTrackSelectionSnapshot, PlaybackProgress, PlayerAudioInfo, PlayerMediaInfo,
-        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
-        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-        PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-        PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeResult,
-        PlayerRuntimeStartup, PlayerVideoInfo, PresentationState, VideoPixelFormat,
+        PlayerResult, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
+        PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand,
+        PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer,
+        PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoInfo, PresentationState,
+        VideoPixelFormat,
     };
     use std::ffi::{CStr, CString};
     use std::ptr;
@@ -3179,6 +3192,68 @@ mod tests {
         assert_eq!(error.category, super::PlayerFfiErrorCategory::Platform);
         assert!(copy_c_string(error.message).contains("ffi panic smoke"));
         unsafe { super::player_ffi_error_free(&mut error) };
+    }
+
+    #[test]
+    fn ffi_error_code_ordinals_append_new_player_error_codes() {
+        assert_eq!(PlayerFfiErrorCode::None as i32, 0);
+        assert_eq!(PlayerFfiErrorCode::NullPointer as i32, 1);
+        assert_eq!(PlayerFfiErrorCode::InvalidUtf8 as i32, 2);
+        assert_eq!(PlayerFfiErrorCode::InvalidArgument as i32, 3);
+        assert_eq!(PlayerFfiErrorCode::InvalidState as i32, 4);
+        assert_eq!(PlayerFfiErrorCode::InvalidSource as i32, 5);
+        assert_eq!(PlayerFfiErrorCode::BackendFailure as i32, 6);
+        assert_eq!(PlayerFfiErrorCode::AudioOutputUnavailable as i32, 7);
+        assert_eq!(PlayerFfiErrorCode::DecodeFailure as i32, 8);
+        assert_eq!(PlayerFfiErrorCode::SeekFailure as i32, 9);
+        assert_eq!(PlayerFfiErrorCode::Unsupported as i32, 10);
+        assert_eq!(PlayerFfiErrorCode::CommandChannelClosed as i32, 11);
+        assert_eq!(PlayerFfiErrorCode::EventChannelClosed as i32, 12);
+        assert_eq!(PlayerFfiErrorCode::Cancelled as i32, 13);
+        assert_eq!(PlayerFfiErrorCode::Timeout as i32, 14);
+    }
+
+    #[test]
+    fn bridge_error_code_mapping_preserves_legacy_and_appended_values() {
+        let cases = [
+            (
+                FfiErrorCode::InvalidArgument,
+                PlayerFfiErrorCode::InvalidArgument,
+            ),
+            (FfiErrorCode::InvalidState, PlayerFfiErrorCode::InvalidState),
+            (
+                FfiErrorCode::InvalidSource,
+                PlayerFfiErrorCode::InvalidSource,
+            ),
+            (
+                FfiErrorCode::BackendFailure,
+                PlayerFfiErrorCode::BackendFailure,
+            ),
+            (
+                FfiErrorCode::AudioOutputUnavailable,
+                PlayerFfiErrorCode::AudioOutputUnavailable,
+            ),
+            (
+                FfiErrorCode::DecodeFailure,
+                PlayerFfiErrorCode::DecodeFailure,
+            ),
+            (FfiErrorCode::SeekFailure, PlayerFfiErrorCode::SeekFailure),
+            (FfiErrorCode::Unsupported, PlayerFfiErrorCode::Unsupported),
+            (
+                FfiErrorCode::CommandChannelClosed,
+                PlayerFfiErrorCode::CommandChannelClosed,
+            ),
+            (
+                FfiErrorCode::EventChannelClosed,
+                PlayerFfiErrorCode::EventChannelClosed,
+            ),
+            (FfiErrorCode::Cancelled, PlayerFfiErrorCode::Cancelled),
+            (FfiErrorCode::Timeout, PlayerFfiErrorCode::Timeout),
+        ];
+
+        for (bridge_code, ffi_code) in cases {
+            assert_eq!(PlayerFfiErrorCode::from(bridge_code), ffi_code);
+        }
     }
 
     #[test]
@@ -3454,7 +3529,7 @@ mod tests {
             &self,
             source: player_model::MediaSource,
             _options: PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+        ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
             Ok(Box::new(FakeRuntimeAdapterInitializer::new(
                 source.uri().to_owned(),
             )))
@@ -3568,7 +3643,7 @@ mod tests {
             self.startup.clone()
         }
 
-        fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+        fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
             Ok(PlayerRuntimeAdapterBootstrap {
                 runtime: Box::new(FakeRuntimeAdapter {
                     source_uri: self.source_uri,
@@ -3630,7 +3705,7 @@ mod tests {
         fn dispatch(
             &mut self,
             command: PlayerRuntimeCommand,
-        ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
             match command {
                 PlayerRuntimeCommand::Play => {
                     self.state = PresentationState::Playing;
@@ -3662,7 +3737,7 @@ mod tests {
             }
         }
 
-        fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+        fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
             Ok(None)
         }
 

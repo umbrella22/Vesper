@@ -33,13 +33,13 @@ use player_plugin_loader::{
     LoadedDynamicPlugin, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
 };
 use player_runtime::{
-    PlayerDecoderPluginVideoMode, PlayerMediaInfo, PlayerPluginCodecCapability,
-    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeBootstrap, PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, register_default_runtime_adapter_factory,
+    PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerMediaInfo,
+    PlayerPluginCodecCapability, PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerResult, PlayerRuntime, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeEvent,
+    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,
+    PlayerVideoDecodeMode, register_default_runtime_adapter_factory,
 };
 use std::collections::VecDeque;
 
@@ -126,9 +126,9 @@ trait WindowsNativeFramePresenter: Send {
     fn backend_kind(&self) -> WindowsNativeFrameBackendKind;
     fn accepted_handle_kind(&self) -> DecoderNativeHandleKind;
     fn decoder_device_context(&self) -> Option<DecoderNativeDeviceContext>;
-    fn attach(&mut self, target: WindowsSurfaceAttachTarget) -> PlayerRuntimeResult<()>;
-    fn reset(&mut self) -> PlayerRuntimeResult<()>;
-    fn present(&mut self, handle: usize) -> PlayerRuntimeResult<()>;
+    fn attach(&mut self, target: WindowsSurfaceAttachTarget) -> PlayerResult<()>;
+    fn reset(&mut self) -> PlayerResult<()>;
+    fn present(&mut self, handle: usize) -> PlayerResult<()>;
 }
 
 #[cfg(any(test, not(target_os = "windows")))]
@@ -161,34 +161,34 @@ impl WindowsNativeFramePresenter for WindowsD3D11NativeFramePresenterSkeleton {
         None
     }
 
-    fn attach(&mut self, target: WindowsSurfaceAttachTarget) -> PlayerRuntimeResult<()> {
+    fn attach(&mut self, target: WindowsSurfaceAttachTarget) -> PlayerResult<()> {
         self.attached_target = Some(target);
         self.state = WindowsD3D11PresenterState::AttachedAwaitingDevice;
         Ok(())
     }
 
-    fn reset(&mut self) -> PlayerRuntimeResult<()> {
+    fn reset(&mut self) -> PlayerResult<()> {
         self.state = WindowsD3D11PresenterState::Detached;
         self.attached_target = None;
         Ok(())
     }
 
-    fn present(&mut self, _handle: usize) -> PlayerRuntimeResult<()> {
+    fn present(&mut self, _handle: usize) -> PlayerResult<()> {
         if self.state == WindowsD3D11PresenterState::Detached {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            return Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "windows D3D11 native-frame presenter is not attached to a surface target yet",
             ));
         }
         if self.state == WindowsD3D11PresenterState::AttachedAwaitingDevice {
             self.state = WindowsD3D11PresenterState::AttachedNoDevice;
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            return Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "windows D3D11 native-frame presenter is not attached to a device/context yet",
             ));
         }
-        Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::BackendFailure,
+        Err(PlayerError::new(
+            PlayerErrorCode::BackendFailure,
             "windows D3D11 native-frame presenter skeleton is not implemented yet",
         ))
     }
@@ -196,7 +196,7 @@ impl WindowsNativeFramePresenter for WindowsD3D11NativeFramePresenterSkeleton {
 
 fn windows_native_frame_presenter_for_backend(
     backend: WindowsNativeFrameBackendKind,
-) -> PlayerRuntimeResult<Box<dyn WindowsNativeFramePresenter>> {
+) -> PlayerResult<Box<dyn WindowsNativeFramePresenter>> {
     match backend {
         #[cfg(target_os = "windows")]
         WindowsNativeFrameBackendKind::D3D11 | WindowsNativeFrameBackendKind::Dxva => {
@@ -217,7 +217,7 @@ mod windows_d3d11_presenter {
     use player_plugin::{
         DecoderNativeDeviceContext, DecoderNativeDeviceContextKind, DecoderNativeHandleKind,
     };
-    use player_runtime::{PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeResult};
+    use player_runtime::{PlayerError, PlayerErrorCode, PlayerResult};
     use windows::Win32::Foundation::{HMODULE, HWND, RECT};
     use windows::Win32::Graphics::Direct3D::{
         D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0,
@@ -264,7 +264,7 @@ mod windows_d3d11_presenter {
     }
 
     impl WindowsD3D11NativeFramePresenter {
-        pub fn new() -> PlayerRuntimeResult<Self> {
+        pub fn new() -> PlayerResult<Self> {
             let feature_levels = [
                 D3D_FEATURE_LEVEL_11_1,
                 D3D_FEATURE_LEVEL_11_0,
@@ -289,18 +289,18 @@ mod windows_d3d11_presenter {
                     Some(&mut context),
                 )
             }
-            .map_err(|error| runtime_error("D3D11CreateDevice", error))?;
+            .map_err(|error| player_error("D3D11CreateDevice", error))?;
 
             Ok(Self {
                 device: device.ok_or_else(|| {
-                    PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
                         "D3D11CreateDevice did not return a device",
                     )
                 })?,
                 context: context.ok_or_else(|| {
-                    PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
                         "D3D11CreateDevice did not return an immediate context",
                     )
                 })?,
@@ -310,18 +310,18 @@ mod windows_d3d11_presenter {
             })
         }
 
-        fn ensure_swap_chain(&mut self) -> PlayerRuntimeResult<()> {
+        fn ensure_swap_chain(&mut self) -> PlayerResult<()> {
             let hwnd_handle = self.attached_hwnd.ok_or_else(|| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "windows D3D11 native-frame presenter is not attached to a Win32 HWND",
                 )
             })?;
             let hwnd = HWND(hwnd_handle as *mut c_void);
             let size = client_size(hwnd)?;
             if size.0 == 0 || size.1 == 0 {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "windows D3D11 native-frame presenter cannot present into a zero-size HWND",
                 ));
             }
@@ -340,7 +340,7 @@ mod windows_d3d11_presenter {
                         DXGI_SWAP_CHAIN_FLAG(0),
                     )
                 }
-                .map_err(|error| runtime_error("IDXGISwapChain::ResizeBuffers", error))?;
+                .map_err(|error| player_error("IDXGISwapChain::ResizeBuffers", error))?;
                 self.swap_chain_size = Some(size);
                 return Ok(());
             }
@@ -348,15 +348,15 @@ mod windows_d3d11_presenter {
             let dxgi_device: IDXGIDevice = self
                 .device
                 .cast()
-                .map_err(|error| runtime_error("ID3D11Device::cast<IDXGIDevice>", error))?;
+                .map_err(|error| player_error("ID3D11Device::cast<IDXGIDevice>", error))?;
             // SAFETY: dxgi_device is valid and returns the adapter that owns
             // the D3D11 device.
             let adapter = unsafe { dxgi_device.GetAdapter() }
-                .map_err(|error| runtime_error("IDXGIDevice::GetAdapter", error))?;
+                .map_err(|error| player_error("IDXGIDevice::GetAdapter", error))?;
             // SAFETY: adapter is a DXGI object; querying its parent factory is
             // the documented way to create a swapchain on the same adapter.
             let factory: IDXGIFactory2 = unsafe { adapter.GetParent() }
-                .map_err(|error| runtime_error("IDXGIAdapter::GetParent", error))?;
+                .map_err(|error| player_error("IDXGIAdapter::GetParent", error))?;
             let desc = DXGI_SWAP_CHAIN_DESC1 {
                 Width: size.0,
                 Height: size.1,
@@ -384,13 +384,13 @@ mod windows_d3d11_presenter {
                     None::<&windows::Win32::Graphics::Dxgi::IDXGIOutput>,
                 )
             }
-            .map_err(|error| runtime_error("IDXGIFactory2::CreateSwapChainForHwnd", error))?;
+            .map_err(|error| player_error("IDXGIFactory2::CreateSwapChainForHwnd", error))?;
             self.swap_chain = Some(swap_chain);
             self.swap_chain_size = Some(size);
             Ok(())
         }
 
-        fn present_texture(&mut self, texture: &ID3D11Texture2D) -> PlayerRuntimeResult<()> {
+        fn present_texture(&mut self, texture: &ID3D11Texture2D) -> PlayerResult<()> {
             self.ensure_swap_chain()?;
             let swap_chain = self.swap_chain()?.clone();
             let back_buffer = self.back_buffer()?;
@@ -401,8 +401,8 @@ mod windows_d3d11_presenter {
                 return self.present_nv12_texture(texture, &desc, &back_buffer, &swap_chain);
             }
             if !is_bgra_swapchain_compatible(desc.Format) {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     format!(
                         "windows D3D11 presenter expected BGRA or NV12 texture output, got DXGI format {}",
                         desc.Format.0
@@ -411,10 +411,10 @@ mod windows_d3d11_presenter {
             }
             let source: ID3D11Resource = texture
                 .cast()
-                .map_err(|error| runtime_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
+                .map_err(|error| player_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
             let target: ID3D11Resource = back_buffer
                 .cast()
-                .map_err(|error| runtime_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
+                .map_err(|error| player_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
             // SAFETY: both textures belong to the same D3D11 device when the
             // plugin honors the shared native_device_context contract.
             unsafe {
@@ -424,7 +424,7 @@ mod windows_d3d11_presenter {
             // SAFETY: the swapchain is valid and owned by this presenter.
             unsafe { swap_chain.Present(1, DXGI_PRESENT(0)) }
                 .ok()
-                .map_err(|error| runtime_error("IDXGISwapChain::Present", error))
+                .map_err(|error| player_error("IDXGISwapChain::Present", error))
         }
 
         fn present_nv12_texture(
@@ -433,17 +433,17 @@ mod windows_d3d11_presenter {
             desc: &windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC,
             back_buffer: &ID3D11Texture2D,
             swap_chain: &IDXGISwapChain1,
-        ) -> PlayerRuntimeResult<()> {
+        ) -> PlayerResult<()> {
             let video_device: ID3D11VideoDevice = self
                 .device
                 .cast()
-                .map_err(|error| runtime_error("ID3D11Device::cast<ID3D11VideoDevice>", error))?;
+                .map_err(|error| player_error("ID3D11Device::cast<ID3D11VideoDevice>", error))?;
             let video_context: ID3D11VideoContext = self.context.cast().map_err(|error| {
-                runtime_error("ID3D11DeviceContext::cast<ID3D11VideoContext>", error)
+                player_error("ID3D11DeviceContext::cast<ID3D11VideoContext>", error)
             })?;
             let output_size = self.swap_chain_size.ok_or_else(|| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "windows D3D11 native-frame presenter has no swapchain size",
                 )
             })?;
@@ -467,12 +467,12 @@ mod windows_d3d11_presenter {
             // duration of the call.
             let enumerator = unsafe { video_device.CreateVideoProcessorEnumerator(&content_desc) }
                 .map_err(|error| {
-                    runtime_error("ID3D11VideoDevice::CreateVideoProcessorEnumerator", error)
+                    player_error("ID3D11VideoDevice::CreateVideoProcessorEnumerator", error)
                 })?;
             // SAFETY: the enumerator belongs to this device and index 0 is the
             // default rate-conversion processor.
             let processor = unsafe { video_device.CreateVideoProcessor(&enumerator, 0) }
-                .map_err(|error| runtime_error("ID3D11VideoDevice::CreateVideoProcessor", error))?;
+                .map_err(|error| player_error("ID3D11VideoDevice::CreateVideoProcessor", error))?;
             let input_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
                 FourCC: 0,
                 ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
@@ -491,10 +491,10 @@ mod windows_d3d11_presenter {
             };
             let source: ID3D11Resource = texture
                 .cast()
-                .map_err(|error| runtime_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
+                .map_err(|error| player_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
             let target: ID3D11Resource = back_buffer
                 .cast()
-                .map_err(|error| runtime_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
+                .map_err(|error| player_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
             let mut input_view = None;
             // SAFETY: texture/enumerator are valid D3D11 objects from the same
             // device, and input_desc is fully initialized.
@@ -507,7 +507,7 @@ mod windows_d3d11_presenter {
                 )
             }
             .map_err(|error| {
-                runtime_error("ID3D11VideoDevice::CreateVideoProcessorInputView", error)
+                player_error("ID3D11VideoDevice::CreateVideoProcessorInputView", error)
             })?;
             let mut output_view = None;
             // SAFETY: back_buffer/enumerator are valid D3D11 objects from the
@@ -521,17 +521,17 @@ mod windows_d3d11_presenter {
                 )
             }
             .map_err(|error| {
-                runtime_error("ID3D11VideoDevice::CreateVideoProcessorOutputView", error)
+                player_error("ID3D11VideoDevice::CreateVideoProcessorOutputView", error)
             })?;
             let input_view = input_view.ok_or_else(|| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "ID3D11VideoDevice::CreateVideoProcessorInputView returned no view",
                 )
             })?;
             let output_view = output_view.ok_or_else(|| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "ID3D11VideoDevice::CreateVideoProcessorOutputView returned no view",
                 )
             })?;
@@ -566,28 +566,28 @@ mod windows_d3d11_presenter {
                 std::mem::ManuallyDrop::drop(&mut stream.pInputSurfaceRight);
             }
             blt_result
-                .map_err(|error| runtime_error("ID3D11VideoContext::VideoProcessorBlt", error))?;
+                .map_err(|error| player_error("ID3D11VideoContext::VideoProcessorBlt", error))?;
             // SAFETY: the swapchain is valid and owned by this presenter.
             unsafe { swap_chain.Present(1, DXGI_PRESENT(0)) }
                 .ok()
-                .map_err(|error| runtime_error("IDXGISwapChain::Present", error))
+                .map_err(|error| player_error("IDXGISwapChain::Present", error))
         }
 
-        fn swap_chain(&self) -> PlayerRuntimeResult<&IDXGISwapChain1> {
+        fn swap_chain(&self) -> PlayerResult<&IDXGISwapChain1> {
             self.swap_chain.as_ref().ok_or_else(|| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "windows D3D11 native-frame presenter has no swapchain",
                 )
             })
         }
 
-        fn back_buffer(&self) -> PlayerRuntimeResult<ID3D11Texture2D> {
+        fn back_buffer(&self) -> PlayerResult<ID3D11Texture2D> {
             let swap_chain = self.swap_chain()?;
             // SAFETY: buffer 0 exists on the swapchain and is returned as an
             // owned D3D11 texture interface for the current back buffer.
             unsafe { swap_chain.GetBuffer(0) }
-                .map_err(|error| runtime_error("IDXGISwapChain::GetBuffer", error))
+                .map_err(|error| player_error("IDXGISwapChain::GetBuffer", error))
         }
     }
 
@@ -606,12 +606,12 @@ mod windows_d3d11_presenter {
             })
         }
 
-        fn attach(&mut self, target: WindowsSurfaceAttachTarget) -> PlayerRuntimeResult<()> {
+        fn attach(&mut self, target: WindowsSurfaceAttachTarget) -> PlayerResult<()> {
             if target.kind != player_runtime::PlayerVideoSurfaceKind::Win32Hwnd
                 || target.handle == 0
             {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::InvalidArgument,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::InvalidArgument,
                     "windows D3D11 native-frame presenter requires a non-null Win32 HWND",
                 ));
             }
@@ -621,16 +621,16 @@ mod windows_d3d11_presenter {
             self.ensure_swap_chain()
         }
 
-        fn reset(&mut self) -> PlayerRuntimeResult<()> {
+        fn reset(&mut self) -> PlayerResult<()> {
             self.swap_chain = None;
             self.swap_chain_size = None;
             Ok(())
         }
 
-        fn present(&mut self, handle: usize) -> PlayerRuntimeResult<()> {
+        fn present(&mut self, handle: usize) -> PlayerResult<()> {
             if handle == 0 {
-                return Err(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "windows D3D11 native-frame presenter received a null texture handle",
                 ));
             }
@@ -641,8 +641,8 @@ mod windows_d3d11_presenter {
             let texture = unsafe {
                 ID3D11Texture2D::from_raw_borrowed(&raw)
                     .ok_or_else(|| {
-                        PlayerRuntimeError::new(
-                            PlayerRuntimeErrorCode::BackendFailure,
+                        PlayerError::new(
+                            PlayerErrorCode::BackendFailure,
                             "windows D3D11 native-frame presenter received an invalid texture handle",
                         )
                     })?
@@ -652,12 +652,12 @@ mod windows_d3d11_presenter {
         }
     }
 
-    fn client_size(hwnd: HWND) -> PlayerRuntimeResult<(u32, u32)> {
+    fn client_size(hwnd: HWND) -> PlayerResult<(u32, u32)> {
         let mut rect = RECT::default();
         // SAFETY: hwnd is provided by winit/raw-window-handle and is only used
         // synchronously to read the current client rect.
         unsafe { GetClientRect(hwnd, &mut rect) }
-            .map_err(|error| runtime_error("GetClientRect", error))?;
+            .map_err(|error| player_error("GetClientRect", error))?;
         let width = (rect.right - rect.left).max(0) as u32;
         let height = (rect.bottom - rect.top).max(0) as u32;
         Ok((width, height))
@@ -671,9 +671,9 @@ mod windows_d3d11_presenter {
         format == DXGI_FORMAT_NV12
     }
 
-    fn runtime_error(operation: &str, error: windows::core::Error) -> PlayerRuntimeError {
-        PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::BackendFailure,
+    fn player_error(operation: &str, error: windows::core::Error) -> PlayerError {
+        PlayerError::new(
+            PlayerErrorCode::BackendFailure,
             format!("{operation} failed: {error}"),
         )
     }
@@ -700,14 +700,14 @@ pub fn windows_runtime_adapter_factory() -> &'static dyn PlayerRuntimeAdapterFac
     &FACTORY
 }
 
-pub fn install_default_windows_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_windows_runtime_adapter_factory() -> PlayerResult<()> {
     register_default_runtime_adapter_factory(windows_runtime_adapter_factory())
 }
 
 pub fn open_windows_host_runtime_uri_with_options(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     open_windows_host_runtime_source_with_options(MediaSource::new(uri), options)
 }
 
@@ -715,7 +715,7 @@ pub fn open_windows_host_runtime_uri_with_options_and_interrupt(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     open_windows_host_runtime_source_with_options_and_interrupt(
         MediaSource::new(uri),
         options,
@@ -726,17 +726,17 @@ pub fn open_windows_host_runtime_uri_with_options_and_interrupt(
 pub fn probe_windows_host_runtime_uri_with_options(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<WindowsHostRuntimeProbe> {
+) -> PlayerResult<WindowsHostRuntimeProbe> {
     probe_windows_host_runtime_source_with_options(MediaSource::new(uri), options)
 }
 
 pub fn probe_windows_host_runtime_source_with_options(
     source: MediaSource,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<WindowsHostRuntimeProbe> {
+) -> PlayerResult<WindowsHostRuntimeProbe> {
     if !cfg!(target_os = "windows") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "windows host runtime strategy can only be probed on Windows targets",
         ));
     }
@@ -758,10 +758,10 @@ pub fn probe_windows_host_runtime_source_with_options(
 pub fn open_windows_host_runtime_source_with_options(
     source: MediaSource,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     if !cfg!(target_os = "windows") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "windows host runtime strategy can only be initialized on Windows targets",
         ));
     }
@@ -773,10 +773,10 @@ pub fn open_windows_host_runtime_source_with_options_and_interrupt(
     source: MediaSource,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     if !cfg!(target_os = "windows") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "windows host runtime strategy can only be initialized on Windows targets",
         ));
     }
@@ -809,10 +809,10 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         if !cfg!(target_os = "windows") {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "windows desktop adapter can only be initialized on Windows targets",
             ));
         }
@@ -829,8 +829,8 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
             let fallback_source = source.clone();
             let fallback_options = options.clone();
             let video_surface = fallback_options.video_surface.clone().ok_or_else(|| {
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::InvalidArgument,
+                PlayerError::new(
+                    PlayerErrorCode::InvalidArgument,
                     "windows native-frame selection requires a video surface",
                 )
             })?;
@@ -893,7 +893,7 @@ impl PlayerRuntimeAdapterInitializer for WindowsRuntimeAdapterInitializer {
         apply_windows_runtime_diagnostics(self.inner.startup(), &self.diagnostics)
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self {
             inner,
             diagnostics,
@@ -1242,11 +1242,11 @@ impl PlayerRuntimeAdapter for WindowsRuntimeAdapter {
     fn dispatch(
         &mut self,
         command: player_runtime::PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<player_runtime::PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<player_runtime::PlayerRuntimeCommandResult> {
         self.inner.dispatch(command)
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<player_runtime::DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<player_runtime::DecodedVideoFrame>> {
         match self.inner.advance() {
             Ok(frame) => Ok(frame),
             Err(error)
@@ -1266,10 +1266,7 @@ impl PlayerRuntimeAdapter for WindowsRuntimeAdapter {
 }
 
 impl WindowsRuntimeAdapter {
-    fn activate_runtime_fallback(
-        &mut self,
-        runtime_error_message: &str,
-    ) -> PlayerRuntimeResult<()> {
+    fn activate_runtime_fallback(&mut self, runtime_error_message: &str) -> PlayerResult<()> {
         let Some(fallback) = self.runtime_fallback.take() else {
             return Ok(());
         };
@@ -1313,8 +1310,8 @@ impl WindowsRuntimeAdapter {
     }
 }
 
-fn should_trigger_windows_runtime_fallback(error: &PlayerRuntimeError) -> bool {
-    if error.code() != PlayerRuntimeErrorCode::BackendFailure {
+fn should_trigger_windows_runtime_fallback(error: &PlayerError) -> bool {
+    if error.code() != PlayerErrorCode::BackendFailure {
         return false;
     }
     let message = error.message().to_ascii_lowercase();
@@ -1751,10 +1748,10 @@ mod tests {
         PluginDiagnosticStatus, PluginRegistry,
     };
     use player_runtime::{
-        PlayerDecoderPluginVideoMode, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
-        PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent,
-        PlayerRuntimeOptions, PlayerRuntimeResult, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+        PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerResult,
+        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
     };
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -1795,7 +1792,7 @@ mod tests {
                 Ok(_) => panic!("non-windows hosts should reject the windows adapter"),
                 Err(error) => error,
             };
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+            assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
     }
 
@@ -1824,7 +1821,7 @@ mod tests {
                 PlayerRuntimeOptions::default(),
             );
             let error = result.expect_err("non-windows hosts should reject the windows host probe");
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+            assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
     }
 
@@ -1856,7 +1853,7 @@ mod tests {
                 Ok(_) => panic!("non-windows hosts should reject the windows host opener"),
                 Err(error) => error,
             };
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+            assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
     }
 
@@ -2145,8 +2142,8 @@ mod tests {
                     track_catalog: Default::default(),
                     track_selection: Default::default(),
                 },
-                advance_error: Some(PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                advance_error: Some(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "windows native-frame presenter/runtime skeleton is not implemented yet",
                 )),
             }),
@@ -2172,7 +2169,7 @@ mod tests {
 
         assert!(matches!(
             error.code(),
-            PlayerRuntimeErrorCode::Unsupported | PlayerRuntimeErrorCode::InvalidSource
+            PlayerErrorCode::Unsupported | PlayerErrorCode::InvalidSource
         ));
         assert!(adapter.runtime_fallback.is_none());
     }
@@ -2407,7 +2404,7 @@ mod tests {
     struct FakeWindowsRuntime {
         capabilities: PlayerRuntimeAdapterCapabilities,
         media_info: player_runtime::PlayerMediaInfo,
-        advance_error: Option<PlayerRuntimeError>,
+        advance_error: Option<PlayerError>,
     }
 
     struct FakeWindowsNativeSession {
@@ -2484,21 +2481,21 @@ mod tests {
             None
         }
 
-        fn attach(&mut self, _target: WindowsSurfaceAttachTarget) -> PlayerRuntimeResult<()> {
+        fn attach(&mut self, _target: WindowsSurfaceAttachTarget) -> PlayerResult<()> {
             Ok(())
         }
 
-        fn reset(&mut self) -> PlayerRuntimeResult<()> {
+        fn reset(&mut self) -> PlayerResult<()> {
             Ok(())
         }
 
-        fn present(&mut self, handle: usize) -> PlayerRuntimeResult<()> {
+        fn present(&mut self, handle: usize) -> PlayerResult<()> {
             self.presented_handles
                 .lock()
                 .expect("presented handles")
                 .push(handle);
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "windows native-frame presenter skeleton is not implemented yet",
             ))
         }
@@ -2638,14 +2635,14 @@ mod tests {
         fn dispatch(
             &mut self,
             _command: PlayerRuntimeCommand,
-        ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
-            Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "fake windows runtime dispatch is not implemented",
             ))
         }
 
-        fn advance(&mut self) -> PlayerRuntimeResult<Option<player_runtime::DecodedVideoFrame>> {
+        fn advance(&mut self) -> PlayerResult<Option<player_runtime::DecodedVideoFrame>> {
             if let Some(error) = self.advance_error.take() {
                 return Err(error);
             }

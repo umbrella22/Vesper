@@ -84,7 +84,7 @@ impl PlayerHandle {
         self.command_tx
             .send(command)
             .await
-            .map_err(|_| PlayerError::CommandChannelClosed)
+            .map_err(|_| PlayerError::command_channel_closed())
     }
 }
 
@@ -129,7 +129,7 @@ impl Player {
                 self.event_tx
                     .send(PlayerEvent::SourceLoaded(source))
                     .await
-                    .map_err(|_| PlayerError::EventChannelClosed)?;
+                    .map_err(|_| PlayerError::event_channel_closed())?;
                 self.set_state(PlaybackState::Ready).await?;
                 Ok(true)
             }
@@ -149,14 +149,14 @@ impl Player {
                 self.event_tx
                     .send(PlayerEvent::SeekCompleted(position))
                     .await
-                    .map_err(|_| PlayerError::EventChannelClosed)?;
+                    .map_err(|_| PlayerError::event_channel_closed())?;
                 Ok(true)
             }
             PlaybackCommand::Shutdown => {
                 self.event_tx
                     .send(PlayerEvent::Shutdown)
                     .await
-                    .map_err(|_| PlayerError::EventChannelClosed)?;
+                    .map_err(|_| PlayerError::event_channel_closed())?;
                 Ok(false)
             }
         }
@@ -172,6 +172,6 @@ impl Player {
         self.event_tx
             .send(PlayerEvent::StateChanged(self.state.clone()))
             .await
-            .map_err(|_| PlayerError::EventChannelClosed)
+            .map_err(|_| PlayerError::event_channel_closed())
     }
 }

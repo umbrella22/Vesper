@@ -37,15 +37,15 @@ use player_plugin_loader::{
     LoadedDynamicPlugin, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
 };
 use player_runtime::{
-    DecodedVideoFrame, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo,
-    PlayerPluginCodecCapability, PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerRuntime, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeError,
-    PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
-    PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-    PlayerVideoSurfaceTarget, PresentationState, register_default_runtime_adapter_factory,
+    DecodedVideoFrame, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerError,
+    PlayerErrorCode, PlayerMediaInfo, PlayerPluginCodecCapability,
+    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerResult, PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
+    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
+    PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoSurfaceTarget,
+    PresentationState, register_default_runtime_adapter_factory,
 };
 
 pub const MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_software_desktop";
@@ -85,26 +85,26 @@ pub fn macos_host_runtime_adapter_factory() -> &'static dyn PlayerRuntimeAdapter
     &FACTORY
 }
 
-pub fn install_default_macos_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_macos_runtime_adapter_factory() -> PlayerResult<()> {
     install_default_macos_host_runtime_adapter_factory()
 }
 
-pub fn install_default_macos_host_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_macos_host_runtime_adapter_factory() -> PlayerResult<()> {
     register_default_runtime_adapter_factory(macos_host_runtime_adapter_factory())
 }
 
-pub fn install_default_macos_software_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_macos_software_runtime_adapter_factory() -> PlayerResult<()> {
     register_default_runtime_adapter_factory(macos_runtime_adapter_factory())
 }
 
-pub fn install_default_macos_native_runtime_adapter_factory() -> PlayerRuntimeResult<()> {
+pub fn install_default_macos_native_runtime_adapter_factory() -> PlayerResult<()> {
     register_default_runtime_adapter_factory(macos_native_runtime_adapter_factory())
 }
 
 pub fn open_macos_host_runtime_uri_with_options(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     open_macos_host_runtime_source_with_options(MediaSource::new(uri), options)
 }
 
@@ -112,7 +112,7 @@ pub fn open_macos_host_runtime_uri_with_options_and_interrupt(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     open_macos_host_runtime_source_with_options_and_interrupt(
         MediaSource::new(uri),
         options,
@@ -124,7 +124,7 @@ pub fn open_macos_software_runtime_uri_with_options_and_interrupt(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     open_macos_software_runtime_source_with_options_and_interrupt(
         MediaSource::new(uri),
         options,
@@ -135,17 +135,17 @@ pub fn open_macos_software_runtime_uri_with_options_and_interrupt(
 pub fn probe_macos_host_runtime_uri_with_options(
     uri: impl Into<String>,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<MacosHostRuntimeProbe> {
+) -> PlayerResult<MacosHostRuntimeProbe> {
     probe_macos_host_runtime_source_with_options(MediaSource::new(uri), options)
 }
 
 pub fn probe_macos_host_runtime_source_with_options(
     source: MediaSource,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<MacosHostRuntimeProbe> {
+) -> PlayerResult<MacosHostRuntimeProbe> {
     if !cfg!(target_os = "macos") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "macos host runtime strategy can only be probed on macOS targets",
         ));
     }
@@ -196,10 +196,10 @@ pub fn probe_macos_host_runtime_source_with_options(
 pub fn open_macos_host_runtime_source_with_options(
     source: MediaSource,
     options: PlayerRuntimeOptions,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     if !cfg!(target_os = "macos") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "macos host runtime strategy can only be initialized on macOS targets",
         ));
     }
@@ -256,10 +256,10 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
     source: MediaSource,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     if !cfg!(target_os = "macos") {
-        return Err(PlayerRuntimeError::new(
-            PlayerRuntimeErrorCode::Unsupported,
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
             "macos host runtime strategy can only be initialized on macOS targets",
         ));
     }
@@ -319,7 +319,7 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
     source: MediaSource,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     let selection = probe_platform_desktop_source_with_options(
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         source.clone(),
@@ -449,7 +449,7 @@ trait MacosHostFallbackFactory: Send + Sync {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>>;
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>>;
 }
 
 #[derive(Debug, Default)]
@@ -499,10 +499,10 @@ impl PlayerRuntimeAdapterFactory for MacosHostPlayerRuntimeAdapterFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         if !cfg!(target_os = "macos") {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "macos host runtime adapter can only be initialized on macOS targets",
             ));
         }
@@ -525,10 +525,10 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         if !cfg!(target_os = "macos") {
-            return Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::Unsupported,
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
                 "macos desktop adapter can only be initialized on macOS targets",
             ));
         }
@@ -602,7 +602,7 @@ impl PlayerRuntimeAdapterInitializer for MacosHostRuntimeAdapterInitializer {
         self.startup.clone()
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self {
             selection, startup, ..
         } = *self;
@@ -650,7 +650,7 @@ impl PlayerRuntimeAdapterInitializer for MacosRuntimeAdapterInitializer {
         apply_macos_runtime_diagnostics(self.inner.startup(), &self.diagnostics)
     }
 
-    fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         let Self {
             inner,
             diagnostics,
@@ -714,7 +714,7 @@ impl MacosHostFallbackFactory for MacosSoftwareFallbackFactory {
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
-    ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         macos_runtime_adapter_factory().probe_source_with_options(source, options)
     }
 }
@@ -777,7 +777,7 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
-    ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
         match self.inner.dispatch(command.clone()) {
             Ok(result) => Ok(result),
             Err(error)
@@ -791,7 +791,7 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
         }
     }
 
-    fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         match self.inner.advance() {
             Ok(frame) => Ok(frame),
             Err(error)
@@ -811,10 +811,7 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
 }
 
 impl MacosRuntimeAdapter {
-    fn activate_runtime_fallback(
-        &mut self,
-        runtime_error_message: &str,
-    ) -> PlayerRuntimeResult<()> {
+    fn activate_runtime_fallback(&mut self, runtime_error_message: &str) -> PlayerResult<()> {
         let Some(fallback) = self.runtime_fallback.take() else {
             return Ok(());
         };
@@ -836,8 +833,8 @@ impl MacosRuntimeAdapter {
         open_fallback: impl FnOnce(
             MediaSource,
             PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap>,
-    ) -> PlayerRuntimeResult<()> {
+        ) -> PlayerResult<PlayerRuntimeAdapterBootstrap>,
+    ) -> PlayerResult<()> {
         let progress = self.inner.progress();
         let playback_rate = self.inner.playback_rate();
         let was_playing = self.inner.presentation_state() == PresentationState::Playing;
@@ -877,8 +874,8 @@ impl MacosRuntimeAdapter {
     }
 }
 
-fn should_trigger_runtime_fallback_for_advance(error: &PlayerRuntimeError) -> bool {
-    if error.code() != PlayerRuntimeErrorCode::BackendFailure {
+fn should_trigger_runtime_fallback_for_advance(error: &PlayerError) -> bool {
+    if error.code() != PlayerErrorCode::BackendFailure {
         return false;
     }
     let message = error.message().to_ascii_lowercase();
@@ -891,9 +888,9 @@ fn should_trigger_runtime_fallback_for_advance(error: &PlayerRuntimeError) -> bo
 
 fn should_trigger_runtime_fallback_for_command(
     command: &PlayerRuntimeCommand,
-    error: &PlayerRuntimeError,
+    error: &PlayerError,
 ) -> bool {
-    if error.code() != PlayerRuntimeErrorCode::BackendFailure {
+    if error.code() != PlayerErrorCode::BackendFailure {
         return false;
     }
     let message = error.message().to_ascii_lowercase();
@@ -1881,7 +1878,7 @@ fn probe_macos_host_runtime_initializer_with_factories(
     options: PlayerRuntimeOptions,
     native_factory: &dyn PlayerRuntimeAdapterFactory,
     software_fallback_factory: Arc<dyn MacosHostFallbackFactory>,
-) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
     match native_factory.probe_source_with_options(source.clone(), options.clone()) {
         Ok(initializer) => {
             let capabilities = initializer.capabilities();
@@ -1933,7 +1930,7 @@ fn probe_software_fallback_initializer(
     options: PlayerRuntimeOptions,
     software_factory: &dyn MacosHostFallbackFactory,
     fallback_reason: Option<String>,
-) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
     let initializer = software_factory.probe_source_with_options(source, options.clone())?;
     let capabilities = initializer.capabilities();
     let media_info = initializer.media_info();
@@ -1967,7 +1964,7 @@ fn open_software_fallback_runtime(
     source: MediaSource,
     options: PlayerRuntimeOptions,
     fallback_reason: Option<String>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     match PlayerRuntime::open_source_with_factory(source, options, macos_runtime_adapter_factory())
     {
         Ok(mut bootstrap) => {
@@ -1984,8 +1981,8 @@ fn open_software_fallback_runtime(
             Ok(bootstrap)
         }
         Err(software_error) => match fallback_reason {
-            Some(fallback_reason) => Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            Some(fallback_reason) => Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 format!(
                     "macos native host playback failed and software fallback also failed: native={}, software={}",
                     fallback_reason,
@@ -2002,7 +1999,7 @@ fn open_software_fallback_runtime_with_interrupt(
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
     fallback_reason: Option<String>,
-) -> PlayerRuntimeResult<PlayerRuntimeBootstrap> {
+) -> PlayerResult<PlayerRuntimeBootstrap> {
     match open_macos_software_runtime_source_with_options_and_interrupt(
         source,
         options,
@@ -2013,8 +2010,8 @@ fn open_software_fallback_runtime_with_interrupt(
             Ok(bootstrap)
         }
         Err(software_error) => match fallback_reason {
-            Some(fallback_reason) => Err(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            Some(fallback_reason) => Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 format!(
                     "macos native host playback failed and software fallback also failed: native={}, software={}",
                     fallback_reason,
@@ -2031,7 +2028,7 @@ fn open_software_fallback_adapter_with_factory(
     options: PlayerRuntimeOptions,
     software_factory: &dyn MacosHostFallbackFactory,
     fallback_reason: Option<String>,
-) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
     let initializer = software_factory.probe_source_with_options(source, options)?;
     let mut startup = initializer.startup();
     apply_video_decode_fallback_reason(&mut startup, fallback_reason);
@@ -2088,13 +2085,14 @@ mod tests {
         PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     };
     use player_runtime::{
-        DecodedVideoFrame, PlaybackProgress, PlayerMediaInfo, PlayerPluginDiagnosticStatus,
-        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+        DecodedVideoFrame, PlaybackProgress, PlayerError, PlayerErrorCode, PlayerMediaInfo,
+        PlayerPluginDiagnosticStatus, PlayerResult, PlayerRuntimeAdapter,
+        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
         PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
         PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-        PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeOptions,
-        PlayerRuntimeResult, PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-        PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,
+        PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
+        PresentationState,
     };
     #[cfg(target_os = "macos")]
     use player_runtime::{PlayerDecoderPluginVideoMode, PlayerRuntimeInitializer};
@@ -2149,7 +2147,7 @@ mod tests {
                 Ok(_) => panic!("non-macos hosts should reject the macos adapter"),
                 Err(error) => error,
             };
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+            assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
     }
 
@@ -2269,8 +2267,8 @@ mod tests {
                 hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
                 fallback_reason: None,
             }),
-            initialize_error: Some(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            initialize_error: Some(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "native init failed",
             )),
             advance_error: None,
@@ -2365,8 +2363,8 @@ mod tests {
                 hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
                 fallback_reason: None,
             }),
-            initialize_error: Some(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            initialize_error: Some(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "native-frame init failed",
             )),
             advance_error: None,
@@ -2479,8 +2477,8 @@ mod tests {
             progress: PlaybackProgress::new(Duration::from_secs(5), Some(Duration::from_secs(30))),
             state: PresentationState::Playing,
             events: VecDeque::new(),
-            advance_error: Some(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            advance_error: Some(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "forced presenter failure",
             )),
             dispatch_error: None,
@@ -2569,8 +2567,8 @@ mod tests {
             state: PresentationState::Playing,
             events: VecDeque::new(),
             advance_error: None,
-            dispatch_error: Some(PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            dispatch_error: Some(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "forced seek failure",
             )),
         });
@@ -2648,8 +2646,8 @@ mod tests {
                     state: PresentationState::Paused,
                     events: VecDeque::new(),
                     advance_error: None,
-                    dispatch_error: Some(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
+                    dispatch_error: Some(PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
                         match command {
                             PlayerRuntimeCommand::Play => "forced play failure",
                             PlayerRuntimeCommand::SetPlaybackRate { .. } => "forced rate failure",
@@ -2700,32 +2698,32 @@ mod tests {
     #[test]
     fn runtime_fallback_trigger_only_matches_expected_paths() {
         assert!(should_trigger_runtime_fallback_for_advance(
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            &PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "failed to present decoded video frame"
             )
         ));
         assert!(should_trigger_runtime_fallback_for_advance(
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            &PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "failed to present seeked video frame"
             )
         ));
         assert!(!should_trigger_runtime_fallback_for_advance(
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            &PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "failed to decode audio stream"
             )
         ));
         assert!(should_trigger_runtime_fallback_for_advance(
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
+            &PlayerError::new(
+                PlayerErrorCode::BackendFailure,
                 "native-frame decoder state is poisoned"
             )
         ));
         assert!(!should_trigger_runtime_fallback_for_advance(
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::SeekFailure,
+            &PlayerError::new(
+                PlayerErrorCode::SeekFailure,
                 "failed to present decoded video frame"
             )
         ));
@@ -2733,38 +2731,23 @@ mod tests {
             &PlayerRuntimeCommand::SeekTo {
                 position: Duration::from_secs(1)
             },
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                "forced seek failure"
-            )
+            &PlayerError::new(PlayerErrorCode::BackendFailure, "forced seek failure")
         ));
         assert!(should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::Play,
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                "forced play failure"
-            )
+            &PlayerError::new(PlayerErrorCode::BackendFailure, "forced play failure")
         ));
         assert!(should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::SetPlaybackRate { rate: 1.5 },
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                "forced rate failure"
-            )
+            &PlayerError::new(PlayerErrorCode::BackendFailure, "forced rate failure")
         ));
         assert!(!should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::Pause,
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                "forced pause failure"
-            )
+            &PlayerError::new(PlayerErrorCode::BackendFailure, "forced pause failure")
         ));
         assert!(!should_trigger_runtime_fallback_for_command(
             &PlayerRuntimeCommand::Stop,
-            &PlayerRuntimeError::new(
-                PlayerRuntimeErrorCode::BackendFailure,
-                "forced stop failure"
-            )
+            &PlayerError::new(PlayerErrorCode::BackendFailure, "forced stop failure")
         ));
     }
 
@@ -2798,8 +2781,8 @@ mod tests {
                     state: PresentationState::Playing,
                     events: VecDeque::new(),
                     advance_error: None,
-                    dispatch_error: Some(PlayerRuntimeError::new(
-                        PlayerRuntimeErrorCode::BackendFailure,
+                    dispatch_error: Some(PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
                         match command {
                             PlayerRuntimeCommand::Pause => "forced pause failure",
                             PlayerRuntimeCommand::Stop => "forced stop failure",
@@ -2827,7 +2810,7 @@ mod tests {
             let error = adapter
                 .dispatch(command)
                 .expect_err("pause/stop should not fallback");
-            assert_eq!(error.code(), PlayerRuntimeErrorCode::BackendFailure);
+            assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
             assert!(adapter.runtime_fallback.is_some());
             assert!(adapter.inner.capabilities().supports_external_video_surface);
         }
@@ -4181,8 +4164,8 @@ mod tests {
         capabilities: PlayerRuntimeAdapterCapabilities,
         media_info: PlayerMediaInfo,
         startup: PlayerRuntimeStartup,
-        initialize_error: Option<PlayerRuntimeError>,
-        advance_error: Option<PlayerRuntimeError>,
+        initialize_error: Option<PlayerError>,
+        advance_error: Option<PlayerError>,
     }
 
     impl PlayerRuntimeAdapterFactory for FakeStrategyFactory {
@@ -4194,7 +4177,7 @@ mod tests {
             &self,
             _source: MediaSource,
             _options: PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+        ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
             Ok(Box::new(FakeStrategyInitializer {
                 capabilities: self.capabilities.clone(),
                 media_info: self.media_info.clone(),
@@ -4210,7 +4193,7 @@ mod tests {
             &self,
             source: MediaSource,
             options: PlayerRuntimeOptions,
-        ) -> PlayerRuntimeResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+        ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
             <Self as PlayerRuntimeAdapterFactory>::probe_source_with_options(self, source, options)
         }
     }
@@ -4219,8 +4202,8 @@ mod tests {
         capabilities: PlayerRuntimeAdapterCapabilities,
         media_info: PlayerMediaInfo,
         startup: PlayerRuntimeStartup,
-        initialize_error: Option<PlayerRuntimeError>,
-        advance_error: Option<PlayerRuntimeError>,
+        initialize_error: Option<PlayerError>,
+        advance_error: Option<PlayerError>,
     }
 
     impl PlayerRuntimeAdapterInitializer for FakeStrategyInitializer {
@@ -4236,7 +4219,7 @@ mod tests {
             self.startup.clone()
         }
 
-        fn initialize(self: Box<Self>) -> PlayerRuntimeResult<PlayerRuntimeAdapterBootstrap> {
+        fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
             let Self {
                 capabilities,
                 media_info,
@@ -4273,8 +4256,8 @@ mod tests {
         progress: PlaybackProgress,
         state: PresentationState,
         events: VecDeque<PlayerRuntimeEvent>,
-        advance_error: Option<PlayerRuntimeError>,
-        dispatch_error: Option<PlayerRuntimeError>,
+        advance_error: Option<PlayerError>,
+        dispatch_error: Option<PlayerError>,
     }
 
     impl PlayerRuntimeAdapter for FakeStrategyRuntime {
@@ -4309,7 +4292,7 @@ mod tests {
         fn dispatch(
             &mut self,
             command: PlayerRuntimeCommand,
-        ) -> PlayerRuntimeResult<PlayerRuntimeCommandResult> {
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
             if let Some(error) = self.dispatch_error.take() {
                 return Err(error);
             }
@@ -4332,7 +4315,7 @@ mod tests {
             })
         }
 
-        fn advance(&mut self) -> PlayerRuntimeResult<Option<DecodedVideoFrame>> {
+        fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
             if let Some(error) = self.advance_error.take() {
                 return Err(error);
             }

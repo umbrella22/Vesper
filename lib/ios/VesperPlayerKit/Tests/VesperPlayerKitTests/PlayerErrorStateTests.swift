@@ -10,7 +10,8 @@ final class PlayerErrorStateTests: XCTestCase {
 
         bridge.setVideoTrackSelection(.track(missingTrackId))
 
-        XCTAssertEqual(bridge.lastError?.category, .unsupported)
+        XCTAssertEqual(bridge.lastError?.code, .unsupported)
+        XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(
             bridge.lastError?.message,
@@ -24,7 +25,8 @@ final class PlayerErrorStateTests: XCTestCase {
 
         bridge.setAbrPolicy(.fixedTrack(missingTrackId))
 
-        XCTAssertEqual(bridge.lastError?.category, .unsupported)
+        XCTAssertEqual(bridge.lastError?.code, .unsupported)
+        XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(
             bridge.lastError?.message,
@@ -37,7 +39,8 @@ final class PlayerErrorStateTests: XCTestCase {
 
         bridge.setAbrPolicy(.constrained(maxHeight: 720))
 
-        XCTAssertEqual(bridge.lastError?.category, .unsupported)
+        XCTAssertEqual(bridge.lastError?.code, .unsupported)
+        XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(
             bridge.lastError?.message,

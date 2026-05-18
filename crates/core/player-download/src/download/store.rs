@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use crate::PlayerRuntimeResult;
+use crate::PlayerResult;
 
 use super::types::{DownloadAssetId, DownloadTaskId, DownloadTaskSnapshot};
 
 pub trait DownloadStore {
-    fn save_task(&mut self, task: DownloadTaskSnapshot) -> PlayerRuntimeResult<()>;
+    fn save_task(&mut self, task: DownloadTaskSnapshot) -> PlayerResult<()>;
 
     fn task(&self, task_id: DownloadTaskId) -> Option<DownloadTaskSnapshot>;
 
@@ -21,7 +21,7 @@ pub struct InMemoryDownloadStore {
 }
 
 impl DownloadStore for InMemoryDownloadStore {
-    fn save_task(&mut self, task: DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn save_task(&mut self, task: DownloadTaskSnapshot) -> PlayerResult<()> {
         let task_id = task.task_id;
         let asset_id = task.asset_id.clone();
 

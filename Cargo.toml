@@ -13,6 +13,7 @@ members = [
     "crates/platform/desktop/*",
     "crates/platform/mobile/*",
     "crates/platform/jni/*",
+    "crates/tools/*",
     "examples/basic-player",
 ]
 resolver = "3"

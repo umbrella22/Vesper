@@ -14,10 +14,10 @@ use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use player_render_wgpu::RenderSurfaceConfig;
 use player_runtime::{
     DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, PlayerBufferingPolicy,
-    PlayerBufferingPreset, PlayerMediaInfo, PlayerRuntimeAdapterCapabilities,
-    PlayerRuntimeBootstrap, PlayerRuntimeOptions, PlayerRuntimeResult, PlayerRuntimeStartup,
-    PreloadCandidate, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadSnapshot,
-    PreloadTaskId, PreloadTaskSnapshot,
+    PlayerBufferingPreset, PlayerMediaInfo, PlayerResult, PlayerRuntimeAdapterCapabilities,
+    PlayerRuntimeBootstrap, PlayerRuntimeOptions, PlayerRuntimeStartup, PreloadCandidate,
+    PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadSnapshot, PreloadTaskId,
+    PreloadTaskSnapshot,
 };
 use winit::window::Window;
 
@@ -92,14 +92,14 @@ impl DesktopNoopPreloadExecutor {
 }
 
 impl PreloadExecutor for DesktopNoopPreloadExecutor {
-    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()> {
         if let Ok(mut commands) = self.commands.lock() {
             commands.push(DesktopPreloadCommand::Warmup { task: task.clone() });
         }
         Ok(())
     }
 
-    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerRuntimeResult<()> {
+    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()> {
         if let Ok(mut commands) = self.commands.lock() {
             commands.push(DesktopPreloadCommand::Cancel { task_id });
         }
@@ -130,22 +130,19 @@ impl DesktopPreloadBridgeSession {
     pub fn complete(
         &mut self,
         task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.planner.complete(task_id)
     }
 
     pub fn fail(
         &mut self,
         task_id: PreloadTaskId,
-        error: player_runtime::PlayerRuntimeError,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        error: player_runtime::PlayerError,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.planner.fail(task_id, error)
     }
 
-    pub fn cancel(
-        &mut self,
-        task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    pub fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.planner.cancel(task_id)
     }
 
@@ -472,10 +469,10 @@ mod tests {
     use player_render_wgpu::RenderSurfaceConfig;
     use player_runtime::{
         DEFAULT_VIDEO_PREFETCH_CAPACITY, InMemoryPreloadBudgetProvider, MediaSourceKind,
-        MediaSourceProtocol, MediaTrackCatalog, MediaTrackSelectionSnapshot, PlayerMediaInfo,
-        PlayerRuntimeError, PlayerRuntimeErrorCode, PlayerRuntimeOptions, PlayerVideoInfo,
-        PreloadBudget, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
-        PreloadEvent, PreloadExecutor, PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
+        MediaSourceProtocol, MediaTrackCatalog, MediaTrackSelectionSnapshot, PlayerError,
+        PlayerErrorCode, PlayerMediaInfo, PlayerRuntimeOptions, PlayerVideoInfo, PreloadBudget,
+        PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadEvent,
+        PreloadExecutor, PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
     };
     const HLS_REMOTE_SOURCE: &str = "https://example.com/stream/master.m3u8";
     const DASH_REMOTE_SOURCE: &str = "https://example.com/stream/manifest.mpd";
@@ -711,8 +708,8 @@ mod tests {
         let failed = session
             .fail(
                 task_id,
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
                     "desktop preload noop executor failed",
                 ),
             )

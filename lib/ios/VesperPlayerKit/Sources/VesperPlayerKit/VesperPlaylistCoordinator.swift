@@ -433,8 +433,8 @@ public final class VesperPlaylistCoordinator: ObservableObject {
                     _ = vesper_runtime_playlist_session_fail_preload_task(
                         handle,
                         task.taskId,
-                        3,
-                        7,
+                        PlayerFfiErrorCodeBackendFailure,
+                        PlayerFfiErrorCategoryNetwork,
                         false,
                         message
                     )

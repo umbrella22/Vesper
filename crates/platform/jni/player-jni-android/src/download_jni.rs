@@ -14,8 +14,7 @@ use player_runtime::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
     DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadProfile,
     DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
-    DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus,
-    PlayerRuntimeError,
+    DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus, PlayerError,
 };
 
 use crate::{
@@ -1261,7 +1260,7 @@ fn mutate_download_task(
         &mut AndroidDownloadBridgeSession,
         player_runtime::DownloadTaskId,
         Instant,
-    ) -> player_runtime::PlayerRuntimeResult<Option<DownloadTaskSnapshot>>,
+    ) -> player_runtime::PlayerResult<Option<DownloadTaskSnapshot>>,
 ) -> jboolean {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
@@ -1510,7 +1509,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|env| -> JniResult<jboolean> {
                 let message = message.try_to_string(env)?;
-                let error = PlayerRuntimeError::with_taxonomy(
+                let error = PlayerError::with_taxonomy(
                     error_code_from_ordinal(code_ordinal),
                     error_category_from_ordinal(category_ordinal),
                     (retriable as u8) != 0,

@@ -2,9 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use player_download::{
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
-};
+use player_download::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 use player_model::MediaSource;
 
 pub const DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS: u32 = 2;
@@ -188,14 +186,14 @@ pub type PreloadTaskState = PreloadTaskStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadErrorSummary {
-    pub code: PlayerRuntimeErrorCode,
-    pub category: PlayerRuntimeErrorCategory,
+    pub code: PlayerErrorCode,
+    pub category: PlayerErrorCategory,
     pub retriable: bool,
     pub message: String,
 }
 
-impl From<PlayerRuntimeError> for PreloadErrorSummary {
-    fn from(value: PlayerRuntimeError) -> Self {
+impl From<PlayerError> for PreloadErrorSummary {
+    fn from(value: PlayerError) -> Self {
         Self {
             code: value.code(),
             category: value.category(),
@@ -296,9 +294,9 @@ impl PreloadBudgetProvider for InMemoryPreloadBudgetProvider {
 }
 
 pub trait PreloadExecutor {
-    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerRuntimeResult<()>;
+    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()>;
 
-    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerRuntimeResult<()>;
+    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()>;
 }
 
 #[derive(Debug, Default)]
@@ -318,12 +316,12 @@ impl InMemoryPreloadExecutor {
 }
 
 impl PreloadExecutor for InMemoryPreloadExecutor {
-    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()> {
         self.started.push(task.task_id);
         Ok(())
     }
 
-    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerRuntimeResult<()> {
+    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()> {
         self.cancelled.push(task_id);
         Ok(())
     }
@@ -504,10 +502,7 @@ where
         planned
     }
 
-    pub fn cancel(
-        &mut self,
-        task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    pub fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         let Some(record) = self.tasks.get_mut(&task_id) else {
             return Ok(None);
         };
@@ -526,7 +521,7 @@ where
     pub fn complete(
         &mut self,
         task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         let Some(record) = self.tasks.get_mut(&task_id) else {
             return Ok(None);
         };
@@ -545,8 +540,8 @@ where
     pub fn fail(
         &mut self,
         task_id: PreloadTaskId,
-        error: PlayerRuntimeError,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        error: PlayerError,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         let Some(record) = self.tasks.get_mut(&task_id) else {
             return Ok(None);
         };
@@ -566,7 +561,7 @@ where
         &mut self,
         task_id: PreloadTaskId,
         now: Instant,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.expire_due_tasks(now);
 
         let Some(current) = self.tasks.get(&task_id).cloned() else {
@@ -741,7 +736,7 @@ mod tests {
         PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadEvent, PreloadPlanner,
         PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
     };
-    use player_download::{PlayerRuntimeError, PlayerRuntimeErrorCode};
+    use player_download::{PlayerError, PlayerErrorCode};
     use player_model::MediaSource;
     use std::time::{Duration, Instant};
 
@@ -1085,17 +1080,14 @@ mod tests {
         let failed = planner
             .fail(
                 task_id,
-                PlayerRuntimeError::new(
-                    PlayerRuntimeErrorCode::BackendFailure,
-                    "warmup request timed out",
-                ),
+                PlayerError::new(PlayerErrorCode::BackendFailure, "warmup request timed out"),
             )
             .expect("fail should succeed")
             .expect("task should exist");
         assert_eq!(failed.status, PreloadTaskStatus::Failed);
         assert_eq!(
             failed.error_summary.expect("error summary").code,
-            PlayerRuntimeErrorCode::BackendFailure
+            PlayerErrorCode::BackendFailure
         );
 
         let next_task_ids = planner.plan(

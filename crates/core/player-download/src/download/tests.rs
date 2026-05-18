@@ -6,8 +6,8 @@ use super::{
     InMemoryDownloadExecutor, InMemoryDownloadStore,
 };
 use crate::{
-    DownloadAssetStream, DownloadStreamKind, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-    PlayerRuntimeErrorCode, PlayerRuntimeResult,
+    DownloadAssetStream, DownloadStreamKind, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+    PlayerResult,
 };
 use player_model::MediaSource;
 use player_plugin::{
@@ -190,27 +190,27 @@ impl super::DownloadExecutor for PendingPrepareExecutor {
     fn prepare(
         &mut self,
         task: &super::DownloadTaskSnapshot,
-    ) -> PlayerRuntimeResult<DownloadPrepareResult> {
+    ) -> PlayerResult<DownloadPrepareResult> {
         self.prepared.push(task.task_id);
         Ok(DownloadPrepareResult::Pending)
     }
 
-    fn start(&mut self, task: &super::DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn start(&mut self, task: &super::DownloadTaskSnapshot) -> PlayerResult<()> {
         self.started.push(task.task_id);
         Ok(())
     }
 
-    fn pause(&mut self, task_id: DownloadTaskId) -> PlayerRuntimeResult<()> {
+    fn pause(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
         self.paused.push(task_id);
         Ok(())
     }
 
-    fn resume(&mut self, task: &super::DownloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn resume(&mut self, task: &super::DownloadTaskSnapshot) -> PlayerResult<()> {
         self.started.push(task.task_id);
         Ok(())
     }
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerRuntimeResult<()> {
+    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
         self.removed.push(task_id);
         Ok(())
     }
@@ -424,9 +424,9 @@ fn manager_replaces_task_plan_and_resets_progress_for_recovery() {
     manager
         .fail_task(
             task_id,
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::BackendFailure,
-                PlayerRuntimeErrorCategory::Network,
+            PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Network,
                 "stale resource",
             ),
             now,
@@ -663,7 +663,7 @@ fn manager_reports_task_id_exhaustion_instead_of_wrapping() {
         )
         .expect_err("task id exhaustion should be reported");
 
-    assert_eq!(error.code(), PlayerRuntimeErrorCode::InvalidState);
+    assert_eq!(error.code(), PlayerErrorCode::InvalidState);
     assert!(error.message().contains("task id space is exhausted"));
 }
 
@@ -904,9 +904,9 @@ fn manager_ignores_late_failure_after_pause_or_remove() {
     let paused = manager
         .fail_task(
             task_id,
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::BackendFailure,
-                PlayerRuntimeErrorCategory::Network,
+            PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Network,
                 "late worker failure",
             ),
             now,
@@ -923,9 +923,9 @@ fn manager_ignores_late_failure_after_pause_or_remove() {
     let removed = manager
         .fail_task(
             task_id,
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::BackendFailure,
-                PlayerRuntimeErrorCategory::Network,
+            PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Network,
                 "later worker failure",
             ),
             now,
@@ -963,7 +963,7 @@ fn manager_dispatches_pipeline_hook_events_for_state_changes() {
     let _ = manager
         .fail_task(
             task_id,
-            PlayerRuntimeError::new(PlayerRuntimeErrorCode::BackendFailure, "network failed"),
+            PlayerError::new(PlayerErrorCode::BackendFailure, "network failed"),
             now,
         )
         .expect("fail should succeed");

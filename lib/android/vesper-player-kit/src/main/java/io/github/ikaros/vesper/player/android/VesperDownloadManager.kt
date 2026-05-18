@@ -242,8 +242,8 @@ enum class VesperDownloadState {
 }
 
 data class VesperDownloadError(
-    val codeOrdinal: Int,
-    val categoryOrdinal: Int,
+    val code: VesperPlayerErrorCode,
+    val category: VesperPlayerErrorCategory,
     val retriable: Boolean,
     val message: String,
 )
@@ -1028,8 +1028,8 @@ class VesperDownloadManager internal constructor(
                     bindings.failDownloadTask(
                         sessionHandle = sessionHandle,
                         taskId = taskId,
-                        codeOrdinal = error.codeOrdinal,
-                        categoryOrdinal = error.categoryOrdinal,
+                        codeOrdinal = error.code.legacyOrdinal,
+                        categoryOrdinal = error.category.legacyOrdinal,
                         retriable = error.retriable,
                         message = error.message,
                         nowEpochMs = System.currentTimeMillis(),
@@ -1806,8 +1806,8 @@ internal class VesperForegroundDownloadExecutor(
                 reporter.fail(
                     task.taskId,
                     VesperDownloadError(
-                        codeOrdinal = ANDROID_DOWNLOAD_BACKEND_FAILURE_ORDINAL,
-                        categoryOrdinal = ANDROID_DOWNLOAD_NETWORK_CATEGORY_ORDINAL,
+                        code = VesperPlayerErrorCode.BackendFailure,
+                        category = VesperPlayerErrorCategory.Network,
                         retriable = false,
                         message = error.message ?: "android download preparation failed",
                     ),
@@ -1957,8 +1957,8 @@ internal class VesperForegroundDownloadExecutor(
                         reporter.fail(
                             task.taskId,
                             VesperDownloadError(
-                                codeOrdinal = ANDROID_DOWNLOAD_BACKEND_FAILURE_ORDINAL,
-                                categoryOrdinal = ANDROID_DOWNLOAD_NETWORK_CATEGORY_ORDINAL,
+                                code = VesperPlayerErrorCode.BackendFailure,
+                                category = VesperPlayerErrorCategory.Network,
                                 retriable = false,
                                 message = recoveryError.message ?: "android download recovery failed",
                             ),
@@ -1968,8 +1968,8 @@ internal class VesperForegroundDownloadExecutor(
                     reporter.fail(
                         task.taskId,
                         VesperDownloadError(
-                            codeOrdinal = ANDROID_DOWNLOAD_BACKEND_FAILURE_ORDINAL,
-                            categoryOrdinal = ANDROID_DOWNLOAD_NETWORK_CATEGORY_ORDINAL,
+                            code = VesperPlayerErrorCode.BackendFailure,
+                            category = VesperPlayerErrorCategory.Network,
                             retriable = false,
                             message = error.message ?: "android foreground download failed",
                         ),
@@ -1978,8 +1978,8 @@ internal class VesperForegroundDownloadExecutor(
                     reporter.fail(
                         task.taskId,
                         VesperDownloadError(
-                            codeOrdinal = ANDROID_DOWNLOAD_BACKEND_FAILURE_ORDINAL,
-                            categoryOrdinal = ANDROID_DOWNLOAD_NETWORK_CATEGORY_ORDINAL,
+                            code = VesperPlayerErrorCode.BackendFailure,
+                            category = VesperPlayerErrorCategory.Network,
                             retriable = false,
                             message = error.message ?: "android foreground download failed",
                         ),
@@ -3560,8 +3560,8 @@ private fun VesperDownloadTaskSnapshot.toNativePayload(): NativeDownloadTask =
         progress = progress.toNativePayload(),
         assetIndex = assetIndex.toNativePayload(),
         hasError = error != null,
-        errorCodeOrdinal = error?.codeOrdinal ?: 0,
-        errorCategoryOrdinal = error?.categoryOrdinal ?: 0,
+        errorCodeOrdinal = error?.code?.legacyOrdinal ?: 0,
+        errorCategoryOrdinal = error?.category?.legacyOrdinal ?: 0,
         errorRetriable = error?.retriable ?: false,
         errorMessage = error?.message,
     )
@@ -3581,8 +3581,8 @@ private fun NativeDownloadTask.toPublic(): VesperDownloadTaskSnapshot =
         error =
             if (hasError) {
                 VesperDownloadError(
-                    codeOrdinal = errorCodeOrdinal,
-                    categoryOrdinal = errorCategoryOrdinal,
+                    code = VesperPlayerErrorCode.fromLegacyOrdinal(errorCodeOrdinal),
+                    category = VesperPlayerErrorCategory.fromLegacyOrdinal(errorCategoryOrdinal),
                     retriable = errorRetriable,
                     message = errorMessage ?: "download failed",
                 )
@@ -3728,8 +3728,8 @@ private fun NativeDownloadEvent.toPublic(): VesperDownloadEvent =
                     error =
                         if (hasError) {
                             VesperDownloadError(
-                                codeOrdinal = errorCodeOrdinal,
-                                categoryOrdinal = errorCategoryOrdinal,
+                                code = VesperPlayerErrorCode.fromLegacyOrdinal(errorCodeOrdinal),
+                                category = VesperPlayerErrorCategory.fromLegacyOrdinal(errorCategoryOrdinal),
                                 retriable = errorRetriable,
                                 message = errorMessage.orEmpty(),
                             )
@@ -3986,16 +3986,20 @@ private fun JSONObject.toDownloadByteRange(): VesperDownloadByteRange =
 
 private fun VesperDownloadError.toJson(): JSONObject =
     JSONObject().apply {
-        put("codeOrdinal", codeOrdinal)
-        put("categoryOrdinal", categoryOrdinal)
+        put("code", code.wireName)
+        put("category", category.wireName)
         put("retriable", retriable)
         put("message", message)
     }
 
 private fun JSONObject.toDownloadError(): VesperDownloadError =
     VesperDownloadError(
-        codeOrdinal = optInt("codeOrdinal", 0),
-        categoryOrdinal = optInt("categoryOrdinal", 0),
+        code =
+            optStringOrNull("code")?.let(VesperPlayerErrorCode::fromWireName)
+                ?: VesperPlayerErrorCode.fromLegacyOrdinal(optInt("codeOrdinal", 0)),
+        category =
+            optStringOrNull("category")?.let(VesperPlayerErrorCategory::fromWireName)
+                ?: VesperPlayerErrorCategory.fromLegacyOrdinal(optInt("categoryOrdinal", 0)),
         retriable = optBoolean("retriable", false),
         message = optString("message", "download failed"),
     )
@@ -4230,8 +4234,6 @@ private class DownloadProgressThrottle(
     }
 }
 
-private const val ANDROID_DOWNLOAD_BACKEND_FAILURE_ORDINAL = 3
-private const val ANDROID_DOWNLOAD_NETWORK_CATEGORY_ORDINAL = 2
 private const val ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_BYTES = 512L * 1024L
 private const val ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_INTERVAL_MS = 250L
 private const val ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS = 15_000

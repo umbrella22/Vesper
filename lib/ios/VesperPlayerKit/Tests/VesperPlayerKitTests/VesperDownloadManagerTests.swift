@@ -5,6 +5,63 @@ import VesperPlayerKitBridgeShim
 
 @MainActor
 final class VesperDownloadManagerTests: XCTestCase {
+    func testDownloadErrorCodableRequiresTypedFields() throws {
+        let error = VesperDownloadError(
+            code: .backendFailure,
+            category: .network,
+            retriable: true,
+            message: "network stalled"
+        )
+
+        let data = try JSONEncoder().encode(error)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(json["code"] as? String, "backendFailure")
+        XCTAssertEqual(json["category"] as? String, "network")
+        XCTAssertEqual(json["retriable"] as? Bool, true)
+        XCTAssertEqual(json["message"] as? String, "network stalled")
+
+        let decoded = try JSONDecoder().decode(VesperDownloadError.self, from: data)
+        XCTAssertEqual(decoded, error)
+    }
+
+    func testDownloadErrorCodableRejectsLegacyOrdinalPayload() {
+        let payload: [String: Any] = [
+            "code" + "Ordinal": 3,
+            "category" + "Ordinal": 2,
+            "retriable": false,
+            "message": "legacy",
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: payload)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(VesperDownloadError.self, from: data))
+    }
+
+    func testPlayerErrorFfiEnumBridgeMapping() {
+        XCTAssertEqual(
+            VesperPlayerErrorCode(ffiCode: PlayerFfiErrorCodeBackendFailure),
+            .backendFailure
+        )
+        XCTAssertEqual(
+            VesperPlayerErrorCode(ffiCode: PlayerFfiErrorCodeUnsupported),
+            .unsupported
+        )
+        XCTAssertEqual(VesperPlayerErrorCode.timeout.ffiCode, PlayerFfiErrorCodeTimeout)
+        XCTAssertEqual(
+            VesperPlayerErrorCategory(ffiCategory: PlayerFfiErrorCategoryNetwork),
+            .network
+        )
+        XCTAssertEqual(
+            VesperPlayerErrorCategory(ffiCategory: PlayerFfiErrorCategoryCapability),
+            .capability
+        )
+        XCTAssertEqual(
+            VesperPlayerErrorCategory.playback.ffiCategory,
+            PlayerFfiErrorCategoryPlayback
+        )
+    }
+
     func testCreateTaskAutoStartRefreshesSnapshotAndStartsExecutor() {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
@@ -609,8 +666,8 @@ private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadMan
             let updated = task.with(
                 status: .failed,
                 error: StoredDownloadError(
-                    code: error.codeOrdinal,
-                    category: error.categoryOrdinal,
+                    code: error.code.ffiCode,
+                    category: error.category.ffiCategory,
                     retriable: error.retriable,
                     message: error.message
                 )
@@ -725,8 +782,8 @@ private struct StoredDownloadTask {
 }
 
 private struct StoredDownloadError {
-    let code: UInt32
-    let category: UInt32
+    let code: PlayerFfiErrorCode
+    let category: PlayerFfiErrorCategory
     let retriable: Bool
     let message: String
 }
@@ -919,8 +976,8 @@ private func makeRuntimeEvent(from event: StoredRuntimeEvent) -> VesperRuntimeDo
         state_status: task.status.toRuntimeStatus(),
         state_progress: makeRuntimeProgress(from: task),
         state_has_error: event.kind == .stateChanged && error != nil,
-        state_error_code: event.kind == .stateChanged ? (error?.code ?? 0) : 0,
-        state_error_category: event.kind == .stateChanged ? (error?.category ?? 0) : 0,
+        state_error_code: event.kind == .stateChanged ? (error?.code ?? PlayerFfiErrorCodeNone) : PlayerFfiErrorCodeNone,
+        state_error_category: event.kind == .stateChanged ? (error?.category ?? PlayerFfiErrorCategoryPlatform) : PlayerFfiErrorCategoryPlatform,
         state_error_retriable: event.kind == .stateChanged ? (error?.retriable ?? false) : false,
         state_error_message: stateErrorMessage,
         state_completed_path: stateCompletedPath,
@@ -989,8 +1046,8 @@ private func makeRuntimeTask(from task: StoredDownloadTask) -> VesperRuntimeDown
             completed_path: task.completedPath.flatMap(duplicateRuntimeCString)
         ),
         has_error: task.error != nil,
-        error_code: task.error?.code ?? 0,
-        error_category: task.error?.category ?? 0,
+        error_code: task.error?.code ?? PlayerFfiErrorCodeNone,
+        error_category: task.error?.category ?? PlayerFfiErrorCategoryPlatform,
         error_retriable: task.error?.retriable ?? false,
         error_message: task.error.flatMap { duplicateRuntimeCString($0.message) }
     )
@@ -1044,8 +1101,8 @@ private func emptyRuntimeTask() -> VesperRuntimeDownloadTask {
             completed_path: nil
         ),
         has_error: false,
-        error_code: 0,
-        error_category: 0,
+        error_code: PlayerFfiErrorCodeNone,
+        error_category: PlayerFfiErrorCategoryPlatform,
         error_retriable: false,
         error_message: nil
     )

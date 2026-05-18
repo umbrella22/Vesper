@@ -23,6 +23,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.publishedResiliencePolicy = updatedPolicy
         bridge.publishedLastError = VesperPlayerError(
             message: "temporary network hiccup",
+            code: .backendFailure,
             category: .network,
             retriable: true
         )
@@ -194,6 +195,7 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {}
     func setAbrPolicy(_ policy: VesperAbrPolicy) {}
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {}
+    func setAudioSessionInterrupted(_ interrupted: Bool) {}
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent] { [] }
     func benchmarkSummary() -> VesperBenchmarkSummary {
         VesperBenchmarkSummary(

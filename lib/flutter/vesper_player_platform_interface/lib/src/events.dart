@@ -13,7 +13,12 @@ sealed class VesperPlayerEvent {
         final errorMap = vesperDecodeMap(rawError);
         final error = errorMap.isNotEmpty
             ? VesperPlayerError.fromMap(errorMap)
-            : const VesperPlayerError(message: 'Unknown Vesper player error.');
+            : const VesperPlayerError(
+                message: 'Unknown Vesper player error.',
+                code: VesperPlayerErrorCode.backendFailure,
+                category: VesperPlayerErrorCategory.platform,
+                retriable: false,
+              );
         final rawSnapshot = map['snapshot'];
         final snapshotMap = vesperDecodeMap(rawSnapshot);
         return VesperPlayerErrorEvent(

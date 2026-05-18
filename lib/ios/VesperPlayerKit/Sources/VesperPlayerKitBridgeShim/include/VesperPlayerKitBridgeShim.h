@@ -1,9 +1,39 @@
+/* Auto-generated. Do not edit directly. */
 #ifndef VESPER_PLAYER_KIT_BRIDGE_SHIM_H
 #define VESPER_PLAYER_KIT_BRIDGE_SHIM_H
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+typedef enum PlayerFfiErrorCode {
+  PlayerFfiErrorCodeNone = 0,
+  PlayerFfiErrorCodeNullPointer = 1,
+  PlayerFfiErrorCodeInvalidUtf8 = 2,
+  PlayerFfiErrorCodeInvalidArgument = 3,
+  PlayerFfiErrorCodeInvalidState = 4,
+  PlayerFfiErrorCodeInvalidSource = 5,
+  PlayerFfiErrorCodeBackendFailure = 6,
+  PlayerFfiErrorCodeAudioOutputUnavailable = 7,
+  PlayerFfiErrorCodeDecodeFailure = 8,
+  PlayerFfiErrorCodeSeekFailure = 9,
+  PlayerFfiErrorCodeUnsupported = 10,
+  PlayerFfiErrorCodeCommandChannelClosed = 11,
+  PlayerFfiErrorCodeEventChannelClosed = 12,
+  PlayerFfiErrorCodeCancelled = 13,
+  PlayerFfiErrorCodeTimeout = 14,
+} PlayerFfiErrorCode;
+
+typedef enum PlayerFfiErrorCategory {
+  PlayerFfiErrorCategoryInput = 0,
+  PlayerFfiErrorCategorySource = 1,
+  PlayerFfiErrorCategoryNetwork = 2,
+  PlayerFfiErrorCategoryDecode = 3,
+  PlayerFfiErrorCategoryAudioOutput = 4,
+  PlayerFfiErrorCategoryPlayback = 5,
+  PlayerFfiErrorCategoryCapability = 6,
+  PlayerFfiErrorCategoryPlatform = 7,
+} PlayerFfiErrorCategory;
 
 typedef struct VesperRuntimeBufferingPolicy {
   int preset_ordinal;
@@ -129,8 +159,8 @@ typedef struct VesperRuntimePreloadTask {
   uint64_t expected_disk_bytes;
   uint64_t warmup_window_ms;
   bool has_error;
-  uint32_t error_code;
-  uint32_t error_category;
+  PlayerFfiErrorCode error_code;
+  PlayerFfiErrorCategory error_category;
   bool error_retriable;
   char *error_message;
 } VesperRuntimePreloadTask;
@@ -345,8 +375,8 @@ typedef struct VesperRuntimeDownloadTask {
   VesperRuntimeDownloadProgressSnapshot progress;
   VesperRuntimeDownloadAssetIndex asset_index;
   bool has_error;
-  uint32_t error_code;
-  uint32_t error_category;
+  PlayerFfiErrorCode error_code;
+  PlayerFfiErrorCategory error_category;
   bool error_retriable;
   char *error_message;
 } VesperRuntimeDownloadTask;
@@ -389,8 +419,8 @@ typedef struct VesperRuntimeDownloadEvent {
   VesperRuntimeDownloadTaskStatus state_status;
   VesperRuntimeDownloadProgressSnapshot state_progress;
   bool state_has_error;
-  uint32_t state_error_code;
-  uint32_t state_error_category;
+  PlayerFfiErrorCode state_error_code;
+  PlayerFfiErrorCategory state_error_category;
   bool state_error_retriable;
   char *state_error_message;
   char *state_completed_path;
@@ -466,13 +496,12 @@ bool vesper_runtime_preload_session_complete(
 bool vesper_runtime_preload_session_fail(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message);
 
-void vesper_runtime_preload_command_list_free(
-    VesperRuntimePreloadCommandList *commands);
+void vesper_runtime_preload_command_list_free(VesperRuntimePreloadCommandList *commands);
 
 void vesper_runtime_preload_session_dispose(uint64_t handle);
 
@@ -491,20 +520,15 @@ bool vesper_runtime_playlist_session_update_viewport_hints(
     const VesperRuntimePlaylistViewportHint *hints,
     uintptr_t hints_len);
 
-bool vesper_runtime_playlist_session_clear_viewport_hints(
-    uint64_t handle);
+bool vesper_runtime_playlist_session_clear_viewport_hints(uint64_t handle);
 
-bool vesper_runtime_playlist_session_advance_to_next(
-    uint64_t handle);
+bool vesper_runtime_playlist_session_advance_to_next(uint64_t handle);
 
-bool vesper_runtime_playlist_session_advance_to_previous(
-    uint64_t handle);
+bool vesper_runtime_playlist_session_advance_to_previous(uint64_t handle);
 
-bool vesper_runtime_playlist_session_handle_playback_completed(
-    uint64_t handle);
+bool vesper_runtime_playlist_session_handle_playback_completed(uint64_t handle);
 
-bool vesper_runtime_playlist_session_handle_playback_failed(
-    uint64_t handle);
+bool vesper_runtime_playlist_session_handle_playback_failed(uint64_t handle);
 
 bool vesper_runtime_playlist_session_current_active_item(
     uint64_t handle,
@@ -521,13 +545,12 @@ bool vesper_runtime_playlist_session_complete_preload_task(
 bool vesper_runtime_playlist_session_fail_preload_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message);
 
-void vesper_runtime_playlist_active_item_free(
-    VesperRuntimePlaylistActiveItem *item);
+void vesper_runtime_playlist_active_item_free(VesperRuntimePlaylistActiveItem *item);
 
 void vesper_runtime_playlist_session_dispose(uint64_t handle);
 
@@ -592,8 +615,8 @@ bool vesper_runtime_download_session_export_task(
 bool vesper_runtime_download_session_fail_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message);
 
@@ -613,14 +636,11 @@ bool vesper_runtime_download_session_drain_events(
     uint64_t handle,
     VesperRuntimeDownloadEventList *out_events);
 
-void vesper_runtime_download_snapshot_free(
-    VesperRuntimeDownloadSnapshot *snapshot);
+void vesper_runtime_download_snapshot_free(VesperRuntimeDownloadSnapshot *snapshot);
 
-void vesper_runtime_download_command_list_free(
-    VesperRuntimeDownloadCommandList *commands);
+void vesper_runtime_download_command_list_free(VesperRuntimeDownloadCommandList *commands);
 
-void vesper_runtime_download_event_list_free(
-    VesperRuntimeDownloadEventList *events);
+void vesper_runtime_download_event_list_free(VesperRuntimeDownloadEventList *events);
 
 void vesper_runtime_download_session_dispose(uint64_t handle);
 
@@ -628,8 +648,7 @@ bool vesper_runtime_resolve_track_preferences(
     const VesperRuntimeTrackPreferencePolicy *track_preferences,
     VesperRuntimeTrackPreferencePolicy *out_preferences);
 
-void vesper_runtime_track_preferences_free(
-    VesperRuntimeTrackPreferencePolicy *track_preferences);
+void vesper_runtime_track_preferences_free(VesperRuntimeTrackPreferencePolicy *track_preferences);
 
 bool vesper_runtime_benchmark_sink_session_create(
     char **plugin_library_paths,

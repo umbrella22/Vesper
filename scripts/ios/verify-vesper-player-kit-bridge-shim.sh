@@ -8,9 +8,38 @@ shim_dir="$repo_root/lib/ios/VesperPlayerKit/Sources/VesperPlayerKitBridgeShim"
 shim_c="$shim_dir/VesperPlayerKitBridgeShim.c"
 shim_h="$shim_dir/include/VesperPlayerKitBridgeShim.h"
 rust_ffi_ios="$repo_root/crates/ffi/player-ffi-ios/src/lib.rs"
+manifest="$repo_root/scripts/ios/bridge-shim/manifest.json"
 
 vesper_require_command clang "clang is required to verify the VesperPlayerKit bridge shim."
+vesper_require_command cargo "cargo is required to generate the VesperPlayerKit bridge shim."
+vesper_require_command diff "diff is required to compare the generated VesperPlayerKit bridge shim."
 vesper_require_command perl "perl is required to verify VesperPlayerKit bridge symbols."
+
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/vesper-ios-bridge.XXXXXX")"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+generated_shim_dir="$tmp_dir/generated"
+(
+  cd "$repo_root"
+  cargo run --quiet -p player-ios-bridge-shim-generator -- \
+  generate \
+  --manifest "$manifest" \
+  --out-dir "$generated_shim_dir"
+)
+
+if ! diff -u "$generated_shim_dir/include/VesperPlayerKitBridgeShim.h" "$shim_h"; then
+  echo "" >&2
+  echo "VesperPlayerKitBridgeShim.h is out of sync with the Rust generator." >&2
+  echo "Run: ./scripts/vesper ios sync-bridge-shim" >&2
+  exit 1
+fi
+
+if ! diff -u "$generated_shim_dir/VesperPlayerKitBridgeShim.c" "$shim_c"; then
+  echo "" >&2
+  echo "VesperPlayerKitBridgeShim.c is out of sync with the Rust generator." >&2
+  echo "Run: ./scripts/vesper ios sync-bridge-shim" >&2
+  exit 1
+fi
 
 clang \
   -fsyntax-only \
@@ -24,9 +53,6 @@ if grep -En "$forbidden_cast_pattern" "$shim_c"; then
   echo "Use explicit input/output conversion helpers instead." >&2
   exit 1
 fi
-
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/vesper-ios-bridge.XXXXXX")"
-trap 'rm -rf "$tmp_dir"' EXIT
 
 extern_symbols="$tmp_dir/player_ffi_externs.txt"
 rust_symbols="$tmp_dir/player_ffi_rust_exports.txt"

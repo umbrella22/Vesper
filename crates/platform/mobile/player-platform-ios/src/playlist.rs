@@ -3,11 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use player_runtime::{
-    InMemoryPreloadBudgetProvider, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-    PlayerRuntimeErrorCode, PlayerRuntimeResult, PlaylistActiveItem, PlaylistAdvanceDecision,
-    PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent, PlaylistQueueItem,
-    PlaylistSnapshot, PlaylistViewportHint, PreloadBudget, PreloadEvent, PreloadExecutor,
-    PreloadTaskId, PreloadTaskSnapshot,
+    InMemoryPreloadBudgetProvider, PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult,
+    PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistCoordinator, PlaylistCoordinatorConfig,
+    PlaylistEvent, PlaylistQueueItem, PlaylistSnapshot, PlaylistViewportHint, PreloadBudget,
+    PreloadEvent, PreloadExecutor, PreloadTaskId, PreloadTaskSnapshot,
 };
 
 use crate::IosPreloadCommand;
@@ -22,11 +21,11 @@ impl IosPlaylistExecutor {
         Self { queue }
     }
 
-    fn push_command(&self, command: IosPreloadCommand) -> PlayerRuntimeResult<()> {
+    fn push_command(&self, command: IosPreloadCommand) -> PlayerResult<()> {
         let mut queue = self.queue.lock().map_err(|_| {
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::BackendFailure,
-                PlayerRuntimeErrorCategory::Platform,
+            PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Platform,
                 "ios playlist preload command queue lock poisoned",
             )
         })?;
@@ -36,11 +35,11 @@ impl IosPlaylistExecutor {
 }
 
 impl PreloadExecutor for IosPlaylistExecutor {
-    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerRuntimeResult<()> {
+    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()> {
         self.push_command(IosPreloadCommand::Start { task: task.clone() })
     }
 
-    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerRuntimeResult<()> {
+    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()> {
         self.push_command(IosPreloadCommand::Cancel { task_id })
     }
 }
@@ -110,15 +109,15 @@ impl IosPlaylistBridgeSession {
     pub fn complete_preload_task(
         &mut self,
         task_id: PreloadTaskId,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.coordinator.complete_preload_task(task_id)
     }
 
     pub fn fail_preload_task(
         &mut self,
         task_id: PreloadTaskId,
-        error: PlayerRuntimeError,
-    ) -> PlayerRuntimeResult<Option<PreloadTaskSnapshot>> {
+        error: PlayerError,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         self.coordinator.fail_preload_task(task_id, error)
     }
 

@@ -23,8 +23,8 @@ use player_runtime::{
     DownloadAssetIndex, DownloadByteRange, DownloadContentFormat, DownloadManager,
     DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot,
     DownloadSource, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus,
-    DownloadTaskStatus::Completed, InMemoryDownloadStore, PlayerRuntimeError,
-    PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+    DownloadTaskStatus::Completed, InMemoryDownloadStore, PlayerError, PlayerErrorCategory,
+    PlayerErrorCode,
 };
 use vesper_remux_ffmpeg::FfmpegRemuxProcessor;
 
@@ -36,11 +36,11 @@ const CURL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub struct DesktopDownloadPlanningClient;
 
 impl DownloadPlanningClient for DesktopDownloadPlanningClient {
-    fn fetch_text(&self, uri: &str) -> player_runtime::PlayerRuntimeResult<String> {
+    fn fetch_text(&self, uri: &str) -> player_runtime::PlayerResult<String> {
         fetch_remote_text(uri).map_err(|error| source_error(error.to_string()))
     }
 
-    fn content_length(&self, uri: &str) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+    fn content_length(&self, uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
         if let Some(local_path) = local_path_from_uri(uri) {
             return fs::metadata(&local_path)
                 .map(|metadata| Some(metadata.len()))
@@ -98,7 +98,7 @@ enum WorkerEvent {
     },
     Failed {
         task_id: DownloadTaskId,
-        error: PlayerRuntimeError,
+        error: PlayerError,
     },
 }
 
@@ -138,7 +138,7 @@ impl DesktopDownloadExecutor {
         }
     }
 
-    fn spawn_worker(&mut self, task: DownloadTaskSnapshot) -> Result<(), PlayerRuntimeError> {
+    fn spawn_worker(&mut self, task: DownloadTaskSnapshot) -> Result<(), PlayerError> {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.cancellations.insert(task.task_id, cancel_flag.clone());
         let worker_tx = self.worker_tx.clone();
@@ -160,7 +160,7 @@ impl player_runtime::DownloadExecutor for DesktopDownloadExecutor {
     fn prepare(
         &mut self,
         task: &DownloadTaskSnapshot,
-    ) -> player_runtime::PlayerRuntimeResult<DownloadPrepareResult> {
+    ) -> player_runtime::PlayerResult<DownloadPrepareResult> {
         if let Some(target_directory) = task.profile.target_directory.as_ref() {
             fs::create_dir_all(target_directory).map_err(|error| {
                 source_error(format!(
@@ -172,20 +172,20 @@ impl player_runtime::DownloadExecutor for DesktopDownloadExecutor {
         Ok(DownloadPrepareResult::Ready(None))
     }
 
-    fn start(&mut self, task: &DownloadTaskSnapshot) -> player_runtime::PlayerRuntimeResult<()> {
+    fn start(&mut self, task: &DownloadTaskSnapshot) -> player_runtime::PlayerResult<()> {
         self.spawn_worker(task.clone())
     }
 
-    fn pause(&mut self, task_id: DownloadTaskId) -> player_runtime::PlayerRuntimeResult<()> {
+    fn pause(&mut self, task_id: DownloadTaskId) -> player_runtime::PlayerResult<()> {
         self.cancel(task_id);
         Ok(())
     }
 
-    fn resume(&mut self, task: &DownloadTaskSnapshot) -> player_runtime::PlayerRuntimeResult<()> {
+    fn resume(&mut self, task: &DownloadTaskSnapshot) -> player_runtime::PlayerResult<()> {
         self.spawn_worker(task.clone())
     }
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> player_runtime::PlayerRuntimeResult<()> {
+    fn remove(&mut self, task_id: DownloadTaskId) -> player_runtime::PlayerResult<()> {
         self.cancel(task_id);
         Ok(())
     }
@@ -258,7 +258,7 @@ impl DesktopDownloadController {
         asset_id: String,
         label: String,
         prepared: PreparedDownloadTask,
-    ) -> player_runtime::PlayerRuntimeResult<DownloadTaskId> {
+    ) -> player_runtime::PlayerResult<DownloadTaskId> {
         self.asset_labels.insert(asset_id.clone(), label);
         self.manager.create_task(
             asset_id,
@@ -272,7 +272,7 @@ impl DesktopDownloadController {
     pub fn trigger_primary_action(
         &mut self,
         task_id: DownloadTaskId,
-    ) -> player_runtime::PlayerRuntimeResult<()> {
+    ) -> player_runtime::PlayerResult<()> {
         let Some(task) = self.manager.task(task_id) else {
             return Ok(());
         };
@@ -292,10 +292,7 @@ impl DesktopDownloadController {
         Ok(())
     }
 
-    pub fn remove_task(
-        &mut self,
-        task_id: DownloadTaskId,
-    ) -> player_runtime::PlayerRuntimeResult<()> {
+    pub fn remove_task(&mut self, task_id: DownloadTaskId) -> player_runtime::PlayerResult<()> {
         let Some(snapshot) = self.manager.task(task_id) else {
             return Ok(());
         };
@@ -310,10 +307,7 @@ impl DesktopDownloadController {
         Ok(())
     }
 
-    pub fn request_export(
-        &mut self,
-        task_id: DownloadTaskId,
-    ) -> player_runtime::PlayerRuntimeResult<()> {
+    pub fn request_export(&mut self, task_id: DownloadTaskId) -> player_runtime::PlayerResult<()> {
         let Some(snapshot) = self.manager.task(task_id) else {
             return Ok(());
         };
@@ -600,7 +594,7 @@ fn run_download_task(
     cancel_flag: Arc<AtomicBool>,
     worker_tx: Sender<WorkerEvent>,
 ) {
-    let result = (|| -> Result<Option<PathBuf>, PlayerRuntimeError> {
+    let result = (|| -> Result<Option<PathBuf>, PlayerError> {
         let work_items = build_work_items(&task)?;
         let mut received_bytes = 0_u64;
         let mut received_segments = 0_u32;
@@ -709,9 +703,7 @@ fn run_download_task(
     }
 }
 
-fn build_work_items(
-    task: &DownloadTaskSnapshot,
-) -> Result<Vec<DownloadWorkItem>, PlayerRuntimeError> {
+fn build_work_items(task: &DownloadTaskSnapshot) -> Result<Vec<DownloadWorkItem>, PlayerError> {
     let Some(target_directory) = task.profile.target_directory.as_ref() else {
         return Err(playback_error(format!(
             "download task {} is missing a target directory",
@@ -787,7 +779,7 @@ fn download_remote_file(
     expected_size_bytes: Option<u64>,
     resume_from_bytes: u64,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<(), PlayerRuntimeError> {
+) -> Result<(), PlayerError> {
     if expected_size_bytes.is_some_and(|expected| resume_from_bytes >= expected) {
         return Ok(());
     }
@@ -886,7 +878,7 @@ fn run_curl_download(
     range_header: Option<&str>,
     output_path: &Path,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<CurlDownloadOutput, PlayerRuntimeError> {
+) -> Result<CurlDownloadOutput, PlayerError> {
     let temp_path = temporary_sibling_path(output_path, "part");
     let headers_path = temporary_sibling_path(output_path, "headers");
     let mut command = Command::new(CURL_BIN);
@@ -953,7 +945,7 @@ fn copy_local_file(
     output_path: &Path,
     byte_range: Option<DownloadByteRange>,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<(), PlayerRuntimeError> {
+) -> Result<(), PlayerError> {
     if cancel_flag.load(Ordering::SeqCst) {
         return Ok(());
     }
@@ -1002,7 +994,7 @@ fn write_generated_text(
     text: &str,
     output_path: &Path,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<(), PlayerRuntimeError> {
+) -> Result<(), PlayerError> {
     if cancel_flag.load(Ordering::SeqCst) {
         return Ok(());
     }
@@ -1023,7 +1015,7 @@ fn write_generated_text(
 fn resumable_existing_bytes(
     output_path: &Path,
     expected_size_bytes: Option<u64>,
-) -> Result<u64, PlayerRuntimeError> {
+) -> Result<u64, PlayerError> {
     if !output_path.exists() {
         return Ok(0);
     }
@@ -1095,7 +1087,7 @@ fn parse_content_range_start(headers: &str) -> Option<u64> {
     range.split_once('-')?.0.parse::<u64>().ok()
 }
 
-fn append_file(source_path: &Path, output_path: &Path) -> Result<(), PlayerRuntimeError> {
+fn append_file(source_path: &Path, output_path: &Path) -> Result<(), PlayerError> {
     let mut input = fs::File::open(source_path).map_err(|error| {
         source_error(format!(
             "failed to open temp download `{}` for append: {error}",
@@ -1149,7 +1141,7 @@ fn wait_for_child(
     child: &mut Child,
     uri: &str,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<std::process::ExitStatus, PlayerRuntimeError> {
+) -> Result<std::process::ExitStatus, PlayerError> {
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = child.kill();
@@ -1193,14 +1185,14 @@ fn fetch_remote_text(uri: &str) -> Result<String> {
         .map_err(|error| anyhow!("manifest `{uri}` was not valid UTF-8: {error}"))
 }
 
-fn probe_remote_content_length(uri: &str) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+fn probe_remote_content_length(uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
     if let Some(size) = probe_remote_head_content_length(uri)? {
         return Ok(Some(size));
     }
     probe_remote_range_content_length(uri)
 }
 
-fn probe_remote_head_content_length(uri: &str) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+fn probe_remote_head_content_length(uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
     let output = Command::new(CURL_BIN)
         .arg("-L")
         .arg("--head")
@@ -1227,9 +1219,7 @@ fn probe_remote_head_content_length(uri: &str) -> player_runtime::PlayerRuntimeR
     Ok(last_header_value(headers, "content-length").and_then(|value| value.parse::<u64>().ok()))
 }
 
-fn probe_remote_range_content_length(
-    uri: &str,
-) -> player_runtime::PlayerRuntimeResult<Option<u64>> {
+fn probe_remote_range_content_length(uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
     let output_path =
         std::env::temp_dir().join(format!("vesper-content-length-{}", unique_suffix()));
     let transfer = run_curl_download(
@@ -1332,9 +1322,7 @@ fn sanitize_path_segment(segment: &str) -> String {
     }
 }
 
-fn derive_export_output_path(
-    snapshot: &DownloadTaskSnapshot,
-) -> Result<PathBuf, PlayerRuntimeError> {
+fn derive_export_output_path(snapshot: &DownloadTaskSnapshot) -> Result<PathBuf, PlayerError> {
     if let Some(completed_path) = snapshot.asset_index.completed_path.as_ref() {
         return Ok(completed_path.with_extension("mp4"));
     }
@@ -1352,7 +1340,7 @@ fn derive_export_output_path(
 
 fn completed_download_info(
     snapshot: &DownloadTaskSnapshot,
-) -> Result<CompletedDownloadInfo, PlayerRuntimeError> {
+) -> Result<CompletedDownloadInfo, PlayerError> {
     let metadata = DownloadMetadata {
         source_uri: Some(snapshot.source.source.uri().to_owned()),
         manifest_uri: snapshot.source.manifest_uri.clone(),
@@ -1407,7 +1395,7 @@ fn completed_download_info(
     })
 }
 
-fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> Result<PathBuf, PlayerRuntimeError> {
+fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> Result<PathBuf, PlayerError> {
     let Some(target_directory) = snapshot.profile.target_directory.as_ref() else {
         return Err(playback_error(format!(
             "download task {} is missing target directory",
@@ -1452,9 +1440,7 @@ fn resolve_segment_paths(snapshot: &DownloadTaskSnapshot) -> Vec<PathBuf> {
         .collect()
 }
 
-fn resolve_single_file_path(
-    snapshot: &DownloadTaskSnapshot,
-) -> Result<PathBuf, PlayerRuntimeError> {
+fn resolve_single_file_path(snapshot: &DownloadTaskSnapshot) -> Result<PathBuf, PlayerError> {
     let Some(target_directory) = snapshot.profile.target_directory.as_ref() else {
         return Err(playback_error(format!(
             "download task {} is missing target directory",
@@ -1553,43 +1539,43 @@ pub fn normalized_progress_ratio(progress: &DownloadProgressSnapshot) -> Option<
         })
 }
 
-fn source_error(message: impl Into<String>) -> PlayerRuntimeError {
-    PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::InvalidSource,
-        PlayerRuntimeErrorCategory::Source,
+fn source_error(message: impl Into<String>) -> PlayerError {
+    PlayerError::with_category(
+        PlayerErrorCode::InvalidSource,
+        PlayerErrorCategory::Source,
         message,
     )
 }
 
-fn network_error(message: impl Into<String>) -> PlayerRuntimeError {
-    PlayerRuntimeError::with_taxonomy(
-        PlayerRuntimeErrorCode::BackendFailure,
-        PlayerRuntimeErrorCategory::Network,
+fn network_error(message: impl Into<String>) -> PlayerError {
+    PlayerError::with_taxonomy(
+        PlayerErrorCode::BackendFailure,
+        PlayerErrorCategory::Network,
         true,
         message,
     )
 }
 
-fn playback_error(message: impl Into<String>) -> PlayerRuntimeError {
-    PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::InvalidState,
-        PlayerRuntimeErrorCategory::Playback,
+fn playback_error(message: impl Into<String>) -> PlayerError {
+    PlayerError::with_category(
+        PlayerErrorCode::InvalidState,
+        PlayerErrorCategory::Playback,
         message,
     )
 }
 
-fn capability_error(message: impl Into<String>) -> PlayerRuntimeError {
-    PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::Unsupported,
-        PlayerRuntimeErrorCategory::Capability,
+fn capability_error(message: impl Into<String>) -> PlayerError {
+    PlayerError::with_category(
+        PlayerErrorCode::Unsupported,
+        PlayerErrorCategory::Capability,
         message,
     )
 }
 
-fn platform_error(message: impl Into<String>) -> PlayerRuntimeError {
-    PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::BackendFailure,
-        PlayerRuntimeErrorCategory::Platform,
+fn platform_error(message: impl Into<String>) -> PlayerError {
+    PlayerError::with_category(
+        PlayerErrorCode::BackendFailure,
+        PlayerErrorCategory::Platform,
         message,
     )
 }

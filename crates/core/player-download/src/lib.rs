@@ -13,7 +13,5 @@ pub use download::{
     DownloadTaskState, DownloadTaskStatePatch, DownloadTaskStatus, InMemoryDownloadExecutor,
     InMemoryDownloadStore,
 };
-pub use error::{
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
-};
+pub use error::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 pub use planner::{DownloadPlanner, DownloadPlanningClient};

@@ -621,8 +621,8 @@ final class VesperDownloadProgressSnapshot {
 
 final class VesperDownloadError {
   const VesperDownloadError({
-    required this.codeOrdinal,
-    required this.categoryOrdinal,
+    required this.code,
+    required this.category,
     required this.retriable,
     required this.message,
   });
@@ -630,26 +630,50 @@ final class VesperDownloadError {
   factory VesperDownloadError.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
     return VesperDownloadError(
-      codeOrdinal: _decodeInt(normalized['codeOrdinal']) ?? 0,
-      categoryOrdinal: _decodeInt(normalized['categoryOrdinal']) ?? 0,
+      code: _decodeRequiredDownloadEnum(
+        VesperPlayerErrorCode.values,
+        normalized['code'],
+        'code',
+      ),
+      category: _decodeRequiredDownloadEnum(
+        VesperPlayerErrorCategory.values,
+        normalized['category'],
+        'category',
+      ),
       retriable: normalized['retriable'] as bool? ?? false,
       message: normalized['message'] as String? ?? 'Unknown download error.',
     );
   }
 
-  final int codeOrdinal;
-  final int categoryOrdinal;
+  final VesperPlayerErrorCode code;
+  final VesperPlayerErrorCategory category;
   final bool retriable;
   final String message;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'codeOrdinal': codeOrdinal,
-      'categoryOrdinal': categoryOrdinal,
+      'code': code.name,
+      'category': category.name,
       'retriable': retriable,
       'message': message,
     };
   }
+}
+
+T _decodeRequiredDownloadEnum<T extends Enum>(
+  Iterable<T> values,
+  Object? raw,
+  String key,
+) {
+  if (raw is! String) {
+    throw FormatException('Expected $key to be a string.');
+  }
+  for (final value in values) {
+    if (value.name == raw) {
+      return value;
+    }
+  }
+  throw FormatException('Unknown $key: $raw.');
 }
 
 final class VesperDownloadTaskSnapshot {

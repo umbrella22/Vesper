@@ -10,9 +10,7 @@ use player_plugin::{
     ProcessorProgress, StreamKind,
 };
 
-use crate::{
-    PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode, PlayerRuntimeResult,
-};
+use crate::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 
 use super::executor::DownloadExecutor;
 use super::manager::DownloadManager;
@@ -30,7 +28,7 @@ where
     pub(super) fn run_post_processors(
         &self,
         snapshot: &DownloadTaskSnapshot,
-    ) -> PlayerRuntimeResult<Option<PathBuf>> {
+    ) -> PlayerResult<Option<PathBuf>> {
         if self.config.post_processors.is_empty() {
             if download_streams_require_assembly(&snapshot.asset_index.streams) {
                 let assembly_mode =
@@ -55,7 +53,7 @@ where
         snapshot: &DownloadTaskSnapshot,
         output_path: Option<&Path>,
         progress: &dyn ProcessorProgress,
-    ) -> PlayerRuntimeResult<PathBuf> {
+    ) -> PlayerResult<PathBuf> {
         let run = self.run_post_processor_chain(
             snapshot,
             ProcessorOutputPathPolicy::Export { output_path },
@@ -67,9 +65,9 @@ where
             return Ok(path);
         }
 
-        Err(PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::Unsupported,
-            PlayerRuntimeErrorCategory::Capability,
+        Err(PlayerError::with_category(
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Capability,
             format!(
                 "download task {} has no post-download processor available for export",
                 snapshot.task_id.get()
@@ -82,7 +80,7 @@ where
         snapshot: &DownloadTaskSnapshot,
         output_path_policy: ProcessorOutputPathPolicy<'_>,
         progress: &dyn ProcessorProgress,
-    ) -> PlayerRuntimeResult<PostProcessorRun> {
+    ) -> PlayerResult<PostProcessorRun> {
         let mut current_input = self.completed_download_info(snapshot)?;
         let mut current_completed_path = snapshot.asset_index.completed_path.clone();
         let mut ran_processor = false;
@@ -162,7 +160,7 @@ where
         snapshot: &DownloadTaskSnapshot,
         output_path: Option<&Path>,
         progress: &dyn ProcessorProgress,
-    ) -> PlayerRuntimeResult<PathBuf> {
+    ) -> PlayerResult<PathBuf> {
         let source_path = resolve_single_file_path(snapshot)?;
         let Some(output_path) = output_path else {
             return Ok(source_path);
@@ -178,7 +176,7 @@ where
     fn completed_download_info(
         &self,
         snapshot: &DownloadTaskSnapshot,
-    ) -> PlayerRuntimeResult<CompletedDownloadInfo> {
+    ) -> PlayerResult<CompletedDownloadInfo> {
         let metadata = DownloadMetadata {
             source_uri: Some(snapshot.source.source.uri().to_owned()),
             manifest_uri: snapshot.source.manifest_uri.clone(),
@@ -207,9 +205,9 @@ where
                 path: resolve_single_file_path(snapshot)?,
             },
             DownloadContentFormat::Unknown => {
-                return Err(PlayerRuntimeError::with_category(
-                    PlayerRuntimeErrorCode::Unsupported,
-                    PlayerRuntimeErrorCategory::Capability,
+                return Err(PlayerError::with_category(
+                    PlayerErrorCode::Unsupported,
+                    PlayerErrorCategory::Capability,
                     format!(
                         "download task {} has unknown content format for post-processing",
                         snapshot.task_id.get()
@@ -274,7 +272,7 @@ impl ProcessorOutputPathPolicy<'_> {
         current_completed_path: Option<&Path>,
         processor: &Arc<dyn PostDownloadProcessor>,
         ran_processor: bool,
-    ) -> PlayerRuntimeResult<PathBuf> {
+    ) -> PlayerResult<PathBuf> {
         match self {
             Self::Derived => {
                 derive_processor_output_path(snapshot, current_completed_path, processor)
@@ -301,7 +299,7 @@ fn assembly_required_error(
     snapshot: &DownloadTaskSnapshot,
     input: &CompletedDownloadInfo,
     ran_processor: bool,
-) -> PlayerRuntimeError {
+) -> PlayerError {
     assembly_required_error_for_mode(snapshot, input.assembly_mode, ran_processor)
 }
 
@@ -309,15 +307,15 @@ fn assembly_required_error_for_mode(
     snapshot: &DownloadTaskSnapshot,
     assembly_mode: AssemblyMode,
     ran_processor: bool,
-) -> PlayerRuntimeError {
+) -> PlayerError {
     let detail = if ran_processor {
         "no processor produced an assembled output"
     } else {
         "no processor supports this assembly mode"
     };
-    PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::Unsupported,
-        PlayerRuntimeErrorCategory::Capability,
+    PlayerError::with_category(
+        PlayerErrorCode::Unsupported,
+        PlayerErrorCategory::Capability,
         format!(
             "download task {} requires post-download assembly for {:?}: {detail}",
             snapshot.task_id.get(),
@@ -353,7 +351,7 @@ fn completed_info_for_processed_output(
 
 fn completed_streams_for_snapshot(
     snapshot: &DownloadTaskSnapshot,
-) -> PlayerRuntimeResult<Vec<CompletedStream>> {
+) -> PlayerResult<Vec<CompletedStream>> {
     let streams = effective_asset_streams(&snapshot.asset_index);
     streams
         .iter()
@@ -409,7 +407,7 @@ fn effective_asset_streams(asset_index: &DownloadAssetIndex) -> Vec<DownloadAsse
 fn content_format_for_stream(
     snapshot: &DownloadTaskSnapshot,
     stream: &DownloadAssetStream,
-) -> PlayerRuntimeResult<CompletedContentFormat> {
+) -> PlayerResult<CompletedContentFormat> {
     match snapshot.source.content_format {
         DownloadContentFormat::HlsSegments => Ok(CompletedContentFormat::HlsSegments {
             manifest_path: resolve_stream_manifest_path(snapshot, stream, "m3u8")?,
@@ -426,9 +424,9 @@ fn content_format_for_stream(
         DownloadContentFormat::SingleFile => Ok(CompletedContentFormat::SingleFile {
             path: resolve_stream_single_file_path(snapshot, stream)?,
         }),
-        DownloadContentFormat::Unknown => Err(PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::Unsupported,
-            PlayerRuntimeErrorCategory::Capability,
+        DownloadContentFormat::Unknown => Err(PlayerError::with_category(
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Capability,
             format!(
                 "download task {} has unknown content format for stream assembly",
                 snapshot.task_id.get()
@@ -441,7 +439,7 @@ fn resolve_stream_manifest_path(
     snapshot: &DownloadTaskSnapshot,
     stream: &DownloadAssetStream,
     extension: &str,
-) -> PlayerRuntimeResult<PathBuf> {
+) -> PlayerResult<PathBuf> {
     let target_directory = target_directory_for_snapshot(snapshot)?;
     stream
         .resource_ids
@@ -463,9 +461,9 @@ fn resolve_stream_manifest_path(
         })
         .or_else(|| resolve_manifest_path(snapshot).ok())
         .ok_or_else(|| {
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::InvalidState,
-                PlayerRuntimeErrorCategory::Playback,
+            PlayerError::with_category(
+                PlayerErrorCode::InvalidState,
+                PlayerErrorCategory::Playback,
                 format!(
                     "download task {} is missing a stream manifest for `{}`",
                     snapshot.task_id.get(),
@@ -503,7 +501,7 @@ fn resolve_stream_segment_paths(
 fn resolve_stream_single_file_path(
     snapshot: &DownloadTaskSnapshot,
     stream: &DownloadAssetStream,
-) -> PlayerRuntimeResult<PathBuf> {
+) -> PlayerResult<PathBuf> {
     let target_directory = target_directory_for_snapshot(snapshot)?;
     stream
         .resource_ids
@@ -523,9 +521,9 @@ fn resolve_stream_single_file_path(
         })
         .or_else(|| resolve_single_file_path(snapshot).ok())
         .ok_or_else(|| {
-            PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::InvalidState,
-                PlayerRuntimeErrorCategory::Playback,
+            PlayerError::with_category(
+                PlayerErrorCode::InvalidState,
+                PlayerErrorCategory::Playback,
                 format!(
                     "download task {} is missing a stream file for `{}`",
                     snapshot.task_id.get(),
@@ -535,11 +533,11 @@ fn resolve_stream_single_file_path(
         })
 }
 
-fn target_directory_for_snapshot(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult<&Path> {
+fn target_directory_for_snapshot(snapshot: &DownloadTaskSnapshot) -> PlayerResult<&Path> {
     snapshot.profile.target_directory.as_deref().ok_or_else(|| {
-        PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::InvalidState,
-            PlayerRuntimeErrorCategory::Playback,
+        PlayerError::with_category(
+            PlayerErrorCode::InvalidState,
+            PlayerErrorCategory::Playback,
             format!(
                 "download task {} is missing target directory",
                 snapshot.task_id.get()
@@ -595,7 +593,7 @@ fn derive_processor_output_path(
     snapshot: &DownloadTaskSnapshot,
     current_completed_path: Option<&Path>,
     processor: &Arc<dyn PostDownloadProcessor>,
-) -> PlayerRuntimeResult<PathBuf> {
+) -> PlayerResult<PathBuf> {
     let extension = processor
         .capabilities()
         .output_formats
@@ -626,9 +624,9 @@ fn derive_processor_output_path(
         )));
     }
 
-    Err(PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::InvalidState,
-        PlayerRuntimeErrorCategory::Playback,
+    Err(PlayerError::with_category(
+        PlayerErrorCode::InvalidState,
+        PlayerErrorCategory::Playback,
         format!(
             "download task {} has no completed path or target directory for processor `{}` output",
             snapshot.task_id.get(),
@@ -679,7 +677,7 @@ fn sanitize_asset_id(asset_id: &str) -> String {
     }
 }
 
-fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult<PathBuf> {
+fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> PlayerResult<PathBuf> {
     if let Some(path) = snapshot.asset_index.completed_path.as_ref()
         && is_manifest_path_for_format(path, snapshot.source.content_format)
     {
@@ -707,9 +705,9 @@ fn resolve_manifest_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult
         return Ok(path);
     }
 
-    Err(PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::InvalidSource,
-        PlayerRuntimeErrorCategory::Source,
+    Err(PlayerError::with_category(
+        PlayerErrorCode::InvalidSource,
+        PlayerErrorCategory::Source,
         format!(
             "download task {} is missing a local manifest path for post-processing",
             snapshot.task_id.get()
@@ -745,7 +743,7 @@ fn resolve_segment_paths(snapshot: &DownloadTaskSnapshot) -> Vec<PathBuf> {
         .collect()
 }
 
-fn resolve_single_file_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeResult<PathBuf> {
+fn resolve_single_file_path(snapshot: &DownloadTaskSnapshot) -> PlayerResult<PathBuf> {
     if let Some(path) = snapshot.asset_index.completed_path.as_ref() {
         return Ok(path.clone());
     }
@@ -760,9 +758,9 @@ fn resolve_single_file_path(snapshot: &DownloadTaskSnapshot) -> PlayerRuntimeRes
         return Ok(path);
     }
 
-    Err(PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::InvalidSource,
-        PlayerRuntimeErrorCategory::Source,
+    Err(PlayerError::with_category(
+        PlayerErrorCode::InvalidSource,
+        PlayerErrorCategory::Source,
         format!(
             "download task {} is missing a local completed file path for post-processing",
             snapshot.task_id.get()
@@ -774,11 +772,11 @@ fn copy_single_file_export(
     source_path: &Path,
     output_path: &Path,
     progress: &dyn ProcessorProgress,
-) -> PlayerRuntimeResult<()> {
+) -> PlayerResult<()> {
     if progress.is_cancelled() {
-        return Err(PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::BackendFailure,
-            PlayerRuntimeErrorCategory::Platform,
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::BackendFailure,
+            PlayerErrorCategory::Platform,
             "download export was cancelled",
         ));
     }
@@ -802,9 +800,9 @@ fn copy_single_file_export(
 
     loop {
         if progress.is_cancelled() {
-            return Err(PlayerRuntimeError::with_category(
-                PlayerRuntimeErrorCode::BackendFailure,
-                PlayerRuntimeErrorCategory::Platform,
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Platform,
                 "download export was cancelled",
             ));
         }
@@ -839,10 +837,10 @@ fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn export_io_error(path: &Path, operation: &str, error: std::io::Error) -> PlayerRuntimeError {
-    PlayerRuntimeError::with_category(
-        PlayerRuntimeErrorCode::BackendFailure,
-        PlayerRuntimeErrorCategory::Platform,
+fn export_io_error(path: &Path, operation: &str, error: std::io::Error) -> PlayerError {
+    PlayerError::with_category(
+        PlayerErrorCode::BackendFailure,
+        PlayerErrorCategory::Platform,
         format!("failed to {operation} `{}`: {error}", path.display()),
     )
 }
@@ -883,36 +881,36 @@ fn resolve_uri_to_path(uri: &str) -> Option<PathBuf> {
     }
 }
 
-fn map_processor_error(processor_name: &str, error: ProcessorError) -> PlayerRuntimeError {
+fn map_processor_error(processor_name: &str, error: ProcessorError) -> PlayerError {
     match error {
-        ProcessorError::UnsupportedFormat(_) => PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::Unsupported,
-            PlayerRuntimeErrorCategory::Capability,
+        ProcessorError::UnsupportedFormat(_) => PlayerError::with_category(
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Capability,
             format!("post-processor `{processor_name}` does not support this download format"),
         ),
-        ProcessorError::PayloadCodec(message) => PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::BackendFailure,
-            PlayerRuntimeErrorCategory::Platform,
+        ProcessorError::PayloadCodec(message) => PlayerError::with_category(
+            PlayerErrorCode::BackendFailure,
+            PlayerErrorCategory::Platform,
             format!("post-processor `{processor_name}` exchanged invalid payload: {message}"),
         ),
-        ProcessorError::AbiViolation(message) => PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::BackendFailure,
-            PlayerRuntimeErrorCategory::Platform,
+        ProcessorError::AbiViolation(message) => PlayerError::with_category(
+            PlayerErrorCode::BackendFailure,
+            PlayerErrorCategory::Platform,
             format!("post-processor `{processor_name}` violated plugin ABI: {message}"),
         ),
-        ProcessorError::OutputPath(message) => PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::InvalidArgument,
-            PlayerRuntimeErrorCategory::Input,
+        ProcessorError::OutputPath(message) => PlayerError::with_category(
+            PlayerErrorCode::InvalidArgument,
+            PlayerErrorCategory::Input,
             format!("post-processor `{processor_name}` output path error: {message}"),
         ),
-        ProcessorError::Cancelled => PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::BackendFailure,
-            PlayerRuntimeErrorCategory::Playback,
+        ProcessorError::Cancelled => PlayerError::with_category(
+            PlayerErrorCode::BackendFailure,
+            PlayerErrorCategory::Playback,
             format!("post-processor `{processor_name}` was cancelled"),
         ),
-        ProcessorError::MuxFailed(message) => PlayerRuntimeError::with_category(
-            PlayerRuntimeErrorCode::BackendFailure,
-            PlayerRuntimeErrorCategory::Platform,
+        ProcessorError::MuxFailed(message) => PlayerError::with_category(
+            PlayerErrorCode::BackendFailure,
+            PlayerErrorCategory::Platform,
             format!("post-processor `{processor_name}` failed: {message}"),
         ),
     }

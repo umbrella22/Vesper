@@ -1,5 +1,5 @@
+/* Auto-generated. Do not edit directly. */
 #include "include/VesperPlayerKitBridgeShim.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -141,8 +141,8 @@ typedef struct PlayerFfiTrackPreferences {
 } PlayerFfiTrackPreferences;
 
 typedef struct PlayerFfiError {
-  int code;
-  int category;
+  PlayerFfiErrorCode code;
+  PlayerFfiErrorCategory category;
   bool retriable;
   char *message;
 } PlayerFfiError;
@@ -191,8 +191,8 @@ typedef struct PlayerFfiPreloadTask {
   uint64_t expected_disk_bytes;
   uint64_t warmup_window_ms;
   bool has_error;
-  uint32_t error_code;
-  uint32_t error_category;
+  PlayerFfiErrorCode error_code;
+  PlayerFfiErrorCategory error_category;
   bool error_retriable;
   char *error_message;
 } PlayerFfiPreloadTask;
@@ -402,8 +402,8 @@ typedef struct PlayerFfiDownloadTask {
   PlayerFfiDownloadProgressSnapshot progress;
   PlayerFfiDownloadAssetIndex asset_index;
   bool has_error;
-  uint32_t error_code;
-  uint32_t error_category;
+  PlayerFfiErrorCode error_code;
+  PlayerFfiErrorCategory error_category;
   bool error_retriable;
   char *error_message;
 } PlayerFfiDownloadTask;
@@ -446,8 +446,8 @@ typedef struct PlayerFfiDownloadEvent {
   PlayerFfiDownloadTaskStatus status;
   PlayerFfiDownloadProgressSnapshot progress;
   bool has_error;
-  uint32_t error_code;
-  uint32_t error_category;
+  PlayerFfiErrorCode error_code;
+  PlayerFfiErrorCategory error_category;
   bool error_retriable;
   char *error_message;
   char *completed_path;
@@ -488,14 +488,13 @@ extern PlayerFfiCallStatus player_ffi_preload_session_complete(
 extern PlayerFfiCallStatus player_ffi_preload_session_fail(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message,
     PlayerFfiError *out_error);
 
-extern void player_ffi_preload_command_list_free(
-    PlayerFfiPreloadCommandList *commands);
+extern void player_ffi_preload_command_list_free(PlayerFfiPreloadCommandList *commands);
 
 extern void player_ffi_preload_session_dispose(uint64_t handle);
 
@@ -542,8 +541,7 @@ extern PlayerFfiCallStatus player_ffi_playlist_session_current_active_item(
     PlayerFfiPlaylistActiveItem *out_active_item,
     PlayerFfiError *out_error);
 
-extern void player_ffi_playlist_active_item_free(
-    PlayerFfiPlaylistActiveItem *item);
+extern void player_ffi_playlist_active_item_free(PlayerFfiPlaylistActiveItem *item);
 
 extern PlayerFfiCallStatus player_ffi_playlist_session_drain_preload_commands(
     uint64_t handle,
@@ -558,8 +556,8 @@ extern PlayerFfiCallStatus player_ffi_playlist_session_complete_preload_task(
 extern PlayerFfiCallStatus player_ffi_playlist_session_fail_preload_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message,
     PlayerFfiError *out_error);
@@ -638,8 +636,8 @@ extern PlayerFfiCallStatus player_ffi_download_session_export_task(
 extern PlayerFfiCallStatus player_ffi_download_session_fail_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message,
     PlayerFfiError *out_error);
@@ -665,8 +663,11 @@ extern PlayerFfiCallStatus player_ffi_download_session_drain_events(
     PlayerFfiError *out_error);
 
 extern void player_ffi_download_snapshot_free(PlayerFfiDownloadSnapshot *snapshot);
+
 extern void player_ffi_download_command_list_free(PlayerFfiDownloadCommandList *commands);
+
 extern void player_ffi_download_event_list_free(PlayerFfiDownloadEventList *events);
+
 extern void player_ffi_download_session_dispose(uint64_t handle);
 
 extern PlayerFfiCallStatus player_ffi_resolve_track_preferences(
@@ -709,6 +710,7 @@ extern PlayerFfiCallStatus player_ffi_dash_bridge_parse_sidx(
 extern void player_ffi_dash_bridge_string_free(char *value);
 
 extern void player_ffi_error_free(PlayerFfiError *error);
+
 extern void player_ffi_track_preferences_free(PlayerFfiTrackPreferences *track_preferences);
 
 static uint64_t non_negative_u64(int64_t value) {
@@ -1984,8 +1986,8 @@ bool vesper_runtime_preload_session_complete(
 bool vesper_runtime_preload_session_fail(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message) {
   PlayerFfiError ffi_error;
@@ -2005,8 +2007,7 @@ bool vesper_runtime_preload_session_fail(
   return true;
 }
 
-void vesper_runtime_preload_command_list_free(
-    VesperRuntimePreloadCommandList *commands) {
+void vesper_runtime_preload_command_list_free(VesperRuntimePreloadCommandList *commands) {
   if (commands == NULL) {
     return;
   }
@@ -2158,8 +2159,7 @@ static bool call_playlist_status(
   return true;
 }
 
-bool vesper_runtime_playlist_session_clear_viewport_hints(
-    uint64_t handle) {
+bool vesper_runtime_playlist_session_clear_viewport_hints(uint64_t handle) {
   PlayerFfiError ffi_error;
   memset(&ffi_error, 0, sizeof(ffi_error));
   return call_playlist_status(
@@ -2167,8 +2167,7 @@ bool vesper_runtime_playlist_session_clear_viewport_hints(
       &ffi_error);
 }
 
-bool vesper_runtime_playlist_session_advance_to_next(
-    uint64_t handle) {
+bool vesper_runtime_playlist_session_advance_to_next(uint64_t handle) {
   PlayerFfiError ffi_error;
   memset(&ffi_error, 0, sizeof(ffi_error));
   return call_playlist_status(
@@ -2176,8 +2175,7 @@ bool vesper_runtime_playlist_session_advance_to_next(
       &ffi_error);
 }
 
-bool vesper_runtime_playlist_session_advance_to_previous(
-    uint64_t handle) {
+bool vesper_runtime_playlist_session_advance_to_previous(uint64_t handle) {
   PlayerFfiError ffi_error;
   memset(&ffi_error, 0, sizeof(ffi_error));
   return call_playlist_status(
@@ -2185,8 +2183,7 @@ bool vesper_runtime_playlist_session_advance_to_previous(
       &ffi_error);
 }
 
-bool vesper_runtime_playlist_session_handle_playback_completed(
-    uint64_t handle) {
+bool vesper_runtime_playlist_session_handle_playback_completed(uint64_t handle) {
   PlayerFfiError ffi_error;
   memset(&ffi_error, 0, sizeof(ffi_error));
   return call_playlist_status(
@@ -2194,8 +2191,7 @@ bool vesper_runtime_playlist_session_handle_playback_completed(
       &ffi_error);
 }
 
-bool vesper_runtime_playlist_session_handle_playback_failed(
-    uint64_t handle) {
+bool vesper_runtime_playlist_session_handle_playback_failed(uint64_t handle) {
   PlayerFfiError ffi_error;
   memset(&ffi_error, 0, sizeof(ffi_error));
   return call_playlist_status(
@@ -2319,8 +2315,8 @@ bool vesper_runtime_playlist_session_complete_preload_task(
 bool vesper_runtime_playlist_session_fail_preload_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message) {
   PlayerFfiError ffi_error;
@@ -2337,8 +2333,7 @@ bool vesper_runtime_playlist_session_fail_preload_task(
       &ffi_error);
 }
 
-void vesper_runtime_playlist_active_item_free(
-    VesperRuntimePlaylistActiveItem *item) {
+void vesper_runtime_playlist_active_item_free(VesperRuntimePlaylistActiveItem *item) {
   if (item == NULL) {
     return;
   }
@@ -2562,8 +2557,8 @@ bool vesper_runtime_download_session_export_task(
 bool vesper_runtime_download_session_fail_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message) {
   PlayerFfiError ffi_error;
@@ -2767,8 +2762,7 @@ bool vesper_runtime_download_session_drain_events(
   return true;
 }
 
-void vesper_runtime_download_snapshot_free(
-    VesperRuntimeDownloadSnapshot *snapshot) {
+void vesper_runtime_download_snapshot_free(VesperRuntimeDownloadSnapshot *snapshot) {
   if (snapshot == NULL) {
     return;
   }
@@ -2781,8 +2775,7 @@ void vesper_runtime_download_snapshot_free(
   memset(snapshot, 0, sizeof(*snapshot));
 }
 
-void vesper_runtime_download_command_list_free(
-    VesperRuntimeDownloadCommandList *commands) {
+void vesper_runtime_download_command_list_free(VesperRuntimeDownloadCommandList *commands) {
   if (commands == NULL) {
     return;
   }
@@ -2795,8 +2788,7 @@ void vesper_runtime_download_command_list_free(
   memset(commands, 0, sizeof(*commands));
 }
 
-void vesper_runtime_download_event_list_free(
-    VesperRuntimeDownloadEventList *events) {
+void vesper_runtime_download_event_list_free(VesperRuntimeDownloadEventList *events) {
   if (events == NULL) {
     return;
   }
@@ -2813,8 +2805,7 @@ void vesper_runtime_download_session_dispose(uint64_t handle) {
   player_ffi_download_session_dispose(handle);
 }
 
-void vesper_runtime_track_preferences_free(
-    VesperRuntimeTrackPreferencePolicy *track_preferences) {
+void vesper_runtime_track_preferences_free(VesperRuntimeTrackPreferencePolicy *track_preferences) {
   if (track_preferences == NULL) {
     return;
   }

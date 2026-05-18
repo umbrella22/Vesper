@@ -7,14 +7,14 @@ use player_runtime::{
     MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
     MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
     PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy, PlayerBufferingPreset,
-    PlayerCachePolicy, PlayerCachePreset, PlayerMediaInfo, PlayerPreloadBudgetPolicy,
-    PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy, PlayerRetryBackoff,
-    PlayerRetryPolicy, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
-    PlayerRuntimeCommandResult, PlayerRuntimeError, PlayerRuntimeErrorCategory,
-    PlayerRuntimeErrorCode, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind,
-    PlayerTimelineSnapshot, PlayerTrackPreferencePolicy, PlayerVideoDecodeInfo,
-    PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState, VideoPixelFormat,
+    PlayerCachePolicy, PlayerCachePreset, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+    PlayerMediaInfo, PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy,
+    PlayerResolvedResiliencePolicy, PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntime,
+    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent,
+    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSeekableRange,
+    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerTrackPreferencePolicy,
+    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState,
+    VideoPixelFormat,
 };
 
 pub type FfiResult<T> = Result<T, FfiError>;
@@ -39,6 +39,10 @@ pub enum FfiErrorCode {
     DecodeFailure,
     SeekFailure,
     Unsupported,
+    CommandChannelClosed,
+    EventChannelClosed,
+    Cancelled,
+    Timeout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -490,38 +494,42 @@ impl From<PresentationState> for FfiPlaybackState {
     }
 }
 
-impl From<PlayerRuntimeErrorCode> for FfiErrorCode {
-    fn from(value: PlayerRuntimeErrorCode) -> Self {
+impl From<PlayerErrorCode> for FfiErrorCode {
+    fn from(value: PlayerErrorCode) -> Self {
         match value {
-            PlayerRuntimeErrorCode::InvalidArgument => Self::InvalidArgument,
-            PlayerRuntimeErrorCode::InvalidState => Self::InvalidState,
-            PlayerRuntimeErrorCode::InvalidSource => Self::InvalidSource,
-            PlayerRuntimeErrorCode::BackendFailure => Self::BackendFailure,
-            PlayerRuntimeErrorCode::AudioOutputUnavailable => Self::AudioOutputUnavailable,
-            PlayerRuntimeErrorCode::DecodeFailure => Self::DecodeFailure,
-            PlayerRuntimeErrorCode::SeekFailure => Self::SeekFailure,
-            PlayerRuntimeErrorCode::Unsupported => Self::Unsupported,
+            PlayerErrorCode::InvalidArgument => Self::InvalidArgument,
+            PlayerErrorCode::InvalidState => Self::InvalidState,
+            PlayerErrorCode::InvalidSource => Self::InvalidSource,
+            PlayerErrorCode::BackendFailure => Self::BackendFailure,
+            PlayerErrorCode::AudioOutputUnavailable => Self::AudioOutputUnavailable,
+            PlayerErrorCode::DecodeFailure => Self::DecodeFailure,
+            PlayerErrorCode::SeekFailure => Self::SeekFailure,
+            PlayerErrorCode::Unsupported => Self::Unsupported,
+            PlayerErrorCode::CommandChannelClosed => Self::CommandChannelClosed,
+            PlayerErrorCode::EventChannelClosed => Self::EventChannelClosed,
+            PlayerErrorCode::Cancelled => Self::Cancelled,
+            PlayerErrorCode::Timeout => Self::Timeout,
         }
     }
 }
 
-impl From<PlayerRuntimeErrorCategory> for FfiErrorCategory {
-    fn from(value: PlayerRuntimeErrorCategory) -> Self {
+impl From<PlayerErrorCategory> for FfiErrorCategory {
+    fn from(value: PlayerErrorCategory) -> Self {
         match value {
-            PlayerRuntimeErrorCategory::Input => Self::Input,
-            PlayerRuntimeErrorCategory::Source => Self::Source,
-            PlayerRuntimeErrorCategory::Network => Self::Network,
-            PlayerRuntimeErrorCategory::Decode => Self::Decode,
-            PlayerRuntimeErrorCategory::AudioOutput => Self::AudioOutput,
-            PlayerRuntimeErrorCategory::Playback => Self::Playback,
-            PlayerRuntimeErrorCategory::Capability => Self::Capability,
-            PlayerRuntimeErrorCategory::Platform => Self::Platform,
+            PlayerErrorCategory::Input => Self::Input,
+            PlayerErrorCategory::Source => Self::Source,
+            PlayerErrorCategory::Network => Self::Network,
+            PlayerErrorCategory::Decode => Self::Decode,
+            PlayerErrorCategory::AudioOutput => Self::AudioOutput,
+            PlayerErrorCategory::Playback => Self::Playback,
+            PlayerErrorCategory::Capability => Self::Capability,
+            PlayerErrorCategory::Platform => Self::Platform,
         }
     }
 }
 
-impl From<PlayerRuntimeError> for FfiError {
-    fn from(value: PlayerRuntimeError) -> Self {
+impl From<PlayerError> for FfiError {
+    fn from(value: PlayerError) -> Self {
         Self {
             code: value.code().into(),
             category: value.category().into(),

@@ -2048,8 +2048,8 @@ private extension VesperDownloadByteRange {
 private extension VesperDownloadError {
     var toMap: [String: Any] {
         [
-            "codeOrdinal": codeOrdinal,
-            "categoryOrdinal": categoryOrdinal,
+            "code": code.rawValue,
+            "category": category.rawValue,
             "retriable": retriable,
             "message": message,
         ]
@@ -2060,6 +2060,7 @@ private extension VesperPlayerError {
     var toMap: [String: Any] {
         [
             "message": message,
+            "code": code.rawValue,
             "category": category.rawValue,
             "retriable": retriable,
         ]
@@ -2071,23 +2072,30 @@ private func flutterValue(_ value: Any?) -> Any {
 }
 
 private func errorMap(from error: Error) -> [String: Any] {
+    let code: String
     let category: String
     if let pluginError = error as? PluginError {
         switch pluginError {
         case .invalidSource:
+            code = "invalidSource"
             category = "source"
         case .invalidTrackSelection, .invalidAbrPolicy:
+            code = "unsupported"
             category = "capability"
         case .unsupported:
-            category = "unsupported"
+            code = "unsupported"
+            category = "capability"
         default:
+            code = "backendFailure"
             category = "platform"
         }
     } else {
+        code = "backendFailure"
         category = "platform"
     }
     return [
         "message": error.localizedDescription,
+        "code": code,
         "category": category,
         "retriable": false,
     ]
@@ -2095,8 +2103,8 @@ private func errorMap(from error: Error) -> [String: Any] {
 
 private func downloadErrorMap(from error: Error) -> [String: Any] {
     [
-        "codeOrdinal": 0,
-        "categoryOrdinal": 0,
+        "code": "backendFailure",
+        "category": "platform",
         "retriable": false,
         "message": error.localizedDescription,
     ]

@@ -1,0 +1,5679 @@
+{
+  "header_guard": "VESPER_PLAYER_KIT_BRIDGE_SHIM_H",
+  "header_includes": [
+    "<stdbool.h>",
+    "<stddef.h>",
+    "<stdint.h>"
+  ],
+  "c_includes": [
+    "\"include/VesperPlayerKitBridgeShim.h\"",
+    "<stdbool.h>",
+    "<stddef.h>",
+    "<stdlib.h>",
+    "<stdint.h>",
+    "<string.h>"
+  ],
+  "public_declarations": [
+    {
+      "kind": "enum",
+      "name": "PlayerFfiErrorCode",
+      "variants": [
+        {
+          "name": "PlayerFfiErrorCodeNone",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiErrorCodeNullPointer",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiErrorCodeInvalidUtf8",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiErrorCodeInvalidArgument",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiErrorCodeInvalidState",
+          "value": 4
+        },
+        {
+          "name": "PlayerFfiErrorCodeInvalidSource",
+          "value": 5
+        },
+        {
+          "name": "PlayerFfiErrorCodeBackendFailure",
+          "value": 6
+        },
+        {
+          "name": "PlayerFfiErrorCodeAudioOutputUnavailable",
+          "value": 7
+        },
+        {
+          "name": "PlayerFfiErrorCodeDecodeFailure",
+          "value": 8
+        },
+        {
+          "name": "PlayerFfiErrorCodeSeekFailure",
+          "value": 9
+        },
+        {
+          "name": "PlayerFfiErrorCodeUnsupported",
+          "value": 10
+        },
+        {
+          "name": "PlayerFfiErrorCodeCommandChannelClosed",
+          "value": 11
+        },
+        {
+          "name": "PlayerFfiErrorCodeEventChannelClosed",
+          "value": 12
+        },
+        {
+          "name": "PlayerFfiErrorCodeCancelled",
+          "value": 13
+        },
+        {
+          "name": "PlayerFfiErrorCodeTimeout",
+          "value": 14
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiErrorCategory",
+      "variants": [
+        {
+          "name": "PlayerFfiErrorCategoryInput",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiErrorCategorySource",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiErrorCategoryNetwork",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiErrorCategoryDecode",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiErrorCategoryAudioOutput",
+          "value": 4
+        },
+        {
+          "name": "PlayerFfiErrorCategoryPlayback",
+          "value": 5
+        },
+        {
+          "name": "PlayerFfiErrorCategoryCapability",
+          "value": 6
+        },
+        {
+          "name": "PlayerFfiErrorCategoryPlatform",
+          "value": 7
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeBufferingPolicy",
+      "fields": [
+        {
+          "ty": "int",
+          "name": "preset_ordinal"
+        },
+        {
+          "ty": "bool",
+          "name": "has_min_buffer_ms"
+        },
+        {
+          "ty": "int64_t",
+          "name": "min_buffer_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_buffer_ms"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_buffer_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_buffer_for_playback_ms"
+        },
+        {
+          "ty": "int64_t",
+          "name": "buffer_for_playback_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_buffer_for_rebuffer_ms"
+        },
+        {
+          "ty": "int64_t",
+          "name": "buffer_for_rebuffer_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeRetryPolicy",
+      "fields": [
+        {
+          "ty": "bool",
+          "name": "uses_default_max_attempts"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_attempts"
+        },
+        {
+          "ty": "int32_t",
+          "name": "max_attempts"
+        },
+        {
+          "ty": "bool",
+          "name": "has_base_delay_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "base_delay_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_delay_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_delay_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_backoff"
+        },
+        {
+          "ty": "int",
+          "name": "backoff_ordinal"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeCachePolicy",
+      "fields": [
+        {
+          "ty": "int",
+          "name": "preset_ordinal"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_memory_bytes"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_memory_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_disk_bytes"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_disk_bytes"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeResolvedResiliencePolicy",
+      "fields": [
+        {
+          "ty": "VesperRuntimeBufferingPolicy",
+          "name": "buffering"
+        },
+        {
+          "ty": "VesperRuntimeRetryPolicy",
+          "name": "retry"
+        },
+        {
+          "ty": "VesperRuntimeCachePolicy",
+          "name": "cache"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePreloadBudgetPolicy",
+      "fields": [
+        {
+          "ty": "bool",
+          "name": "has_max_concurrent_tasks"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "max_concurrent_tasks"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_memory_bytes"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_memory_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_disk_bytes"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_disk_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_warmup_window_ms"
+        },
+        {
+          "ty": "int64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeResolvedPreloadBudgetPolicy",
+      "fields": [
+        {
+          "ty": "uint32_t",
+          "name": "max_concurrent_tasks"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_memory_bytes"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_disk_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePreloadScopeKind",
+      "variants": [
+        {
+          "name": "VesperRuntimePreloadScopeKindApp",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePreloadScopeKindSession",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimePreloadScopeKindPlaylist",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePreloadCandidateKind",
+      "variants": [
+        {
+          "name": "VesperRuntimePreloadCandidateKindCurrent",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePreloadCandidateKindNeighbor",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimePreloadCandidateKindRecommended",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimePreloadCandidateKindBackground",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePreloadSelectionHint",
+      "variants": [
+        {
+          "name": "VesperRuntimePreloadSelectionHintNone",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePreloadSelectionHintCurrentItem",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimePreloadSelectionHintNeighborItem",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimePreloadSelectionHintRecommendedItem",
+          "value": 3
+        },
+        {
+          "name": "VesperRuntimePreloadSelectionHintBackgroundFill",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePreloadPriority",
+      "variants": [
+        {
+          "name": "VesperRuntimePreloadPriorityCritical",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePreloadPriorityHigh",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimePreloadPriorityNormal",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimePreloadPriorityLow",
+          "value": 3
+        },
+        {
+          "name": "VesperRuntimePreloadPriorityBackground",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePreloadTaskStatus",
+      "variants": [
+        {
+          "name": "VesperRuntimePreloadTaskStatusPlanned",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePreloadTaskStatusActive",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimePreloadTaskStatusCancelled",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimePreloadTaskStatusCompleted",
+          "value": 3
+        },
+        {
+          "name": "VesperRuntimePreloadTaskStatusExpired",
+          "value": 4
+        },
+        {
+          "name": "VesperRuntimePreloadTaskStatusFailed",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePreloadCandidate",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "VesperRuntimePreloadScopeKind",
+          "name": "scope_kind"
+        },
+        {
+          "ty": "const char *",
+          "name": "scope_id"
+        },
+        {
+          "ty": "VesperRuntimePreloadCandidateKind",
+          "name": "candidate_kind"
+        },
+        {
+          "ty": "VesperRuntimePreloadSelectionHint",
+          "name": "selection_hint"
+        },
+        {
+          "ty": "VesperRuntimePreloadPriority",
+          "name": "priority"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_disk_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_ttl_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "ttl_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_warmup_window_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePreloadTask",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "char *",
+          "name": "source_identity"
+        },
+        {
+          "ty": "char *",
+          "name": "cache_key"
+        },
+        {
+          "ty": "VesperRuntimePreloadScopeKind",
+          "name": "scope_kind"
+        },
+        {
+          "ty": "char *",
+          "name": "scope_id"
+        },
+        {
+          "ty": "VesperRuntimePreloadCandidateKind",
+          "name": "candidate_kind"
+        },
+        {
+          "ty": "VesperRuntimePreloadSelectionHint",
+          "name": "selection_hint"
+        },
+        {
+          "ty": "VesperRuntimePreloadPriority",
+          "name": "priority"
+        },
+        {
+          "ty": "VesperRuntimePreloadTaskStatus",
+          "name": "status"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_disk_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_error"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "error_retriable"
+        },
+        {
+          "ty": "char *",
+          "name": "error_message"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePreloadCommandKind",
+      "variants": [
+        {
+          "name": "VesperRuntimePreloadCommandKindStart",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePreloadCommandKindCancel",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePreloadCommand",
+      "fields": [
+        {
+          "ty": "VesperRuntimePreloadCommandKind",
+          "name": "kind"
+        },
+        {
+          "ty": "VesperRuntimePreloadTask",
+          "name": "task"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePreloadCommandList",
+      "fields": [
+        {
+          "ty": "VesperRuntimePreloadCommand *",
+          "name": "commands"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePlaylistRepeatMode",
+      "variants": [
+        {
+          "name": "VesperRuntimePlaylistRepeatModeOff",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePlaylistRepeatModeOne",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimePlaylistRepeatModeAll",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePlaylistFailureStrategy",
+      "variants": [
+        {
+          "name": "VesperRuntimePlaylistFailureStrategyPause",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePlaylistFailureStrategySkipToNext",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimePlaylistViewportHintKind",
+      "variants": [
+        {
+          "name": "VesperRuntimePlaylistViewportHintKindVisible",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimePlaylistViewportHintKindNearVisible",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimePlaylistViewportHintKindPrefetchOnly",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimePlaylistViewportHintKindHidden",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePlaylistConfig",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "playlist_id"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "neighbor_previous"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "neighbor_next"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "preload_near_visible"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "preload_prefetch_only"
+        },
+        {
+          "ty": "bool",
+          "name": "auto_advance"
+        },
+        {
+          "ty": "VesperRuntimePlaylistRepeatMode",
+          "name": "repeat_mode"
+        },
+        {
+          "ty": "VesperRuntimePlaylistFailureStrategy",
+          "name": "failure_strategy"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePlaylistQueueItem",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "item_id"
+        },
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_disk_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_ttl_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "ttl_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_warmup_window_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePlaylistViewportHint",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "item_id"
+        },
+        {
+          "ty": "VesperRuntimePlaylistViewportHintKind",
+          "name": "kind"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "order"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimePlaylistActiveItem",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "item_id"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "index"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadConfig",
+      "fields": [
+        {
+          "ty": "bool",
+          "name": "auto_start"
+        },
+        {
+          "ty": "bool",
+          "name": "run_post_processors_on_completion"
+        },
+        {
+          "ty": "char **",
+          "name": "plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "plugin_library_paths_len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimeDownloadContentFormat",
+      "variants": [
+        {
+          "name": "VesperRuntimeDownloadContentFormatHlsSegments",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimeDownloadContentFormatDashSegments",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimeDownloadContentFormatFlvSegments",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimeDownloadContentFormatSingleFile",
+          "value": 3
+        },
+        {
+          "name": "VesperRuntimeDownloadContentFormatUnknown",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimeDownloadOutputFormat",
+      "variants": [
+        {
+          "name": "VesperRuntimeDownloadOutputFormatMp4",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimeDownloadOutputFormatMkv",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimeDownloadOutputFormatOriginal",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimeDownloadStreamKind",
+      "variants": [
+        {
+          "name": "VesperRuntimeDownloadStreamKindCombined",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimeDownloadStreamKindVideo",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimeDownloadStreamKindAudio",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimeDownloadStreamKindSecondaryAudio",
+          "value": 3
+        },
+        {
+          "name": "VesperRuntimeDownloadStreamKindSubtitle",
+          "value": 4
+        },
+        {
+          "name": "VesperRuntimeDownloadStreamKindAuxiliary",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadSource",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "VesperRuntimeDownloadContentFormat",
+          "name": "content_format"
+        },
+        {
+          "ty": "char *",
+          "name": "manifest_uri"
+        },
+        {
+          "ty": "char **",
+          "name": "header_names"
+        },
+        {
+          "ty": "char **",
+          "name": "header_values"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "headers_len"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadProfile",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "variant_id"
+        },
+        {
+          "ty": "char *",
+          "name": "preferred_audio_language"
+        },
+        {
+          "ty": "char *",
+          "name": "preferred_subtitle_language"
+        },
+        {
+          "ty": "char **",
+          "name": "selected_track_ids"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "selected_track_ids_len"
+        },
+        {
+          "ty": "bool",
+          "name": "has_target_output_format"
+        },
+        {
+          "ty": "VesperRuntimeDownloadOutputFormat",
+          "name": "target_output_format"
+        },
+        {
+          "ty": "char *",
+          "name": "target_directory"
+        },
+        {
+          "ty": "bool",
+          "name": "allow_metered_network"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadByteRange",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "offset"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "length"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadResourceRecord",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "resource_id"
+        },
+        {
+          "ty": "char *",
+          "name": "uri"
+        },
+        {
+          "ty": "char *",
+          "name": "relative_path"
+        },
+        {
+          "ty": "bool",
+          "name": "has_byte_range"
+        },
+        {
+          "ty": "VesperRuntimeDownloadByteRange",
+          "name": "byte_range"
+        },
+        {
+          "ty": "char *",
+          "name": "generated_text"
+        },
+        {
+          "ty": "bool",
+          "name": "has_size_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "size_bytes"
+        },
+        {
+          "ty": "char *",
+          "name": "etag"
+        },
+        {
+          "ty": "char *",
+          "name": "checksum"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadSegmentRecord",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "segment_id"
+        },
+        {
+          "ty": "char *",
+          "name": "uri"
+        },
+        {
+          "ty": "char *",
+          "name": "relative_path"
+        },
+        {
+          "ty": "bool",
+          "name": "has_sequence"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "sequence"
+        },
+        {
+          "ty": "bool",
+          "name": "has_byte_range"
+        },
+        {
+          "ty": "VesperRuntimeDownloadByteRange",
+          "name": "byte_range"
+        },
+        {
+          "ty": "bool",
+          "name": "has_size_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "size_bytes"
+        },
+        {
+          "ty": "char *",
+          "name": "checksum"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadAssetStream",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "stream_id"
+        },
+        {
+          "ty": "VesperRuntimeDownloadStreamKind",
+          "name": "kind"
+        },
+        {
+          "ty": "char *",
+          "name": "language"
+        },
+        {
+          "ty": "char *",
+          "name": "codec"
+        },
+        {
+          "ty": "char *",
+          "name": "label"
+        },
+        {
+          "ty": "bool",
+          "name": "has_quality_rank"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "quality_rank"
+        },
+        {
+          "ty": "char **",
+          "name": "resource_ids"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "resource_ids_len"
+        },
+        {
+          "ty": "char **",
+          "name": "segment_ids"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "segment_ids_len"
+        },
+        {
+          "ty": "char **",
+          "name": "metadata_keys"
+        },
+        {
+          "ty": "char **",
+          "name": "metadata_values"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "metadata_len"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadAssetIndex",
+      "fields": [
+        {
+          "ty": "VesperRuntimeDownloadContentFormat",
+          "name": "content_format"
+        },
+        {
+          "ty": "char *",
+          "name": "version"
+        },
+        {
+          "ty": "char *",
+          "name": "etag"
+        },
+        {
+          "ty": "char *",
+          "name": "checksum"
+        },
+        {
+          "ty": "bool",
+          "name": "has_total_size_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "total_size_bytes"
+        },
+        {
+          "ty": "VesperRuntimeDownloadResourceRecord *",
+          "name": "resources"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "resources_len"
+        },
+        {
+          "ty": "VesperRuntimeDownloadSegmentRecord *",
+          "name": "segments"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "segments_len"
+        },
+        {
+          "ty": "VesperRuntimeDownloadAssetStream *",
+          "name": "streams"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "streams_len"
+        },
+        {
+          "ty": "char *",
+          "name": "completed_path"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadProgressSnapshot",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "received_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_total_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "total_bytes"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "received_segments"
+        },
+        {
+          "ty": "bool",
+          "name": "has_total_segments"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "total_segments"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimeDownloadTaskStatus",
+      "variants": [
+        {
+          "name": "VesperRuntimeDownloadTaskStatusQueued",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimeDownloadTaskStatusPreparing",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimeDownloadTaskStatusDownloading",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimeDownloadTaskStatusPaused",
+          "value": 3
+        },
+        {
+          "name": "VesperRuntimeDownloadTaskStatusCompleted",
+          "value": 4
+        },
+        {
+          "name": "VesperRuntimeDownloadTaskStatusFailed",
+          "value": 5
+        },
+        {
+          "name": "VesperRuntimeDownloadTaskStatusRemoved",
+          "value": 6
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadTask",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "char *",
+          "name": "asset_id"
+        },
+        {
+          "ty": "VesperRuntimeDownloadSource",
+          "name": "source"
+        },
+        {
+          "ty": "VesperRuntimeDownloadProfile",
+          "name": "profile"
+        },
+        {
+          "ty": "VesperRuntimeDownloadTaskStatus",
+          "name": "status"
+        },
+        {
+          "ty": "VesperRuntimeDownloadProgressSnapshot",
+          "name": "progress"
+        },
+        {
+          "ty": "VesperRuntimeDownloadAssetIndex",
+          "name": "asset_index"
+        },
+        {
+          "ty": "bool",
+          "name": "has_error"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "error_retriable"
+        },
+        {
+          "ty": "char *",
+          "name": "error_message"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadSnapshot",
+      "fields": [
+        {
+          "ty": "VesperRuntimeDownloadTask *",
+          "name": "tasks"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimeDownloadCommandKind",
+      "variants": [
+        {
+          "name": "VesperRuntimeDownloadCommandKindPrepare",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimeDownloadCommandKindStart",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimeDownloadCommandKindPause",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimeDownloadCommandKindResume",
+          "value": 3
+        },
+        {
+          "name": "VesperRuntimeDownloadCommandKindRemove",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadCommand",
+      "fields": [
+        {
+          "ty": "VesperRuntimeDownloadCommandKind",
+          "name": "kind"
+        },
+        {
+          "ty": "VesperRuntimeDownloadTask",
+          "name": "task"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadCommandList",
+      "fields": [
+        {
+          "ty": "VesperRuntimeDownloadCommand *",
+          "name": "commands"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "VesperRuntimeDownloadEventKind",
+      "variants": [
+        {
+          "name": "VesperRuntimeDownloadEventKindCreated",
+          "value": 0
+        },
+        {
+          "name": "VesperRuntimeDownloadEventKindStateChanged",
+          "value": 1
+        },
+        {
+          "name": "VesperRuntimeDownloadEventKindAssetIndexUpdated",
+          "value": 2
+        },
+        {
+          "name": "VesperRuntimeDownloadEventKindProgressUpdated",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadEvent",
+      "fields": [
+        {
+          "ty": "VesperRuntimeDownloadEventKind",
+          "name": "kind"
+        },
+        {
+          "ty": "VesperRuntimeDownloadTask *",
+          "name": "task"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "VesperRuntimeDownloadTaskStatus",
+          "name": "state_status"
+        },
+        {
+          "ty": "VesperRuntimeDownloadProgressSnapshot",
+          "name": "state_progress"
+        },
+        {
+          "ty": "bool",
+          "name": "state_has_error"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "state_error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "state_error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "state_error_retriable"
+        },
+        {
+          "ty": "char *",
+          "name": "state_error_message"
+        },
+        {
+          "ty": "char *",
+          "name": "state_completed_path"
+        },
+        {
+          "ty": "VesperRuntimeDownloadProgressSnapshot",
+          "name": "progress"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadEventList",
+      "fields": [
+        {
+          "ty": "VesperRuntimeDownloadEvent *",
+          "name": "events"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeDownloadExportCallbacks",
+      "fields": [
+        {
+          "ty": "void *",
+          "name": "context"
+        },
+        {
+          "ty": "void (*)(void *context, float ratio)",
+          "name": "on_progress"
+        },
+        {
+          "ty": "bool (*)(void *context)",
+          "name": "is_cancelled"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeTrackSelection",
+      "fields": [
+        {
+          "ty": "int",
+          "name": "mode_ordinal"
+        },
+        {
+          "ty": "const char *",
+          "name": "track_id"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeAbrPolicy",
+      "fields": [
+        {
+          "ty": "int",
+          "name": "mode_ordinal"
+        },
+        {
+          "ty": "const char *",
+          "name": "track_id"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_bit_rate"
+        },
+        {
+          "ty": "int64_t",
+          "name": "max_bit_rate"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_width"
+        },
+        {
+          "ty": "int32_t",
+          "name": "max_width"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_height"
+        },
+        {
+          "ty": "int32_t",
+          "name": "max_height"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "VesperRuntimeTrackPreferencePolicy",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "preferred_audio_language"
+        },
+        {
+          "ty": "char *",
+          "name": "preferred_subtitle_language"
+        },
+        {
+          "ty": "bool",
+          "name": "select_subtitles_by_default"
+        },
+        {
+          "ty": "bool",
+          "name": "select_undetermined_subtitle_language"
+        },
+        {
+          "ty": "VesperRuntimeTrackSelection",
+          "name": "audio_selection"
+        },
+        {
+          "ty": "VesperRuntimeTrackSelection",
+          "name": "subtitle_selection"
+        },
+        {
+          "ty": "VesperRuntimeAbrPolicy",
+          "name": "abr_policy"
+        }
+      ]
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_resolve_resilience_policy",
+      "parameters": [
+        {
+          "ty": "int",
+          "name": "source_kind_ordinal"
+        },
+        {
+          "ty": "int",
+          "name": "source_protocol_ordinal"
+        },
+        {
+          "ty": "const VesperRuntimeBufferingPolicy *",
+          "name": "buffering_policy"
+        },
+        {
+          "ty": "const VesperRuntimeRetryPolicy *",
+          "name": "retry_policy"
+        },
+        {
+          "ty": "const VesperRuntimeCachePolicy *",
+          "name": "cache_policy"
+        },
+        {
+          "ty": "VesperRuntimeResolvedResiliencePolicy *",
+          "name": "out_policy"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_resolve_preload_budget",
+      "parameters": [
+        {
+          "ty": "const VesperRuntimePreloadBudgetPolicy *",
+          "name": "preload_budget"
+        },
+        {
+          "ty": "VesperRuntimeResolvedPreloadBudgetPolicy *",
+          "name": "out_budget"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_preload_session_create",
+      "parameters": [
+        {
+          "ty": "const VesperRuntimeResolvedPreloadBudgetPolicy *",
+          "name": "preload_budget"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_preload_session_plan",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const VesperRuntimePreloadCandidate *",
+          "name": "candidates"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "candidates_len"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_preload_session_drain_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "VesperRuntimePreloadCommandList *",
+          "name": "out_commands"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_preload_session_complete",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_preload_session_fail",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "retriable"
+        },
+        {
+          "ty": "const char *",
+          "name": "message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_preload_command_list_free",
+      "parameters": [
+        {
+          "ty": "VesperRuntimePreloadCommandList *",
+          "name": "commands"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_preload_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_create",
+      "parameters": [
+        {
+          "ty": "const VesperRuntimePlaylistConfig *",
+          "name": "config"
+        },
+        {
+          "ty": "const VesperRuntimeResolvedPreloadBudgetPolicy *",
+          "name": "preload_budget"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_replace_queue",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const VesperRuntimePlaylistQueueItem *",
+          "name": "queue"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "queue_len"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_update_viewport_hints",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const VesperRuntimePlaylistViewportHint *",
+          "name": "hints"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "hints_len"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_clear_viewport_hints",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_advance_to_next",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_advance_to_previous",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_handle_playback_completed",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_handle_playback_failed",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_current_active_item",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "VesperRuntimePlaylistActiveItem *",
+          "name": "out_active_item"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_drain_preload_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "VesperRuntimePreloadCommandList *",
+          "name": "out_commands"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_complete_preload_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playlist_session_fail_preload_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "retriable"
+        },
+        {
+          "ty": "const char *",
+          "name": "message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_playlist_active_item_free",
+      "parameters": [
+        {
+          "ty": "VesperRuntimePlaylistActiveItem *",
+          "name": "item"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_playlist_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_create",
+      "parameters": [
+        {
+          "ty": "const VesperRuntimeDownloadConfig *",
+          "name": "config"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_create_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "asset_id"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadSource *",
+          "name": "source"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadProfile *",
+          "name": "profile"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadAssetIndex *",
+          "name": "asset_index"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_task_id"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_restore_tasks",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadTask *",
+          "name": "tasks"
+        },
+        {
+          "ty": "size_t",
+          "name": "tasks_len"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_start_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_pause_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_resume_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_update_progress",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "received_bytes"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "received_segments"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_complete_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const char *",
+          "name": "completed_path"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_complete_preparation",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadAssetIndex *",
+          "name": "asset_index"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_replace_task_plan",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadSource *",
+          "name": "source"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadProfile *",
+          "name": "profile"
+        },
+        {
+          "ty": "const VesperRuntimeDownloadAssetIndex *",
+          "name": "asset_index"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_export_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const char *",
+          "name": "output_path"
+        },
+        {
+          "ty": "VesperRuntimeDownloadExportCallbacks",
+          "name": "callbacks"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_fail_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "retriable"
+        },
+        {
+          "ty": "const char *",
+          "name": "message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_remove_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_snapshot",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "VesperRuntimeDownloadSnapshot *",
+          "name": "out_snapshot"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_drain_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "VesperRuntimeDownloadCommandList *",
+          "name": "out_commands"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_drain_events",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "VesperRuntimeDownloadEventList *",
+          "name": "out_events"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_download_snapshot_free",
+      "parameters": [
+        {
+          "ty": "VesperRuntimeDownloadSnapshot *",
+          "name": "snapshot"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_download_command_list_free",
+      "parameters": [
+        {
+          "ty": "VesperRuntimeDownloadCommandList *",
+          "name": "commands"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_download_event_list_free",
+      "parameters": [
+        {
+          "ty": "VesperRuntimeDownloadEventList *",
+          "name": "events"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_download_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_resolve_track_preferences",
+      "parameters": [
+        {
+          "ty": "const VesperRuntimeTrackPreferencePolicy *",
+          "name": "track_preferences"
+        },
+        {
+          "ty": "VesperRuntimeTrackPreferencePolicy *",
+          "name": "out_preferences"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_track_preferences_free",
+      "parameters": [
+        {
+          "ty": "VesperRuntimeTrackPreferencePolicy *",
+          "name": "track_preferences"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_benchmark_sink_session_create",
+      "parameters": [
+        {
+          "ty": "char **",
+          "name": "plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "plugin_library_paths_len"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_benchmark_sink_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_benchmark_sink_session_submit_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "batch_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_report_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_benchmark_sink_session_flush_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_report_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_benchmark_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_dash_bridge_execute_json",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "request_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_dash_bridge_parse_sidx",
+      "parameters": [
+        {
+          "ty": "const uint8_t *",
+          "name": "data"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "data_len"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_dash_bridge_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "public"
+    }
+  ],
+  "private_declarations": [
+    {
+      "kind": "enum",
+      "name": "PlayerFfiCallStatus",
+      "variants": [
+        {
+          "name": "PlayerFfiCallStatusOk",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiCallStatusError",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiMediaSourceKind",
+      "variants": [
+        {
+          "name": "PlayerFfiMediaSourceKindLocal",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiMediaSourceKindRemote",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiMediaSourceProtocol",
+      "variants": [
+        {
+          "name": "PlayerFfiMediaSourceProtocolUnknown",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolFile",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolContent",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolProgressive",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolHls",
+          "value": 4
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolDash",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiBufferingPreset",
+      "variants": [
+        {
+          "name": "PlayerFfiBufferingPresetDefault",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiBufferingPresetBalanced",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiBufferingPresetStreaming",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiBufferingPresetResilient",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiBufferingPresetLowLatency",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiRetryBackoff",
+      "variants": [
+        {
+          "name": "PlayerFfiRetryBackoffFixed",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiRetryBackoffLinear",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiRetryBackoffExponential",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiCachePreset",
+      "variants": [
+        {
+          "name": "PlayerFfiCachePresetDefault",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiCachePresetDisabled",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiCachePresetStreaming",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiCachePresetResilient",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiTrackSelectionMode",
+      "variants": [
+        {
+          "name": "PlayerFfiTrackSelectionModeAuto",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiTrackSelectionModeDisabled",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiTrackSelectionModeTrack",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiAbrMode",
+      "variants": [
+        {
+          "name": "PlayerFfiAbrModeAuto",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiAbrModeConstrained",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiAbrModeFixedTrack",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiBufferingPolicy",
+      "fields": [
+        {
+          "ty": "PlayerFfiBufferingPreset",
+          "name": "preset"
+        },
+        {
+          "ty": "bool",
+          "name": "has_min_buffer_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "min_buffer_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_buffer_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_buffer_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_buffer_for_playback_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "buffer_for_playback_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_buffer_for_rebuffer_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "buffer_for_rebuffer_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiRetryPolicy",
+      "fields": [
+        {
+          "ty": "bool",
+          "name": "uses_default_max_attempts"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_attempts"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "max_attempts"
+        },
+        {
+          "ty": "bool",
+          "name": "has_base_delay_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "base_delay_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_delay_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_delay_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_backoff"
+        },
+        {
+          "ty": "PlayerFfiRetryBackoff",
+          "name": "backoff"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiCachePolicy",
+      "fields": [
+        {
+          "ty": "PlayerFfiCachePreset",
+          "name": "preset"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_memory_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_disk_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_disk_bytes"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiResolvedResiliencePolicy",
+      "fields": [
+        {
+          "ty": "PlayerFfiBufferingPolicy",
+          "name": "buffering"
+        },
+        {
+          "ty": "PlayerFfiRetryPolicy",
+          "name": "retry"
+        },
+        {
+          "ty": "PlayerFfiCachePolicy",
+          "name": "cache"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPreloadBudgetPolicy",
+      "fields": [
+        {
+          "ty": "bool",
+          "name": "has_max_concurrent_tasks"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "max_concurrent_tasks"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_memory_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_disk_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_disk_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_warmup_window_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiResolvedPreloadBudgetPolicy",
+      "fields": [
+        {
+          "ty": "uint32_t",
+          "name": "max_concurrent_tasks"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_disk_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiTrackSelection",
+      "fields": [
+        {
+          "ty": "PlayerFfiTrackSelectionMode",
+          "name": "mode"
+        },
+        {
+          "ty": "char *",
+          "name": "track_id"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiAbrPolicy",
+      "fields": [
+        {
+          "ty": "PlayerFfiAbrMode",
+          "name": "mode"
+        },
+        {
+          "ty": "char *",
+          "name": "track_id"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_bit_rate"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "max_bit_rate"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_width"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "max_width"
+        },
+        {
+          "ty": "bool",
+          "name": "has_max_height"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "max_height"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiTrackPreferences",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "preferred_audio_language"
+        },
+        {
+          "ty": "char *",
+          "name": "preferred_subtitle_language"
+        },
+        {
+          "ty": "bool",
+          "name": "select_subtitles_by_default"
+        },
+        {
+          "ty": "bool",
+          "name": "select_undetermined_subtitle_language"
+        },
+        {
+          "ty": "PlayerFfiTrackSelection",
+          "name": "audio_selection"
+        },
+        {
+          "ty": "PlayerFfiTrackSelection",
+          "name": "subtitle_selection"
+        },
+        {
+          "ty": "PlayerFfiAbrPolicy",
+          "name": "abr_policy"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiError",
+      "fields": [
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "category"
+        },
+        {
+          "ty": "bool",
+          "name": "retriable"
+        },
+        {
+          "ty": "char *",
+          "name": "message"
+        }
+      ]
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_resolve_resilience_policy",
+      "parameters": [
+        {
+          "ty": "PlayerFfiMediaSourceKind",
+          "name": "source_kind"
+        },
+        {
+          "ty": "PlayerFfiMediaSourceProtocol",
+          "name": "source_protocol"
+        },
+        {
+          "ty": "const PlayerFfiBufferingPolicy *",
+          "name": "buffering_policy"
+        },
+        {
+          "ty": "const PlayerFfiRetryPolicy *",
+          "name": "retry_policy"
+        },
+        {
+          "ty": "const PlayerFfiCachePolicy *",
+          "name": "cache_policy"
+        },
+        {
+          "ty": "PlayerFfiResolvedResiliencePolicy *",
+          "name": "out_policy"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_resolve_preload_budget",
+      "parameters": [
+        {
+          "ty": "const PlayerFfiPreloadBudgetPolicy *",
+          "name": "preload_budget"
+        },
+        {
+          "ty": "PlayerFfiResolvedPreloadBudgetPolicy *",
+          "name": "out_budget"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPreloadCandidate",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "int",
+          "name": "scope_kind"
+        },
+        {
+          "ty": "const char *",
+          "name": "scope_id"
+        },
+        {
+          "ty": "int",
+          "name": "candidate_kind"
+        },
+        {
+          "ty": "int",
+          "name": "selection_hint"
+        },
+        {
+          "ty": "int",
+          "name": "priority"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_disk_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_ttl_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "ttl_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_warmup_window_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPreloadTask",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "char *",
+          "name": "source_identity"
+        },
+        {
+          "ty": "char *",
+          "name": "cache_key"
+        },
+        {
+          "ty": "int",
+          "name": "scope_kind"
+        },
+        {
+          "ty": "char *",
+          "name": "scope_id"
+        },
+        {
+          "ty": "int",
+          "name": "candidate_kind"
+        },
+        {
+          "ty": "int",
+          "name": "selection_hint"
+        },
+        {
+          "ty": "int",
+          "name": "priority"
+        },
+        {
+          "ty": "int",
+          "name": "status"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_disk_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_error"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "error_retriable"
+        },
+        {
+          "ty": "char *",
+          "name": "error_message"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPreloadCommand",
+      "fields": [
+        {
+          "ty": "int",
+          "name": "kind"
+        },
+        {
+          "ty": "PlayerFfiPreloadTask",
+          "name": "task"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPreloadCommandList",
+      "fields": [
+        {
+          "ty": "PlayerFfiPreloadCommand *",
+          "name": "commands"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiPlaylistRepeatMode",
+      "variants": [
+        {
+          "name": "PlayerFfiPlaylistRepeatModeOff",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiPlaylistRepeatModeOne",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiPlaylistRepeatModeAll",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiPlaylistFailureStrategy",
+      "variants": [
+        {
+          "name": "PlayerFfiPlaylistFailureStrategyPause",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiPlaylistFailureStrategySkipToNext",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiPlaylistViewportHintKind",
+      "variants": [
+        {
+          "name": "PlayerFfiPlaylistViewportHintKindVisible",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiPlaylistViewportHintKindNearVisible",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiPlaylistViewportHintKindPrefetchOnly",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiPlaylistViewportHintKindHidden",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPlaylistConfig",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "playlist_id"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "neighbor_previous"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "neighbor_next"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "preload_near_visible"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "preload_prefetch_only"
+        },
+        {
+          "ty": "bool",
+          "name": "auto_advance"
+        },
+        {
+          "ty": "PlayerFfiPlaylistRepeatMode",
+          "name": "repeat_mode"
+        },
+        {
+          "ty": "PlayerFfiPlaylistFailureStrategy",
+          "name": "failure_strategy"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPlaylistQueueItem",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "item_id"
+        },
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_memory_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "expected_disk_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_ttl_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "ttl_ms"
+        },
+        {
+          "ty": "bool",
+          "name": "has_warmup_window_ms"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "warmup_window_ms"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPlaylistViewportHint",
+      "fields": [
+        {
+          "ty": "const char *",
+          "name": "item_id"
+        },
+        {
+          "ty": "PlayerFfiPlaylistViewportHintKind",
+          "name": "kind"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "order"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiPlaylistActiveItem",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "item_id"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "index"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadConfig",
+      "fields": [
+        {
+          "ty": "bool",
+          "name": "auto_start"
+        },
+        {
+          "ty": "bool",
+          "name": "run_post_processors_on_completion"
+        },
+        {
+          "ty": "char **",
+          "name": "plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "plugin_library_paths_len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiDownloadContentFormat",
+      "variants": [
+        {
+          "name": "PlayerFfiDownloadContentFormatHlsSegments",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiDownloadContentFormatDashSegments",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiDownloadContentFormatFlvSegments",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiDownloadContentFormatSingleFile",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiDownloadContentFormatUnknown",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiDownloadOutputFormat",
+      "variants": [
+        {
+          "name": "PlayerFfiDownloadOutputFormatMp4",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiDownloadOutputFormatMkv",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiDownloadOutputFormatOriginal",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiDownloadStreamKind",
+      "variants": [
+        {
+          "name": "PlayerFfiDownloadStreamKindCombined",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiDownloadStreamKindVideo",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiDownloadStreamKindAudio",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiDownloadStreamKindSecondaryAudio",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiDownloadStreamKindSubtitle",
+          "value": 4
+        },
+        {
+          "name": "PlayerFfiDownloadStreamKindAuxiliary",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadSource",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "PlayerFfiDownloadContentFormat",
+          "name": "content_format"
+        },
+        {
+          "ty": "char *",
+          "name": "manifest_uri"
+        },
+        {
+          "ty": "char **",
+          "name": "header_names"
+        },
+        {
+          "ty": "char **",
+          "name": "header_values"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "headers_len"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadProfile",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "variant_id"
+        },
+        {
+          "ty": "char *",
+          "name": "preferred_audio_language"
+        },
+        {
+          "ty": "char *",
+          "name": "preferred_subtitle_language"
+        },
+        {
+          "ty": "char **",
+          "name": "selected_track_ids"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "selected_track_ids_len"
+        },
+        {
+          "ty": "bool",
+          "name": "has_target_output_format"
+        },
+        {
+          "ty": "PlayerFfiDownloadOutputFormat",
+          "name": "target_output_format"
+        },
+        {
+          "ty": "char *",
+          "name": "target_directory"
+        },
+        {
+          "ty": "bool",
+          "name": "allow_metered_network"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadByteRange",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "offset"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "length"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadResourceRecord",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "resource_id"
+        },
+        {
+          "ty": "char *",
+          "name": "uri"
+        },
+        {
+          "ty": "char *",
+          "name": "relative_path"
+        },
+        {
+          "ty": "bool",
+          "name": "has_byte_range"
+        },
+        {
+          "ty": "PlayerFfiDownloadByteRange",
+          "name": "byte_range"
+        },
+        {
+          "ty": "char *",
+          "name": "generated_text"
+        },
+        {
+          "ty": "bool",
+          "name": "has_size_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "size_bytes"
+        },
+        {
+          "ty": "char *",
+          "name": "etag"
+        },
+        {
+          "ty": "char *",
+          "name": "checksum"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadSegmentRecord",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "segment_id"
+        },
+        {
+          "ty": "char *",
+          "name": "uri"
+        },
+        {
+          "ty": "char *",
+          "name": "relative_path"
+        },
+        {
+          "ty": "bool",
+          "name": "has_sequence"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "sequence"
+        },
+        {
+          "ty": "bool",
+          "name": "has_byte_range"
+        },
+        {
+          "ty": "PlayerFfiDownloadByteRange",
+          "name": "byte_range"
+        },
+        {
+          "ty": "bool",
+          "name": "has_size_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "size_bytes"
+        },
+        {
+          "ty": "char *",
+          "name": "checksum"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadAssetStream",
+      "fields": [
+        {
+          "ty": "char *",
+          "name": "stream_id"
+        },
+        {
+          "ty": "PlayerFfiDownloadStreamKind",
+          "name": "kind"
+        },
+        {
+          "ty": "char *",
+          "name": "language"
+        },
+        {
+          "ty": "char *",
+          "name": "codec"
+        },
+        {
+          "ty": "char *",
+          "name": "label"
+        },
+        {
+          "ty": "bool",
+          "name": "has_quality_rank"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "quality_rank"
+        },
+        {
+          "ty": "char **",
+          "name": "resource_ids"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "resource_ids_len"
+        },
+        {
+          "ty": "char **",
+          "name": "segment_ids"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "segment_ids_len"
+        },
+        {
+          "ty": "char **",
+          "name": "metadata_keys"
+        },
+        {
+          "ty": "char **",
+          "name": "metadata_values"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "metadata_len"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadAssetIndex",
+      "fields": [
+        {
+          "ty": "PlayerFfiDownloadContentFormat",
+          "name": "content_format"
+        },
+        {
+          "ty": "char *",
+          "name": "version"
+        },
+        {
+          "ty": "char *",
+          "name": "etag"
+        },
+        {
+          "ty": "char *",
+          "name": "checksum"
+        },
+        {
+          "ty": "bool",
+          "name": "has_total_size_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "total_size_bytes"
+        },
+        {
+          "ty": "PlayerFfiDownloadResourceRecord *",
+          "name": "resources"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "resources_len"
+        },
+        {
+          "ty": "PlayerFfiDownloadSegmentRecord *",
+          "name": "segments"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "segments_len"
+        },
+        {
+          "ty": "PlayerFfiDownloadAssetStream *",
+          "name": "streams"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "streams_len"
+        },
+        {
+          "ty": "char *",
+          "name": "completed_path"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadProgressSnapshot",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "received_bytes"
+        },
+        {
+          "ty": "bool",
+          "name": "has_total_bytes"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "total_bytes"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "received_segments"
+        },
+        {
+          "ty": "bool",
+          "name": "has_total_segments"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "total_segments"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiDownloadTaskStatus",
+      "variants": [
+        {
+          "name": "PlayerFfiDownloadTaskStatusQueued",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiDownloadTaskStatusPreparing",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiDownloadTaskStatusDownloading",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiDownloadTaskStatusPaused",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiDownloadTaskStatusCompleted",
+          "value": 4
+        },
+        {
+          "name": "PlayerFfiDownloadTaskStatusFailed",
+          "value": 5
+        },
+        {
+          "name": "PlayerFfiDownloadTaskStatusRemoved",
+          "value": 6
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadTask",
+      "fields": [
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "char *",
+          "name": "asset_id"
+        },
+        {
+          "ty": "PlayerFfiDownloadSource",
+          "name": "source"
+        },
+        {
+          "ty": "PlayerFfiDownloadProfile",
+          "name": "profile"
+        },
+        {
+          "ty": "PlayerFfiDownloadTaskStatus",
+          "name": "status"
+        },
+        {
+          "ty": "PlayerFfiDownloadProgressSnapshot",
+          "name": "progress"
+        },
+        {
+          "ty": "PlayerFfiDownloadAssetIndex",
+          "name": "asset_index"
+        },
+        {
+          "ty": "bool",
+          "name": "has_error"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "error_retriable"
+        },
+        {
+          "ty": "char *",
+          "name": "error_message"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadSnapshot",
+      "fields": [
+        {
+          "ty": "PlayerFfiDownloadTask *",
+          "name": "tasks"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiDownloadCommandKind",
+      "variants": [
+        {
+          "name": "PlayerFfiDownloadCommandKindPrepare",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiDownloadCommandKindStart",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiDownloadCommandKindPause",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiDownloadCommandKindResume",
+          "value": 3
+        },
+        {
+          "name": "PlayerFfiDownloadCommandKindRemove",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadCommand",
+      "fields": [
+        {
+          "ty": "PlayerFfiDownloadCommandKind",
+          "name": "kind"
+        },
+        {
+          "ty": "PlayerFfiDownloadTask",
+          "name": "task"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadCommandList",
+      "fields": [
+        {
+          "ty": "PlayerFfiDownloadCommand *",
+          "name": "commands"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "enum",
+      "name": "PlayerFfiDownloadEventKind",
+      "variants": [
+        {
+          "name": "PlayerFfiDownloadEventKindCreated",
+          "value": 0
+        },
+        {
+          "name": "PlayerFfiDownloadEventKindStateChanged",
+          "value": 1
+        },
+        {
+          "name": "PlayerFfiDownloadEventKindAssetIndexUpdated",
+          "value": 2
+        },
+        {
+          "name": "PlayerFfiDownloadEventKindProgressUpdated",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadEvent",
+      "fields": [
+        {
+          "ty": "PlayerFfiDownloadEventKind",
+          "name": "kind"
+        },
+        {
+          "ty": "PlayerFfiDownloadTask",
+          "name": "task"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiDownloadTaskStatus",
+          "name": "status"
+        },
+        {
+          "ty": "PlayerFfiDownloadProgressSnapshot",
+          "name": "progress"
+        },
+        {
+          "ty": "bool",
+          "name": "has_error"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "error_retriable"
+        },
+        {
+          "ty": "char *",
+          "name": "error_message"
+        },
+        {
+          "ty": "char *",
+          "name": "completed_path"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadEventList",
+      "fields": [
+        {
+          "ty": "PlayerFfiDownloadEvent *",
+          "name": "events"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "len"
+        }
+      ]
+    },
+    {
+      "kind": "struct",
+      "name": "PlayerFfiDownloadExportCallbacks",
+      "fields": [
+        {
+          "ty": "void *",
+          "name": "context"
+        },
+        {
+          "ty": "void (*)(void *context, float ratio)",
+          "name": "on_progress"
+        },
+        {
+          "ty": "bool (*)(void *context)",
+          "name": "is_cancelled"
+        }
+      ]
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_preload_session_create",
+      "parameters": [
+        {
+          "ty": "const PlayerFfiResolvedPreloadBudgetPolicy *",
+          "name": "preload_budget"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_preload_session_plan",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const PlayerFfiPreloadCandidate *",
+          "name": "candidates"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "candidates_len"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_preload_session_drain_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiPreloadCommandList *",
+          "name": "out_commands"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_preload_session_complete",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_preload_session_fail",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "retriable"
+        },
+        {
+          "ty": "const char *",
+          "name": "message"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_preload_command_list_free",
+      "parameters": [
+        {
+          "ty": "PlayerFfiPreloadCommandList *",
+          "name": "commands"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_preload_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_create",
+      "parameters": [
+        {
+          "ty": "const PlayerFfiPlaylistConfig *",
+          "name": "config"
+        },
+        {
+          "ty": "const PlayerFfiResolvedPreloadBudgetPolicy *",
+          "name": "preload_budget"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_replace_queue",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const PlayerFfiPlaylistQueueItem *",
+          "name": "queue"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "queue_len"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_update_viewport_hints",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const PlayerFfiPlaylistViewportHint *",
+          "name": "hints"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "hints_len"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_clear_viewport_hints",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_advance_to_next",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_advance_to_previous",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_handle_playback_completed",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_handle_playback_failed",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_current_active_item",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiPlaylistActiveItem *",
+          "name": "out_active_item"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_playlist_active_item_free",
+      "parameters": [
+        {
+          "ty": "PlayerFfiPlaylistActiveItem *",
+          "name": "item"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_drain_preload_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiPreloadCommandList *",
+          "name": "out_commands"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_complete_preload_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_playlist_session_fail_preload_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "retriable"
+        },
+        {
+          "ty": "const char *",
+          "name": "message"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_playlist_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_create",
+      "parameters": [
+        {
+          "ty": "const PlayerFfiDownloadConfig *",
+          "name": "config"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_create_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "asset_id"
+        },
+        {
+          "ty": "const PlayerFfiDownloadSource *",
+          "name": "source"
+        },
+        {
+          "ty": "const PlayerFfiDownloadProfile *",
+          "name": "profile"
+        },
+        {
+          "ty": "const PlayerFfiDownloadAssetIndex *",
+          "name": "asset_index"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_task_id"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_restore_tasks",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const PlayerFfiDownloadTask *",
+          "name": "tasks"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "tasks_len"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_start_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_pause_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_resume_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_update_progress",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "received_bytes"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "received_segments"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_complete_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const char *",
+          "name": "completed_path"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_complete_preparation",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const PlayerFfiDownloadAssetIndex *",
+          "name": "asset_index"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_replace_task_plan",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const PlayerFfiDownloadSource *",
+          "name": "source"
+        },
+        {
+          "ty": "const PlayerFfiDownloadProfile *",
+          "name": "profile"
+        },
+        {
+          "ty": "const PlayerFfiDownloadAssetIndex *",
+          "name": "asset_index"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_export_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "const char *",
+          "name": "output_path"
+        },
+        {
+          "ty": "PlayerFfiDownloadExportCallbacks",
+          "name": "callbacks"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_fail_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiErrorCode",
+          "name": "error_code"
+        },
+        {
+          "ty": "PlayerFfiErrorCategory",
+          "name": "error_category"
+        },
+        {
+          "ty": "bool",
+          "name": "retriable"
+        },
+        {
+          "ty": "const char *",
+          "name": "message"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_remove_task",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "task_id"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_snapshot",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiDownloadSnapshot *",
+          "name": "out_snapshot"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_drain_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiDownloadCommandList *",
+          "name": "out_commands"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_drain_events",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiDownloadEventList *",
+          "name": "out_events"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_download_snapshot_free",
+      "parameters": [
+        {
+          "ty": "PlayerFfiDownloadSnapshot *",
+          "name": "snapshot"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_download_command_list_free",
+      "parameters": [
+        {
+          "ty": "PlayerFfiDownloadCommandList *",
+          "name": "commands"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_download_event_list_free",
+      "parameters": [
+        {
+          "ty": "PlayerFfiDownloadEventList *",
+          "name": "events"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_download_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_resolve_track_preferences",
+      "parameters": [
+        {
+          "ty": "const PlayerFfiTrackPreferences *",
+          "name": "track_preferences"
+        },
+        {
+          "ty": "PlayerFfiTrackPreferences *",
+          "name": "out_preferences"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_benchmark_session_create",
+      "parameters": [
+        {
+          "ty": "char **",
+          "name": "plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "plugin_library_paths_len"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_benchmark_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_benchmark_session_on_event_batch_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "batch_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_report_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_benchmark_session_flush_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_report_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_benchmark_report_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_dash_bridge_execute_json",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "request_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_dash_bridge_parse_sidx",
+      "parameters": [
+        {
+          "ty": "const uint8_t *",
+          "name": "data"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "data_len"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_dash_bridge_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_error_free",
+      "parameters": [
+        {
+          "ty": "PlayerFfiError *",
+          "name": "error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_track_preferences_free",
+      "parameters": [
+        {
+          "ty": "PlayerFfiTrackPreferences *",
+          "name": "track_preferences"
+        }
+      ],
+      "storage": "extern"
+    }
+  ],
+  "source_items": [
+    {
+      "kind": "static_fragment",
+      "path": "fragments/static/static-helpers-01.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_resolve_resilience_policy",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_resolve_resilience_policy"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_resolve_resilience_policy.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_resolve_preload_budget",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_resolve_preload_budget"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_resolve_preload_budget.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_resolve_track_preferences",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_resolve_track_preferences",
+        "player_ffi_track_preferences_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Frees Rust-owned resolved track preference strings after copying them to runtime DTOs.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_resolve_track_preferences.c.inc"
+    },
+    {
+      "kind": "static_fragment",
+      "path": "fragments/static/static-helpers-02.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_preload_session_create",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_preload_session_create"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_preload_session_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_preload_session_plan",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_preload_session_plan"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_preload_session_plan.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_preload_session_drain_commands",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_preload_command_list_free",
+        "player_ffi_preload_session_drain_commands"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Frees Rust-owned preload command lists after copying them to runtime DTOs.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_preload_session_drain_commands.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_preload_session_complete",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_preload_session_complete"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_preload_session_complete.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_preload_session_fail",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_preload_session_fail"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_preload_session_fail.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_preload_command_list_free",
+      "ffi_symbols": [],
+      "ownership": [
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_preload_command_list_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_preload_session_dispose",
+      "ffi_symbols": [
+        "player_ffi_preload_session_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_preload_session_dispose.c.inc"
+    },
+    {
+      "kind": "static_fragment",
+      "path": "fragments/static/static-helpers-03.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_create",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_playlist_session_create"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_replace_queue",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_playlist_session_replace_queue"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_replace_queue.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_update_viewport_hints",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_playlist_session_update_viewport_hints"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_update_viewport_hints.c.inc"
+    },
+    {
+      "kind": "static_fragment",
+      "path": "fragments/static/static-helpers-04.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_clear_viewport_hints",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_clear_viewport_hints"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_clear_viewport_hints.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_advance_to_next",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_advance_to_next"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_advance_to_next.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_advance_to_previous",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_advance_to_previous"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_advance_to_previous.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_handle_playback_completed",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_handle_playback_completed"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_handle_playback_completed.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_handle_playback_failed",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_handle_playback_failed"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_handle_playback_failed.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_current_active_item",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_playlist_active_item_free",
+        "player_ffi_playlist_session_current_active_item"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Frees Rust-owned playlist active item strings after copying them to runtime DTOs.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_current_active_item.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_drain_preload_commands",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_playlist_session_drain_preload_commands",
+        "player_ffi_preload_command_list_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Frees Rust-owned preload command lists after copying them to runtime DTOs.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_drain_preload_commands.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_complete_preload_task",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_complete_preload_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_complete_preload_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_fail_preload_task",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_fail_preload_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_fail_preload_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_active_item_free",
+      "ffi_symbols": [],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_active_item_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playlist_session_dispose",
+      "ffi_symbols": [
+        "player_ffi_playlist_session_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_create",
+      "ffi_symbols": [
+        "player_ffi_download_session_create"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_create_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_create_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_create_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_restore_tasks",
+      "ffi_symbols": [
+        "player_ffi_download_session_restore_tasks"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_restore_tasks.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_start_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_start_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_start_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_pause_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_pause_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_pause_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_resume_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_resume_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_resume_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_update_progress",
+      "ffi_symbols": [
+        "player_ffi_download_session_update_progress"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_update_progress.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_complete_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_complete_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_complete_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_complete_preparation",
+      "ffi_symbols": [
+        "player_ffi_download_session_complete_preparation"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_complete_preparation.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_replace_task_plan",
+      "ffi_symbols": [
+        "player_ffi_download_session_replace_task_plan"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_replace_task_plan.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_export_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_export_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_export_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_fail_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_fail_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_fail_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_remove_task",
+      "ffi_symbols": [
+        "player_ffi_download_session_remove_task"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_remove_task.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_snapshot",
+      "ffi_symbols": [
+        "player_ffi_download_session_snapshot",
+        "player_ffi_download_snapshot_free",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Frees Rust-owned download snapshots after copying them to runtime DTOs.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_snapshot.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_drain_commands",
+      "ffi_symbols": [
+        "player_ffi_download_command_list_free",
+        "player_ffi_download_session_drain_commands",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Frees Rust-owned download command lists after copying them to runtime DTOs.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_drain_commands.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_drain_events",
+      "ffi_symbols": [
+        "player_ffi_download_event_list_free",
+        "player_ffi_download_session_drain_events",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Frees Rust-owned download event lists after copying them to runtime DTOs.",
+        "Releases C-owned bridge allocations with free.",
+        "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_drain_events.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_snapshot_free",
+      "ffi_symbols": [],
+      "ownership": [
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_snapshot_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_command_list_free",
+      "ffi_symbols": [],
+      "ownership": [
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_command_list_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_event_list_free",
+      "ffi_symbols": [],
+      "ownership": [
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_event_list_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_dispose",
+      "ffi_symbols": [
+        "player_ffi_download_session_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_track_preferences_free",
+      "ffi_symbols": [],
+      "ownership": [
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_track_preferences_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_benchmark_sink_session_create",
+      "ffi_symbols": [
+        "player_ffi_benchmark_session_create",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_sink_session_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_benchmark_sink_session_dispose",
+      "ffi_symbols": [
+        "player_ffi_benchmark_session_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_sink_session_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_benchmark_sink_session_submit_json",
+      "ffi_symbols": [
+        "player_ffi_benchmark_session_on_event_batch_json",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_sink_session_submit_json.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_benchmark_sink_session_flush_json",
+      "ffi_symbols": [
+        "player_ffi_benchmark_session_flush_json",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_sink_session_flush_json.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_benchmark_string_free",
+      "ffi_symbols": [
+        "player_ffi_benchmark_report_string_free"
+      ],
+      "ownership": [
+        "Forwards benchmark report string release to the Rust FFI free function.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_string_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_dash_bridge_execute_json",
+      "ffi_symbols": [
+        "player_ffi_dash_bridge_execute_json",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_dash_bridge_execute_json.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_dash_bridge_parse_sidx",
+      "ffi_symbols": [
+        "player_ffi_dash_bridge_parse_sidx",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_dash_bridge_parse_sidx.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_dash_bridge_string_free",
+      "ffi_symbols": [
+        "player_ffi_dash_bridge_string_free"
+      ],
+      "ownership": [
+        "Forwards DASH bridge string release to the Rust FFI free function.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_dash_bridge_string_free.c.inc"
+    }
+  ]
+}

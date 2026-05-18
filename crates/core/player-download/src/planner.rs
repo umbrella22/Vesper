@@ -4,14 +4,13 @@ use std::path::PathBuf;
 use crate::{
     DownloadAssetIndex, DownloadAssetStream, DownloadByteRange, DownloadContentFormat,
     DownloadProfile, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
-    DownloadStreamKind, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
-    PlayerRuntimeResult,
+    DownloadStreamKind, PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult,
 };
 
 pub trait DownloadPlanningClient {
-    fn fetch_text(&self, uri: &str) -> PlayerRuntimeResult<String>;
+    fn fetch_text(&self, uri: &str) -> PlayerResult<String>;
 
-    fn content_length(&self, uri: &str) -> PlayerRuntimeResult<Option<u64>>;
+    fn content_length(&self, uri: &str) -> PlayerResult<Option<u64>>;
 }
 
 #[derive(Debug)]
@@ -41,15 +40,15 @@ where
         &self,
         source: &DownloadSource,
         profile: &DownloadProfile,
-    ) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    ) -> PlayerResult<DownloadAssetIndex> {
         match source.content_format {
             DownloadContentFormat::HlsSegments => self.plan_hls(source, profile),
             DownloadContentFormat::DashSegments => self.plan_dash(source, profile),
             DownloadContentFormat::FlvSegments => self.plan_flv_segments(source),
             DownloadContentFormat::SingleFile => self.plan_single_file(source),
             DownloadContentFormat::Unknown => Err(planning_error(
-                PlayerRuntimeErrorCode::Unsupported,
-                PlayerRuntimeErrorCategory::Capability,
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Capability,
                 "download planner cannot plan an unknown content format",
             )),
         }
@@ -59,7 +58,7 @@ where
         &self,
         source: &DownloadSource,
         profile: &DownloadProfile,
-    ) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    ) -> PlayerResult<DownloadAssetIndex> {
         let manifest_uri = source
             .manifest_uri
             .as_deref()
@@ -79,12 +78,12 @@ where
         manifest_uri: &str,
         manifest: &str,
         profile: &DownloadProfile,
-    ) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    ) -> PlayerResult<DownloadAssetIndex> {
         let master = parse_hls_master_playlist(manifest_uri, manifest)?;
         let variant = select_hls_variant(&master.variants, profile).ok_or_else(|| {
             planning_error(
-                PlayerRuntimeErrorCode::InvalidSource,
-                PlayerRuntimeErrorCategory::Source,
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Source,
                 "HLS master playlist did not contain a playable variant",
             )
         })?;
@@ -134,7 +133,7 @@ where
         &self,
         source: &DownloadSource,
         profile: &DownloadProfile,
-    ) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    ) -> PlayerResult<DownloadAssetIndex> {
         let manifest_uri = source
             .manifest_uri
             .as_deref()
@@ -143,8 +142,8 @@ where
         let mpd_type = xml_attr(&manifest, "MPD", "type");
         if mpd_type.as_deref().is_some_and(|value| value != "static") {
             return Err(planning_error(
-                PlayerRuntimeErrorCode::Unsupported,
-                PlayerRuntimeErrorCategory::Source,
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Source,
                 "DASH download planning requires a static MPD",
             ));
         }
@@ -164,8 +163,8 @@ where
         }
 
         Err(planning_error(
-            PlayerRuntimeErrorCode::Unsupported,
-            PlayerRuntimeErrorCategory::Source,
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Source,
             "DASH MPD did not contain a supported SegmentTemplate or SegmentBase representation",
         ))
     }
@@ -176,18 +175,18 @@ where
         manifest: &str,
         representation: &DashRepresentation,
         template: &DashSegmentTemplate,
-    ) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    ) -> PlayerResult<DownloadAssetIndex> {
         let duration_seconds = dash_duration_seconds(manifest).ok_or_else(|| {
             planning_error(
-                PlayerRuntimeErrorCode::InvalidSource,
-                PlayerRuntimeErrorCategory::Source,
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Source,
                 "DASH SegmentTemplate planning requires a finite MPD duration",
             )
         })?;
         if template.duration == 0 {
             return Err(planning_error(
-                PlayerRuntimeErrorCode::InvalidSource,
-                PlayerRuntimeErrorCategory::Source,
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Source,
                 "DASH SegmentTemplate duration must be greater than zero",
             ));
         }
@@ -274,7 +273,7 @@ where
         manifest_uri: &str,
         manifest: &str,
         base_url: &str,
-    ) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    ) -> PlayerResult<DownloadAssetIndex> {
         let remote = resolve_uri(manifest_uri, base_url);
         let size = self.probe_required_size(&remote, None)?;
         let local_name = format!("media.{}", extension_from_uri(base_url, "mp4"));
@@ -309,10 +308,7 @@ where
         })
     }
 
-    fn plan_flv_segments(
-        &self,
-        source: &DownloadSource,
-    ) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    fn plan_flv_segments(&self, source: &DownloadSource) -> PlayerResult<DownloadAssetIndex> {
         let uri = source
             .manifest_uri
             .as_deref()
@@ -325,8 +321,8 @@ where
 
         if clip_uris.is_empty() {
             return Err(planning_error(
-                PlayerRuntimeErrorCode::InvalidSource,
-                PlayerRuntimeErrorCategory::Source,
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Source,
                 "FLV clip manifest did not contain any clip URI",
             ));
         }
@@ -375,7 +371,7 @@ where
         })
     }
 
-    fn plan_single_file(&self, source: &DownloadSource) -> PlayerRuntimeResult<DownloadAssetIndex> {
+    fn plan_single_file(&self, source: &DownloadSource) -> PlayerResult<DownloadAssetIndex> {
         let uri = source
             .manifest_uri
             .as_deref()
@@ -405,14 +401,14 @@ where
         &self,
         uri: &str,
         byte_range: Option<DownloadByteRange>,
-    ) -> PlayerRuntimeResult<u64> {
+    ) -> PlayerResult<u64> {
         if let Some(byte_range) = byte_range {
             return Ok(byte_range.length);
         }
         self.client.content_length(uri)?.ok_or_else(|| {
             planning_error(
-                PlayerRuntimeErrorCode::InvalidSource,
-                PlayerRuntimeErrorCategory::Network,
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Network,
                 format!("remote resource `{uri}` did not expose a stable content length"),
             )
         })
@@ -423,7 +419,7 @@ fn build_hls_media_asset_index<C>(
     planner: &DownloadPlanner<C>,
     manifest_path: &str,
     media_playlists: Vec<(&str, HlsMediaPlaylist)>,
-) -> PlayerRuntimeResult<DownloadAssetIndex>
+) -> PlayerResult<DownloadAssetIndex>
 where
     C: DownloadPlanningClient,
 {
@@ -609,7 +605,7 @@ struct HlsSegment {
 fn parse_hls_master_playlist(
     manifest_uri: &str,
     manifest: &str,
-) -> PlayerRuntimeResult<HlsMasterPlaylist> {
+) -> PlayerResult<HlsMasterPlaylist> {
     let mut variants = Vec::new();
     let mut audio = Vec::new();
     let mut pending_variant = None;
@@ -651,10 +647,7 @@ fn parse_hls_master_playlist(
     Ok(HlsMasterPlaylist { variants, audio })
 }
 
-fn parse_hls_media_playlist(
-    manifest_uri: &str,
-    manifest: &str,
-) -> PlayerRuntimeResult<HlsMediaPlaylist> {
+fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<HlsMediaPlaylist> {
     let mut target_duration = None;
     let mut version = None;
     let mut end_list = false;
@@ -691,8 +684,8 @@ fn parse_hls_media_playlist(
             let attributes = parse_hls_attributes(value);
             let Some(uri) = attributes.get("URI") else {
                 return Err(planning_error(
-                    PlayerRuntimeErrorCode::InvalidSource,
-                    PlayerRuntimeErrorCategory::Source,
+                    PlayerErrorCode::InvalidSource,
+                    PlayerErrorCategory::Source,
                     "HLS EXT-X-MAP was missing URI",
                 ));
             };
@@ -734,15 +727,15 @@ fn parse_hls_media_playlist(
 
     if !end_list && !playlist_type_vod {
         return Err(planning_error(
-            PlayerRuntimeErrorCode::Unsupported,
-            PlayerRuntimeErrorCategory::Source,
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Source,
             "HLS download planning requires a VOD playlist or EXT-X-ENDLIST",
         ));
     }
     if segments.is_empty() {
         return Err(planning_error(
-            PlayerRuntimeErrorCode::InvalidSource,
-            PlayerRuntimeErrorCategory::Source,
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
             "HLS media playlist did not contain any segments",
         ));
     }
@@ -915,7 +908,7 @@ struct DashSegmentTemplate {
 fn select_dash_representation(
     manifest: &str,
     profile: &DownloadProfile,
-) -> PlayerRuntimeResult<DashRepresentation> {
+) -> PlayerResult<DashRepresentation> {
     let mut inherited_template = find_segment_template(manifest);
     let inherited_base_url = inherited_dash_base_url(manifest);
     let mut candidates = Vec::new();
@@ -958,8 +951,8 @@ fn select_dash_representation(
         .or_else(|| candidates.into_iter().next())
         .ok_or_else(|| {
             planning_error(
-                PlayerRuntimeErrorCode::InvalidSource,
-                PlayerRuntimeErrorCategory::Source,
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Source,
                 "DASH MPD did not contain any representations",
             )
         })
@@ -1183,7 +1176,7 @@ fn extension_from_uri(uri: &str, default_extension: &str) -> String {
         .to_owned()
 }
 
-fn parse_flv_clip_manifest(base_uri: &str, manifest: &str) -> PlayerRuntimeResult<Vec<String>> {
+fn parse_flv_clip_manifest(base_uri: &str, manifest: &str) -> PlayerResult<Vec<String>> {
     let mut clips = Vec::new();
     for line in manifest.lines() {
         let line = line.trim();
@@ -1213,11 +1206,11 @@ fn escape_ffconcat_path(path: &str) -> String {
 }
 
 fn planning_error(
-    code: PlayerRuntimeErrorCode,
-    category: PlayerRuntimeErrorCategory,
+    code: PlayerErrorCode,
+    category: PlayerErrorCategory,
     message: impl Into<String>,
-) -> PlayerRuntimeError {
-    PlayerRuntimeError::with_category(code, category, message)
+) -> PlayerError {
+    PlayerError::with_category(code, category, message)
 }
 
 #[cfg(test)]
@@ -1225,7 +1218,7 @@ mod tests {
     use super::{DownloadPlanner, DownloadPlanningClient};
     use crate::{
         DownloadByteRange, DownloadContentFormat, DownloadProfile, DownloadSource,
-        DownloadStreamKind, PlayerRuntimeError, PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
+        DownloadStreamKind, PlayerError, PlayerErrorCategory, PlayerErrorCode,
     };
     use player_model::MediaSource;
     use std::collections::HashMap;
@@ -1249,17 +1242,17 @@ mod tests {
     }
 
     impl DownloadPlanningClient for FakeClient {
-        fn fetch_text(&self, uri: &str) -> Result<String, PlayerRuntimeError> {
+        fn fetch_text(&self, uri: &str) -> Result<String, PlayerError> {
             self.text.get(uri).cloned().ok_or_else(|| {
-                PlayerRuntimeError::with_category(
-                    PlayerRuntimeErrorCode::InvalidSource,
-                    PlayerRuntimeErrorCategory::Network,
+                PlayerError::with_category(
+                    PlayerErrorCode::InvalidSource,
+                    PlayerErrorCategory::Network,
                     format!("missing text fixture for {uri}"),
                 )
             })
         }
 
-        fn content_length(&self, uri: &str) -> Result<Option<u64>, PlayerRuntimeError> {
+        fn content_length(&self, uri: &str) -> Result<Option<u64>, PlayerError> {
             Ok(self.sizes.get(uri).copied())
         }
     }
@@ -1463,7 +1456,7 @@ mod tests {
             )
             .expect_err("live playlist should fail");
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
     }
 
     #[test]
@@ -1537,7 +1530,7 @@ mod tests {
             .plan(&source, &DownloadProfile::default())
             .expect_err("dynamic MPD should fail");
 
-        assert_eq!(error.code(), PlayerRuntimeErrorCode::Unsupported);
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
     }
 
     #[test]
@@ -1625,6 +1618,6 @@ mod tests {
             )
             .expect_err("missing content length should fail");
 
-        assert_eq!(error.category(), PlayerRuntimeErrorCategory::Network);
+        assert_eq!(error.category(), PlayerErrorCategory::Network);
     }
 }
