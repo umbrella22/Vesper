@@ -14,8 +14,8 @@ use player_runtime::{
 };
 
 use crate::{
-    HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
-    lock_or_recover, method_sig, resolve_preload_budget_with_runtime, run_jni_entry,
+    HandleRegistry, PKG, error_category_from_jni_ordinal, error_code_from_jni_ordinal, field_sig,
+    jni_name, lock_or_recover, method_sig, resolve_preload_budget_with_runtime, run_jni_entry,
     u64_to_jlong_saturating, u128_to_jlong_saturating,
 };
 
@@ -505,8 +505,8 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
     task_id: jlong,
-    code_ordinal: jint,
-    category_ordinal: jint,
+    code_jni_ordinal: jint,
+    category_jni_ordinal: jint,
     retriable: jboolean,
     message: JString<'_>,
 ) -> jboolean {
@@ -515,8 +515,8 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
             .with_env(|env| -> JniResult<jboolean> {
                 let message = message.try_to_string(env)?;
                 let error = PlayerError::with_taxonomy(
-                    error_code_from_ordinal(code_ordinal),
-                    error_category_from_ordinal(category_ordinal),
+                    error_code_from_jni_ordinal(code_jni_ordinal),
+                    error_category_from_jni_ordinal(category_jni_ordinal),
                     (retriable as u8) != 0,
                     message,
                 );

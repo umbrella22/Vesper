@@ -1028,8 +1028,8 @@ class VesperDownloadManager internal constructor(
                     bindings.failDownloadTask(
                         sessionHandle = sessionHandle,
                         taskId = taskId,
-                        codeOrdinal = error.code.legacyOrdinal,
-                        categoryOrdinal = error.category.legacyOrdinal,
+                        codeOrdinal = error.code.jniOrdinal,
+                        categoryOrdinal = error.category.jniOrdinal,
                         retriable = error.retriable,
                         message = error.message,
                         nowEpochMs = System.currentTimeMillis(),
@@ -3560,8 +3560,8 @@ private fun VesperDownloadTaskSnapshot.toNativePayload(): NativeDownloadTask =
         progress = progress.toNativePayload(),
         assetIndex = assetIndex.toNativePayload(),
         hasError = error != null,
-        errorCodeOrdinal = error?.code?.legacyOrdinal ?: 0,
-        errorCategoryOrdinal = error?.category?.legacyOrdinal ?: 0,
+        errorCodeOrdinal = error?.code?.jniOrdinal ?: 0,
+        errorCategoryOrdinal = error?.category?.jniOrdinal ?: 0,
         errorRetriable = error?.retriable ?: false,
         errorMessage = error?.message,
     )
@@ -3581,8 +3581,8 @@ private fun NativeDownloadTask.toPublic(): VesperDownloadTaskSnapshot =
         error =
             if (hasError) {
                 VesperDownloadError(
-                    code = VesperPlayerErrorCode.fromLegacyOrdinal(errorCodeOrdinal),
-                    category = VesperPlayerErrorCategory.fromLegacyOrdinal(errorCategoryOrdinal),
+                    code = VesperPlayerErrorCode.fromJniOrdinal(errorCodeOrdinal),
+                    category = VesperPlayerErrorCategory.fromJniOrdinal(errorCategoryOrdinal),
                     retriable = errorRetriable,
                     message = errorMessage ?: "download failed",
                 )
@@ -3728,8 +3728,8 @@ private fun NativeDownloadEvent.toPublic(): VesperDownloadEvent =
                     error =
                         if (hasError) {
                             VesperDownloadError(
-                                code = VesperPlayerErrorCode.fromLegacyOrdinal(errorCodeOrdinal),
-                                category = VesperPlayerErrorCategory.fromLegacyOrdinal(errorCategoryOrdinal),
+                                code = VesperPlayerErrorCode.fromJniOrdinal(errorCodeOrdinal),
+                                category = VesperPlayerErrorCategory.fromJniOrdinal(errorCategoryOrdinal),
                                 retriable = errorRetriable,
                                 message = errorMessage.orEmpty(),
                             )
@@ -3996,10 +3996,10 @@ private fun JSONObject.toDownloadError(): VesperDownloadError =
     VesperDownloadError(
         code =
             optStringOrNull("code")?.let(VesperPlayerErrorCode::fromWireName)
-                ?: VesperPlayerErrorCode.fromLegacyOrdinal(optInt("codeOrdinal", 0)),
+                ?: VesperPlayerErrorCode.fromJniOrdinal(optInt("codeOrdinal", 0)),
         category =
             optStringOrNull("category")?.let(VesperPlayerErrorCategory::fromWireName)
-                ?: VesperPlayerErrorCategory.fromLegacyOrdinal(optInt("categoryOrdinal", 0)),
+                ?: VesperPlayerErrorCategory.fromJniOrdinal(optInt("categoryOrdinal", 0)),
         retriable = optBoolean("retriable", false),
         message = optString("message", "download failed"),
     )

@@ -2,7 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 enum class VesperPlayerErrorCode(
     val wireName: String,
-    internal val legacyOrdinal: Int,
+    internal val jniOrdinal: Int,
 ) {
     InvalidArgument("invalidArgument", 0),
     InvalidState("invalidState", 1),
@@ -21,14 +21,14 @@ enum class VesperPlayerErrorCode(
         fun fromWireName(wireName: String?): VesperPlayerErrorCode =
             entries.firstOrNull { it.wireName == wireName } ?: BackendFailure
 
-        internal fun fromLegacyOrdinal(ordinal: Int): VesperPlayerErrorCode =
-            entries.firstOrNull { it.legacyOrdinal == ordinal } ?: BackendFailure
+        internal fun fromJniOrdinal(ordinal: Int): VesperPlayerErrorCode =
+            entries.firstOrNull { it.jniOrdinal == ordinal } ?: BackendFailure
     }
 }
 
 enum class VesperPlayerErrorCategory(
     val wireName: String,
-    internal val legacyOrdinal: Int,
+    internal val jniOrdinal: Int,
 ) {
     Input("input", 0),
     Source("source", 1),
@@ -43,7 +43,7 @@ enum class VesperPlayerErrorCategory(
         fun fromWireName(wireName: String?): VesperPlayerErrorCategory =
             entries.firstOrNull { it.wireName == wireName } ?: Platform
 
-        internal fun fromLegacyOrdinal(ordinal: Int): VesperPlayerErrorCategory =
-            entries.firstOrNull { it.legacyOrdinal == ordinal } ?: Platform
+        internal fun fromJniOrdinal(ordinal: Int): VesperPlayerErrorCategory =
+            entries.firstOrNull { it.jniOrdinal == ordinal } ?: Platform
     }
 }

@@ -18,8 +18,8 @@ use player_runtime::{
 };
 
 use crate::{
-    HandleRegistry, PKG, error_category_from_ordinal, error_code_from_ordinal, field_sig, jni_name,
-    lock_or_recover, method_sig, run_jni_entry, u64_to_jlong_saturating,
+    HandleRegistry, PKG, error_category_from_jni_ordinal, error_code_from_jni_ordinal, field_sig,
+    jni_name, lock_or_recover, method_sig, run_jni_entry, u64_to_jlong_saturating,
 };
 
 type AndroidJniDownloadSession = Arc<Mutex<AndroidDownloadBridgeSession>>;
@@ -549,8 +549,12 @@ fn download_task_from_java<'local>(
     .ok_or_else(|| jni::errors::Error::NullPtr("task.assetIndex"))?;
     let error_summary = if bool_field(env, &task, "hasError")? {
         Some(DownloadErrorSummary {
-            code: error_code_from_ordinal(int_field(env, &task, "errorCodeOrdinal")?),
-            category: error_category_from_ordinal(int_field(env, &task, "errorCategoryOrdinal")?),
+            code: error_code_from_jni_ordinal(int_field(env, &task, "errorCodeOrdinal")?),
+            category: error_category_from_jni_ordinal(int_field(
+                env,
+                &task,
+                "errorCategoryOrdinal",
+            )?),
             retriable: bool_field(env, &task, "errorRetriable")?,
             message: string_field(env, &task, "errorMessage")?
                 .unwrap_or_else(|| "download failed".to_owned()),
@@ -1499,8 +1503,8 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
     task_id: jlong,
-    code_ordinal: jint,
-    category_ordinal: jint,
+    code_jni_ordinal: jint,
+    category_jni_ordinal: jint,
     retriable: jboolean,
     message: JString<'_>,
     _now_epoch_ms: jlong,
@@ -1510,8 +1514,8 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
             .with_env(|env| -> JniResult<jboolean> {
                 let message = message.try_to_string(env)?;
                 let error = PlayerError::with_taxonomy(
-                    error_code_from_ordinal(code_ordinal),
-                    error_category_from_ordinal(category_ordinal),
+                    error_code_from_jni_ordinal(code_jni_ordinal),
+                    error_category_from_jni_ordinal(category_jni_ordinal),
                     (retriable as u8) != 0,
                     message,
                 );

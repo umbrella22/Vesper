@@ -835,8 +835,8 @@ fn native_command_object<'local>(
     }
 }
 
-pub(crate) fn error_code_from_ordinal(ordinal: jint) -> PlayerErrorCode {
-    match ordinal {
+pub(crate) fn error_code_from_jni_ordinal(jni_ordinal: jint) -> PlayerErrorCode {
+    match jni_ordinal {
         0 => PlayerErrorCode::InvalidArgument,
         1 => PlayerErrorCode::InvalidState,
         2 => PlayerErrorCode::InvalidSource,
@@ -853,8 +853,8 @@ pub(crate) fn error_code_from_ordinal(ordinal: jint) -> PlayerErrorCode {
     }
 }
 
-pub(crate) fn error_category_from_ordinal(ordinal: jint) -> PlayerErrorCategory {
-    match ordinal {
+pub(crate) fn error_category_from_jni_ordinal(jni_ordinal: jint) -> PlayerErrorCategory {
+    match jni_ordinal {
         0 => PlayerErrorCategory::Input,
         1 => PlayerErrorCategory::Source,
         2 => PlayerErrorCategory::Network,
@@ -1712,8 +1712,8 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
-    code_ordinal: jint,
-    category_ordinal: jint,
+    code_jni_ordinal: jint,
+    category_jni_ordinal: jint,
     retriable: jboolean,
     message: JString<'_>,
 ) {
@@ -1721,8 +1721,8 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|env| -> JniResult<()> {
                 let message = message.try_to_string(env)?;
-                let code = error_code_from_ordinal(code_ordinal);
-                let category = error_category_from_ordinal(category_ordinal);
+                let code = error_code_from_jni_ordinal(code_jni_ordinal);
+                let category = error_category_from_jni_ordinal(category_jni_ordinal);
                 let _ = with_session_mut(env, session_handle, |session| {
                     session.report_player_error(PlayerError::with_taxonomy(
                         code, category, retriable, message,
@@ -1940,8 +1940,8 @@ mod tests {
         HandleRegistry, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
         MediaTrackSelection, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
         PlayerCachePreset, PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff,
-        PlayerRetryPolicy, PlayerTrackPreferencePolicy, error_category_from_ordinal,
-        error_code_from_ordinal, next_generation, resolve_resilience_policy_with_runtime,
+        PlayerRetryPolicy, PlayerTrackPreferencePolicy, error_category_from_jni_ordinal,
+        error_code_from_jni_ordinal, next_generation, resolve_resilience_policy_with_runtime,
         resolve_track_preferences_with_runtime, u64_to_jlong_saturating, u128_to_jlong_saturating,
     };
     use std::time::Duration;
@@ -2010,7 +2010,7 @@ mod tests {
     }
 
     #[test]
-    fn error_code_ordinals_preserve_legacy_runtime_values() {
+    fn error_code_jni_ordinals_preserve_stable_values() {
         let cases = [
             (0, PlayerErrorCode::InvalidArgument),
             (1, PlayerErrorCode::InvalidState),
@@ -2027,13 +2027,16 @@ mod tests {
         ];
 
         for (ordinal, code) in cases {
-            assert_eq!(error_code_from_ordinal(ordinal), code);
+            assert_eq!(error_code_from_jni_ordinal(ordinal), code);
         }
-        assert_eq!(error_code_from_ordinal(99), PlayerErrorCode::BackendFailure);
+        assert_eq!(
+            error_code_from_jni_ordinal(99),
+            PlayerErrorCode::BackendFailure
+        );
     }
 
     #[test]
-    fn error_category_ordinals_preserve_legacy_runtime_values() {
+    fn error_category_jni_ordinals_preserve_stable_values() {
         let cases = [
             (0, PlayerErrorCategory::Input),
             (1, PlayerErrorCategory::Source),
@@ -2046,10 +2049,10 @@ mod tests {
         ];
 
         for (ordinal, category) in cases {
-            assert_eq!(error_category_from_ordinal(ordinal), category);
+            assert_eq!(error_category_from_jni_ordinal(ordinal), category);
         }
         assert_eq!(
-            error_category_from_ordinal(99),
+            error_category_from_jni_ordinal(99),
             PlayerErrorCategory::Platform
         );
     }
