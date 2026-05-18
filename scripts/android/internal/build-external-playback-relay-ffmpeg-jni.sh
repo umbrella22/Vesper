@@ -56,7 +56,16 @@ FFMPEG_ANDROID_DIR="${VESPER_ANDROID_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_D
 PROFILE_HASH="$(vesper_ffmpeg_profile_key android)"
 
 if [[ "${VESPER_ANDROID_SKIP_FFMPEG_RUNTIME_BUILD:-0}" != "1" ]]; then
-  "$ROOT_DIR/scripts/vesper" ffmpeg --platform android --profile "$FFMPEG_PROFILE"
+  ffmpeg_build_args=(
+    ffmpeg
+    --platform android
+    --profile "$FFMPEG_PROFILE"
+    --android-artifact prebuilts
+  )
+  if [[ -n "${RUST_ANDROID_ABIS:-}" ]]; then
+    ffmpeg_build_args+=(--abi "$RUST_ANDROID_ABIS")
+  fi
+  "$ROOT_DIR/scripts/vesper" "${ffmpeg_build_args[@]}"
 else
   vesper_ffmpeg_validate_android_runtime_artifacts \
     "$RUNTIME_MODULE_DIR" \

@@ -19,10 +19,6 @@ val configuredAndroidAbis =
         ?: listOf("arm64-v8a")
 
 val workspaceRootDir = rootProject.layout.projectDirectory.dir("../../..")
-val ffmpegRuntimeAssetsDir =
-    workspaceRootDir.dir("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime")
-val ffmpegRuntimeJniLibsDir =
-    workspaceRootDir.dir("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs")
 val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
 val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
 val playerFfmpegPluginBuildProfile =
@@ -118,8 +114,6 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
     inputs.property("abis", configuredAndroidAbis)
     inputs.property("profile", playerFfmpegPluginBuildProfile)
     outputs.dir(playerFfmpegPluginJniLibsDirFile)
-    outputs.dir(ffmpegRuntimeAssetsDir)
-    outputs.dir(ffmpegRuntimeJniLibsDir)
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
@@ -141,7 +135,8 @@ tasks.named("preBuild").configure {
 
 tasks.matching { task ->
     (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
-        (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
+        (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model")) ||
+        (task.name.startsWith("lint") && task.name.contains("Analyze"))
 }.configureEach {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
 }
@@ -151,7 +146,8 @@ ffmpegRuntimeProject.plugins.withId("com.android.library") {
     ffmpegRuntimeProject.tasks.matching { task ->
         (task.name.startsWith("merge") &&
             (task.name.endsWith("Assets") || task.name.endsWith("JniLibFolders"))) ||
-            (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
+            (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model")) ||
+            (task.name.startsWith("lint") && task.name.contains("Analyze"))
     }.configureEach {
         dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     }
@@ -166,7 +162,8 @@ relayFfmpegProject.plugins.withId("com.android.library") {
     }
     relayFfmpegProject.tasks.matching { task ->
         (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
-            (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
+            (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model")) ||
+            (task.name.startsWith("lint") && task.name.contains("Analyze"))
     }.configureEach {
         dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     }

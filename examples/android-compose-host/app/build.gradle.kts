@@ -11,10 +11,6 @@ val configuredAndroidAbis =
         ?: listOf("arm64-v8a")
 
 val workspaceRootDir = rootProject.layout.projectDirectory.dir("../..")
-val ffmpegRuntimeAssetsDir =
-    workspaceRootDir.dir("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime")
-val ffmpegRuntimeJniLibsDir =
-    workspaceRootDir.dir("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs")
 val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
 val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
 val playerFfmpegPluginBuildProfile =
@@ -109,8 +105,6 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
     inputs.property("abis", configuredAndroidAbis)
     inputs.property("profile", playerFfmpegPluginBuildProfile)
     outputs.dir(playerFfmpegPluginJniLibsDirFile)
-    outputs.dir(ffmpegRuntimeAssetsDir)
-    outputs.dir(ffmpegRuntimeJniLibsDir)
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))

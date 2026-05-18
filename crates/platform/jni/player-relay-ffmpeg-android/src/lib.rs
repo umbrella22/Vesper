@@ -505,7 +505,10 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
         let request = match request_json.try_to_string(env) {
             Ok(request) => request.to_string(),
             Err(error) => {
-                throw_dash_bridge_exception(env, &format!("Failed to decode DASH bridge request: {error}"))?;
+                throw_dash_bridge_exception(
+                    env,
+                    &format!("Failed to decode DASH bridge request: {error}"),
+                )?;
                 return Ok(());
             }
         };
@@ -523,7 +526,10 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 }
 
 fn throw_dash_bridge_exception(env: &mut Env<'_>, message: &str) -> JniResult<()> {
-    env.throw_new(jni_name("java/lang/IllegalArgumentException"), JNIString::from(message))
+    env.throw_new(
+        jni_name("java/lang/IllegalArgumentException"),
+        JNIString::from(message),
+    )
 }
 
 struct OpenedStream {
@@ -2047,8 +2053,8 @@ mod tests {
     use super::{
         FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, OpenRequest, PreparedTrack,
         RangeRequest, cleanup_stale_caches_in, hls_playlist_snapshot, open_growing_cache_file,
-        open_growing_cache_range, packet_sort_timestamp_us, resolve_range, safe_file_component,
-        prewarm_stream, sessions, streams, validate_request,
+        open_growing_cache_range, packet_sort_timestamp_us, prewarm_stream, resolve_range,
+        safe_file_component, sessions, streams, validate_request,
     };
 
     #[test]

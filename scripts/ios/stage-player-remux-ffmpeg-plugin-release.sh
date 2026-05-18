@@ -266,7 +266,7 @@ for slice in "${SELECTED_SLICES[@]}"; do
 
   slice_framework_root="$FRAMEWORK_STAGING_DIR/$slice"
   create_framework "$slice" "$source_dir" "$platform_name" "$(vesper_apple_ios_deployment_target)" "$slice_framework_root"
-  lipo -verify_arch arm64 "$slice_framework_root/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME"
+  lipo "$slice_framework_root/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" -verify_arch arm64
   FRAMEWORK_ARGS+=(-framework "$slice_framework_root/$FRAMEWORK_BUNDLE")
 done
 

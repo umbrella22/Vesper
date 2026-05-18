@@ -19,7 +19,6 @@ use player_plugin::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
     OutputFormat, PostDownloadProcessor, ProcessorOutput, ProcessorProgress, StreamKind,
 };
-use vesper_remux_ffmpeg::FfmpegRemuxProcessor;
 use player_runtime::{
     DownloadAssetIndex, DownloadByteRange, DownloadContentFormat, DownloadManager,
     DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot,
@@ -27,6 +26,7 @@ use player_runtime::{
     DownloadTaskStatus::Completed, InMemoryDownloadStore, PlayerRuntimeError,
     PlayerRuntimeErrorCategory, PlayerRuntimeErrorCode,
 };
+use vesper_remux_ffmpeg::FfmpegRemuxProcessor;
 
 const CURL_BIN: &str = "curl";
 const DOWNLOAD_ROOT_DIR: &str = "vesper-desktop-downloads";
