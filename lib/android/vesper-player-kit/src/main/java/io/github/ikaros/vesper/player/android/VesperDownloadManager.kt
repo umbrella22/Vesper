@@ -9,6 +9,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import java.io.ByteArrayOutputStream
@@ -1361,6 +1362,10 @@ internal class VesperForegroundDownloadExecutor(
         DefaultDataSource.Factory(checkNotNull(appContext) { "Android Context is required for non-HTTP downloads" })
     }
 
+    private fun closeDataSourceQuietly(dataSource: DataSource) {
+        runCatching { dataSource.close() }
+    }
+
     private suspend fun prepareAssetIndexWithRecovery(
         task: VesperDownloadTaskSnapshot,
         reporter: VesperDownloadExecutionReporter,
@@ -2301,7 +2306,7 @@ internal class VesperForegroundDownloadExecutor(
                     }
                 }
             } finally {
-                runCatching { dataSource.close() }
+                closeDataSourceQuietly(dataSource)
             }
         }
         if (expected != null && totalWritten != expected) {
@@ -2709,7 +2714,7 @@ internal class VesperForegroundDownloadExecutor(
             }
             output.toString(Charsets.UTF_8.name())
         } finally {
-            runCatching { dataSource.close() }
+            closeDataSourceQuietly(dataSource)
         }
     }
 
@@ -2755,7 +2760,7 @@ internal class VesperForegroundDownloadExecutor(
             }
             length
         } finally {
-            runCatching { dataSource.close() }
+            closeDataSourceQuietly(dataSource)
         }
     }
 

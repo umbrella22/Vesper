@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.external.internal.net.isLikelyTunnelInterfaceName
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
@@ -729,14 +730,6 @@ private fun NetworkInterface?.isUsableLanInterface(interfaceName: String?): Bool
 
 private fun NetworkInterface.isLikelyTunnelInterface(): Boolean {
     return name.isLikelyTunnelInterfaceName()
-}
-
-private fun String.isLikelyTunnelInterfaceName(): Boolean {
-    val normalizedName = lowercase(Locale.US)
-    return normalizedName.startsWith("tun") ||
-        normalizedName.startsWith("tap") ||
-        normalizedName.startsWith("ppp") ||
-        normalizedName.startsWith("wg")
 }
 
 private fun InetAddress.toRelayHost(): String =

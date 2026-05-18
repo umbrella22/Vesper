@@ -879,6 +879,28 @@ private data class DashSegmentBase(
         )
 }
 
+private data class DashTrackContext(
+    val kind: String,
+    val mediaId: String,
+    val representationId: String,
+    val mimeType: String?,
+    val codecs: String?,
+    val mediaBaseUri: String,
+)
+
+private class DashReferenceResolver(
+    private val origin: VesperRelayDashSourceOrigin,
+    private val baseDetails: Map<String, String>,
+) {
+    fun baseFor(parentBaseUri: String, element: Element): String =
+        firstBaseUrl(element)
+            ?.let { reference(parentBaseUri, it) }
+            ?: parentBaseUri
+
+    fun reference(baseUri: String, reference: String): String =
+        resolveDashReference(baseUri, reference, origin, baseDetails)
+}
+
 internal fun planHostPreparedDash(
     manifestText: String,
     manifestUri: String,
@@ -955,14 +977,10 @@ internal fun planHostPreparedDash(
         )
     }
 
-    val mpdBase = firstBaseUrl(document.documentElement)
-        ?.let { resolveDashReference(manifestUri, it, sourceOrigin, baseDetails) }
-        ?: manifestUri
+    val referenceResolver = DashReferenceResolver(sourceOrigin, baseDetails)
+    val mpdBase = referenceResolver.baseFor(manifestUri, document.documentElement)
     val period = periods.firstOrNull()
-    val periodBase = period
-        ?.let { firstBaseUrl(it) }
-        ?.let { resolveDashReference(mpdBase, it, sourceOrigin, baseDetails) }
-        ?: mpdBase
+    val periodBase = period?.let { referenceResolver.baseFor(mpdBase, it) } ?: mpdBase
     val adaptationSets =
         if (period != null) {
             childElementsByTagName(period, "AdaptationSet")
@@ -982,68 +1000,29 @@ internal fun planHostPreparedDash(
         val representationId =
             selectedRepresentation.getAttribute("id").takeIf(String::isNotBlank) ?: "$kind$index"
         val mediaId = "$kind$index"
-        val adaptationBase = firstBaseUrl(adaptation)
-            ?.let { resolveDashReference(periodBase, it, sourceOrigin, baseDetails) }
-            ?: periodBase
-        val representationBase = firstBaseUrl(selectedRepresentation)
-            ?.let { resolveDashReference(adaptationBase, it, sourceOrigin, baseDetails) }
-            ?: adaptationBase
+        val adaptationBase = referenceResolver.baseFor(periodBase, adaptation)
+        val representationBase = referenceResolver.baseFor(adaptationBase, selectedRepresentation)
+        val trackContext = DashTrackContext(
+            kind = kind,
+            mediaId = mediaId,
+            representationId = representationId,
+            mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank)
+                ?: adaptation.getAttribute("mimeType").takeIf(String::isNotBlank),
+            codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank)
+                ?: adaptation.getAttribute("codecs").takeIf(String::isNotBlank),
+            mediaBaseUri = representationBase,
+        )
         val template = dashTemplateFromElement(selectedRepresentation)
             ?: dashTemplateFromElement(adaptation)
         when {
-            template != null -> {
-                val finiteDurationSeconds = durationSeconds
-                    ?: throw VesperRelayHostInputException(
-                        status = 415,
-                        diagnostic = VesperRelayDiagnostic(
-                            code = "unsupported_dash_layout",
-                            message = "Host-prepared relay remux requires a finite DASH mediaPresentationDuration.",
-                            details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
-                        ),
-                    )
-                validateTemplate(template, baseDetails, kind, representationId)
-                val segmentSeconds = template.duration.toDouble() / template.timescale.coerceAtLeast(1L).toDouble()
-                val segmentCount = kotlin.math.ceil(finiteDurationSeconds / segmentSeconds)
-                    .toLong()
-                    .coerceAtLeast(1L)
-                if (segmentCount > Int.MAX_VALUE) {
-                    throw unsupportedDashLayout(
-                        baseDetails = baseDetails,
-                        message = "DASH SegmentTemplate expands to too many segments for relay remux v1.",
-                        details = mapOf("trackKind" to kind, "mediaId" to representationId),
-                    )
-                }
-                val initializationUri = template.initialization?.let { initialization ->
-                    resolveDashReference(
-                        representationBase,
-                        expandDashTemplate(initialization, representationId, template.startNumber),
-                        sourceOrigin,
-                        baseDetails,
-                    )
-                }
-                val segments = (0 until segmentCount).map { offset ->
-                    val number = template.startNumber + offset
-                    VesperRelayDashSegment(
-                        index = number,
-                        uri = resolveDashReference(
-                            representationBase,
-                            expandDashTemplate(template.media, representationId, number),
-                            sourceOrigin,
-                            baseDetails,
-                        ),
-                    )
-                }
-                planned += VesperRelayDashTrackPlan(
-                    kind = kind,
-                    mediaId = mediaId,
-                    mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank)
-                        ?: adaptation.getAttribute("mimeType").takeIf(String::isNotBlank),
-                    codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank)
-                        ?: adaptation.getAttribute("codecs").takeIf(String::isNotBlank),
-                    initializationUri = initializationUri,
-                    segments = segments,
+            template != null ->
+                planned += planSegmentTemplateTrack(
+                    context = trackContext,
+                    template = template,
+                    durationSeconds = durationSeconds,
+                    baseDetails = baseDetails,
+                    referenceResolver = referenceResolver,
                 )
-            }
             isDynamic -> {
                 return@forEachIndexed
             }
@@ -1056,13 +1035,7 @@ internal fun planHostPreparedDash(
                         details = mapOf("trackKind" to kind, "mediaId" to representationId),
                     )
                 planned += planSegmentBaseTrack(
-                    kind = kind,
-                    mediaId = mediaId,
-                    mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank)
-                        ?: adaptation.getAttribute("mimeType").takeIf(String::isNotBlank),
-                    codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank)
-                        ?: adaptation.getAttribute("codecs").takeIf(String::isNotBlank),
-                    mediaUri = representationBase,
+                    context = trackContext,
                     segmentBase = segmentBase,
                     baseDetails = baseDetails,
                     resolver = resolver,
@@ -1100,19 +1073,69 @@ private fun selectRepresentation(
         ?: representations.firstOrNull()
 }
 
+private fun planSegmentTemplateTrack(
+    context: DashTrackContext,
+    template: DashTemplate,
+    durationSeconds: Double?,
+    baseDetails: Map<String, String>,
+    referenceResolver: DashReferenceResolver,
+): VesperRelayDashTrackPlan {
+    val finiteDurationSeconds = durationSeconds
+        ?: throw VesperRelayHostInputException(
+            status = 415,
+            diagnostic = VesperRelayDiagnostic(
+                code = "unsupported_dash_layout",
+                message = "Host-prepared relay remux requires a finite DASH mediaPresentationDuration.",
+                details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
+            ),
+        )
+    validateTemplate(template, baseDetails, context.kind, context.representationId)
+    val segmentSeconds = template.duration.toDouble() / template.timescale.coerceAtLeast(1L).toDouble()
+    val segmentCount = kotlin.math.ceil(finiteDurationSeconds / segmentSeconds)
+        .toLong()
+        .coerceAtLeast(1L)
+    if (segmentCount > Int.MAX_VALUE) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentTemplate expands to too many segments for relay remux v1.",
+            details = mapOf("trackKind" to context.kind, "mediaId" to context.representationId),
+        )
+    }
+    val initializationUri = template.initialization?.let { initialization ->
+        referenceResolver.reference(
+            context.mediaBaseUri,
+            expandDashTemplate(initialization, context.representationId, template.startNumber),
+        )
+    }
+    val segments = (0 until segmentCount).map { offset ->
+        val number = template.startNumber + offset
+        VesperRelayDashSegment(
+            index = number,
+            uri = referenceResolver.reference(
+                context.mediaBaseUri,
+                expandDashTemplate(template.media, context.representationId, number),
+            ),
+        )
+    }
+    return VesperRelayDashTrackPlan(
+        kind = context.kind,
+        mediaId = context.mediaId,
+        mimeType = context.mimeType,
+        codecs = context.codecs,
+        initializationUri = initializationUri,
+        segments = segments,
+    )
+}
+
 private fun planSegmentBaseTrack(
-    kind: String,
-    mediaId: String,
-    mimeType: String?,
-    codecs: String?,
-    mediaUri: String,
+    context: DashTrackContext,
     segmentBase: DashSegmentBase,
     baseDetails: Map<String, String>,
     resolver: VesperRelayDashResourceResolver,
 ): VesperRelayDashTrackPlan {
     val mediaSegments =
         try {
-            val sidxBytes = resolver.readRange(mediaUri, segmentBase.indexRange)
+            val sidxBytes = resolver.readRange(context.mediaBaseUri, segmentBase.indexRange)
             val sidx = VesperRelayDashBridgeApiProvider.parseSidx(sidxBytes)
             VesperRelayDashBridgeApiProvider.mediaSegments(segmentBase.toBridgeModel(), sidx)
         } catch (error: IOException) {
@@ -1122,7 +1145,7 @@ private fun planSegmentBaseTrack(
                     code = error.dashResourceErrorCode(),
                     message = "Failed to fetch DASH sidx for host-prepared relay remux.",
                     details = baseDetails
-                        .withSegmentHash(mediaUri)
+                        .withSegmentHash(context.mediaBaseUri)
                         .withHostError(error.message ?: error.javaClass.simpleName),
                 ),
             )
@@ -1131,25 +1154,25 @@ private fun planSegmentBaseTrack(
                 baseDetails = baseDetails,
                 message = "DASH SegmentBase sidx could not be parsed for host-prepared relay remux.",
                 details = mapOf(
-                    "trackKind" to kind,
-                    "mediaId" to mediaId,
-                    "segmentUriHash" to hashForDiagnostic(mediaUri),
+                    "trackKind" to context.kind,
+                    "mediaId" to context.mediaId,
+                    "segmentUriHash" to hashForDiagnostic(context.mediaBaseUri),
                     "hostError" to (error.message ?: error.javaClass.simpleName),
                 ),
             )
         }
 
     return VesperRelayDashTrackPlan(
-        kind = kind,
-        mediaId = mediaId,
-        mimeType = mimeType,
-        codecs = codecs,
-        initializationUri = mediaUri,
+        kind = context.kind,
+        mediaId = context.mediaId,
+        mimeType = context.mimeType,
+        codecs = context.codecs,
+        initializationUri = context.mediaBaseUri,
         initializationRange = segmentBase.initialization,
         segments = mediaSegments.mapIndexed { index, segment ->
             VesperRelayDashSegment(
                 index = index.toLong(),
-                uri = mediaUri,
+                uri = context.mediaBaseUri,
                 byteRange = segment.range,
             )
         },

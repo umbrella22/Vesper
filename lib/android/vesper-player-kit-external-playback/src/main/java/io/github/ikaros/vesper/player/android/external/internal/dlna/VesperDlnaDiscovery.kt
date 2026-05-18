@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.security.NetworkSecurityPolicy
 import android.util.Log
+import io.github.ikaros.vesper.player.android.external.internal.net.isLikelyTunnelInterfaceName
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -335,9 +336,6 @@ class VesperDlnaDiscovery(
                 return null
             }
             val xml = connection.inputStream.bufferedReader().use { it.readText() }
-            if (!isDiscoveryActive(generation)) {
-                return null
-            }
             val device = try {
                 VesperDlnaDeviceDescriptionParser.parse(
                     xml = xml,
@@ -360,9 +358,6 @@ class VesperDlnaDiscovery(
                     message = error.message ?: "Failed to parse DLNA device description.",
                     details = request.details("error" to error.javaClass.simpleName),
                 )
-                return null
-            }
-            if (!isDiscoveryActive(generation)) {
                 return null
             }
             if (!device.supportsPlayback) {
@@ -833,14 +828,6 @@ private fun NetworkInterface?.isUsableDlnaInterface(interfaceName: String?): Boo
             !networkInterface.isPointToPoint &&
             !networkInterface.name.isLikelyTunnelInterfaceName()
     }.getOrDefault(false)
-}
-
-private fun String.isLikelyTunnelInterfaceName(): Boolean {
-    val normalized = lowercase(Locale.US)
-    return normalized.startsWith("tun") ||
-        normalized.startsWith("tap") ||
-        normalized.startsWith("ppp") ||
-        normalized.startsWith("wg")
 }
 
 private fun VesperDlnaDescriptionRequest.details(

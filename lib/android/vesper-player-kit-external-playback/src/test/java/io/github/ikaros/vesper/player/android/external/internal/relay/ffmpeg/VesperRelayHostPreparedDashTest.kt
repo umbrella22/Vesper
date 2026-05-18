@@ -87,6 +87,34 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
+    fun plansSegmentTemplateWithRepresentationBaseUrlInheritance() {
+        val plan = planHostPreparedDash(
+            manifestText = """
+                <MPD type="static" mediaPresentationDuration="PT4S">
+                  <BaseURL>https://cdn.example/root/</BaseURL>
+                  <Period>
+                    <BaseURL>period/</BaseURL>
+                    <AdaptationSet mimeType="video/mp4">
+                      <BaseURL>adaptation/</BaseURL>
+                      <Representation id="v1" codecs="avc1.640028">
+                        <BaseURL>representation/</BaseURL>
+                        <SegmentTemplate timescale="1" duration="4" startNumber="3"
+                          initialization="init-${'$'}RepresentationID${'$'}.mp4"
+                          media="chunk-${'$'}Number%02d${'$'}.m4s" />
+                      </Representation>
+                    </AdaptationSet>
+                  </Period>
+                </MPD>
+            """.trimIndent(),
+            manifestUri = "https://example.com/video/manifest.mpd",
+        )
+
+        val track = plan.tracks.single()
+        assertEquals("https://cdn.example/root/period/adaptation/representation/init-v1.mp4", track.initializationUri)
+        assertEquals("https://cdn.example/root/period/adaptation/representation/chunk-03.m4s", track.segments.single().uri)
+    }
+
+    @Test
     fun plansStaticSegmentBaseVideoTrackWithSidxRanges() {
         withBridgeApi(FakeSegmentBaseBridgeApi) {
             val resolver = ByteArrayRangeResolver(
@@ -121,6 +149,45 @@ class VesperRelayHostPreparedDashTest {
             assertEquals(2, track.segments.size)
             assertEquals(VesperRelayDashByteRange(200, 299), track.segments[0].byteRange)
             assertEquals(VesperRelayDashByteRange(300, 449), track.segments[1].byteRange)
+        }
+    }
+
+    @Test
+    fun plansSegmentBaseWithRepresentationBaseUrlInheritance() {
+        withBridgeApi(FakeSegmentBaseBridgeApi) {
+            val mediaUri = "https://cdn.example/root/period/adaptation/representation/main.mp4"
+            val resolver = ByteArrayRangeResolver(
+                uri = mediaUri,
+                payload = byteArrayOf(9, 8, 7),
+            )
+
+            val plan = planHostPreparedDash(
+                manifestText = """
+                    <MPD type="static" mediaPresentationDuration="PT10S">
+                      <BaseURL>https://cdn.example/root/</BaseURL>
+                      <Period>
+                        <BaseURL>period/</BaseURL>
+                        <AdaptationSet mimeType="video/mp4">
+                          <BaseURL>adaptation/</BaseURL>
+                          <Representation id="v1" codecs="avc1.640028">
+                            <BaseURL>representation/main.mp4</BaseURL>
+                            <SegmentBase indexRange="100-199">
+                              <Initialization range="0-99" />
+                            </SegmentBase>
+                          </Representation>
+                        </AdaptationSet>
+                      </Period>
+                    </MPD>
+                """.trimIndent(),
+                manifestUri = "https://example.com/video/manifest.mpd",
+                resolver = resolver,
+            )
+
+            assertEquals(listOf(mediaUri to VesperRelayDashByteRange(100, 199)), resolver.reads)
+            val track = plan.tracks.single()
+            assertEquals(mediaUri, track.initializationUri)
+            assertEquals(mediaUri, track.segments.first().uri)
+            assertEquals(VesperRelayDashByteRange(200, 299), track.segments.first().byteRange)
         }
     }
 

@@ -56,33 +56,30 @@ class VesperSystemPlaybackService : MediaSessionService() {
 
         if (registeredSession !== activeSession) {
             registeredSession?.let(::removeRegisteredSession)
-            runCatching {
+            val attached = safely("failed to attach media session to playback service") {
                 if (!isSessionAdded(activeSession)) {
                     addSession(activeSession)
                 }
                 registeredSession = activeSession
-            }.onFailure { error ->
-                Log.w(TAG, "failed to attach media session to playback service", error)
+            }
+            if (!attached) {
                 stopSelf()
                 return
             }
         }
 
-        runCatching {
+        if (!safely("failed to promote media playback service") {
             triggerNotificationUpdate()
-        }.onFailure { error ->
-            Log.w(TAG, "failed to promote media playback service", error)
+        }) {
             stopSelf()
         }
     }
 
     private fun removeRegisteredSession(session: MediaSession) {
-        runCatching {
+        safely("failed to detach media session from playback service") {
             if (isSessionAdded(session)) {
                 removeSession(session)
             }
-        }.onFailure { error ->
-            Log.w(TAG, "failed to detach media session from playback service", error)
         }
     }
 }
@@ -203,12 +200,10 @@ internal class VesperAndroidSystemPlaybackCoordinator(
         if (serviceStarted && serviceSession === activeSession) {
             return
         }
-        runCatching {
+        safely("failed to start media playback service") {
             ContextCompat.startForegroundService(appContext, serviceIntent())
             serviceStarted = true
             serviceSession = activeSession
-        }.onFailure { error ->
-            Log.w(TAG, "failed to start media playback service", error)
         }
     }
 
@@ -216,10 +211,8 @@ internal class VesperAndroidSystemPlaybackCoordinator(
         if (!serviceStarted) {
             return
         }
-        runCatching {
+        safely("failed to stop media playback service") {
             appContext.stopService(serviceIntent())
-        }.onFailure { error ->
-            Log.w(TAG, "failed to stop media playback service", error)
         }
         serviceStarted = false
         serviceSession = null
@@ -246,19 +239,15 @@ internal class VesperAndroidSystemPlaybackCoordinator(
             return
         }
         val index = exoPlayer.currentMediaItemIndex.coerceIn(0, exoPlayer.mediaItemCount - 1)
-        runCatching {
+        safely("failed to update media session metadata") {
             exoPlayer.replaceMediaItem(index, mediaItem)
-        }.onFailure { error ->
-            Log.w(TAG, "failed to update media session metadata", error)
         }
     }
 
     private fun refreshMediaButtonPreferences() {
         val currentSession = session ?: return
-        runCatching {
+        safely("failed to update media button preferences") {
             currentSession.setMediaButtonPreferences(buildMediaButtonPreferences())
-        }.onFailure { error ->
-            Log.w(TAG, "failed to update media button preferences", error)
         }
     }
 
@@ -495,14 +484,20 @@ private fun VesperSystemPlaybackMetadata.toMediaMetadata(): MediaMetadata {
 
     artist?.let(builder::setArtist)
     albumTitle?.let(builder::setAlbumTitle)
-    artworkUri?.let { uri ->
-        runCatching { Uri.parse(uri) }
-            .getOrNull()
-            ?.let(builder::setArtworkUri)
-    }
+    artworkUri?.let { uri -> builder.setArtworkUri(Uri.parse(uri)) }
 
     return builder.build()
 }
+
+private inline fun safely(
+    message: String,
+    action: () -> Unit,
+): Boolean =
+    runCatching {
+        action()
+    }.onFailure { error ->
+        Log.w(TAG, message, error)
+    }.isSuccess
 
 private const val ACTION_START_SYSTEM_PLAYBACK_SERVICE =
     "io.github.ikaros.vesper.player.android.action.START_SYSTEM_PLAYBACK_SERVICE"
