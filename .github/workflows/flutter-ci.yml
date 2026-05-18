@@ -99,6 +99,9 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Flutter pub publish dry-run
+        run: ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub-dry-run
+
   flutter-macos-quality:
     name: Flutter macOS Package Quality
     runs-on: macos-latest

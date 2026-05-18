@@ -168,6 +168,13 @@ fi
   echo
   echo "These downloads are prebuilt binary artifacts. Host applications that consume them do not need to run the repository's local JNI or FFmpeg generation tasks during their own Gradle / Xcode builds. FFmpeg-backed artifacts keep FFmpeg's license, notices, corresponding source, configure flags, and LGPL relinking boundary separate from Vesper's Apache-2.0 source license."
   echo
+  echo "## Sample Apps"
+  echo
+  echo "- Android Compose host sample: \`VesperPlayerAndroidComposeHost-android-arm64-v8a-debug-signed.apk\`"
+  echo "- Flutter Android host sample: \`VesperPlayerFlutterHost-android-arm64-v8a-debug-signed.apk\`"
+  echo
+  echo "The sample APKs are arm64-only, debug-signed, and published only for side-load evaluation of the SDK demos. They are not production-signed app-store artifacts and should not be used as a host application's release signing model."
+  echo
   echo "## Release Details"
   echo
   if [[ -n "$PREVIOUS_TAG" ]]; then

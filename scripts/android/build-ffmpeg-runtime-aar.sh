@@ -10,9 +10,7 @@ PROJECT_DIR="$ROOT_DIR/lib/android"
 RUNTIME_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-ffmpeg-runtime"
 JNI_LIBS_DIR="$RUNTIME_MODULE_DIR/src/main/jniLibs"
 ASSETS_DIR="$RUNTIME_MODULE_DIR/src/main/assets/vesper-ffmpeg-runtime"
-PROJECT_GRADLEW="$PROJECT_DIR/gradlew"
-LOCAL_GRADLE="$(find "$PROJECT_DIR/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
-FALLBACK_GRADLEW="$ROOT_DIR/examples/android-compose-host/gradlew"
+FALLBACK_PROJECT_DIR="$ROOT_DIR/examples/android-compose-host"
 
 if [[ $# -eq 0 || "${1:0:2}" != "--" ]]; then
   cat <<EOF >&2
@@ -58,16 +56,7 @@ done
 printf '%s\n' "$PROFILE_HASH" >"$ASSETS_DIR/profile-hash.txt"
 
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$ROOT_DIR/.gradle/gradle-user-home}"
-if [[ -x "$PROJECT_GRADLEW" ]]; then
-  GRADLE_CMD=("$PROJECT_GRADLEW")
-elif [[ -n "$LOCAL_GRADLE" && -x "$LOCAL_GRADLE" ]]; then
-  GRADLE_CMD=("$LOCAL_GRADLE")
-elif [[ -x "$FALLBACK_GRADLEW" ]]; then
-  GRADLE_CMD=("$FALLBACK_GRADLEW")
-else
-  echo "No Gradle wrapper or local Gradle distribution was found for Android runtime AAR." >&2
-  exit 1
-fi
+GRADLE_CMD=("$(vesper_android_resolve_gradle "$PROJECT_DIR" "$FALLBACK_PROJECT_DIR")")
 
 "${GRADLE_CMD[@]}" -p "$PROJECT_DIR" :vesper-player-kit-ffmpeg-runtime:assembleRelease
 

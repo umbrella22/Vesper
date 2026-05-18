@@ -22,9 +22,43 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
 
 jobs:
+  release-checks:
+    name: Release Metadata and Lightweight Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --locked
+
+      - name: Prepare release version metadata
+        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+
+      - name: Verify generated FFI header
+        run: ./scripts/vesper ffi verify
+
+      - name: Test FFmpeg profiles
+        run: scripts/ffmpeg/test-profiles.sh
+
+      - name: Check Rust workspace
+        run: cargo check --workspace
+
   android-lib:
     name: VesperPlayerKit Android ${{ matrix.abi }}
     runs-on: ubuntu-latest
+    needs:
+      - release-checks
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +109,9 @@ jobs:
         with:
           gradle-version: "9.4.0"
 
+      - name: Prepare release version metadata
+        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+
       - name: Build VesperPlayerKit Android release asset
         run: ./scripts/vesper android stage-release release-assets/android ${{ matrix.abi }}
 
@@ -103,9 +140,115 @@ jobs:
           name: VesperPlayerKit-android-${{ matrix.abi }}
           path: release-assets/android/*.aar
 
+  android-samples:
+    name: Vesper Android Sample APKs ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+    needs:
+      - release-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        abi:
+          - arm64-v8a
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Resolve Android SDK root
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> "$GITHUB_ENV"
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.0"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.6"
+          channel: stable
+          cache: true
+
+      - name: Prepare release version metadata
+        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+
+      - name: Write Android local.properties
+        run: |
+          cat <<EOF > examples/android-compose-host/local.properties
+          sdk.dir=${ANDROID_SDK_ROOT}
+          EOF
+          cat <<EOF > examples/flutter-host/android/local.properties
+          sdk.dir=${ANDROID_SDK_ROOT}
+          flutter.sdk=${FLUTTER_ROOT}
+          EOF
+
+      - name: Stage Android sample APKs
+        run: ./scripts/vesper android sample-apks release-assets/android-samples ${{ matrix.abi }}
+
+      - name: Verify Android sample APKs are arm64-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apk_files=(release-assets/android-samples/*.apk)
+          if [[ ${#apk_files[@]} -ne 2 ]]; then
+            echo "Expected exactly two Android sample APKs, found ${#apk_files[@]}." >&2
+            printf '%s\n' "${apk_files[@]}" >&2
+            exit 1
+          fi
+
+          for apk in "${apk_files[@]}"; do
+            if unzip -Z1 "$apk" | grep -E '(^|/)lib/(x86|x86_64|armeabi-v7a)/' >/dev/null; then
+              echo "Found unexpected non-arm64 JNI payload in $apk" >&2
+              unzip -Z1 "$apk" | grep -E '(^|/)lib/(x86|x86_64|armeabi-v7a)/' >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload Vesper Android sample APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: VesperPlayerKit-android-samples-${{ matrix.abi }}
+          path: release-assets/android-samples/*.apk
+
   ios-lib:
     name: VesperPlayerKit iOS arm64
     runs-on: macos-latest
+    needs:
+      - release-checks
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
@@ -129,6 +272,9 @@ jobs:
 
       - name: Select Xcode 26.3
         run: xcodebuild -version
+
+      - name: Prepare release version metadata
+        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
 
       - name: Build VesperPlayerKit iOS release assets
         run: ./scripts/vesper ios stage-release release-assets/ios
@@ -182,6 +328,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - android-lib
+      - android-samples
       - ios-lib
 
     steps:
@@ -196,6 +343,9 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
+
+      - name: Prepare release version metadata
+        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
 
       - name: Generate VesperPlayerKit release notes
         run: ./scripts/vesper release notes "${RELEASE_TAG}" release-assets/RELEASE_NOTES.md
@@ -215,7 +365,7 @@ jobs:
         run: |
           cd release-assets
           shopt -s nullglob
-          shasum -a 256 *.aar *.zip > SHA256SUMS.txt
+          shasum -a 256 *.aar *.zip *.apk > SHA256SUMS.txt
 
       - name: Publish VesperPlayerKit GitHub release
         uses: softprops/action-gh-release@v2
@@ -227,4 +377,5 @@ jobs:
           files: |
             release-assets/*.aar
             release-assets/*.zip
+            release-assets/*.apk
             release-assets/SHA256SUMS.txt

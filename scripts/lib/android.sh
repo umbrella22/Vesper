@@ -192,3 +192,59 @@ vesper_android_report_missing_ndk() {
   echo >&2
   echo "$suffix" >&2
 }
+
+vesper_android_resolve_gradle() {
+  local project_dir="$1"
+  local fallback_project_dir="${2:-}"
+  local project_gradlew="$project_dir/gradlew"
+  local local_gradle=""
+  local fallback_gradle=""
+
+  if [[ "${CI:-}" == "true" ]]; then
+    if command -v gradle >/dev/null 2>&1; then
+      command -v gradle
+      return 0
+    fi
+
+    echo "CI=true but no CI-provisioned gradle executable was found in PATH." >&2
+    echo "Install Gradle with gradle/actions/setup-gradle or expose a CI-provisioned Gradle binary." >&2
+    return 1
+  fi
+
+  local_gradle="$(find "$project_dir/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+  if [[ -n "$local_gradle" && -x "$local_gradle" ]]; then
+    printf '%s\n' "$local_gradle"
+    return 0
+  fi
+
+  if [[ -n "$fallback_project_dir" ]]; then
+    fallback_gradle="$(find "$fallback_project_dir/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -n "$fallback_gradle" && -x "$fallback_gradle" ]]; then
+      printf '%s\n' "$fallback_gradle"
+      return 0
+    fi
+  fi
+
+  cat <<EOF >&2
+No local cached Gradle distribution was found for local Android work.
+
+Checked local distributions under:
+  $project_dir/.gradle/wrapper/dists
+EOF
+
+  if [[ -n "$fallback_project_dir" ]]; then
+    cat <<EOF >&2
+  $fallback_project_dir/.gradle/wrapper/dists
+EOF
+  fi
+
+  cat <<EOF >&2
+
+Do not use gradlew for local agent work because it may download Gradle.
+Seed the project-local wrapper cache, or run in CI with setup-gradle and CI=true.
+
+Project wrapper intentionally not invoked:
+  $project_gradlew
+EOF
+  return 1
+}

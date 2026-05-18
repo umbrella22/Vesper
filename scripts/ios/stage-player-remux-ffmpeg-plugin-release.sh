@@ -19,6 +19,24 @@ PROFILE="default"
 DRY_RUN=0
 SELECTED_SLICES=()
 
+read_project_version() {
+  sed -n 's/^[[:space:]]*CFBundleShortVersionString: "\([^"]*\)".*/\1/p' "$PROJECT_DIR/project.yml" \
+    | head -n 1
+}
+
+read_project_build() {
+  sed -n 's/^[[:space:]]*CFBundleVersion: "\([0-9][0-9]*\)".*/\1/p' "$PROJECT_DIR/project.yml" \
+    | head -n 1
+}
+
+VESPER_RELEASE_VERSION="${VESPER_RELEASE_VERSION:-$(read_project_version)}"
+VESPER_RELEASE_BUILD="${VESPER_RELEASE_BUILD:-${VESPER_RELEASE_IOS_BUILD:-$(read_project_build)}}"
+
+if [[ -z "$VESPER_RELEASE_VERSION" || -z "$VESPER_RELEASE_BUILD" ]]; then
+  echo "Unable to resolve iOS remux plugin release version from project metadata." >&2
+  exit 1
+fi
+
 usage() {
   cat <<EOF >&2
 Usage: $0 [output-dir] [options] [ios-arm64] [ios-simulator-arm64]
@@ -140,10 +158,10 @@ framework_info_plist() {
   /usr/libexec/PlistBuddy -c "Add :CFBundleInfoDictionaryVersion string 6.0" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundleName string $FRAMEWORK_NAME" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string FMWK" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.3.0" "$output_path"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VESPER_RELEASE_VERSION" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms:0 string $platform_name" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 0.3.0" "$output_path"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VESPER_RELEASE_BUILD" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string $minimum_os_version" "$output_path"
 }
 

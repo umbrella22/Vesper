@@ -22,12 +22,19 @@ Release gate:
 - if any Android, iOS, desktop, Flutter, or other shipped artifact bundles
   FFmpeg or any other third-party binary, update this file before cutting that
   release
-- helper commands such as `scripts/vesper android ffmpeg`,
-  `scripts/vesper apple ffmpeg`, or `scripts/vesper desktop ensure-ffmpeg`
+- helper commands such as `scripts/vesper ffmpeg --platform android`,
+  `scripts/vesper ffmpeg --platform ios`, or `scripts/vesper desktop ensure-ffmpeg`
   create local build inputs only; running them does not satisfy redistribution
   notice, source, or relinking obligations by itself
-- artifacts that bundle `player-remux-ffmpeg` must be reviewed as FFmpeg
-  redistribution artifacts because the plugin depends on FFmpeg libraries
+- Android artifacts that bundle `vesper-player-kit-ffmpeg-runtime` must be
+  reviewed as FFmpeg redistribution artifacts. The Android
+  `player-remux-ffmpeg` plugin and `vesper-player-kit-external-playback` relay
+  FFmpeg JNI layer must not carry their own `libav*` copies; they depend on the
+  shared runtime profile selected by the host
+- iOS core `VesperPlayerKit.xcframework` must not embed FFmpeg. Optional iOS
+  FFmpeg/remux support is distributed as a separate signable XCFramework, such
+  as `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`, and remains under
+  FFmpeg's own redistribution boundary
 - offline MP4 export support for HLS, DASH, and FLV inputs uses the existing
   optional remux-plugin boundary and does not by itself add a repository-bundled
   FFmpeg binary
@@ -62,21 +69,17 @@ Important boundary:
 
 Default Vesper scripts are intended to stay on the LGPL-oriented side:
 
-- `scripts/vesper android ffmpeg` builds shared FFmpeg libraries for Android
-  and does not pass `--enable-gpl` or `--enable-nonfree`; the default
-  `legacy` OpenSSL backend adds `--enable-version3`, so release artifacts
-  produced from that default Android build must be treated as LGPLv3-or-later
-  unless a release owner verifies a different configuration
-- `scripts/vesper apple ffmpeg` builds Apple FFmpeg static archives and
-  dynamic libraries without `--enable-gpl`, `--enable-nonfree`, or
-  `--enable-version3` in the default `legacy` profile, so it should be treated
-  as an LGPLv2.1-or-later FFmpeg build unless a release owner changes those
-  flags or dependencies
-- Android and Apple FFmpeg scripts support `legacy`, `remux-local`, and
-  `custom` profiles plus caller-provided capability overlays. Every generated
-  ABI / slice writes `vesper-ffmpeg-build-metadata.txt`; use that file as the
-  source of truth for the profile, external dependencies, license-sensitive
-  flags, source archive, and full configure line in release notices.
+- `scripts/vesper ffmpeg --platform android|ios --profile <name>` is the public
+  FFmpeg build entrypoint. The `download-remux`, `relay-remux`, and `default`
+  profiles validate local-only, no-OpenSSL builds and do not pass
+  `--enable-gpl` or `--enable-nonfree`.
+- Android and Apple FFmpeg implementation scripts still support private
+  lower-level arguments for Gradle/Xcode integration, but release workflows and
+  public documentation should use the root `ffmpeg` command.
+- Every generated ABI / slice writes `vesper-ffmpeg-build-metadata.txt`; use
+  that file as the source of truth for the declared profile, profile hash,
+  external dependencies, license-sensitive flags, source archive, and full
+  configure line in release notices.
 - The scripts block `--enable-gpl` and `--enable-nonfree` unless the caller
   passes `--acknowledge-gpl-nonfree`. Passing that acknowledgement does not
   resolve licensing obligations; it only records an intentional release-owner
@@ -86,9 +89,9 @@ Default Vesper scripts are intended to stay on the LGPL-oriented side:
   dynamic FFmpeg when possible, and any statically linked redistributed binary
   must include an LGPL-compliant way to relink against a modified FFmpeg build
 - `scripts/vesper android remux-plugin` and
-  `scripts/vesper ios remux-plugin` produce optional plugin artifacts; bundling
-  those plugins in an app is an explicit decision by the host and triggers the
-  same FFmpeg redistribution review
+  `scripts/vesper ios stage-remux-plugin-release` produce optional plugin
+  artifacts; bundling those plugins in an app is an explicit decision by the
+  host and triggers the same FFmpeg redistribution review
 
 Before shipping any artifact that includes FFmpeg libraries:
 
@@ -108,9 +111,9 @@ Before shipping any artifact that includes FFmpeg libraries:
    object files or another documented mechanism that allows relinking against a
    modified LGPL FFmpeg build.
 6. Do not remove or obscure FFmpeg library names, notices, or attribution.
-7. Review external libraries compiled into FFmpeg. Android `legacy` defaults
-   currently involve OpenSSL and, when DASH is enabled, libxml2; custom
-   profiles may add or remove dependencies, and their notices and source
+7. Review external libraries compiled into FFmpeg. The mobile `default` profile
+   currently uses libxml2 for DASH and validates that OpenSSL stays disabled;
+   overlays may add or remove dependencies, and their notices and source
    obligations must be tracked alongside FFmpeg.
 8. Keep the host app's EULA, about screen, and download page consistent with
    FFmpeg's separate license and avoid terms that prohibit reverse engineering

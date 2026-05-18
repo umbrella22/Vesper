@@ -82,7 +82,9 @@ and only accepts generic `VesperPlayerSource` values.
 ## Build From CLI
 
 ```sh
-examples/android-compose-host/gradlew -p examples/android-compose-host \
+GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home \
+examples/android-compose-host/.gradle/wrapper/dists/gradle-9.4.0-bin/lcvyxq3t37f6mx9miaydrrgs/gradle-9.4.0/bin/gradle \
+  -p examples/android-compose-host \
   -Pvesper.player.android.abis=arm64-v8a \
   assembleRelease
 ```
@@ -91,7 +93,9 @@ examples/android-compose-host/gradlew -p examples/android-compose-host \
 
 ```sh
 ./scripts/vesper android jni release arm64-v8a
-examples/android-compose-host/gradlew -p examples/android-compose-host \
+GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home \
+examples/android-compose-host/.gradle/wrapper/dists/gradle-9.4.0-bin/lcvyxq3t37f6mx9miaydrrgs/gradle-9.4.0/bin/gradle \
+  -p examples/android-compose-host \
   -Pvesper.player.android.abis=arm64-v8a \
   :app:testDebugUnitTest
 ```

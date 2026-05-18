@@ -22,7 +22,7 @@ authors = ["umbrella22"]
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.94"
-version = "0.2.0"
+version = "0.3.0"
 
 [workspace.dependencies]
 anyhow = "1.0.102"

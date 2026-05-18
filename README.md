@@ -236,9 +236,10 @@ cargo check --workspace
 ./scripts/vesper desktop verify-remux
 ```
 
-Android and Flutter Android builds use the Gradle wrappers checked into the
-corresponding projects, so local builds use the same Gradle / Android Gradle
-Plugin versions as the examples and scripts.
+Android helper scripts use project-local cached Gradle distributions for local
+development and a CI-provisioned `gradle` executable in GitHub Actions. This
+keeps local agent work offline-safe while letting CI install Gradle through
+`gradle/actions/setup-gradle`.
 
 iOS Rust build helpers resolve the workspace through the SDK root Cargo
 manifest, so they can be called from Xcode build phases, Flutter plugin builds,
@@ -347,13 +348,17 @@ name:
 - Android Compose UI: `VesperPlayerKitComposeUi-android-<abi>.aar`
 - Android external playback: `VesperPlayerKitExternalPlayback-android-<abi>.aar`
 - Android FFmpeg runtime: `VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
+- Android Compose sample APK: `VesperPlayerAndroidComposeHost-android-<abi>-debug-signed.apk`
+- Flutter Android sample APK: `VesperPlayerFlutterHost-android-<abi>-debug-signed.apk`
 - iOS framework slices: `VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework: `VesperPlayerKit.xcframework.zip`
 - Optional iOS FFmpeg remux plugin: `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
 - `SHA256SUMS.txt` for release artifact verification
 
-Android packaging is currently `arm64-v8a` only. iOS packaging is arm64 only for
-device, Apple Silicon Simulator, and optional Catalyst slices. The iOS core
+Android packaging is currently `arm64-v8a` only, including the downloadable
+sample APKs. The sample APKs are debug-signed for side-load evaluation only and
+are not production app-store artifacts. iOS packaging is arm64 only for device,
+Apple Silicon Simulator, and optional Catalyst slices. The iOS core
 `VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
 is shipped as a separate optional XCFramework that the host app signs and embeds.
 

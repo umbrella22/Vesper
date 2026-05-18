@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 - 2026-05-18
+
+- Prepared package metadata for the 0.3.0 release.
+
 ## 0.2.0 - 2026-05-13
 
 ### Breaking Changes

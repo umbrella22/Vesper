@@ -10,9 +10,7 @@ COMPOSE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose"
 COMPOSE_UI_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose-ui"
 EXTERNAL_PLAYBACK_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-external-playback"
 FFMPEG_RUNTIME_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-ffmpeg-runtime"
-PROJECT_GRADLEW="$PROJECT_DIR/gradlew"
-LOCAL_GRADLE="$(find "$PROJECT_DIR/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
-FALLBACK_GRADLEW="$ROOT_DIR/examples/android-compose-host/gradlew"
+FALLBACK_PROJECT_DIR="$ROOT_DIR/examples/android-compose-host"
 OUTPUT_DIR="${1:-$ROOT_DIR/dist/release/android}"
 shift || true
 
@@ -27,27 +25,7 @@ sdk.dir=${ANDROID_SDK_ROOT}
 EOF
 fi
 
-if [[ -x "$PROJECT_GRADLEW" ]]; then
-  GRADLE_CMD=("$PROJECT_GRADLEW" -p "$PROJECT_DIR")
-elif [[ -n "$LOCAL_GRADLE" && -x "$LOCAL_GRADLE" ]]; then
-  GRADLE_CMD=("$LOCAL_GRADLE" -p "$PROJECT_DIR")
-elif [[ -x "$FALLBACK_GRADLEW" ]]; then
-  GRADLE_CMD=("$FALLBACK_GRADLEW" -p "$PROJECT_DIR")
-else
-  cat <<EOF >&2
-No Gradle wrapper was found for building Android release artifacts.
-
-Checked project wrapper:
-  $PROJECT_GRADLEW
-
-Checked local distributions under:
-  $PROJECT_DIR/.gradle/wrapper/dists
-
-Checked fallback wrapper:
-  $FALLBACK_GRADLEW
-EOF
-  exit 1
-fi
+GRADLE_CMD=("$(vesper_android_resolve_gradle "$PROJECT_DIR" "$FALLBACK_PROJECT_DIR")" -p "$PROJECT_DIR")
 
 mkdir -p "$OUTPUT_DIR"
 

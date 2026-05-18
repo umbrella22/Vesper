@@ -1,0 +1,66 @@
+name: Vesper Flutter Pub Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Stable tag to publish, for example v0.3.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: flutter-pub-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+
+jobs:
+  publish-flutter-packages:
+    name: Publish Flutter packages to pub.dev
+    runs-on: ubuntu-latest
+    environment: pub.dev
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-'))
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.6"
+          channel: stable
+          cache: true
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${RELEASE_TAG}"
+          version="${tag#v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Flutter pub release only accepts stable numeric tags, got: $tag" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release version metadata
+        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+
+      - name: Publish Flutter packages
+        run: ./scripts/vesper flutter pub-publish /tmp/vesper-flutter-pub-release "${VESPER_RELEASE_VERSION}"

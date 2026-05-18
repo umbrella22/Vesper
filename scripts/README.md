@@ -13,8 +13,9 @@ scripts/
   ios/        iOS FFI, XCFramework, remux plugin, embed phase, release staging
   desktop/    desktop FFmpeg, pkg-config wrapper, desktop plugin verification
   ffi/        C header generation / verification and C host smoke tests
+  flutter/    Flutter pub staging, dry-run, and automated publish helpers
   mobile/     mobile host kit packaging verification
-  release/    GitHub Release notes generation
+  release/    Version metadata checks and GitHub Release notes generation
 ```
 
 ## Common Commands
@@ -31,6 +32,7 @@ scripts/
 ./scripts/vesper android jni release arm64-v8a
 ./scripts/vesper android aar
 ./scripts/vesper android stage-release
+./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
 
 ./scripts/vesper ios ffi release
 ./scripts/vesper ios verify-bridge-shim
@@ -45,8 +47,35 @@ scripts/
 
 ./scripts/vesper mobile verify-no-remux android
 ./scripts/vesper mobile verify-no-remux ios
+./scripts/vesper flutter stage-pub /tmp/vesper-flutter-pub
+./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
+./scripts/vesper release prepare-from-tag vMAJOR.MINOR.PATCH
+./scripts/vesper release verify-current
 ./scripts/vesper release notes <tag> [output-path]
 ```
+
+## Gradle Resolution
+
+Android helper scripts use a CI-provisioned `gradle` executable when `CI=true`.
+GitHub Actions jobs install that executable with `gradle/actions/setup-gradle`.
+Local agent work remains offline-safe: scripts look for a project-local cached
+Gradle distribution under `.gradle/wrapper/dists/**/bin/gradle` and do not
+invoke `gradlew` when that cache is missing.
+
+## Flutter Pub Publishing
+
+Repository `pubspec.yaml` files keep path dependencies for local development.
+The pub helpers stage temporary packages, remove `publish_to: none`, copy the
+root license, and rewrite internal package dependencies to hosted constraints
+for the selected version. If no version argument is passed, the staging helper
+uses the current `vesper_player` package version.
+
+Release workflows do not hardcode product versions. They derive the numeric
+product version from the pushed tag, apply it to the CI workspace with
+`./scripts/vesper release prepare-from-tag "$RELEASE_TAG"`, and verify the
+updated metadata before packaging. Stable tags such as `vMAJOR.MINOR.PATCH`
+publish staged Flutter packages to pub.dev; RC tags publish GitHub release
+artifacts but do not publish to pub.dev.
 
 ## Mobile FFmpeg Profiles
 

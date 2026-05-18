@@ -10,11 +10,12 @@ Usage: scripts/vesper <group> <command> [args...]
 Groups:
   ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
-  android  jni | aar | remux-plugin | stage-release
+  android  jni | aar | remux-plugin | stage-release | sample-apks
   ios      ffi | remux-plugin | stage-remux-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | verify-bridge-shim
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
-  release  notes
+  flutter  stage-pub | pub-dry-run | pub-publish
+  release  notes | set-version | prepare-from-tag | metadata-from-tag | verify-version | verify-current
 EOF
 }
 
@@ -57,6 +58,9 @@ case "$group:$command" in
   android:stage-release)
     exec "$SCRIPT_DIR/android/stage-vesper-player-kit-release.sh" "$@"
     ;;
+  android:sample-apks)
+    exec "$SCRIPT_DIR/android/stage-sample-apks.sh" "$@"
+    ;;
   ios:ffi)
     exec "$SCRIPT_DIR/ios/build-player-ffi-xcframework.sh" "$@"
     ;;
@@ -96,8 +100,32 @@ case "$group:$command" in
   mobile:verify-no-remux)
     exec "$SCRIPT_DIR/mobile/verify-host-kit-without-player-remux-ffmpeg.sh" "$@"
     ;;
+  flutter:stage-pub)
+    exec "$SCRIPT_DIR/flutter/stage-pub-packages.sh" "$@"
+    ;;
+  flutter:pub-dry-run)
+    exec "$SCRIPT_DIR/flutter/pub-dry-run.sh" "$@"
+    ;;
+  flutter:pub-publish)
+    exec "$SCRIPT_DIR/flutter/publish-pub-packages.sh" "$@"
+    ;;
   release:notes)
     exec "$SCRIPT_DIR/release/generate-notes.sh" "$@"
+    ;;
+  release:set-version)
+    exec "$SCRIPT_DIR/release/version.sh" set "$@"
+    ;;
+  release:prepare-from-tag)
+    exec "$SCRIPT_DIR/release/version.sh" prepare-from-tag "$@"
+    ;;
+  release:metadata-from-tag)
+    exec "$SCRIPT_DIR/release/version.sh" metadata-from-tag "$@"
+    ;;
+  release:verify-version)
+    exec "$SCRIPT_DIR/release/version.sh" verify "$@"
+    ;;
+  release:verify-current)
+    exec "$SCRIPT_DIR/release/version.sh" verify-current "$@"
     ;;
   *)
     usage
