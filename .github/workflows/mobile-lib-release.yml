@@ -33,6 +33,18 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
 
+      - name: Verify release tag is on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          main_commit="$(git rev-parse origin/main)"
+          if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+            echo "Release tag ${RELEASE_TAG} is not reachable from origin/main." >&2
+            exit 1
+          fi
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -337,6 +349,18 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
+
+      - name: Verify release tag is on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          main_commit="$(git rev-parse origin/main)"
+          if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+            echo "Release tag ${RELEASE_TAG} is not reachable from origin/main." >&2
+            exit 1
+          fi
 
       - name: Download VesperPlayerKit release bundles
         uses: actions/download-artifact@v4
