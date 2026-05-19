@@ -399,7 +399,11 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_read(
+/// # Safety
+///
+/// This function is called by the JVM through JNI. The JVM must pass a valid
+/// `jbyteArray` that belongs to the current JNI frame when `buffer` is non-null.
+pub unsafe extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_read(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     handle: jlong,

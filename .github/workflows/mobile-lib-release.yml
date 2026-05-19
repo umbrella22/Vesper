@@ -20,6 +20,13 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+  LINUX_WORKSPACE_EXCLUDES: >-
+    --exclude player-platform-macos
+    --exclude player-platform-windows
+    --exclude player-platform-ios
+    --exclude player-ffi-ios
+    --exclude player-platform-android
+    --exclude player-jni-android
 
 jobs:
   release-checks:
@@ -51,6 +58,35 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libasound2-dev \
+            libudev-dev \
+            libegl1-mesa-dev \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev
+
       - name: Install cbindgen
         run: cargo install cbindgen --locked
 
@@ -64,7 +100,7 @@ jobs:
         run: scripts/ffmpeg/test-profiles.sh
 
       - name: Check Rust workspace
-        run: cargo check --workspace
+        run: cargo check --workspace ${{ env.LINUX_WORKSPACE_EXCLUDES }}
 
   android-lib:
     name: VesperPlayerKit Android ${{ matrix.abi }}
