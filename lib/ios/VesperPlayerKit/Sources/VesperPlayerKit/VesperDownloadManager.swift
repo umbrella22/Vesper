@@ -2257,6 +2257,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
 
     private func resolveURL(_ value: String) throws -> URL {
         if let url = URL(string: value) {
+            try rejectInsecureHTTPURL(url)
             return url
         }
         throw CocoaError(.fileReadInvalidFileName)

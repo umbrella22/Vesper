@@ -124,6 +124,7 @@ void main() {
         lastError: const VesperPlayerError(
           message:
               '恢复的 iOS fixedTrack 目标 720p 长时间未收敛；当前已回退为不高于 720p 的 constrained ABR，播放器实际仍在渲染 480p。',
+          code: VesperPlayerErrorCode.backendFailure,
           category: VesperPlayerErrorCategory.playback,
           retriable: false,
         ),
@@ -146,6 +147,7 @@ void main() {
         fixedTrackStatus: VesperFixedTrackStatus.fallback,
         lastError: const VesperPlayerError(
           message: 'Best-effort iOS fixedTrack 720p is still rendering 480p.',
+          code: VesperPlayerErrorCode.backendFailure,
           category: VesperPlayerErrorCategory.playback,
           retriable: false,
         ),
@@ -166,6 +168,7 @@ void main() {
           ),
           lastError: const VesperPlayerError(
             message: 'Network timed out.',
+            code: VesperPlayerErrorCode.timeout,
             category: VesperPlayerErrorCategory.playback,
             retriable: true,
           ),
