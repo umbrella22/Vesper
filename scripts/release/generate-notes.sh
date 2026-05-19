@@ -83,30 +83,58 @@ release_channel() {
   fi
 }
 
-commit_group_label() {
+category_label_en() {
   local category="$1"
 
   case "$category" in
     "Mobile Platform Kits")
-      echo "移动端平台套件 / Mobile Platform Kits"
+      echo "Mobile Platform Kits"
       ;;
     "Desktop Runtime & Demo")
-      echo "桌面运行时与示例 / Desktop Runtime & Demo"
+      echo "Desktop Runtime & Demo"
       ;;
     "Core Runtime & FFI")
-      echo "核心运行时与 FFI / Core Runtime & FFI"
+      echo "Core Runtime & FFI"
       ;;
     "Media Pipeline")
-      echo "媒体管线 / Media Pipeline"
+      echo "Media Pipeline"
       ;;
     "CI & Release Tooling")
-      echo "CI 与发布工具 / CI & Release Tooling"
+      echo "CI & Release Tooling"
       ;;
     "Docs & Planning")
-      echo "文档与规划 / Docs & Planning"
+      echo "Docs & Planning"
       ;;
     *)
-      echo "其他变更 / Other Changes"
+      echo "Other Changes"
+      ;;
+  esac
+}
+
+category_label_zh() {
+  local category="$1"
+
+  case "$category" in
+    "Mobile Platform Kits")
+      echo "移动端平台套件"
+      ;;
+    "Desktop Runtime & Demo")
+      echo "桌面运行时与示例"
+      ;;
+    "Core Runtime & FFI")
+      echo "核心运行时与 FFI"
+      ;;
+    "Media Pipeline")
+      echo "媒体管线"
+      ;;
+    "CI & Release Tooling")
+      echo "CI 与发布工具"
+      ;;
+    "Docs & Planning")
+      echo "文档与规划"
+      ;;
+    *)
+      echo "其他变更"
       ;;
   esac
 }
@@ -190,93 +218,111 @@ asset_link() {
 
 emit_download_item() {
   local asset="$1"
-  local zh_label="$2"
-  local en_label="$3"
+  local label="$2"
   local link
 
   link="$(asset_link "$asset")"
-  printf -- '- %s - %s / %s\n' "$link" "$zh_label" "$en_label"
+  printf -- '- %s - %s\n' "$link" "$label"
 }
 
-emit_initial_release_highlights() {
+emit_initial_release_en() {
   cat <<'EOF'
-## 修复问题 / Fixes
+## Fixes
 
-- 中文：这是 VesperPlayerKit 的首次候选发布，没有历史版本回归修复对比；本轮发布前已补齐 Dart 错误码构造、iOS 不安全 HTTP 拦截，以及 Android / CI 发布依赖声明等稳定性问题。
-  English: This is the first VesperPlayerKit release candidate, so there is no prior regression set; this cut includes pre-release stability fixes for Dart error-code construction, iOS insecure-HTTP rejection, and Android / CI release dependency wiring.
-- 中文：修正 FFmpeg、Gradle、桥接 shim 等发布脚本细节，让移动端二进制产物可以由 tag 工作流稳定生成。
-  English: FFmpeg, Gradle, and bridge-shim release scripts were tightened so mobile binary artifacts can be generated reliably from the tag workflow.
+- This is the first VesperPlayerKit release candidate, so there is no prior release regression set. This cut includes pre-release stability fixes for Dart error-code construction, iOS insecure-HTTP rejection, Android / CI release dependency wiring, Android sample APK packaging, and iOS framework staging.
+- FFmpeg, Gradle, bridge-shim, Android sample APK, and iOS framework release scripts were tightened so mobile binary artifacts can be generated reliably from the tag workflow.
 
-## 新增功能 / New Capabilities
+## New Capabilities
 
-- 中文：Android 提供核心 Host Kit AAR、Compose 绑定、Compose UI、外部播放扩展和 FFmpeg Runtime 拆分包，面向 arm64-v8a 设备发布。
-  English: Android ships a core host-kit AAR, Compose binding, Compose UI, external playback extension, and a split FFmpeg runtime package for arm64-v8a devices.
-- 中文：iOS 提供设备 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及可选的 FFmpeg remux 插件 XCFramework。
-  English: iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and an optional FFmpeg remux plugin XCFramework.
-- 中文：Flutter 示例和 Android Compose 示例随 release 一起提供，方便快速验证接入效果。
-  English: Flutter and Android Compose sample apps are published with the release for quick integration checks.
-- 中文：核心能力覆盖 DASH / HLS 桥接、离线下载与导出、远程媒体引用、请求头透传、SegmentBase / byte-range 处理、DLNA / AirPlay 外部播放，以及 FFmpeg remux 后处理。
-  English: Core capabilities include DASH / HLS bridging, offline download and export, remote media references, request-header forwarding, SegmentBase / byte-range handling, DLNA / AirPlay external playback, and FFmpeg remux post-processing.
+- Android ships a core host-kit AAR, Compose binding, Compose UI package, external playback extension, and split FFmpeg runtime package for arm64-v8a devices.
+- iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and optional FFmpeg remux plugin XCFramework.
+- Flutter and Android Compose sample apps are published with the release for quick integration checks.
+- Core capabilities include DASH / HLS bridging, offline download and export, remote media references, request-header forwarding, SegmentBase / byte-range handling, DLNA / AirPlay external playback, and FFmpeg remux post-processing.
 
-## 优化改进 / Improvements
+## Improvements
 
-- 中文：Android 默认走硬件解码和 SurfaceView 路径，发布产物按模块拆分，便于宿主应用只接入需要的能力。
-  English: Android defaults to hardware decoding and the SurfaceView path, with release artifacts split by module so host apps can depend only on the capabilities they need.
-- 中文：iOS 保持 SPM / XCFramework 分发路径，并把 FFmpeg 插件与主 SDK 分离，保留 FFmpeg 独立许可、notice、源码和 LGPL relinking 边界。
-  English: iOS keeps the SPM / XCFramework distribution path and separates the FFmpeg plugin from the main SDK, preserving FFmpeg's independent license, notices, source, and LGPL relinking boundary.
-- 中文：发布流程会生成校验和，并校验 Android / iOS 产物只包含预期的 arm64 切片。
-  English: The release flow generates checksums and verifies Android / iOS artifacts contain only the expected arm64 slices.
+- Android defaults to hardware decoding and the SurfaceView path, with release artifacts split by module so host apps can depend only on the capabilities they need.
+- iOS keeps the SPM / XCFramework distribution path and separates the FFmpeg plugin from the main SDK, preserving FFmpeg's independent license, notices, source, and LGPL relinking boundary.
+- The release flow generates checksums and verifies Android / iOS artifacts contain only the expected arm64 slices.
 EOF
 }
 
-emit_incremental_release_highlights() {
+emit_initial_release_zh() {
   cat <<'EOF'
-## 修复问题 / Fixes
+## 修复问题
 
-- 中文：本版本的修复项请查看下方按模块整理的变更摘要；英文提交标题已尽量配套中文说明。
-  English: Fixes for this version are listed in the module-grouped change summary below, with Chinese descriptions paired with the original English commit titles where available.
+- 这是 VesperPlayerKit 的首次候选发布，没有历史版本回归修复对比。本轮发布前已补齐 Dart 错误码构造、iOS 不安全 HTTP 拦截、Android / CI 发布依赖声明、Android 示例 APK 打包，以及 iOS framework 暂存等稳定性问题。
+- 修正 FFmpeg、Gradle、bridge shim、Android 示例 APK 和 iOS framework 发布脚本细节，让移动端二进制产物可以由 tag 工作流稳定生成。
 
-## 新增功能 / New Capabilities
+## 新增功能
 
-- 中文：本版本新增能力请查看下方变更摘要和对应平台下载产物。
-  English: New capabilities for this version are listed in the change summary below and reflected in the platform-specific downloads.
+- Android 提供核心 Host Kit AAR、Compose 绑定、Compose UI 包、外部播放扩展和 FFmpeg Runtime 拆分包，面向 arm64-v8a 设备发布。
+- iOS 提供真机 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及可选的 FFmpeg remux 插件 XCFramework。
+- Flutter 示例和 Android Compose 示例随 release 一起提供，方便快速验证接入效果。
+- 核心能力覆盖 DASH / HLS 桥接、离线下载与导出、远程媒体引用、请求头透传、SegmentBase / byte-range 处理、DLNA / AirPlay 外部播放，以及 FFmpeg remux 后处理。
 
-## 优化改进 / Improvements
+## 优化改进
 
-- 中文：构建、发布、平台集成和运行时优化请查看下方变更摘要。
-  English: Build, release, platform integration, and runtime improvements are listed in the change summary below.
+- Android 默认走硬件解码和 SurfaceView 路径，发布产物按模块拆分，便于宿主应用只接入需要的能力。
+- iOS 保持 SPM / XCFramework 分发路径，并把 FFmpeg 插件与主 SDK 分离，保留 FFmpeg 独立许可、notice、源码和 LGPL relinking 边界。
+- 发布流程会生成校验和，并校验 Android / iOS 产物只包含预期的 arm64 切片。
 EOF
 }
 
-emit_grouped_commits() {
+emit_incremental_release_en() {
+  cat <<'EOF'
+## Fixes
+
+- Fixes for this version are listed in the module-grouped change summary below.
+
+## New Capabilities
+
+- New capabilities for this version are listed in the change summary below and reflected in the platform-specific downloads.
+
+## Improvements
+
+- Build, release, platform integration, and runtime improvements are listed in the change summary below.
+EOF
+}
+
+emit_incremental_release_zh() {
+  cat <<'EOF'
+## 修复问题
+
+- 本版本的修复项请查看下方按模块整理的变更摘要。
+
+## 新增功能
+
+- 本版本新增能力请查看下方变更摘要和对应平台下载产物。
+
+## 优化改进
+
+- 构建、发布、平台集成和运行时优化请查看下方变更摘要。
+EOF
+}
+
+emit_grouped_commits_en() {
   local range_spec="$1"
   local temp_dir
   local category
   local sha
   local short_sha
   local subject
-  local translated_subject
   local author
   local changed_paths
 
   temp_dir="$(mktemp -d)"
-  trap 'rm -rf "$temp_dir"' EXIT
 
   while IFS= read -r sha; do
     [[ -n "$sha" ]] || continue
 
     short_sha="$(git rev-parse --short "$sha")"
     subject="$(git log -1 --format='%s' "$sha")"
-    translated_subject="$(translate_commit_subject "$subject")"
     author="$(git log -1 --format='%an' "$sha")"
     changed_paths="$(git show --pretty='' --name-only "$sha")"
     category="$(classify_commit_group "$changed_paths")"
 
-    if [[ "$translated_subject" == "$subject" ]]; then
-      printf -- '- `%s` %s (%s)\n' "$short_sha" "$subject" "$author" >>"$temp_dir/$category.txt"
-    else
-      printf -- '- `%s` 中文：%s / English: %s (%s)\n' "$short_sha" "$translated_subject" "$subject" "$author" >>"$temp_dir/$category.txt"
-    fi
+    printf -- '- `%s` %s (%s)\n' "$short_sha" "$subject" "$author" >>"$temp_dir/$category.txt"
   done < <(git log --no-merges --format='%H' "$range_spec" || true)
 
   for category in \
@@ -289,12 +335,74 @@ emit_grouped_commits() {
     "Other Changes"
   do
     if [[ -s "$temp_dir/$category.txt" ]]; then
-      echo "### $(commit_group_label "$category")"
+      echo "### $(category_label_en "$category")"
       echo
       cat "$temp_dir/$category.txt"
       echo
     fi
   done
+
+  rm -rf "$temp_dir"
+}
+
+emit_grouped_commits_zh() {
+  local range_spec="$1"
+  local temp_dir
+  local category
+  local sha
+  local short_sha
+  local subject
+  local translated_subject
+  local author
+  local changed_paths
+
+  temp_dir="$(mktemp -d)"
+
+  while IFS= read -r sha; do
+    [[ -n "$sha" ]] || continue
+
+    short_sha="$(git rev-parse --short "$sha")"
+    subject="$(git log -1 --format='%s' "$sha")"
+    translated_subject="$(translate_commit_subject "$subject")"
+    author="$(git log -1 --format='%an' "$sha")"
+    changed_paths="$(git show --pretty='' --name-only "$sha")"
+    category="$(classify_commit_group "$changed_paths")"
+
+    printf -- '- `%s` %s (%s)\n' "$short_sha" "$translated_subject" "$author" >>"$temp_dir/$category.txt"
+  done < <(git log --no-merges --format='%H' "$range_spec" || true)
+
+  for category in \
+    "Mobile Platform Kits" \
+    "Desktop Runtime & Demo" \
+    "Core Runtime & FFI" \
+    "Media Pipeline" \
+    "CI & Release Tooling" \
+    "Docs & Planning" \
+    "Other Changes"
+  do
+    if [[ -s "$temp_dir/$category.txt" ]]; then
+      echo "### $(category_label_zh "$category")"
+      echo
+      cat "$temp_dir/$category.txt"
+      echo
+    fi
+  done
+
+  rm -rf "$temp_dir"
+}
+
+release_contributor_lines() {
+  local range_spec="$1"
+  local lines
+
+  lines="$(git log --format='%ae%x09%an' "$range_spec" \
+    | awk -F '\t' 'NF >= 2 && !seen[$1]++ { print "- " $2 }' || true)"
+
+  if [[ -n "$lines" ]]; then
+    printf '%s\n' "$lines"
+  else
+    echo "- No contributor metadata found"
+  fi
 }
 
 git rev-parse --verify "${CURRENT_TAG}^{commit}" >/dev/null
@@ -318,83 +426,107 @@ RELEASE_CHANNEL="$(release_channel "$CURRENT_TAG")"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 
-contributor_lines="$(git shortlog -sne "$RANGE_SPEC" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+/- /' || true)"
-if [[ -z "$contributor_lines" ]]; then
-  contributor_lines="- No contributor metadata found"
-fi
+contributor_lines="$(release_contributor_lines "$RANGE_SPEC")"
 
 {
   echo "# VesperPlayerKit ${CURRENT_TAG}"
   echo
-  echo "中文：这是 VesperPlayerKit 面向 Android 和 iOS 的移动端 SDK 发布包。"
+  echo "VesperPlayerKit ${CURRENT_TAG} is a release for the Android and iOS mobile SDK bundles."
   echo
-  echo "English: This release packages the VesperPlayerKit mobile SDK bundles for Android and iOS."
-  echo
-  echo "## 发布信息 / Release Details"
+  echo "## Release Details"
   echo
   if [[ -n "$PREVIOUS_TAG" ]]; then
-    echo "- 上一个版本 / Previous version: \`${PREVIOUS_TAG}\`"
+    echo "- Previous version: \`${PREVIOUS_TAG}\`"
   else
-    echo "- 上一个版本 / Previous version: 首个带标签发布版本 / first tagged VesperPlayerKit release"
+    echo "- Previous version: first tagged VesperPlayerKit release"
   fi
-  echo "- 发布标签 / Release tag: \`${CURRENT_TAG}\`"
-  echo "- 发布通道 / Release channel: ${RELEASE_CHANNEL}"
+  echo "- Release tag: \`${CURRENT_TAG}\`"
+  echo "- Release channel: ${RELEASE_CHANNEL}"
   if [[ -n "$COMPARE_URL" ]]; then
-    echo "- 变更对比 / Compare changes: [\`${PREVIOUS_TAG}...${CURRENT_TAG}\`](${COMPARE_URL})"
+    echo "- Compare changes: [\`${PREVIOUS_TAG}...${CURRENT_TAG}\`](${COMPARE_URL})"
   fi
   echo
   if [[ -z "$PREVIOUS_TAG" ]]; then
-    emit_initial_release_highlights
+    emit_initial_release_en
   else
-    emit_incremental_release_highlights
+    emit_incremental_release_en
   fi
   echo
-  echo "## 变更摘要 / Change Summary"
+  echo "## Change Summary"
   echo
   if [[ -z "$PREVIOUS_TAG" ]]; then
-    echo "- 中文：这是首次 GitHub Release，英文提交历史已整理为上方的双语能力摘要，方便首次接入评估。"
-    echo "- English: This is the first GitHub release; the English commit history has been condensed into the bilingual capability summary above for first-time integration review."
-    echo
+    echo "- This is the first GitHub release. The commit history has been condensed into the capability summary above for first-time integration review."
   elif git log --no-merges --format='%H' "$RANGE_SPEC" | grep -q .; then
-    emit_grouped_commits "$RANGE_SPEC"
+    emit_grouped_commits_en "$RANGE_SPEC"
   else
-    echo "- 中文：此范围内没有非合并提交。"
-    echo "- English: No non-merge commits were found in this range."
-    echo
+    echo "- No non-merge commits were found in this range."
   fi
   echo
-  echo "## 下载 / Downloads"
+  echo "---"
   echo
-  echo "这些下载是预构建二进制产物；接入方不需要在自己的 Gradle / Xcode 构建中运行本仓库的 JNI 或 FFmpeg 生成任务。"
+  echo "# VesperPlayerKit ${CURRENT_TAG} 中文说明"
   echo
-  echo "These downloads are prebuilt binary artifacts; host applications do not need to run this repository's JNI or FFmpeg generation tasks during their own Gradle / Xcode builds."
+  echo "VesperPlayerKit ${CURRENT_TAG} 是 Android 与 iOS 移动端 SDK 二进制发布包。"
+  echo
+  echo "## 发布信息"
+  echo
+  if [[ -n "$PREVIOUS_TAG" ]]; then
+    echo "- 上一个版本：\`${PREVIOUS_TAG}\`"
+  else
+    echo "- 上一个版本：首个带标签发布版本"
+  fi
+  echo "- 发布标签：\`${CURRENT_TAG}\`"
+  echo "- 发布通道：${RELEASE_CHANNEL}"
+  if [[ -n "$COMPARE_URL" ]]; then
+    echo "- 变更对比：[\`${PREVIOUS_TAG}...${CURRENT_TAG}\`](${COMPARE_URL})"
+  fi
+  echo
+  if [[ -z "$PREVIOUS_TAG" ]]; then
+    emit_initial_release_zh
+  else
+    emit_incremental_release_zh
+  fi
+  echo
+  echo "## 变更摘要"
+  echo
+  if [[ -z "$PREVIOUS_TAG" ]]; then
+    echo "- 这是首次 GitHub Release。英文提交历史已整理为上方能力摘要，方便首次接入评估。"
+  elif git log --no-merges --format='%H' "$RANGE_SPEC" | grep -q .; then
+    emit_grouped_commits_zh "$RANGE_SPEC"
+  else
+    echo "- 此范围内没有非合并提交。"
+  fi
+  echo
+  echo "---"
+  echo
+  echo "## Downloads"
+  echo
+  echo "These downloads are prebuilt binary artifacts. Host applications do not need to run this repository's JNI or FFmpeg generation tasks during their own Gradle / Xcode builds."
   echo
   echo "### Android"
   echo
-  emit_download_item "VesperPlayerKit-android-arm64-v8a.aar" "核心 Android Host Kit AAR" "Core Android host-kit AAR"
-  emit_download_item "VesperPlayerKitCompose-android-arm64-v8a.aar" "Jetpack Compose 绑定 AAR" "Jetpack Compose binding AAR"
-  emit_download_item "VesperPlayerKitComposeUi-android-arm64-v8a.aar" "可选 Compose UI 控件 AAR" "Optional Compose UI controls AAR"
-  emit_download_item "VesperPlayerKitExternalPlayback-android-arm64-v8a.aar" "外部播放扩展 AAR" "External playback extension AAR"
-  emit_download_item "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar" "FFmpeg Runtime AAR" "FFmpeg runtime AAR"
-  emit_download_item "VesperPlayerAndroidComposeHost-android-arm64-v8a-debug-signed.apk" "Android Compose 示例 APK，debug 签名，仅用于侧载验证" "Android Compose sample APK, debug-signed for side-load evaluation only"
-  emit_download_item "VesperPlayerFlutterHost-android-arm64-v8a-debug-signed.apk" "Flutter Android 示例 APK，debug 签名，仅用于侧载验证" "Flutter Android sample APK, debug-signed for side-load evaluation only"
+  emit_download_item "VesperPlayerKit-android-arm64-v8a.aar" "Core Android host-kit AAR"
+  emit_download_item "VesperPlayerKitCompose-android-arm64-v8a.aar" "Jetpack Compose binding AAR"
+  emit_download_item "VesperPlayerKitComposeUi-android-arm64-v8a.aar" "Optional Compose UI controls AAR"
+  emit_download_item "VesperPlayerKitExternalPlayback-android-arm64-v8a.aar" "External playback extension AAR"
+  emit_download_item "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar" "FFmpeg runtime AAR"
+  emit_download_item "VesperPlayerAndroidComposeHost-android-arm64-v8a-debug-signed.apk" "Android Compose sample APK, debug-signed for side-load evaluation only"
+  emit_download_item "VesperPlayerFlutterHost-android-arm64-v8a-debug-signed.apk" "Flutter Android sample APK, debug-signed for side-load evaluation only"
   echo
   echo "### iOS"
   echo
-  emit_download_item "VesperPlayerKit-ios-arm64.framework.zip" "iOS 真机 framework" "iOS device framework"
-  emit_download_item "VesperPlayerKit-ios-simulator-arm64.framework.zip" "Apple Silicon 模拟器 framework" "Apple Silicon simulator framework"
-  emit_download_item "VesperPlayerKit.xcframework.zip" "合并 XCFramework" "Combined XCFramework"
-  emit_download_item "VesperPlayerRemuxFfmpegPlugin.xcframework.zip" "可选 FFmpeg remux 插件 XCFramework" "Optional FFmpeg remux plugin XCFramework"
+  emit_download_item "VesperPlayerKit-ios-arm64.framework.zip" "iOS device framework"
+  emit_download_item "VesperPlayerKit-ios-simulator-arm64.framework.zip" "Apple Silicon simulator framework"
+  emit_download_item "VesperPlayerKit.xcframework.zip" "Combined XCFramework"
+  emit_download_item "VesperPlayerRemuxFfmpegPlugin.xcframework.zip" "Optional FFmpeg remux plugin XCFramework"
   echo
-  echo "### 校验与许可 / Checksums and Licensing"
+  echo "### Checksums and Licensing"
   echo
-  emit_download_item "SHA256SUMS.txt" "发布产物 SHA-256 校验和" "SHA-256 checksums for release artifacts"
-  echo
-  echo "FFmpeg 相关产物保留 FFmpeg 独立许可、notice、对应源码、configure flags 和 LGPL relinking 边界，不并入 Vesper 的 Apache-2.0 源码许可。"
+  emit_download_item "SHA256SUMS.txt" "SHA-256 checksums for release artifacts"
   echo
   echo "FFmpeg-backed artifacts keep FFmpeg's license, notices, corresponding source, configure flags, and LGPL relinking boundary separate from Vesper's Apache-2.0 source license."
   echo
-  echo "## 发布贡献者 / Release Contributors"
+  echo "## Release Contributors"
   echo
   printf '%s\n' "$contributor_lines"
 } >"$OUTPUT_PATH"
