@@ -43,7 +43,7 @@ for abi in "${selected_abis[@]}"; do
     (
       cd "$FLUTTER_PROJECT"
       flutter pub get
-      flutter build apk --release --target-platform android-arm64
+      flutter build apk --release --target-platform android-arm64 --split-per-abi
     )
   else
     FLUTTER_GRADLE="$(vesper_android_resolve_gradle "$FLUTTER_ANDROID_PROJECT")"
@@ -54,7 +54,7 @@ for abi in "${selected_abis[@]}"; do
       :app:assembleRelease
   fi
 
-  flutter_apks=("$FLUTTER_PROJECT"/build/app/outputs/flutter-apk/app-release.apk)
+  flutter_apks=("$FLUTTER_PROJECT"/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)
   if [[ ${#flutter_apks[@]} -ne 1 || ! -f "${flutter_apks[0]}" ]]; then
     echo "Expected exactly one Flutter Android sample APK." >&2
     printf '%s\n' "${flutter_apks[@]}" >&2

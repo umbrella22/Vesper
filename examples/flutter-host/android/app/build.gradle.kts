@@ -17,6 +17,10 @@ val configuredAndroidAbis =
         ?.map(String::trim)
         ?.filter(String::isNotEmpty)
         ?: listOf("arm64-v8a")
+val isFlutterSplitPerAbiBuild =
+    providers.gradleProperty("split-per-abi")
+        .map(String::toBoolean)
+        .orElse(false)
 
 val workspaceRootDir = rootProject.layout.projectDirectory.dir("../../..")
 val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
@@ -50,8 +54,10 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        ndk {
-            abiFilters += configuredAndroidAbis
+        if (!isFlutterSplitPerAbiBuild.get()) {
+            ndk {
+                abiFilters += configuredAndroidAbis
+            }
         }
     }
 

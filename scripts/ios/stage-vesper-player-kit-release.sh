@@ -25,14 +25,21 @@ stage_framework_zip() {
   local output_zip="$2"
   local extract_arch="${3:-}"
   local temp_dir
+  local binary_info
 
   temp_dir="$(mktemp -d)"
   cp -R "$source_framework" "$temp_dir/$FRAMEWORK_NAME"
 
   if [[ -n "$extract_arch" ]]; then
-    lipo "$source_framework/$BINARY_NAME" \
-      -extract "$extract_arch" \
-      -output "$temp_dir/$FRAMEWORK_NAME/$BINARY_NAME"
+    binary_info="$(lipo -info "$source_framework/$BINARY_NAME")"
+    if [[ "$binary_info" == *"are:"* ]]; then
+      lipo "$source_framework/$BINARY_NAME" \
+        -extract "$extract_arch" \
+        -output "$temp_dir/$FRAMEWORK_NAME/$BINARY_NAME"
+    elif [[ "$binary_info" != *"architecture: $extract_arch"* ]]; then
+      echo "Expected $extract_arch framework binary, got: $binary_info" >&2
+      exit 1
+    fi
   fi
 
   ditto -c -k --sequesterRsrc --keepParent \
@@ -46,10 +53,11 @@ temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir" "$ARM64_XCFRAMEWORK_PATH"' EXIT
 
 ARM64_SIMULATOR_FRAMEWORK="$temp_dir/$FRAMEWORK_NAME"
-cp -R "$SIMULATOR_FRAMEWORK" "$ARM64_SIMULATOR_FRAMEWORK"
-lipo "$SIMULATOR_FRAMEWORK/$BINARY_NAME" \
-  -extract arm64 \
-  -output "$ARM64_SIMULATOR_FRAMEWORK/$BINARY_NAME"
+stage_framework_zip \
+  "$SIMULATOR_FRAMEWORK" \
+  "$temp_dir/VesperPlayerKit-ios-simulator-arm64.framework.zip" \
+  "arm64"
+ditto -x -k "$temp_dir/VesperPlayerKit-ios-simulator-arm64.framework.zip" "$temp_dir"
 
 rm -rf "$ARM64_XCFRAMEWORK_PATH"
 xcodebuild -create-xcframework \
