@@ -770,6 +770,411 @@ enum VesperPlayerErrorCode {
   timeout,
 }
 
+enum VesperRuntimeWarningDomain { frameProcessor }
+
+enum VesperFrameProcessorWarningKind {
+  slow,
+  deadlineMissed,
+  backpressure,
+  bypassActivated,
+  lateOutputDropped,
+  outputDropped,
+  disabled,
+  recovered,
+  unsupported,
+}
+
+enum VesperFrameProcessorPolicyAction {
+  continuePlayback,
+  bypassOriginalFrame,
+  dropOutput,
+  disableProcessor,
+  failPlayback,
+  diagnosticsOnly,
+}
+
+final class VesperFrameProcessorWarning {
+  const VesperFrameProcessorWarning({
+    required this.kind,
+    required this.pluginName,
+    required this.processorIndex,
+    required this.policyAction,
+    this.frameId,
+    this.framePtsUs,
+    this.frameDurationUs,
+    this.inputHandleKind,
+    this.outputHandleKind,
+    this.queueDepth,
+    this.inFlightFrames,
+    this.queueWaitUs,
+    this.processTimeUs,
+    this.submitToReadyUs,
+    this.presentDeadlineUs,
+    this.deadlineOverrunUs,
+    this.consecutiveMissCount,
+    this.message,
+  });
+
+  factory VesperFrameProcessorWarning.fromMap(Map<Object?, Object?> map) {
+    return VesperFrameProcessorWarning(
+      kind: _decodeEnum(
+        VesperFrameProcessorWarningKind.values,
+        map['kind'],
+        VesperFrameProcessorWarningKind.unsupported,
+      ),
+      pluginName: map['pluginName'] as String? ?? '',
+      processorIndex: _decodeInt(map, 'processorIndex') ?? 0,
+      frameId: _decodeInt(map, 'frameId'),
+      framePtsUs: _decodeInt(map, 'framePtsUs'),
+      frameDurationUs: _decodeInt(map, 'frameDurationUs'),
+      inputHandleKind: map['inputHandleKind'] as String?,
+      outputHandleKind: map['outputHandleKind'] as String?,
+      queueDepth: _decodeInt(map, 'queueDepth'),
+      inFlightFrames: _decodeInt(map, 'inFlightFrames'),
+      queueWaitUs: _decodeInt(map, 'queueWaitUs'),
+      processTimeUs: _decodeInt(map, 'processTimeUs'),
+      submitToReadyUs: _decodeInt(map, 'submitToReadyUs'),
+      presentDeadlineUs: _decodeInt(map, 'presentDeadlineUs'),
+      deadlineOverrunUs: _decodeInt(map, 'deadlineOverrunUs'),
+      consecutiveMissCount: _decodeInt(map, 'consecutiveMissCount'),
+      policyAction: _decodeEnum(
+        VesperFrameProcessorPolicyAction.values,
+        map['policyAction'],
+        VesperFrameProcessorPolicyAction.continuePlayback,
+      ),
+      message: map['message'] as String?,
+    );
+  }
+
+  final VesperFrameProcessorWarningKind kind;
+  final String pluginName;
+  final int processorIndex;
+  final int? frameId;
+  final int? framePtsUs;
+  final int? frameDurationUs;
+  final String? inputHandleKind;
+  final String? outputHandleKind;
+  final int? queueDepth;
+  final int? inFlightFrames;
+  final int? queueWaitUs;
+  final int? processTimeUs;
+  final int? submitToReadyUs;
+  final int? presentDeadlineUs;
+  final int? deadlineOverrunUs;
+  final int? consecutiveMissCount;
+  final VesperFrameProcessorPolicyAction policyAction;
+  final String? message;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'kind': kind.name,
+      'pluginName': pluginName,
+      'processorIndex': processorIndex,
+      if (frameId != null) 'frameId': frameId,
+      if (framePtsUs != null) 'framePtsUs': framePtsUs,
+      if (frameDurationUs != null) 'frameDurationUs': frameDurationUs,
+      if (inputHandleKind != null) 'inputHandleKind': inputHandleKind,
+      if (outputHandleKind != null) 'outputHandleKind': outputHandleKind,
+      if (queueDepth != null) 'queueDepth': queueDepth,
+      if (inFlightFrames != null) 'inFlightFrames': inFlightFrames,
+      if (queueWaitUs != null) 'queueWaitUs': queueWaitUs,
+      if (processTimeUs != null) 'processTimeUs': processTimeUs,
+      if (submitToReadyUs != null) 'submitToReadyUs': submitToReadyUs,
+      if (presentDeadlineUs != null) 'presentDeadlineUs': presentDeadlineUs,
+      if (deadlineOverrunUs != null) 'deadlineOverrunUs': deadlineOverrunUs,
+      if (consecutiveMissCount != null)
+        'consecutiveMissCount': consecutiveMissCount,
+      'policyAction': policyAction.name,
+      if (message != null) 'message': message,
+    };
+  }
+}
+
+final class VesperRuntimeWarning {
+  const VesperRuntimeWarning.frameProcessor(this.frameProcessor)
+      : domain = VesperRuntimeWarningDomain.frameProcessor;
+
+  factory VesperRuntimeWarning.fromMap(Map<Object?, Object?> map) {
+    final domain = _decodeEnum(
+      VesperRuntimeWarningDomain.values,
+      map['domain'],
+      VesperRuntimeWarningDomain.frameProcessor,
+    );
+    return switch (domain) {
+      VesperRuntimeWarningDomain.frameProcessor =>
+        VesperRuntimeWarning.frameProcessor(
+          VesperFrameProcessorWarning.fromMap(
+            _rawMap(map['frameProcessor']) ?? const <Object?, Object?>{},
+          ),
+        ),
+    };
+  }
+
+  final VesperRuntimeWarningDomain domain;
+  final VesperFrameProcessorWarning frameProcessor;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'domain': domain.name,
+      'frameProcessor': frameProcessor.toMap(),
+    };
+  }
+}
+
+enum VesperPluginDiagnosticStatus {
+  loaded,
+  loadFailed,
+  unsupportedKind,
+  decoderSupported,
+  decoderUnsupported,
+  frameProcessorSupported,
+  frameProcessorUnsupported,
+}
+
+enum VesperPluginCapabilityKind { decoder, frameProcessor }
+
+final class VesperPluginCodecCapability {
+  const VesperPluginCodecCapability({
+    required this.mediaKind,
+    required this.codec,
+  });
+
+  factory VesperPluginCodecCapability.fromMap(Map<Object?, Object?> map) {
+    return VesperPluginCodecCapability(
+      mediaKind: map['mediaKind'] as String? ?? '',
+      codec: map['codec'] as String? ?? '',
+    );
+  }
+
+  final String mediaKind;
+  final String codec;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'mediaKind': mediaKind,
+      'codec': codec,
+    };
+  }
+}
+
+final class VesperPluginDecoderCapabilitySummary {
+  const VesperPluginDecoderCapabilitySummary({
+    this.codecs = const <VesperPluginCodecCapability>[],
+    this.legacyCodecs = const <String>[],
+    this.supportsNativeFrameOutput = false,
+    this.supportsHardwareDecode = false,
+    this.supportsCpuVideoFrames = false,
+    this.supportsAudioFrames = false,
+    this.supportsGpuHandles = false,
+    this.supportsFlush = false,
+    this.supportsDrain = false,
+    this.maxSessions,
+  });
+
+  factory VesperPluginDecoderCapabilitySummary.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    final rawCodecs = map['codecs'];
+    return VesperPluginDecoderCapabilitySummary(
+      codecs: rawCodecs is Iterable
+          ? rawCodecs
+              .map(_rawMap)
+              .whereType<Map<Object?, Object?>>()
+              .map(VesperPluginCodecCapability.fromMap)
+              .toList(growable: false)
+          : const <VesperPluginCodecCapability>[],
+      legacyCodecs: _decodeStringList(map['legacyCodecs']),
+      supportsNativeFrameOutput: _decodeBool(map, 'supportsNativeFrameOutput'),
+      supportsHardwareDecode: _decodeBool(map, 'supportsHardwareDecode'),
+      supportsCpuVideoFrames: _decodeBool(map, 'supportsCpuVideoFrames'),
+      supportsAudioFrames: _decodeBool(map, 'supportsAudioFrames'),
+      supportsGpuHandles: _decodeBool(map, 'supportsGpuHandles'),
+      supportsFlush: _decodeBool(map, 'supportsFlush'),
+      supportsDrain: _decodeBool(map, 'supportsDrain'),
+      maxSessions: _decodeInt(map, 'maxSessions'),
+    );
+  }
+
+  final List<VesperPluginCodecCapability> codecs;
+  final List<String> legacyCodecs;
+  final bool supportsNativeFrameOutput;
+  final bool supportsHardwareDecode;
+  final bool supportsCpuVideoFrames;
+  final bool supportsAudioFrames;
+  final bool supportsGpuHandles;
+  final bool supportsFlush;
+  final bool supportsDrain;
+  final int? maxSessions;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'codecs': codecs.map((codec) => codec.toMap()).toList(growable: false),
+      'legacyCodecs': legacyCodecs,
+      'supportsNativeFrameOutput': supportsNativeFrameOutput,
+      'supportsHardwareDecode': supportsHardwareDecode,
+      'supportsCpuVideoFrames': supportsCpuVideoFrames,
+      'supportsAudioFrames': supportsAudioFrames,
+      'supportsGpuHandles': supportsGpuHandles,
+      'supportsFlush': supportsFlush,
+      'supportsDrain': supportsDrain,
+      if (maxSessions != null) 'maxSessions': maxSessions,
+    };
+  }
+}
+
+final class VesperPluginFrameProcessorCapabilitySummary {
+  const VesperPluginFrameProcessorCapabilitySummary({
+    this.acceptedInputHandleKinds = const <String>[],
+    this.outputHandleKinds = const <String>[],
+    this.supportsVideoFrames = false,
+    this.supportsInPlacePassthrough = false,
+    this.preservesDimensions = false,
+    this.mayChangeDimensions = false,
+    this.preservesColorMetadata = false,
+    this.preservesHdrMetadata = false,
+    this.supportsFlush = false,
+    this.maxSessions,
+    this.maxInFlightFrames,
+  });
+
+  factory VesperPluginFrameProcessorCapabilitySummary.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    return VesperPluginFrameProcessorCapabilitySummary(
+      acceptedInputHandleKinds:
+          _decodeStringList(map['acceptedInputHandleKinds']),
+      outputHandleKinds: _decodeStringList(map['outputHandleKinds']),
+      supportsVideoFrames: _decodeBool(map, 'supportsVideoFrames'),
+      supportsInPlacePassthrough:
+          _decodeBool(map, 'supportsInPlacePassthrough'),
+      preservesDimensions: _decodeBool(map, 'preservesDimensions'),
+      mayChangeDimensions: _decodeBool(map, 'mayChangeDimensions'),
+      preservesColorMetadata: _decodeBool(map, 'preservesColorMetadata'),
+      preservesHdrMetadata: _decodeBool(map, 'preservesHdrMetadata'),
+      supportsFlush: _decodeBool(map, 'supportsFlush'),
+      maxSessions: _decodeInt(map, 'maxSessions'),
+      maxInFlightFrames: _decodeInt(map, 'maxInFlightFrames'),
+    );
+  }
+
+  final List<String> acceptedInputHandleKinds;
+  final List<String> outputHandleKinds;
+  final bool supportsVideoFrames;
+  final bool supportsInPlacePassthrough;
+  final bool preservesDimensions;
+  final bool mayChangeDimensions;
+  final bool preservesColorMetadata;
+  final bool preservesHdrMetadata;
+  final bool supportsFlush;
+  final int? maxSessions;
+  final int? maxInFlightFrames;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'acceptedInputHandleKinds': acceptedInputHandleKinds,
+      'outputHandleKinds': outputHandleKinds,
+      'supportsVideoFrames': supportsVideoFrames,
+      'supportsInPlacePassthrough': supportsInPlacePassthrough,
+      'preservesDimensions': preservesDimensions,
+      'mayChangeDimensions': mayChangeDimensions,
+      'preservesColorMetadata': preservesColorMetadata,
+      'preservesHdrMetadata': preservesHdrMetadata,
+      'supportsFlush': supportsFlush,
+      if (maxSessions != null) 'maxSessions': maxSessions,
+      if (maxInFlightFrames != null) 'maxInFlightFrames': maxInFlightFrames,
+    };
+  }
+}
+
+final class VesperPluginCapability {
+  const VesperPluginCapability.decoder(this.decoder)
+      : kind = VesperPluginCapabilityKind.decoder,
+        frameProcessor = null;
+
+  const VesperPluginCapability.frameProcessor(this.frameProcessor)
+      : kind = VesperPluginCapabilityKind.frameProcessor,
+        decoder = null;
+
+  factory VesperPluginCapability.fromMap(Map<Object?, Object?> map) {
+    final kind = _decodeEnum(
+      VesperPluginCapabilityKind.values,
+      map['kind'],
+      VesperPluginCapabilityKind.decoder,
+    );
+    return switch (kind) {
+      VesperPluginCapabilityKind.decoder => VesperPluginCapability.decoder(
+          VesperPluginDecoderCapabilitySummary.fromMap(
+            _rawMap(map['decoder']) ?? const <Object?, Object?>{},
+          ),
+        ),
+      VesperPluginCapabilityKind.frameProcessor =>
+        VesperPluginCapability.frameProcessor(
+          VesperPluginFrameProcessorCapabilitySummary.fromMap(
+            _rawMap(map['frameProcessor']) ?? const <Object?, Object?>{},
+          ),
+        ),
+    };
+  }
+
+  final VesperPluginCapabilityKind kind;
+  final VesperPluginDecoderCapabilitySummary? decoder;
+  final VesperPluginFrameProcessorCapabilitySummary? frameProcessor;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'kind': kind.name,
+      if (decoder != null) 'decoder': decoder!.toMap(),
+      if (frameProcessor != null) 'frameProcessor': frameProcessor!.toMap(),
+    };
+  }
+}
+
+final class VesperPluginDiagnostic {
+  const VesperPluginDiagnostic({
+    required this.path,
+    required this.status,
+    this.pluginName,
+    this.pluginKind,
+    this.message,
+    this.capability,
+  });
+
+  factory VesperPluginDiagnostic.fromMap(Map<Object?, Object?> map) {
+    return VesperPluginDiagnostic(
+      path: map['path'] as String? ?? '',
+      pluginName: map['pluginName'] as String?,
+      pluginKind: map['pluginKind'] as String?,
+      status: _decodeEnum(
+        VesperPluginDiagnosticStatus.values,
+        map['status'],
+        VesperPluginDiagnosticStatus.unsupportedKind,
+      ),
+      message: map['message'] as String?,
+      capability: _rawMap(map['capability']) == null
+          ? null
+          : VesperPluginCapability.fromMap(_rawMap(map['capability'])!),
+    );
+  }
+
+  final String path;
+  final String? pluginName;
+  final String? pluginKind;
+  final VesperPluginDiagnosticStatus status;
+  final String? message;
+  final VesperPluginCapability? capability;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'path': path,
+      if (pluginName != null) 'pluginName': pluginName,
+      if (pluginKind != null) 'pluginKind': pluginKind,
+      'status': status.name,
+      if (message != null) 'message': message,
+      if (capability != null) 'capability': capability!.toMap(),
+    };
+  }
+}
+
 T _decodeEnum<T extends Enum>(Iterable<T> values, Object? raw, T fallback) {
   if (raw is! String) {
     return fallback;

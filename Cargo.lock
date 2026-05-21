@@ -1651,6 +1651,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-frame-processor-diagnostic"
+version = "0.3.0"
+dependencies = [
+ "player-plugin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "player-host-desktop"
 version = "0.3.0"
 dependencies = [
@@ -1754,6 +1763,7 @@ dependencies = [
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
+ "tracing",
 ]
 
 [[package]]
@@ -1784,6 +1794,7 @@ name = "player-plugin"
 version = "0.3.0"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -1845,6 +1856,8 @@ dependencies = [
  "player-model",
  "player-playlist",
  "player-preload",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

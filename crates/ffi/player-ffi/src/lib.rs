@@ -3,18 +3,21 @@ mod c_api;
 use std::time::{Duration, Instant};
 
 use player_runtime::{
-    DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady, MediaAbrMode, MediaAbrPolicy,
+    DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady, FrameProcessorPolicyAction,
+    FrameProcessorWarning, FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy,
     MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
     MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
     PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy, PlayerBufferingPreset,
     PlayerCachePolicy, PlayerCachePreset, PlayerError, PlayerErrorCategory, PlayerErrorCode,
-    PlayerMediaInfo, PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy,
-    PlayerResolvedResiliencePolicy, PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntime,
-    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent,
-    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSeekableRange,
-    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerTrackPreferencePolicy,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState,
-    VideoPixelFormat,
+    PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
+    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerPluginFrameProcessorCapabilitySummary, PlayerPreloadBudgetPolicy,
+    PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy, PlayerRetryBackoff,
+    PlayerRetryPolicy, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
+    PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerSeekableRange, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerTrackPreferencePolicy, PlayerVideoDecodeInfo,
+    PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState, VideoPixelFormat,
 };
 
 pub type FfiResult<T> = Result<T, FfiError>;
@@ -296,12 +299,75 @@ pub struct FfiVideoDecodeInfo {
     pub fallback_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiPluginDiagnosticStatus {
+    Loaded,
+    LoadFailed,
+    UnsupportedKind,
+    DecoderSupported,
+    DecoderUnsupported,
+    FrameProcessorSupported,
+    FrameProcessorUnsupported,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiPluginCodecCapability {
+    pub media_kind: String,
+    pub codec: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiPluginDecoderCapabilitySummary {
+    pub codecs: Vec<FfiPluginCodecCapability>,
+    pub legacy_codecs: Vec<String>,
+    pub supports_native_frame_output: bool,
+    pub supports_hardware_decode: bool,
+    pub supports_cpu_video_frames: bool,
+    pub supports_audio_frames: bool,
+    pub supports_gpu_handles: bool,
+    pub supports_flush: bool,
+    pub supports_drain: bool,
+    pub max_sessions: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiPluginFrameProcessorCapabilitySummary {
+    pub accepted_input_handle_kinds: Vec<String>,
+    pub output_handle_kinds: Vec<String>,
+    pub supports_video_frames: bool,
+    pub supports_in_place_passthrough: bool,
+    pub preserves_dimensions: bool,
+    pub may_change_dimensions: bool,
+    pub preserves_color_metadata: bool,
+    pub preserves_hdr_metadata: bool,
+    pub supports_flush: bool,
+    pub max_sessions: Option<u32>,
+    pub max_in_flight_frames: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FfiPluginCapabilitySummary {
+    Decoder(FfiPluginDecoderCapabilitySummary),
+    FrameProcessor(FfiPluginFrameProcessorCapabilitySummary),
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiPluginDiagnostic {
+    pub path: String,
+    pub plugin_name: Option<String>,
+    pub plugin_kind: Option<String>,
+    pub status: FfiPluginDiagnosticStatus,
+    pub message: Option<String>,
+    pub capability: Option<FfiPluginCapabilitySummary>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FfiStartup {
     pub ffmpeg_initialized: bool,
     pub audio_output: Option<FfiAudioOutputInfo>,
     pub decoded_audio: Option<FfiDecodedAudioSummary>,
     pub video_decode: Option<FfiVideoDecodeInfo>,
+    pub plugin_diagnostics: Vec<FfiPluginDiagnostic>,
 }
 
 #[derive(Debug, Clone)]
@@ -416,6 +482,69 @@ pub struct FfiFirstFrameReady {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiRuntimeWarningDomain {
+    FrameProcessor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiFrameProcessorWarningKind {
+    Slow,
+    DeadlineMissed,
+    Backpressure,
+    BypassActivated,
+    LateOutputDropped,
+    OutputDropped,
+    Disabled,
+    Recovered,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiFrameProcessorPolicyAction {
+    Continue,
+    BypassOriginalFrame,
+    DropOutput,
+    DisableProcessor,
+    FailPlayback,
+    DiagnosticsOnly,
+}
+
+#[derive(Debug, Clone)]
+pub struct FfiFrameProcessorWarning {
+    pub kind: FfiFrameProcessorWarningKind,
+    pub plugin_name: String,
+    pub processor_index: usize,
+    pub frame_id: Option<u64>,
+    pub frame_pts_us: Option<i64>,
+    pub frame_duration_us: Option<i64>,
+    pub input_handle_kind: Option<String>,
+    pub output_handle_kind: Option<String>,
+    pub queue_depth: Option<u32>,
+    pub in_flight_frames: Option<u32>,
+    pub queue_wait_us: Option<u64>,
+    pub process_time_us: Option<u64>,
+    pub submit_to_ready_us: Option<u64>,
+    pub present_deadline_us: Option<i64>,
+    pub deadline_overrun_us: Option<u64>,
+    pub consecutive_miss_count: Option<u32>,
+    pub policy_action: FfiFrameProcessorPolicyAction,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FfiRuntimeWarning {
+    FrameProcessor(FfiFrameProcessorWarning),
+}
+
+impl FfiRuntimeWarning {
+    pub fn domain(&self) -> FfiRuntimeWarningDomain {
+        match self {
+            Self::FrameProcessor(_) => FfiRuntimeWarningDomain::FrameProcessor,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum FfiEvent {
     Initialized(FfiStartup),
@@ -429,6 +558,7 @@ pub enum FfiEvent {
     PlaybackRateChanged { rate: f32 },
     SeekCompleted { position_ms: u64 },
     RetryScheduled { attempt: u32, delay_ms: u64 },
+    Warning(FfiRuntimeWarning),
     Error(FfiError),
     Ended,
 }
@@ -1065,6 +1195,98 @@ impl From<&PlayerVideoDecodeInfo> for FfiVideoDecodeInfo {
     }
 }
 
+impl From<PlayerPluginDiagnosticStatus> for FfiPluginDiagnosticStatus {
+    fn from(value: PlayerPluginDiagnosticStatus) -> Self {
+        match value {
+            PlayerPluginDiagnosticStatus::Loaded => Self::Loaded,
+            PlayerPluginDiagnosticStatus::LoadFailed => Self::LoadFailed,
+            PlayerPluginDiagnosticStatus::UnsupportedKind => Self::UnsupportedKind,
+            PlayerPluginDiagnosticStatus::DecoderSupported => Self::DecoderSupported,
+            PlayerPluginDiagnosticStatus::DecoderUnsupported => Self::DecoderUnsupported,
+            PlayerPluginDiagnosticStatus::FrameProcessorSupported => Self::FrameProcessorSupported,
+            PlayerPluginDiagnosticStatus::FrameProcessorUnsupported => {
+                Self::FrameProcessorUnsupported
+            }
+        }
+    }
+}
+
+impl From<PlayerPluginCodecCapability> for FfiPluginCodecCapability {
+    fn from(value: PlayerPluginCodecCapability) -> Self {
+        Self {
+            media_kind: value.media_kind,
+            codec: value.codec,
+        }
+    }
+}
+
+impl From<PlayerPluginDecoderCapabilitySummary> for FfiPluginDecoderCapabilitySummary {
+    fn from(value: PlayerPluginDecoderCapabilitySummary) -> Self {
+        Self {
+            codecs: value
+                .codecs
+                .into_iter()
+                .map(FfiPluginCodecCapability::from)
+                .collect(),
+            legacy_codecs: value.legacy_codecs,
+            supports_native_frame_output: value.supports_native_frame_output,
+            supports_hardware_decode: value.supports_hardware_decode,
+            supports_cpu_video_frames: value.supports_cpu_video_frames,
+            supports_audio_frames: value.supports_audio_frames,
+            supports_gpu_handles: value.supports_gpu_handles,
+            supports_flush: value.supports_flush,
+            supports_drain: value.supports_drain,
+            max_sessions: value.max_sessions,
+        }
+    }
+}
+
+impl From<PlayerPluginFrameProcessorCapabilitySummary>
+    for FfiPluginFrameProcessorCapabilitySummary
+{
+    fn from(value: PlayerPluginFrameProcessorCapabilitySummary) -> Self {
+        Self {
+            accepted_input_handle_kinds: value.accepted_input_handle_kinds,
+            output_handle_kinds: value.output_handle_kinds,
+            supports_video_frames: value.supports_video_frames,
+            supports_in_place_passthrough: value.supports_in_place_passthrough,
+            preserves_dimensions: value.preserves_dimensions,
+            may_change_dimensions: value.may_change_dimensions,
+            preserves_color_metadata: value.preserves_color_metadata,
+            preserves_hdr_metadata: value.preserves_hdr_metadata,
+            supports_flush: value.supports_flush,
+            max_sessions: value.max_sessions,
+            max_in_flight_frames: value.max_in_flight_frames,
+        }
+    }
+}
+
+impl From<PlayerPluginCapabilitySummary> for FfiPluginCapabilitySummary {
+    fn from(value: PlayerPluginCapabilitySummary) -> Self {
+        match value {
+            PlayerPluginCapabilitySummary::Decoder(summary) => {
+                Self::Decoder(FfiPluginDecoderCapabilitySummary::from(summary))
+            }
+            PlayerPluginCapabilitySummary::FrameProcessor(summary) => {
+                Self::FrameProcessor(FfiPluginFrameProcessorCapabilitySummary::from(summary))
+            }
+        }
+    }
+}
+
+impl From<PlayerPluginDiagnostic> for FfiPluginDiagnostic {
+    fn from(value: PlayerPluginDiagnostic) -> Self {
+        Self {
+            path: value.path,
+            plugin_name: value.plugin_name,
+            plugin_kind: value.plugin_kind,
+            status: value.status.into(),
+            message: value.message,
+            capability: value.capability.map(FfiPluginCapabilitySummary::from),
+        }
+    }
+}
+
 impl From<PlayerRuntimeStartup> for FfiStartup {
     fn from(value: PlayerRuntimeStartup) -> Self {
         Self {
@@ -1072,6 +1294,11 @@ impl From<PlayerRuntimeStartup> for FfiStartup {
             audio_output: value.audio_output.map(FfiAudioOutputInfo::from),
             decoded_audio: value.decoded_audio.map(FfiDecodedAudioSummary::from),
             video_decode: value.video_decode.map(FfiVideoDecodeInfo::from),
+            plugin_diagnostics: value
+                .plugin_diagnostics
+                .into_iter()
+                .map(FfiPluginDiagnostic::from)
+                .collect(),
         }
     }
 }
@@ -1198,6 +1425,68 @@ impl From<&FirstFrameReady> for FfiFirstFrameReady {
     }
 }
 
+impl From<FrameProcessorWarningKind> for FfiFrameProcessorWarningKind {
+    fn from(value: FrameProcessorWarningKind) -> Self {
+        match value {
+            FrameProcessorWarningKind::Slow => Self::Slow,
+            FrameProcessorWarningKind::DeadlineMissed => Self::DeadlineMissed,
+            FrameProcessorWarningKind::Backpressure => Self::Backpressure,
+            FrameProcessorWarningKind::BypassActivated => Self::BypassActivated,
+            FrameProcessorWarningKind::LateOutputDropped => Self::LateOutputDropped,
+            FrameProcessorWarningKind::OutputDropped => Self::OutputDropped,
+            FrameProcessorWarningKind::Disabled => Self::Disabled,
+            FrameProcessorWarningKind::Recovered => Self::Recovered,
+            FrameProcessorWarningKind::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+impl From<FrameProcessorPolicyAction> for FfiFrameProcessorPolicyAction {
+    fn from(value: FrameProcessorPolicyAction) -> Self {
+        match value {
+            FrameProcessorPolicyAction::Continue => Self::Continue,
+            FrameProcessorPolicyAction::BypassOriginalFrame => Self::BypassOriginalFrame,
+            FrameProcessorPolicyAction::DropOutput => Self::DropOutput,
+            FrameProcessorPolicyAction::DisableProcessor => Self::DisableProcessor,
+            FrameProcessorPolicyAction::FailPlayback => Self::FailPlayback,
+            FrameProcessorPolicyAction::DiagnosticsOnly => Self::DiagnosticsOnly,
+        }
+    }
+}
+
+impl From<FrameProcessorWarning> for FfiFrameProcessorWarning {
+    fn from(value: FrameProcessorWarning) -> Self {
+        Self {
+            kind: value.kind.into(),
+            plugin_name: value.plugin_name,
+            processor_index: value.processor_index,
+            frame_id: value.frame_id,
+            frame_pts_us: value.frame_pts_us,
+            frame_duration_us: value.frame_duration_us,
+            input_handle_kind: value.input_handle_kind,
+            output_handle_kind: value.output_handle_kind,
+            queue_depth: value.queue_depth,
+            in_flight_frames: value.in_flight_frames,
+            queue_wait_us: value.queue_wait_us,
+            process_time_us: value.process_time_us,
+            submit_to_ready_us: value.submit_to_ready_us,
+            present_deadline_us: value.present_deadline_us,
+            deadline_overrun_us: value.deadline_overrun_us,
+            consecutive_miss_count: value.consecutive_miss_count,
+            policy_action: value.policy_action.into(),
+            message: value.message,
+        }
+    }
+}
+
+impl From<PlayerRuntimeWarning> for FfiRuntimeWarning {
+    fn from(value: PlayerRuntimeWarning) -> Self {
+        match value {
+            PlayerRuntimeWarning::FrameProcessor(warning) => Self::FrameProcessor(warning.into()),
+        }
+    }
+}
+
 impl From<PlayerRuntimeEvent> for FfiEvent {
     fn from(value: PlayerRuntimeEvent) -> Self {
         match value {
@@ -1227,6 +1516,7 @@ impl From<PlayerRuntimeEvent> for FfiEvent {
                 attempt,
                 delay_ms: duration_to_millis(delay),
             },
+            PlayerRuntimeEvent::Warning(warning) => Self::Warning(warning.into()),
             PlayerRuntimeEvent::Error(error) => Self::Error(error.into()),
             PlayerRuntimeEvent::Ended => Self::Ended,
         }
@@ -1434,14 +1724,20 @@ impl Default for FfiTrackPreferences {
 mod tests {
     use super::{
         FfiAbrMode, FfiBufferingPolicy, FfiBufferingPreset, FfiCachePolicy, FfiCachePreset,
-        FfiEvent, FfiMediaInfo, FfiMediaSourceKind, FfiMediaSourceProtocol, FfiPreloadBudgetPolicy,
+        FfiEvent, FfiFrameProcessorPolicyAction, FfiFrameProcessorWarningKind, FfiMediaInfo,
+        FfiMediaSourceKind, FfiMediaSourceProtocol, FfiPreloadBudgetPolicy,
         FfiResolvedPreloadBudgetPolicy, FfiResolvedResiliencePolicy, FfiRetryBackoff,
-        FfiRetryPolicy, FfiTimelineKind, FfiTimelineSnapshot, FfiTrackKind, FfiTrackPreferences,
-        FfiTrackSelection, FfiTrackSelectionMode, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
-        MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+        FfiRetryPolicy, FfiRuntimeWarning, FfiRuntimeWarningDomain, FfiTimelineKind,
+        FfiTimelineSnapshot, FfiTrackKind, FfiTrackPreferences, FfiTrackSelection,
+        FfiTrackSelectionMode, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
+        MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
         MediaTrackSelectionSnapshot, PlaybackProgress, PlayerMediaInfo, PlayerRuntimeEvent,
         PlayerSeekableRange, PlayerTimelineSnapshot, resolve_preload_budget,
         resolve_resilience_policy, resolve_track_preferences,
+    };
+    use player_runtime::{
+        FrameProcessorPolicyAction, FrameProcessorWarning, FrameProcessorWarningKind,
+        PlayerRuntimeWarning,
     };
     use std::time::Duration;
 
@@ -1540,6 +1836,57 @@ mod tests {
                 assert_eq!(delay_ms, 1_500);
             }
             other => panic!("expected retry scheduled event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn runtime_warning_event_to_ffi_preserves_frame_processor_payload() {
+        let ffi = FfiEvent::from(PlayerRuntimeEvent::Warning(
+            PlayerRuntimeWarning::FrameProcessor(FrameProcessorWarning {
+                kind: FrameProcessorWarningKind::DeadlineMissed,
+                plugin_name: "fixture-processor".to_owned(),
+                processor_index: 0,
+                frame_id: Some(7),
+                frame_pts_us: Some(33_000),
+                frame_duration_us: Some(33_000),
+                input_handle_kind: Some("CvPixelBuffer".to_owned()),
+                output_handle_kind: Some("CvPixelBuffer".to_owned()),
+                queue_depth: None,
+                in_flight_frames: None,
+                queue_wait_us: None,
+                process_time_us: Some(50_000),
+                submit_to_ready_us: Some(50_000),
+                present_deadline_us: Some(49_000),
+                deadline_overrun_us: Some(34_000),
+                consecutive_miss_count: None,
+                policy_action: FrameProcessorPolicyAction::BypassOriginalFrame,
+                message: Some("processor output missed frame deadline".to_owned()),
+            }),
+        ));
+
+        match ffi {
+            FfiEvent::Warning(warning) => {
+                assert_eq!(warning.domain(), FfiRuntimeWarningDomain::FrameProcessor);
+                let FfiRuntimeWarning::FrameProcessor(warning) = warning;
+                assert_eq!(warning.kind, FfiFrameProcessorWarningKind::DeadlineMissed);
+                assert_eq!(warning.plugin_name, "fixture-processor");
+                assert_eq!(warning.processor_index, 0);
+                assert_eq!(warning.frame_id, Some(7));
+                assert_eq!(warning.frame_pts_us, Some(33_000));
+                assert_eq!(warning.input_handle_kind.as_deref(), Some("CvPixelBuffer"));
+                assert_eq!(warning.output_handle_kind.as_deref(), Some("CvPixelBuffer"));
+                assert_eq!(warning.process_time_us, Some(50_000));
+                assert_eq!(warning.deadline_overrun_us, Some(34_000));
+                assert_eq!(
+                    warning.policy_action,
+                    FfiFrameProcessorPolicyAction::BypassOriginalFrame
+                );
+                assert_eq!(
+                    warning.message.as_deref(),
+                    Some("processor output missed frame deadline")
+                );
+            }
+            other => panic!("expected warning event, got {other:?}"),
         }
     }
 

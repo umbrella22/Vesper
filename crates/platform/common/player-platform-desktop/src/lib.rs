@@ -118,6 +118,9 @@ pub trait DesktopVideoSource: Send {
     fn seek_to(&mut self, position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>>;
     fn buffered_frame_count(&self) -> usize;
     fn set_prefetch_limit(&self, limit: usize);
+    fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+        Vec::new()
+    }
 }
 
 pub struct DesktopVideoSourceBootstrap {
@@ -761,6 +764,7 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
         self.poll_audio_metadata_worker();
         self.poll_audio_decode_worker();
         self.poll_audio_stream_worker();
+        self.events.extend(self.video_source.drain_events());
         self.events.drain(..).collect()
     }
 

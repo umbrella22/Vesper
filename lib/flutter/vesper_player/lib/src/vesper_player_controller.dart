@@ -9,8 +9,10 @@ class VesperPlayerController {
   VesperPlayerController._({
     required this.playerId,
     required VesperPlayerSnapshot initialSnapshot,
+    required List<VesperPluginDiagnostic> pluginDiagnostics,
     required VesperPlayerPlatform platform,
   })  : _platform = platform,
+        pluginDiagnostics = List.unmodifiable(pluginDiagnostics),
         snapshotListenable = ValueNotifier<VesperPlayerSnapshot>(
           initialSnapshot,
         ) {
@@ -46,12 +48,14 @@ class VesperPlayerController {
     return VesperPlayerController._(
       playerId: result.playerId,
       initialSnapshot: result.snapshot,
+      pluginDiagnostics: result.pluginDiagnostics,
       platform: platform,
     );
   }
 
   final String playerId;
   final VesperPlayerPlatform _platform;
+  final List<VesperPluginDiagnostic> pluginDiagnostics;
   final ValueNotifier<VesperPlayerSnapshot> snapshotListenable;
   final StreamController<VesperPlayerEvent> _eventsController =
       StreamController<VesperPlayerEvent>.broadcast();
@@ -213,6 +217,8 @@ class VesperPlayerController {
             _applySnapshot(event.snapshot);
           case VesperPlayerErrorEvent():
             _applyPlatformError(event);
+          case VesperPlayerWarningEvent():
+            _eventsController.add(event);
           case VesperPlayerDisposedEvent():
             _eventsController.add(event);
         }

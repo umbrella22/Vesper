@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::{
+    NativeFrame, NativeFrameMetadata, NativeFrameReleaseTracking, NativeHandleKind, VisibleRect,
+};
+
 /// Media kind handled by a decoder plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum DecoderMediaKind {
@@ -129,6 +133,38 @@ pub enum DecoderNativeHandleKind {
     Unknown(String),
 }
 
+impl From<DecoderNativeHandleKind> for NativeHandleKind {
+    fn from(value: DecoderNativeHandleKind) -> Self {
+        match value {
+            DecoderNativeHandleKind::CvPixelBuffer => Self::CvPixelBuffer,
+            DecoderNativeHandleKind::IoSurface => Self::IoSurface,
+            DecoderNativeHandleKind::MetalTexture => Self::MetalTexture,
+            DecoderNativeHandleKind::DmaBuf => Self::DmaBuf,
+            DecoderNativeHandleKind::VaapiSurface => Self::VaapiSurface,
+            DecoderNativeHandleKind::D3D11Texture2D => Self::D3D11Texture2D,
+            DecoderNativeHandleKind::DxgiSurface => Self::DxgiSurface,
+            DecoderNativeHandleKind::VulkanImage => Self::VulkanImage,
+            DecoderNativeHandleKind::Unknown(name) => Self::Unknown(name),
+        }
+    }
+}
+
+impl From<NativeHandleKind> for DecoderNativeHandleKind {
+    fn from(value: NativeHandleKind) -> Self {
+        match value {
+            NativeHandleKind::CvPixelBuffer => Self::CvPixelBuffer,
+            NativeHandleKind::IoSurface => Self::IoSurface,
+            NativeHandleKind::MetalTexture => Self::MetalTexture,
+            NativeHandleKind::DmaBuf => Self::DmaBuf,
+            NativeHandleKind::VaapiSurface => Self::VaapiSurface,
+            NativeHandleKind::D3D11Texture2D => Self::D3D11Texture2D,
+            NativeHandleKind::DxgiSurface => Self::DxgiSurface,
+            NativeHandleKind::VulkanImage => Self::VulkanImage,
+            NativeHandleKind::Unknown(name) => Self::Unknown(name),
+        }
+    }
+}
+
 /// Native graphics device/context kinds that a host may share with a decoder plugin.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DecoderNativeDeviceContextKind {
@@ -192,11 +228,51 @@ pub struct DecoderVisibleRect {
     pub height: u32,
 }
 
+impl From<DecoderVisibleRect> for VisibleRect {
+    fn from(value: DecoderVisibleRect) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        }
+    }
+}
+
+impl From<VisibleRect> for DecoderVisibleRect {
+    fn from(value: VisibleRect) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        }
+    }
+}
+
 /// Release tracking diagnostics attached to a native frame.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecoderNativeFrameReleaseTracking {
     pub frame_id: Option<u64>,
     pub requires_release: bool,
+}
+
+impl From<DecoderNativeFrameReleaseTracking> for NativeFrameReleaseTracking {
+    fn from(value: DecoderNativeFrameReleaseTracking) -> Self {
+        Self {
+            frame_id: value.frame_id,
+            requires_release: value.requires_release,
+        }
+    }
+}
+
+impl From<NativeFrameReleaseTracking> for DecoderNativeFrameReleaseTracking {
+    fn from(value: NativeFrameReleaseTracking) -> Self {
+        Self {
+            frame_id: value.frame_id,
+            requires_release: value.requires_release,
+        }
+    }
 }
 
 /// Metadata for a decoded native frame. The native handle is transferred separately.
@@ -222,11 +298,69 @@ pub struct DecoderNativeFrameMetadata {
     pub release_tracking: Option<DecoderNativeFrameReleaseTracking>,
 }
 
+impl From<DecoderNativeFrameMetadata> for NativeFrameMetadata {
+    fn from(value: DecoderNativeFrameMetadata) -> Self {
+        Self {
+            media_kind: value.media_kind,
+            format: value.format,
+            codec: value.codec,
+            pts_us: value.pts_us,
+            duration_us: value.duration_us,
+            width: value.width,
+            height: value.height,
+            coded_width: value.coded_width,
+            coded_height: value.coded_height,
+            visible_rect: value.visible_rect.map(Into::into),
+            handle_kind: value.handle_kind.into(),
+            frame_id: value.frame_id,
+            release_tracking: value.release_tracking.map(Into::into),
+        }
+    }
+}
+
+impl From<NativeFrameMetadata> for DecoderNativeFrameMetadata {
+    fn from(value: NativeFrameMetadata) -> Self {
+        Self {
+            media_kind: value.media_kind,
+            format: value.format,
+            codec: value.codec,
+            pts_us: value.pts_us,
+            duration_us: value.duration_us,
+            width: value.width,
+            height: value.height,
+            coded_width: value.coded_width,
+            coded_height: value.coded_height,
+            visible_rect: value.visible_rect.map(Into::into),
+            handle_kind: value.handle_kind.into(),
+            frame_id: value.frame_id,
+            release_tracking: value.release_tracking.map(Into::into),
+        }
+    }
+}
+
 /// A decoded native frame returned by the Rust-side decoder session trait.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecoderNativeFrame {
     pub metadata: DecoderNativeFrameMetadata,
     pub handle: usize,
+}
+
+impl From<DecoderNativeFrame> for NativeFrame {
+    fn from(value: DecoderNativeFrame) -> Self {
+        Self {
+            metadata: value.metadata.into(),
+            handle: value.handle,
+        }
+    }
+}
+
+impl From<NativeFrame> for DecoderNativeFrame {
+    fn from(value: NativeFrame) -> Self {
+        Self {
+            metadata: value.metadata.into(),
+            handle: value.handle,
+        }
+    }
 }
 
 /// Metadata returned by the dynamic ABI v2 native-frame receive call.
@@ -347,4 +481,98 @@ pub trait NativeDecoderSession: Send {
     fn flush(&mut self) -> Result<(), DecoderError>;
 
     fn close(&mut self) -> Result<(), DecoderError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
+        DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderVisibleRect,
+    };
+    use crate::{NativeFrame, NativeFrameMetadata, NativeHandleKind};
+
+    fn decoder_native_frame() -> DecoderNativeFrame {
+        DecoderNativeFrame {
+            metadata: DecoderNativeFrameMetadata {
+                media_kind: DecoderMediaKind::Video,
+                format: DecoderFrameFormat::Nv12,
+                codec: "hevc".to_owned(),
+                pts_us: Some(125_000),
+                duration_us: Some(41_667),
+                width: 3_840,
+                height: 2_160,
+                coded_width: Some(3_840),
+                coded_height: Some(2_176),
+                visible_rect: Some(DecoderVisibleRect {
+                    x: 0,
+                    y: 0,
+                    width: 3_840,
+                    height: 2_160,
+                }),
+                handle_kind: DecoderNativeHandleKind::D3D11Texture2D,
+                frame_id: Some(99),
+                release_tracking: Some(DecoderNativeFrameReleaseTracking {
+                    frame_id: Some(99),
+                    requires_release: true,
+                }),
+            },
+            handle: 0xfeed,
+        }
+    }
+
+    #[test]
+    fn decoder_native_frame_converts_to_shared_native_frame() {
+        let decoder_frame = decoder_native_frame();
+        let native_frame = NativeFrame::from(decoder_frame.clone());
+
+        assert_eq!(native_frame.handle, decoder_frame.handle);
+        assert_eq!(
+            native_frame.metadata.handle_kind,
+            NativeHandleKind::D3D11Texture2D
+        );
+        assert_eq!(
+            native_frame
+                .metadata
+                .visible_rect
+                .as_ref()
+                .map(|rect| rect.height),
+            Some(2_160)
+        );
+        assert_eq!(
+            native_frame
+                .metadata
+                .release_tracking
+                .as_ref()
+                .map(|tracking| tracking.requires_release),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn shared_native_frame_converts_back_to_decoder_native_frame() {
+        let original = decoder_native_frame();
+        let native_frame = NativeFrame::from(original.clone());
+        let recovered = DecoderNativeFrame::from(native_frame);
+
+        assert_eq!(recovered, original);
+    }
+
+    #[test]
+    fn native_frame_metadata_converts_to_decoder_metadata() {
+        let metadata = NativeFrameMetadata::from(decoder_native_frame().metadata);
+        let decoder_metadata = DecoderNativeFrameMetadata::from(metadata);
+
+        assert_eq!(
+            decoder_metadata.handle_kind,
+            DecoderNativeHandleKind::D3D11Texture2D
+        );
+        assert_eq!(decoder_metadata.frame_id, Some(99));
+        assert_eq!(
+            decoder_metadata
+                .visible_rect
+                .as_ref()
+                .map(|rect| rect.width),
+            Some(3_840)
+        );
+    }
 }

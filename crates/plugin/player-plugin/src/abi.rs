@@ -7,6 +7,7 @@ pub enum VesperPluginKind {
     PipelineEventHook = 2,
     Decoder = 3,
     BenchmarkSink = 4,
+    FrameProcessor = 5,
 }
 
 #[repr(u32)]
@@ -366,6 +367,121 @@ unsafe impl Sync for VesperDecoderPluginApiV2 {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperFrameProcessorPluginApiV1::open_session_json`.
+///
+/// When `status` is `Success`, `session` must be a plugin-owned opaque session
+/// pointer and `payload` may encode a `FrameProcessorSessionInfo` JSON document.
+/// When `status` is `Failure`, `session` must be null and `payload` must encode
+/// a `FrameProcessorError` JSON document.
+pub struct VesperFrameProcessorOpenSessionResult {
+    pub status: VesperPluginResultStatus,
+    pub session: *mut c_void,
+    pub payload: VesperPluginBytes,
+}
+
+impl Default for VesperFrameProcessorOpenSessionResult {
+    fn default() -> Self {
+        Self {
+            status: VesperPluginResultStatus::Success,
+            session: std::ptr::null_mut(),
+            payload: VesperPluginBytes::null(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperFrameProcessorPluginApiV1::receive_frame`.
+///
+/// On success, `metadata` must encode a `FrameProcessorReceiveFrameMetadata`
+/// JSON document. When that metadata reports a frame, `handle` is a
+/// plugin-owned native frame handle that must later be released through
+/// `release_frame`. On failure, `metadata` must encode a `FrameProcessorError`
+/// JSON document and `handle` must be zero.
+pub struct VesperFrameProcessorReceiveFrameResult {
+    pub status: VesperPluginResultStatus,
+    pub metadata: VesperPluginBytes,
+    pub handle: usize,
+}
+
+impl Default for VesperFrameProcessorReceiveFrameResult {
+    fn default() -> Self {
+        Self {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::null(),
+            handle: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// C ABI exposed by a frame processor plugin.
+///
+/// The v1 frame processor ABI processes `NativeFrame -> NativeFrame` for video
+/// frames only. `submit_frame_json` borrows the input handle for the duration of
+/// a synchronous submit call; processor-owned output handles are returned by
+/// `receive_frame` and must be released exactly once through `release_frame`.
+pub struct VesperFrameProcessorPluginApiV1 {
+    pub context: *mut c_void,
+    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
+    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
+    pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub open_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            config_json: *const u8,
+            config_json_len: usize,
+        ) -> VesperFrameProcessorOpenSessionResult,
+    >,
+    pub submit_frame_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            submit_json: *const u8,
+            submit_json_len: usize,
+            handle: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub receive_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperFrameProcessorReceiveFrameResult,
+    >,
+    pub release_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            handle_kind: u32,
+            handle: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub flush_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub close_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
+}
+
+// SAFETY: host-side wrappers only expose this API behind
+// `FrameProcessorPluginFactory`, and plugin authors must uphold the declared
+// `Send + Sync` contract for the underlying context pointer and callbacks.
+unsafe impl Send for VesperFrameProcessorPluginApiV1 {}
+// SAFETY: same reasoning as above; the plugin context is required to be safe for
+// concurrent shared access when exposed as a frame processor plugin.
+unsafe impl Sync for VesperFrameProcessorPluginApiV1 {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 /// Plugin descriptor exported by `vesper_plugin_entry`.
 ///
 /// `plugin_name` must be a valid NUL-terminated UTF-8 string and `api` must
@@ -388,5 +504,7 @@ pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = VESPER_PLUGIN_ABI_VERSION_
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V3: u32 = 3;
 /// ABI version used by post-download processors with assembly support.
 pub const VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3: u32 = 3;
+/// Initial ABI version used by native-frame processor plugins.
+pub const VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1: u32 = 1;
 /// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

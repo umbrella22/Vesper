@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
+use serde::{Deserialize, Serialize};
 
 pub use adapter::{
     PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterFactory,
@@ -121,6 +122,9 @@ pub struct PlayerRuntimeOptions {
     pub video_surface: Option<PlayerVideoSurfaceTarget>,
     pub decoder_plugin_library_paths: Vec<PathBuf>,
     pub decoder_plugin_video_mode: PlayerDecoderPluginVideoMode,
+    pub frame_processor_library_paths: Vec<PathBuf>,
+    pub frame_processor_mode: FrameProcessorMode,
+    pub frame_processor_policy: FrameProcessorPolicy,
     pub video_prefetch_capacity: usize,
     pub video_present_early_tolerance: Duration,
     pub video_idle_poll_interval: Duration,
@@ -135,6 +139,36 @@ pub struct PlayerRuntimeOptions {
 pub enum PlayerDecoderPluginVideoMode {
     DiagnosticsOnly,
     PreferNativeFrame,
+}
+
+/// Rust-internal frame processor rollout mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FrameProcessorMode {
+    #[default]
+    Disabled,
+    DiagnosticsOnly,
+    PreferProcessed,
+    RequireProcessed,
+}
+
+/// Rust-internal frame processor scheduling policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameProcessorPolicy {
+    pub frame_deadline: Duration,
+    pub late_output_tolerance: Duration,
+    pub max_chain_depth: usize,
+    pub max_in_flight_frames_per_processor: u32,
+}
+
+impl Default for FrameProcessorPolicy {
+    fn default() -> Self {
+        Self {
+            frame_deadline: Duration::from_millis(16),
+            late_output_tolerance: Duration::from_millis(4),
+            max_chain_depth: 8,
+            max_in_flight_frames_per_processor: 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,6 +393,8 @@ pub enum PlayerPluginDiagnosticStatus {
     UnsupportedKind,
     DecoderSupported,
     DecoderUnsupported,
+    FrameProcessorSupported,
+    FrameProcessorUnsupported,
 }
 
 /// Rust-side codec capability summary emitted by decoder plugin diagnostics.
@@ -383,6 +419,29 @@ pub struct PlayerPluginDecoderCapabilitySummary {
     pub max_sessions: Option<u32>,
 }
 
+/// Rust-side frame processor capability summary emitted by desktop runtime probes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerPluginFrameProcessorCapabilitySummary {
+    pub accepted_input_handle_kinds: Vec<String>,
+    pub output_handle_kinds: Vec<String>,
+    pub supports_video_frames: bool,
+    pub supports_in_place_passthrough: bool,
+    pub preserves_dimensions: bool,
+    pub may_change_dimensions: bool,
+    pub preserves_color_metadata: bool,
+    pub preserves_hdr_metadata: bool,
+    pub supports_flush: bool,
+    pub max_sessions: Option<u32>,
+    pub max_in_flight_frames: Option<u32>,
+}
+
+/// Rust-side capability summary emitted by plugin diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayerPluginCapabilitySummary {
+    Decoder(PlayerPluginDecoderCapabilitySummary),
+    FrameProcessor(PlayerPluginFrameProcessorCapabilitySummary),
+}
+
 /// Rust-side plugin diagnostic record emitted by desktop runtime probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginDiagnostic {
@@ -391,7 +450,7 @@ pub struct PlayerPluginDiagnostic {
     pub plugin_kind: Option<String>,
     pub status: PlayerPluginDiagnosticStatus,
     pub message: Option<String>,
-    pub decoder_capabilities: Option<PlayerPluginDecoderCapabilitySummary>,
+    pub capability: Option<PlayerPluginCapabilitySummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -433,6 +492,24 @@ pub struct PlayerResilienceMetrics {
     pub last_retry_delay: Option<Duration>,
 }
 
+/// Aggregate frame processing counters reported by frame-processing runtimes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PlayerFrameProcessingMetrics {
+    pub submitted_frame_count: u64,
+    pub processed_frame_count: u64,
+    pub bypassed_frame_count: u64,
+    pub dropped_output_count: u64,
+    pub deadline_miss_count: u64,
+    pub late_output_drop_count: u64,
+    pub backpressure_count: u64,
+    pub disabled_processor_count: u32,
+    pub max_queue_depth: Option<u32>,
+    pub max_in_flight_frames: Option<u32>,
+    pub last_queue_wait_us: Option<u64>,
+    pub last_process_time_us: Option<u64>,
+    pub last_submit_to_ready_us: Option<u64>,
+}
+
 #[derive(Debug, Default)]
 pub struct PlayerResilienceMetricsTracker {
     metrics: PlayerResilienceMetrics,
@@ -461,6 +538,72 @@ pub struct FirstFrameReady {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayerRuntimeWarningDomain {
+    FrameProcessor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FrameProcessorWarningKind {
+    Slow,
+    DeadlineMissed,
+    Backpressure,
+    BypassActivated,
+    LateOutputDropped,
+    OutputDropped,
+    Disabled,
+    Recovered,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FrameProcessorPolicyAction {
+    Continue,
+    BypassOriginalFrame,
+    DropOutput,
+    DisableProcessor,
+    FailPlayback,
+    DiagnosticsOnly,
+}
+
+/// Structured diagnostics for one frame processor warning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameProcessorWarning {
+    pub kind: FrameProcessorWarningKind,
+    pub plugin_name: String,
+    pub processor_index: usize,
+    pub frame_id: Option<u64>,
+    pub frame_pts_us: Option<i64>,
+    pub frame_duration_us: Option<i64>,
+    pub input_handle_kind: Option<String>,
+    pub output_handle_kind: Option<String>,
+    pub queue_depth: Option<u32>,
+    pub in_flight_frames: Option<u32>,
+    pub queue_wait_us: Option<u64>,
+    pub process_time_us: Option<u64>,
+    pub submit_to_ready_us: Option<u64>,
+    pub present_deadline_us: Option<i64>,
+    pub deadline_overrun_us: Option<u64>,
+    pub consecutive_miss_count: Option<u32>,
+    pub policy_action: FrameProcessorPolicyAction,
+    pub message: Option<String>,
+}
+
+/// Runtime warning payloads emitted by adapters while playback continues.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "domain", content = "payload")]
+pub enum PlayerRuntimeWarning {
+    FrameProcessor(FrameProcessorWarning),
+}
+
+impl PlayerRuntimeWarning {
+    pub fn domain(&self) -> PlayerRuntimeWarningDomain {
+        match self {
+            Self::FrameProcessor(_) => PlayerRuntimeWarningDomain::FrameProcessor,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PlayerRuntimeEvent {
     Initialized(PlayerRuntimeStartup),
@@ -474,6 +617,7 @@ pub enum PlayerRuntimeEvent {
     PlaybackRateChanged { rate: f32 },
     SeekCompleted { position: Duration },
     RetryScheduled { attempt: u32, delay: Duration },
+    Warning(PlayerRuntimeWarning),
     Error(PlayerError),
     Ended,
 }
@@ -514,6 +658,9 @@ impl Default for PlayerRuntimeOptions {
             video_surface: None,
             decoder_plugin_library_paths: Vec::new(),
             decoder_plugin_video_mode: PlayerDecoderPluginVideoMode::DiagnosticsOnly,
+            frame_processor_library_paths: Vec::new(),
+            frame_processor_mode: FrameProcessorMode::Disabled,
+            frame_processor_policy: FrameProcessorPolicy::default(),
             video_prefetch_capacity: DEFAULT_VIDEO_PREFETCH_CAPACITY,
             video_present_early_tolerance: DEFAULT_VIDEO_PRESENT_EARLY_TOLERANCE,
             video_idle_poll_interval: DEFAULT_VIDEO_IDLE_POLL_INTERVAL,
@@ -542,6 +689,24 @@ impl PlayerRuntimeOptions {
 
     pub fn with_decoder_plugin_video_mode(mut self, mode: PlayerDecoderPluginVideoMode) -> Self {
         self.decoder_plugin_video_mode = mode;
+        self
+    }
+
+    pub fn with_frame_processor_mode(mut self, mode: FrameProcessorMode) -> Self {
+        self.frame_processor_mode = mode;
+        self
+    }
+
+    pub fn with_frame_processor_library_paths(
+        mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
+        self.frame_processor_library_paths = paths.into_iter().collect();
+        self
+    }
+
+    pub fn with_frame_processor_policy(mut self, policy: FrameProcessorPolicy) -> Self {
+        self.frame_processor_policy = policy;
         self
     }
 
@@ -1362,13 +1527,16 @@ fn default_runtime_adapter_factory() -> PlayerResult<&'static dyn PlayerRuntimeA
 mod tests {
     use super::{
         DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
-        DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, MediaAbrMode,
-        MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
-        MediaTrackSelectionMode, PlaybackProgress, PlayerBufferingPolicy, PlayerBufferingPreset,
-        PlayerCachePolicy, PlayerCachePreset, PlayerErrorCategory, PlayerErrorCode,
-        PlayerMediaInfo, PlayerPreloadBudgetPolicy, PlayerResilienceMetricsTracker,
+        DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, FrameProcessorMode,
+        FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarning,
+        FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
+        MediaSourceProtocol, MediaTrackSelection, MediaTrackSelectionMode, PlaybackProgress,
+        PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
+        PlayerErrorCategory, PlayerErrorCode, PlayerFrameProcessingMetrics, PlayerMediaInfo,
+        PlayerPreloadBudgetPolicy, PlayerResilienceMetricsTracker,
         PlayerResolvedPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy,
-        PlayerRuntimeOptions, PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
+        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeWarning, PlayerRuntimeWarningDomain,
+        PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
         PlayerTrackPreferencePolicy, PresentationState,
     };
     use std::time::Duration;
@@ -1548,6 +1716,12 @@ mod tests {
     fn runtime_options_default_to_shared_resilience_baseline() {
         let options = PlayerRuntimeOptions::default();
 
+        assert_eq!(options.frame_processor_mode, FrameProcessorMode::Disabled);
+        assert!(options.frame_processor_library_paths.is_empty());
+        assert_eq!(
+            options.frame_processor_policy,
+            FrameProcessorPolicy::default()
+        );
         assert_eq!(options.buffering_policy, PlayerBufferingPolicy::default());
         assert_eq!(
             options.retry_policy,
@@ -1562,6 +1736,119 @@ mod tests {
         assert_eq!(
             options.track_preferences,
             PlayerTrackPreferencePolicy::default()
+        );
+    }
+
+    #[test]
+    fn runtime_options_builder_sets_frame_processor_mode() {
+        let options = PlayerRuntimeOptions::default()
+            .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
+            .with_frame_processor_library_paths([std::path::PathBuf::from("/tmp/frame-processor")])
+            .with_frame_processor_policy(FrameProcessorPolicy {
+                frame_deadline: Duration::from_millis(8),
+                late_output_tolerance: Duration::from_millis(2),
+                max_chain_depth: 2,
+                max_in_flight_frames_per_processor: 1,
+            });
+
+        assert_eq!(
+            options.frame_processor_mode,
+            FrameProcessorMode::RequireProcessed
+        );
+        assert_eq!(
+            options.frame_processor_library_paths,
+            vec![std::path::PathBuf::from("/tmp/frame-processor")]
+        );
+        assert_eq!(
+            options.frame_processor_policy.frame_deadline,
+            Duration::from_millis(8)
+        );
+    }
+
+    #[test]
+    fn frame_processor_warning_round_trips_through_json() {
+        let warning = PlayerRuntimeWarning::FrameProcessor(FrameProcessorWarning {
+            kind: FrameProcessorWarningKind::DeadlineMissed,
+            plugin_name: "fixture-denoise".to_owned(),
+            processor_index: 1,
+            frame_id: Some(123),
+            frame_pts_us: Some(66_000),
+            frame_duration_us: Some(33_333),
+            input_handle_kind: Some("CvPixelBuffer".to_owned()),
+            output_handle_kind: Some("CvPixelBuffer".to_owned()),
+            queue_depth: Some(2),
+            in_flight_frames: Some(1),
+            queue_wait_us: Some(1_200),
+            process_time_us: Some(9_800),
+            submit_to_ready_us: Some(11_000),
+            present_deadline_us: Some(75_000),
+            deadline_overrun_us: Some(700),
+            consecutive_miss_count: Some(3),
+            policy_action: FrameProcessorPolicyAction::BypassOriginalFrame,
+            message: Some("processed frame missed presenter deadline".to_owned()),
+        });
+
+        let encoded = serde_json::to_string(&warning).expect("serialize warning");
+        let decoded: PlayerRuntimeWarning =
+            serde_json::from_str(&encoded).expect("deserialize warning");
+
+        assert_eq!(decoded, warning);
+        assert_eq!(decoded.domain(), PlayerRuntimeWarningDomain::FrameProcessor);
+    }
+
+    #[test]
+    fn runtime_event_can_carry_frame_processor_warning() {
+        let event = PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(
+            FrameProcessorWarning {
+                kind: FrameProcessorWarningKind::BypassActivated,
+                plugin_name: "fixture-upscale".to_owned(),
+                processor_index: 0,
+                frame_id: Some(7),
+                frame_pts_us: Some(42_000),
+                frame_duration_us: None,
+                input_handle_kind: None,
+                output_handle_kind: None,
+                queue_depth: None,
+                in_flight_frames: None,
+                queue_wait_us: None,
+                process_time_us: None,
+                submit_to_ready_us: None,
+                present_deadline_us: None,
+                deadline_overrun_us: None,
+                consecutive_miss_count: Some(5),
+                policy_action: FrameProcessorPolicyAction::BypassOriginalFrame,
+                message: None,
+            },
+        ));
+
+        match event {
+            PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(warning)) => {
+                assert_eq!(warning.processor_index, 0);
+                assert_eq!(warning.kind, FrameProcessorWarningKind::BypassActivated);
+            }
+            other => panic!("expected frame processor warning event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn frame_processing_metrics_default_is_empty() {
+        assert_eq!(
+            PlayerFrameProcessingMetrics::default(),
+            PlayerFrameProcessingMetrics {
+                submitted_frame_count: 0,
+                processed_frame_count: 0,
+                bypassed_frame_count: 0,
+                dropped_output_count: 0,
+                deadline_miss_count: 0,
+                late_output_drop_count: 0,
+                backpressure_count: 0,
+                disabled_processor_count: 0,
+                max_queue_depth: None,
+                max_in_flight_frames: None,
+                last_queue_wait_us: None,
+                last_process_time_us: None,
+                last_submit_to_ready_us: None,
+            }
         );
     }
 

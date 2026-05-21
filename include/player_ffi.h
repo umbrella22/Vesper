@@ -55,12 +55,29 @@ typedef enum PlayerFfiEventKind {
   PLAYER_FFI_EVENT_KIND_ENDED = 10,
   PLAYER_FFI_EVENT_KIND_INTERRUPTION_CHANGED = 11,
   PLAYER_FFI_EVENT_KIND_RETRY_SCHEDULED = 12,
+  PLAYER_FFI_EVENT_KIND_WARNING = 13,
 } PlayerFfiEventKind;
 
 typedef enum PlayerFfiVideoDecodeMode {
   PLAYER_FFI_VIDEO_DECODE_MODE_SOFTWARE = 0,
   PLAYER_FFI_VIDEO_DECODE_MODE_HARDWARE = 1,
 } PlayerFfiVideoDecodeMode;
+
+typedef enum PlayerFfiPluginDiagnosticStatus {
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_LOADED = 0,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_LOAD_FAILED = 1,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_UNSUPPORTED_KIND = 2,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_DECODER_SUPPORTED = 3,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_DECODER_UNSUPPORTED = 4,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_FRAME_PROCESSOR_SUPPORTED = 5,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_FRAME_PROCESSOR_UNSUPPORTED = 6,
+} PlayerFfiPluginDiagnosticStatus;
+
+typedef enum PlayerFfiPluginCapabilityKind {
+  PLAYER_FFI_PLUGIN_CAPABILITY_KIND_NONE = 0,
+  PLAYER_FFI_PLUGIN_CAPABILITY_KIND_DECODER = 1,
+  PLAYER_FFI_PLUGIN_CAPABILITY_KIND_FRAME_PROCESSOR = 2,
+} PlayerFfiPluginCapabilityKind;
 
 typedef enum PlayerFfiMediaSourceKind {
   PLAYER_FFI_MEDIA_SOURCE_KIND_LOCAL = 0,
@@ -100,6 +117,31 @@ typedef enum PlayerFfiPlaybackState {
   PLAYER_FFI_PLAYBACK_STATE_PAUSED = 2,
   PLAYER_FFI_PLAYBACK_STATE_FINISHED = 3,
 } PlayerFfiPlaybackState;
+
+typedef enum PlayerFfiRuntimeWarningDomain {
+  PLAYER_FFI_RUNTIME_WARNING_DOMAIN_FRAME_PROCESSOR = 0,
+} PlayerFfiRuntimeWarningDomain;
+
+typedef enum PlayerFfiFrameProcessorWarningKind {
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_SLOW = 0,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_DEADLINE_MISSED = 1,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_BACKPRESSURE = 2,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_BYPASS_ACTIVATED = 3,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_LATE_OUTPUT_DROPPED = 4,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_OUTPUT_DROPPED = 5,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_DISABLED = 6,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_RECOVERED = 7,
+  PLAYER_FFI_FRAME_PROCESSOR_WARNING_KIND_UNSUPPORTED = 8,
+} PlayerFfiFrameProcessorWarningKind;
+
+typedef enum PlayerFfiFrameProcessorPolicyAction {
+  PLAYER_FFI_FRAME_PROCESSOR_POLICY_ACTION_CONTINUE = 0,
+  PLAYER_FFI_FRAME_PROCESSOR_POLICY_ACTION_BYPASS_ORIGINAL_FRAME = 1,
+  PLAYER_FFI_FRAME_PROCESSOR_POLICY_ACTION_DROP_OUTPUT = 2,
+  PLAYER_FFI_FRAME_PROCESSOR_POLICY_ACTION_DISABLE_PROCESSOR = 3,
+  PLAYER_FFI_FRAME_PROCESSOR_POLICY_ACTION_FAIL_PLAYBACK = 4,
+  PLAYER_FFI_FRAME_PROCESSOR_POLICY_ACTION_DIAGNOSTICS_ONLY = 5,
+} PlayerFfiFrameProcessorPolicyAction;
 
 typedef enum PlayerFfiCallStatus {
   PLAYER_FFI_CALL_STATUS_OK = 0,
@@ -182,6 +224,60 @@ typedef struct PlayerFfiVideoDecodeInfo {
   char *fallback_reason;
 } PlayerFfiVideoDecodeInfo;
 
+typedef struct PlayerFfiPluginCodecCapability {
+  char *media_kind;
+  char *codec;
+} PlayerFfiPluginCodecCapability;
+
+typedef struct PlayerFfiPluginDecoderCapabilitySummary {
+  struct PlayerFfiPluginCodecCapability *codecs;
+  size_t codecs_len;
+  char **legacy_codecs;
+  size_t legacy_codecs_len;
+  bool supports_native_frame_output;
+  bool supports_hardware_decode;
+  bool supports_cpu_video_frames;
+  bool supports_audio_frames;
+  bool supports_gpu_handles;
+  bool supports_flush;
+  bool supports_drain;
+  bool has_max_sessions;
+  uint32_t max_sessions;
+} PlayerFfiPluginDecoderCapabilitySummary;
+
+typedef struct PlayerFfiPluginFrameProcessorCapabilitySummary {
+  char **accepted_input_handle_kinds;
+  size_t accepted_input_handle_kinds_len;
+  char **output_handle_kinds;
+  size_t output_handle_kinds_len;
+  bool supports_video_frames;
+  bool supports_in_place_passthrough;
+  bool preserves_dimensions;
+  bool may_change_dimensions;
+  bool preserves_color_metadata;
+  bool preserves_hdr_metadata;
+  bool supports_flush;
+  bool has_max_sessions;
+  uint32_t max_sessions;
+  bool has_max_in_flight_frames;
+  uint32_t max_in_flight_frames;
+} PlayerFfiPluginFrameProcessorCapabilitySummary;
+
+typedef struct PlayerFfiPluginCapabilitySummary {
+  enum PlayerFfiPluginCapabilityKind kind;
+  struct PlayerFfiPluginDecoderCapabilitySummary decoder;
+  struct PlayerFfiPluginFrameProcessorCapabilitySummary frame_processor;
+} PlayerFfiPluginCapabilitySummary;
+
+typedef struct PlayerFfiPluginDiagnostic {
+  char *path;
+  char *plugin_name;
+  char *plugin_kind;
+  enum PlayerFfiPluginDiagnosticStatus status;
+  char *message;
+  struct PlayerFfiPluginCapabilitySummary capability;
+} PlayerFfiPluginDiagnostic;
+
 typedef struct PlayerFfiStartup {
   bool ffmpeg_initialized;
   bool has_audio_output;
@@ -190,6 +286,8 @@ typedef struct PlayerFfiStartup {
   struct PlayerFfiDecodedAudioSummary decoded_audio;
   bool has_video_decode;
   struct PlayerFfiVideoDecodeInfo video_decode;
+  struct PlayerFfiPluginDiagnostic *plugin_diagnostics;
+  size_t plugin_diagnostics_len;
 } PlayerFfiStartup;
 
 typedef struct PlayerFfiVideoInfo {
@@ -282,6 +380,43 @@ typedef struct PlayerFfiFirstFrameReady {
   uint32_t height;
 } PlayerFfiFirstFrameReady;
 
+typedef struct PlayerFfiFrameProcessorWarning {
+  enum PlayerFfiFrameProcessorWarningKind kind;
+  char *plugin_name;
+  size_t processor_index;
+  bool has_frame_id;
+  uint64_t frame_id;
+  bool has_frame_pts_us;
+  int64_t frame_pts_us;
+  bool has_frame_duration_us;
+  int64_t frame_duration_us;
+  char *input_handle_kind;
+  char *output_handle_kind;
+  bool has_queue_depth;
+  uint32_t queue_depth;
+  bool has_in_flight_frames;
+  uint32_t in_flight_frames;
+  bool has_queue_wait_us;
+  uint64_t queue_wait_us;
+  bool has_process_time_us;
+  uint64_t process_time_us;
+  bool has_submit_to_ready_us;
+  uint64_t submit_to_ready_us;
+  bool has_present_deadline_us;
+  int64_t present_deadline_us;
+  bool has_deadline_overrun_us;
+  uint64_t deadline_overrun_us;
+  bool has_consecutive_miss_count;
+  uint32_t consecutive_miss_count;
+  enum PlayerFfiFrameProcessorPolicyAction policy_action;
+  char *message;
+} PlayerFfiFrameProcessorWarning;
+
+typedef struct PlayerFfiRuntimeWarning {
+  enum PlayerFfiRuntimeWarningDomain domain;
+  struct PlayerFfiFrameProcessorWarning frame_processor;
+} PlayerFfiRuntimeWarning;
+
 typedef struct PlayerFfiEvent {
   enum PlayerFfiEventKind kind;
   struct PlayerFfiStartup initialized;
@@ -297,6 +432,7 @@ typedef struct PlayerFfiEvent {
   uint64_t seek_position_ms;
   uint32_t retry_attempt;
   uint64_t retry_delay_ms;
+  struct PlayerFfiRuntimeWarning warning;
   struct PlayerFfiError error;
 } PlayerFfiEvent;
 

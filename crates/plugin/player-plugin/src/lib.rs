@@ -4,17 +4,21 @@ mod abi;
 mod benchmark;
 mod capability;
 mod decoder;
+mod frame_processor;
 mod hook;
+mod native_frame;
 mod processor;
 
 pub use abi::{
     VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
-    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
-    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
+    VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
-    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
+    VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
+    VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
+    VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
+    VesperPluginResultStatus, VesperPostDownloadProcessorApi,
 };
 pub use benchmark::{
     BenchmarkEvent, BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
@@ -30,7 +34,17 @@ pub use decoder::{
     DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
     DecoderSessionInfo, DecoderVisibleRect, NativeDecoderPluginFactory, NativeDecoderSession,
 };
+pub use frame_processor::{
+    FrameProcessorCapabilities, FrameProcessorError, FrameProcessorFrameTimings,
+    FrameProcessorOperationStatus, FrameProcessorOutputFrame, FrameProcessorPluginFactory,
+    FrameProcessorReceiveFrameMetadata, FrameProcessorReceiveOutput, FrameProcessorReceiveStatus,
+    FrameProcessorSession, FrameProcessorSessionConfig, FrameProcessorSessionInfo,
+    FrameProcessorSubmitFrame, FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
+};
 pub use hook::{PipelineEvent, PipelineEventHook};
+pub use native_frame::{
+    NativeFrame, NativeFrameMetadata, NativeFrameReleaseTracking, NativeHandleKind, VisibleRect,
+};
 pub use processor::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream,
     ContentFormatKind, DownloadMetadata, OutputFormat, PostDownloadProcessor, ProcessorError,

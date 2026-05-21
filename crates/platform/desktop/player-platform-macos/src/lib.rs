@@ -6,9 +6,12 @@ mod system;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -29,27 +32,41 @@ use player_platform_desktop::{
 };
 use player_plugin::{
     DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind,
-    DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession,
-    VesperPluginKind,
+    DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig, FrameProcessorError,
+    FrameProcessorOutputFrame, FrameProcessorReceiveOutput, FrameProcessorSession,
+    FrameProcessorSessionConfig, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
+    FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame, NativeFrameMetadata,
+    NativeHandleKind, VesperPluginKind,
 };
 use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
-    LoadedDynamicPlugin, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+    FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
+    PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
 };
 use player_runtime::{
-    DecodedVideoFrame, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerError,
-    PlayerErrorCode, PlayerMediaInfo, PlayerPluginCodecCapability,
+    DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
+    FrameProcessorWarning, FrameProcessorWarningKind, PlaybackProgress,
+    PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerFrameProcessingMetrics,
+    PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
     PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerResult, PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
-    PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoSurfaceTarget,
-    PresentationState, register_default_runtime_adapter_factory,
+    PlayerPluginFrameProcessorCapabilitySummary, PlayerResult, PlayerRuntime, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent,
+    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning,
+    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoSurfaceTarget, PresentationState,
+    register_default_runtime_adapter_factory,
 };
+use tracing::info;
 
 pub const MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_software_desktop";
 pub const MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_host";
+const MACOS_NATIVE_FRAME_PREFETCH_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const MACOS_NATIVE_FRAME_DECODER_DRAIN_RETRY_INTERVAL: Duration = Duration::from_millis(1);
+const FRAME_PROCESSOR_DEBUG_ENV: &str = "VESPER_FRAME_PROCESSOR_DEBUG";
+const FRAME_PROCESSOR_DEBUG_TRACE_ENV: &str = "VESPER_FRAME_PROCESSOR_DEBUG_TRACE";
+const FRAME_PROCESSOR_DEBUG_WINDOW_ENV: &str = "VESPER_FRAME_PROCESSOR_DEBUG_WINDOW";
+const DEFAULT_FRAME_PROCESSOR_DEBUG_WINDOW: u64 = 120;
 
 pub use native::{
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MacosAvFoundationBridge,
@@ -213,7 +230,9 @@ pub fn open_macos_host_runtime_source_with_options(
     );
 
     match native_initializer {
-        Ok(initializer) if should_prefer_native_host_runtime(&initializer.media_info(), &options) => {
+        Ok(initializer)
+            if should_prefer_native_host_runtime(&initializer.media_info(), &options) =>
+        {
             let media_info = initializer.media_info();
             match initializer.initialize() {
                 Ok(mut bootstrap) => {
@@ -231,16 +250,11 @@ pub fn open_macos_host_runtime_source_with_options(
                 ),
             }
         }
-        Ok(initializer) => open_software_fallback_runtime(
-            source,
-            options,
-            initializer.media_info().best_video.as_ref().map(|video| {
-                format!(
-                    "macos native host runtime requires an external video surface for {} playback; selected software desktop path",
-                    video.codec
-                )
-            }),
-        ),
+        Ok(initializer) => {
+            let fallback_reason =
+                macos_host_software_path_reason(&initializer.media_info(), &options);
+            open_software_fallback_runtime(source, options, fallback_reason)
+        }
         Err(native_error) => open_software_fallback_runtime(
             source,
             options,
@@ -273,7 +287,9 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
     );
 
     match native_initializer {
-        Ok(initializer) if should_prefer_native_host_runtime(&initializer.media_info(), &options) => {
+        Ok(initializer)
+            if should_prefer_native_host_runtime(&initializer.media_info(), &options) =>
+        {
             let media_info = initializer.media_info();
             match initializer.initialize() {
                 Ok(mut bootstrap) => {
@@ -292,17 +308,16 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
                 ),
             }
         }
-        Ok(initializer) => open_software_fallback_runtime_with_interrupt(
-            source,
-            options,
-            interrupt_flag,
-            initializer.media_info().best_video.as_ref().map(|video| {
-                format!(
-                    "macos native host runtime requires an external video surface for {} playback; selected software desktop path",
-                    video.codec
-                )
-            }),
-        ),
+        Ok(initializer) => {
+            let fallback_reason =
+                macos_host_software_path_reason(&initializer.media_info(), &options);
+            open_software_fallback_runtime_with_interrupt(
+                source,
+                options,
+                interrupt_flag,
+                fallback_reason,
+            )
+        }
         Err(native_error) => open_software_fallback_runtime_with_interrupt(
             source,
             options,
@@ -348,6 +363,9 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
                 Arc::new(MacosNativeFrameVideoSourceFactory {
                     plugin_path: selection.plugin_path,
                     video_surface: selection.video_surface,
+                    frame_processor_paths: selection.frame_processor_paths,
+                    frame_processor_mode: selection.frame_processor_mode,
+                    frame_processor_policy: selection.frame_processor_policy,
                 }),
                 macos_native_frame_decoder_capabilities(),
             )
@@ -366,6 +384,15 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
         startup,
     } = match (open_result, selection) {
         (Ok(bootstrap), _) => bootstrap,
+        (Err(native_error), Some(selection)) if strict_frame_processor_selection(&selection) => {
+            return Err(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
+                format!(
+                    "native-frame frame processor initialization failed in strict mode: {}",
+                    native_error.message()
+                ),
+            ));
+        }
         (Err(native_error), Some(_)) => {
             let mut bootstrap = open_platform_desktop_source_with_options_and_interrupt(
                 MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
@@ -467,6 +494,7 @@ struct MacosRuntimeAdapterInitializer {
     diagnostics: MacosRuntimeDiagnostics,
     fallback: Option<MacosRuntimeAdapterFallback>,
     runtime_fallback: Option<MacosRuntimeActiveFallback>,
+    strict_frame_processor_error_prefix: Option<String>,
 }
 
 struct MacosRuntimeAdapterFallback {
@@ -551,6 +579,9 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
                 Arc::new(MacosNativeFrameVideoSourceFactory {
                     plugin_path: selection.plugin_path.clone(),
                     video_surface: selection.video_surface,
+                    frame_processor_paths: selection.frame_processor_paths.clone(),
+                    frame_processor_mode: selection.frame_processor_mode,
+                    frame_processor_policy: selection.frame_processor_policy.clone(),
                 }),
                 capabilities,
             )?;
@@ -560,21 +591,36 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
                 macos_native_frame_decoder_video_decode_info(selection.plugin_name.as_deref());
             diagnostics.has_video_surface = true;
 
+            let strict_frame_processor = strict_frame_processor_selection(&selection);
+            let (fallback, runtime_fallback, strict_frame_processor_error_prefix) =
+                if strict_frame_processor {
+                    let strict_error_prefix =
+                        "native-frame frame processor initialization failed in strict mode"
+                            .to_owned();
+                    (None, None, Some(strict_error_prefix))
+                } else {
+                    let fallback = MacosRuntimeAdapterFallback {
+                        inner,
+                        diagnostics: fallback_diagnostics,
+                        fallback_reason: "native-frame decoder plugin initialization failed; selected FFmpeg software path"
+                            .to_owned(),
+                    };
+                    let runtime_fallback = MacosRuntimeActiveFallback {
+                        source: source.clone(),
+                        options: options.clone(),
+                        fallback_reason:
+                            "native-frame runtime failed during playback; selected FFmpeg software path"
+                                .to_owned(),
+                    };
+                    (Some(fallback), Some(runtime_fallback), None)
+                };
+
             return Ok(Box::new(MacosRuntimeAdapterInitializer {
                 inner: native_inner,
                 diagnostics,
-                fallback: Some(MacosRuntimeAdapterFallback {
-                    inner,
-                    diagnostics: fallback_diagnostics,
-                    fallback_reason: "native-frame decoder plugin initialization failed; selected FFmpeg software path".to_owned(),
-                }),
-                runtime_fallback: Some(MacosRuntimeActiveFallback {
-                    source: source.clone(),
-                    options: options.clone(),
-                    fallback_reason:
-                        "native-frame runtime failed during playback; selected FFmpeg software path"
-                            .to_owned(),
-                }),
+                fallback,
+                runtime_fallback,
+                strict_frame_processor_error_prefix,
             }));
         }
 
@@ -585,6 +631,7 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
             diagnostics,
             fallback: None,
             runtime_fallback: None,
+            strict_frame_processor_error_prefix: None,
         }))
     }
 }
@@ -656,6 +703,7 @@ impl PlayerRuntimeAdapterInitializer for MacosRuntimeAdapterInitializer {
             diagnostics,
             fallback,
             runtime_fallback,
+            strict_frame_processor_error_prefix,
         } = *self;
 
         match inner.initialize() {
@@ -666,6 +714,12 @@ impl PlayerRuntimeAdapterInitializer for MacosRuntimeAdapterInitializer {
             )),
             Err(native_error) => {
                 let Some(fallback) = fallback else {
+                    if let Some(prefix) = strict_frame_processor_error_prefix {
+                        return Err(PlayerError::new(
+                            native_error.code(),
+                            format!("{prefix}: {}", native_error.message()),
+                        ));
+                    }
                     return Err(native_error);
                 };
                 let mut diagnostics = fallback.diagnostics;
@@ -906,39 +960,409 @@ fn should_trigger_runtime_fallback_for_command(
     }
 }
 
+fn strict_frame_processor_selection(selection: &MacosNativeFrameDecoderSelection) -> bool {
+    selection.frame_processor_mode == FrameProcessorMode::RequireProcessed
+        && !selection.frame_processor_paths.is_empty()
+}
+
 #[derive(Debug, Clone)]
 struct MacosNativeFrameDecoderSelection {
     plugin_path: PathBuf,
     plugin_name: Option<String>,
     video_surface: PlayerVideoSurfaceTarget,
+    frame_processor_paths: Vec<PathBuf>,
+    frame_processor_mode: FrameProcessorMode,
+    frame_processor_policy: FrameProcessorPolicy,
 }
 
 #[derive(Debug)]
 struct MacosNativeFrameVideoSourceFactory {
     plugin_path: PathBuf,
     video_surface: PlayerVideoSurfaceTarget,
+    frame_processor_paths: Vec<PathBuf>,
+    frame_processor_mode: FrameProcessorMode,
+    frame_processor_policy: FrameProcessorPolicy,
 }
 
 struct MacosNativeFrameVideoSource {
-    packet_source: Box<dyn MacosNativeFramePacketSource>,
     stream_info: VideoPacketStreamInfo,
+    session: Arc<Mutex<Box<dyn NativeDecoderSession>>>,
     shared: Arc<Mutex<MacosNativeFrameDecoderState>>,
+    outstanding_frames: Arc<AtomicUsize>,
+    command_tx: Sender<MacosNativeFrameWorkerCommand>,
+    frame_rx: Receiver<MacosNativeFrameWorkerEvent>,
+    generation: u64,
+    current_generation: Arc<AtomicU64>,
+    buffered_frame_count: Arc<AtomicUsize>,
+    prefetch_limit: Arc<AtomicUsize>,
+    prefetch_wakeup: Arc<MacosNativeFramePrefetchWakeup>,
     end_of_input_sent: bool,
     end_of_stream_received: bool,
+    worker: Option<JoinHandle<()>>,
 }
 
+// Lock ordering for native-frame playback: acquire `session` before `shared` whenever both are
+// needed. Holding `shared` while taking `session` can deadlock with decoder receive/release paths.
 struct MacosNativeFrameDecoderState {
-    session: Box<dyn NativeDecoderSession>,
+    frame_processor_chain: Option<MacosFrameProcessorChain>,
     presenter: Option<MacosMetalLayerPresenter>,
-    outstanding_frames: Arc<AtomicUsize>,
     presentation_epoch: u64,
+}
+
+#[derive(Debug, Default)]
+struct MacosNativeFramePrefetchWakeup {
+    state: Mutex<MacosNativeFramePrefetchWakeupState>,
+    changed: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct MacosNativeFramePrefetchWakeupState {
+    sequence: u64,
+}
+
+impl MacosNativeFramePrefetchWakeup {
+    fn notify(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.sequence = state.sequence.wrapping_add(1);
+            self.changed.notify_all();
+        }
+    }
+
+    fn wait_for_change(&self, observed_sequence: &mut u64) {
+        let Ok(state) = self.state.lock() else {
+            return;
+        };
+        let sequence = state.sequence;
+        if sequence != *observed_sequence {
+            *observed_sequence = sequence;
+            return;
+        }
+        if let Ok((state_after_wait, _)) = self
+            .changed
+            .wait_timeout(state, MACOS_NATIVE_FRAME_PREFETCH_COMMAND_POLL_INTERVAL)
+        {
+            *observed_sequence = state_after_wait.sequence;
+        }
+    }
 }
 
 #[derive(Debug)]
+struct MacosFrameProcessorChain {
+    processors: Vec<MacosFrameProcessorNode>,
+    mode: FrameProcessorMode,
+    policy: FrameProcessorPolicy,
+    metrics: PlayerFrameProcessingMetrics,
+    pending_events: VecDeque<PlayerRuntimeEvent>,
+    debug: FrameProcessorDebugState,
+}
+
+struct MacosFrameProcessorNode {
+    plugin_name: String,
+    processor_index: usize,
+    session: Box<dyn FrameProcessorSession>,
+}
+
+impl std::fmt::Debug for MacosFrameProcessorNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacosFrameProcessorNode")
+            .field("plugin_name", &self.plugin_name)
+            .field("processor_index", &self.processor_index)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+struct MacosFrameProcessorFrame {
+    decoder_frame: DecoderNativeFrame,
+    presentation_frame: DecoderNativeFrame,
+    processor_outputs: Vec<ProcessorOwnedNativeFrame>,
+}
+
+#[derive(Debug)]
+struct ProcessorOwnedNativeFrame {
+    processor_index: usize,
+    frame: NativeFrame,
+}
+
+#[derive(Debug)]
+struct FrameProcessorDebugState {
+    enabled: bool,
+    trace_frames: bool,
+    window_frames: u64,
+    frame_count: u64,
+    window_start: Instant,
+    last_pts_us: Option<i64>,
+    last_frame_started_at: Option<Instant>,
+    max_wall_us: u128,
+    total_wall_us: u128,
+    max_pts_delta_us: Option<i64>,
+    total_pts_delta_us: i128,
+    pts_delta_count: u64,
+    bypassed_frames: u64,
+    dropped_outputs: u64,
+    deadline_misses: u64,
+    backpressure_count: u64,
+    pending_count: u64,
+    presented_processed: u64,
+    presented_original: u64,
+    max_queue_depth: Option<u32>,
+    max_in_flight_frames: Option<u32>,
+}
+
+impl FrameProcessorDebugState {
+    // Debug environment variables are snapshotted when the processor chain is opened. Changing
+    // them during playback requires recreating the player/runtime.
+    fn from_env() -> Self {
+        Self {
+            enabled: env_flag(FRAME_PROCESSOR_DEBUG_ENV),
+            trace_frames: env_flag(FRAME_PROCESSOR_DEBUG_TRACE_ENV),
+            window_frames: env_u64(FRAME_PROCESSOR_DEBUG_WINDOW_ENV)
+                .unwrap_or(DEFAULT_FRAME_PROCESSOR_DEBUG_WINDOW)
+                .max(1),
+            frame_count: 0,
+            window_start: Instant::now(),
+            last_pts_us: None,
+            last_frame_started_at: None,
+            max_wall_us: 0,
+            total_wall_us: 0,
+            max_pts_delta_us: None,
+            total_pts_delta_us: 0,
+            pts_delta_count: 0,
+            bypassed_frames: 0,
+            dropped_outputs: 0,
+            deadline_misses: 0,
+            backpressure_count: 0,
+            pending_count: 0,
+            presented_processed: 0,
+            presented_original: 0,
+            max_queue_depth: None,
+            max_in_flight_frames: None,
+        }
+    }
+
+    fn begin_frame(&mut self, pts_us: Option<i64>) -> FrameProcessorFrameDebugSample {
+        if !self.enabled {
+            return FrameProcessorFrameDebugSample::default();
+        }
+        self.frame_count = self.frame_count.saturating_add(1);
+        let started_at = Instant::now();
+        self.last_frame_started_at = Some(started_at);
+        let pts_delta_us = pts_us.and_then(|pts| self.last_pts_us.map(|previous| pts - previous));
+        if let Some(delta) = pts_delta_us {
+            self.max_pts_delta_us = Some(
+                self.max_pts_delta_us
+                    .map(|current| current.max(delta.abs()))
+                    .unwrap_or(delta.abs()),
+            );
+            self.total_pts_delta_us = self.total_pts_delta_us.saturating_add(delta as i128);
+            self.pts_delta_count = self.pts_delta_count.saturating_add(1);
+        }
+        if pts_us.is_some() {
+            self.last_pts_us = pts_us;
+        }
+        FrameProcessorFrameDebugSample {
+            sequence: self.frame_count,
+            started_at: Some(started_at),
+            input_pts_us: pts_us,
+            pts_delta_us,
+            ..FrameProcessorFrameDebugSample::default()
+        }
+    }
+
+    fn observe_submit(&mut self, queue_depth: Option<u32>, in_flight_frames: Option<u32>) {
+        if !self.enabled {
+            return;
+        }
+        self.max_queue_depth = max_option_u32(self.max_queue_depth, queue_depth);
+        self.max_in_flight_frames = max_option_u32(self.max_in_flight_frames, in_flight_frames);
+    }
+
+    fn observe_bypass(&mut self) {
+        if self.enabled {
+            self.bypassed_frames = self.bypassed_frames.saturating_add(1);
+        }
+    }
+
+    fn observe_backpressure(&mut self) {
+        if self.enabled {
+            self.backpressure_count = self.backpressure_count.saturating_add(1);
+        }
+    }
+
+    fn observe_pending(&mut self) {
+        if self.enabled {
+            self.pending_count = self.pending_count.saturating_add(1);
+        }
+    }
+
+    fn observe_deadline_miss(&mut self) {
+        if self.enabled {
+            self.deadline_misses = self.deadline_misses.saturating_add(1);
+        }
+    }
+
+    fn observe_dropped_output(&mut self) {
+        if self.enabled {
+            self.dropped_outputs = self.dropped_outputs.saturating_add(1);
+        }
+    }
+
+    fn finish_frame(&mut self, sample: FrameProcessorFrameDebugSample) {
+        if !self.enabled {
+            return;
+        }
+        let wall_us = sample
+            .started_at
+            .map(|started_at| started_at.elapsed().as_micros())
+            .unwrap_or(0);
+        self.max_wall_us = self.max_wall_us.max(wall_us);
+        self.total_wall_us = self.total_wall_us.saturating_add(wall_us);
+        if sample.presented_processed {
+            self.presented_processed = self.presented_processed.saturating_add(1);
+        } else {
+            self.presented_original = self.presented_original.saturating_add(1);
+        }
+        if self.trace_frames {
+            info!(
+                sequence = sample.sequence,
+                input_pts_us = sample.input_pts_us,
+                pts_delta_us = sample.pts_delta_us,
+                wall_us,
+                node_count = sample.node_count,
+                submitted_nodes = sample.submitted_nodes,
+                processed_nodes = sample.processed_nodes,
+                bypassed = sample.bypassed,
+                pending = sample.pending,
+                dropped_output = sample.dropped_output,
+                deadline_missed = sample.deadline_missed,
+                presented_processed = sample.presented_processed,
+                output_pts_us = sample.output_pts_us,
+                "macOS frame processor debug frame"
+            );
+        }
+        if self.frame_count.is_multiple_of(self.window_frames) {
+            self.log_summary();
+            self.reset_window();
+        }
+    }
+
+    fn log_summary(&self) {
+        let avg_wall_us = if self.window_frames == 0 {
+            0
+        } else {
+            self.total_wall_us / u128::from(self.window_frames)
+        };
+        let avg_pts_delta_us = if self.pts_delta_count == 0 {
+            None
+        } else {
+            Some(self.total_pts_delta_us / i128::from(self.pts_delta_count))
+        };
+        info!(
+            frames = self.window_frames,
+            elapsed_ms = self.window_start.elapsed().as_millis(),
+            avg_wall_us,
+            max_wall_us = self.max_wall_us,
+            avg_pts_delta_us,
+            max_pts_delta_us = self.max_pts_delta_us,
+            bypassed_frames = self.bypassed_frames,
+            dropped_outputs = self.dropped_outputs,
+            deadline_misses = self.deadline_misses,
+            backpressure_count = self.backpressure_count,
+            pending_count = self.pending_count,
+            presented_processed = self.presented_processed,
+            presented_original = self.presented_original,
+            max_queue_depth = self.max_queue_depth,
+            max_in_flight_frames = self.max_in_flight_frames,
+            "macOS frame processor debug summary"
+        );
+    }
+
+    fn reset_window(&mut self) {
+        self.window_start = Instant::now();
+        self.max_wall_us = 0;
+        self.total_wall_us = 0;
+        self.max_pts_delta_us = None;
+        self.total_pts_delta_us = 0;
+        self.pts_delta_count = 0;
+        self.bypassed_frames = 0;
+        self.dropped_outputs = 0;
+        self.deadline_misses = 0;
+        self.backpressure_count = 0;
+        self.pending_count = 0;
+        self.presented_processed = 0;
+        self.presented_original = 0;
+        self.max_queue_depth = None;
+        self.max_in_flight_frames = None;
+    }
+}
+
+#[derive(Debug, Default)]
+struct FrameProcessorFrameDebugSample {
+    sequence: u64,
+    started_at: Option<Instant>,
+    input_pts_us: Option<i64>,
+    output_pts_us: Option<i64>,
+    pts_delta_us: Option<i64>,
+    node_count: usize,
+    submitted_nodes: usize,
+    processed_nodes: usize,
+    bypassed: bool,
+    pending: bool,
+    dropped_output: bool,
+    deadline_missed: bool,
+    presented_processed: bool,
+}
+
+#[derive(Debug)]
+struct MacosFrameProcessorProcessState {
+    current_frame: NativeFrame,
+    processor_outputs: Vec<ProcessorOwnedNativeFrame>,
+    using_processor_output: bool,
+    debug_sample: FrameProcessorFrameDebugSample,
+}
+
+#[derive(Debug)]
+enum MacosNativeFramePoll {
+    Frame(MacosFrameProcessorFrame),
+    Decoder(DecoderReceiveNativeFrameOutput),
+}
+
+#[derive(Debug)]
+enum MacosNativeFrameWorkerCommand {
+    Seek { generation: u64, position: Duration },
+    Shutdown,
+}
+
+#[derive(Debug)]
+enum MacosNativeFrameWorkerEvent {
+    Frame {
+        generation: u64,
+        frame: MacosFrameProcessorFrame,
+    },
+    EndOfStream {
+        generation: u64,
+    },
+    Error {
+        generation: u64,
+        message: String,
+    },
+}
+
 struct MacosDeferredNativeFramePresentation {
+    session: Arc<Mutex<Box<dyn NativeDecoderSession>>>,
     shared: Arc<Mutex<MacosNativeFrameDecoderState>>,
-    frame: Option<DecoderNativeFrame>,
+    outstanding_frames: Arc<AtomicUsize>,
+    frame: Option<MacosFrameProcessorFrame>,
     presentation_epoch: u64,
+}
+
+impl std::fmt::Debug for MacosDeferredNativeFramePresentation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacosDeferredNativeFramePresentation")
+            .field("has_frame", &self.frame.is_some())
+            .field("presentation_epoch", &self.presentation_epoch)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for MacosNativeFrameVideoSource {
@@ -956,14 +1380,16 @@ impl std::fmt::Debug for MacosNativeFrameDecoderState {
     }
 }
 
-impl Drop for MacosNativeFrameDecoderState {
+impl Drop for MacosNativeFrameVideoSource {
     fn drop(&mut self) {
-        let outstanding = self.outstanding_frames.load(Ordering::SeqCst);
-        if outstanding != 0 {
-            eprintln!(
-                "dropping macOS native-frame decoder state with unreleased frames: {outstanding}"
-            );
+        let _ = self
+            .command_tx
+            .send(MacosNativeFrameWorkerCommand::Shutdown);
+        self.prefetch_wakeup.notify();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
+        self.release_queued_prefetch_events();
     }
 }
 
@@ -1035,6 +1461,12 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
         let session_info = session.session_info();
         let presenter = MacosMetalLayerPresenter::new(self.video_surface)
             .map_err(|error| anyhow::anyhow!(error.message().to_owned()))?;
+        let frame_processor_chain = open_macos_frame_processor_chain(
+            &stream_info,
+            &self.frame_processor_paths,
+            self.frame_processor_mode,
+            self.frame_processor_policy.clone(),
+        )?;
         let decode_info = BackendVideoDecodeInfo {
             selected_mode: BackendVideoDecoderMode::Hardware,
             hardware_available: true,
@@ -1046,20 +1478,48 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
                 .unwrap_or_else(|| factory.name().to_owned()),
             fallback_reason: None,
         };
+        let outstanding_frames = Arc::new(AtomicUsize::new(0));
+        let session = Arc::new(Mutex::new(session));
         let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
-            session,
+            frame_processor_chain,
             presenter: Some(presenter),
-            outstanding_frames: Arc::new(AtomicUsize::new(0)),
             presentation_epoch: 0,
         }));
+        let (command_tx, command_rx) = mpsc::channel();
+        let (frame_tx, frame_rx) = mpsc::channel();
+        let current_generation = Arc::new(AtomicU64::new(0));
+        let buffered_frame_count = Arc::new(AtomicUsize::new(0));
+        let prefetch_limit = Arc::new(AtomicUsize::new(1));
+        let prefetch_wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+        let worker = spawn_macos_native_frame_prefetch_worker(
+            Box::new(packet_source),
+            session.clone(),
+            shared.clone(),
+            outstanding_frames.clone(),
+            command_rx,
+            frame_tx,
+            current_generation.clone(),
+            buffered_frame_count.clone(),
+            prefetch_limit.clone(),
+            prefetch_wakeup.clone(),
+        )?;
 
         Ok(DesktopVideoSourceBootstrap {
             source: Box::new(MacosNativeFrameVideoSource {
-                packet_source: Box::new(packet_source),
                 stream_info,
+                session,
                 shared,
+                outstanding_frames,
+                command_tx,
+                frame_rx,
+                generation: 0,
+                current_generation,
+                buffered_frame_count,
+                prefetch_limit,
+                prefetch_wakeup,
                 end_of_input_sent: false,
                 end_of_stream_received: false,
+                worker: Some(worker),
             }),
             decode_info,
             probe,
@@ -1069,17 +1529,11 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
 
 impl DesktopVideoSource for MacosNativeFrameVideoSource {
     fn recv_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>> {
-        loop {
-            match self.poll_frame(true)? {
-                DesktopVideoFramePoll::Ready(frame) => return Ok(Some(frame)),
-                DesktopVideoFramePoll::EndOfStream => return Ok(None),
-                DesktopVideoFramePoll::Pending => continue,
-            }
-        }
+        self.recv_prefetched_frame()
     }
 
     fn try_recv_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
-        self.poll_frame(false)
+        self.try_recv_prefetched_frame()
     }
 
     fn seek_to(&mut self, position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>> {
@@ -1088,149 +1542,193 @@ impl DesktopVideoSource for MacosNativeFrameVideoSource {
                 .shared
                 .lock()
                 .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
-            shared
-                .session
-                .flush()
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             shared.presentation_epoch = shared.presentation_epoch.saturating_add(1);
         }
-        self.packet_source.seek_to(position)?;
+        self.generation = self.generation.wrapping_add(1);
+        self.current_generation
+            .store(self.generation, Ordering::SeqCst);
+        self.buffered_frame_count.store(0, Ordering::SeqCst);
         self.end_of_input_sent = false;
         self.end_of_stream_received = false;
-        self.recv_frame()
+        self.command_tx
+            .send(MacosNativeFrameWorkerCommand::Seek {
+                generation: self.generation,
+                position,
+            })
+            .context("failed to send seek request to macOS native-frame prefetch worker")?;
+        self.prefetch_wakeup.notify();
+        self.recv_prefetched_frame()
     }
 
     fn buffered_frame_count(&self) -> usize {
-        0
+        self.buffered_frame_count.load(Ordering::SeqCst)
     }
 
-    fn set_prefetch_limit(&self, _limit: usize) {}
+    fn set_prefetch_limit(&self, limit: usize) {
+        self.prefetch_limit.store(limit.max(1), Ordering::SeqCst);
+        self.prefetch_wakeup.notify();
+    }
+
+    fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+        self.shared
+            .lock()
+            .ok()
+            .and_then(|mut shared| {
+                shared
+                    .frame_processor_chain
+                    .as_mut()
+                    .map(MacosFrameProcessorChain::drain_events)
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl MacosNativeFrameVideoSource {
-    fn poll_frame(&mut self, blocking: bool) -> anyhow::Result<DesktopVideoFramePoll> {
-        if self.end_of_stream_received {
-            return Ok(DesktopVideoFramePoll::EndOfStream);
-        }
-
-        let mut packets_submitted = 0usize;
+    fn recv_prefetched_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>> {
         loop {
-            match self.receive_native_frame()? {
-                DecoderReceiveNativeFrameOutput::Frame(frame) => {
-                    return self
-                        .deferred_desktop_frame(frame)
-                        .map(DesktopVideoFramePoll::Ready);
-                }
-                DecoderReceiveNativeFrameOutput::Eof => {
-                    self.end_of_stream_received = true;
-                    return Ok(DesktopVideoFramePoll::EndOfStream);
-                }
-                DecoderReceiveNativeFrameOutput::NeedMoreInput => {}
+            if self.end_of_input_sent {
+                return Ok(None);
+            }
+
+            let event = self
+                .frame_rx
+                .recv()
+                .context("macOS native-frame prefetch worker disconnected")?;
+            if let Some(frame) = self.handle_prefetch_event(event)? {
+                return Ok(Some(frame));
             }
 
             if self.end_of_input_sent {
-                return Ok(DesktopVideoFramePoll::Pending);
+                return Ok(None);
             }
+        }
+    }
 
-            match self.packet_source.next_packet()? {
-                Some(packet) => {
-                    self.send_packet(packet)?;
-                    packets_submitted = packets_submitted.saturating_add(1);
-                    if !blocking && packets_submitted >= 4 {
-                        return Ok(DesktopVideoFramePoll::Pending);
+    fn try_recv_prefetched_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
+        if self.end_of_input_sent {
+            return Ok(DesktopVideoFramePoll::EndOfStream);
+        }
+
+        loop {
+            match self.frame_rx.try_recv() {
+                Ok(event) => {
+                    if let Some(frame) = self.handle_prefetch_event(event)? {
+                        return Ok(DesktopVideoFramePoll::Ready(frame));
+                    }
+                    if self.end_of_input_sent {
+                        return Ok(DesktopVideoFramePoll::EndOfStream);
                     }
                 }
-                None => {
-                    self.send_end_of_stream()?;
-                    self.end_of_input_sent = true;
+                Err(TryRecvError::Empty) => return Ok(DesktopVideoFramePoll::Pending),
+                Err(TryRecvError::Disconnected) => {
+                    anyhow::bail!("macOS native-frame prefetch worker disconnected")
                 }
             }
         }
     }
 
-    fn receive_native_frame(&mut self) -> anyhow::Result<DecoderReceiveNativeFrameOutput> {
-        let mut shared = self
-            .shared
-            .lock()
-            .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
-        let result = shared
-            .session
-            .receive_native_frame()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        if matches!(result, DecoderReceiveNativeFrameOutput::Frame(_)) {
-            shared.outstanding_frames.fetch_add(1, Ordering::SeqCst);
+    fn handle_prefetch_event(
+        &mut self,
+        event: MacosNativeFrameWorkerEvent,
+    ) -> anyhow::Result<Option<DesktopVideoFrame>> {
+        match event {
+            MacosNativeFrameWorkerEvent::Frame { generation, frame }
+                if generation == self.generation =>
+            {
+                decrement_macos_native_frame_buffered_count(
+                    &self.buffered_frame_count,
+                    &self.prefetch_wakeup,
+                );
+                self.deferred_desktop_frame(frame).map(Some)
+            }
+            MacosNativeFrameWorkerEvent::Frame { frame, .. } => {
+                decrement_macos_native_frame_buffered_count(
+                    &self.buffered_frame_count,
+                    &self.prefetch_wakeup,
+                );
+                if let (Ok(mut session), Ok(mut shared)) = (self.session.lock(), self.shared.lock())
+                {
+                    let _ = release_macos_processor_frame_and_track(
+                        session.as_mut(),
+                        &mut shared,
+                        self.outstanding_frames.as_ref(),
+                        frame,
+                    );
+                }
+                Ok(None)
+            }
+            MacosNativeFrameWorkerEvent::EndOfStream { generation }
+                if generation == self.generation =>
+            {
+                self.end_of_input_sent = true;
+                self.end_of_stream_received = true;
+                Ok(None)
+            }
+            MacosNativeFrameWorkerEvent::Error {
+                generation,
+                message,
+            } if generation == self.generation => Err(anyhow::anyhow!(message)),
+            _ => Ok(None),
         }
-        Ok(result)
     }
 
-    fn send_packet(&mut self, packet: CompressedVideoPacket) -> anyhow::Result<()> {
-        let mut shared = self
-            .shared
-            .lock()
-            .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
-        shared
-            .session
-            .send_packet(
-                &DecoderPacket {
-                    pts_us: packet.pts_us,
-                    dts_us: packet.dts_us,
-                    duration_us: packet.duration_us,
-                    stream_index: packet.stream_index,
-                    key_frame: packet.key_frame,
-                    discontinuity: packet.discontinuity,
-                    end_of_stream: false,
-                },
-                &packet.data,
-            )
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        Ok(())
-    }
-
-    fn send_end_of_stream(&mut self) -> anyhow::Result<()> {
-        let mut shared = self
-            .shared
-            .lock()
-            .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
-        shared
-            .session
-            .send_packet(
-                &DecoderPacket {
-                    stream_index: u32::try_from(self.stream_info.stream_index).unwrap_or(u32::MAX),
-                    end_of_stream: true,
-                    ..DecoderPacket::default()
-                },
-                &[],
-            )
-            .map(|_| ())
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    fn release_queued_prefetch_events(&mut self) {
+        while let Ok(event) = self.frame_rx.try_recv() {
+            if let MacosNativeFrameWorkerEvent::Frame { frame, .. } = event {
+                decrement_macos_native_frame_buffered_count(
+                    &self.buffered_frame_count,
+                    &self.prefetch_wakeup,
+                );
+                if let (Ok(mut session), Ok(mut shared)) = (self.session.lock(), self.shared.lock())
+                {
+                    let _ = release_macos_processor_frame_and_track(
+                        session.as_mut(),
+                        &mut shared,
+                        self.outstanding_frames.as_ref(),
+                        frame,
+                    );
+                }
+            }
+        }
     }
 
     fn deferred_desktop_frame(
         &self,
-        frame: DecoderNativeFrame,
+        frame: MacosFrameProcessorFrame,
     ) -> anyhow::Result<DesktopVideoFrame> {
-        if frame.metadata.handle_kind != DecoderNativeHandleKind::CvPixelBuffer {
+        if frame.presentation_frame.metadata.handle_kind != DecoderNativeHandleKind::CvPixelBuffer {
+            let mut session = self
+                .session
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
             let mut shared = self
                 .shared
                 .lock()
                 .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
-            let _ = shared.session.release_native_frame(frame);
-            shared.outstanding_frames.fetch_sub(1, Ordering::SeqCst);
+            let _ = release_macos_processor_frame_and_track(
+                session.as_mut(),
+                &mut shared,
+                self.outstanding_frames.as_ref(),
+                frame,
+            );
             anyhow::bail!("macOS native-frame presenter only accepts CVPixelBuffer handles");
         }
         let presentation_time = frame
+            .presentation_frame
             .metadata
             .pts_us
             .and_then(duration_from_micros)
             .unwrap_or(Duration::ZERO);
-        let width = frame.metadata.width;
-        let height = frame.metadata.height;
+        let width = frame.presentation_frame.metadata.width;
+        let height = frame.presentation_frame.metadata.height;
         Ok(DesktopVideoFrame::native_deferred(
             presentation_time,
             width,
             height,
             Box::new(MacosDeferredNativeFramePresentation {
+                session: self.session.clone(),
                 shared: self.shared.clone(),
+                outstanding_frames: self.outstanding_frames.clone(),
                 frame: Some(frame),
                 presentation_epoch: shared_presentation_epoch(&self.shared)?,
             }),
@@ -1238,34 +1736,368 @@ impl MacosNativeFrameVideoSource {
     }
 }
 
+fn spawn_macos_native_frame_prefetch_worker(
+    packet_source: Box<dyn MacosNativeFramePacketSource>,
+    session: Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    shared: Arc<Mutex<MacosNativeFrameDecoderState>>,
+    outstanding_frames: Arc<AtomicUsize>,
+    command_rx: Receiver<MacosNativeFrameWorkerCommand>,
+    frame_tx: Sender<MacosNativeFrameWorkerEvent>,
+    current_generation: Arc<AtomicU64>,
+    buffered_frame_count: Arc<AtomicUsize>,
+    prefetch_limit: Arc<AtomicUsize>,
+    prefetch_wakeup: Arc<MacosNativeFramePrefetchWakeup>,
+) -> anyhow::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("macos-native-frame-prefetch".to_owned())
+        .spawn(move || {
+            macos_native_frame_prefetch_worker_loop(
+                packet_source,
+                session,
+                shared,
+                outstanding_frames,
+                command_rx,
+                frame_tx,
+                current_generation,
+                buffered_frame_count,
+                prefetch_limit,
+                prefetch_wakeup,
+            );
+        })
+        .context("failed to spawn macOS native-frame prefetch worker")
+}
+
+fn macos_native_frame_prefetch_worker_loop(
+    mut packet_source: Box<dyn MacosNativeFramePacketSource>,
+    session: Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    shared: Arc<Mutex<MacosNativeFrameDecoderState>>,
+    outstanding_frames: Arc<AtomicUsize>,
+    command_rx: Receiver<MacosNativeFrameWorkerCommand>,
+    frame_tx: Sender<MacosNativeFrameWorkerEvent>,
+    current_generation: Arc<AtomicU64>,
+    buffered_frame_count: Arc<AtomicUsize>,
+    prefetch_limit: Arc<AtomicUsize>,
+    prefetch_wakeup: Arc<MacosNativeFramePrefetchWakeup>,
+) {
+    let mut generation = 0u64;
+    let mut end_of_input_sent = false;
+    let mut end_of_stream_received = false;
+    let mut pending_event = None;
+    let mut wakeup_sequence = 0u64;
+
+    loop {
+        match latest_macos_native_frame_worker_command(&command_rx) {
+            Some(MacosNativeFrameWorkerCommand::Shutdown) => break,
+            Some(MacosNativeFrameWorkerCommand::Seek {
+                generation: new_generation,
+                position,
+            }) => {
+                generation = new_generation;
+                pending_event = None;
+                end_of_input_sent = false;
+                end_of_stream_received = false;
+                let seek_result = flush_and_seek_macos_native_frame_source(
+                    &session,
+                    &shared,
+                    packet_source.as_mut(),
+                    position,
+                );
+                if let Err(error) = seek_result {
+                    pending_event = Some(MacosNativeFrameWorkerEvent::Error {
+                        generation,
+                        message: error.to_string(),
+                    });
+                }
+            }
+            None => {}
+        }
+
+        if pending_event.is_none() {
+            if end_of_stream_received {
+                wait_for_macos_native_frame_prefetch_work(&prefetch_wakeup, &mut wakeup_sequence);
+                continue;
+            }
+            let limit = prefetch_limit.load(Ordering::SeqCst).max(1);
+            if buffered_frame_count.load(Ordering::SeqCst) >= limit {
+                wait_for_macos_native_frame_prefetch_work(&prefetch_wakeup, &mut wakeup_sequence);
+                continue;
+            }
+            pending_event = Some(
+                match decode_next_macos_native_frame_worker_event(
+                    &shared,
+                    &session,
+                    &outstanding_frames,
+                    packet_source.as_mut(),
+                    generation,
+                    &mut end_of_input_sent,
+                    &mut end_of_stream_received,
+                ) {
+                    Ok(event) => event,
+                    Err(error) => MacosNativeFrameWorkerEvent::Error {
+                        generation,
+                        message: error.to_string(),
+                    },
+                },
+            );
+        }
+
+        let Some(event) = pending_event.take() else {
+            continue;
+        };
+        let frame_generation = macos_native_frame_worker_frame_generation(&event);
+        if let Some(event_generation) = frame_generation
+            && event_generation == current_generation.load(Ordering::SeqCst)
+        {
+            buffered_frame_count.fetch_add(1, Ordering::SeqCst);
+        }
+        match frame_tx.send(event) {
+            Ok(()) => {}
+            Err(event) => {
+                if let Some(event_generation) = frame_generation
+                    && event_generation == current_generation.load(Ordering::SeqCst)
+                {
+                    decrement_macos_native_frame_buffered_count(
+                        &buffered_frame_count,
+                        &prefetch_wakeup,
+                    );
+                }
+                if let MacosNativeFrameWorkerEvent::Frame { frame, .. } = event.0
+                    && let (Ok(mut session), Ok(mut shared)) = (session.lock(), shared.lock())
+                {
+                    let _ = release_macos_processor_frame_and_track(
+                        session.as_mut(),
+                        &mut shared,
+                        outstanding_frames.as_ref(),
+                        frame,
+                    );
+                }
+                break;
+            }
+        }
+    }
+}
+
+fn latest_macos_native_frame_worker_command(
+    command_rx: &Receiver<MacosNativeFrameWorkerCommand>,
+) -> Option<MacosNativeFrameWorkerCommand> {
+    let mut latest = None;
+    loop {
+        match command_rx.try_recv() {
+            Ok(MacosNativeFrameWorkerCommand::Shutdown) => {
+                return Some(MacosNativeFrameWorkerCommand::Shutdown);
+            }
+            Ok(command) => latest = Some(command),
+            Err(TryRecvError::Empty) => return latest,
+            Err(TryRecvError::Disconnected) => {
+                return Some(MacosNativeFrameWorkerCommand::Shutdown);
+            }
+        }
+    }
+}
+
+fn wait_for_macos_native_frame_prefetch_work(
+    wakeup: &MacosNativeFramePrefetchWakeup,
+    observed_sequence: &mut u64,
+) {
+    wakeup.wait_for_change(observed_sequence);
+}
+
+fn macos_native_frame_worker_frame_generation(event: &MacosNativeFrameWorkerEvent) -> Option<u64> {
+    match event {
+        MacosNativeFrameWorkerEvent::Frame { generation, .. } => Some(*generation),
+        _ => None,
+    }
+}
+
+fn decrement_macos_native_frame_buffered_count(
+    buffered_frame_count: &AtomicUsize,
+    wakeup: &MacosNativeFramePrefetchWakeup,
+) {
+    let _ = buffered_frame_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+        Some(count.saturating_sub(1))
+    });
+    wakeup.notify();
+}
+
+fn flush_and_seek_macos_native_frame_source(
+    session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    shared: &Arc<Mutex<MacosNativeFrameDecoderState>>,
+    packet_source: &mut dyn MacosNativeFramePacketSource,
+    position: Duration,
+) -> anyhow::Result<()> {
+    {
+        let mut session = session
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
+        session
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    }
+    {
+        let mut shared = shared
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
+        if let Some(chain) = shared.frame_processor_chain.as_mut() {
+            chain.flush();
+        }
+    }
+    packet_source.seek_to(position)
+}
+
+fn decode_next_macos_native_frame_worker_event(
+    shared: &Arc<Mutex<MacosNativeFrameDecoderState>>,
+    session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    outstanding_frames: &AtomicUsize,
+    packet_source: &mut dyn MacosNativeFramePacketSource,
+    generation: u64,
+    end_of_input_sent: &mut bool,
+    end_of_stream_received: &mut bool,
+) -> anyhow::Result<MacosNativeFrameWorkerEvent> {
+    loop {
+        match receive_macos_native_frame_from_decoder(shared, session, outstanding_frames)? {
+            MacosNativeFramePoll::Frame(frame) => {
+                return Ok(MacosNativeFrameWorkerEvent::Frame { generation, frame });
+            }
+            MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::Eof) => {
+                *end_of_stream_received = true;
+                return Ok(MacosNativeFrameWorkerEvent::EndOfStream { generation });
+            }
+            MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::NeedMoreInput) => {}
+            MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::Frame(_)) => {}
+        }
+
+        if *end_of_input_sent {
+            thread::sleep(MACOS_NATIVE_FRAME_DECODER_DRAIN_RETRY_INTERVAL);
+            continue;
+        }
+
+        match packet_source.next_packet()? {
+            Some(packet) => {
+                send_macos_native_frame_packet(session, packet)?;
+            }
+            None => {
+                send_macos_native_frame_end_of_stream(session)?;
+                *end_of_input_sent = true;
+            }
+        }
+    }
+}
+
+fn receive_macos_native_frame_from_decoder(
+    shared: &Arc<Mutex<MacosNativeFrameDecoderState>>,
+    session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    outstanding_frames: &AtomicUsize,
+) -> anyhow::Result<MacosNativeFramePoll> {
+    let mut session = session
+        .lock()
+        .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
+    let result = session
+        .receive_native_frame()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let DecoderReceiveNativeFrameOutput::Frame(frame) = result else {
+        return Ok(MacosNativeFramePoll::Decoder(result));
+    };
+    outstanding_frames.fetch_add(1, Ordering::SeqCst);
+    let mut shared = shared
+        .lock()
+        .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
+    let frame = match process_macos_native_frame(&mut shared, frame) {
+        Ok(frame) => frame,
+        Err((error, frame_for_release)) => {
+            let _ = release_native_frame_with_counter(
+                session.as_mut(),
+                outstanding_frames,
+                frame_for_release,
+            );
+            return Err(error);
+        }
+    };
+    Ok(MacosNativeFramePoll::Frame(frame))
+}
+
+fn send_macos_native_frame_packet(
+    session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    packet: CompressedVideoPacket,
+) -> anyhow::Result<()> {
+    let mut session = session
+        .lock()
+        .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
+    session
+        .send_packet(
+            &DecoderPacket {
+                pts_us: packet.pts_us,
+                dts_us: packet.dts_us,
+                duration_us: packet.duration_us,
+                stream_index: packet.stream_index,
+                key_frame: packet.key_frame,
+                discontinuity: packet.discontinuity,
+                end_of_stream: false,
+            },
+            &packet.data,
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(())
+}
+
+fn send_macos_native_frame_end_of_stream(
+    session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+) -> anyhow::Result<()> {
+    let mut session = session
+        .lock()
+        .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
+    session
+        .send_packet(
+            &DecoderPacket {
+                end_of_stream: true,
+                ..DecoderPacket::default()
+            },
+            &[],
+        )
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
 impl DesktopVideoFramePresentation for MacosDeferredNativeFramePresentation {
     fn present(mut self: Box<Self>) -> anyhow::Result<()> {
         let Some(frame) = self.frame.take() else {
             return Ok(());
         };
-        present_and_release_native_frame(&self.shared, frame, self.presentation_epoch)
+        present_and_release_macos_processor_frame(
+            &self.session,
+            &self.shared,
+            self.outstanding_frames.as_ref(),
+            frame,
+            self.presentation_epoch,
+        )
     }
 }
 
 impl Drop for MacosDeferredNativeFramePresentation {
     fn drop(&mut self) {
         if let Some(frame) = self.frame.take()
-            && let Ok(mut shared) = self.shared.lock()
+            && let (Ok(mut session), Ok(mut shared)) = (self.session.lock(), self.shared.lock())
         {
-            let _ = release_native_frame_and_track(&mut shared, frame);
+            let _ = release_macos_processor_frame_and_track(
+                session.as_mut(),
+                &mut shared,
+                self.outstanding_frames.as_ref(),
+                frame,
+            );
         }
     }
 }
 
-fn release_native_frame_and_track(
+fn release_macos_processor_frame_and_track(
+    session: &mut dyn NativeDecoderSession,
     shared: &mut MacosNativeFrameDecoderState,
-    frame: DecoderNativeFrame,
-) -> Result<(), player_plugin::DecoderError> {
-    release_native_frame_with_counter(
-        shared.session.as_mut(),
-        shared.outstanding_frames.as_ref(),
-        frame,
-    )
+    outstanding_frames: &AtomicUsize,
+    frame: MacosFrameProcessorFrame,
+) -> anyhow::Result<()> {
+    if let Some(chain) = shared.frame_processor_chain.as_mut() {
+        chain.release_processor_outputs(frame.processor_outputs);
+    }
+    release_native_frame_with_counter(session, outstanding_frames, frame.decoder_frame)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 fn release_native_frame_with_counter(
@@ -1280,37 +2112,41 @@ fn release_native_frame_with_counter(
     result
 }
 
-fn present_and_release_native_frame(
+fn present_and_release_macos_processor_frame(
+    session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
     shared: &Arc<Mutex<MacosNativeFrameDecoderState>>,
-    frame: DecoderNativeFrame,
+    outstanding_frames: &AtomicUsize,
+    frame: MacosFrameProcessorFrame,
     presentation_epoch: u64,
 ) -> anyhow::Result<()> {
+    let mut session = session
+        .lock()
+        .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
     let mut shared = shared
         .lock()
         .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
-    let MacosNativeFrameDecoderState {
-        session,
-        presenter,
-        outstanding_frames,
-        presentation_epoch: current_epoch,
-    } = &mut *shared;
-    if *current_epoch != presentation_epoch {
-        return release_native_frame_with_counter(
+    if shared.presentation_epoch != presentation_epoch {
+        return release_macos_processor_frame_and_track(
             session.as_mut(),
-            outstanding_frames.as_ref(),
+            &mut shared,
+            outstanding_frames,
             frame,
-        )
-        .map_err(|error| anyhow::anyhow!(error.to_string()));
+        );
     }
-    let presenter = presenter
+    let presenter = shared
+        .presenter
         .as_mut()
         .ok_or_else(|| anyhow::anyhow!("macOS native-frame presenter is not configured"))?;
-    present_and_release_native_frame_with(
+    let present_result = presenter
+        .present_cv_pixel_buffer_handle(frame.presentation_frame.handle)
+        .map_err(|error| anyhow::anyhow!(error.message().to_owned()));
+    let release_result = release_macos_processor_frame_and_track(
         session.as_mut(),
-        presenter,
-        outstanding_frames.as_ref(),
+        &mut shared,
+        outstanding_frames,
         frame,
-    )
+    );
+    present_result.and(release_result)
 }
 
 #[cfg(test)]
@@ -1338,19 +2174,7 @@ fn shared_presentation_epoch(
         .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))
 }
 
-fn present_and_release_native_frame_with(
-    session: &mut dyn NativeDecoderSession,
-    presenter: &mut MacosMetalLayerPresenter,
-    outstanding_frames: &AtomicUsize,
-    frame: DecoderNativeFrame,
-) -> anyhow::Result<()> {
-    present_and_release_native_frame_with_presenter(session, outstanding_frames, frame, |handle| {
-        presenter
-            .present_cv_pixel_buffer_handle(handle)
-            .map_err(|error| error.message().to_owned())
-    })
-}
-
+#[cfg(test)]
 fn present_and_release_native_frame_with_presenter(
     session: &mut dyn NativeDecoderSession,
     outstanding_frames: &AtomicUsize,
@@ -1362,6 +2186,678 @@ fn present_and_release_native_frame_with_presenter(
         .map_err(|error| anyhow::anyhow!(error.to_string()));
 
     present_result.and(release_result)
+}
+
+fn open_macos_frame_processor_chain(
+    stream_info: &VideoPacketStreamInfo,
+    paths: &[PathBuf],
+    mode: FrameProcessorMode,
+    policy: FrameProcessorPolicy,
+) -> anyhow::Result<Option<MacosFrameProcessorChain>> {
+    if mode == FrameProcessorMode::Disabled || paths.is_empty() {
+        return Ok(None);
+    }
+    let input_metadata = NativeFrameMetadata {
+        media_kind: DecoderMediaKind::Video,
+        format: player_plugin::DecoderFrameFormat::Nv12,
+        codec: stream_info.codec.clone(),
+        pts_us: None,
+        duration_us: None,
+        width: stream_info.width.unwrap_or(0),
+        height: stream_info.height.unwrap_or(0),
+        coded_width: stream_info.width,
+        coded_height: stream_info.height,
+        visible_rect: None,
+        handle_kind: NativeHandleKind::CvPixelBuffer,
+        frame_id: None,
+        release_tracking: None,
+    };
+    let mut processors = Vec::new();
+    for (processor_index, path) in paths.iter().enumerate().take(policy.max_chain_depth) {
+        let plugin = LoadedDynamicPlugin::load(path)
+            .with_context(|| format!("failed to load frame processor plugin {}", path.display()))?;
+        let factory = plugin.frame_processor_plugin_factory().ok_or_else(|| {
+            anyhow::anyhow!(
+                "plugin `{}` does not export a frame processor API",
+                plugin.plugin_name()
+            )
+        })?;
+        let capabilities = factory.capabilities();
+        if !capabilities.supports_video_frames {
+            anyhow::bail!(
+                "frame processor `{}` does not support video frames",
+                factory.name()
+            );
+        }
+        if capabilities.may_change_dimensions {
+            anyhow::bail!(
+                "frame processor `{}` changes frame dimensions, which v1 does not allow",
+                factory.name()
+            );
+        }
+        let session = factory
+            .open_session(&FrameProcessorSessionConfig {
+                processor_index,
+                input_metadata: input_metadata.clone(),
+                max_in_flight_frames: Some(policy.max_in_flight_frames_per_processor),
+            })
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        processors.push(MacosFrameProcessorNode {
+            plugin_name: factory.name().to_owned(),
+            processor_index,
+            session,
+        });
+    }
+    if processors.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(MacosFrameProcessorChain {
+        processors,
+        mode,
+        policy,
+        metrics: PlayerFrameProcessingMetrics::default(),
+        pending_events: VecDeque::new(),
+        debug: FrameProcessorDebugState::from_env(),
+    }))
+}
+
+fn process_macos_native_frame(
+    shared: &mut MacosNativeFrameDecoderState,
+    frame: DecoderNativeFrame,
+) -> Result<MacosFrameProcessorFrame, (anyhow::Error, DecoderNativeFrame)> {
+    let Some(chain) = shared.frame_processor_chain.as_mut() else {
+        return Ok(MacosFrameProcessorFrame {
+            decoder_frame: frame.clone(),
+            presentation_frame: frame,
+            processor_outputs: Vec::new(),
+        });
+    };
+    chain.process(frame)
+}
+
+fn decoder_frame_to_native_frame(frame: &DecoderNativeFrame) -> NativeFrame {
+    NativeFrame {
+        metadata: frame.metadata.clone().into(),
+        handle: frame.handle,
+    }
+}
+
+fn native_frame_to_decoder_frame(frame: &NativeFrame) -> DecoderNativeFrame {
+    DecoderNativeFrame {
+        metadata: frame.metadata.clone().into(),
+        handle: frame.handle,
+    }
+}
+
+fn output_frame_requires_processor_release(frame: &NativeFrame) -> bool {
+    frame
+        .metadata
+        .release_tracking
+        .as_ref()
+        .is_none_or(|tracking| tracking.requires_release)
+}
+
+impl MacosFrameProcessorChain {
+    fn process(
+        &mut self,
+        decoder_frame: DecoderNativeFrame,
+    ) -> Result<MacosFrameProcessorFrame, (anyhow::Error, DecoderNativeFrame)> {
+        let mut state = self.begin_process_state(&decoder_frame);
+        for node_index in 0..self.processors.len() {
+            self.process_node(node_index, &decoder_frame, &mut state)?;
+        }
+
+        Ok(self.finish_process_state(decoder_frame, state))
+    }
+
+    fn begin_process_state(
+        &mut self,
+        decoder_frame: &DecoderNativeFrame,
+    ) -> MacosFrameProcessorProcessState {
+        let current_frame = decoder_frame_to_native_frame(decoder_frame);
+        let mut debug_sample = self.debug.begin_frame(current_frame.metadata.pts_us);
+        debug_sample.node_count = self.processors.len();
+        MacosFrameProcessorProcessState {
+            current_frame,
+            processor_outputs: Vec::new(),
+            using_processor_output: false,
+            debug_sample,
+        }
+    }
+
+    fn process_node(
+        &mut self,
+        node_index: usize,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) -> Result<(), (anyhow::Error, DecoderNativeFrame)> {
+        let submit_result = match self.submit_to_node(node_index, &state.current_frame) {
+            Ok(result) => result,
+            Err(error) => {
+                self.release_processor_outputs(std::mem::take(&mut state.processor_outputs));
+                return Err((error, decoder_frame.clone()));
+            }
+        };
+
+        if self.handle_submit_status(node_index, submit_result, decoder_frame, state)? {
+            return Ok(());
+        }
+
+        let receive_output = match self.receive_from_node(node_index) {
+            Ok(output) => output,
+            Err(error) => {
+                self.release_processor_outputs(std::mem::take(&mut state.processor_outputs));
+                return Err((error, decoder_frame.clone()));
+            }
+        };
+        self.handle_receive_output(node_index, receive_output, decoder_frame, state)
+    }
+
+    fn submit_to_node(
+        &mut self,
+        node_index: usize,
+        current_frame: &NativeFrame,
+    ) -> anyhow::Result<FrameProcessorSubmitResult> {
+        let submit = FrameProcessorSubmitFrame {
+            metadata: current_frame.metadata.clone(),
+            present_deadline_us: current_frame
+                .metadata
+                .pts_us
+                .map(|pts| pts.saturating_add(duration_us_i64(self.policy.frame_deadline))),
+        };
+        self.metrics.submitted_frame_count = self.metrics.submitted_frame_count.saturating_add(1);
+        let node = &mut self.processors[node_index];
+        node.session
+            .submit_frame(current_frame, &submit)
+            .map_err(|error| {
+                frame_processor_runtime_error(
+                    self.mode,
+                    node.processor_index,
+                    &node.plugin_name,
+                    error,
+                )
+            })
+    }
+
+    fn handle_submit_status(
+        &mut self,
+        node_index: usize,
+        submit_result: FrameProcessorSubmitResult,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) -> Result<bool, (anyhow::Error, DecoderNativeFrame)> {
+        self.debug
+            .observe_submit(submit_result.queue_depth, submit_result.in_flight_frames);
+        match submit_result.status {
+            FrameProcessorSubmitStatus::Accepted => {
+                state.debug_sample.submitted_nodes =
+                    state.debug_sample.submitted_nodes.saturating_add(1);
+                Ok(false)
+            }
+            FrameProcessorSubmitStatus::Bypassed | FrameProcessorSubmitStatus::Backpressure => {
+                self.handle_submit_bypass(node_index, submit_result, decoder_frame, state)?;
+                Ok(true)
+            }
+            FrameProcessorSubmitStatus::Rejected => {
+                self.handle_submit_rejected(node_index, submit_result, decoder_frame, state)?;
+                Ok(true)
+            }
+        }
+    }
+
+    fn handle_submit_bypass(
+        &mut self,
+        node_index: usize,
+        submit_result: FrameProcessorSubmitResult,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) -> Result<(), (anyhow::Error, DecoderNativeFrame)> {
+        self.reset_to_decoder_frame(decoder_frame, state);
+        self.metrics.bypassed_frame_count = self.metrics.bypassed_frame_count.saturating_add(1);
+        self.debug.observe_bypass();
+        state.debug_sample.bypassed = true;
+        if submit_result.status == FrameProcessorSubmitStatus::Backpressure {
+            self.metrics.backpressure_count = self.metrics.backpressure_count.saturating_add(1);
+            self.debug.observe_backpressure();
+        }
+        let node_snapshot = self.node_snapshot(node_index);
+        let warning_kind = if submit_result.status == FrameProcessorSubmitStatus::Backpressure {
+            FrameProcessorWarningKind::Backpressure
+        } else {
+            FrameProcessorWarningKind::BypassActivated
+        };
+        self.push_warning(
+            warning_kind,
+            &node_snapshot,
+            &state.current_frame,
+            FrameProcessorWarningDetails {
+                queue_depth: submit_result.queue_depth,
+                in_flight_frames: submit_result.in_flight_frames,
+                ..FrameProcessorWarningDetails::default()
+            },
+            FrameProcessorPolicyAction::BypassOriginalFrame,
+            submit_result.message,
+        );
+        if self.mode == FrameProcessorMode::RequireProcessed {
+            return Err((
+                anyhow::anyhow!(
+                    "frame processor `{}` bypassed a frame in strict mode",
+                    node_snapshot.plugin_name
+                ),
+                decoder_frame.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn handle_submit_rejected(
+        &mut self,
+        node_index: usize,
+        submit_result: FrameProcessorSubmitResult,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) -> Result<(), (anyhow::Error, DecoderNativeFrame)> {
+        self.reset_to_decoder_frame(decoder_frame, state);
+        self.debug.observe_bypass();
+        state.debug_sample.bypassed = true;
+        let node_snapshot = self.node_snapshot(node_index);
+        self.push_warning(
+            FrameProcessorWarningKind::Unsupported,
+            &node_snapshot,
+            &state.current_frame,
+            FrameProcessorWarningDetails {
+                queue_depth: submit_result.queue_depth,
+                in_flight_frames: submit_result.in_flight_frames,
+                ..FrameProcessorWarningDetails::default()
+            },
+            if self.mode == FrameProcessorMode::RequireProcessed {
+                FrameProcessorPolicyAction::FailPlayback
+            } else {
+                FrameProcessorPolicyAction::BypassOriginalFrame
+            },
+            submit_result.message,
+        );
+        if self.mode == FrameProcessorMode::RequireProcessed {
+            return Err((
+                anyhow::anyhow!(
+                    "frame processor `{}` rejected a frame in strict mode",
+                    node_snapshot.plugin_name
+                ),
+                decoder_frame.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn receive_from_node(
+        &mut self,
+        node_index: usize,
+    ) -> anyhow::Result<FrameProcessorReceiveOutput> {
+        let node = &mut self.processors[node_index];
+        node.session.receive_frame().map_err(|error| {
+            frame_processor_runtime_error(self.mode, node.processor_index, &node.plugin_name, error)
+        })
+    }
+
+    fn handle_receive_output(
+        &mut self,
+        node_index: usize,
+        receive_output: FrameProcessorReceiveOutput,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) -> Result<(), (anyhow::Error, DecoderNativeFrame)> {
+        match receive_output {
+            FrameProcessorReceiveOutput::Frame(output) => {
+                self.handle_ready_output(node_index, output, decoder_frame, state)
+            }
+            FrameProcessorReceiveOutput::Pending | FrameProcessorReceiveOutput::EndOfStream => {
+                self.handle_pending_output(node_index, decoder_frame, state)
+            }
+        }
+    }
+
+    fn handle_ready_output(
+        &mut self,
+        node_index: usize,
+        output: FrameProcessorOutputFrame,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) -> Result<(), (anyhow::Error, DecoderNativeFrame)> {
+        state.debug_sample.processed_nodes = state.debug_sample.processed_nodes.saturating_add(1);
+        let node_snapshot = self.node_snapshot(node_index);
+        let timing_decision =
+            self.record_output_timing(&node_snapshot, &state.current_frame, &output);
+        state.debug_sample.deadline_missed |= timing_decision.deadline_missed;
+        state.debug_sample.dropped_output |= timing_decision.should_drop_output;
+        if timing_decision.should_drop_output || timing_decision.should_fail_playback {
+            self.release_processor_outputs(vec![ProcessorOwnedNativeFrame {
+                processor_index: node_snapshot.processor_index,
+                frame: output.frame.clone(),
+            }]);
+        }
+        if timing_decision.should_fail_playback && self.mode == FrameProcessorMode::RequireProcessed
+        {
+            self.release_processor_outputs(std::mem::take(&mut state.processor_outputs));
+            return Err((
+                anyhow::anyhow!(
+                    "frame processor `{}` missed frame deadline in strict mode",
+                    node_snapshot.plugin_name
+                ),
+                decoder_frame.clone(),
+            ));
+        }
+        if timing_decision.should_drop_output {
+            self.reset_to_decoder_frame(decoder_frame, state);
+            return Ok(());
+        }
+        self.accept_processor_output(output.frame, &node_snapshot, decoder_frame, state);
+        Ok(())
+    }
+
+    fn accept_processor_output(
+        &mut self,
+        output_frame: NativeFrame,
+        node_snapshot: &MacosFrameProcessorNodeSnapshot,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) {
+        if output_frame_requires_processor_release(&output_frame) {
+            state.processor_outputs.push(ProcessorOwnedNativeFrame {
+                processor_index: node_snapshot.processor_index,
+                frame: output_frame.clone(),
+            });
+        }
+        state.current_frame = output_frame;
+        if self.mode == FrameProcessorMode::DiagnosticsOnly {
+            state.current_frame = decoder_frame_to_native_frame(decoder_frame);
+            state.using_processor_output = false;
+        } else {
+            state.using_processor_output = true;
+        }
+    }
+
+    fn handle_pending_output(
+        &mut self,
+        node_index: usize,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) -> Result<(), (anyhow::Error, DecoderNativeFrame)> {
+        self.reset_to_decoder_frame(decoder_frame, state);
+        self.metrics.bypassed_frame_count = self.metrics.bypassed_frame_count.saturating_add(1);
+        self.debug.observe_bypass();
+        self.debug.observe_pending();
+        state.debug_sample.bypassed = true;
+        state.debug_sample.pending = true;
+        let node_snapshot = self.node_snapshot(node_index);
+        self.push_warning(
+            FrameProcessorWarningKind::BypassActivated,
+            &node_snapshot,
+            &state.current_frame,
+            FrameProcessorWarningDetails::default(),
+            FrameProcessorPolicyAction::BypassOriginalFrame,
+            Some("processor did not return a ready frame".to_owned()),
+        );
+        if self.mode == FrameProcessorMode::RequireProcessed {
+            return Err((
+                anyhow::anyhow!(
+                    "frame processor `{}` did not return a ready frame in strict mode",
+                    node_snapshot.plugin_name
+                ),
+                decoder_frame.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn reset_to_decoder_frame(
+        &mut self,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut MacosFrameProcessorProcessState,
+    ) {
+        self.release_processor_outputs(std::mem::take(&mut state.processor_outputs));
+        state.current_frame = decoder_frame_to_native_frame(decoder_frame);
+        state.using_processor_output = false;
+    }
+
+    fn finish_process_state(
+        &mut self,
+        decoder_frame: DecoderNativeFrame,
+        mut state: MacosFrameProcessorProcessState,
+    ) -> MacosFrameProcessorFrame {
+        let presentation_frame = if self.mode == FrameProcessorMode::PreferProcessed
+            || self.mode == FrameProcessorMode::RequireProcessed
+        {
+            native_frame_to_decoder_frame(&state.current_frame)
+        } else {
+            decoder_frame.clone()
+        };
+        state.debug_sample.output_pts_us = presentation_frame.metadata.pts_us;
+        state.debug_sample.presented_processed = state.using_processor_output;
+        self.debug.finish_frame(state.debug_sample);
+        MacosFrameProcessorFrame {
+            decoder_frame,
+            presentation_frame,
+            processor_outputs: state.processor_outputs,
+        }
+    }
+
+    fn record_output_timing(
+        &mut self,
+        node: &MacosFrameProcessorNodeSnapshot,
+        input: &NativeFrame,
+        output: &FrameProcessorOutputFrame,
+    ) -> MacosFrameProcessorTimingDecision {
+        self.metrics.processed_frame_count = self.metrics.processed_frame_count.saturating_add(1);
+        self.metrics.last_queue_wait_us = output.timings.queue_wait_us;
+        self.metrics.last_process_time_us = output.timings.process_time_us;
+        self.metrics.last_submit_to_ready_us = output.timings.submit_to_ready_us;
+        let mut decision = MacosFrameProcessorTimingDecision::default();
+        if output
+            .timings
+            .submit_to_ready_us
+            .is_some_and(|elapsed| elapsed > self.policy.frame_deadline.as_micros() as u64)
+        {
+            self.metrics.deadline_miss_count = self.metrics.deadline_miss_count.saturating_add(1);
+            self.debug.observe_deadline_miss();
+            decision.deadline_missed = true;
+            let action = if self.mode == FrameProcessorMode::RequireProcessed {
+                FrameProcessorPolicyAction::FailPlayback
+            } else {
+                FrameProcessorPolicyAction::BypassOriginalFrame
+            };
+            self.push_warning(
+                FrameProcessorWarningKind::DeadlineMissed,
+                node,
+                input,
+                FrameProcessorWarningDetails::from_output_timing(
+                    output,
+                    self.policy.frame_deadline,
+                ),
+                action,
+                Some("processor output missed frame deadline".to_owned()),
+            );
+            if self.mode == FrameProcessorMode::RequireProcessed {
+                decision.should_fail_playback = true;
+            }
+        }
+        if output.timings.submit_to_ready_us.is_some_and(|elapsed| {
+            elapsed
+                > (self.policy.frame_deadline + self.policy.late_output_tolerance).as_micros()
+                    as u64
+        }) {
+            decision.should_drop_output = true;
+            self.metrics.dropped_output_count = self.metrics.dropped_output_count.saturating_add(1);
+            self.metrics.late_output_drop_count =
+                self.metrics.late_output_drop_count.saturating_add(1);
+            self.debug.observe_dropped_output();
+            self.push_warning(
+                FrameProcessorWarningKind::LateOutputDropped,
+                node,
+                input,
+                FrameProcessorWarningDetails::from_output_timing(
+                    output,
+                    self.policy.frame_deadline,
+                ),
+                FrameProcessorPolicyAction::DropOutput,
+                Some("processor output was later than tolerance".to_owned()),
+            );
+        }
+        decision
+    }
+
+    fn release_processor_outputs(&mut self, mut outputs: Vec<ProcessorOwnedNativeFrame>) {
+        while let Some(output) = outputs.pop() {
+            if let Some(node) = self
+                .processors
+                .iter_mut()
+                .find(|node| node.processor_index == output.processor_index)
+            {
+                let _ = node.session.release_frame(output.frame);
+            }
+        }
+    }
+
+    fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+        self.pending_events.drain(..).collect()
+    }
+
+    fn flush(&mut self) {
+        for node in &mut self.processors {
+            let _ = node.session.flush();
+        }
+    }
+
+    fn push_warning(
+        &mut self,
+        kind: FrameProcessorWarningKind,
+        node: &MacosFrameProcessorNodeSnapshot,
+        input: &NativeFrame,
+        details: FrameProcessorWarningDetails,
+        policy_action: FrameProcessorPolicyAction,
+        message: Option<String>,
+    ) {
+        self.pending_events.push_back(PlayerRuntimeEvent::Warning(
+            PlayerRuntimeWarning::FrameProcessor(FrameProcessorWarning {
+                kind,
+                plugin_name: node.plugin_name.clone(),
+                processor_index: node.processor_index,
+                frame_id: input.metadata.frame_id,
+                frame_pts_us: input.metadata.pts_us,
+                frame_duration_us: input.metadata.duration_us,
+                input_handle_kind: Some(format!("{:?}", input.metadata.handle_kind)),
+                output_handle_kind: details.output_handle_kind,
+                queue_depth: details.queue_depth,
+                in_flight_frames: details.in_flight_frames,
+                queue_wait_us: details.queue_wait_us.or(self.metrics.last_queue_wait_us),
+                process_time_us: details
+                    .process_time_us
+                    .or(self.metrics.last_process_time_us),
+                submit_to_ready_us: details
+                    .submit_to_ready_us
+                    .or(self.metrics.last_submit_to_ready_us),
+                present_deadline_us: input
+                    .metadata
+                    .pts_us
+                    .map(|pts| pts.saturating_add(duration_us_i64(self.policy.frame_deadline))),
+                deadline_overrun_us: details.deadline_overrun_us,
+                consecutive_miss_count: None,
+                policy_action,
+                message,
+            }),
+        ));
+    }
+
+    fn node_snapshot(&self, node_index: usize) -> MacosFrameProcessorNodeSnapshot {
+        let node = &self.processors[node_index];
+        MacosFrameProcessorNodeSnapshot {
+            plugin_name: node.plugin_name.clone(),
+            processor_index: node.processor_index,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MacosFrameProcessorNodeSnapshot {
+    plugin_name: String,
+    processor_index: usize,
+}
+
+#[derive(Debug, Default)]
+struct FrameProcessorWarningDetails {
+    output_handle_kind: Option<String>,
+    queue_depth: Option<u32>,
+    in_flight_frames: Option<u32>,
+    queue_wait_us: Option<u64>,
+    process_time_us: Option<u64>,
+    submit_to_ready_us: Option<u64>,
+    deadline_overrun_us: Option<u64>,
+}
+
+impl FrameProcessorWarningDetails {
+    fn from_output_timing(output: &FrameProcessorOutputFrame, deadline: Duration) -> Self {
+        let deadline_us = deadline.as_micros() as u64;
+        Self {
+            output_handle_kind: Some(format!("{:?}", output.frame.metadata.handle_kind)),
+            queue_wait_us: output.timings.queue_wait_us,
+            process_time_us: output.timings.process_time_us,
+            submit_to_ready_us: output.timings.submit_to_ready_us,
+            deadline_overrun_us: output
+                .timings
+                .submit_to_ready_us
+                .and_then(|elapsed| elapsed.checked_sub(deadline_us)),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct MacosFrameProcessorTimingDecision {
+    should_drop_output: bool,
+    should_fail_playback: bool,
+    deadline_missed: bool,
+}
+
+fn frame_processor_runtime_error(
+    mode: FrameProcessorMode,
+    processor_index: usize,
+    plugin_name: &str,
+    error: FrameProcessorError,
+) -> anyhow::Error {
+    if mode == FrameProcessorMode::RequireProcessed {
+        anyhow::anyhow!(
+            "frame processor `{plugin_name}` at index {processor_index} failed in strict mode: {error}"
+        )
+    } else {
+        anyhow::anyhow!(
+            "frame processor `{plugin_name}` at index {processor_index} failed: {error}"
+        )
+    }
+}
+
+fn duration_us_i64(duration: Duration) -> i64 {
+    i64::try_from(duration.as_micros()).unwrap_or(i64::MAX)
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn max_option_u32(current: Option<u32>, next: Option<u32>) -> Option<u32> {
+    current.max(next)
 }
 
 fn select_macos_native_frame_decoder(
@@ -1394,10 +2890,12 @@ fn select_macos_native_frame_decoder(
         request.clone(),
     );
     let record = registry.best_native_decoder_for(&request)?;
-    let requirements = record
-        .decoder_capabilities
-        .as_ref()
-        .and_then(|capabilities| capabilities.native_requirements.as_ref());
+    let requirements = match record.capability_summary.as_ref() {
+        Some(PluginCapabilitySummary::Decoder(capabilities)) => {
+            capabilities.native_requirements.as_ref()
+        }
+        _ => None,
+    };
     if requirements.is_some_and(|requirements| {
         requirements.requires_native_device_context
             || (!requirements.output_handle_kinds.is_empty()
@@ -1411,6 +2909,13 @@ fn select_macos_native_frame_decoder(
         plugin_path: record.path.clone(),
         plugin_name: record.plugin_name.clone(),
         video_surface,
+        frame_processor_paths: if options.frame_processor_mode == FrameProcessorMode::Disabled {
+            Vec::new()
+        } else {
+            options.frame_processor_library_paths.clone()
+        },
+        frame_processor_mode: options.frame_processor_mode,
+        frame_processor_policy: options.frame_processor_policy.clone(),
     })
 }
 
@@ -1519,6 +3024,14 @@ fn macos_runtime_diagnostics(
                 .map(player_plugin_diagnostic_from_record),
         );
     }
+    if let Some(registry) = frame_processor_plugin_registry(options) {
+        plugin_diagnostics.extend(
+            registry
+                .records()
+                .iter()
+                .map(player_plugin_diagnostic_from_record),
+        );
+    }
 
     video_decode =
         apply_native_frame_plugin_preference_to_video_decode(video_decode, media_info, options);
@@ -1579,7 +3092,29 @@ fn apply_decoder_plugin_diagnostics(
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
 ) -> PlayerRuntimeStartup {
-    let Some(registry) = decoder_plugin_registry(media_info, options) else {
+    if let Some(registry) = decoder_plugin_registry(media_info, options) {
+        startup.plugin_diagnostics.extend(
+            registry
+                .records()
+                .iter()
+                .map(player_plugin_diagnostic_from_record),
+        );
+        if let Some(video_decode) = startup.video_decode.take() {
+            startup.video_decode = Some(apply_decoder_plugin_registry_to_video_decode(
+                video_decode,
+                media_info,
+                &registry,
+            ));
+        }
+    }
+    apply_frame_processor_plugin_diagnostics(startup, options)
+}
+
+fn apply_frame_processor_plugin_diagnostics(
+    mut startup: PlayerRuntimeStartup,
+    options: &PlayerRuntimeOptions,
+) -> PlayerRuntimeStartup {
+    let Some(registry) = frame_processor_plugin_registry(options) else {
         return startup;
     };
     startup.plugin_diagnostics.extend(
@@ -1588,13 +3123,6 @@ fn apply_decoder_plugin_diagnostics(
             .iter()
             .map(player_plugin_diagnostic_from_record),
     );
-    if let Some(video_decode) = startup.video_decode.take() {
-        startup.video_decode = Some(apply_decoder_plugin_registry_to_video_decode(
-            video_decode,
-            media_info,
-            &registry,
-        ));
-    }
     startup
 }
 
@@ -1696,6 +3224,17 @@ fn decoder_plugin_registry(
     ))
 }
 
+fn frame_processor_plugin_registry(options: &PlayerRuntimeOptions) -> Option<PluginRegistry> {
+    if options.frame_processor_mode == FrameProcessorMode::Disabled
+        || options.frame_processor_library_paths.is_empty()
+    {
+        return None;
+    }
+    Some(PluginRegistry::inspect_frame_processor_support(
+        &options.frame_processor_library_paths,
+    ))
+}
+
 fn decoder_plugin_diagnostic(
     media_info: &PlayerMediaInfo,
     registry: &PluginRegistry,
@@ -1739,11 +3278,11 @@ fn decoder_plugin_supported_labels(registry: &PluginRegistry) -> Vec<String> {
         .filter(|record| record.status == PluginDiagnosticStatus::DecoderSupported)
         .map(|record| {
             let name = record.plugin_name.as_deref().unwrap_or("unknown-decoder");
-            if record
-                .decoder_capabilities
-                .as_ref()
-                .is_some_and(|capabilities| capabilities.supports_native_frame_output)
-            {
+            if matches!(
+                record.capability_summary.as_ref(),
+                Some(PluginCapabilitySummary::Decoder(capabilities))
+                    if capabilities.supports_native_frame_output
+            ) {
                 format!("{name} native-frame")
             } else {
                 name.to_owned()
@@ -1814,12 +3353,33 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
             PluginDiagnosticStatus::DecoderUnsupported => {
                 PlayerPluginDiagnosticStatus::DecoderUnsupported
             }
+            PluginDiagnosticStatus::FrameProcessorSupported => {
+                PlayerPluginDiagnosticStatus::FrameProcessorSupported
+            }
+            PluginDiagnosticStatus::FrameProcessorUnsupported => {
+                PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+            }
         },
         message: record.message.clone(),
-        decoder_capabilities: record
-            .decoder_capabilities
+        capability: record
+            .capability_summary
             .as_ref()
-            .map(player_decoder_capability_summary_from_loader),
+            .map(player_plugin_capability_summary_from_loader),
+    }
+}
+
+fn player_plugin_capability_summary_from_loader(
+    summary: &PluginCapabilitySummary,
+) -> PlayerPluginCapabilitySummary {
+    match summary {
+        PluginCapabilitySummary::Decoder(summary) => PlayerPluginCapabilitySummary::Decoder(
+            player_decoder_capability_summary_from_loader(summary),
+        ),
+        PluginCapabilitySummary::FrameProcessor(summary) => {
+            PlayerPluginCapabilitySummary::FrameProcessor(
+                player_frame_processor_capability_summary_from_loader(summary),
+            )
+        }
     }
 }
 
@@ -1857,12 +3417,53 @@ fn player_decoder_codec_summary_from_loader(
     }
 }
 
+fn player_frame_processor_capability_summary_from_loader(
+    summary: &FrameProcessorPluginCapabilitySummary,
+) -> PlayerPluginFrameProcessorCapabilitySummary {
+    PlayerPluginFrameProcessorCapabilitySummary {
+        accepted_input_handle_kinds: summary
+            .accepted_input_handle_kinds
+            .iter()
+            .map(native_handle_kind_label)
+            .collect(),
+        output_handle_kinds: summary
+            .output_handle_kinds
+            .iter()
+            .map(native_handle_kind_label)
+            .collect(),
+        supports_video_frames: summary.supports_video_frames,
+        supports_in_place_passthrough: summary.supports_in_place_passthrough,
+        preserves_dimensions: summary.preserves_dimensions,
+        may_change_dimensions: summary.may_change_dimensions,
+        preserves_color_metadata: summary.preserves_color_metadata,
+        preserves_hdr_metadata: summary.preserves_hdr_metadata,
+        supports_flush: summary.supports_flush,
+        max_sessions: summary.max_sessions,
+        max_in_flight_frames: summary.max_in_flight_frames,
+    }
+}
+
+fn native_handle_kind_label(handle_kind: &NativeHandleKind) -> String {
+    match handle_kind {
+        NativeHandleKind::CvPixelBuffer => "cv_pixel_buffer".to_owned(),
+        NativeHandleKind::IoSurface => "io_surface".to_owned(),
+        NativeHandleKind::MetalTexture => "metal_texture".to_owned(),
+        NativeHandleKind::DmaBuf => "dma_buf".to_owned(),
+        NativeHandleKind::VaapiSurface => "vaapi_surface".to_owned(),
+        NativeHandleKind::D3D11Texture2D => "d3d11_texture_2d".to_owned(),
+        NativeHandleKind::DxgiSurface => "dxgi_surface".to_owned(),
+        NativeHandleKind::VulkanImage => "vulkan_image".to_owned(),
+        NativeHandleKind::Unknown(name) => name.clone(),
+    }
+}
+
 fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
     match kind {
         VesperPluginKind::PostDownloadProcessor => "post_download_processor",
         VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
         VesperPluginKind::Decoder => "decoder",
         VesperPluginKind::BenchmarkSink => "benchmark_sink",
+        VesperPluginKind::FrameProcessor => "frame_processor",
     }
 }
 
@@ -1870,7 +3471,35 @@ fn should_prefer_native_host_runtime(
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
 ) -> bool {
+    if should_route_macos_host_to_decoder_plugin_path(media_info, options) {
+        return false;
+    }
     options.video_surface.is_some() || media_info.best_video.is_none()
+}
+
+fn should_route_macos_host_to_decoder_plugin_path(
+    media_info: &PlayerMediaInfo,
+    options: &PlayerRuntimeOptions,
+) -> bool {
+    media_info.best_video.is_some()
+        && options.decoder_plugin_video_mode == PlayerDecoderPluginVideoMode::PreferNativeFrame
+}
+
+fn macos_host_software_path_reason(
+    media_info: &PlayerMediaInfo,
+    options: &PlayerRuntimeOptions,
+) -> Option<String> {
+    let best_video = media_info.best_video.as_ref()?;
+    if should_route_macos_host_to_decoder_plugin_path(media_info, options) {
+        return Some(format!(
+            "native-frame decoder plugin playback requested for {} video; selected desktop decoder plugin path",
+            best_video.codec
+        ));
+    }
+    Some(format!(
+        "macos native host runtime requires an external video surface for {} playback; selected software desktop path",
+        best_video.codec
+    ))
 }
 
 fn probe_macos_host_runtime_initializer_with_factories(
@@ -1899,12 +3528,7 @@ fn probe_macos_host_runtime_initializer_with_factories(
                     startup,
                 }))
             } else {
-                let fallback_reason = media_info.best_video.as_ref().map(|video| {
-                    format!(
-                        "macos native host runtime requires an external video surface for {} playback; selected software desktop path",
-                        video.codec
-                    )
-                });
+                let fallback_reason = macos_host_software_path_reason(&media_info, &options);
                 probe_software_fallback_initializer(
                     source,
                     options,
@@ -1965,6 +3589,7 @@ fn open_software_fallback_runtime(
     options: PlayerRuntimeOptions,
     fallback_reason: Option<String>,
 ) -> PlayerResult<PlayerRuntimeBootstrap> {
+    let forward_strict_frame_processor_error = strict_frame_processor_fallback_enabled(&options);
     match PlayerRuntime::open_source_with_factory(source, options, macos_runtime_adapter_factory())
     {
         Ok(mut bootstrap) => {
@@ -1981,14 +3606,22 @@ fn open_software_fallback_runtime(
             Ok(bootstrap)
         }
         Err(software_error) => match fallback_reason {
-            Some(fallback_reason) => Err(PlayerError::new(
-                PlayerErrorCode::BackendFailure,
-                format!(
-                    "macos native host playback failed and software fallback also failed: native={}, software={}",
-                    fallback_reason,
-                    software_error.message()
-                ),
-            )),
+            Some(fallback_reason) => {
+                if should_forward_strict_frame_processor_fallback_error(
+                    forward_strict_frame_processor_error,
+                    &software_error,
+                ) {
+                    return Err(software_error);
+                }
+                Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
+                    format!(
+                        "macos native host playback failed and software fallback also failed: native={}, software={}",
+                        fallback_reason,
+                        software_error.message()
+                    ),
+                ))
+            }
             None => Err(software_error),
         },
     }
@@ -2000,6 +3633,7 @@ fn open_software_fallback_runtime_with_interrupt(
     interrupt_flag: Arc<AtomicBool>,
     fallback_reason: Option<String>,
 ) -> PlayerResult<PlayerRuntimeBootstrap> {
+    let forward_strict_frame_processor_error = strict_frame_processor_fallback_enabled(&options);
     match open_macos_software_runtime_source_with_options_and_interrupt(
         source,
         options,
@@ -2010,14 +3644,22 @@ fn open_software_fallback_runtime_with_interrupt(
             Ok(bootstrap)
         }
         Err(software_error) => match fallback_reason {
-            Some(fallback_reason) => Err(PlayerError::new(
-                PlayerErrorCode::BackendFailure,
-                format!(
-                    "macos native host playback failed and software fallback also failed: native={}, software={}",
-                    fallback_reason,
-                    software_error.message()
-                ),
-            )),
+            Some(fallback_reason) => {
+                if should_forward_strict_frame_processor_fallback_error(
+                    forward_strict_frame_processor_error,
+                    &software_error,
+                ) {
+                    return Err(software_error);
+                }
+                Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
+                    format!(
+                        "macos native host playback failed and software fallback also failed: native={}, software={}",
+                        fallback_reason,
+                        software_error.message()
+                    ),
+                ))
+            }
             None => Err(software_error),
         },
     }
@@ -2029,12 +3671,40 @@ fn open_software_fallback_adapter_with_factory(
     software_factory: &dyn MacosHostFallbackFactory,
     fallback_reason: Option<String>,
 ) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
+    let forward_strict_frame_processor_error = strict_frame_processor_fallback_enabled(&options);
     let initializer = software_factory.probe_source_with_options(source, options)?;
     let mut startup = initializer.startup();
     apply_video_decode_fallback_reason(&mut startup, fallback_reason);
-    let mut bootstrap = initializer.initialize()?;
+    let mut bootstrap = match initializer.initialize() {
+        Ok(bootstrap) => bootstrap,
+        Err(software_error)
+            if should_forward_strict_frame_processor_fallback_error(
+                forward_strict_frame_processor_error,
+                &software_error,
+            ) =>
+        {
+            return Err(software_error);
+        }
+        Err(software_error) => return Err(software_error),
+    };
     bootstrap.startup = startup;
     Ok(bootstrap)
+}
+
+fn strict_frame_processor_fallback_enabled(options: &PlayerRuntimeOptions) -> bool {
+    options.frame_processor_mode == FrameProcessorMode::RequireProcessed
+        && !options.frame_processor_library_paths.is_empty()
+}
+
+fn should_forward_strict_frame_processor_fallback_error(
+    strict_frame_processor_fallback: bool,
+    error: &PlayerError,
+) -> bool {
+    strict_frame_processor_fallback
+        && error.code() == PlayerErrorCode::BackendFailure
+        && error
+            .message()
+            .contains("frame processor initialization failed in strict mode")
 }
 
 #[cfg(test)]
@@ -2045,18 +3715,20 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc,
     };
     use std::time::{Duration, Instant};
 
     #[cfg(target_os = "macos")]
     use super::macos_runtime_adapter_factory;
     use super::{
-        MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID, MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
-        MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, MacosHostPlayerRuntimeAdapterFactory,
-        MacosNativeFrameDecoderState, MacosNativeFramePacketSource, MacosNativeFrameVideoSource,
-        MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
-        MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
+        FrameProcessorDebugState, MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID,
+        MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+        MacosFrameProcessorChain, MacosFrameProcessorNode, MacosHostPlayerRuntimeAdapterFactory,
+        MacosNativeFrameDecoderState, MacosNativeFramePacketSource, MacosNativeFramePrefetchWakeup,
+        MacosNativeFrameVideoSource, MacosRuntimeActiveFallback, MacosRuntimeAdapter,
+        MacosRuntimeAdapterFallback, MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
         MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics,
         apply_decoder_plugin_diagnostics_to_video_decode,
         apply_decoder_plugin_registry_to_video_decode,
@@ -2065,8 +3737,10 @@ mod tests {
         open_macos_software_runtime_source_with_options_and_interrupt,
         present_and_release_native_frame_with_presenter, present_if_current_epoch_and_release,
         probe_macos_host_runtime_initializer_with_factories,
-        probe_macos_host_runtime_source_with_options, release_native_frame_with_counter,
+        probe_macos_host_runtime_source_with_options, process_macos_native_frame,
+        release_native_frame_with_counter, should_forward_strict_frame_processor_fallback_error,
         should_trigger_runtime_fallback_for_advance, should_trigger_runtime_fallback_for_command,
+        spawn_macos_native_frame_prefetch_worker, strict_frame_processor_fallback_enabled,
     };
     use player_backend_ffmpeg::{
         CompressedVideoPacket, FfmpegBackend, VideoPacketSource, VideoPacketStreamInfo,
@@ -2078,21 +3752,26 @@ mod tests {
         DecoderError, DecoderMediaKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
         DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
         DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
-        NativeDecoderSession, VesperPluginKind,
+        FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorOutputFrame,
+        FrameProcessorReceiveOutput, FrameProcessorSession, FrameProcessorSessionInfo,
+        FrameProcessorSubmitFrame, FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
+        NativeDecoderSession, NativeFrame, VesperPluginKind,
     };
     use player_plugin_loader::{
         DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, LoadedDynamicPlugin,
-        PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+        PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     };
     use player_runtime::{
-        DecodedVideoFrame, PlaybackProgress, PlayerError, PlayerErrorCode, PlayerMediaInfo,
+        DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
+        FrameProcessorWarningKind, PlaybackProgress, PlayerError, PlayerErrorCode,
+        PlayerFrameProcessingMetrics, PlayerMediaInfo, PlayerPluginCapabilitySummary,
         PlayerPluginDiagnosticStatus, PlayerResult, PlayerRuntimeAdapter,
         PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
         PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
         PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,
-        PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
-        PresentationState,
+        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning,
+        PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind,
+        PlayerVideoSurfaceTarget, PresentationState,
     };
     #[cfg(target_os = "macos")]
     use player_runtime::{PlayerDecoderPluginVideoMode, PlayerRuntimeInitializer};
@@ -2242,6 +3921,99 @@ mod tests {
     }
 
     #[test]
+    fn macos_host_strategy_routes_explicit_native_frame_request_to_plugin_path() {
+        let native_factory = FakeStrategyFactory {
+            capabilities: PlayerRuntimeAdapterCapabilities {
+                adapter_id: MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID,
+                backend_family: PlayerRuntimeAdapterBackendFamily::NativeMacos,
+                supports_audio_output: true,
+                supports_frame_output: false,
+                supports_external_video_surface: true,
+                supports_seek: true,
+                supports_stop: true,
+                supports_playback_rate: true,
+                playback_rate_min: Some(0.5),
+                playback_rate_max: Some(3.0),
+                natural_playback_rate_max: Some(2.0),
+                supports_hardware_decode: true,
+                supports_streaming: true,
+                supports_hdr: true,
+            },
+            media_info: media_info_with_codec("H264"),
+            startup: startup_with_video_decode(PlayerVideoDecodeInfo {
+                selected_mode: PlayerVideoDecodeMode::Hardware,
+                hardware_available: true,
+                hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
+                fallback_reason: None,
+            }),
+            initialize_error: None,
+            advance_error: None,
+        };
+        let software_factory = FakeStrategyFactory {
+            capabilities: PlayerRuntimeAdapterCapabilities {
+                adapter_id: MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                backend_family: PlayerRuntimeAdapterBackendFamily::SoftwareDesktop,
+                supports_audio_output: true,
+                supports_frame_output: false,
+                supports_external_video_surface: true,
+                supports_seek: true,
+                supports_stop: true,
+                supports_playback_rate: true,
+                playback_rate_min: Some(0.5),
+                playback_rate_max: Some(3.0),
+                natural_playback_rate_max: Some(2.0),
+                supports_hardware_decode: true,
+                supports_streaming: true,
+                supports_hdr: true,
+            },
+            media_info: media_info_with_codec("H264"),
+            startup: startup_with_video_decode(PlayerVideoDecodeInfo {
+                selected_mode: PlayerVideoDecodeMode::Hardware,
+                hardware_available: true,
+                hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
+                fallback_reason: None,
+            }),
+            initialize_error: None,
+            advance_error: None,
+        };
+        unsafe {
+            std::env::set_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE", "1");
+        }
+        let options = PlayerRuntimeOptions::default()
+            .with_video_surface(PlayerVideoSurfaceTarget {
+                kind: PlayerVideoSurfaceKind::PlayerLayer,
+                handle: 0x1234,
+            })
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame);
+
+        let initializer = probe_macos_host_runtime_initializer_with_factories(
+            MediaSource::new("fixture.mp4"),
+            options,
+            &native_factory,
+            Arc::new(software_factory),
+        )
+        .expect("host strategy probe should route to desktop plugin path");
+
+        assert_eq!(
+            initializer.capabilities().backend_family,
+            PlayerRuntimeAdapterBackendFamily::SoftwareDesktop
+        );
+        assert_eq!(
+            initializer.capabilities().adapter_id,
+            MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
+        );
+        assert!(
+            initializer
+                .startup()
+                .video_decode
+                .as_ref()
+                .and_then(|info| info.fallback_reason.as_deref())
+                .unwrap_or_default()
+                .contains("selected desktop decoder plugin path")
+        );
+    }
+
+    #[test]
     fn host_strategy_initializer_falls_back_to_software_when_native_initialize_fails() {
         let native_factory = FakeStrategyFactory {
             capabilities: PlayerRuntimeAdapterCapabilities {
@@ -2338,6 +4110,29 @@ mod tests {
     }
 
     #[test]
+    fn strict_frame_processor_fallback_error_is_forwarded_without_host_wrapper() {
+        let mut strict_options = PlayerRuntimeOptions::default()
+            .with_frame_processor_library_paths([PathBuf::from("fixture-frame-processor")])
+            .with_frame_processor_mode(FrameProcessorMode::RequireProcessed);
+        assert!(strict_frame_processor_fallback_enabled(&strict_options));
+        let strict_error = PlayerError::new(
+            PlayerErrorCode::BackendFailure,
+            "native-frame frame processor initialization failed in strict mode: unsupported native handle kind: CvPixelBuffer",
+        );
+
+        assert!(should_forward_strict_frame_processor_fallback_error(
+            strict_frame_processor_fallback_enabled(&strict_options),
+            &strict_error
+        ));
+
+        strict_options.frame_processor_mode = FrameProcessorMode::PreferProcessed;
+        assert!(!should_forward_strict_frame_processor_fallback_error(
+            strict_frame_processor_fallback_enabled(&strict_options),
+            &strict_error
+        ));
+    }
+
+    #[test]
     fn software_runtime_initializer_falls_back_when_native_frame_initialize_fails() {
         let native_inner = Box::new(FakeStrategyInitializer {
             capabilities: PlayerRuntimeAdapterCapabilities {
@@ -2425,6 +4220,7 @@ mod tests {
                         .to_owned(),
             }),
             runtime_fallback: None,
+            strict_frame_processor_error_prefix: None,
         });
 
         let bootstrap = initializer
@@ -2451,6 +4247,67 @@ mod tests {
                 .unwrap_or_default()
                 .contains("native-frame init failed")
         );
+    }
+
+    #[test]
+    fn software_runtime_initializer_returns_native_frame_error_without_fallback() {
+        let native_inner = Box::new(FakeStrategyInitializer {
+            capabilities: PlayerRuntimeAdapterCapabilities {
+                adapter_id: MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                backend_family: PlayerRuntimeAdapterBackendFamily::SoftwareDesktop,
+                supports_audio_output: true,
+                supports_frame_output: false,
+                supports_external_video_surface: true,
+                supports_seek: true,
+                supports_stop: true,
+                supports_playback_rate: true,
+                playback_rate_min: Some(0.5),
+                playback_rate_max: Some(3.0),
+                natural_playback_rate_max: Some(2.0),
+                supports_hardware_decode: true,
+                supports_streaming: true,
+                supports_hdr: true,
+            },
+            media_info: media_info_with_codec("H264"),
+            startup: startup_with_video_decode(PlayerVideoDecodeInfo {
+                selected_mode: PlayerVideoDecodeMode::Hardware,
+                hardware_available: true,
+                hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
+                fallback_reason: None,
+            }),
+            initialize_error: Some(PlayerError::new(
+                PlayerErrorCode::BackendFailure,
+                "native-frame init failed",
+            )),
+            advance_error: None,
+        });
+        let diagnostics = MacosRuntimeDiagnostics {
+            video_decode: macos_native_frame_decoder_video_decode_info(Some("fixture-native")),
+            plugin_diagnostics: Vec::new(),
+            has_video_surface: true,
+        };
+        let initializer = Box::new(MacosRuntimeAdapterInitializer {
+            inner: native_inner,
+            diagnostics,
+            fallback: None,
+            runtime_fallback: None,
+            strict_frame_processor_error_prefix: Some(
+                "native-frame frame processor initialization failed in strict mode".to_owned(),
+            ),
+        });
+
+        let error = match initializer.initialize() {
+            Ok(_) => panic!("strict native-frame initializer should not fall back"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
+        assert!(
+            error
+                .message()
+                .contains("frame processor initialization failed in strict mode")
+        );
+        assert!(error.message().contains("native-frame init failed"));
     }
 
     #[test]
@@ -3001,12 +4858,11 @@ mod tests {
                 diagnostic.plugin_name.as_deref(),
                 Some("player-decoder-videotoolbox")
             );
-            assert!(
-                diagnostic
-                    .decoder_capabilities
-                    .as_ref()
-                    .is_some_and(|capabilities| capabilities.supports_native_frame_output)
-            );
+            assert!(matches!(
+                diagnostic.capability.as_ref(),
+                Some(PlayerPluginCapabilitySummary::Decoder(capabilities))
+                    if capabilities.supports_native_frame_output
+            ));
             let fallback = diagnostics
                 .video_decode
                 .fallback_reason
@@ -3083,8 +4939,10 @@ mod tests {
             .expect("VideoToolbox native session should open");
 
         let mut submitted_packets = 0usize;
+        let mut accepted_packets = 0usize;
         let mut decoded_frames = 0usize;
-        while submitted_packets < 120 && decoded_frames == 0 {
+        let mut decoded_pts = Vec::new();
+        while submitted_packets < 120 {
             let Some(packet) = packet_source
                 .next_packet()
                 .expect("packet demux should succeed")
@@ -3109,6 +4967,7 @@ mod tests {
             if !send_result.accepted {
                 continue;
             }
+            accepted_packets += 1;
 
             loop {
                 match session
@@ -3123,6 +4982,7 @@ mod tests {
                         assert!(frame.handle != 0);
                         assert!(frame.metadata.width > 0);
                         assert!(frame.metadata.height > 0);
+                        decoded_pts.push(frame.metadata.pts_us);
                         session
                             .release_native_frame(frame)
                             .expect("native frame release should succeed");
@@ -3137,6 +4997,17 @@ mod tests {
         assert!(
             decoded_frames > 0,
             "VideoToolbox did not produce a CVPixelBuffer after {submitted_packets} packets from {source}"
+        );
+        assert!(
+            decoded_frames >= accepted_packets.saturating_sub(2),
+            "VideoToolbox output was sparse for {source}: decoded {decoded_frames} frames from {accepted_packets} accepted packets; pts={decoded_pts:?}"
+        );
+        assert!(
+            decoded_pts
+                .iter()
+                .flatten()
+                .any(|pts| *pts > 0 && *pts < 1_000_000),
+            "VideoToolbox output did not include non-keyframe-era PTS values from the first second: pts={decoded_pts:?}"
         );
     }
 
@@ -3184,10 +5055,8 @@ mod tests {
             "VideoToolbox should decode a frame after flush/seek"
         );
 
-        assert!(
-            drain_videotoolbox_session_to_eof(packet_source.as_mut(), session.as_mut(), 600),
-            "VideoToolbox should report EOF after packet drain"
-        );
+        drain_videotoolbox_session_to_eof(packet_source.as_mut(), session.as_mut())
+            .expect("VideoToolbox should report EOF after packet drain");
         session.close().expect("VideoToolbox session should close");
     }
 
@@ -3250,6 +5119,267 @@ mod tests {
         unsafe {
             player_macos_test_release_object(layer_handle);
         }
+    }
+
+    #[test]
+    #[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared libraries plus a local H264/HEVC source"]
+    #[cfg(target_os = "macos")]
+    fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
+        let Some(decoder_plugin_path) =
+            std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping native-frame frame processor test: VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH is not set"
+            );
+            return;
+        };
+        if !decoder_plugin_path.is_file() {
+            eprintln!(
+                "skipping native-frame frame processor test: decoder plugin path is missing: {}",
+                decoder_plugin_path.display()
+            );
+            return;
+        }
+        let Some(frame_processor_path) =
+            std::env::var_os("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping native-frame frame processor test: VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH is not set"
+            );
+            return;
+        };
+        if !frame_processor_path.is_file() {
+            eprintln!(
+                "skipping native-frame frame processor test: frame processor plugin path is missing: {}",
+                frame_processor_path.display()
+            );
+            return;
+        }
+        let Some(source) = videotoolbox_smoke_source_path() else {
+            eprintln!(
+                "skipping native-frame frame processor test: no local H264/HEVC smoke source found"
+            );
+            return;
+        };
+
+        let layer_handle = unsafe { player_macos_test_create_player_layer() };
+        assert!(
+            !layer_handle.is_null(),
+            "test player layer handle should be created"
+        );
+
+        let options = PlayerRuntimeOptions::default()
+            .with_video_surface(PlayerVideoSurfaceTarget {
+                kind: PlayerVideoSurfaceKind::PlayerLayer,
+                handle: layer_handle as usize,
+            })
+            .with_decoder_plugin_library_paths([decoder_plugin_path])
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+            .with_frame_processor_library_paths([frame_processor_path])
+            .with_frame_processor_mode(FrameProcessorMode::PreferProcessed);
+        let bootstrap =
+            open_macos_host_runtime_source_with_options(MediaSource::new(source), options)
+                .expect("macOS host runtime should open the native-frame frame processor path");
+        unsafe {
+            std::env::remove_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE");
+        }
+
+        assert!(
+            bootstrap
+                .runtime
+                .capabilities()
+                .supports_external_video_surface
+        );
+        assert!(
+            bootstrap
+                .startup
+                .plugin_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.status
+                    == PlayerPluginDiagnosticStatus::FrameProcessorSupported
+                    && diagnostic.plugin_name.as_deref()
+                        == Some("player-frame-processor-diagnostic")),
+            "expected frame processor support diagnostic, got {:?}",
+            bootstrap.startup.plugin_diagnostics
+        );
+        assert!(
+            bootstrap
+                .startup
+                .video_decode
+                .as_ref()
+                .and_then(|info| info.fallback_reason.as_deref())
+                .unwrap_or_default()
+                .contains("selected for native-frame VideoToolbox playback"),
+            "expected native-frame decoder selection diagnostic, got {:?}",
+            bootstrap.startup.video_decode
+        );
+
+        unsafe {
+            player_macos_test_release_object(layer_handle);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared libraries plus a local H264/HEVC source"]
+    #[cfg(target_os = "macos")]
+    fn macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_software() {
+        let Some(decoder_plugin_path) =
+            std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping strict frame processor fallback test: VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH is not set"
+            );
+            return;
+        };
+        if !decoder_plugin_path.is_file() {
+            eprintln!(
+                "skipping strict frame processor fallback test: decoder plugin path is missing: {}",
+                decoder_plugin_path.display()
+            );
+            return;
+        }
+        let Some(frame_processor_path) =
+            std::env::var_os("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping strict frame processor fallback test: VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH is not set"
+            );
+            return;
+        };
+        if !frame_processor_path.is_file() {
+            eprintln!(
+                "skipping strict frame processor fallback test: frame processor plugin path is missing: {}",
+                frame_processor_path.display()
+            );
+            return;
+        }
+        let Some(source) = videotoolbox_smoke_source_path() else {
+            eprintln!(
+                "skipping strict frame processor fallback test: no local H264/HEVC smoke source found"
+            );
+            return;
+        };
+
+        let layer_handle = unsafe { player_macos_test_create_player_layer() };
+        assert!(
+            !layer_handle.is_null(),
+            "test player layer handle should be created"
+        );
+
+        let options = PlayerRuntimeOptions::default()
+            .with_video_surface(PlayerVideoSurfaceTarget {
+                kind: PlayerVideoSurfaceKind::PlayerLayer,
+                handle: layer_handle as usize,
+            })
+            .with_decoder_plugin_library_paths([decoder_plugin_path])
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+            .with_frame_processor_library_paths([frame_processor_path])
+            .with_frame_processor_mode(FrameProcessorMode::RequireProcessed);
+        let error = match open_macos_software_runtime_source_with_options_and_interrupt(
+            MediaSource::new(source),
+            options,
+            Arc::new(AtomicBool::new(false)),
+        ) {
+            Ok(_) => panic!("strict frame processor initialization should not fall back"),
+            Err(error) => error,
+        };
+        unsafe {
+            player_macos_test_release_object(layer_handle);
+        }
+
+        assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
+        assert!(
+            error
+                .message()
+                .contains("frame processor initialization failed in strict mode"),
+            "unexpected strict frame processor error: {}",
+            error
+        );
+    }
+
+    #[test]
+    #[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared libraries plus a local H264/HEVC source"]
+    #[cfg(target_os = "macos")]
+    fn macos_host_strict_frame_processor_failure_forwards_software_error_message() {
+        let Some(decoder_plugin_path) =
+            std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping host strict frame processor error test: VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH is not set"
+            );
+            return;
+        };
+        if !decoder_plugin_path.is_file() {
+            eprintln!(
+                "skipping host strict frame processor error test: decoder plugin path is missing: {}",
+                decoder_plugin_path.display()
+            );
+            return;
+        }
+        let Some(frame_processor_path) =
+            std::env::var_os("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping host strict frame processor error test: VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH is not set"
+            );
+            return;
+        };
+        if !frame_processor_path.is_file() {
+            eprintln!(
+                "skipping host strict frame processor error test: frame processor plugin path is missing: {}",
+                frame_processor_path.display()
+            );
+            return;
+        }
+        let Some(source) = videotoolbox_smoke_source_path() else {
+            eprintln!(
+                "skipping host strict frame processor error test: no local H264/HEVC smoke source found"
+            );
+            return;
+        };
+
+        let layer_handle = unsafe { player_macos_test_create_player_layer() };
+        assert!(
+            !layer_handle.is_null(),
+            "test player layer handle should be created"
+        );
+
+        let options = PlayerRuntimeOptions::default()
+            .with_video_surface(PlayerVideoSurfaceTarget {
+                kind: PlayerVideoSurfaceKind::PlayerLayer,
+                handle: layer_handle as usize,
+            })
+            .with_decoder_plugin_library_paths([decoder_plugin_path])
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+            .with_frame_processor_library_paths([frame_processor_path])
+            .with_frame_processor_mode(FrameProcessorMode::RequireProcessed);
+        let error =
+            match open_macos_host_runtime_source_with_options(MediaSource::new(source), options) {
+                Ok(_) => {
+                    unsafe {
+                        player_macos_test_release_object(layer_handle);
+                    }
+                    panic!("strict host frame processor initialization should fail");
+                }
+                Err(error) => error,
+            };
+        unsafe {
+            player_macos_test_release_object(layer_handle);
+        }
+
+        assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
+        assert!(
+            error
+                .message()
+                .contains("frame processor initialization failed in strict mode"),
+            "unexpected strict frame processor error: {}",
+            error
+        );
+        assert!(
+            !error.message().contains("software fallback also failed"),
+            "strict frame processor error should not be wrapped as a fallback failure: {}",
+            error
+        );
     }
 
     #[test]
@@ -3736,12 +5866,13 @@ mod tests {
             .expect("seek should succeed")
             .expect("seek should decode a frame");
 
-        assert_eq!(
-            events
-                .lock()
-                .map(|events| events.clone())
-                .unwrap_or_default(),
-            vec!["flush", "packet_seek", "send_packet"]
+        let events = events
+            .lock()
+            .map(|events| events.clone())
+            .unwrap_or_default();
+        assert!(
+            contains_ordered_events(&events, &["flush", "packet_seek", "send_packet"]),
+            "seek should flush before packet seek and first post-seek packet: {events:?}"
         );
         assert_eq!(
             session_state
@@ -3769,10 +5900,12 @@ mod tests {
             false,
         );
 
-        assert!(matches!(
-            source.try_recv_frame().expect("first poll should succeed"),
-            DesktopVideoFramePoll::EndOfStream
-        ));
+        assert!(
+            source
+                .recv_frame()
+                .expect("first receive should succeed")
+                .is_none()
+        );
         assert!(matches!(
             source
                 .try_recv_frame()
@@ -3811,21 +5944,27 @@ mod tests {
             false,
         );
 
-        assert!(matches!(
-            source.try_recv_frame().expect("initial eof should succeed"),
-            DesktopVideoFramePoll::EndOfStream
-        ));
+        assert!(
+            source
+                .recv_frame()
+                .expect("initial eof should succeed")
+                .is_none()
+        );
         let frame = source
             .seek_to(Duration::from_millis(500))
             .expect("seek after eof should succeed")
             .expect("seek after eof should decode a frame");
 
-        assert_eq!(
-            events
-                .lock()
-                .map(|events| events.clone())
-                .unwrap_or_default(),
-            vec!["send_eos", "flush", "packet_seek", "send_packet"]
+        let events = events
+            .lock()
+            .map(|events| events.clone())
+            .unwrap_or_default();
+        assert!(
+            contains_ordered_events(
+                &events,
+                &["send_eos", "flush", "packet_seek", "send_packet"]
+            ),
+            "seek after EOF should flush and resume packets in order: {events:?}"
         );
         assert_eq!(frame.presentation_time, Duration::from_micros(500_000));
         drop(frame);
@@ -3850,10 +5989,10 @@ mod tests {
             false,
         );
 
-        let frame = match source.try_recv_frame().expect("frame poll should succeed") {
-            DesktopVideoFramePoll::Ready(frame) => frame,
-            other => panic!("expected a deferred native frame, got {other:?}"),
-        };
+        let frame = source
+            .recv_frame()
+            .expect("frame receive should succeed")
+            .expect("expected a deferred native frame");
         assert_eq!(outstanding_frames.load(Ordering::SeqCst), 1);
 
         drop(frame);
@@ -3863,6 +6002,271 @@ mod tests {
             session_state
                 .lock()
                 .map(|state| state.released_handles)
+                .unwrap_or_default(),
+            1
+        );
+    }
+
+    #[test]
+    fn frame_processor_prefer_mode_uses_processed_frame_and_releases_output() {
+        let state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+            output_handle_offset: 1_000,
+            ..RecordingFrameProcessorState::default()
+        }));
+        let mut chain = frame_processor_chain_for_test(
+            FrameProcessorMode::PreferProcessed,
+            vec![RecordingFrameProcessorSession::new(state.clone())],
+        );
+
+        let processed = chain
+            .process(test_native_frame(10, Some(33_000)))
+            .expect("processor chain should produce a frame");
+
+        assert_eq!(processed.presentation_frame.handle, 1_010);
+        assert_eq!(processed.decoder_frame.handle, 10);
+        assert_eq!(processed.processor_outputs.len(), 1);
+        assert_eq!(chain.metrics.submitted_frame_count, 1);
+        assert_eq!(chain.metrics.processed_frame_count, 1);
+
+        chain.release_processor_outputs(processed.processor_outputs);
+        assert_eq!(
+            state
+                .lock()
+                .map(|state| state.released_handles.clone())
+                .unwrap_or_default(),
+            vec![1_010]
+        );
+    }
+
+    #[test]
+    fn frame_processor_prefer_mode_accepts_in_place_passthrough_output() {
+        let state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+            output_handle_offset: 0,
+            output_requires_release: Some(false),
+            ..RecordingFrameProcessorState::default()
+        }));
+        let mut chain = frame_processor_chain_for_test(
+            FrameProcessorMode::PreferProcessed,
+            vec![RecordingFrameProcessorSession::new(state.clone())],
+        );
+
+        let processed = chain
+            .process(test_native_frame(10, Some(33_000)))
+            .expect("processor chain should accept in-place passthrough output");
+
+        assert_eq!(processed.presentation_frame.handle, 10);
+        assert!(processed.processor_outputs.is_empty());
+
+        chain.release_processor_outputs(processed.processor_outputs);
+        assert!(
+            state
+                .lock()
+                .map(|state| state.released_handles.is_empty())
+                .unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn frame_processor_late_output_is_dropped_and_warns() {
+        let state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+            output_handle_offset: 2_000,
+            submit_to_ready_us: Some(25_000),
+            ..RecordingFrameProcessorState::default()
+        }));
+        let mut chain = frame_processor_chain_for_test(
+            FrameProcessorMode::PreferProcessed,
+            vec![RecordingFrameProcessorSession::new(state.clone())],
+        );
+
+        let processed = chain
+            .process(test_native_frame(11, Some(66_000)))
+            .expect("late output should bypass instead of failing in prefer mode");
+
+        assert_eq!(processed.presentation_frame.handle, 11);
+        assert!(processed.processor_outputs.is_empty());
+        assert_eq!(chain.metrics.deadline_miss_count, 1);
+        assert_eq!(chain.metrics.late_output_drop_count, 1);
+        assert_eq!(chain.metrics.dropped_output_count, 1);
+        assert_eq!(
+            state
+                .lock()
+                .map(|state| state.released_handles.clone())
+                .unwrap_or_default(),
+            vec![2_011]
+        );
+
+        let events = chain.drain_events();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(warning))
+                    if warning.kind == FrameProcessorWarningKind::LateOutputDropped
+                        && warning.policy_action == FrameProcessorPolicyAction::DropOutput
+                        && warning.processor_index == 0
+                        && warning.output_handle_kind.as_deref() == Some("CvPixelBuffer")
+                        && warning.submit_to_ready_us == Some(25_000)
+                        && warning.deadline_overrun_us == Some(9_000)
+            )),
+            "late output should emit a processor-indexed warning"
+        );
+    }
+
+    #[test]
+    fn frame_processor_diagnostics_mode_runs_processor_but_presents_original() {
+        let state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+            output_handle_offset: 4_000,
+            ..RecordingFrameProcessorState::default()
+        }));
+        let mut chain = frame_processor_chain_for_test(
+            FrameProcessorMode::DiagnosticsOnly,
+            vec![RecordingFrameProcessorSession::new(state.clone())],
+        );
+
+        let processed = chain
+            .process(test_native_frame(13, Some(120_000)))
+            .expect("diagnostics mode should still run processor");
+
+        assert_eq!(processed.presentation_frame.handle, 13);
+        assert_eq!(processed.processor_outputs.len(), 1);
+        assert_eq!(
+            state
+                .lock()
+                .map(|state| state.submitted_handles.clone())
+                .unwrap_or_default(),
+            vec![13]
+        );
+
+        chain.release_processor_outputs(processed.processor_outputs);
+        assert_eq!(
+            state
+                .lock()
+                .map(|state| state.released_handles.clone())
+                .unwrap_or_default(),
+            vec![4_013]
+        );
+    }
+
+    #[test]
+    fn frame_processor_backpressure_bypasses_and_reports_queue_state() {
+        let state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+            submit_status: Some(FrameProcessorSubmitStatus::Backpressure),
+            forced_queue_depth: Some(3),
+            forced_in_flight_frames: Some(2),
+            ..RecordingFrameProcessorState::default()
+        }));
+        let mut chain = frame_processor_chain_for_test(
+            FrameProcessorMode::PreferProcessed,
+            vec![RecordingFrameProcessorSession::new(state)],
+        );
+
+        let processed = chain
+            .process(test_native_frame(14, Some(140_000)))
+            .expect("backpressure should bypass original in prefer mode");
+
+        assert_eq!(processed.presentation_frame.handle, 14);
+        assert_eq!(chain.metrics.bypassed_frame_count, 1);
+        assert_eq!(chain.metrics.backpressure_count, 1);
+        let events = chain.drain_events();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(warning))
+                    if warning.kind == FrameProcessorWarningKind::Backpressure
+                        && warning.policy_action == FrameProcessorPolicyAction::BypassOriginalFrame
+                        && warning.queue_depth == Some(3)
+                        && warning.in_flight_frames == Some(2)
+            )),
+            "backpressure should carry queue and in-flight state"
+        );
+    }
+
+    #[test]
+    fn frame_processor_rejected_frame_fails_in_strict_mode() {
+        let state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+            submit_status: Some(FrameProcessorSubmitStatus::Rejected),
+            ..RecordingFrameProcessorState::default()
+        }));
+        let mut chain = frame_processor_chain_for_test(
+            FrameProcessorMode::RequireProcessed,
+            vec![RecordingFrameProcessorSession::new(state)],
+        );
+
+        let error = chain
+            .process(test_native_frame(15, Some(160_000)))
+            .expect_err("strict mode should fail on rejected frame");
+
+        assert!(error.0.to_string().contains("strict mode"));
+        let events = chain.drain_events();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(warning))
+                    if warning.kind == FrameProcessorWarningKind::Unsupported
+                        && warning.policy_action == FrameProcessorPolicyAction::FailPlayback
+                        && warning.processor_index == 0
+            )),
+            "strict rejected frame should emit unsupported warning before failing"
+        );
+    }
+
+    #[test]
+    fn frame_processor_strict_deadline_failure_releases_processor_and_decoder_frames() {
+        let state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+            output_handle_offset: 3_000,
+            submit_to_ready_us: Some(17_000),
+            ..RecordingFrameProcessorState::default()
+        }));
+        let mut shared = MacosNativeFrameDecoderState {
+            frame_processor_chain: Some(frame_processor_chain_for_test(
+                FrameProcessorMode::RequireProcessed,
+                vec![RecordingFrameProcessorSession::new(state.clone())],
+            )),
+            presenter: None,
+            presentation_epoch: 0,
+        };
+
+        let error = process_macos_native_frame(&mut shared, test_native_frame(12, Some(99_000)))
+            .expect_err("strict mode should fail playback on deadline miss");
+
+        assert!(error.0.to_string().contains("strict mode"));
+        assert_eq!(
+            state
+                .lock()
+                .map(|state| state.released_handles.clone())
+                .unwrap_or_default(),
+            vec![3_012]
+        );
+    }
+
+    #[test]
+    fn frame_processor_chain_flushes_sessions() {
+        let first_state = Arc::new(std::sync::Mutex::new(
+            RecordingFrameProcessorState::default(),
+        ));
+        let second_state = Arc::new(std::sync::Mutex::new(
+            RecordingFrameProcessorState::default(),
+        ));
+        let mut chain = frame_processor_chain_for_test(
+            FrameProcessorMode::DiagnosticsOnly,
+            vec![
+                RecordingFrameProcessorSession::new(first_state.clone()),
+                RecordingFrameProcessorSession::new(second_state.clone()),
+            ],
+        );
+
+        chain.flush();
+
+        assert_eq!(
+            first_state
+                .lock()
+                .map(|state| state.flush_count)
+                .unwrap_or_default(),
+            1
+        );
+        assert_eq!(
+            second_state
+                .lock()
+                .map(|state| state.flush_count)
                 .unwrap_or_default(),
             1
         );
@@ -3929,27 +6333,28 @@ mod tests {
         message: &str,
         supports_native_frame_output: bool,
     ) -> PluginDiagnosticRecord {
+        let decoder_capabilities = DecoderPluginCapabilitySummary {
+            typed_codecs: vec![DecoderPluginCodecSummary {
+                codec: codec.to_owned(),
+                media_kind: DecoderMediaKind::Video,
+            }],
+            codecs: vec![format!("Video:{codec}")],
+            supports_native_frame_output,
+            native_requirements: None,
+            supports_hardware_decode: false,
+            supports_cpu_video_frames: !supports_native_frame_output,
+            supports_audio_frames: false,
+            supports_gpu_handles: supports_native_frame_output,
+            supports_flush: true,
+            supports_drain: true,
+            max_sessions: Some(1),
+        };
         PluginDiagnosticRecord {
             path: PathBuf::from("fixture-decoder"),
             status,
             plugin_name: Some("fixture-decoder".to_owned()),
             plugin_kind: Some(VesperPluginKind::Decoder),
-            decoder_capabilities: Some(DecoderPluginCapabilitySummary {
-                typed_codecs: vec![DecoderPluginCodecSummary {
-                    codec: codec.to_owned(),
-                    media_kind: DecoderMediaKind::Video,
-                }],
-                codecs: vec![format!("Video:{codec}")],
-                supports_native_frame_output,
-                native_requirements: None,
-                supports_hardware_decode: false,
-                supports_cpu_video_frames: !supports_native_frame_output,
-                supports_audio_frames: false,
-                supports_gpu_handles: supports_native_frame_output,
-                supports_flush: true,
-                supports_drain: true,
-                max_sessions: Some(1),
-            }),
+            capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
             message: Some(message.to_owned()),
         }
     }
@@ -4049,31 +6454,33 @@ mod tests {
     fn drain_videotoolbox_session_to_eof(
         packet_source: &mut VideoPacketSource,
         session: &mut dyn NativeDecoderSession,
-        max_packets: usize,
-    ) -> bool {
-        for _ in 0..max_packets {
-            let Some(packet) = packet_source
-                .next_packet()
-                .expect("packet demux should succeed")
-            else {
-                session
-                    .send_packet(
-                        &DecoderPacket {
-                            end_of_stream: true,
-                            ..DecoderPacket::default()
-                        },
-                        &[],
-                    )
-                    .expect("VideoToolbox should accept EOF packet");
-                return receive_and_release_videotoolbox_frames(session).1;
-            };
+    ) -> Result<(), &'static str> {
+        while let Some(packet) = packet_source
+            .next_packet()
+            .expect("packet demux should succeed")
+        {
             let _ = send_videotoolbox_packet(session, packet)
                 .expect("VideoToolbox should accept compressed packet");
             if receive_and_release_videotoolbox_frames(session).1 {
-                return true;
+                return Ok(());
+            };
+        }
+
+        session
+            .send_packet(
+                &DecoderPacket {
+                    end_of_stream: true,
+                    ..DecoderPacket::default()
+                },
+                &[],
+            )
+            .expect("VideoToolbox should accept EOF packet");
+        for _ in 0..16 {
+            if receive_and_release_videotoolbox_frames(session).1 {
+                return Ok(());
             }
         }
-        false
+        Err("VideoToolbox did not emit EOF after end-of-stream packet")
     }
 
     fn send_videotoolbox_packet(
@@ -4480,20 +6887,67 @@ mod tests {
         end_of_stream_received: bool,
     ) -> MacosNativeFrameVideoSource {
         let stream_info = packet_source.stream_info.clone();
-        MacosNativeFrameVideoSource {
-            packet_source: Box::new(packet_source),
-            stream_info,
-            shared: Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
-                session: Box::new(RecordingNativeDecoderSession {
-                    state: session_state,
-                }),
-                presenter: None,
-                outstanding_frames,
-                presentation_epoch: 0,
+        let session: Arc<std::sync::Mutex<Box<dyn NativeDecoderSession>>> = Arc::new(
+            std::sync::Mutex::new(Box::new(RecordingNativeDecoderSession {
+                state: session_state,
             })),
+        );
+        let shared = Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
+            frame_processor_chain: None,
+            presenter: None,
+            presentation_epoch: 0,
+        }));
+        let (command_tx, command_rx) = mpsc::channel();
+        let (frame_tx, frame_rx) = mpsc::channel();
+        let current_generation = Arc::new(AtomicU64::new(0));
+        let buffered_frame_count = Arc::new(AtomicUsize::new(0));
+        let prefetch_limit = Arc::new(AtomicUsize::new(1));
+        let prefetch_wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+        let worker = spawn_macos_native_frame_prefetch_worker(
+            Box::new(packet_source),
+            session.clone(),
+            shared.clone(),
+            outstanding_frames.clone(),
+            command_rx,
+            frame_tx,
+            current_generation.clone(),
+            buffered_frame_count.clone(),
+            prefetch_limit.clone(),
+            prefetch_wakeup.clone(),
+        )
+        .expect("test prefetch worker should spawn");
+        MacosNativeFrameVideoSource {
+            stream_info,
+            session,
+            shared,
+            outstanding_frames,
+            command_tx,
+            frame_rx,
+            generation: 0,
+            current_generation,
+            buffered_frame_count,
+            prefetch_limit,
+            prefetch_wakeup,
             end_of_input_sent,
             end_of_stream_received,
+            worker: Some(worker),
         }
+    }
+
+    fn contains_ordered_events(events: &[&'static str], expected: &[&'static str]) -> bool {
+        let mut next_expected = 0;
+        for event in events {
+            if expected
+                .get(next_expected)
+                .is_some_and(|expected| expected == event)
+            {
+                next_expected += 1;
+                if next_expected == expected.len() {
+                    return true;
+                }
+            }
+        }
+        expected.is_empty()
     }
 
     fn test_video_packet_stream_info() -> VideoPacketStreamInfo {
@@ -4579,6 +7033,164 @@ mod tests {
 
         fn close(&mut self) -> Result<(), DecoderError> {
             Ok(())
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingFrameProcessorState {
+        submit_status: Option<FrameProcessorSubmitStatus>,
+        receive_pending: bool,
+        output_handle_offset: usize,
+        output_requires_release: Option<bool>,
+        submit_to_ready_us: Option<u64>,
+        forced_queue_depth: Option<u32>,
+        forced_in_flight_frames: Option<u32>,
+        submitted_handles: Vec<usize>,
+        released_handles: Vec<usize>,
+        flush_count: usize,
+        close_count: usize,
+    }
+
+    struct RecordingFrameProcessorSession {
+        state: Arc<std::sync::Mutex<RecordingFrameProcessorState>>,
+        pending: Option<FrameProcessorOutputFrame>,
+    }
+
+    impl RecordingFrameProcessorSession {
+        fn new(state: Arc<std::sync::Mutex<RecordingFrameProcessorState>>) -> Self {
+            Self {
+                state,
+                pending: None,
+            }
+        }
+    }
+
+    impl FrameProcessorSession for RecordingFrameProcessorSession {
+        fn session_info(&self) -> FrameProcessorSessionInfo {
+            FrameProcessorSessionInfo {
+                processor_name: Some("recording-frame-processor".to_owned()),
+                selected_backend: Some("fixture".to_owned()),
+                output_handle_kind: Some(player_plugin::NativeHandleKind::CvPixelBuffer),
+                max_in_flight_frames: Some(1),
+            }
+        }
+
+        fn submit_frame(
+            &mut self,
+            frame: &NativeFrame,
+            _submit: &FrameProcessorSubmitFrame,
+        ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?;
+            state.submitted_handles.push(frame.handle);
+            if let Some(status) = state.submit_status {
+                return Ok(FrameProcessorSubmitResult {
+                    status,
+                    queue_depth: Some(state.forced_queue_depth.unwrap_or(0)),
+                    in_flight_frames: Some(state.forced_in_flight_frames.unwrap_or(0)),
+                    message: Some("forced submit status".to_owned()),
+                });
+            }
+            if state.receive_pending {
+                return Ok(FrameProcessorSubmitResult::default());
+            }
+            let mut output_metadata = frame.metadata.clone();
+            output_metadata.frame_id = output_metadata
+                .frame_id
+                .map(|frame_id| frame_id.saturating_add(10_000));
+            if let Some(requires_release) = state.output_requires_release {
+                output_metadata.release_tracking =
+                    Some(player_plugin::NativeFrameReleaseTracking {
+                        frame_id: output_metadata.frame_id,
+                        requires_release,
+                    });
+            }
+            let output_handle = state.output_handle_offset.saturating_add(frame.handle);
+            self.pending = Some(FrameProcessorOutputFrame {
+                frame: NativeFrame {
+                    metadata: output_metadata,
+                    handle: output_handle,
+                },
+                timings: FrameProcessorFrameTimings {
+                    queue_wait_us: Some(0),
+                    process_time_us: state.submit_to_ready_us,
+                    submit_to_ready_us: state.submit_to_ready_us.or(Some(100)),
+                },
+                source_frame_id: frame.metadata.frame_id,
+            });
+            Ok(FrameProcessorSubmitResult::default())
+        }
+
+        fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
+            let receive_pending = self
+                .state
+                .lock()
+                .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?
+                .receive_pending;
+            if receive_pending {
+                Ok(FrameProcessorReceiveOutput::Pending)
+            } else if let Some(output) = self.pending.take() {
+                Ok(FrameProcessorReceiveOutput::Frame(output))
+            } else {
+                Ok(FrameProcessorReceiveOutput::Pending)
+            }
+        }
+
+        fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?;
+            state.released_handles.push(frame.handle);
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), FrameProcessorError> {
+            self.pending = None;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?;
+            state.flush_count = state.flush_count.saturating_add(1);
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), FrameProcessorError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?;
+            state.close_count = state.close_count.saturating_add(1);
+            Ok(())
+        }
+    }
+
+    fn frame_processor_chain_for_test(
+        mode: FrameProcessorMode,
+        sessions: Vec<RecordingFrameProcessorSession>,
+    ) -> MacosFrameProcessorChain {
+        MacosFrameProcessorChain {
+            processors: sessions
+                .into_iter()
+                .enumerate()
+                .map(|(processor_index, session)| MacosFrameProcessorNode {
+                    plugin_name: format!("recording-frame-processor-{processor_index}"),
+                    processor_index,
+                    session: Box::new(session),
+                })
+                .collect(),
+            mode,
+            policy: FrameProcessorPolicy {
+                frame_deadline: Duration::from_millis(16),
+                late_output_tolerance: Duration::from_millis(4),
+                max_chain_depth: 8,
+                max_in_flight_frames_per_processor: 1,
+            },
+            metrics: PlayerFrameProcessingMetrics::default(),
+            pending_events: VecDeque::new(),
+            debug: FrameProcessorDebugState::from_env(),
         }
     }
 }

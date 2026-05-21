@@ -11,19 +11,28 @@ use crate::{
     FfiCachePolicy as BridgeCachePolicy, FfiCachePreset as BridgeCachePreset, FfiCommand,
     FfiDecodedAudioSummary, FfiError as BridgeError, FfiErrorCategory as BridgeErrorCategory,
     FfiErrorCode as BridgeErrorCode, FfiEvent as BridgeEvent, FfiFirstFrameReady,
+    FfiFrameProcessorPolicyAction as BridgeFrameProcessorPolicyAction,
+    FfiFrameProcessorWarning as BridgeFrameProcessorWarning,
+    FfiFrameProcessorWarningKind as BridgeFrameProcessorWarningKind,
     FfiMediaInfo as BridgeMediaInfo, FfiMediaSourceKind as BridgeMediaSourceKind,
     FfiMediaSourceProtocol as BridgeMediaSourceProtocol, FfiPixelFormat as BridgePixelFormat,
     FfiPlaybackState, FfiPlayer, FfiPlayerInitializer,
+    FfiPluginCapabilitySummary as BridgePluginCapabilitySummary,
+    FfiPluginDecoderCapabilitySummary as BridgePluginDecoderCapabilitySummary,
+    FfiPluginDiagnostic as BridgePluginDiagnostic,
+    FfiPluginDiagnosticStatus as BridgePluginDiagnosticStatus,
+    FfiPluginFrameProcessorCapabilitySummary as BridgePluginFrameProcessorCapabilitySummary,
     FfiPreloadBudgetPolicy as BridgePreloadBudgetPolicy, FfiProgress as BridgeProgress,
     FfiResolvedPreloadBudgetPolicy as BridgeResolvedPreloadBudgetPolicy,
     FfiResolvedResiliencePolicy as BridgeResolvedResiliencePolicy,
     FfiRetryBackoff as BridgeRetryBackoff, FfiRetryPolicy as BridgeRetryPolicy,
-    FfiSeekableRange as BridgeSeekableRange, FfiSnapshot as BridgeSnapshot,
-    FfiStartup as BridgeStartup, FfiTimelineKind as BridgeTimelineKind,
-    FfiTimelineSnapshot as BridgeTimelineSnapshot, FfiTrack as BridgeTrack,
-    FfiTrackCatalog as BridgeTrackCatalog, FfiTrackKind as BridgeTrackKind,
-    FfiTrackPreferences as BridgeTrackPreferences, FfiTrackSelection as BridgeTrackSelection,
-    FfiTrackSelectionMode as BridgeTrackSelectionMode,
+    FfiRuntimeWarning as BridgeRuntimeWarning,
+    FfiRuntimeWarningDomain as BridgeRuntimeWarningDomain, FfiSeekableRange as BridgeSeekableRange,
+    FfiSnapshot as BridgeSnapshot, FfiStartup as BridgeStartup,
+    FfiTimelineKind as BridgeTimelineKind, FfiTimelineSnapshot as BridgeTimelineSnapshot,
+    FfiTrack as BridgeTrack, FfiTrackCatalog as BridgeTrackCatalog,
+    FfiTrackKind as BridgeTrackKind, FfiTrackPreferences as BridgeTrackPreferences,
+    FfiTrackSelection as BridgeTrackSelection, FfiTrackSelectionMode as BridgeTrackSelectionMode,
     FfiTrackSelectionSnapshot as BridgeTrackSelectionSnapshot,
     FfiVideoDecodeInfo as BridgeVideoDecodeInfo, FfiVideoDecodeMode as BridgeVideoDecodeMode,
     FfiVideoFrame as BridgeVideoFrame, FfiVideoInfo, resolve_preload_budget,
@@ -205,6 +214,63 @@ pub enum PlayerFfiEventKind {
     Ended = 10,
     InterruptionChanged = 11,
     RetryScheduled = 12,
+    Warning = 13,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiRuntimeWarningDomain {
+    #[default]
+    FrameProcessor = 0,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiFrameProcessorWarningKind {
+    #[default]
+    Slow = 0,
+    DeadlineMissed = 1,
+    Backpressure = 2,
+    BypassActivated = 3,
+    LateOutputDropped = 4,
+    OutputDropped = 5,
+    Disabled = 6,
+    Recovered = 7,
+    Unsupported = 8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiFrameProcessorPolicyAction {
+    #[default]
+    Continue = 0,
+    BypassOriginalFrame = 1,
+    DropOutput = 2,
+    DisableProcessor = 3,
+    FailPlayback = 4,
+    DiagnosticsOnly = 5,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiPluginDiagnosticStatus {
+    #[default]
+    Loaded = 0,
+    LoadFailed = 1,
+    UnsupportedKind = 2,
+    DecoderSupported = 3,
+    DecoderUnsupported = 4,
+    FrameProcessorSupported = 5,
+    FrameProcessorUnsupported = 6,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiPluginCapabilityKind {
+    #[default]
+    None = 0,
+    Decoder = 1,
+    FrameProcessor = 2,
 }
 
 /// Generation-checked initializer handle returned by `player_ffi_initializer_probe_uri`.
@@ -485,6 +551,70 @@ pub struct PlayerFfiVideoDecodeInfo {
 
 #[repr(C)]
 #[derive(Debug, Default)]
+pub struct PlayerFfiPluginCodecCapability {
+    pub media_kind: *mut c_char,
+    pub codec: *mut c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiPluginDecoderCapabilitySummary {
+    pub codecs: *mut PlayerFfiPluginCodecCapability,
+    pub codecs_len: usize,
+    pub legacy_codecs: *mut *mut c_char,
+    pub legacy_codecs_len: usize,
+    pub supports_native_frame_output: bool,
+    pub supports_hardware_decode: bool,
+    pub supports_cpu_video_frames: bool,
+    pub supports_audio_frames: bool,
+    pub supports_gpu_handles: bool,
+    pub supports_flush: bool,
+    pub supports_drain: bool,
+    pub has_max_sessions: bool,
+    pub max_sessions: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiPluginFrameProcessorCapabilitySummary {
+    pub accepted_input_handle_kinds: *mut *mut c_char,
+    pub accepted_input_handle_kinds_len: usize,
+    pub output_handle_kinds: *mut *mut c_char,
+    pub output_handle_kinds_len: usize,
+    pub supports_video_frames: bool,
+    pub supports_in_place_passthrough: bool,
+    pub preserves_dimensions: bool,
+    pub may_change_dimensions: bool,
+    pub preserves_color_metadata: bool,
+    pub preserves_hdr_metadata: bool,
+    pub supports_flush: bool,
+    pub has_max_sessions: bool,
+    pub max_sessions: u32,
+    pub has_max_in_flight_frames: bool,
+    pub max_in_flight_frames: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiPluginCapabilitySummary {
+    pub kind: PlayerFfiPluginCapabilityKind,
+    pub decoder: PlayerFfiPluginDecoderCapabilitySummary,
+    pub frame_processor: PlayerFfiPluginFrameProcessorCapabilitySummary,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiPluginDiagnostic {
+    pub path: *mut c_char,
+    pub plugin_name: *mut c_char,
+    pub plugin_kind: *mut c_char,
+    pub status: PlayerFfiPluginDiagnosticStatus,
+    pub message: *mut c_char,
+    pub capability: PlayerFfiPluginCapabilitySummary,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
 pub struct PlayerFfiStartup {
     pub ffmpeg_initialized: bool,
     pub has_audio_output: bool,
@@ -493,6 +623,8 @@ pub struct PlayerFfiStartup {
     pub decoded_audio: PlayerFfiDecodedAudioSummary,
     pub has_video_decode: bool,
     pub video_decode: PlayerFfiVideoDecodeInfo,
+    pub plugin_diagnostics: *mut PlayerFfiPluginDiagnostic,
+    pub plugin_diagnostics_len: usize,
 }
 
 #[repr(C)]
@@ -564,6 +696,47 @@ pub struct PlayerFfiFirstFrameReady {
 
 #[repr(C)]
 #[derive(Debug, Default)]
+pub struct PlayerFfiFrameProcessorWarning {
+    pub kind: PlayerFfiFrameProcessorWarningKind,
+    pub plugin_name: *mut c_char,
+    pub processor_index: usize,
+    pub has_frame_id: bool,
+    pub frame_id: u64,
+    pub has_frame_pts_us: bool,
+    pub frame_pts_us: i64,
+    pub has_frame_duration_us: bool,
+    pub frame_duration_us: i64,
+    pub input_handle_kind: *mut c_char,
+    pub output_handle_kind: *mut c_char,
+    pub has_queue_depth: bool,
+    pub queue_depth: u32,
+    pub has_in_flight_frames: bool,
+    pub in_flight_frames: u32,
+    pub has_queue_wait_us: bool,
+    pub queue_wait_us: u64,
+    pub has_process_time_us: bool,
+    pub process_time_us: u64,
+    pub has_submit_to_ready_us: bool,
+    pub submit_to_ready_us: u64,
+    pub has_present_deadline_us: bool,
+    pub present_deadline_us: i64,
+    pub has_deadline_overrun_us: bool,
+    pub deadline_overrun_us: u64,
+    pub has_consecutive_miss_count: bool,
+    pub consecutive_miss_count: u32,
+    pub policy_action: PlayerFfiFrameProcessorPolicyAction,
+    pub message: *mut c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct PlayerFfiRuntimeWarning {
+    pub domain: PlayerFfiRuntimeWarningDomain,
+    pub frame_processor: PlayerFfiFrameProcessorWarning,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
 pub struct PlayerFfiEvent {
     pub kind: PlayerFfiEventKind,
     pub initialized: PlayerFfiStartup,
@@ -579,6 +752,7 @@ pub struct PlayerFfiEvent {
     pub seek_position_ms: u64,
     pub retry_attempt: u32,
     pub retry_delay_ms: u64,
+    pub warning: PlayerFfiRuntimeWarning,
     pub error: PlayerFfiError,
 }
 
@@ -637,6 +811,43 @@ impl From<BridgeMediaSourceProtocol> for PlayerFfiMediaSourceProtocol {
             BridgeMediaSourceProtocol::Progressive => Self::Progressive,
             BridgeMediaSourceProtocol::Hls => Self::Hls,
             BridgeMediaSourceProtocol::Dash => Self::Dash,
+        }
+    }
+}
+
+impl From<BridgeRuntimeWarningDomain> for PlayerFfiRuntimeWarningDomain {
+    fn from(value: BridgeRuntimeWarningDomain) -> Self {
+        match value {
+            BridgeRuntimeWarningDomain::FrameProcessor => Self::FrameProcessor,
+        }
+    }
+}
+
+impl From<BridgeFrameProcessorWarningKind> for PlayerFfiFrameProcessorWarningKind {
+    fn from(value: BridgeFrameProcessorWarningKind) -> Self {
+        match value {
+            BridgeFrameProcessorWarningKind::Slow => Self::Slow,
+            BridgeFrameProcessorWarningKind::DeadlineMissed => Self::DeadlineMissed,
+            BridgeFrameProcessorWarningKind::Backpressure => Self::Backpressure,
+            BridgeFrameProcessorWarningKind::BypassActivated => Self::BypassActivated,
+            BridgeFrameProcessorWarningKind::LateOutputDropped => Self::LateOutputDropped,
+            BridgeFrameProcessorWarningKind::OutputDropped => Self::OutputDropped,
+            BridgeFrameProcessorWarningKind::Disabled => Self::Disabled,
+            BridgeFrameProcessorWarningKind::Recovered => Self::Recovered,
+            BridgeFrameProcessorWarningKind::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+impl From<BridgeFrameProcessorPolicyAction> for PlayerFfiFrameProcessorPolicyAction {
+    fn from(value: BridgeFrameProcessorPolicyAction) -> Self {
+        match value {
+            BridgeFrameProcessorPolicyAction::Continue => Self::Continue,
+            BridgeFrameProcessorPolicyAction::BypassOriginalFrame => Self::BypassOriginalFrame,
+            BridgeFrameProcessorPolicyAction::DropOutput => Self::DropOutput,
+            BridgeFrameProcessorPolicyAction::DisableProcessor => Self::DisableProcessor,
+            BridgeFrameProcessorPolicyAction::FailPlayback => Self::FailPlayback,
+            BridgeFrameProcessorPolicyAction::DiagnosticsOnly => Self::DiagnosticsOnly,
         }
     }
 }
@@ -1092,8 +1303,137 @@ impl From<BridgeVideoDecodeInfo> for PlayerFfiVideoDecodeInfo {
     }
 }
 
+impl From<BridgePluginDiagnosticStatus> for PlayerFfiPluginDiagnosticStatus {
+    fn from(value: BridgePluginDiagnosticStatus) -> Self {
+        match value {
+            BridgePluginDiagnosticStatus::Loaded => Self::Loaded,
+            BridgePluginDiagnosticStatus::LoadFailed => Self::LoadFailed,
+            BridgePluginDiagnosticStatus::UnsupportedKind => Self::UnsupportedKind,
+            BridgePluginDiagnosticStatus::DecoderSupported => Self::DecoderSupported,
+            BridgePluginDiagnosticStatus::DecoderUnsupported => Self::DecoderUnsupported,
+            BridgePluginDiagnosticStatus::FrameProcessorSupported => Self::FrameProcessorSupported,
+            BridgePluginDiagnosticStatus::FrameProcessorUnsupported => {
+                Self::FrameProcessorUnsupported
+            }
+        }
+    }
+}
+
+impl From<crate::FfiPluginCodecCapability> for PlayerFfiPluginCodecCapability {
+    fn from(value: crate::FfiPluginCodecCapability) -> Self {
+        Self {
+            media_kind: into_c_string_ptr(value.media_kind),
+            codec: into_c_string_ptr(value.codec),
+        }
+    }
+}
+
+impl From<BridgePluginDecoderCapabilitySummary> for PlayerFfiPluginDecoderCapabilitySummary {
+    fn from(value: BridgePluginDecoderCapabilitySummary) -> Self {
+        let codecs = value
+            .codecs
+            .into_iter()
+            .map(PlayerFfiPluginCodecCapability::from)
+            .collect::<Vec<_>>();
+        let (codecs, codecs_len) = into_owned_struct_array(codecs);
+        let (legacy_codecs, legacy_codecs_len) = into_owned_c_string_array(value.legacy_codecs);
+        Self {
+            codecs,
+            codecs_len,
+            legacy_codecs,
+            legacy_codecs_len,
+            supports_native_frame_output: value.supports_native_frame_output,
+            supports_hardware_decode: value.supports_hardware_decode,
+            supports_cpu_video_frames: value.supports_cpu_video_frames,
+            supports_audio_frames: value.supports_audio_frames,
+            supports_gpu_handles: value.supports_gpu_handles,
+            supports_flush: value.supports_flush,
+            supports_drain: value.supports_drain,
+            has_max_sessions: value.max_sessions.is_some(),
+            max_sessions: value.max_sessions.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<BridgePluginFrameProcessorCapabilitySummary>
+    for PlayerFfiPluginFrameProcessorCapabilitySummary
+{
+    fn from(value: BridgePluginFrameProcessorCapabilitySummary) -> Self {
+        let (accepted_input_handle_kinds, accepted_input_handle_kinds_len) =
+            into_owned_c_string_array(value.accepted_input_handle_kinds);
+        let (output_handle_kinds, output_handle_kinds_len) =
+            into_owned_c_string_array(value.output_handle_kinds);
+        Self {
+            accepted_input_handle_kinds,
+            accepted_input_handle_kinds_len,
+            output_handle_kinds,
+            output_handle_kinds_len,
+            supports_video_frames: value.supports_video_frames,
+            supports_in_place_passthrough: value.supports_in_place_passthrough,
+            preserves_dimensions: value.preserves_dimensions,
+            may_change_dimensions: value.may_change_dimensions,
+            preserves_color_metadata: value.preserves_color_metadata,
+            preserves_hdr_metadata: value.preserves_hdr_metadata,
+            supports_flush: value.supports_flush,
+            has_max_sessions: value.max_sessions.is_some(),
+            max_sessions: value.max_sessions.unwrap_or_default(),
+            has_max_in_flight_frames: value.max_in_flight_frames.is_some(),
+            max_in_flight_frames: value.max_in_flight_frames.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<BridgePluginCapabilitySummary> for PlayerFfiPluginCapabilitySummary {
+    fn from(value: BridgePluginCapabilitySummary) -> Self {
+        match value {
+            BridgePluginCapabilitySummary::Decoder(summary) => Self {
+                kind: PlayerFfiPluginCapabilityKind::Decoder,
+                decoder: summary.into(),
+                frame_processor: PlayerFfiPluginFrameProcessorCapabilitySummary::default(),
+            },
+            BridgePluginCapabilitySummary::FrameProcessor(summary) => Self {
+                kind: PlayerFfiPluginCapabilityKind::FrameProcessor,
+                decoder: PlayerFfiPluginDecoderCapabilitySummary::default(),
+                frame_processor: summary.into(),
+            },
+        }
+    }
+}
+
+impl From<BridgePluginDiagnostic> for PlayerFfiPluginDiagnostic {
+    fn from(value: BridgePluginDiagnostic) -> Self {
+        Self {
+            path: into_c_string_ptr(value.path),
+            plugin_name: value
+                .plugin_name
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            plugin_kind: value
+                .plugin_kind
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            status: value.status.into(),
+            message: value
+                .message
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            capability: value
+                .capability
+                .map(PlayerFfiPluginCapabilitySummary::from)
+                .unwrap_or_default(),
+        }
+    }
+}
+
 impl From<BridgeStartup> for PlayerFfiStartup {
     fn from(value: BridgeStartup) -> Self {
+        let plugin_diagnostics = value
+            .plugin_diagnostics
+            .into_iter()
+            .map(PlayerFfiPluginDiagnostic::from)
+            .collect::<Vec<_>>();
+        let (plugin_diagnostics, plugin_diagnostics_len) =
+            into_owned_struct_array(plugin_diagnostics);
         Self {
             ffmpeg_initialized: value.ffmpeg_initialized,
             has_audio_output: value.audio_output.is_some(),
@@ -1111,6 +1451,8 @@ impl From<BridgeStartup> for PlayerFfiStartup {
                 .video_decode
                 .map(PlayerFfiVideoDecodeInfo::from)
                 .unwrap_or_default(),
+            plugin_diagnostics,
+            plugin_diagnostics_len,
         }
     }
 }
@@ -1199,6 +1541,63 @@ impl From<FfiFirstFrameReady> for PlayerFfiFirstFrameReady {
     }
 }
 
+impl From<BridgeFrameProcessorWarning> for PlayerFfiFrameProcessorWarning {
+    fn from(value: BridgeFrameProcessorWarning) -> Self {
+        Self {
+            kind: value.kind.into(),
+            plugin_name: into_c_string_ptr(value.plugin_name),
+            processor_index: value.processor_index,
+            has_frame_id: value.frame_id.is_some(),
+            frame_id: value.frame_id.unwrap_or_default(),
+            has_frame_pts_us: value.frame_pts_us.is_some(),
+            frame_pts_us: value.frame_pts_us.unwrap_or_default(),
+            has_frame_duration_us: value.frame_duration_us.is_some(),
+            frame_duration_us: value.frame_duration_us.unwrap_or_default(),
+            input_handle_kind: value
+                .input_handle_kind
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            output_handle_kind: value
+                .output_handle_kind
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            has_queue_depth: value.queue_depth.is_some(),
+            queue_depth: value.queue_depth.unwrap_or_default(),
+            has_in_flight_frames: value.in_flight_frames.is_some(),
+            in_flight_frames: value.in_flight_frames.unwrap_or_default(),
+            has_queue_wait_us: value.queue_wait_us.is_some(),
+            queue_wait_us: value.queue_wait_us.unwrap_or_default(),
+            has_process_time_us: value.process_time_us.is_some(),
+            process_time_us: value.process_time_us.unwrap_or_default(),
+            has_submit_to_ready_us: value.submit_to_ready_us.is_some(),
+            submit_to_ready_us: value.submit_to_ready_us.unwrap_or_default(),
+            has_present_deadline_us: value.present_deadline_us.is_some(),
+            present_deadline_us: value.present_deadline_us.unwrap_or_default(),
+            has_deadline_overrun_us: value.deadline_overrun_us.is_some(),
+            deadline_overrun_us: value.deadline_overrun_us.unwrap_or_default(),
+            has_consecutive_miss_count: value.consecutive_miss_count.is_some(),
+            consecutive_miss_count: value.consecutive_miss_count.unwrap_or_default(),
+            policy_action: value.policy_action.into(),
+            message: value
+                .message
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+        }
+    }
+}
+
+impl From<BridgeRuntimeWarning> for PlayerFfiRuntimeWarning {
+    fn from(value: BridgeRuntimeWarning) -> Self {
+        let domain = value.domain().into();
+        match value {
+            BridgeRuntimeWarning::FrameProcessor(warning) => Self {
+                domain,
+                frame_processor: warning.into(),
+            },
+        }
+    }
+}
+
 impl From<BridgeEvent> for PlayerFfiEvent {
     fn from(value: BridgeEvent) -> Self {
         match value {
@@ -1259,6 +1658,11 @@ impl From<BridgeEvent> for PlayerFfiEvent {
                 kind: PlayerFfiEventKind::RetryScheduled,
                 retry_attempt: attempt,
                 retry_delay_ms: delay_ms,
+                ..Self::default()
+            },
+            BridgeEvent::Warning(warning) => Self {
+                kind: PlayerFfiEventKind::Warning,
+                warning: warning.into(),
                 ..Self::default()
             },
             BridgeEvent::Error(error) => Self {
@@ -2578,10 +2982,30 @@ fn into_owned_struct_array<T>(values: Vec<T>) -> (*mut T, usize) {
     (ptr, len)
 }
 
+fn into_owned_c_string_array(values: Vec<String>) -> (*mut *mut c_char, usize) {
+    let values = values
+        .into_iter()
+        .map(into_c_string_ptr)
+        .collect::<Vec<_>>();
+    into_owned_struct_array(values)
+}
+
 fn free_c_string(ptr_ref: &mut *mut c_char) {
     if !ptr_ref.is_null() && !(*ptr_ref).is_null() {
         unsafe {
             drop(CString::from_raw(*ptr_ref));
+        }
+    }
+    *ptr_ref = ptr::null_mut();
+}
+
+fn free_c_string_array(ptr_ref: &mut *mut *mut c_char, len: usize) {
+    if !ptr_ref.is_null() && !(*ptr_ref).is_null() {
+        unsafe {
+            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(*ptr_ref, len));
+            for value in boxed.iter_mut() {
+                free_c_string(value);
+            }
         }
     }
     *ptr_ref = ptr::null_mut();
@@ -2662,6 +3086,86 @@ fn free_audio_output(audio_output: &mut PlayerFfiAudioOutputInfo) {
     *audio_output = PlayerFfiAudioOutputInfo::default();
 }
 
+fn free_plugin_codec_capability(codec: &mut PlayerFfiPluginCodecCapability) {
+    free_c_string(&mut codec.media_kind);
+    free_c_string(&mut codec.codec);
+    *codec = PlayerFfiPluginCodecCapability::default();
+}
+
+fn free_plugin_decoder_capability(capability: &mut PlayerFfiPluginDecoderCapabilitySummary) {
+    if !capability.codecs.is_null() {
+        unsafe {
+            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
+                capability.codecs,
+                capability.codecs_len,
+            ));
+            for codec in boxed.iter_mut() {
+                free_plugin_codec_capability(codec);
+            }
+        }
+    }
+    free_c_string_array(&mut capability.legacy_codecs, capability.legacy_codecs_len);
+    *capability = PlayerFfiPluginDecoderCapabilitySummary::default();
+}
+
+fn free_plugin_frame_processor_capability(
+    capability: &mut PlayerFfiPluginFrameProcessorCapabilitySummary,
+) {
+    free_c_string_array(
+        &mut capability.accepted_input_handle_kinds,
+        capability.accepted_input_handle_kinds_len,
+    );
+    free_c_string_array(
+        &mut capability.output_handle_kinds,
+        capability.output_handle_kinds_len,
+    );
+    *capability = PlayerFfiPluginFrameProcessorCapabilitySummary::default();
+}
+
+fn free_plugin_capability(capability: &mut PlayerFfiPluginCapabilitySummary) {
+    free_plugin_decoder_capability(&mut capability.decoder);
+    free_plugin_frame_processor_capability(&mut capability.frame_processor);
+    *capability = PlayerFfiPluginCapabilitySummary::default();
+}
+
+fn free_plugin_diagnostic(diagnostic: &mut PlayerFfiPluginDiagnostic) {
+    free_c_string(&mut diagnostic.path);
+    free_c_string(&mut diagnostic.plugin_name);
+    free_c_string(&mut diagnostic.plugin_kind);
+    free_c_string(&mut diagnostic.message);
+    free_plugin_capability(&mut diagnostic.capability);
+    *diagnostic = PlayerFfiPluginDiagnostic::default();
+}
+
+fn free_plugin_diagnostics(startup: &mut PlayerFfiStartup) {
+    if !startup.plugin_diagnostics.is_null() {
+        unsafe {
+            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
+                startup.plugin_diagnostics,
+                startup.plugin_diagnostics_len,
+            ));
+            for diagnostic in boxed.iter_mut() {
+                free_plugin_diagnostic(diagnostic);
+            }
+        }
+    }
+    startup.plugin_diagnostics = ptr::null_mut();
+    startup.plugin_diagnostics_len = 0;
+}
+
+fn free_frame_processor_warning(warning: &mut PlayerFfiFrameProcessorWarning) {
+    free_c_string(&mut warning.plugin_name);
+    free_c_string(&mut warning.input_handle_kind);
+    free_c_string(&mut warning.output_handle_kind);
+    free_c_string(&mut warning.message);
+    *warning = PlayerFfiFrameProcessorWarning::default();
+}
+
+fn free_runtime_warning(warning: &mut PlayerFfiRuntimeWarning) {
+    free_frame_processor_warning(&mut warning.frame_processor);
+    *warning = PlayerFfiRuntimeWarning::default();
+}
+
 fn free_video_decode(video_decode: &mut PlayerFfiVideoDecodeInfo) {
     free_c_string(&mut video_decode.hardware_backend);
     free_c_string(&mut video_decode.fallback_reason);
@@ -2671,6 +3175,7 @@ fn free_video_decode(video_decode: &mut PlayerFfiVideoDecodeInfo) {
 fn free_startup(startup: &mut PlayerFfiStartup) {
     free_audio_output(&mut startup.audio_output);
     free_video_decode(&mut startup.video_decode);
+    free_plugin_diagnostics(startup);
     *startup = PlayerFfiStartup::default();
 }
 
@@ -2696,6 +3201,7 @@ fn free_event(event: &mut PlayerFfiEvent) {
     free_startup(&mut event.initialized);
     free_media_info(&mut event.metadata_ready);
     free_audio_output(&mut event.audio_output);
+    free_runtime_warning(&mut event.warning);
     unsafe { player_ffi_error_free(&mut event.error) };
     *event = PlayerFfiEvent::default();
 }
@@ -3045,27 +3551,33 @@ fn event_list_mut(events: *mut PlayerFfiEventList) -> Option<&'static mut Player
 mod tests {
     use super::{
         FfiPlayerInitializer, PlayerFfiAbrMode, PlayerFfiCallStatus, PlayerFfiCommandKind,
-        PlayerFfiError, PlayerFfiErrorCode, PlayerFfiEventKind, PlayerFfiHandle,
-        PlayerFfiInitializerHandle, PlayerFfiMediaInfo, PlayerFfiPlaybackState, PlayerFfiSnapshot,
-        PlayerFfiStartup, PlayerFfiTrackKind, PlayerFfiVideoFrame, into_initializer_handle,
-        player_ffi_event_list_free, player_ffi_initializer_destroy,
-        player_ffi_initializer_initialize, player_ffi_initializer_media_info,
-        player_ffi_initializer_probe_uri, player_ffi_initializer_startup,
-        player_ffi_media_info_free, player_ffi_player_destroy, player_ffi_player_dispatch,
-        player_ffi_player_drain_events, player_ffi_player_set_playback_rate,
-        player_ffi_snapshot_free, player_ffi_startup_free, player_ffi_video_frame_free,
+        PlayerFfiError, PlayerFfiErrorCode, PlayerFfiEventKind,
+        PlayerFfiFrameProcessorPolicyAction, PlayerFfiFrameProcessorWarningKind, PlayerFfiHandle,
+        PlayerFfiInitializerHandle, PlayerFfiMediaInfo, PlayerFfiPlaybackState,
+        PlayerFfiPluginCapabilityKind, PlayerFfiPluginDiagnosticStatus,
+        PlayerFfiRuntimeWarningDomain, PlayerFfiSnapshot, PlayerFfiStartup, PlayerFfiTrackKind,
+        PlayerFfiVideoFrame, into_initializer_handle, player_ffi_event_list_free,
+        player_ffi_initializer_destroy, player_ffi_initializer_initialize,
+        player_ffi_initializer_media_info, player_ffi_initializer_probe_uri,
+        player_ffi_initializer_startup, player_ffi_media_info_free, player_ffi_player_destroy,
+        player_ffi_player_dispatch, player_ffi_player_drain_events,
+        player_ffi_player_set_playback_rate, player_ffi_snapshot_free, player_ffi_startup_free,
+        player_ffi_video_frame_free,
     };
     use crate::FfiErrorCode;
     use player_runtime::{
-        DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
-        MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+        DecodedVideoFrame, FrameProcessorPolicyAction, FrameProcessorWarning,
+        FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
+        MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
         MediaTrackSelectionSnapshot, PlaybackProgress, PlayerAudioInfo, PlayerMediaInfo,
-        PlayerResult, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-        PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities,
-        PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand,
-        PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer,
-        PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoInfo, PresentationState,
-        VideoPixelFormat,
+        PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
+        PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+        PlayerPluginFrameProcessorCapabilitySummary, PlayerResult, PlayerRuntimeAdapter,
+        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+        PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup,
+        PlayerRuntimeWarning, PlayerVideoInfo, PresentationState, VideoPixelFormat,
     };
     use std::ffi::{CStr, CString};
     use std::ptr;
@@ -3333,6 +3845,86 @@ mod tests {
     }
 
     #[test]
+    fn player_drain_events_preserves_runtime_warning_payload() {
+        unsafe {
+            let initializer = fake_initializer("https://example.com/warning.m3u8");
+            let handle =
+                into_initializer_handle(initializer).expect("initializer handle should fit");
+            let mut player_handle = PlayerFfiHandle::default();
+            let mut has_initial_frame = false;
+            let mut initial_frame = PlayerFfiVideoFrame::default();
+            let mut startup = PlayerFfiStartup::default();
+            let mut error = PlayerFfiError::default();
+
+            let status = player_ffi_initializer_initialize(
+                handle,
+                &mut player_handle,
+                &mut has_initial_frame,
+                &mut initial_frame,
+                &mut startup,
+                &mut error,
+            );
+            assert_eq!(status, PlayerFfiCallStatus::Ok);
+            player_ffi_video_frame_free(&mut initial_frame);
+            player_ffi_startup_free(&mut startup);
+
+            let mut applied = false;
+            let mut snapshot = PlayerFfiSnapshot::default();
+            let dispatch_status = player_ffi_player_dispatch(
+                player_handle,
+                PlayerFfiCommandKind::SeekTo,
+                42,
+                &mut applied,
+                ptr::null_mut(),
+                &mut snapshot,
+                &mut error,
+            );
+            assert_eq!(dispatch_status, PlayerFfiCallStatus::Ok);
+            player_ffi_snapshot_free(&mut snapshot);
+
+            let mut events = super::PlayerFfiEventList::default();
+            let drain_status =
+                player_ffi_player_drain_events(player_handle, &mut events, &mut error);
+            assert_eq!(drain_status, PlayerFfiCallStatus::Ok);
+            assert_eq!(events.len, 1);
+
+            let event = &*events.ptr;
+            assert_eq!(event.kind, PlayerFfiEventKind::Warning);
+            assert_eq!(
+                event.warning.domain,
+                PlayerFfiRuntimeWarningDomain::FrameProcessor
+            );
+            let warning = &event.warning.frame_processor;
+            assert_eq!(
+                warning.kind,
+                PlayerFfiFrameProcessorWarningKind::DeadlineMissed
+            );
+            assert_eq!(copy_c_string(warning.plugin_name), "fixture-processor");
+            assert_eq!(warning.processor_index, 2);
+            assert!(warning.has_frame_id);
+            assert_eq!(warning.frame_id, 7);
+            assert!(warning.has_frame_pts_us);
+            assert_eq!(warning.frame_pts_us, 33_000);
+            assert_eq!(copy_c_string(warning.input_handle_kind), "CvPixelBuffer");
+            assert_eq!(copy_c_string(warning.output_handle_kind), "CvPixelBuffer");
+            assert!(warning.has_process_time_us);
+            assert_eq!(warning.process_time_us, 50_000);
+            assert_eq!(
+                warning.policy_action,
+                PlayerFfiFrameProcessorPolicyAction::BypassOriginalFrame
+            );
+            assert_eq!(
+                copy_c_string(warning.message),
+                "processor output missed frame deadline"
+            );
+            player_ffi_event_list_free(&mut events);
+
+            let destroy_status = player_ffi_player_destroy(player_handle, &mut error);
+            assert_eq!(destroy_status, PlayerFfiCallStatus::Ok);
+        }
+    }
+
+    #[test]
     fn initializer_media_info_and_startup_round_trip_fake_runtime_payload() {
         unsafe {
             let handle = into_initializer_handle(fake_initializer("https://example.com/video.mp4"))
@@ -3379,6 +3971,68 @@ mod tests {
             assert_eq!(
                 copy_c_string(startup.video_decode.hardware_backend),
                 "stub-hw"
+            );
+            assert_eq!(startup.plugin_diagnostics_len, 2);
+            let diagnostics = std::slice::from_raw_parts(
+                startup.plugin_diagnostics,
+                startup.plugin_diagnostics_len,
+            );
+            assert_eq!(
+                copy_c_string(diagnostics[0].path),
+                "/tmp/player-decoder-fixture.dylib"
+            );
+            assert_eq!(copy_c_string(diagnostics[0].plugin_name), "fixture-decoder");
+            assert_eq!(
+                diagnostics[0].status,
+                PlayerFfiPluginDiagnosticStatus::DecoderSupported
+            );
+            assert_eq!(
+                diagnostics[0].capability.kind,
+                PlayerFfiPluginCapabilityKind::Decoder
+            );
+            assert_eq!(diagnostics[0].capability.decoder.codecs_len, 1);
+            assert_eq!(
+                copy_c_string((*diagnostics[0].capability.decoder.codecs).media_kind),
+                "Video"
+            );
+            assert_eq!(
+                copy_c_string((*diagnostics[0].capability.decoder.codecs).codec),
+                "h264"
+            );
+            assert_eq!(diagnostics[0].capability.decoder.legacy_codecs_len, 1);
+            assert_eq!(
+                copy_c_string(*diagnostics[0].capability.decoder.legacy_codecs),
+                "Video:h264"
+            );
+            assert!(
+                diagnostics[0]
+                    .capability
+                    .decoder
+                    .supports_native_frame_output
+            );
+            assert_eq!(
+                diagnostics[1].status,
+                PlayerFfiPluginDiagnosticStatus::FrameProcessorSupported
+            );
+            assert_eq!(
+                diagnostics[1].capability.kind,
+                PlayerFfiPluginCapabilityKind::FrameProcessor
+            );
+            assert_eq!(
+                diagnostics[1]
+                    .capability
+                    .frame_processor
+                    .accepted_input_handle_kinds_len,
+                1
+            );
+            assert_eq!(
+                copy_c_string(
+                    *diagnostics[1]
+                        .capability
+                        .frame_processor
+                        .accepted_input_handle_kinds
+                ),
+                "CvPixelBuffer"
             );
             player_ffi_startup_free(&mut startup);
 
@@ -3617,7 +4271,54 @@ mod tests {
                     hardware_backend: Some("stub-hw".to_owned()),
                     fallback_reason: None,
                 }),
-                plugin_diagnostics: Vec::new(),
+                plugin_diagnostics: vec![
+                    PlayerPluginDiagnostic {
+                        path: "/tmp/player-decoder-fixture.dylib".to_owned(),
+                        plugin_name: Some("fixture-decoder".to_owned()),
+                        plugin_kind: Some("decoder".to_owned()),
+                        status: PlayerPluginDiagnosticStatus::DecoderSupported,
+                        message: Some("fixture decoder loaded".to_owned()),
+                        capability: Some(PlayerPluginCapabilitySummary::Decoder(
+                            PlayerPluginDecoderCapabilitySummary {
+                                codecs: vec![PlayerPluginCodecCapability {
+                                    media_kind: "Video".to_owned(),
+                                    codec: "h264".to_owned(),
+                                }],
+                                legacy_codecs: vec!["Video:h264".to_owned()],
+                                supports_native_frame_output: true,
+                                supports_hardware_decode: true,
+                                supports_cpu_video_frames: false,
+                                supports_audio_frames: false,
+                                supports_gpu_handles: true,
+                                supports_flush: true,
+                                supports_drain: true,
+                                max_sessions: Some(1),
+                            },
+                        )),
+                    },
+                    PlayerPluginDiagnostic {
+                        path: "/tmp/player-frame-processor-fixture.dylib".to_owned(),
+                        plugin_name: Some("fixture-processor".to_owned()),
+                        plugin_kind: Some("frame_processor".to_owned()),
+                        status: PlayerPluginDiagnosticStatus::FrameProcessorSupported,
+                        message: Some("fixture processor loaded".to_owned()),
+                        capability: Some(PlayerPluginCapabilitySummary::FrameProcessor(
+                            PlayerPluginFrameProcessorCapabilitySummary {
+                                accepted_input_handle_kinds: vec!["CvPixelBuffer".to_owned()],
+                                output_handle_kinds: vec!["CvPixelBuffer".to_owned()],
+                                supports_video_frames: true,
+                                supports_in_place_passthrough: true,
+                                preserves_dimensions: true,
+                                may_change_dimensions: false,
+                                preserves_color_metadata: true,
+                                preserves_hdr_metadata: true,
+                                supports_flush: true,
+                                max_sessions: Some(2),
+                                max_in_flight_frames: Some(4),
+                            },
+                        )),
+                    },
+                ],
             };
 
             Self {
@@ -3723,6 +4424,36 @@ mod tests {
                     self.playback_rate = rate;
                     self.pending_events
                         .push(PlayerRuntimeEvent::PlaybackRateChanged { rate });
+                    Ok(PlayerRuntimeCommandResult {
+                        applied: true,
+                        frame: None,
+                        snapshot: PlayerRuntimeAdapter::snapshot(self),
+                    })
+                }
+                PlayerRuntimeCommand::SeekTo { position } => {
+                    self.progress = PlaybackProgress::new(position, Some(Duration::from_secs(60)));
+                    self.pending_events.push(PlayerRuntimeEvent::Warning(
+                        PlayerRuntimeWarning::FrameProcessor(FrameProcessorWarning {
+                            kind: FrameProcessorWarningKind::DeadlineMissed,
+                            plugin_name: "fixture-processor".to_owned(),
+                            processor_index: 2,
+                            frame_id: Some(7),
+                            frame_pts_us: Some(33_000),
+                            frame_duration_us: Some(33_000),
+                            input_handle_kind: Some("CvPixelBuffer".to_owned()),
+                            output_handle_kind: Some("CvPixelBuffer".to_owned()),
+                            queue_depth: Some(1),
+                            in_flight_frames: Some(1),
+                            queue_wait_us: Some(100),
+                            process_time_us: Some(50_000),
+                            submit_to_ready_us: Some(50_000),
+                            present_deadline_us: Some(49_000),
+                            deadline_overrun_us: Some(34_000),
+                            consecutive_miss_count: Some(3),
+                            policy_action: FrameProcessorPolicyAction::BypassOriginalFrame,
+                            message: Some("processor output missed frame deadline".to_owned()),
+                        }),
+                    ));
                     Ok(PlayerRuntimeCommandResult {
                         applied: true,
                         frame: None,

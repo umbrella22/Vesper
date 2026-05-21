@@ -8,20 +8,29 @@ final class VesperPlatformCreateResult {
   const VesperPlatformCreateResult({
     required this.playerId,
     required this.snapshot,
+    this.pluginDiagnostics = const <VesperPluginDiagnostic>[],
   });
 
   factory VesperPlatformCreateResult.fromMap(Map<Object?, Object?> map) {
     final rawSnapshot = vesperDecodeMap(map['snapshot']);
+    final rawPluginDiagnostics = map['pluginDiagnostics'];
     return VesperPlatformCreateResult(
       playerId: map['playerId'] as String? ?? '',
       snapshot: rawSnapshot.isNotEmpty
           ? VesperPlayerSnapshot.fromMap(rawSnapshot)
           : const VesperPlayerSnapshot.initial(),
+      pluginDiagnostics: rawPluginDiagnostics is Iterable
+          ? rawPluginDiagnostics
+              .map((item) => vesperDecodeMap(item))
+              .map(VesperPluginDiagnostic.fromMap)
+              .toList(growable: false)
+          : const <VesperPluginDiagnostic>[],
     );
   }
 
   final String playerId;
   final VesperPlayerSnapshot snapshot;
+  final List<VesperPluginDiagnostic> pluginDiagnostics;
 }
 
 final class VesperPlatformDownloadCreateResult {

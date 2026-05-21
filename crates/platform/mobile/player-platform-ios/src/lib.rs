@@ -8,16 +8,17 @@ use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
-    MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
-    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError,
-    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics,
-    PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
-    PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FrameProcessorMode, MAX_PLAYBACK_RATE,
+    MIN_PLAYBACK_RATE, MediaAbrMode, MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind,
+    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
+    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerResilienceMetrics, PlayerResilienceMetricsTracker,
+    PlayerResult, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
+    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
+    PresentationState,
 };
 
 pub use download::{IosDownloadBridgeSession, IosDownloadCommand};
@@ -517,7 +518,8 @@ impl IosHostEvent {
             PlayerRuntimeEvent::Initialized(_)
             | PlayerRuntimeEvent::MetadataReady(_)
             | PlayerRuntimeEvent::FirstFrameReady(_)
-            | PlayerRuntimeEvent::AudioOutputChanged(_) => None,
+            | PlayerRuntimeEvent::AudioOutputChanged(_)
+            | PlayerRuntimeEvent::Warning(_) => None,
         }
     }
 }
@@ -660,6 +662,7 @@ impl PlayerRuntimeAdapterFactory for IosNativePlayerRuntimeAdapterFactory {
             }
             None => (placeholder_media_info(&source), placeholder_startup()),
         };
+        let startup = apply_ios_frame_processor_diagnostics(startup, &options);
 
         Ok(Box::new(IosNativePlayerRuntimeInitializer {
             bridge: self.bridge.clone(),
@@ -1663,6 +1666,32 @@ fn placeholder_startup() -> PlayerRuntimeStartup {
     }
 }
 
+fn apply_ios_frame_processor_diagnostics(
+    mut startup: PlayerRuntimeStartup,
+    options: &PlayerRuntimeOptions,
+) -> PlayerRuntimeStartup {
+    if options.frame_processor_mode == FrameProcessorMode::Disabled
+        && options.frame_processor_library_paths.is_empty()
+    {
+        return startup;
+    }
+    startup.plugin_diagnostics.push(PlayerPluginDiagnostic {
+        path: options
+            .frame_processor_library_paths
+            .first()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "internal-frame-processor-config".to_owned()),
+        plugin_name: None,
+        plugin_kind: Some("frame_processor".to_owned()),
+        status: PlayerPluginDiagnosticStatus::FrameProcessorUnsupported,
+        message: Some(
+            "iOS DirectNative playback does not support per-frame processors yet".to_owned(),
+        ),
+        capability: None,
+    });
+    startup
+}
+
 fn normalize_media_info(source: &MediaSource, mut media_info: PlayerMediaInfo) -> PlayerMediaInfo {
     media_info.source_uri = source.uri().to_owned();
     media_info.source_kind = source.kind();
@@ -1815,13 +1844,13 @@ mod tests {
     };
     use player_model::MediaSource;
     use player_runtime::{
-        DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaTrack, MediaTrackCatalog,
-        MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress,
-        PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics, PlayerResult,
-        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
-        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSnapshot,
-        PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
+        DecodedVideoFrame, FrameProcessorMode, MediaAbrMode, MediaAbrPolicy, MediaTrack,
+        MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot,
+        PlaybackProgress, PlayerErrorCode, PlayerMediaInfo, PlayerPluginDiagnosticStatus,
+        PlayerResilienceMetrics, PlayerResult, PlayerRuntimeAdapterBackendFamily,
+        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
+        PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup,
+        PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
         PresentationState,
     };
 
@@ -1842,6 +1871,39 @@ mod tests {
         );
         assert!(capabilities.supports_external_video_surface);
         assert!(capabilities.supports_hardware_decode);
+    }
+
+    #[test]
+    fn ios_frame_processor_config_reports_unsupported_diagnostic() {
+        let factory = IosNativePlayerRuntimeAdapterFactory::default();
+        let initializer = factory
+            .probe_source_with_options(
+                MediaSource::new("placeholder.mp4"),
+                PlayerRuntimeOptions::default()
+                    .with_frame_processor_mode(FrameProcessorMode::PreferProcessed)
+                    .with_frame_processor_library_paths([std::path::PathBuf::from(
+                        "/tmp/player-frame-processor-diagnostic",
+                    )]),
+            )
+            .expect("ios skeleton probe should succeed");
+
+        let startup = initializer.startup();
+        let diagnostic = startup
+            .plugin_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.plugin_kind.as_deref() == Some("frame_processor"))
+            .expect("frame processor configuration should report a diagnostic");
+        assert_eq!(
+            diagnostic.status,
+            PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+        );
+        assert!(
+            diagnostic
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("iOS DirectNative playback does not support per-frame processors yet")
+        );
     }
 
     #[test]

@@ -104,4 +104,132 @@ void main() {
       VesperFixedTrackStatus.pending,
     );
   });
+
+  test('player warning event decodes frame processor payload', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'macos-player',
+      'type': 'warning',
+      'warning': <Object?, Object?>{
+        'domain': 'frameProcessor',
+        'frameProcessor': <Object?, Object?>{
+          'kind': 'deadlineMissed',
+          'pluginName': 'fixture-processor',
+          'processorIndex': 2,
+          'frameId': 7,
+          'framePtsUs': 33000,
+          'inputHandleKind': 'CvPixelBuffer',
+          'outputHandleKind': 'CvPixelBuffer',
+          'processTimeUs': 50000,
+          'deadlineOverrunUs': 34000,
+          'policyAction': 'bypassOriginalFrame',
+          'message': 'processor output missed frame deadline',
+        },
+      },
+    });
+
+    expect(event, isA<VesperPlayerWarningEvent>());
+    final warningEvent = event as VesperPlayerWarningEvent;
+    expect(warningEvent.playerId, 'macos-player');
+    expect(
+        warningEvent.warning.domain, VesperRuntimeWarningDomain.frameProcessor);
+    expect(
+      warningEvent.warning.frameProcessor.kind,
+      VesperFrameProcessorWarningKind.deadlineMissed,
+    );
+    expect(warningEvent.warning.frameProcessor.pluginName, 'fixture-processor');
+    expect(warningEvent.warning.frameProcessor.processorIndex, 2);
+    expect(warningEvent.warning.frameProcessor.frameId, 7);
+    expect(warningEvent.warning.frameProcessor.framePtsUs, 33000);
+    expect(
+      warningEvent.warning.frameProcessor.policyAction,
+      VesperFrameProcessorPolicyAction.bypassOriginalFrame,
+    );
+  });
+
+  test('platform create result decodes plugin diagnostics', () {
+    final result = VesperPlatformCreateResult.fromMap(<Object?, Object?>{
+      'playerId': 'macos-player',
+      'snapshot': const VesperPlayerSnapshot.initial().toMap(),
+      'pluginDiagnostics': <Object?>[
+        <Object?, Object?>{
+          'path': '/tmp/player-decoder-fixture.dylib',
+          'pluginName': 'fixture-decoder',
+          'pluginKind': 'decoder',
+          'status': 'decoderSupported',
+          'message': 'fixture decoder loaded',
+          'capability': <Object?, Object?>{
+            'kind': 'decoder',
+            'decoder': <Object?, Object?>{
+              'codecs': <Object?>[
+                <Object?, Object?>{
+                  'mediaKind': 'Video',
+                  'codec': 'h264',
+                },
+              ],
+              'legacyCodecs': <String>['Video:h264'],
+              'supportsNativeFrameOutput': true,
+              'supportsHardwareDecode': true,
+              'supportsGpuHandles': true,
+              'supportsFlush': true,
+              'supportsDrain': true,
+              'maxSessions': 1,
+            },
+          },
+        },
+        <Object?, Object?>{
+          'path': '/tmp/player-frame-processor-fixture.dylib',
+          'pluginName': 'fixture-processor',
+          'pluginKind': 'frame_processor',
+          'status': 'frameProcessorSupported',
+          'capability': <Object?, Object?>{
+            'kind': 'frameProcessor',
+            'frameProcessor': <Object?, Object?>{
+              'acceptedInputHandleKinds': <String>['CvPixelBuffer'],
+              'outputHandleKinds': <String>['CvPixelBuffer'],
+              'supportsVideoFrames': true,
+              'supportsInPlacePassthrough': true,
+              'preservesDimensions': true,
+              'preservesColorMetadata': true,
+              'preservesHdrMetadata': true,
+              'supportsFlush': true,
+              'maxSessions': 2,
+              'maxInFlightFrames': 4,
+            },
+          },
+        },
+      ],
+    });
+
+    expect(result.pluginDiagnostics, hasLength(2));
+    final decoder = result.pluginDiagnostics.first;
+    expect(decoder.status, VesperPluginDiagnosticStatus.decoderSupported);
+    expect(decoder.capability?.kind, VesperPluginCapabilityKind.decoder);
+    expect(decoder.capability?.decoder?.codecs.single.codec, 'h264');
+    expect(decoder.capability?.decoder?.legacyCodecs.single, 'Video:h264');
+    expect(decoder.capability?.decoder?.supportsNativeFrameOutput, isTrue);
+    expect(decoder.capability?.decoder?.maxSessions, 1);
+
+    final frameProcessor = result.pluginDiagnostics[1];
+    expect(
+      frameProcessor.status,
+      VesperPluginDiagnosticStatus.frameProcessorSupported,
+    );
+    expect(
+      frameProcessor.capability?.kind,
+      VesperPluginCapabilityKind.frameProcessor,
+    );
+    expect(
+      frameProcessor
+          .capability?.frameProcessor?.acceptedInputHandleKinds.single,
+      'CvPixelBuffer',
+    );
+    expect(
+      frameProcessor.capability?.frameProcessor?.maxInFlightFrames,
+      4,
+    );
+    expect(
+      frameProcessor.capability?.toMap()['kind'],
+      VesperPluginCapabilityKind.frameProcessor.name,
+    );
+  });
 }

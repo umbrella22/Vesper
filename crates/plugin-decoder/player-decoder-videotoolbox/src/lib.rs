@@ -337,11 +337,11 @@ mod platform {
     use std::sync::{Arc, Mutex};
 
     use player_plugin::{
-        DecoderError, DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrameMetadata,
-        DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderPacket,
-        DecoderPacketResult, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
-        DecoderSessionInfo, VesperDecoderOpenSessionResult, VesperDecoderReceiveNativeFrameResult,
-        VesperPluginProcessResult,
+        DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
+        DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
+        DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
+        DecoderSessionConfig, DecoderSessionInfo, VesperDecoderOpenSessionResult,
+        VesperDecoderReceiveNativeFrameResult, VesperPluginProcessResult,
     };
 
     use super::{
@@ -646,6 +646,7 @@ mod platform {
         codec_name: String,
         width: u32,
         height: u32,
+        bitstream_format: Option<DecoderBitstreamFormat>,
         nal_length_size: usize,
         parameter_sets: Vec<Vec<u8>>,
         format_description: CMFormatDescriptionRef,
@@ -671,6 +672,7 @@ mod platform {
                 codec_name: config.codec,
                 width: config.width.unwrap_or_default(),
                 height: config.height.unwrap_or_default(),
+                bitstream_format: config.bitstream_format,
                 nal_length_size: parsed.as_ref().map_or(4, |parsed| parsed.nal_length_size),
                 parameter_sets: parsed
                     .take()
@@ -909,10 +911,16 @@ mod platform {
         }
 
         fn normalized_sample_data(&self, data: &[u8]) -> Result<Vec<u8>, DecoderError> {
-            if has_annexb_start_code(data) {
-                annexb_to_length_prefixed(data, self.nal_length_size)
-            } else {
-                Ok(data.to_vec())
+            match &self.bitstream_format {
+                Some(DecoderBitstreamFormat::AnnexB) => {
+                    annexb_to_length_prefixed(data, self.nal_length_size)
+                }
+                Some(DecoderBitstreamFormat::Avcc) | Some(DecoderBitstreamFormat::Hvcc) => {
+                    Ok(data.to_vec())
+                }
+                Some(DecoderBitstreamFormat::Unknown(_)) | None => {
+                    normalize_sample_data(data, self.nal_length_size)
+                }
             }
         }
 
@@ -1033,14 +1041,17 @@ mod platform {
         codec: VideoCodecKind,
         extradata: &[u8],
     ) -> Result<ParsedVideoConfig, DecoderError> {
-        if has_annexb_start_code(extradata) {
-            return parse_annexb_parameter_sets(codec, extradata).ok_or_else(|| {
-                DecoderError::InvalidPacket {
-                    message: "extradata did not contain complete Annex B parameter sets".to_owned(),
-                }
-            });
-        }
         match codec {
+            VideoCodecKind::H264 if extradata.first() == Some(&1) => {
+                parse_avcc_extradata(extradata)
+            }
+            VideoCodecKind::Hevc if extradata.first() == Some(&1) => {
+                parse_hvcc_extradata(extradata)
+            }
+            _ if has_annexb_start_code(extradata) => parse_annexb_parameter_sets(codec, extradata)
+                .ok_or_else(|| DecoderError::InvalidPacket {
+                    message: "extradata did not contain complete Annex B parameter sets".to_owned(),
+                }),
             VideoCodecKind::H264 => parse_avcc_extradata(extradata),
             VideoCodecKind::Hevc => parse_hvcc_extradata(extradata),
         }
@@ -1424,6 +1435,51 @@ mod platform {
         Ok(output)
     }
 
+    fn normalize_sample_data(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>, DecoderError> {
+        if length_prefixed_sample_is_well_formed(data, nal_length_size) {
+            return Ok(data.to_vec());
+        }
+        if has_annexb_start_code(data) {
+            return annexb_to_length_prefixed(data, nal_length_size);
+        }
+        Ok(data.to_vec())
+    }
+
+    fn length_prefixed_sample_is_well_formed(data: &[u8], nal_length_size: usize) -> bool {
+        if data.len() <= nal_length_size || !(1..=4).contains(&nal_length_size) {
+            return false;
+        }
+
+        let mut offset = 0usize;
+        let mut nal_count = 0usize;
+        while offset < data.len() {
+            if data.len().saturating_sub(offset) < nal_length_size {
+                return false;
+            }
+            let nal_len = read_nal_length(&data[offset..offset + nal_length_size]);
+            offset = offset.saturating_add(nal_length_size);
+            if nal_len == 0 {
+                return false;
+            }
+            let Some(next_offset) = offset.checked_add(nal_len) else {
+                return false;
+            };
+            if next_offset > data.len() {
+                return false;
+            }
+            offset = next_offset;
+            nal_count = nal_count.saturating_add(1);
+        }
+
+        nal_count > 0
+    }
+
+    fn read_nal_length(bytes: &[u8]) -> usize {
+        bytes
+            .iter()
+            .fold(0usize, |length, byte| (length << 8) | usize::from(*byte))
+    }
+
     fn annexb_nalus(data: &[u8]) -> Vec<&[u8]> {
         let mut nalus = Vec::new();
         let mut cursor = 0;
@@ -1503,8 +1559,8 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::{
-            VideoCodecKind, annexb_to_length_prefixed, parse_annexb_parameter_sets,
-            parse_avcc_extradata,
+            VideoCodecKind, annexb_to_length_prefixed, length_prefixed_sample_is_well_formed,
+            normalize_sample_data, parse_annexb_parameter_sets, parse_avcc_extradata,
         };
 
         #[test]
@@ -1538,6 +1594,19 @@ mod platform {
             let converted = annexb_to_length_prefixed(&packet, 4).expect("Annex B should convert");
 
             assert_eq!(converted, vec![0, 0, 0, 3, 0x65, 1, 2, 0, 0, 0, 2, 0x41, 3]);
+        }
+
+        #[test]
+        fn avcc_sample_with_start_code_like_length_stays_length_prefixed() {
+            let mut packet = vec![0, 0, 1, 0];
+            packet.push(0x41);
+            packet.extend(std::iter::repeat_n(0xaa, 255));
+
+            assert!(length_prefixed_sample_is_well_formed(&packet, 4));
+            let normalized =
+                normalize_sample_data(&packet, 4).expect("length-prefixed sample should normalize");
+
+            assert_eq!(normalized, packet);
         }
     }
 }

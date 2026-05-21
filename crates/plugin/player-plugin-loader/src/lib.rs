@@ -9,18 +9,25 @@ use libloading::Library;
 use player_plugin::{
     BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
     BenchmarkSinkStatus, CompletedDownloadInfo, DecoderCapabilities, DecoderCodecCapability,
-    DecoderError, DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind,
-    DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
-    DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput,
-    DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
-    PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
-    ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
-    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
-    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
+    DecoderError, DecoderMediaKind, DecoderNativeFrame, DecoderNativeRequirements,
+    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveFrameStatus,
+    DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
+    DecoderSessionInfo, FrameProcessorCapabilities, FrameProcessorError,
+    FrameProcessorOperationStatus, FrameProcessorOutputFrame, FrameProcessorPluginFactory,
+    FrameProcessorReceiveFrameMetadata, FrameProcessorReceiveOutput, FrameProcessorReceiveStatus,
+    FrameProcessorSession, FrameProcessorSessionConfig, FrameProcessorSessionInfo,
+    FrameProcessorSubmitFrame, FrameProcessorSubmitResult, NativeDecoderPluginFactory,
+    NativeDecoderSession, NativeFrame, NativeHandleKind, PipelineEvent, PipelineEventHook,
+    PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,
+    ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
+    VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
-    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
+    VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
+    VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
+    VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
+    VesperPluginResultStatus, VesperPostDownloadProcessorApi,
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -69,6 +76,7 @@ pub struct LoadedDynamicPlugin {
     pipeline_event_hook: Option<Arc<DynamicPipelineEventHook>>,
     benchmark_sink: Option<Arc<DynamicBenchmarkSink>>,
     native_decoder_plugin_factory: Option<Arc<DynamicNativeDecoderPluginFactory>>,
+    frame_processor_plugin_factory: Option<Arc<DynamicFrameProcessorPluginFactory>>,
 }
 
 pub struct BenchmarkSinkPluginSession {
@@ -235,6 +243,12 @@ impl LoadedDynamicPlugin {
             .map(|factory| factory as Arc<dyn NativeDecoderPluginFactory>)
     }
 
+    pub fn frame_processor_plugin_factory(&self) -> Option<Arc<dyn FrameProcessorPluginFactory>> {
+        self.frame_processor_plugin_factory
+            .clone()
+            .map(|factory| factory as Arc<dyn FrameProcessorPluginFactory>)
+    }
+
     fn from_descriptor(
         library: Option<Arc<LibraryHolder>>,
         descriptor: &VesperPluginDescriptor,
@@ -245,6 +259,7 @@ impl LoadedDynamicPlugin {
                 VESPER_PLUGIN_ABI_VERSION_V2
             }
             VesperPluginKind::Decoder => VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+            VesperPluginKind::FrameProcessor => VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
         };
         if descriptor.abi_version != expected_abi_version {
             return Err(PluginLoadError::AbiVersionMismatch {
@@ -276,6 +291,7 @@ impl LoadedDynamicPlugin {
                     pipeline_event_hook: None,
                     benchmark_sink: None,
                     native_decoder_plugin_factory: None,
+                    frame_processor_plugin_factory: None,
                 })
             }
             VesperPluginKind::PipelineEventHook => {
@@ -299,6 +315,7 @@ impl LoadedDynamicPlugin {
                     pipeline_event_hook: Some(Arc::new(hook)),
                     benchmark_sink: None,
                     native_decoder_plugin_factory: None,
+                    frame_processor_plugin_factory: None,
                 })
             }
             VesperPluginKind::BenchmarkSink => {
@@ -322,6 +339,7 @@ impl LoadedDynamicPlugin {
                     pipeline_event_hook: None,
                     benchmark_sink: Some(Arc::new(sink)),
                     native_decoder_plugin_factory: None,
+                    frame_processor_plugin_factory: None,
                 })
             }
             VesperPluginKind::Decoder => {
@@ -344,6 +362,30 @@ impl LoadedDynamicPlugin {
                     pipeline_event_hook: None,
                     benchmark_sink: None,
                     native_decoder_plugin_factory: Some(Arc::new(factory)),
+                    frame_processor_plugin_factory: None,
+                })
+            }
+            VesperPluginKind::FrameProcessor => {
+                let api_ptr = descriptor.api.cast::<VesperFrameProcessorPluginApiV1>();
+                let api =
+                    // SAFETY: `descriptor.api` must point at the v1 frame processor
+                    // ABI table when the plugin exports a valid frame processor descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "frame_processor_plugin_api_v1",
+                    })?;
+                let factory = DynamicFrameProcessorPluginFactory::new(
+                    library,
+                    descriptor_name.clone(),
+                    CheckedFrameProcessorPluginApi::try_from(*api)?,
+                )?;
+                Ok(Self {
+                    name: descriptor_name,
+                    plugin_kind: descriptor.plugin_kind,
+                    post_download_processor: None,
+                    pipeline_event_hook: None,
+                    benchmark_sink: None,
+                    native_decoder_plugin_factory: None,
+                    frame_processor_plugin_factory: Some(Arc::new(factory)),
                 })
             }
         }
@@ -404,6 +446,47 @@ impl From<&DecoderCapabilities> for DecoderPluginCapabilitySummary {
     }
 }
 
+/// Compact capability summary for one frame processor plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameProcessorPluginCapabilitySummary {
+    pub accepted_input_handle_kinds: Vec<NativeHandleKind>,
+    pub output_handle_kinds: Vec<NativeHandleKind>,
+    pub supports_video_frames: bool,
+    pub supports_in_place_passthrough: bool,
+    pub preserves_dimensions: bool,
+    pub may_change_dimensions: bool,
+    pub preserves_color_metadata: bool,
+    pub preserves_hdr_metadata: bool,
+    pub supports_flush: bool,
+    pub max_sessions: Option<u32>,
+    pub max_in_flight_frames: Option<u32>,
+}
+
+impl From<&FrameProcessorCapabilities> for FrameProcessorPluginCapabilitySummary {
+    fn from(capabilities: &FrameProcessorCapabilities) -> Self {
+        Self {
+            accepted_input_handle_kinds: capabilities.accepted_input_handle_kinds.clone(),
+            output_handle_kinds: capabilities.output_handle_kinds.clone(),
+            supports_video_frames: capabilities.supports_video_frames,
+            supports_in_place_passthrough: capabilities.supports_in_place_passthrough,
+            preserves_dimensions: capabilities.preserves_dimensions,
+            may_change_dimensions: capabilities.may_change_dimensions,
+            preserves_color_metadata: capabilities.preserves_color_metadata,
+            preserves_hdr_metadata: capabilities.preserves_hdr_metadata,
+            supports_flush: capabilities.supports_flush,
+            max_sessions: capabilities.max_sessions,
+            max_in_flight_frames: capabilities.max_in_flight_frames,
+        }
+    }
+}
+
+/// Capability summary for one loaded plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginCapabilitySummary {
+    Decoder(DecoderPluginCapabilitySummary),
+    FrameProcessor(FrameProcessorPluginCapabilitySummary),
+}
+
 impl DecoderPluginCapabilitySummary {
     fn from_capabilities(
         capabilities: &DecoderCapabilities,
@@ -444,6 +527,8 @@ pub enum PluginDiagnosticStatus {
     UnsupportedKind,
     DecoderSupported,
     DecoderUnsupported,
+    FrameProcessorSupported,
+    FrameProcessorUnsupported,
 }
 
 /// Structured diagnostic record for one dynamic plugin path.
@@ -453,8 +538,17 @@ pub struct PluginDiagnosticRecord {
     pub status: PluginDiagnosticStatus,
     pub plugin_name: Option<String>,
     pub plugin_kind: Option<VesperPluginKind>,
-    pub decoder_capabilities: Option<DecoderPluginCapabilitySummary>,
+    pub capability_summary: Option<PluginCapabilitySummary>,
     pub message: Option<String>,
+}
+
+fn decoder_capability_summary(
+    record: &PluginDiagnosticRecord,
+) -> Option<&DecoderPluginCapabilitySummary> {
+    match record.capability_summary.as_ref() {
+        Some(PluginCapabilitySummary::Decoder(summary)) => Some(summary),
+        _ => None,
+    }
 }
 
 impl PluginDiagnosticRecord {
@@ -466,6 +560,11 @@ impl PluginDiagnosticRecord {
         let path = path.into();
         match decoder_factory_summary(plugin) {
             Some((name, capabilities, native_frame_output, native_requirements)) => {
+                let capability_summary = DecoderPluginCapabilitySummary::from_capabilities(
+                    &capabilities,
+                    native_frame_output,
+                    native_requirements.clone(),
+                );
                 match decoder_match {
                     Some(request)
                         if capabilities.supports_codec(&request.codec, request.media_kind) =>
@@ -475,13 +574,9 @@ impl PluginDiagnosticRecord {
                             status: PluginDiagnosticStatus::DecoderSupported,
                             plugin_name: Some(name.clone()),
                             plugin_kind: Some(plugin.plugin_kind()),
-                            decoder_capabilities: Some(
-                                DecoderPluginCapabilitySummary::from_capabilities(
-                                    &capabilities,
-                                    native_frame_output,
-                                    native_requirements.clone(),
-                                ),
-                            ),
+                            capability_summary: Some(PluginCapabilitySummary::Decoder(
+                                capability_summary,
+                            )),
                             message: Some(format!(
                                 "{} advertises {:?} {} support{}",
                                 name,
@@ -500,13 +595,9 @@ impl PluginDiagnosticRecord {
                         status: PluginDiagnosticStatus::DecoderUnsupported,
                         plugin_name: Some(name.clone()),
                         plugin_kind: Some(plugin.plugin_kind()),
-                        decoder_capabilities: Some(
-                            DecoderPluginCapabilitySummary::from_capabilities(
-                                &capabilities,
-                                native_frame_output,
-                                native_requirements.clone(),
-                            ),
-                        ),
+                        capability_summary: Some(PluginCapabilitySummary::Decoder(
+                            capability_summary,
+                        )),
                         message: Some(format!(
                             "{} does not advertise {:?} {} support",
                             name, request.media_kind, request.codec
@@ -517,13 +608,9 @@ impl PluginDiagnosticRecord {
                         status: PluginDiagnosticStatus::Loaded,
                         plugin_name: Some(name.clone()),
                         plugin_kind: Some(plugin.plugin_kind()),
-                        decoder_capabilities: Some(
-                            DecoderPluginCapabilitySummary::from_capabilities(
-                                &capabilities,
-                                native_frame_output,
-                                native_requirements,
-                            ),
-                        ),
+                        capability_summary: Some(PluginCapabilitySummary::Decoder(
+                            capability_summary,
+                        )),
                         message: Some(format!(
                             "{} decoder plugin loaded{}",
                             name,
@@ -541,9 +628,69 @@ impl PluginDiagnosticRecord {
                 status: PluginDiagnosticStatus::UnsupportedKind,
                 plugin_name: Some(plugin.plugin_name().to_owned()),
                 plugin_kind: Some(plugin.plugin_kind()),
-                decoder_capabilities: None,
+                capability_summary: frame_processor_factory_summary(plugin).map(|capabilities| {
+                    PluginCapabilitySummary::FrameProcessor(
+                        FrameProcessorPluginCapabilitySummary::from(&capabilities),
+                    )
+                }),
                 message: Some(format!("{} is not a decoder plugin", plugin.plugin_name())),
             },
+        }
+    }
+
+    pub fn from_loaded_frame_processor_plugin(
+        path: impl Into<PathBuf>,
+        plugin: &LoadedDynamicPlugin,
+    ) -> Self {
+        let path = path.into();
+        if let Some((name, capabilities)) = frame_processor_summary(plugin) {
+            let capability_summary = FrameProcessorPluginCapabilitySummary::from(&capabilities);
+            let supported =
+                capabilities.supports_video_frames && !capabilities.may_change_dimensions;
+            let status = if supported {
+                PluginDiagnosticStatus::FrameProcessorSupported
+            } else {
+                PluginDiagnosticStatus::FrameProcessorUnsupported
+            };
+            let message = if supported {
+                format!("{name} frame processor plugin loaded")
+            } else if capabilities.may_change_dimensions {
+                format!("{name} frame processor changes frame dimensions, which v1 does not allow")
+            } else {
+                format!("{name} does not advertise video frame processing support")
+            };
+            return Self {
+                path,
+                status,
+                plugin_name: Some(name),
+                plugin_kind: Some(plugin.plugin_kind()),
+                capability_summary: Some(PluginCapabilitySummary::FrameProcessor(
+                    capability_summary,
+                )),
+                message: Some(message),
+            };
+        }
+
+        let decoder_summary = decoder_factory_summary(plugin).map(
+            |(_, capabilities, native_frame_output, native_requirements)| {
+                DecoderPluginCapabilitySummary::from_capabilities(
+                    &capabilities,
+                    native_frame_output,
+                    native_requirements,
+                )
+            },
+        );
+
+        Self {
+            path,
+            status: PluginDiagnosticStatus::UnsupportedKind,
+            plugin_name: Some(plugin.plugin_name().to_owned()),
+            plugin_kind: Some(plugin.plugin_kind()),
+            capability_summary: decoder_summary.map(PluginCapabilitySummary::Decoder),
+            message: Some(format!(
+                "{} is not a frame processor plugin",
+                plugin.plugin_name()
+            )),
         }
     }
 
@@ -554,7 +701,7 @@ impl PluginDiagnosticRecord {
             status: PluginDiagnosticStatus::LoadFailed,
             plugin_name: None,
             plugin_kind: None,
-            decoder_capabilities: None,
+            capability_summary: None,
             message: Some(error.to_string()),
         }
     }
@@ -585,6 +732,22 @@ fn decoder_factory_summary(
     })
 }
 
+fn frame_processor_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<(String, FrameProcessorCapabilities)> {
+    plugin
+        .frame_processor_plugin_factory()
+        .map(|factory| (factory.name().to_owned(), factory.capabilities()))
+}
+
+fn frame_processor_factory_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<FrameProcessorCapabilities> {
+    plugin
+        .frame_processor_plugin_factory()
+        .map(|factory| factory.capabilities())
+}
+
 /// Aggregated loader-side report for inspected dynamic plugin paths.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PluginRegistryReport {
@@ -593,8 +756,11 @@ pub struct PluginRegistryReport {
     pub failed: usize,
     pub decoder_supported: usize,
     pub decoder_unsupported: usize,
+    pub frame_processor_supported: usize,
+    pub frame_processor_unsupported: usize,
     pub unsupported_kind: usize,
     pub best_supported_decoder_name: Option<String>,
+    pub best_supported_frame_processor_name: Option<String>,
     pub diagnostic_notes: Vec<String>,
 }
 
@@ -624,6 +790,24 @@ impl PluginRegistry {
         Self { records }
     }
 
+    pub fn inspect_frame_processor_support(
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> Self {
+        let records = paths
+            .into_iter()
+            .map(|path| {
+                let path = path.as_ref().to_path_buf();
+                match LoadedDynamicPlugin::load(&path) {
+                    Ok(plugin) => {
+                        PluginDiagnosticRecord::from_loaded_frame_processor_plugin(path, &plugin)
+                    }
+                    Err(error) => PluginDiagnosticRecord::load_failed(path, error),
+                }
+            })
+            .collect();
+        Self { records }
+    }
+
     pub fn from_records(records: Vec<PluginDiagnosticRecord>) -> Self {
         Self { records }
     }
@@ -638,15 +822,12 @@ impl PluginRegistry {
     ) -> Option<&PluginDiagnosticRecord> {
         self.records.iter().find(|record| {
             record.status == PluginDiagnosticStatus::DecoderSupported
-                && record
-                    .decoder_capabilities
-                    .as_ref()
-                    .is_some_and(|capabilities| {
-                        capabilities.typed_codecs.iter().any(|codec| {
-                            codec.media_kind == request.media_kind
-                                && codec.codec.eq_ignore_ascii_case(&request.codec)
-                        })
+                && decoder_capability_summary(record).is_some_and(|capabilities| {
+                    capabilities.typed_codecs.iter().any(|codec| {
+                        codec.media_kind == request.media_kind
+                            && codec.codec.eq_ignore_ascii_case(&request.codec)
                     })
+                })
         })
     }
 
@@ -656,16 +837,13 @@ impl PluginRegistry {
     ) -> Option<&PluginDiagnosticRecord> {
         self.records.iter().find(|record| {
             record.status == PluginDiagnosticStatus::DecoderSupported
-                && record
-                    .decoder_capabilities
-                    .as_ref()
-                    .is_some_and(|capabilities| {
-                        capabilities.supports_native_frame_output
-                            && capabilities.typed_codecs.iter().any(|codec| {
-                                codec.media_kind == request.media_kind
-                                    && codec.codec.eq_ignore_ascii_case(&request.codec)
-                            })
-                    })
+                && decoder_capability_summary(record).is_some_and(|capabilities| {
+                    capabilities.supports_native_frame_output
+                        && capabilities.typed_codecs.iter().any(|codec| {
+                            codec.media_kind == request.media_kind
+                                && codec.codec.eq_ignore_ascii_case(&request.codec)
+                        })
+                })
         })
     }
 
@@ -675,6 +853,14 @@ impl PluginRegistry {
 
     pub fn supports_native_decoder(&self, request: &DecoderPluginMatchRequest) -> bool {
         self.best_native_decoder_for(request).is_some()
+    }
+
+    pub fn frame_processor_supported_plugin_names(&self) -> Vec<&str> {
+        self.records
+            .iter()
+            .filter(|record| record.status == PluginDiagnosticStatus::FrameProcessorSupported)
+            .filter_map(|record| record.plugin_name.as_deref())
+            .collect()
     }
 
     pub fn decoder_supported_plugin_names(&self) -> Vec<&str> {
@@ -724,6 +910,18 @@ impl PluginRegistry {
                 PluginDiagnosticStatus::DecoderUnsupported => {
                     report.loaded += 1;
                     report.decoder_unsupported += 1;
+                    report.diagnostic_notes.push(record.summary());
+                }
+                PluginDiagnosticStatus::FrameProcessorSupported => {
+                    report.loaded += 1;
+                    report.frame_processor_supported += 1;
+                    if report.best_supported_frame_processor_name.is_none() {
+                        report.best_supported_frame_processor_name = record.plugin_name.clone();
+                    }
+                }
+                PluginDiagnosticStatus::FrameProcessorUnsupported => {
+                    report.loaded += 1;
+                    report.frame_processor_unsupported += 1;
                     report.diagnostic_notes.push(record.summary());
                 }
             }
@@ -785,6 +983,31 @@ type DecoderReleaseNativeFrameFn = unsafe extern "C" fn(
     handle: usize,
 ) -> VesperPluginProcessResult;
 type DecoderSessionOperationFn =
+    unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
+type FrameProcessorOpenSessionJsonFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        config_json: *const u8,
+        config_json_len: usize,
+    ) -> VesperFrameProcessorOpenSessionResult;
+type FrameProcessorSubmitFrameJsonFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+    submit_json: *const u8,
+    submit_json_len: usize,
+    handle: usize,
+) -> VesperPluginProcessResult;
+type FrameProcessorReceiveFrameFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+) -> VesperFrameProcessorReceiveFrameResult;
+type FrameProcessorReleaseFrameFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+    handle_kind: u32,
+    handle: usize,
+) -> VesperPluginProcessResult;
+type FrameProcessorSessionOperationFn =
     unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
 
 #[derive(Debug, Clone, Copy)]
@@ -967,6 +1190,66 @@ impl TryFrom<VesperDecoderPluginApiV2> for CheckedNativeDecoderPluginApi {
             })?,
             close_session: api.close_session.ok_or(PluginLoadError::MissingField {
                 field: "decoder_plugin_api_v2.close_session",
+            })?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CheckedFrameProcessorPluginApi {
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
+    name: Option<NameFn>,
+    capabilities_json: CapabilitiesJsonFn,
+    free_bytes: FreeBytesFn,
+    open_session_json: FrameProcessorOpenSessionJsonFn,
+    submit_frame_json: FrameProcessorSubmitFrameJsonFn,
+    receive_frame: FrameProcessorReceiveFrameFn,
+    release_frame: FrameProcessorReleaseFrameFn,
+    flush_session: FrameProcessorSessionOperationFn,
+    close_session: FrameProcessorSessionOperationFn,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through
+// `FrameProcessorPluginFactory`.
+unsafe impl Send for CheckedFrameProcessorPluginApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedFrameProcessorPluginApi {}
+
+impl TryFrom<VesperFrameProcessorPluginApiV1> for CheckedFrameProcessorPluginApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperFrameProcessorPluginApiV1) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            capabilities_json: api.capabilities_json.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.capabilities_json",
+            })?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.free_bytes",
+            })?,
+            open_session_json: api.open_session_json.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.open_session_json",
+            })?,
+            submit_frame_json: api.submit_frame_json.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.submit_frame_json",
+            })?,
+            receive_frame: api.receive_frame.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.receive_frame",
+            })?,
+            release_frame: api.release_frame.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.release_frame",
+            })?,
+            flush_session: api.flush_session.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.flush_session",
+            })?,
+            close_session: api.close_session.ok_or(PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.close_session",
             })?,
         })
     }
@@ -1431,7 +1714,7 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
         match result.status {
             VesperPluginResultStatus::Success => {
                 if result.session.is_null() {
-                    reclaim_decoder_payload(
+                    reclaim_plugin_payload(
                         result.payload,
                         self.inner.api.free_bytes,
                         self.inner.api.context,
@@ -1541,7 +1824,9 @@ impl DynamicNativeDecoderSession {
         frame: DecoderNativeFrame,
         operation: &'static str,
     ) -> Result<(), DecoderError> {
-        let handle_kind = native_handle_kind_code(&frame.metadata.handle_kind)?;
+        let handle_kind =
+            native_handle_kind_code(&NativeHandleKind::from(frame.metadata.handle_kind.clone()))
+                .map_err(DecoderError::abi_violation)?;
         // SAFETY: the validated plugin API guarantees `release_native_frame` is
         // present. The frame handle was previously returned by this same plugin
         // session and tracked by the loader.
@@ -1562,7 +1847,11 @@ impl DynamicNativeDecoderSession {
     ) -> Result<(), DecoderError> {
         let mut first_error = None;
         while let Some(frame) = self.outstanding_frames.pop() {
-            if let Err(error) = self.release_tracked_native_frame(frame, operation)
+            let release_result = self.release_tracked_native_frame(frame.clone(), operation);
+            if release_result.is_err() {
+                self.outstanding_frames.push(frame);
+            }
+            if let Err(error) = release_result
                 && first_error.is_none()
             {
                 first_error = Some(error);
@@ -1722,20 +2011,431 @@ impl Drop for DynamicNativeDecoderSession {
     }
 }
 
-fn native_handle_kind_code(handle_kind: &DecoderNativeHandleKind) -> Result<u32, DecoderError> {
-    match handle_kind {
-        DecoderNativeHandleKind::CvPixelBuffer => Ok(1),
-        DecoderNativeHandleKind::IoSurface => Ok(2),
-        DecoderNativeHandleKind::MetalTexture => Ok(3),
-        DecoderNativeHandleKind::DmaBuf => Ok(4),
-        DecoderNativeHandleKind::VaapiSurface => Ok(5),
-        DecoderNativeHandleKind::D3D11Texture2D => Ok(6),
-        DecoderNativeHandleKind::DxgiSurface => Ok(7),
-        DecoderNativeHandleKind::VulkanImage => Ok(8),
-        DecoderNativeHandleKind::Unknown(kind) => Err(DecoderError::abi_violation(format!(
-            "native decoder handle kind `{kind}` cannot be released through ABI v2"
-        ))),
+#[derive(Debug)]
+struct DynamicFrameProcessorPluginFactoryInner {
+    #[allow(dead_code)]
+    library: Option<Arc<LibraryHolder>>,
+    name: String,
+    api: CheckedFrameProcessorPluginApi,
+    capabilities: FrameProcessorCapabilities,
+}
+
+impl Drop for DynamicFrameProcessorPluginFactoryInner {
+    fn drop(&mut self) {
+        if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
+            unsafe { destroy(self.api.context) };
+        }
     }
+}
+
+#[derive(Debug, Clone)]
+struct DynamicFrameProcessorPluginFactory {
+    inner: Arc<DynamicFrameProcessorPluginFactoryInner>,
+}
+
+impl DynamicFrameProcessorPluginFactory {
+    fn new(
+        library: Option<Arc<LibraryHolder>>,
+        fallback_name: String,
+        api: CheckedFrameProcessorPluginApi,
+    ) -> Result<Self, PluginLoadError> {
+        let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
+            let name_ptr = unsafe { name_fn(api.context) };
+            if name_ptr.is_null() {
+                fallback_name
+            } else {
+                c_string_field(name_ptr, "frame_processor_name")?
+            }
+        } else {
+            fallback_name
+        };
+        let capabilities = decode_plugin_bytes::<FrameProcessorCapabilities>(
+            // SAFETY: the validated API guarantees `capabilities_json` and
+            // `free_bytes` are present and use the shared `VesperPluginBytes`
+            // ownership contract documented in `player-plugin`.
+            unsafe { (api.capabilities_json)(api.context) },
+            api.free_bytes,
+            api.context,
+        )
+        .map_err(map_capabilities_payload_error)?;
+
+        Ok(Self {
+            inner: Arc::new(DynamicFrameProcessorPluginFactoryInner {
+                library,
+                name,
+                api,
+                capabilities,
+            }),
+        })
+    }
+}
+
+impl FrameProcessorPluginFactory for DynamicFrameProcessorPluginFactory {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn capabilities(&self) -> FrameProcessorCapabilities {
+        self.inner.capabilities.clone()
+    }
+
+    fn open_session(
+        &self,
+        config: &FrameProcessorSessionConfig,
+    ) -> Result<Box<dyn FrameProcessorSession>, FrameProcessorError> {
+        let config_json = serde_json::to_vec(config).map_err(|error| {
+            FrameProcessorError::payload_codec(format!(
+                "serialize frame processor config for `{}` failed: {error}",
+                self.inner.name
+            ))
+        })?;
+
+        // SAFETY: the validated plugin API guarantees `open_session_json` is
+        // present, and `config_json` remains alive for the duration of this
+        // synchronous callback.
+        let result = unsafe {
+            (self.inner.api.open_session_json)(
+                self.inner.api.context,
+                config_json.as_ptr(),
+                config_json.len(),
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                if result.session.is_null() {
+                    reclaim_plugin_payload(
+                        result.payload,
+                        self.inner.api.free_bytes,
+                        self.inner.api.context,
+                    );
+                    return Err(FrameProcessorError::abi_violation(format!(
+                        "frame processor plugin `{}` returned a null session pointer",
+                        self.inner.name
+                    )));
+                }
+                let session_info = decode_plugin_bytes_or_default::<FrameProcessorSessionInfo>(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                )
+                .map_err(|error| {
+                    map_frame_processor_payload_error(&self.inner.name, "open_session", error)
+                })?;
+                Ok(Box::new(DynamicFrameProcessorSession {
+                    factory: self.inner.clone(),
+                    session: result.session,
+                    session_info,
+                    closed: false,
+                    outstanding_frames: Vec::new(),
+                }))
+            }
+            VesperPluginResultStatus::Failure => {
+                let error = decode_frame_processor_error_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                    &self.inner.name,
+                    "open_session",
+                );
+                Err(error)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DynamicFrameProcessorSession {
+    factory: Arc<DynamicFrameProcessorPluginFactoryInner>,
+    session: *mut c_void,
+    session_info: FrameProcessorSessionInfo,
+    closed: bool,
+    outstanding_frames: Vec<NativeFrame>,
+}
+
+// SAFETY: the dynamic frame processor session is only exposed through
+// `FrameProcessorSession: Send`; the plugin ABI requires the opaque session
+// pointer to be safe to move across threads when exported through this API.
+unsafe impl Send for DynamicFrameProcessorSession {}
+
+impl DynamicFrameProcessorSession {
+    fn ensure_open(&self) -> Result<(), FrameProcessorError> {
+        if self.closed || self.session.is_null() {
+            Err(FrameProcessorError::NotConfigured)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn decode_operation_result(
+        &self,
+        result: VesperPluginProcessResult,
+        operation: &'static str,
+    ) -> Result<(), FrameProcessorError> {
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let _ = decode_plugin_bytes_or_default::<FrameProcessorOperationStatus>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_frame_processor_payload_error(&self.factory.name, operation, error)
+                })?;
+                Ok(())
+            }
+            VesperPluginResultStatus::Failure => Err(decode_frame_processor_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                operation,
+            )),
+        }
+    }
+
+    fn take_outstanding_frame(
+        &mut self,
+        frame: &NativeFrame,
+    ) -> Result<NativeFrame, FrameProcessorError> {
+        let index = self
+            .outstanding_frames
+            .iter()
+            .position(|candidate| candidate.handle == frame.handle)
+            .ok_or_else(|| {
+                FrameProcessorError::abi_violation(format!(
+                    "frame processor plugin `{}` was asked to release an untracked output frame handle",
+                    self.factory.name
+                ))
+            })?;
+        Ok(self.outstanding_frames.swap_remove(index))
+    }
+
+    fn release_tracked_frame(
+        &mut self,
+        frame: NativeFrame,
+        operation: &'static str,
+    ) -> Result<(), FrameProcessorError> {
+        let handle_kind = native_handle_kind_code(&frame.metadata.handle_kind)
+            .map_err(FrameProcessorError::abi_violation)?;
+        // SAFETY: the validated plugin API guarantees `release_frame` is
+        // present. The frame handle was previously returned by this same plugin
+        // session and tracked by the loader.
+        let result = unsafe {
+            (self.factory.api.release_frame)(
+                self.factory.api.context,
+                self.session,
+                handle_kind,
+                frame.handle,
+            )
+        };
+        self.decode_operation_result(result, operation)
+    }
+
+    fn release_outstanding_frames(
+        &mut self,
+        operation: &'static str,
+    ) -> Result<(), FrameProcessorError> {
+        let mut first_error = None;
+        while let Some(frame) = self.outstanding_frames.pop() {
+            let release_result = self.release_tracked_frame(frame.clone(), operation);
+            if release_result.is_err() {
+                self.outstanding_frames.push(frame);
+            }
+            if let Err(error) = release_result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl FrameProcessorSession for DynamicFrameProcessorSession {
+    fn session_info(&self) -> FrameProcessorSessionInfo {
+        self.session_info.clone()
+    }
+
+    fn submit_frame(
+        &mut self,
+        frame: &NativeFrame,
+        submit: &FrameProcessorSubmitFrame,
+    ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
+        self.ensure_open()?;
+        let submit_json = serde_json::to_vec(submit).map_err(|error| {
+            FrameProcessorError::payload_codec(format!(
+                "serialize frame processor submit payload for `{}` failed: {error}",
+                self.factory.name
+            ))
+        })?;
+
+        // SAFETY: the validated plugin API guarantees `submit_frame_json` is
+        // present. The JSON buffer remains alive for this synchronous call, and
+        // the input frame handle is borrowed only for the duration of the call.
+        let result = unsafe {
+            (self.factory.api.submit_frame_json)(
+                self.factory.api.context,
+                self.session,
+                submit_json.as_ptr(),
+                submit_json.len(),
+                frame.handle,
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                decode_plugin_bytes_or_default::<FrameProcessorSubmitResult>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_frame_processor_payload_error(&self.factory.name, "submit_frame", error)
+                })
+            }
+            VesperPluginResultStatus::Failure => Err(decode_frame_processor_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                "submit_frame",
+            )),
+        }
+    }
+
+    fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
+        self.ensure_open()?;
+        // SAFETY: the validated plugin API guarantees `receive_frame` is
+        // present and returns plugin-owned byte buffers reclaimed below.
+        let result =
+            unsafe { (self.factory.api.receive_frame)(self.factory.api.context, self.session) };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let metadata = decode_plugin_bytes::<FrameProcessorReceiveFrameMetadata>(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_frame_processor_payload_error(&self.factory.name, "receive_frame", error)
+                })?;
+                match metadata.status {
+                    FrameProcessorReceiveStatus::Frame => {
+                        if result.handle == 0 {
+                            return Err(FrameProcessorError::abi_violation(format!(
+                                "frame processor plugin `{}` returned frame status with a null handle",
+                                self.factory.name
+                            )));
+                        }
+                        let frame_metadata = metadata.frame.ok_or_else(|| {
+                            FrameProcessorError::abi_violation(format!(
+                                "frame processor plugin `{}` returned frame status without frame metadata",
+                                self.factory.name
+                            ))
+                        })?;
+                        let frame = NativeFrame {
+                            metadata: frame_metadata,
+                            handle: result.handle,
+                        };
+                        if frame_processor_output_requires_release(&frame) {
+                            self.outstanding_frames.push(frame.clone());
+                        }
+                        Ok(FrameProcessorReceiveOutput::Frame(
+                            FrameProcessorOutputFrame {
+                                frame,
+                                timings: metadata.timings,
+                                source_frame_id: metadata.source_frame_id,
+                            },
+                        ))
+                    }
+                    FrameProcessorReceiveStatus::Pending => {
+                        Ok(FrameProcessorReceiveOutput::Pending)
+                    }
+                    FrameProcessorReceiveStatus::EndOfStream => {
+                        Ok(FrameProcessorReceiveOutput::EndOfStream)
+                    }
+                }
+            }
+            VesperPluginResultStatus::Failure => Err(decode_frame_processor_error_payload(
+                result.metadata,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                "receive_frame",
+            )),
+        }
+    }
+
+    fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
+        self.ensure_open()?;
+        let frame = self.take_outstanding_frame(&frame)?;
+        self.release_tracked_frame(frame, "release_frame")
+    }
+
+    fn flush(&mut self) -> Result<(), FrameProcessorError> {
+        self.ensure_open()?;
+        let release_result = self.release_outstanding_frames("release_frame_on_flush");
+        // SAFETY: the validated plugin API guarantees `flush_session` is present.
+        let result =
+            unsafe { (self.factory.api.flush_session)(self.factory.api.context, self.session) };
+        let flush_result = self.decode_operation_result(result, "flush");
+        release_result.and(flush_result)
+    }
+
+    fn close(&mut self) -> Result<(), FrameProcessorError> {
+        if self.closed || self.session.is_null() {
+            return Ok(());
+        }
+        let release_result = self.release_outstanding_frames("release_frame_on_close");
+        // SAFETY: the validated plugin API guarantees `close_session` is present
+        // and consumes or releases the opaque session pointer exactly once.
+        let result =
+            unsafe { (self.factory.api.close_session)(self.factory.api.context, self.session) };
+        self.closed = true;
+        self.session = std::ptr::null_mut();
+        let close_result = self.decode_operation_result(result, "close");
+        release_result.and(close_result)
+    }
+}
+
+impl Drop for DynamicFrameProcessorSession {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
+fn native_handle_kind_code(handle_kind: &NativeHandleKind) -> Result<u32, String> {
+    match handle_kind {
+        NativeHandleKind::CvPixelBuffer => Ok(1),
+        NativeHandleKind::IoSurface => Ok(2),
+        NativeHandleKind::MetalTexture => Ok(3),
+        NativeHandleKind::DmaBuf => Ok(4),
+        NativeHandleKind::VaapiSurface => Ok(5),
+        NativeHandleKind::D3D11Texture2D => Ok(6),
+        NativeHandleKind::DxgiSurface => Ok(7),
+        NativeHandleKind::VulkanImage => Ok(8),
+        NativeHandleKind::Unknown(kind) => Err(format!(
+            "native handle kind `{kind}` cannot be released through the dynamic plugin ABI"
+        )),
+    }
+}
+
+fn frame_processor_output_requires_release(frame: &NativeFrame) -> bool {
+    frame
+        .metadata
+        .release_tracking
+        .as_ref()
+        .is_none_or(|tracking| tracking.requires_release)
 }
 
 struct ProgressAdapter<'a> {
@@ -1827,6 +2527,34 @@ fn decode_decoder_error_payload(
         .unwrap_or_else(|error| map_decoder_payload_error(plugin_name, payload_kind, error))
 }
 
+fn map_frame_processor_payload_error(
+    plugin_name: &str,
+    payload_kind: &str,
+    error: PluginPayloadError,
+) -> FrameProcessorError {
+    match error {
+        PluginPayloadError::NullPayloadWithLength { len } => {
+            FrameProcessorError::abi_violation(format!(
+                "frame processor plugin `{plugin_name}` returned {payload_kind} payload with null data pointer and len {len}"
+            ))
+        }
+        PluginPayloadError::Json(error) => FrameProcessorError::payload_codec(format!(
+            "decode frame processor plugin `{plugin_name}` {payload_kind} payload failed: {error}"
+        )),
+    }
+}
+
+fn decode_frame_processor_error_payload(
+    payload: VesperPluginBytes,
+    free_bytes: FreeBytesFn,
+    context: *mut c_void,
+    plugin_name: &str,
+    payload_kind: &str,
+) -> FrameProcessorError {
+    decode_plugin_bytes::<FrameProcessorError>(payload, free_bytes, context)
+        .unwrap_or_else(|error| map_frame_processor_payload_error(plugin_name, payload_kind, error))
+}
+
 fn decode_plugin_bytes_or_default<T: Default + DeserializeOwned>(
     payload: VesperPluginBytes,
     free_bytes: FreeBytesFn,
@@ -1841,7 +2569,7 @@ fn decode_plugin_bytes_or_default<T: Default + DeserializeOwned>(
     decode_plugin_bytes(payload, free_bytes, context)
 }
 
-fn reclaim_decoder_payload(
+fn reclaim_plugin_payload(
     payload: VesperPluginBytes,
     free_bytes: FreeBytesFn,
     context: *mut c_void,
@@ -1881,7 +2609,8 @@ fn decode_plugin_bytes<T: DeserializeOwned>(
 mod tests {
     use super::{
         DecoderPluginCodecSummary, DecoderPluginMatchRequest, LoadedDynamicPlugin,
-        PluginDiagnosticRecord, PluginDiagnosticStatus, PluginLoadError, PluginRegistry,
+        PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginLoadError,
+        PluginRegistry,
     };
     use player_plugin::{
         AssemblyMode, BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkReport,
@@ -1892,13 +2621,20 @@ mod tests {
         DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderNativeRequirements,
         DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
         DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
-        DecoderSessionInfo, DownloadMetadata, OutputFormat, PipelineEvent, ProcessorCapabilities,
-        ProcessorError, ProcessorOutput, ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        DecoderSessionInfo, DownloadMetadata, FrameProcessorCapabilities, FrameProcessorError,
+        FrameProcessorFrameTimings, FrameProcessorOperationStatus,
+        FrameProcessorReceiveFrameMetadata, FrameProcessorReceiveOutput,
+        FrameProcessorSessionConfig, FrameProcessorSessionInfo, FrameProcessorSubmitFrame,
+        FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeFrame, NativeFrameMetadata,
+        NativeFrameReleaseTracking, NativeHandleKind, OutputFormat, PipelineEvent,
+        ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
+        VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
         VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
         VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-        VesperDecoderReceiveNativeFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
-        VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
-        VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+        VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
+        VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
+        VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind,
+        VesperPluginProcessResult, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     };
     use std::collections::BTreeMap;
     use std::env;
@@ -1910,11 +2646,21 @@ mod tests {
     static HOOK_NAME: &[u8] = b"fixture-hook\0";
     static SINK_NAME: &[u8] = b"fixture-benchmark-sink\0";
     static DECODER_NAME: &[u8] = b"fixture-decoder\0";
+    static FRAME_PROCESSOR_NAME: &[u8] = b"test-frame-processor\0";
     static EVENTS: LazyLock<Mutex<Vec<PipelineEvent>>> = LazyLock::new(|| Mutex::new(Vec::new()));
     static BENCHMARK_BATCHES: LazyLock<Mutex<Vec<BenchmarkEventBatch>>> =
         LazyLock::new(|| Mutex::new(Vec::new()));
     static NATIVE_FRAME_RELEASES: LazyLock<Mutex<Vec<usize>>> =
         LazyLock::new(|| Mutex::new(Vec::new()));
+    static FRAME_PROCESSOR_RELEASES: LazyLock<Mutex<Vec<usize>>> =
+        LazyLock::new(|| Mutex::new(Vec::new()));
+    static FRAME_PROCESSOR_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn frame_processor_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        FRAME_PROCESSOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
 
     #[derive(Default)]
     struct RecordingProgress {
@@ -2574,20 +3320,19 @@ mod tests {
 
         assert_eq!(record.status, PluginDiagnosticStatus::DecoderSupported);
         assert_eq!(record.plugin_name.as_deref(), Some("fixture-decoder"));
+        let Some(PluginCapabilitySummary::Decoder(capabilities)) =
+            record.capability_summary.as_ref()
+        else {
+            panic!("expected decoder capabilities");
+        };
         assert!(
-            record
-                .decoder_capabilities
-                .as_ref()
-                .expect("capabilities")
+            capabilities
                 .codecs
                 .iter()
                 .any(|codec| codec == "Video:fixture-video")
         );
         assert!(
-            record
-                .decoder_capabilities
-                .as_ref()
-                .expect("capabilities")
+            capabilities
                 .typed_codecs
                 .contains(&DecoderPluginCodecSummary {
                     codec: "fixture-video".to_owned(),
@@ -2718,11 +3463,281 @@ mod tests {
             .best_native_decoder_for(&request)
             .expect("native decoder should be selected");
         assert_eq!(native_record.path, PathBuf::from("fixture-native-decoder"));
+        assert!(matches!(
+            native_record.capability_summary.as_ref(),
+            Some(PluginCapabilitySummary::Decoder(capabilities))
+                if capabilities.supports_native_frame_output
+        ));
+    }
+
+    #[test]
+    fn dynamic_frame_processor_plugin_adapter_round_trips_native_frame() {
+        let _guard = frame_processor_test_guard();
+        if let Ok(mut releases) = FRAME_PROCESSOR_RELEASES.lock() {
+            releases.clear();
+        }
+        let api = fixture_frame_processor_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            plugin_kind: VesperPluginKind::FrameProcessor,
+            plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+        };
+
+        let plugin =
+            LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+        assert!(plugin.native_decoder_plugin_factory().is_none());
+        let factory = plugin
+            .frame_processor_plugin_factory()
+            .expect("frame processor factory should be available");
+        assert_eq!(factory.name(), "test-frame-processor");
+        assert!(factory.capabilities().supports_video_frames);
+
+        let input = fixture_native_frame();
+        let mut session = factory
+            .open_session(&FrameProcessorSessionConfig {
+                processor_index: 3,
+                input_metadata: input.metadata.clone(),
+                max_in_flight_frames: Some(1),
+            })
+            .expect("open frame processor session");
+        assert_eq!(
+            session.session_info().processor_name.as_deref(),
+            Some("test-frame-processor")
+        );
+
+        let submit = session
+            .submit_frame(
+                &input,
+                &FrameProcessorSubmitFrame {
+                    metadata: input.metadata.clone(),
+                    present_deadline_us: Some(100_000),
+                },
+            )
+            .expect("submit frame");
+        assert_eq!(submit.status, FrameProcessorSubmitStatus::Accepted);
+
+        let output = match session.receive_frame().expect("receive output") {
+            FrameProcessorReceiveOutput::Frame(output) => output,
+            other => panic!("expected processed frame, got {other:?}"),
+        };
+        assert_ne!(output.frame.handle, 0);
+        assert_eq!(output.frame.metadata.pts_us, input.metadata.pts_us);
+        assert_eq!(output.source_frame_id, input.metadata.frame_id);
+        let output_handle = output.frame.handle;
+        session
+            .release_frame(output.frame)
+            .expect("release processor output");
+        assert_eq!(
+            session.receive_frame().expect("pending"),
+            FrameProcessorReceiveOutput::Pending
+        );
+        session.close().expect("close frame processor");
         assert!(
-            native_record
-                .decoder_capabilities
+            FRAME_PROCESSOR_RELEASES
+                .lock()
+                .map(|releases| releases.contains(&output_handle))
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn dynamic_frame_processor_plugin_close_releases_unreturned_outputs() {
+        let _guard = frame_processor_test_guard();
+        if let Ok(mut releases) = FRAME_PROCESSOR_RELEASES.lock() {
+            releases.clear();
+        }
+        let api = fixture_frame_processor_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            plugin_kind: VesperPluginKind::FrameProcessor,
+            plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+        };
+        let plugin =
+            LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+        let factory = plugin
+            .frame_processor_plugin_factory()
+            .expect("frame processor factory should be available");
+        let input = fixture_native_frame();
+        let mut session = factory
+            .open_session(&FrameProcessorSessionConfig {
+                processor_index: 0,
+                input_metadata: input.metadata.clone(),
+                max_in_flight_frames: Some(1),
+            })
+            .expect("open frame processor session");
+        session
+            .submit_frame(
+                &input,
+                &FrameProcessorSubmitFrame::new(input.metadata.clone()),
+            )
+            .expect("submit frame");
+        let output = match session.receive_frame().expect("receive output") {
+            FrameProcessorReceiveOutput::Frame(output) => output,
+            other => panic!("expected processed frame, got {other:?}"),
+        };
+        let handle = output.frame.handle;
+
+        session
+            .close()
+            .expect("close should release outstanding output");
+
+        assert!(
+            FRAME_PROCESSOR_RELEASES
+                .lock()
+                .map(|releases| releases.contains(&handle))
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn dynamic_frame_processor_plugin_does_not_release_passthrough_outputs() {
+        let _guard = frame_processor_test_guard();
+        if let Ok(mut releases) = FRAME_PROCESSOR_RELEASES.lock() {
+            releases.clear();
+        }
+        let api = fixture_frame_processor_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            plugin_kind: VesperPluginKind::FrameProcessor,
+            plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+        };
+        let plugin =
+            LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+        let factory = plugin
+            .frame_processor_plugin_factory()
+            .expect("frame processor factory should be available");
+        let mut input = fixture_native_frame();
+        input.metadata.release_tracking = Some(NativeFrameReleaseTracking {
+            frame_id: input.metadata.frame_id,
+            requires_release: false,
+        });
+        let mut session = factory
+            .open_session(&FrameProcessorSessionConfig {
+                processor_index: 0,
+                input_metadata: input.metadata.clone(),
+                max_in_flight_frames: Some(1),
+            })
+            .expect("open frame processor session");
+        session
+            .submit_frame(
+                &input,
+                &FrameProcessorSubmitFrame::new(input.metadata.clone()),
+            )
+            .expect("submit frame");
+        let output = match session.receive_frame().expect("receive output") {
+            FrameProcessorReceiveOutput::Frame(output) => output,
+            other => panic!("expected processed frame, got {other:?}"),
+        };
+
+        assert_eq!(
+            output
+                .frame
+                .metadata
+                .release_tracking
                 .as_ref()
-                .is_some_and(|capabilities| capabilities.supports_native_frame_output)
+                .map(|tracking| tracking.requires_release),
+            Some(false)
+        );
+        assert!(
+            session.release_frame(output.frame).is_err(),
+            "loader should not track passthrough output for processor release"
+        );
+        session
+            .close()
+            .expect("close should not release passthrough output");
+        assert!(
+            FRAME_PROCESSOR_RELEASES
+                .lock()
+                .map(|releases| releases.is_empty())
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn dynamic_frame_processor_plugin_rejects_missing_submit_entry() {
+        let api = VesperFrameProcessorPluginApiV1 {
+            submit_frame_json: None,
+            ..fixture_frame_processor_api()
+        };
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            plugin_kind: VesperPluginKind::FrameProcessor,
+            plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+        };
+
+        let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect_err("frame processor ABI requires submit_frame_json");
+
+        assert!(matches!(
+            error,
+            PluginLoadError::MissingField {
+                field: "frame_processor_plugin_api_v1.submit_frame_json"
+            }
+        ));
+    }
+
+    #[test]
+    fn dynamic_frame_processor_plugin_rejects_old_abi_revision() {
+        let api = fixture_frame_processor_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::FrameProcessor,
+            plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+        };
+
+        let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect_err("wrong frame processor ABI revision should be rejected");
+
+        assert!(matches!(
+            error,
+            PluginLoadError::AbiVersionMismatch {
+                expected: 1,
+                actual: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_registry_reports_frame_processor_support() {
+        let api = fixture_frame_processor_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            plugin_kind: VesperPluginKind::FrameProcessor,
+            plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+        };
+        let plugin =
+            LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+        let record = PluginDiagnosticRecord::from_loaded_frame_processor_plugin(
+            PathBuf::from("test-frame-processor"),
+            &plugin,
+        );
+
+        assert_eq!(
+            record.status,
+            PluginDiagnosticStatus::FrameProcessorSupported
+        );
+        assert_eq!(record.plugin_name.as_deref(), Some("test-frame-processor"));
+        assert!(matches!(
+            record.capability_summary,
+            Some(PluginCapabilitySummary::FrameProcessor(_))
+        ));
+
+        let registry = PluginRegistry::from_records(vec![record]);
+        let report = registry.report();
+        assert_eq!(report.frame_processor_supported, 1);
+        assert_eq!(
+            report.best_supported_frame_processor_name.as_deref(),
+            Some("test-frame-processor")
+        );
+        assert_eq!(
+            registry.frame_processor_supported_plugin_names(),
+            vec!["test-frame-processor"]
         );
     }
 
@@ -2984,6 +3999,32 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "requires a built player-frame-processor-diagnostic shared library artifact"]
+    fn dynamic_loader_opens_real_frame_processor_diagnostic_shared_library() {
+        let plugin_path =
+            resolve_frame_processor_diagnostic_plugin_path().unwrap_or_else(|error| {
+                panic!("failed to resolve frame processor diagnostic plugin path: {error}")
+            });
+
+        let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to load frame processor diagnostic shared library `{}`: {error}",
+                plugin_path.display()
+            )
+        });
+
+        assert_eq!(plugin.plugin_name(), "player-frame-processor-diagnostic");
+        assert!(plugin.post_download_processor().is_none());
+        assert!(plugin.pipeline_event_hook().is_none());
+        assert!(plugin.native_decoder_plugin_factory().is_none());
+        let factory = plugin
+            .frame_processor_plugin_factory()
+            .expect("player-frame-processor-diagnostic should export a frame processor factory");
+        assert_eq!(factory.name(), "player-frame-processor-diagnostic");
+        assert!(factory.capabilities().supports_video_frames);
+    }
+
     fn fixture_processor_api() -> VesperPostDownloadProcessorApi {
         VesperPostDownloadProcessorApi {
             context: std::ptr::null_mut(),
@@ -3033,6 +4074,22 @@ mod tests {
         }
     }
 
+    fn fixture_frame_processor_api() -> VesperFrameProcessorPluginApiV1 {
+        VesperFrameProcessorPluginApiV1 {
+            context: std::ptr::null_mut(),
+            destroy: None,
+            name: Some(fixture_frame_processor_name),
+            capabilities_json: Some(fixture_frame_processor_capabilities_json),
+            free_bytes: Some(fixture_free_bytes),
+            open_session_json: Some(fixture_frame_processor_open_session_json),
+            submit_frame_json: Some(fixture_frame_processor_submit_frame_json),
+            receive_frame: Some(fixture_frame_processor_receive_frame),
+            release_frame: Some(fixture_frame_processor_release_frame),
+            flush_session: Some(fixture_frame_processor_flush_session),
+            close_session: Some(fixture_frame_processor_close_session),
+        }
+    }
+
     unsafe extern "C" fn fixture_processor_name(_context: *mut c_void) -> *const c_char {
         PROCESSOR_NAME.as_ptr().cast::<c_char>()
     }
@@ -3047,6 +4104,10 @@ mod tests {
 
     unsafe extern "C" fn fixture_decoder_name(_context: *mut c_void) -> *const c_char {
         DECODER_NAME.as_ptr().cast::<c_char>()
+    }
+
+    unsafe extern "C" fn fixture_frame_processor_name(_context: *mut c_void) -> *const c_char {
+        FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>()
     }
 
     unsafe extern "C" fn fixture_benchmark_on_event_batch_json(
@@ -3184,6 +4245,12 @@ mod tests {
     struct FixtureDecoderSession {
         last_pts_us: Option<i64>,
         pending_frame: Option<Vec<u8>>,
+    }
+
+    #[derive(Debug, Default)]
+    struct FixtureFrameProcessorSession {
+        pending_output: Option<NativeFrame>,
+        pending_source_frame_id: Option<u64>,
     }
 
     unsafe extern "C" fn fixture_native_decoder_open_session_json(
@@ -3372,6 +4439,205 @@ mod tests {
         decoder_process_success(&DecoderOperationStatus { completed: true })
     }
 
+    unsafe extern "C" fn fixture_frame_processor_capabilities_json(
+        _context: *mut c_void,
+    ) -> VesperPluginBytes {
+        let capabilities = FrameProcessorCapabilities {
+            accepted_input_handle_kinds: vec![NativeHandleKind::IoSurface],
+            output_handle_kinds: vec![NativeHandleKind::IoSurface],
+            supports_video_frames: true,
+            supports_in_place_passthrough: true,
+            preserves_dimensions: true,
+            may_change_dimensions: false,
+            preserves_color_metadata: true,
+            preserves_hdr_metadata: true,
+            supports_flush: true,
+            max_sessions: Some(1),
+            max_in_flight_frames: Some(1),
+        };
+        VesperPluginBytes::from_vec(
+            serde_json::to_vec(&capabilities).expect("serialize frame processor caps"),
+        )
+    }
+
+    unsafe extern "C" fn fixture_frame_processor_open_session_json(
+        _context: *mut c_void,
+        config_json: *const u8,
+        config_json_len: usize,
+    ) -> VesperFrameProcessorOpenSessionResult {
+        let config = match decode_frame_processor_fixture_json::<FrameProcessorSessionConfig>(
+            config_json,
+            config_json_len,
+        ) {
+            Ok(config) => config,
+            Err(error) => return frame_processor_open_error(error),
+        };
+        if config.input_metadata.handle_kind != NativeHandleKind::IoSurface {
+            return frame_processor_open_error(FrameProcessorError::unsupported_handle(format!(
+                "{:?}",
+                config.input_metadata.handle_kind
+            )));
+        }
+
+        let session = Box::into_raw(Box::new(FixtureFrameProcessorSession::default()));
+        let info = FrameProcessorSessionInfo {
+            processor_name: Some("test-frame-processor".to_owned()),
+            selected_backend: Some("fixture-native".to_owned()),
+            output_handle_kind: Some(NativeHandleKind::IoSurface),
+            max_in_flight_frames: Some(1),
+        };
+        VesperFrameProcessorOpenSessionResult {
+            status: VesperPluginResultStatus::Success,
+            session: session.cast::<c_void>(),
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&info).expect("serialize frame processor info"),
+            ),
+        }
+    }
+
+    unsafe extern "C" fn fixture_frame_processor_submit_frame_json(
+        _context: *mut c_void,
+        session: *mut c_void,
+        submit_json: *const u8,
+        submit_json_len: usize,
+        handle: usize,
+    ) -> VesperPluginProcessResult {
+        let Some(session) = (unsafe { session.cast::<FixtureFrameProcessorSession>().as_mut() })
+        else {
+            return frame_processor_process_error(FrameProcessorError::NotConfigured);
+        };
+        let submit = match decode_frame_processor_fixture_json::<FrameProcessorSubmitFrame>(
+            submit_json,
+            submit_json_len,
+        ) {
+            Ok(submit) => submit,
+            Err(error) => return frame_processor_process_error(error),
+        };
+        if handle == 0 {
+            return frame_processor_process_error(FrameProcessorError::abi_violation(
+                "fixture frame processor received a null input handle",
+            ));
+        }
+        if session.pending_output.is_some() {
+            return frame_processor_process_success(&FrameProcessorSubmitResult {
+                status: FrameProcessorSubmitStatus::Backpressure,
+                queue_depth: Some(1),
+                in_flight_frames: Some(1),
+                message: Some("fixture output is still pending".to_owned()),
+            });
+        }
+
+        let mut output_metadata = submit.metadata.clone();
+        let requires_release = submit
+            .metadata
+            .release_tracking
+            .as_ref()
+            .is_none_or(|tracking| tracking.requires_release);
+        output_metadata.frame_id = if requires_release {
+            Some(handle as u64 + 1)
+        } else {
+            submit.metadata.frame_id
+        };
+        output_metadata.release_tracking = Some(NativeFrameReleaseTracking {
+            frame_id: output_metadata.frame_id,
+            requires_release,
+        });
+        session.pending_source_frame_id = submit.metadata.frame_id;
+        let output_handle = if requires_release {
+            Box::into_raw(Box::new(vec![handle as u8])) as usize
+        } else {
+            handle
+        };
+        session.pending_output = Some(NativeFrame {
+            metadata: output_metadata,
+            handle: output_handle,
+        });
+        frame_processor_process_success(&FrameProcessorSubmitResult {
+            status: FrameProcessorSubmitStatus::Accepted,
+            queue_depth: Some(1),
+            in_flight_frames: Some(1),
+            message: None,
+        })
+    }
+
+    unsafe extern "C" fn fixture_frame_processor_receive_frame(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperFrameProcessorReceiveFrameResult {
+        let Some(session) = (unsafe { session.cast::<FixtureFrameProcessorSession>().as_mut() })
+        else {
+            return frame_processor_receive_error(FrameProcessorError::NotConfigured);
+        };
+        let Some(output) = session.pending_output.take() else {
+            return frame_processor_receive_success(
+                &FrameProcessorReceiveFrameMetadata::pending(),
+                0,
+            );
+        };
+        let mut metadata = FrameProcessorReceiveFrameMetadata::frame(output.metadata.clone());
+        metadata.timings = FrameProcessorFrameTimings {
+            queue_wait_us: Some(10),
+            process_time_us: Some(20),
+            submit_to_ready_us: Some(30),
+        };
+        metadata.source_frame_id = session.pending_source_frame_id.take();
+        frame_processor_receive_success(&metadata, output.handle)
+    }
+
+    unsafe extern "C" fn fixture_frame_processor_release_frame(
+        _context: *mut c_void,
+        _session: *mut c_void,
+        handle_kind: u32,
+        handle: usize,
+    ) -> VesperPluginProcessResult {
+        if handle_kind != 2 || handle == 0 {
+            return frame_processor_process_error(FrameProcessorError::abi_violation(
+                "fixture frame processor release received an invalid handle",
+            ));
+        }
+        if let Ok(mut releases) = FRAME_PROCESSOR_RELEASES.lock() {
+            releases.push(handle);
+        }
+        // SAFETY: the handle was allocated with `Box::into_raw` in this test
+        // fixture and is released exactly once here.
+        let _ = unsafe { Box::from_raw(handle as *mut Vec<u8>) };
+        frame_processor_process_success(&FrameProcessorOperationStatus { completed: true })
+    }
+
+    unsafe extern "C" fn fixture_frame_processor_flush_session(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        let Some(session) = (unsafe { session.cast::<FixtureFrameProcessorSession>().as_mut() })
+        else {
+            return frame_processor_process_error(FrameProcessorError::NotConfigured);
+        };
+        if let Some(output) = session.pending_output.take() {
+            // SAFETY: pending fixture outputs are owned by this session and can
+            // be reclaimed on flush when the host never received them.
+            let _ = unsafe { Box::from_raw(output.handle as *mut Vec<u8>) };
+        }
+        frame_processor_process_success(&FrameProcessorOperationStatus { completed: true })
+    }
+
+    unsafe extern "C" fn fixture_frame_processor_close_session(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        if session.is_null() {
+            return frame_processor_process_error(FrameProcessorError::NotConfigured);
+        }
+        // SAFETY: the session pointer was allocated with `Box::into_raw` by
+        // the matching open-session callback and close is called once.
+        let mut session = unsafe { Box::from_raw(session.cast::<FixtureFrameProcessorSession>()) };
+        if let Some(output) = session.pending_output.take() {
+            // SAFETY: pending fixture outputs are owned by this session and can
+            // be reclaimed on close when the host never received them.
+            let _ = unsafe { Box::from_raw(output.handle as *mut Vec<u8>) };
+        }
+        frame_processor_process_success(&FrameProcessorOperationStatus { completed: true })
+    }
+
     unsafe extern "C" fn fixture_payload_codec_process_json(
         _context: *mut c_void,
         _input_json: *const u8,
@@ -3487,6 +4753,107 @@ mod tests {
         }
     }
 
+    fn decode_frame_processor_fixture_json<T: serde::de::DeserializeOwned>(
+        data: *const u8,
+        len: usize,
+    ) -> Result<T, FrameProcessorError> {
+        if data.is_null() && len > 0 {
+            return Err(FrameProcessorError::abi_violation(
+                "fixture frame processor JSON pointer was null with non-zero len",
+            ));
+        }
+        let payload = if data.is_null() || len == 0 {
+            &[]
+        } else {
+            // SAFETY: fixture callers pass a valid JSON buffer for the duration
+            // of this synchronous callback.
+            unsafe { std::slice::from_raw_parts(data, len) }
+        };
+        serde_json::from_slice(payload)
+            .map_err(|error| FrameProcessorError::payload_codec(error.to_string()))
+    }
+
+    fn frame_processor_open_error(
+        error: FrameProcessorError,
+    ) -> VesperFrameProcessorOpenSessionResult {
+        VesperFrameProcessorOpenSessionResult {
+            status: VesperPluginResultStatus::Failure,
+            session: std::ptr::null_mut(),
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize frame processor error"),
+            ),
+        }
+    }
+
+    fn frame_processor_process_success<T: serde::Serialize>(
+        value: &T,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Success,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(value).expect("serialize frame processor value"),
+            ),
+        }
+    }
+
+    fn frame_processor_process_error(error: FrameProcessorError) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Failure,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize frame processor error"),
+            ),
+        }
+    }
+
+    fn frame_processor_receive_success(
+        metadata: &FrameProcessorReceiveFrameMetadata,
+        handle: usize,
+    ) -> VesperFrameProcessorReceiveFrameResult {
+        VesperFrameProcessorReceiveFrameResult {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(metadata).expect("serialize frame processor metadata"),
+            ),
+            handle,
+        }
+    }
+
+    fn frame_processor_receive_error(
+        error: FrameProcessorError,
+    ) -> VesperFrameProcessorReceiveFrameResult {
+        VesperFrameProcessorReceiveFrameResult {
+            status: VesperPluginResultStatus::Failure,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize frame processor error"),
+            ),
+            handle: 0,
+        }
+    }
+
+    fn fixture_native_frame() -> NativeFrame {
+        NativeFrame {
+            metadata: NativeFrameMetadata {
+                media_kind: DecoderMediaKind::Video,
+                format: DecoderFrameFormat::Nv12,
+                codec: "fixture-video".to_owned(),
+                pts_us: Some(2_000),
+                duration_us: Some(33_333),
+                width: 2,
+                height: 2,
+                coded_width: Some(2),
+                coded_height: Some(2),
+                visible_rect: None,
+                handle_kind: NativeHandleKind::IoSurface,
+                frame_id: Some(41),
+                release_tracking: Some(NativeFrameReleaseTracking {
+                    frame_id: Some(41),
+                    requires_release: true,
+                }),
+            },
+            handle: 0xfeed,
+        }
+    }
+
     unsafe extern "C" fn fixture_free_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
         // SAFETY: the fixture only reclaims buffers it allocated with
         // `VesperPluginBytes::from_vec`.
@@ -3569,6 +4936,32 @@ mod tests {
         }
 
         resolve_plugin_path("player_decoder_d3d11")
+    }
+
+    fn resolve_frame_processor_diagnostic_plugin_path() -> Result<PathBuf, String> {
+        if let Some(path) = env::var_os("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH") {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "environment variable VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH points to missing file `{}`",
+                path.display()
+            ));
+        }
+        if let Some(paths) = env::var_os("VESPER_FRAME_PROCESSOR_PLUGIN_PATHS")
+            && let Some(path) = env::split_paths(&paths).next()
+        {
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "environment variable VESPER_FRAME_PROCESSOR_PLUGIN_PATHS points to missing file `{}`",
+                path.display()
+            ));
+        }
+
+        resolve_plugin_path("player_frame_processor_diagnostic")
     }
 
     fn resolve_plugin_path(stem: &str) -> Result<PathBuf, String> {

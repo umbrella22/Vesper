@@ -112,6 +112,40 @@ void main() {
     expect(platform.savedFileName, 'clip.mp4');
     expect(platform.savedCollection, VesperDownloadPublicCollection.movies);
   });
+
+  test('player controller exposes startup plugin diagnostics', () async {
+    platform.playerPluginDiagnostics = <VesperPluginDiagnostic>[
+      const VesperPluginDiagnostic(
+        path: '/tmp/player-decoder-fixture.dylib',
+        pluginName: 'fixture-decoder',
+        pluginKind: 'decoder',
+        status: VesperPluginDiagnosticStatus.decoderSupported,
+        capability: VesperPluginCapability.decoder(
+          VesperPluginDecoderCapabilitySummary(
+            codecs: <VesperPluginCodecCapability>[
+              VesperPluginCodecCapability(mediaKind: 'Video', codec: 'h264'),
+            ],
+            legacyCodecs: <String>['Video:h264'],
+            supportsNativeFrameOutput: true,
+            supportsHardwareDecode: true,
+            supportsGpuHandles: true,
+            supportsFlush: true,
+            supportsDrain: true,
+            maxSessions: 1,
+          ),
+        ),
+      ),
+    ];
+
+    final controller = await VesperPlayerController.create();
+    addTearDown(controller.dispose);
+
+    expect(controller.pluginDiagnostics, hasLength(1));
+    final diagnostic = controller.pluginDiagnostics.single;
+    expect(diagnostic.status, VesperPluginDiagnosticStatus.decoderSupported);
+    expect(diagnostic.capability?.kind, VesperPluginCapabilityKind.decoder);
+    expect(diagnostic.capability?.decoder?.codecs.single.codec, 'h264');
+  });
 }
 
 Future<void> _flushEvents() async {
@@ -173,6 +207,8 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
 
   VesperDownloadSnapshot initialSnapshot =
       const VesperDownloadSnapshot.initial();
+  List<VesperPluginDiagnostic> playerPluginDiagnostics =
+      const <VesperPluginDiagnostic>[];
   int? sharedTaskId;
   String? sharedFileName;
   String? sharedMimeType;
@@ -283,7 +319,11 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
   }) async {
-    throw UnimplementedError();
+    return VesperPlatformCreateResult(
+      playerId: 'test-player',
+      snapshot: const VesperPlayerSnapshot.initial(),
+      pluginDiagnostics: playerPluginDiagnostics,
+    );
   }
 
   @override
@@ -295,7 +335,7 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
   Future<void> initialize(String playerId) async => throw UnimplementedError();
 
   @override
-  Future<void> dispose(String playerId) async => throw UnimplementedError();
+  Future<void> dispose(String playerId) async {}
 
   @override
   Future<void> refreshPlayer(String playerId) async =>

@@ -44,12 +44,13 @@ use player_render_wgpu::{
     VideoFrameTexture, VideoRenderer, Yuv420pVideoFrame, default_window_attributes,
 };
 use player_runtime::{
-    DecodedAudioSummary, DecodedVideoFrame, MediaTrackCatalog, MediaTrackSelectionSnapshot,
-    PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap,
-    PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot,
-    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-    PresentationState, VideoPixelFormat,
+    DecodedAudioSummary, DecodedVideoFrame, FrameProcessorMode, MediaTrackCatalog,
+    MediaTrackSelectionSnapshot, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo,
+    PlayerPluginCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
+    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot, PlayerTimelineKind,
+    PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState,
+    VideoPixelFormat,
 };
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -66,11 +67,18 @@ const CONTROL_HIDE_DELAY: Duration = Duration::from_secs(2);
 const CONTROL_FADE_DURATION: Duration = Duration::from_millis(220);
 const CONTROL_FADE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const PLAYBACK_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(125);
+const PLAYBACK_UI_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const POST_LAUNCH_PLAY_PAINT_FALLBACK: Duration = Duration::from_millis(120);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DECODER_PLUGIN_PATHS_ENV: &str = "VESPER_DECODER_PLUGIN_PATHS";
 const DECODER_PLUGIN_VIDEO_MODE_ENV: &str = "VESPER_DECODER_PLUGIN_VIDEO_MODE";
+const FRAME_PROCESSOR_PLUGIN_PATHS_ENV: &str = "VESPER_FRAME_PROCESSOR_PLUGIN_PATHS";
+const FRAME_PROCESSOR_MODE_ENV: &str = "VESPER_FRAME_PROCESSOR_MODE";
+const PLAYBACK_DEBUG_ENV: &str = "VESPER_PLAYBACK_DEBUG";
+const PLAYBACK_DEBUG_TRACE_ENV: &str = "VESPER_PLAYBACK_DEBUG_TRACE";
+const PLAYBACK_DEBUG_WINDOW_ENV: &str = "VESPER_PLAYBACK_DEBUG_WINDOW";
+const DEFAULT_PLAYBACK_DEBUG_WINDOW: u64 = 120;
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
 const MIN_WINDOW_INNER_WIDTH: u32 = 1280;
@@ -207,6 +215,193 @@ struct DesktopPlayerApp {
     first_frame_upload_logged: bool,
     first_frame_present_logged: bool,
     last_uploaded_frame_sequence: Option<u64>,
+    playback_debug: PlaybackDebugState,
+    last_pointer_overlay_refresh_at: Option<Instant>,
+}
+
+#[derive(Debug)]
+struct PlaybackDebugState {
+    enabled: bool,
+    trace_ticks: bool,
+    window_ticks: u64,
+    tick_count: u64,
+    window_start: Instant,
+    last_tick_at: Option<Instant>,
+    last_position: Option<Duration>,
+    max_tick_gap_ms: u128,
+    total_tick_gap_ms: u128,
+    tick_gap_count: u64,
+    max_position_delta_ms: u128,
+    total_position_delta_ms: u128,
+    position_delta_count: u64,
+    repeated_position_ticks: u64,
+    advanced_ticks: u64,
+    max_advance_elapsed_ms: u128,
+    total_advance_elapsed_ms: u128,
+    buffering_ticks: u64,
+    external_surface_ticks: u64,
+}
+
+impl PlaybackDebugState {
+    fn from_env() -> Self {
+        Self {
+            enabled: env_flag(PLAYBACK_DEBUG_ENV),
+            trace_ticks: env_flag(PLAYBACK_DEBUG_TRACE_ENV),
+            window_ticks: env_u64(PLAYBACK_DEBUG_WINDOW_ENV)
+                .unwrap_or(DEFAULT_PLAYBACK_DEBUG_WINDOW)
+                .max(1),
+            tick_count: 0,
+            window_start: Instant::now(),
+            last_tick_at: None,
+            last_position: None,
+            max_tick_gap_ms: 0,
+            total_tick_gap_ms: 0,
+            tick_gap_count: 0,
+            max_position_delta_ms: 0,
+            total_position_delta_ms: 0,
+            position_delta_count: 0,
+            repeated_position_ticks: 0,
+            advanced_ticks: 0,
+            max_advance_elapsed_ms: 0,
+            total_advance_elapsed_ms: 0,
+            buffering_ticks: 0,
+            external_surface_ticks: 0,
+        }
+    }
+
+    fn observe_tick(&mut self, sample: PlaybackDebugTickSample) {
+        if !self.enabled {
+            return;
+        }
+        self.tick_count = self.tick_count.saturating_add(1);
+        let now = sample.observed_at;
+        let tick_gap_ms = self
+            .last_tick_at
+            .map(|last_tick| now.saturating_duration_since(last_tick).as_millis());
+        if let Some(gap) = tick_gap_ms {
+            self.max_tick_gap_ms = self.max_tick_gap_ms.max(gap);
+            self.total_tick_gap_ms = self.total_tick_gap_ms.saturating_add(gap);
+            self.tick_gap_count = self.tick_gap_count.saturating_add(1);
+        }
+        self.last_tick_at = Some(now);
+
+        let position_delta_ms = match (self.last_position, sample.position) {
+            (Some(previous), Some(current)) => {
+                let delta = if current >= previous {
+                    current - previous
+                } else {
+                    previous - current
+                };
+                Some(delta.as_millis())
+            }
+            _ => None,
+        };
+        if let Some(delta) = position_delta_ms {
+            if delta == 0 {
+                self.repeated_position_ticks = self.repeated_position_ticks.saturating_add(1);
+            } else {
+                self.max_position_delta_ms = self.max_position_delta_ms.max(delta);
+                self.total_position_delta_ms = self.total_position_delta_ms.saturating_add(delta);
+                self.position_delta_count = self.position_delta_count.saturating_add(1);
+            }
+        }
+        if sample.position.is_some() {
+            self.last_position = sample.position;
+        }
+        if sample.frame_advanced {
+            self.advanced_ticks = self.advanced_ticks.saturating_add(1);
+        }
+        self.max_advance_elapsed_ms = self.max_advance_elapsed_ms.max(sample.advance_elapsed_ms);
+        self.total_advance_elapsed_ms = self
+            .total_advance_elapsed_ms
+            .saturating_add(sample.advance_elapsed_ms);
+        if sample.buffering {
+            self.buffering_ticks = self.buffering_ticks.saturating_add(1);
+        }
+        if sample.external_surface {
+            self.external_surface_ticks = self.external_surface_ticks.saturating_add(1);
+        }
+        if self.trace_ticks {
+            info!(
+                tick = self.tick_count,
+                state = ?sample.state,
+                position_secs = sample.position.map(|position| position.as_secs_f64()),
+                position_delta_ms,
+                tick_gap_ms,
+                frame_advanced = sample.frame_advanced,
+                advance_elapsed_ms = sample.advance_elapsed_ms,
+                next_deadline_ms = sample.next_deadline_ms,
+                buffering = sample.buffering,
+                external_surface = sample.external_surface,
+                "basic player playback debug tick"
+            );
+        }
+        if self.tick_count.is_multiple_of(self.window_ticks) {
+            self.log_summary();
+            self.reset_window();
+        }
+    }
+
+    fn log_summary(&self) {
+        let avg_tick_gap_ms = if self.tick_gap_count == 0 {
+            None
+        } else {
+            Some(self.total_tick_gap_ms / u128::from(self.tick_gap_count))
+        };
+        let avg_position_delta_ms = if self.position_delta_count == 0 {
+            None
+        } else {
+            Some(self.total_position_delta_ms / u128::from(self.position_delta_count))
+        };
+        let avg_advance_elapsed_ms = if self.window_ticks == 0 {
+            0
+        } else {
+            self.total_advance_elapsed_ms / u128::from(self.window_ticks)
+        };
+        info!(
+            ticks = self.window_ticks,
+            elapsed_ms = self.window_start.elapsed().as_millis(),
+            avg_tick_gap_ms,
+            max_tick_gap_ms = self.max_tick_gap_ms,
+            avg_position_delta_ms,
+            max_position_delta_ms = self.max_position_delta_ms,
+            repeated_position_ticks = self.repeated_position_ticks,
+            advanced_ticks = self.advanced_ticks,
+            avg_advance_elapsed_ms,
+            max_advance_elapsed_ms = self.max_advance_elapsed_ms,
+            buffering_ticks = self.buffering_ticks,
+            external_surface_ticks = self.external_surface_ticks,
+            "basic player playback debug summary"
+        );
+    }
+
+    fn reset_window(&mut self) {
+        self.window_start = Instant::now();
+        self.max_tick_gap_ms = 0;
+        self.total_tick_gap_ms = 0;
+        self.tick_gap_count = 0;
+        self.max_position_delta_ms = 0;
+        self.total_position_delta_ms = 0;
+        self.position_delta_count = 0;
+        self.repeated_position_ticks = 0;
+        self.advanced_ticks = 0;
+        self.max_advance_elapsed_ms = 0;
+        self.total_advance_elapsed_ms = 0;
+        self.buffering_ticks = 0;
+        self.external_surface_ticks = 0;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlaybackDebugTickSample {
+    observed_at: Instant,
+    state: PresentationState,
+    position: Option<Duration>,
+    frame_advanced: bool,
+    advance_elapsed_ms: u128,
+    next_deadline_ms: Option<u128>,
+    buffering: bool,
+    external_surface: bool,
 }
 
 impl DesktopPlayerApp {
@@ -272,6 +467,8 @@ impl DesktopPlayerApp {
             first_frame_upload_logged: false,
             first_frame_present_logged: false,
             last_uploaded_frame_sequence: None,
+            playback_debug: PlaybackDebugState::from_env(),
+            last_pointer_overlay_refresh_at: None,
         }
     }
 
@@ -475,6 +672,8 @@ impl DesktopPlayerApp {
         self.first_frame_upload_logged = false;
         self.first_frame_present_logged = false;
         self.last_uploaded_frame_sequence = None;
+        self.playback_debug = PlaybackDebugState::from_env();
+        self.last_pointer_overlay_refresh_at = None;
         self.pending_post_launch_play_paint_deadline = None;
     }
 
@@ -1127,9 +1326,70 @@ impl DesktopPlayerApp {
         self.refresh_playback_frame()
     }
 
+    fn observe_playback_debug_tick(
+        &mut self,
+        frame_advanced: bool,
+        advance_elapsed_ms: u128,
+        next_deadline: Option<Instant>,
+    ) {
+        if !self.playback_debug.enabled {
+            return;
+        }
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
+        let snapshot = runtime.snapshot();
+        self.playback_debug.observe_tick(PlaybackDebugTickSample {
+            observed_at: Instant::now(),
+            state: snapshot.state,
+            position: Some(snapshot.progress.position()),
+            frame_advanced,
+            advance_elapsed_ms,
+            next_deadline_ms: next_deadline.map(|deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+            }),
+            buffering: snapshot.is_buffering,
+            external_surface: self.uses_external_video_surface,
+        });
+    }
+
+    fn request_pointer_overlay_refresh_if_due(&mut self) {
+        let now = Instant::now();
+        if self
+            .last_pointer_overlay_refresh_at
+            .is_some_and(|last_refresh| {
+                now.duration_since(last_refresh) < PLAYBACK_UI_REFRESH_INTERVAL
+            })
+        {
+            return;
+        }
+        self.last_pointer_overlay_refresh_at = Some(now);
+        self.overlay_dirty = true;
+    }
+
     fn refresh_playback_frame(&mut self) -> Result<()> {
-        let upload_overlay = self.overlay_dirty || self.playback_overlay_tick_due();
-        self.refresh_overlay_with_video_frame(true, upload_overlay)
+        self.refresh_overlay_with_video_frame(true, false)
+    }
+
+    fn ui_overlay_tick_due(&self) -> bool {
+        self.overlay_dirty || self.playback_overlay_tick_due()
+    }
+
+    fn ui_overlay_deadline(&self) -> Option<Instant> {
+        if self.overlay_dirty {
+            return Some(Instant::now());
+        }
+        self.playback_ui_deadline()
+    }
+
+    fn refresh_ui_overlay_if_due(&mut self) -> Result<bool> {
+        if !self.ui_overlay_tick_due() {
+            return Ok(false);
+        }
+        self.refresh_overlay_ui_only()?;
+        Ok(true)
     }
 
     fn refresh_overlay(&mut self) -> Result<()> {
@@ -1299,6 +1559,23 @@ impl DesktopPlayerApp {
         }
         self.last_overlay_refresh_at
             .is_some_and(|last_refresh| last_refresh.elapsed() >= PLAYBACK_OVERLAY_REFRESH_INTERVAL)
+    }
+
+    fn playback_ui_deadline(&self) -> Option<Instant> {
+        let runtime = self.runtime.as_ref()?;
+        if runtime.snapshot().state != PresentationState::Playing {
+            return None;
+        }
+        if self.controls_opacity <= 0.01 || self.seek_preview.is_some() {
+            return None;
+        }
+
+        let interval = PLAYBACK_UI_REFRESH_INTERVAL.min(PLAYBACK_OVERLAY_REFRESH_INTERVAL);
+        Some(
+            self.last_overlay_refresh_at
+                .map(|last_refresh| last_refresh + interval)
+                .unwrap_or_else(Instant::now),
+        )
     }
 
     fn update_window_title(&mut self) {
@@ -1935,6 +2212,8 @@ fn basic_player_runtime_options() -> PlayerRuntimeOptions {
     PlayerRuntimeOptions::default()
         .with_decoder_plugin_library_paths(decoder_plugin_library_paths_from_env())
         .with_decoder_plugin_video_mode(decoder_plugin_video_mode_from_env())
+        .with_frame_processor_library_paths(frame_processor_library_paths_from_env())
+        .with_frame_processor_mode(frame_processor_mode_from_env())
 }
 
 fn decoder_plugin_library_paths_from_env() -> Vec<PathBuf> {
@@ -1954,6 +2233,55 @@ fn decoder_plugin_video_mode_from_value(value: Option<String>) -> PlayerDecoderP
         }
         _ => PlayerDecoderPluginVideoMode::DiagnosticsOnly,
     }
+}
+
+fn frame_processor_library_paths_from_env() -> Vec<PathBuf> {
+    std::env::var_os(FRAME_PROCESSOR_PLUGIN_PATHS_ENV)
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default()
+}
+
+fn frame_processor_mode_from_env() -> FrameProcessorMode {
+    frame_processor_mode_from_value(std::env::var(FRAME_PROCESSOR_MODE_ENV).ok())
+}
+
+fn frame_processor_mode_from_value(value: Option<String>) -> FrameProcessorMode {
+    match value {
+        Some(value) if value.eq_ignore_ascii_case("diagnostics") => {
+            FrameProcessorMode::DiagnosticsOnly
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("prefer-processed")
+                || value.eq_ignore_ascii_case("prefer") =>
+        {
+            FrameProcessorMode::PreferProcessed
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("require-processed")
+                || value.eq_ignore_ascii_case("strict") =>
+        {
+            FrameProcessorMode::RequireProcessed
+        }
+        _ => FrameProcessorMode::Disabled,
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
 }
 
 fn video_frame_texture(frame: &DecodedVideoFrame) -> VideoFrameTexture {
@@ -2044,8 +2372,7 @@ impl ApplicationHandler for DesktopPlayerApp {
                     event_loop.exit();
                     return;
                 }
-                self.sync_ui_presenter();
-                self.overlay_dirty = true;
+                self.request_pointer_overlay_refresh_if_due();
             }
             WindowEvent::CursorLeft { .. } => {
                 if self.seek_preview.is_some() {
@@ -2293,6 +2620,7 @@ impl ApplicationHandler for DesktopPlayerApp {
             return;
         }
 
+        let advance_started_at = Instant::now();
         let frame_advanced = match self.advance_playback() {
             Ok(frame_advanced) => frame_advanced,
             Err(error) => {
@@ -2301,33 +2629,32 @@ impl ApplicationHandler for DesktopPlayerApp {
                 return;
             }
         };
-
-        if !frame_advanced && self.overlay_dirty {
-            self.sync_ui_presenter();
-            if let Err(error) = self.refresh_overlay_ui_only() {
-                error!(?error, "failed to refresh dirty overlay");
-                event_loop.exit();
-                return;
-            }
-        }
+        let advance_elapsed_ms = advance_started_at.elapsed().as_millis();
 
         self.log_runtime_events();
         self.update_window_title();
-        self.sync_ui_presenter();
+        if let Err(error) = self.refresh_ui_overlay_if_due() {
+            error!(?error, "failed to refresh dirty overlay");
+            event_loop.exit();
+            return;
+        }
         let controls_animation_deadline = self.controls_animation_deadline();
-        if self.pending_launch_activation.is_some()
-            || self.pending_post_launch_play
-            || self.overlay_dirty
-        {
+        let ui_overlay_deadline = self.ui_overlay_deadline();
+        let runtime_next_deadline = self.runtime.as_ref().and_then(PlayerRuntime::next_deadline);
+        self.observe_playback_debug_tick(frame_advanced, advance_elapsed_ms, runtime_next_deadline);
+        if self.pending_launch_activation.is_some() || self.pending_post_launch_play {
             event_loop.set_control_flow(ControlFlow::Poll);
-        } else if let Some(runtime) = self.runtime.as_ref() {
-            if let Some(deadline) = runtime.next_deadline() {
+        } else if self.runtime.is_some() {
+            if let Some(deadline) = runtime_next_deadline {
                 let mut next_deadline = deadline;
                 if let Some(hide_deadline) = self.controls_hide_deadline {
                     next_deadline = next_deadline.min(hide_deadline);
                 }
                 if let Some(animation_deadline) = controls_animation_deadline {
                     next_deadline = next_deadline.min(animation_deadline);
+                }
+                if let Some(ui_overlay_deadline) = ui_overlay_deadline {
+                    next_deadline = next_deadline.min(ui_overlay_deadline);
                 }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if self.uses_external_video_surface {
@@ -2338,14 +2665,25 @@ impl ApplicationHandler for DesktopPlayerApp {
                 if let Some(animation_deadline) = controls_animation_deadline {
                     next_deadline = next_deadline.min(animation_deadline);
                 }
+                if let Some(ui_overlay_deadline) = ui_overlay_deadline {
+                    next_deadline = next_deadline.min(ui_overlay_deadline);
+                }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if let Some(hide_deadline) = self.controls_hide_deadline {
-                let next_deadline = controls_animation_deadline
+                let mut next_deadline = controls_animation_deadline
                     .map(|animation_deadline| hide_deadline.min(animation_deadline))
                     .unwrap_or(hide_deadline);
+                if let Some(ui_overlay_deadline) = ui_overlay_deadline {
+                    next_deadline = next_deadline.min(ui_overlay_deadline);
+                }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if let Some(animation_deadline) = controls_animation_deadline {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(animation_deadline));
+                let next_deadline = ui_overlay_deadline
+                    .map(|ui_overlay_deadline| animation_deadline.min(ui_overlay_deadline))
+                    .unwrap_or(animation_deadline);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
+            } else if let Some(ui_overlay_deadline) = ui_overlay_deadline {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(ui_overlay_deadline));
             } else {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
@@ -2421,16 +2759,36 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
     }
 
     let total = records.len();
+    let supported_frame_processors = records
+        .iter()
+        .filter(|record| record.status == PlayerPluginDiagnosticStatus::FrameProcessorSupported)
+        .map(|record| {
+            record
+                .plugin_name
+                .as_deref()
+                .unwrap_or("unknown-frame-processor")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    if !supported_frame_processors.is_empty() {
+        return Some(format!(
+            "frame processor plugins: {}/{} supported ({}); internal playback mode controls whether processed frames are preferred",
+            supported_frame_processors.len(),
+            total,
+            supported_frame_processors.join(", ")
+        ));
+    }
+
     let supported_decoders = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderSupported)
         .map(|record| {
             let name = record.plugin_name.as_deref().unwrap_or("unknown-decoder");
-            if record
-                .decoder_capabilities
-                .as_ref()
-                .is_some_and(|capabilities| capabilities.supports_native_frame_output)
-            {
+            if matches!(
+                record.capability.as_ref(),
+                Some(PlayerPluginCapabilitySummary::Decoder(capabilities))
+                    if capabilities.supports_native_frame_output
+            ) {
                 format!("{name} native-frame")
             } else {
                 name.to_owned()
@@ -2455,13 +2813,17 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderUnsupported)
         .count();
+    let unsupported_frame_processor_count = records
+        .iter()
+        .filter(|record| record.status == PlayerPluginDiagnosticStatus::FrameProcessorUnsupported)
+        .count();
     let unsupported_kind_count = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::UnsupportedKind)
         .count();
 
     Some(format!(
-        "decoder plugins: 0/{total} supported, {loaded_count} loaded, {failed_count} failed, {unsupported_codec_count} unsupported codec, {unsupported_kind_count} non-decoder"
+        "plugins: 0/{total} supported, {loaded_count} loaded, {failed_count} failed, {unsupported_codec_count} unsupported decoder codec, {unsupported_frame_processor_count} unsupported frame processor, {unsupported_kind_count} unsupported kind"
     ))
 }
 
@@ -2516,6 +2878,13 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
                 "player retry scheduled"
             );
         }
+        PlayerRuntimeEvent::Warning(warning) => {
+            warn!(
+                warning = ?warning,
+                domain = ?warning.domain(),
+                "player runtime warning"
+            );
+        }
         PlayerRuntimeEvent::Error(error) => {
             error!(code = ?error.code(), message = error.message(), "player runtime error");
         }
@@ -2531,10 +2900,11 @@ mod tests {
     use super::{
         ControlAction, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL,
         DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus,
-        decoder_plugin_video_mode_from_value, resolve_media_source_argument,
+        decoder_plugin_video_mode_from_value, frame_processor_mode_from_value,
+        resolve_media_source_argument,
     };
     use player_render_wgpu::RenderFrameOutcome;
-    use player_runtime::PlayerDecoderPluginVideoMode;
+    use player_runtime::{FrameProcessorMode, PlayerDecoderPluginVideoMode};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -2570,6 +2940,34 @@ mod tests {
         assert_eq!(
             decoder_plugin_video_mode_from_value(Some("NATIVE-FRAME".to_owned())),
             PlayerDecoderPluginVideoMode::PreferNativeFrame
+        );
+    }
+
+    #[test]
+    fn frame_processor_mode_defaults_to_disabled() {
+        assert_eq!(
+            frame_processor_mode_from_value(None),
+            FrameProcessorMode::Disabled
+        );
+        assert_eq!(
+            frame_processor_mode_from_value(Some("disabled".to_owned())),
+            FrameProcessorMode::Disabled
+        );
+    }
+
+    #[test]
+    fn frame_processor_mode_parses_internal_modes() {
+        assert_eq!(
+            frame_processor_mode_from_value(Some("diagnostics".to_owned())),
+            FrameProcessorMode::DiagnosticsOnly
+        );
+        assert_eq!(
+            frame_processor_mode_from_value(Some("prefer-processed".to_owned())),
+            FrameProcessorMode::PreferProcessed
+        );
+        assert_eq!(
+            frame_processor_mode_from_value(Some("strict".to_owned())),
+            FrameProcessorMode::RequireProcessed
         );
     }
 

@@ -26,16 +26,19 @@ use player_platform_desktop::{
 use player_plugin::{
     DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeDeviceContext,
     DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderPacket,
-    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession, VesperPluginKind,
+    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession, NativeHandleKind,
+    VesperPluginKind,
 };
 use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
-    LoadedDynamicPlugin, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+    FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
+    PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
 };
 use player_runtime::{
-    PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerMediaInfo,
-    PlayerPluginCodecCapability, PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerResult, PlayerRuntime, PlayerRuntimeAdapter,
+    FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
+    PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
+    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerPluginFrameProcessorCapabilitySummary, PlayerResult, PlayerRuntime, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeEvent,
     PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,
@@ -1348,10 +1351,12 @@ fn select_windows_native_frame_candidate_from_registry(
     let best_video = media_info.best_video.as_ref()?;
     let request = DecoderPluginMatchRequest::video(best_video.codec.clone());
     let record = registry.best_native_decoder_for(&request)?;
-    let requirements = record
-        .decoder_capabilities
-        .as_ref()
-        .and_then(|capabilities| capabilities.native_requirements.as_ref());
+    let requirements = match record.capability_summary.as_ref() {
+        Some(PluginCapabilitySummary::Decoder(capabilities)) => {
+            capabilities.native_requirements.as_ref()
+        }
+        _ => None,
+    };
     if requirements.is_some_and(|requirements| {
         (!requirements.required_device_context_kinds.is_empty()
             && !requirements
@@ -1430,6 +1435,24 @@ fn windows_runtime_diagnostics(
             selection,
         );
     }
+    if let Some(registry) = windows_frame_processor_plugin_registry(options) {
+        plugin_diagnostics.extend(
+            registry
+                .records()
+                .iter()
+                .map(player_plugin_diagnostic_from_record),
+        );
+        if selection.is_none()
+            && options.frame_processor_mode != FrameProcessorMode::Disabled
+            && !options.frame_processor_library_paths.is_empty()
+        {
+            let note = "frame processor plugins are diagnostic-only on Windows until the D3D11 native-frame presenter path is fully active".to_owned();
+            fallback_reason = Some(match fallback_reason {
+                Some(existing) if !existing.is_empty() => format!("{existing}; {note}"),
+                _ => note,
+            });
+        }
+    }
 
     WindowsRuntimeDiagnostics {
         video_decode: PlayerVideoDecodeInfo {
@@ -1458,6 +1481,19 @@ fn windows_decoder_plugin_registry(
     Some(PluginRegistry::inspect_decoder_support(
         &options.decoder_plugin_library_paths,
         DecoderPluginMatchRequest::video(best_video.codec.clone()),
+    ))
+}
+
+fn windows_frame_processor_plugin_registry(
+    options: &PlayerRuntimeOptions,
+) -> Option<PluginRegistry> {
+    if options.frame_processor_mode == FrameProcessorMode::Disabled
+        || options.frame_processor_library_paths.is_empty()
+    {
+        return None;
+    }
+    Some(PluginRegistry::inspect_frame_processor_support(
+        &options.frame_processor_library_paths,
     ))
 }
 
@@ -1584,12 +1620,33 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
             PluginDiagnosticStatus::DecoderUnsupported => {
                 PlayerPluginDiagnosticStatus::DecoderUnsupported
             }
+            PluginDiagnosticStatus::FrameProcessorSupported => {
+                PlayerPluginDiagnosticStatus::FrameProcessorSupported
+            }
+            PluginDiagnosticStatus::FrameProcessorUnsupported => {
+                PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+            }
         },
         message: record.message.clone(),
-        decoder_capabilities: record
-            .decoder_capabilities
+        capability: record
+            .capability_summary
             .as_ref()
-            .map(player_decoder_capability_summary_from_loader),
+            .map(player_plugin_capability_summary_from_loader),
+    }
+}
+
+fn player_plugin_capability_summary_from_loader(
+    summary: &PluginCapabilitySummary,
+) -> PlayerPluginCapabilitySummary {
+    match summary {
+        PluginCapabilitySummary::Decoder(summary) => PlayerPluginCapabilitySummary::Decoder(
+            player_decoder_capability_summary_from_loader(summary),
+        ),
+        PluginCapabilitySummary::FrameProcessor(summary) => {
+            PlayerPluginCapabilitySummary::FrameProcessor(
+                player_frame_processor_capability_summary_from_loader(summary),
+            )
+        }
     }
 }
 
@@ -1627,12 +1684,53 @@ fn player_decoder_codec_summary_from_loader(
     }
 }
 
+fn player_frame_processor_capability_summary_from_loader(
+    summary: &FrameProcessorPluginCapabilitySummary,
+) -> PlayerPluginFrameProcessorCapabilitySummary {
+    PlayerPluginFrameProcessorCapabilitySummary {
+        accepted_input_handle_kinds: summary
+            .accepted_input_handle_kinds
+            .iter()
+            .map(native_handle_kind_label)
+            .collect(),
+        output_handle_kinds: summary
+            .output_handle_kinds
+            .iter()
+            .map(native_handle_kind_label)
+            .collect(),
+        supports_video_frames: summary.supports_video_frames,
+        supports_in_place_passthrough: summary.supports_in_place_passthrough,
+        preserves_dimensions: summary.preserves_dimensions,
+        may_change_dimensions: summary.may_change_dimensions,
+        preserves_color_metadata: summary.preserves_color_metadata,
+        preserves_hdr_metadata: summary.preserves_hdr_metadata,
+        supports_flush: summary.supports_flush,
+        max_sessions: summary.max_sessions,
+        max_in_flight_frames: summary.max_in_flight_frames,
+    }
+}
+
+fn native_handle_kind_label(handle_kind: &NativeHandleKind) -> String {
+    match handle_kind {
+        NativeHandleKind::CvPixelBuffer => "cv_pixel_buffer".to_owned(),
+        NativeHandleKind::IoSurface => "io_surface".to_owned(),
+        NativeHandleKind::MetalTexture => "metal_texture".to_owned(),
+        NativeHandleKind::DmaBuf => "dma_buf".to_owned(),
+        NativeHandleKind::VaapiSurface => "vaapi_surface".to_owned(),
+        NativeHandleKind::D3D11Texture2D => "d3d11_texture_2d".to_owned(),
+        NativeHandleKind::DxgiSurface => "dxgi_surface".to_owned(),
+        NativeHandleKind::VulkanImage => "vulkan_image".to_owned(),
+        NativeHandleKind::Unknown(name) => name.clone(),
+    }
+}
+
 fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
     match kind {
         VesperPluginKind::PostDownloadProcessor => "post_download_processor",
         VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
         VesperPluginKind::Decoder => "decoder",
         VesperPluginKind::BenchmarkSink => "benchmark_sink",
+        VesperPluginKind::FrameProcessor => "frame_processor",
     }
 }
 
@@ -1744,8 +1842,8 @@ mod tests {
         DecoderSessionInfo, NativeDecoderSession, VesperPluginKind,
     };
     use player_plugin_loader::{
-        DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, PluginDiagnosticRecord,
-        PluginDiagnosticStatus, PluginRegistry,
+        DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, PluginCapabilitySummary,
+        PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     };
     use player_runtime::{
         PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerResult,
@@ -2572,27 +2670,28 @@ mod tests {
     }
 
     fn windows_native_plugin_registry(codec: &str) -> PluginRegistry {
+        let decoder_capabilities = DecoderPluginCapabilitySummary {
+            typed_codecs: vec![DecoderPluginCodecSummary {
+                codec: codec.to_owned(),
+                media_kind: DecoderMediaKind::Video,
+            }],
+            codecs: vec![format!("Video:{codec}")],
+            supports_native_frame_output: true,
+            native_requirements: None,
+            supports_hardware_decode: true,
+            supports_cpu_video_frames: false,
+            supports_audio_frames: false,
+            supports_gpu_handles: true,
+            supports_flush: true,
+            supports_drain: true,
+            max_sessions: Some(1),
+        };
         PluginRegistry::from_records(vec![PluginDiagnosticRecord {
             path: std::path::PathBuf::from("fixture-windows-decoder"),
             status: PluginDiagnosticStatus::DecoderSupported,
             plugin_name: Some("fixture-windows-decoder".to_owned()),
             plugin_kind: Some(VesperPluginKind::Decoder),
-            decoder_capabilities: Some(DecoderPluginCapabilitySummary {
-                typed_codecs: vec![DecoderPluginCodecSummary {
-                    codec: codec.to_owned(),
-                    media_kind: DecoderMediaKind::Video,
-                }],
-                codecs: vec![format!("Video:{codec}")],
-                supports_native_frame_output: true,
-                native_requirements: None,
-                supports_hardware_decode: true,
-                supports_cpu_video_frames: false,
-                supports_audio_frames: false,
-                supports_gpu_handles: true,
-                supports_flush: true,
-                supports_drain: true,
-                max_sessions: Some(1),
-            }),
+            capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
             message: Some(format!(
                 "fixture-windows-decoder advertises Video {codec} support with native-frame output"
             )),
