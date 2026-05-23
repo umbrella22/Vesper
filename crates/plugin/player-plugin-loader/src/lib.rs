@@ -19,15 +19,22 @@ use player_plugin::{
     FrameProcessorSubmitFrame, FrameProcessorSubmitResult, NativeDecoderPluginFactory,
     NativeDecoderSession, NativeFrame, NativeHandleKind, PipelineEvent, PipelineEventHook,
     PostDownloadProcessor, ProcessorCapabilities, ProcessorError, ProcessorOutput,
-    ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
-    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
-    VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    ProcessorProgress, SourceNormalizerError, SourceNormalizerOperationStatus,
+    SourceNormalizerPacketCapabilities, SourceNormalizerPacketLease,
+    SourceNormalizerPacketPluginFactory, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
+    SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
+    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
     VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
     VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
     VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerPluginApiV2,
+    VesperSourceNormalizerReadPacketResult,
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -77,6 +84,8 @@ pub struct LoadedDynamicPlugin {
     benchmark_sink: Option<Arc<DynamicBenchmarkSink>>,
     native_decoder_plugin_factory: Option<Arc<DynamicNativeDecoderPluginFactory>>,
     frame_processor_plugin_factory: Option<Arc<DynamicFrameProcessorPluginFactory>>,
+    source_normalizer_packet_plugin_factory:
+        Option<Arc<DynamicSourceNormalizerPacketPluginFactory>>,
 }
 
 pub struct BenchmarkSinkPluginSession {
@@ -249,6 +258,14 @@ impl LoadedDynamicPlugin {
             .map(|factory| factory as Arc<dyn FrameProcessorPluginFactory>)
     }
 
+    pub fn source_normalizer_packet_plugin_factory(
+        &self,
+    ) -> Option<Arc<dyn SourceNormalizerPacketPluginFactory>> {
+        self.source_normalizer_packet_plugin_factory
+            .clone()
+            .map(|factory| factory as Arc<dyn SourceNormalizerPacketPluginFactory>)
+    }
+
     fn from_descriptor(
         library: Option<Arc<LibraryHolder>>,
         descriptor: &VesperPluginDescriptor,
@@ -260,6 +277,7 @@ impl LoadedDynamicPlugin {
             }
             VesperPluginKind::Decoder => VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             VesperPluginKind::FrameProcessor => VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            VesperPluginKind::SourceNormalizer => VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
         };
         if descriptor.abi_version != expected_abi_version {
             return Err(PluginLoadError::AbiVersionMismatch {
@@ -292,6 +310,7 @@ impl LoadedDynamicPlugin {
                     benchmark_sink: None,
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: None,
+                    source_normalizer_packet_plugin_factory: None,
                 })
             }
             VesperPluginKind::PipelineEventHook => {
@@ -316,6 +335,7 @@ impl LoadedDynamicPlugin {
                     benchmark_sink: None,
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: None,
+                    source_normalizer_packet_plugin_factory: None,
                 })
             }
             VesperPluginKind::BenchmarkSink => {
@@ -340,6 +360,7 @@ impl LoadedDynamicPlugin {
                     benchmark_sink: Some(Arc::new(sink)),
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: None,
+                    source_normalizer_packet_plugin_factory: None,
                 })
             }
             VesperPluginKind::Decoder => {
@@ -363,6 +384,7 @@ impl LoadedDynamicPlugin {
                     benchmark_sink: None,
                     native_decoder_plugin_factory: Some(Arc::new(factory)),
                     frame_processor_plugin_factory: None,
+                    source_normalizer_packet_plugin_factory: None,
                 })
             }
             VesperPluginKind::FrameProcessor => {
@@ -386,6 +408,31 @@ impl LoadedDynamicPlugin {
                     benchmark_sink: None,
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: Some(Arc::new(factory)),
+                    source_normalizer_packet_plugin_factory: None,
+                })
+            }
+            VesperPluginKind::SourceNormalizer => {
+                let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV2>();
+                let api =
+                    // SAFETY: `descriptor.api` must point at the v2 source normalizer
+                    // ABI table when the plugin exports a valid source normalizer descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "source_normalizer_plugin_api_v2",
+                    })?;
+                let factory = DynamicSourceNormalizerPacketPluginFactory::new(
+                    library,
+                    descriptor_name.clone(),
+                    CheckedSourceNormalizerPacketPluginApi::try_from(*api)?,
+                )?;
+                Ok(Self {
+                    name: descriptor_name,
+                    plugin_kind: descriptor.plugin_kind,
+                    post_download_processor: None,
+                    pipeline_event_hook: None,
+                    benchmark_sink: None,
+                    native_decoder_plugin_factory: None,
+                    frame_processor_plugin_factory: None,
+                    source_normalizer_packet_plugin_factory: Some(Arc::new(factory)),
                 })
             }
         }
@@ -480,11 +527,42 @@ impl From<&FrameProcessorCapabilities> for FrameProcessorPluginCapabilitySummary
     }
 }
 
+/// Compact capability summary for one packet-stream source normalizer plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceNormalizerPacketPluginCapabilitySummary {
+    pub supported_runtime_profiles: Vec<String>,
+    pub max_level: player_plugin::SourceNormalizerNormalizeLevel,
+    pub media_kinds: Vec<player_plugin::SourceNormalizerPacketMediaKind>,
+    pub codecs: Vec<String>,
+    pub bitstream_formats: Vec<player_plugin::DecoderBitstreamFormat>,
+    pub supports_seek: bool,
+    pub supports_flush: bool,
+    pub required_capabilities: player_plugin::SourceNormalizerRequiredCapabilities,
+    pub max_sessions: Option<u32>,
+}
+
+impl From<&SourceNormalizerPacketCapabilities> for SourceNormalizerPacketPluginCapabilitySummary {
+    fn from(capabilities: &SourceNormalizerPacketCapabilities) -> Self {
+        Self {
+            supported_runtime_profiles: capabilities.supported_runtime_profiles.clone(),
+            max_level: capabilities.max_level,
+            media_kinds: capabilities.media_kinds.clone(),
+            codecs: capabilities.codecs.clone(),
+            bitstream_formats: capabilities.bitstream_formats.clone(),
+            supports_seek: capabilities.supports_seek,
+            supports_flush: capabilities.supports_flush,
+            required_capabilities: capabilities.required_capabilities.clone(),
+            max_sessions: capabilities.max_sessions,
+        }
+    }
+}
+
 /// Capability summary for one loaded plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginCapabilitySummary {
     Decoder(DecoderPluginCapabilitySummary),
     FrameProcessor(FrameProcessorPluginCapabilitySummary),
+    SourceNormalizerPacket(SourceNormalizerPacketPluginCapabilitySummary),
 }
 
 impl DecoderPluginCapabilitySummary {
@@ -529,6 +607,8 @@ pub enum PluginDiagnosticStatus {
     DecoderUnsupported,
     FrameProcessorSupported,
     FrameProcessorUnsupported,
+    SourceNormalizerSupported,
+    SourceNormalizerUnsupported,
 }
 
 /// Structured diagnostic record for one dynamic plugin path.
@@ -547,6 +627,15 @@ fn decoder_capability_summary(
 ) -> Option<&DecoderPluginCapabilitySummary> {
     match record.capability_summary.as_ref() {
         Some(PluginCapabilitySummary::Decoder(summary)) => Some(summary),
+        _ => None,
+    }
+}
+
+fn source_normalizer_packet_capability_summary(
+    record: &PluginDiagnosticRecord,
+) -> Option<&SourceNormalizerPacketPluginCapabilitySummary> {
+    match record.capability_summary.as_ref() {
+        Some(PluginCapabilitySummary::SourceNormalizerPacket(summary)) => Some(summary),
         _ => None,
     }
 }
@@ -628,11 +717,19 @@ impl PluginDiagnosticRecord {
                 status: PluginDiagnosticStatus::UnsupportedKind,
                 plugin_name: Some(plugin.plugin_name().to_owned()),
                 plugin_kind: Some(plugin.plugin_kind()),
-                capability_summary: frame_processor_factory_summary(plugin).map(|capabilities| {
-                    PluginCapabilitySummary::FrameProcessor(
-                        FrameProcessorPluginCapabilitySummary::from(&capabilities),
-                    )
-                }),
+                capability_summary: frame_processor_factory_summary(plugin)
+                    .map(|capabilities| {
+                        PluginCapabilitySummary::FrameProcessor(
+                            FrameProcessorPluginCapabilitySummary::from(&capabilities),
+                        )
+                    })
+                    .or_else(|| {
+                        source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
+                            PluginCapabilitySummary::SourceNormalizerPacket(
+                                SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
+                            )
+                        })
+                    }),
                 message: Some(format!("{} is not a decoder plugin", plugin.plugin_name())),
             },
         }
@@ -673,11 +770,11 @@ impl PluginDiagnosticRecord {
 
         let decoder_summary = decoder_factory_summary(plugin).map(
             |(_, capabilities, native_frame_output, native_requirements)| {
-                DecoderPluginCapabilitySummary::from_capabilities(
+                PluginCapabilitySummary::Decoder(DecoderPluginCapabilitySummary::from_capabilities(
                     &capabilities,
                     native_frame_output,
                     native_requirements,
-                )
+                ))
             },
         );
 
@@ -686,9 +783,89 @@ impl PluginDiagnosticRecord {
             status: PluginDiagnosticStatus::UnsupportedKind,
             plugin_name: Some(plugin.plugin_name().to_owned()),
             plugin_kind: Some(plugin.plugin_kind()),
-            capability_summary: decoder_summary.map(PluginCapabilitySummary::Decoder),
+            capability_summary: decoder_summary.or_else(|| {
+                source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
+                    PluginCapabilitySummary::SourceNormalizerPacket(
+                        SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
+                    )
+                })
+            }),
             message: Some(format!(
                 "{} is not a frame processor plugin",
+                plugin.plugin_name()
+            )),
+        }
+    }
+
+    pub fn from_loaded_source_normalizer_plugin(
+        path: impl Into<PathBuf>,
+        plugin: &LoadedDynamicPlugin,
+    ) -> Self {
+        let path = path.into();
+        if let Some((name, capabilities)) = source_normalizer_packet_summary(plugin) {
+            let capability_summary =
+                SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities);
+            let supported = !capabilities.supported_runtime_profiles.is_empty()
+                && !capabilities.media_kinds.is_empty();
+            let status = if supported {
+                PluginDiagnosticStatus::SourceNormalizerSupported
+            } else {
+                PluginDiagnosticStatus::SourceNormalizerUnsupported
+            };
+            let message = if supported {
+                format!("{name} source_normalizer_packet_v2 plugin loaded")
+            } else if capabilities.supported_runtime_profiles.is_empty() {
+                format!("{name} does not advertise packet source normalizer runtime profiles")
+            } else {
+                format!("{name} does not advertise packet source normalizer media kinds")
+            };
+            return Self {
+                path,
+                status,
+                plugin_name: Some(name),
+                plugin_kind: Some(plugin.plugin_kind()),
+                capability_summary: Some(PluginCapabilitySummary::SourceNormalizerPacket(
+                    capability_summary,
+                )),
+                message: Some(message),
+            };
+        }
+
+        let capability_summary = decoder_factory_summary(plugin)
+            .map(
+                |(_, capabilities, native_frame_output, native_requirements)| {
+                    PluginCapabilitySummary::Decoder(
+                        DecoderPluginCapabilitySummary::from_capabilities(
+                            &capabilities,
+                            native_frame_output,
+                            native_requirements,
+                        ),
+                    )
+                },
+            )
+            .or_else(|| {
+                frame_processor_factory_summary(plugin).map(|capabilities| {
+                    PluginCapabilitySummary::FrameProcessor(
+                        FrameProcessorPluginCapabilitySummary::from(&capabilities),
+                    )
+                })
+            })
+            .or_else(|| {
+                source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
+                    PluginCapabilitySummary::SourceNormalizerPacket(
+                        SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
+                    )
+                })
+            });
+
+        Self {
+            path,
+            status: PluginDiagnosticStatus::UnsupportedKind,
+            plugin_name: Some(plugin.plugin_name().to_owned()),
+            plugin_kind: Some(plugin.plugin_kind()),
+            capability_summary,
+            message: Some(format!(
+                "{} is not a source normalizer plugin",
                 plugin.plugin_name()
             )),
         }
@@ -748,6 +925,22 @@ fn frame_processor_factory_summary(
         .map(|factory| factory.capabilities())
 }
 
+fn source_normalizer_packet_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<(String, SourceNormalizerPacketCapabilities)> {
+    plugin
+        .source_normalizer_packet_plugin_factory()
+        .map(|factory| (factory.name().to_owned(), factory.packet_capabilities()))
+}
+
+fn source_normalizer_packet_factory_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<SourceNormalizerPacketCapabilities> {
+    plugin
+        .source_normalizer_packet_plugin_factory()
+        .map(|factory| factory.packet_capabilities())
+}
+
 /// Aggregated loader-side report for inspected dynamic plugin paths.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PluginRegistryReport {
@@ -758,9 +951,12 @@ pub struct PluginRegistryReport {
     pub decoder_unsupported: usize,
     pub frame_processor_supported: usize,
     pub frame_processor_unsupported: usize,
+    pub source_normalizer_supported: usize,
+    pub source_normalizer_unsupported: usize,
     pub unsupported_kind: usize,
     pub best_supported_decoder_name: Option<String>,
     pub best_supported_frame_processor_name: Option<String>,
+    pub best_supported_source_normalizer_name: Option<String>,
     pub diagnostic_notes: Vec<String>,
 }
 
@@ -800,6 +996,24 @@ impl PluginRegistry {
                 match LoadedDynamicPlugin::load(&path) {
                     Ok(plugin) => {
                         PluginDiagnosticRecord::from_loaded_frame_processor_plugin(path, &plugin)
+                    }
+                    Err(error) => PluginDiagnosticRecord::load_failed(path, error),
+                }
+            })
+            .collect();
+        Self { records }
+    }
+
+    pub fn inspect_source_normalizer_support(
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> Self {
+        let records = paths
+            .into_iter()
+            .map(|path| {
+                let path = path.as_ref().to_path_buf();
+                match LoadedDynamicPlugin::load(&path) {
+                    Ok(plugin) => {
+                        PluginDiagnosticRecord::from_loaded_source_normalizer_plugin(path, &plugin)
                     }
                     Err(error) => PluginDiagnosticRecord::load_failed(path, error),
                 }
@@ -863,6 +1077,42 @@ impl PluginRegistry {
             .collect()
     }
 
+    pub fn source_normalizer_supported_plugin_names(&self) -> Vec<&str> {
+        self.records
+            .iter()
+            .filter(|record| record.status == PluginDiagnosticStatus::SourceNormalizerSupported)
+            .filter_map(|record| record.plugin_name.as_deref())
+            .collect()
+    }
+
+    pub fn best_source_normalizer(&self) -> Option<&PluginDiagnosticRecord> {
+        self.records
+            .iter()
+            .find(|record| record.status == PluginDiagnosticStatus::SourceNormalizerSupported)
+    }
+
+    pub fn best_source_normalizer_packet(&self) -> Option<&PluginDiagnosticRecord> {
+        self.records.iter().find(|record| {
+            record.status == PluginDiagnosticStatus::SourceNormalizerSupported
+                && source_normalizer_packet_capability_summary(record).is_some()
+        })
+    }
+
+    pub fn best_source_normalizer_for_profile(
+        &self,
+        runtime_profile: &str,
+    ) -> Option<&PluginDiagnosticRecord> {
+        self.records.iter().find(|record| {
+            record.status == PluginDiagnosticStatus::SourceNormalizerSupported
+                && source_normalizer_packet_capability_summary(record).is_some_and(|capabilities| {
+                    capabilities
+                        .supported_runtime_profiles
+                        .iter()
+                        .any(|profile| profile.eq_ignore_ascii_case(runtime_profile))
+                })
+        })
+    }
+
     pub fn decoder_supported_plugin_names(&self) -> Vec<&str> {
         self.records
             .iter()
@@ -874,7 +1124,14 @@ impl PluginRegistry {
     pub fn diagnostic_notes(&self) -> Vec<String> {
         self.records
             .iter()
-            .filter(|record| record.status != PluginDiagnosticStatus::DecoderSupported)
+            .filter(|record| {
+                !matches!(
+                    record.status,
+                    PluginDiagnosticStatus::DecoderSupported
+                        | PluginDiagnosticStatus::FrameProcessorSupported
+                        | PluginDiagnosticStatus::SourceNormalizerSupported
+                )
+            })
             .map(PluginDiagnosticRecord::summary)
             .collect()
     }
@@ -922,6 +1179,18 @@ impl PluginRegistry {
                 PluginDiagnosticStatus::FrameProcessorUnsupported => {
                     report.loaded += 1;
                     report.frame_processor_unsupported += 1;
+                    report.diagnostic_notes.push(record.summary());
+                }
+                PluginDiagnosticStatus::SourceNormalizerSupported => {
+                    report.loaded += 1;
+                    report.source_normalizer_supported += 1;
+                    if report.best_supported_source_normalizer_name.is_none() {
+                        report.best_supported_source_normalizer_name = record.plugin_name.clone();
+                    }
+                }
+                PluginDiagnosticStatus::SourceNormalizerUnsupported => {
+                    report.loaded += 1;
+                    report.source_normalizer_unsupported += 1;
                     report.diagnostic_notes.push(record.summary());
                 }
             }
@@ -1009,6 +1278,29 @@ type FrameProcessorReleaseFrameFn = unsafe extern "C" fn(
 ) -> VesperPluginProcessResult;
 type FrameProcessorSessionOperationFn =
     unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
+type SourceNormalizerSeekSessionJsonFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+    seek_json: *const u8,
+    seek_json_len: usize,
+) -> VesperPluginProcessResult;
+type SourceNormalizerSessionOperationFn =
+    unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
+type SourceNormalizerOpenPacketSessionJsonFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        config_json: *const u8,
+        config_json_len: usize,
+    ) -> VesperSourceNormalizerOpenPacketSessionResult;
+type SourceNormalizerReadPacketFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+) -> VesperSourceNormalizerReadPacketResult;
+type SourceNormalizerReleasePacketFn = unsafe extern "C" fn(
+    context: *mut c_void,
+    session: *mut c_void,
+    packet_handle: usize,
+) -> VesperPluginProcessResult;
 
 #[derive(Debug, Clone, Copy)]
 struct CheckedPostDownloadProcessorApi {
@@ -1251,6 +1543,72 @@ impl TryFrom<VesperFrameProcessorPluginApiV1> for CheckedFrameProcessorPluginApi
             close_session: api.close_session.ok_or(PluginLoadError::MissingField {
                 field: "frame_processor_plugin_api_v1.close_session",
             })?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CheckedSourceNormalizerPacketPluginApi {
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
+    name: Option<NameFn>,
+    packet_capabilities_json: CapabilitiesJsonFn,
+    free_bytes: FreeBytesFn,
+    open_packet_session_json: SourceNormalizerOpenPacketSessionJsonFn,
+    read_packet: SourceNormalizerReadPacketFn,
+    release_packet: SourceNormalizerReleasePacketFn,
+    seek_packet_session_json: Option<SourceNormalizerSeekSessionJsonFn>,
+    flush_packet_session: SourceNormalizerSessionOperationFn,
+    close_packet_session: SourceNormalizerSessionOperationFn,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through
+// `SourceNormalizerPacketPluginFactory`.
+unsafe impl Send for CheckedSourceNormalizerPacketPluginApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedSourceNormalizerPacketPluginApi {}
+
+impl TryFrom<VesperSourceNormalizerPluginApiV2> for CheckedSourceNormalizerPacketPluginApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperSourceNormalizerPluginApiV2) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            packet_capabilities_json: api.packet_capabilities_json.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v2.packet_capabilities_json",
+                },
+            )?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v2.free_bytes",
+            })?,
+            open_packet_session_json: api.open_packet_session_json.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v2.open_packet_session_json",
+                },
+            )?,
+            read_packet: api.read_packet.ok_or(PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v2.read_packet",
+            })?,
+            release_packet: api.release_packet.ok_or(PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v2.release_packet",
+            })?,
+            seek_packet_session_json: api.seek_packet_session_json,
+            flush_packet_session: api.flush_packet_session.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v2.flush_packet_session",
+                },
+            )?,
+            close_packet_session: api.close_packet_session.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v2.close_packet_session",
+                },
+            )?,
         })
     }
 }
@@ -2414,6 +2772,421 @@ impl Drop for DynamicFrameProcessorSession {
     }
 }
 
+#[derive(Debug)]
+struct DynamicSourceNormalizerPacketPluginFactoryInner {
+    #[allow(dead_code)]
+    library: Option<Arc<LibraryHolder>>,
+    name: String,
+    api: CheckedSourceNormalizerPacketPluginApi,
+    capabilities: SourceNormalizerPacketCapabilities,
+}
+
+impl Drop for DynamicSourceNormalizerPacketPluginFactoryInner {
+    fn drop(&mut self) {
+        if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
+            unsafe { destroy(self.api.context) };
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DynamicSourceNormalizerPacketPluginFactory {
+    inner: Arc<DynamicSourceNormalizerPacketPluginFactoryInner>,
+}
+
+impl DynamicSourceNormalizerPacketPluginFactory {
+    fn new(
+        library: Option<Arc<LibraryHolder>>,
+        fallback_name: String,
+        api: CheckedSourceNormalizerPacketPluginApi,
+    ) -> Result<Self, PluginLoadError> {
+        let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
+            let name_ptr = unsafe { name_fn(api.context) };
+            if name_ptr.is_null() {
+                fallback_name
+            } else {
+                c_string_field(name_ptr, "source_normalizer_packet_name")?
+            }
+        } else {
+            fallback_name
+        };
+        let capabilities = decode_plugin_bytes::<SourceNormalizerPacketCapabilities>(
+            // SAFETY: the validated API guarantees `packet_capabilities_json`
+            // and `free_bytes` are present.
+            unsafe { (api.packet_capabilities_json)(api.context) },
+            api.free_bytes,
+            api.context,
+        )
+        .map_err(map_capabilities_payload_error)?;
+
+        Ok(Self {
+            inner: Arc::new(DynamicSourceNormalizerPacketPluginFactoryInner {
+                library,
+                name,
+                api,
+                capabilities,
+            }),
+        })
+    }
+}
+
+impl SourceNormalizerPacketPluginFactory for DynamicSourceNormalizerPacketPluginFactory {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn packet_capabilities(&self) -> SourceNormalizerPacketCapabilities {
+        self.inner.capabilities.clone()
+    }
+
+    fn open_packet_session(
+        &self,
+        config: &SourceNormalizerPacketSessionConfig,
+    ) -> Result<Box<dyn SourceNormalizerPacketSession>, SourceNormalizerError> {
+        let config_json = serde_json::to_vec(config).map_err(|error| {
+            SourceNormalizerError::payload_codec(format!(
+                "serialize source normalizer packet config for `{}` failed: {error}",
+                self.inner.name
+            ))
+        })?;
+
+        // SAFETY: the validated plugin API guarantees
+        // `open_packet_session_json` is present, and `config_json` remains
+        // alive for the duration of this synchronous callback.
+        let result = unsafe {
+            (self.inner.api.open_packet_session_json)(
+                self.inner.api.context,
+                config_json.as_ptr(),
+                config_json.len(),
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                if result.session.is_null() {
+                    reclaim_plugin_payload(
+                        result.payload,
+                        self.inner.api.free_bytes,
+                        self.inner.api.context,
+                    );
+                    return Err(SourceNormalizerError::abi_violation(format!(
+                        "source normalizer packet plugin `{}` returned a null session pointer",
+                        self.inner.name
+                    )));
+                }
+                let stream_info = decode_plugin_bytes::<SourceNormalizerPacketStreamInfo>(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                )
+                .map_err(|error| {
+                    map_source_normalizer_payload_error(
+                        &self.inner.name,
+                        "open_packet_session",
+                        error,
+                    )
+                })?;
+                Ok(Box::new(DynamicSourceNormalizerPacketSession {
+                    factory: self.inner.clone(),
+                    session: result.session,
+                    stream_info,
+                    outstanding_packet: None,
+                    closed: false,
+                }))
+            }
+            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+                result.payload,
+                self.inner.api.free_bytes,
+                self.inner.api.context,
+                &self.inner.name,
+                "open_packet_session",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DynamicSourceNormalizerPacketSession {
+    factory: Arc<DynamicSourceNormalizerPacketPluginFactoryInner>,
+    session: *mut c_void,
+    stream_info: SourceNormalizerPacketStreamInfo,
+    outstanding_packet: Option<usize>,
+    closed: bool,
+}
+
+// SAFETY: the dynamic source normalizer packet session is only exposed through
+// `SourceNormalizerPacketSession: Send`; the plugin ABI requires the opaque
+// session pointer to be safe to move across threads when exported through this
+// API.
+unsafe impl Send for DynamicSourceNormalizerPacketSession {}
+
+impl DynamicSourceNormalizerPacketSession {
+    fn ensure_open(&self) -> Result<(), SourceNormalizerError> {
+        if self.closed || self.session.is_null() {
+            Err(SourceNormalizerError::NotConfigured)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn decode_operation_result(
+        &self,
+        result: VesperPluginProcessResult,
+        operation: &'static str,
+    ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                decode_plugin_bytes_or_default::<SourceNormalizerOperationStatus>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_source_normalizer_payload_error(&self.factory.name, operation, error)
+                })
+            }
+            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                operation,
+            )),
+        }
+    }
+
+    fn release_outstanding_packet(
+        &mut self,
+        operation: &'static str,
+    ) -> Result<(), SourceNormalizerError> {
+        let Some(packet_handle) = self.outstanding_packet.take() else {
+            return Ok(());
+        };
+
+        // SAFETY: `release_packet` is present in the validated v2 API and the
+        // handle was returned by this same session from a successful read.
+        let result = unsafe {
+            (self.factory.api.release_packet)(self.factory.api.context, self.session, packet_handle)
+        };
+        self.decode_operation_result(result, operation).map(|_| ())
+    }
+
+    fn release_packet_result(
+        &self,
+        packet_handle: usize,
+    ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        // SAFETY: `release_packet` is present in the validated v2 API and this
+        // method is only called for a handle currently tracked by this session.
+        let result = unsafe {
+            (self.factory.api.release_packet)(self.factory.api.context, self.session, packet_handle)
+        };
+        self.decode_operation_result(result, "release_packet")
+    }
+
+    fn reclaim_unexpected_packet_handle(&self, packet_handle: usize) {
+        if packet_handle == 0 || self.session.is_null() {
+            return;
+        }
+        // SAFETY: this is best-effort cleanup for an ABI-violating result that
+        // still returned a plugin-owned handle.
+        let result = unsafe {
+            (self.factory.api.release_packet)(self.factory.api.context, self.session, packet_handle)
+        };
+        reclaim_plugin_payload(
+            result.payload,
+            self.factory.api.free_bytes,
+            self.factory.api.context,
+        );
+    }
+}
+
+impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
+    fn stream_info(&self) -> SourceNormalizerPacketStreamInfo {
+        self.stream_info.clone()
+    }
+
+    fn read_packet(&mut self) -> Result<SourceNormalizerPacketLease<'_>, SourceNormalizerError> {
+        self.ensure_open()?;
+        if let Some(packet_handle) = self.outstanding_packet {
+            return Err(SourceNormalizerError::abi_violation(format!(
+                "source normalizer packet plugin `{}` still has unreleased packet handle {}",
+                self.factory.name, packet_handle
+            )));
+        }
+
+        // SAFETY: the validated plugin API guarantees `read_packet` is present
+        // and returns metadata bytes reclaimed below. Packet bytes stay valid
+        // until `release_packet` is called for the returned handle.
+        let result =
+            unsafe { (self.factory.api.read_packet)(self.factory.api.context, self.session) };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let metadata = decode_plugin_bytes::<SourceNormalizerReadPacketMetadata>(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_source_normalizer_payload_error(&self.factory.name, "read_packet", error)
+                })?;
+
+                if metadata.status != SourceNormalizerReadPacketStatus::Packet {
+                    if !result.data.is_null() || result.data_len != 0 || result.packet_handle != 0 {
+                        self.reclaim_unexpected_packet_handle(result.packet_handle);
+                        return Err(SourceNormalizerError::abi_violation(format!(
+                            "source normalizer packet plugin `{}` returned packet bytes for {:?}",
+                            self.factory.name, metadata.status
+                        )));
+                    }
+                    return Ok(SourceNormalizerPacketLease {
+                        metadata,
+                        data: &[],
+                        handle: 0,
+                    });
+                }
+
+                if metadata.packet.is_none() {
+                    self.reclaim_unexpected_packet_handle(result.packet_handle);
+                    return Err(SourceNormalizerError::abi_violation(format!(
+                        "source normalizer packet plugin `{}` returned Packet status without packet metadata",
+                        self.factory.name
+                    )));
+                }
+                if result.packet_handle == 0 {
+                    return Err(SourceNormalizerError::abi_violation(format!(
+                        "source normalizer packet plugin `{}` returned Packet status without a packet handle",
+                        self.factory.name
+                    )));
+                }
+                if result.data.is_null() && result.data_len > 0 {
+                    self.reclaim_unexpected_packet_handle(result.packet_handle);
+                    return Err(SourceNormalizerError::abi_violation(format!(
+                        "source normalizer packet plugin `{}` returned null packet data with len {}",
+                        self.factory.name, result.data_len
+                    )));
+                }
+
+                self.outstanding_packet = Some(result.packet_handle);
+                let data = if result.data_len == 0 {
+                    &[]
+                } else {
+                    // SAFETY: the plugin returned a successful packet lease. The
+                    // byte range remains valid until this loader calls
+                    // `release_packet` for `result.packet_handle`.
+                    unsafe { std::slice::from_raw_parts(result.data, result.data_len) }
+                };
+                Ok(SourceNormalizerPacketLease {
+                    metadata,
+                    data,
+                    handle: result.packet_handle,
+                })
+            }
+            VesperPluginResultStatus::Failure => {
+                if result.packet_handle != 0 {
+                    self.reclaim_unexpected_packet_handle(result.packet_handle);
+                }
+                Err(decode_source_normalizer_error_payload(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                    &self.factory.name,
+                    "read_packet",
+                ))
+            }
+        }
+    }
+
+    fn release_packet(&mut self, packet_handle: usize) -> Result<(), SourceNormalizerError> {
+        self.ensure_open()?;
+        match self.outstanding_packet {
+            Some(outstanding) if outstanding == packet_handle => {
+                self.release_packet_result(packet_handle)?;
+                self.outstanding_packet = None;
+                Ok(())
+            }
+            Some(outstanding) => Err(SourceNormalizerError::abi_violation(format!(
+                "source normalizer packet plugin `{}` tried to release packet handle {}, but {} is outstanding",
+                self.factory.name, packet_handle, outstanding
+            ))),
+            None => Err(SourceNormalizerError::abi_violation(format!(
+                "source normalizer packet plugin `{}` has no outstanding packet handle to release",
+                self.factory.name
+            ))),
+        }
+    }
+
+    fn seek(
+        &mut self,
+        seek: &SourceNormalizerPacketSeek,
+    ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        self.ensure_open()?;
+        self.release_outstanding_packet("release_packet_on_seek")?;
+        let Some(seek_packet_session_json) = self.factory.api.seek_packet_session_json else {
+            return Err(SourceNormalizerError::unsupported_operation("seek"));
+        };
+        let seek_json = serde_json::to_vec(seek).map_err(|error| {
+            SourceNormalizerError::payload_codec(format!(
+                "serialize source normalizer packet seek for `{}` failed: {error}",
+                self.factory.name
+            ))
+        })?;
+
+        // SAFETY: the optional seek callback comes from the validated v2 API and
+        // the JSON buffer remains alive for the synchronous call.
+        let result = unsafe {
+            seek_packet_session_json(
+                self.factory.api.context,
+                self.session,
+                seek_json.as_ptr(),
+                seek_json.len(),
+            )
+        };
+        self.decode_operation_result(result, "seek_packet")
+    }
+
+    fn flush(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        self.ensure_open()?;
+        self.release_outstanding_packet("release_packet_on_flush")?;
+        // SAFETY: the validated plugin API guarantees `flush_packet_session` is
+        // present for packet v2 sessions.
+        let result = unsafe {
+            (self.factory.api.flush_packet_session)(self.factory.api.context, self.session)
+        };
+        self.decode_operation_result(result, "flush_packet")
+    }
+
+    fn close(&mut self) -> Result<(), SourceNormalizerError> {
+        if self.closed || self.session.is_null() {
+            return Ok(());
+        }
+        let release_result = self.release_outstanding_packet("release_packet_on_close");
+        // SAFETY: the validated plugin API guarantees `close_packet_session` is
+        // present and consumes or releases the opaque session pointer exactly
+        // once.
+        let result = unsafe {
+            (self.factory.api.close_packet_session)(self.factory.api.context, self.session)
+        };
+        self.closed = true;
+        self.session = std::ptr::null_mut();
+        let close_result = self
+            .decode_operation_result(result, "close_packet")
+            .map(|_| ());
+        release_result.and(close_result)
+    }
+}
+
+impl Drop for DynamicSourceNormalizerPacketSession {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
 fn native_handle_kind_code(handle_kind: &NativeHandleKind) -> Result<u32, String> {
     match handle_kind {
         NativeHandleKind::CvPixelBuffer => Ok(1),
@@ -2555,6 +3328,35 @@ fn decode_frame_processor_error_payload(
         .unwrap_or_else(|error| map_frame_processor_payload_error(plugin_name, payload_kind, error))
 }
 
+fn map_source_normalizer_payload_error(
+    plugin_name: &str,
+    payload_kind: &str,
+    error: PluginPayloadError,
+) -> SourceNormalizerError {
+    match error {
+        PluginPayloadError::NullPayloadWithLength { len } => {
+            SourceNormalizerError::abi_violation(format!(
+                "source normalizer plugin `{plugin_name}` returned {payload_kind} payload with null data pointer and len {len}"
+            ))
+        }
+        PluginPayloadError::Json(error) => SourceNormalizerError::payload_codec(format!(
+            "decode source normalizer plugin `{plugin_name}` {payload_kind} payload failed: {error}"
+        )),
+    }
+}
+
+fn decode_source_normalizer_error_payload(
+    payload: VesperPluginBytes,
+    free_bytes: FreeBytesFn,
+    context: *mut c_void,
+    plugin_name: &str,
+    payload_kind: &str,
+) -> SourceNormalizerError {
+    decode_plugin_bytes::<SourceNormalizerError>(payload, free_bytes, context).unwrap_or_else(
+        |error| map_source_normalizer_payload_error(plugin_name, payload_kind, error),
+    )
+}
+
 fn decode_plugin_bytes_or_default<T: Default + DeserializeOwned>(
     payload: VesperPluginBytes,
     free_bytes: FreeBytesFn,
@@ -2628,25 +3430,36 @@ mod tests {
         FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeFrame, NativeFrameMetadata,
         NativeFrameReleaseTracking, NativeHandleKind, OutputFormat, PipelineEvent,
         ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
+        SourceNormalizerError, SourceNormalizerNormalizeLevel, SourceNormalizerOperationStatus,
+        SourceNormalizerPacket, SourceNormalizerPacketCapabilities,
+        SourceNormalizerPacketMediaKind, SourceNormalizerPacketPluginFactory,
+        SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+        SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
+        SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
+        SourceNormalizerReadPacketStatus, SourceNormalizerRequiredCapabilities,
         VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
         VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+        VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperBenchmarkSinkApi,
+        VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
         VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
         VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
         VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind,
         VesperPluginProcessResult, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+        VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerPluginApiV2,
+        VesperSourceNormalizerReadPacketResult,
     };
     use std::collections::BTreeMap;
     use std::env;
     use std::ffi::{c_char, c_void};
     use std::path::{Path, PathBuf};
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::{Arc, LazyLock, Mutex};
 
     static PROCESSOR_NAME: &[u8] = b"fixture-processor\0";
     static HOOK_NAME: &[u8] = b"fixture-hook\0";
     static SINK_NAME: &[u8] = b"fixture-benchmark-sink\0";
     static DECODER_NAME: &[u8] = b"fixture-decoder\0";
     static FRAME_PROCESSOR_NAME: &[u8] = b"test-frame-processor\0";
+    static SOURCE_NORMALIZER_PACKET_NAME: &[u8] = b"test-source-normalizer-packet\0";
     static EVENTS: LazyLock<Mutex<Vec<PipelineEvent>>> = LazyLock::new(|| Mutex::new(Vec::new()));
     static BENCHMARK_BATCHES: LazyLock<Mutex<Vec<BenchmarkEventBatch>>> =
         LazyLock::new(|| Mutex::new(Vec::new()));
@@ -2654,12 +3467,64 @@ mod tests {
         LazyLock::new(|| Mutex::new(Vec::new()));
     static FRAME_PROCESSOR_RELEASES: LazyLock<Mutex<Vec<usize>>> =
         LazyLock::new(|| Mutex::new(Vec::new()));
+    static SOURCE_NORMALIZER_PACKET_RELEASES: LazyLock<Mutex<Vec<usize>>> =
+        LazyLock::new(|| Mutex::new(Vec::new()));
     static FRAME_PROCESSOR_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    static SOURCE_NORMALIZER_PACKET_TEST_LOCK: LazyLock<Mutex<()>> =
+        LazyLock::new(|| Mutex::new(()));
 
     fn frame_processor_test_guard() -> std::sync::MutexGuard<'static, ()> {
         FRAME_PROCESSOR_TEST_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn source_normalizer_packet_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        SOURCE_NORMALIZER_PACKET_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn reset_source_normalizer_packet_releases() {
+        SOURCE_NORMALIZER_PACKET_RELEASES
+            .lock()
+            .map(|mut releases| releases.clear())
+            .unwrap_or_default();
+    }
+
+    fn source_normalizer_packet_releases() -> Vec<usize> {
+        SOURCE_NORMALIZER_PACKET_RELEASES
+            .lock()
+            .map(|releases| releases.clone())
+            .unwrap_or_default()
+    }
+
+    fn fixture_source_normalizer_packet_factory() -> Arc<dyn SourceNormalizerPacketPluginFactory> {
+        let api = fixture_source_normalizer_packet_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::SourceNormalizer,
+            plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
+        };
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect("load source normalizer packet plugin");
+        plugin
+            .source_normalizer_packet_plugin_factory()
+            .expect("packet factory should be available")
+    }
+
+    fn fixture_source_normalizer_packet_session() -> Box<dyn SourceNormalizerPacketSession> {
+        fixture_source_normalizer_packet_factory()
+            .open_packet_session(&SourceNormalizerPacketSessionConfig {
+                runtime_profile: "fixture-packet".to_owned(),
+                input: "file:///tmp/input.mp4".to_owned(),
+                headers: Vec::new(),
+                startup_timeout_ms: None,
+                session_timeout_ms: None,
+                preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+            })
+            .expect("open packet session")
     }
 
     #[derive(Default)]
@@ -3742,6 +4607,210 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_source_normalizer_packet_plugin_round_trips_packet_lifecycle() {
+        let _guard = source_normalizer_packet_test_guard();
+        reset_source_normalizer_packet_releases();
+        let factory = fixture_source_normalizer_packet_factory();
+        assert_eq!(factory.name(), "test-source-normalizer-packet");
+        assert!(factory.packet_capabilities().supports_codec("h264"));
+
+        let mut session = fixture_source_normalizer_packet_session();
+        assert_eq!(
+            session.stream_info().normalizer_name.as_deref(),
+            Some("test-source-normalizer-packet")
+        );
+
+        let packet = session.read_packet().expect("read first packet");
+        assert_eq!(
+            packet.metadata.status,
+            SourceNormalizerReadPacketStatus::Packet
+        );
+        assert_eq!(packet.data, &[0, 0, 1, 9]);
+        let handle = packet.handle;
+        drop(packet);
+
+        assert!(
+            session.read_packet().is_err(),
+            "loader should require release before another read"
+        );
+        session.release_packet(handle).expect("release packet");
+        assert_eq!(source_normalizer_packet_releases(), vec![handle]);
+        assert!(
+            session.release_packet(handle).is_err(),
+            "double release should fail before calling the plugin again"
+        );
+
+        let eos = session.read_packet().expect("read eos");
+        assert_eq!(
+            eos.metadata.status,
+            SourceNormalizerReadPacketStatus::EndOfStream
+        );
+        assert_eq!(eos.handle, 0);
+        session.close().expect("close packet session");
+        assert!(
+            session.read_packet().is_err(),
+            "read after close should report not configured"
+        );
+    }
+
+    #[test]
+    fn dynamic_source_normalizer_packet_plugin_seek_releases_outstanding_packet() {
+        let _guard = source_normalizer_packet_test_guard();
+        reset_source_normalizer_packet_releases();
+        let mut session = fixture_source_normalizer_packet_session();
+
+        let packet = session.read_packet().expect("read first packet");
+        let handle = packet.handle;
+        drop(packet);
+
+        let status = session
+            .seek(&SourceNormalizerPacketSeek {
+                position_millis: 250,
+                exact: false,
+            })
+            .expect("seek should release outstanding packet");
+        assert!(status.completed);
+        assert_eq!(source_normalizer_packet_releases(), vec![handle]);
+
+        let packet = session.read_packet().expect("read packet after seek");
+        let metadata = packet.metadata.clone();
+        let handle_after_seek = packet.handle;
+        drop(packet);
+        let packet = metadata.packet.expect("packet metadata");
+        assert_eq!(packet.pts_us, Some(250_000));
+        assert!(packet.discontinuity);
+
+        session
+            .release_packet(handle_after_seek)
+            .expect("release packet after seek");
+    }
+
+    #[test]
+    fn dynamic_source_normalizer_packet_plugin_flush_releases_outstanding_packet() {
+        let _guard = source_normalizer_packet_test_guard();
+        reset_source_normalizer_packet_releases();
+        let mut session = fixture_source_normalizer_packet_session();
+
+        let packet = session.read_packet().expect("read first packet");
+        let handle = packet.handle;
+        drop(packet);
+
+        let status = session
+            .flush()
+            .expect("flush should release outstanding packet");
+        assert!(status.completed);
+        assert_eq!(source_normalizer_packet_releases(), vec![handle]);
+
+        let packet = session.read_packet().expect("read packet after flush");
+        assert_eq!(
+            packet.metadata.status,
+            SourceNormalizerReadPacketStatus::Packet
+        );
+        assert_eq!(
+            packet
+                .metadata
+                .packet
+                .as_ref()
+                .and_then(|packet| packet.pts_us),
+            Some(1_000)
+        );
+        let handle_after_flush = packet.handle;
+        drop(packet);
+
+        session
+            .release_packet(handle_after_flush)
+            .expect("release packet after flush");
+    }
+
+    #[test]
+    fn dynamic_source_normalizer_packet_plugin_drop_releases_outstanding_packet() {
+        let _guard = source_normalizer_packet_test_guard();
+        reset_source_normalizer_packet_releases();
+        let mut session = fixture_source_normalizer_packet_session();
+
+        let packet = session.read_packet().expect("read first packet");
+        let handle = packet.handle;
+        drop(packet);
+
+        drop(session);
+        assert_eq!(source_normalizer_packet_releases(), vec![handle]);
+    }
+
+    #[test]
+    fn dynamic_source_normalizer_packet_plugin_rejects_missing_release_callback() {
+        let api = VesperSourceNormalizerPluginApiV2 {
+            release_packet: None,
+            ..fixture_source_normalizer_packet_api()
+        };
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::SourceNormalizer,
+            plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
+        };
+
+        let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect_err("packet ABI requires release_packet");
+
+        assert!(matches!(
+            error,
+            PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v2.release_packet"
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_registry_reports_source_normalizer_packet_v2_support() {
+        let api = fixture_source_normalizer_packet_api();
+        let descriptor = VesperPluginDescriptor {
+            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+            plugin_kind: VesperPluginKind::SourceNormalizer,
+            plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+            api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
+        };
+        let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+            .expect("load source normalizer packet plugin");
+        let record = PluginDiagnosticRecord::from_loaded_source_normalizer_plugin(
+            PathBuf::from("test-source-normalizer-packet"),
+            &plugin,
+        );
+
+        assert_eq!(
+            record.status,
+            PluginDiagnosticStatus::SourceNormalizerSupported
+        );
+        assert_eq!(
+            record.plugin_name.as_deref(),
+            Some("test-source-normalizer-packet")
+        );
+        assert!(matches!(
+            record.capability_summary,
+            Some(PluginCapabilitySummary::SourceNormalizerPacket(_))
+        ));
+        assert!(
+            record
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("source_normalizer_packet_v2"))
+        );
+
+        let registry = PluginRegistry::from_records(vec![record]);
+        assert_eq!(
+            registry
+                .best_source_normalizer_packet()
+                .and_then(|record| record.plugin_name.as_deref()),
+            Some("test-source-normalizer-packet")
+        );
+        assert_eq!(
+            registry
+                .best_source_normalizer_for_profile("fixture-packet")
+                .and_then(|record| record.plugin_name.as_deref()),
+            Some("test-source-normalizer-packet")
+        );
+    }
+
+    #[test]
     fn dynamic_post_download_processor_reports_payload_codec_errors() {
         let api = VesperPostDownloadProcessorApi {
             process_json: Some(fixture_payload_codec_process_json),
@@ -4090,6 +5159,22 @@ mod tests {
         }
     }
 
+    fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV2 {
+        VesperSourceNormalizerPluginApiV2 {
+            context: std::ptr::null_mut(),
+            destroy: None,
+            name: Some(fixture_source_normalizer_packet_name),
+            packet_capabilities_json: Some(fixture_source_normalizer_packet_capabilities_json),
+            open_packet_session_json: Some(fixture_source_normalizer_open_packet_session_json),
+            read_packet: Some(fixture_source_normalizer_read_packet),
+            release_packet: Some(fixture_source_normalizer_release_packet),
+            seek_packet_session_json: Some(fixture_source_normalizer_seek_packet_session_json),
+            flush_packet_session: Some(fixture_source_normalizer_flush_packet_session),
+            close_packet_session: Some(fixture_source_normalizer_close_packet_session),
+            free_bytes: Some(fixture_free_bytes),
+        }
+    }
+
     unsafe extern "C" fn fixture_processor_name(_context: *mut c_void) -> *const c_char {
         PROCESSOR_NAME.as_ptr().cast::<c_char>()
     }
@@ -4108,6 +5193,12 @@ mod tests {
 
     unsafe extern "C" fn fixture_frame_processor_name(_context: *mut c_void) -> *const c_char {
         FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>()
+    }
+
+    unsafe extern "C" fn fixture_source_normalizer_packet_name(
+        _context: *mut c_void,
+    ) -> *const c_char {
+        SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>()
     }
 
     unsafe extern "C" fn fixture_benchmark_on_event_batch_json(
@@ -4251,6 +5342,17 @@ mod tests {
     struct FixtureFrameProcessorSession {
         pending_output: Option<NativeFrame>,
         pending_source_frame_id: Option<u64>,
+    }
+
+    struct FixtureSourceNormalizerPacketSession {
+        emitted_packet: bool,
+        leased_packet: Option<FixtureSourceNormalizerPacketLease>,
+        last_seek: Option<u64>,
+    }
+
+    struct FixtureSourceNormalizerPacketLease {
+        handle: usize,
+        data: Vec<u8>,
     }
 
     unsafe extern "C" fn fixture_native_decoder_open_session_json(
@@ -4638,6 +5740,236 @@ mod tests {
         frame_processor_process_success(&FrameProcessorOperationStatus { completed: true })
     }
 
+    unsafe extern "C" fn fixture_source_normalizer_packet_capabilities_json(
+        _context: *mut c_void,
+    ) -> VesperPluginBytes {
+        let capabilities = SourceNormalizerPacketCapabilities {
+            supported_runtime_profiles: vec!["fixture-packet".to_owned()],
+            max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+            media_kinds: vec![SourceNormalizerPacketMediaKind::Video],
+            codecs: vec!["H264".to_owned()],
+            bitstream_formats: vec![DecoderBitstreamFormat::Avcc],
+            supports_seek: true,
+            supports_flush: true,
+            required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+            max_sessions: Some(1),
+        };
+        VesperPluginBytes::from_vec(
+            serde_json::to_vec(&capabilities).expect("serialize source normalizer packet caps"),
+        )
+    }
+
+    unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
+        _context: *mut c_void,
+        config_json: *const u8,
+        config_json_len: usize,
+    ) -> VesperSourceNormalizerOpenPacketSessionResult {
+        let config = match decode_source_normalizer_fixture_json::<
+            SourceNormalizerPacketSessionConfig,
+        >(config_json, config_json_len)
+        {
+            Ok(config) => config,
+            Err(error) => return source_normalizer_packet_open_error(error),
+        };
+        if config.input.is_empty() {
+            return source_normalizer_packet_open_error(SourceNormalizerError::invalid_input(
+                "input must not be empty",
+            ));
+        }
+        if !config
+            .runtime_profile
+            .eq_ignore_ascii_case("fixture-packet")
+        {
+            return source_normalizer_packet_open_error(
+                SourceNormalizerError::UnsupportedRuntimeProfile {
+                    profile: config.runtime_profile,
+                },
+            );
+        }
+        let info = SourceNormalizerPacketStreamInfo {
+            session_id: Some("fixture-packet-session".to_owned()),
+            normalizer_name: Some("test-source-normalizer-packet".to_owned()),
+            runtime_profile: Some("fixture-packet".to_owned()),
+            selected_backend: Some("fixture".to_owned()),
+            tracks: vec![SourceNormalizerPacketTrackInfo {
+                stream_index: 0,
+                media_kind: SourceNormalizerPacketMediaKind::Video,
+                codec: "H264".to_owned(),
+                extradata: vec![1, 2, 3],
+                bitstream_format: Some(DecoderBitstreamFormat::Avcc),
+                width: Some(16),
+                height: Some(16),
+                coded_width: Some(16),
+                coded_height: Some(16),
+                sample_rate: None,
+                channels: None,
+                frame_rate: Some(30.0),
+                time_base_num: Some(1),
+                time_base_den: Some(90_000),
+            }],
+            selected_track_index: Some(0),
+            duration_millis: Some(1_000),
+            seekable: true,
+        };
+        let session = Box::into_raw(Box::new(FixtureSourceNormalizerPacketSession {
+            emitted_packet: false,
+            leased_packet: None,
+            last_seek: None,
+        }));
+        VesperSourceNormalizerOpenPacketSessionResult {
+            status: VesperPluginResultStatus::Success,
+            session: session.cast::<c_void>(),
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&info).expect("serialize source normalizer packet info"),
+            ),
+        }
+    }
+
+    unsafe extern "C" fn fixture_source_normalizer_read_packet(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperSourceNormalizerReadPacketResult {
+        let Some(session) = (unsafe {
+            session
+                .cast::<FixtureSourceNormalizerPacketSession>()
+                .as_mut()
+        }) else {
+            return source_normalizer_read_packet_error(SourceNormalizerError::NotConfigured);
+        };
+        if session.leased_packet.is_some() {
+            return source_normalizer_read_packet_error(SourceNormalizerError::abi_violation(
+                "previous packet is still leased",
+            ));
+        }
+        if session.emitted_packet {
+            return source_normalizer_read_packet_success(
+                &SourceNormalizerReadPacketMetadata::end_of_stream(),
+                None,
+            );
+        }
+
+        session.emitted_packet = true;
+        let handle = 0x51;
+        session.leased_packet = Some(FixtureSourceNormalizerPacketLease {
+            handle,
+            data: vec![0, 0, 1, 9],
+        });
+        let packet = session.leased_packet.as_ref().expect("stored packet");
+        source_normalizer_read_packet_success(
+            &SourceNormalizerReadPacketMetadata::packet(SourceNormalizerPacket {
+                pts_us: session
+                    .last_seek
+                    .map(|millis| i64::try_from(millis.saturating_mul(1_000)).unwrap_or(i64::MAX))
+                    .or(Some(1_000)),
+                dts_us: Some(1_000),
+                duration_us: Some(33_333),
+                stream_index: 0,
+                key_frame: true,
+                discontinuity: session.last_seek.is_some(),
+                end_of_stream: false,
+            }),
+            Some((packet.data.as_ptr(), packet.data.len(), packet.handle)),
+        )
+    }
+
+    unsafe extern "C" fn fixture_source_normalizer_release_packet(
+        _context: *mut c_void,
+        session: *mut c_void,
+        packet_handle: usize,
+    ) -> VesperPluginProcessResult {
+        let Some(session) = (unsafe {
+            session
+                .cast::<FixtureSourceNormalizerPacketSession>()
+                .as_mut()
+        }) else {
+            return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+        };
+        match session.leased_packet.take() {
+            Some(packet) if packet.handle == packet_handle => {
+                if let Ok(mut releases) = SOURCE_NORMALIZER_PACKET_RELEASES.lock() {
+                    releases.push(packet_handle);
+                }
+                source_normalizer_process_success(&SourceNormalizerOperationStatus {
+                    completed: true,
+                    message: None,
+                })
+            }
+            Some(packet) => {
+                session.leased_packet = Some(packet);
+                source_normalizer_process_error(SourceNormalizerError::abi_violation(
+                    "unexpected packet handle",
+                ))
+            }
+            None => source_normalizer_process_error(SourceNormalizerError::abi_violation(
+                "no packet is leased",
+            )),
+        }
+    }
+
+    unsafe extern "C" fn fixture_source_normalizer_seek_packet_session_json(
+        _context: *mut c_void,
+        session: *mut c_void,
+        seek_json: *const u8,
+        seek_json_len: usize,
+    ) -> VesperPluginProcessResult {
+        let Some(session) = (unsafe {
+            session
+                .cast::<FixtureSourceNormalizerPacketSession>()
+                .as_mut()
+        }) else {
+            return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+        };
+        let seek = match decode_source_normalizer_fixture_json::<SourceNormalizerPacketSeek>(
+            seek_json,
+            seek_json_len,
+        ) {
+            Ok(seek) => seek,
+            Err(error) => return source_normalizer_process_error(error),
+        };
+        session.leased_packet = None;
+        session.emitted_packet = false;
+        session.last_seek = Some(seek.position_millis);
+        source_normalizer_process_success(&SourceNormalizerOperationStatus {
+            completed: true,
+            message: None,
+        })
+    }
+
+    unsafe extern "C" fn fixture_source_normalizer_flush_packet_session(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        let Some(session) = (unsafe {
+            session
+                .cast::<FixtureSourceNormalizerPacketSession>()
+                .as_mut()
+        }) else {
+            return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+        };
+        session.leased_packet = None;
+        session.emitted_packet = false;
+        source_normalizer_process_success(&SourceNormalizerOperationStatus {
+            completed: true,
+            message: None,
+        })
+    }
+
+    unsafe extern "C" fn fixture_source_normalizer_close_packet_session(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        if session.is_null() {
+            return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+        }
+        // SAFETY: the session pointer was allocated with `Box::into_raw` by
+        // the matching open-session callback and close is called once.
+        let _ = unsafe { Box::from_raw(session.cast::<FixtureSourceNormalizerPacketSession>()) };
+        source_normalizer_process_success(&SourceNormalizerOperationStatus {
+            completed: true,
+            message: None,
+        })
+    }
+
     unsafe extern "C" fn fixture_payload_codec_process_json(
         _context: *mut c_void,
         _input_json: *const u8,
@@ -4830,6 +6162,88 @@ mod tests {
         }
     }
 
+    fn decode_source_normalizer_fixture_json<T: serde::de::DeserializeOwned>(
+        data: *const u8,
+        len: usize,
+    ) -> Result<T, SourceNormalizerError> {
+        if data.is_null() && len > 0 {
+            return Err(SourceNormalizerError::abi_violation(
+                "fixture source normalizer JSON pointer was null with non-zero len",
+            ));
+        }
+        let payload = if data.is_null() || len == 0 {
+            &[]
+        } else {
+            // SAFETY: fixture callers pass a valid JSON buffer for the duration
+            // of this synchronous callback.
+            unsafe { std::slice::from_raw_parts(data, len) }
+        };
+        serde_json::from_slice(payload)
+            .map_err(|error| SourceNormalizerError::payload_codec(error.to_string()))
+    }
+
+    fn source_normalizer_packet_open_error(
+        error: SourceNormalizerError,
+    ) -> VesperSourceNormalizerOpenPacketSessionResult {
+        VesperSourceNormalizerOpenPacketSessionResult {
+            status: VesperPluginResultStatus::Failure,
+            session: std::ptr::null_mut(),
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize source normalizer packet error"),
+            ),
+        }
+    }
+
+    fn source_normalizer_process_success<T: serde::Serialize>(
+        value: &T,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Success,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(value).expect("serialize source normalizer value"),
+            ),
+        }
+    }
+
+    fn source_normalizer_process_error(error: SourceNormalizerError) -> VesperPluginProcessResult {
+        VesperPluginProcessResult {
+            status: VesperPluginResultStatus::Failure,
+            payload: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize source normalizer error"),
+            ),
+        }
+    }
+
+    fn source_normalizer_read_packet_success(
+        metadata: &SourceNormalizerReadPacketMetadata,
+        packet: Option<(*const u8, usize, usize)>,
+    ) -> VesperSourceNormalizerReadPacketResult {
+        let (data, data_len, packet_handle) = packet.unwrap_or((std::ptr::null(), 0, 0));
+        VesperSourceNormalizerReadPacketResult {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(metadata).expect("serialize source normalizer packet metadata"),
+            ),
+            data,
+            data_len,
+            packet_handle,
+        }
+    }
+
+    fn source_normalizer_read_packet_error(
+        error: SourceNormalizerError,
+    ) -> VesperSourceNormalizerReadPacketResult {
+        VesperSourceNormalizerReadPacketResult {
+            status: VesperPluginResultStatus::Failure,
+            metadata: VesperPluginBytes::from_vec(
+                serde_json::to_vec(&error).expect("serialize source normalizer packet error"),
+            ),
+            data: std::ptr::null(),
+            data_len: 0,
+            packet_handle: 0,
+        }
+    }
+
     fn fixture_native_frame() -> NativeFrame {
         NativeFrame {
             metadata: NativeFrameMetadata {
@@ -4965,11 +6379,7 @@ mod tests {
     }
 
     fn resolve_plugin_path(stem: &str) -> Result<PathBuf, String> {
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(3)
-            .map(Path::to_path_buf)
-            .ok_or_else(|| "failed to derive workspace root from CARGO_MANIFEST_DIR".to_owned())?;
+        let workspace_root = workspace_root()?;
         let target_dir = env::var_os("CARGO_TARGET_DIR")
             .map(PathBuf::from)
             .map(|path| {
@@ -5010,6 +6420,14 @@ mod tests {
         } else {
             format!("lib{stem}.so")
         }
+    }
+
+    fn workspace_root() -> Result<PathBuf, String> {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "failed to derive workspace root from CARGO_MANIFEST_DIR".to_owned())
     }
 
     #[allow(dead_code)]

@@ -50,7 +50,9 @@ reference.
   local HTTP relay for protected headers, local files, and `content://` sources.
 - Platform-native surfaces instead of frame-copy rendering paths for mobile
   playback.
-- Optional remux / codec plugin architecture for advanced media workflows.
+- Optional plugin architecture for advanced media workflows: post-download
+  remux, native-frame decoder experiments, internal frame processor diagnostics,
+  and desktop-first source normalization.
 - Generated, generation-checked C value handles for hosts that integrate through
   the FFI boundary.
 - Runnable host applications for Android, iOS, Flutter, desktop Rust, and C.
@@ -73,8 +75,9 @@ check before exposing advanced controls.
 | ABR `fixedTrack` policy  | ✅ exact                     | ✅ best-effort HLS/DASH pinning on iOS 15+    | ✅                                        | ✅ per-platform semantics             |
 | Resilience policy        | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
 | Preload budget           | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| Download manager         | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export       | ✅ public `player-host-desktop::download` service | ✅ Android / iOS / desktop           |
-| Hardware decode probe    | `VesperDecoderBackend`       | `VesperCodecSupport`                          | macOS VideoToolbox v2 opt-in              | Reflected through mobile capabilities |
+| Download manager         | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export       | ✅ public `player-host-desktop::download` service | ✅ Android / iOS                      |
+| Hardware decode probe    | `VesperDecoderBackend`       | `VesperCodecSupport`                          | macOS VideoToolbox native-frame opt-in    | Reflected through mobile capabilities |
+| Plugin startup diagnostics | Internal runtime diagnostics | Internal runtime diagnostics                  | ✅ decoder / frame processor / source normalizer diagnostics | Exposed as create-result diagnostics where supported |
 
 The Flutter macOS package exists as an experimental stub and does not yet ship a
 real playback backend. Product UI should rely on runtime capability flags rather
@@ -163,6 +166,12 @@ The desktop demo starts with an empty stage. Drag in a file, click "Open Local
 File", or paste a remote URL into the playlist tab. See [Desktop FFmpeg](#desktop-ffmpeg)
 for how FFmpeg is resolved when desktop builds need demuxing / decoding support.
 
+Desktop plugin experiments are opt-in. `basic-player` can load native-frame
+decoder plugins, frame processor diagnostic plugins, and packet-stream source
+normalizer plugins through environment-configured library paths. These paths are
+intended for SDK development and diagnostics, not for Android / iOS public
+host-kit APIs.
+
 ### C ABI
 
 Start with the generated header at [include/player_ffi.h](include/player_ffi.h),
@@ -180,6 +189,10 @@ Android is distributed as AAR modules:
 
 - `vesper-player-kit`: core controller, source model, JNI bridge, download
   manager, and native video surface selection.
+- `vesper-player-kit-external-playback`: optional Google Cast, DLNA / UPnP AV,
+  and local relay integration.
+- `vesper-player-kit-ffmpeg-runtime`: optional FFmpeg runtime package used by
+  remux and relay workflows.
 - `vesper-player-kit-compose`: Compose adapter with `VesperPlayerSurface` and
   controller/state helpers.
 - `vesper-player-kit-compose-ui`: optional opinionated Compose player stage.
@@ -258,6 +271,11 @@ disabled. The default profile unions download and relay remux capabilities.
 ./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
 ./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
 ```
+
+Source normalization uses a separate runtime-profile file at
+`scripts/source-normalizer-profiles.toml`. Those profiles describe how unusual
+or container-incompatible sources are detected and normalized at runtime; they
+do not replace the build-time FFmpeg packaging profiles above.
 
 Callers can add controlled overlays with `--extra-libraries`,
 `--extra-demuxers`, `--extra-muxers`, `--extra-protocols`,
@@ -372,8 +390,8 @@ Vesper is still evolving and has not yet shipped as a stable 1.0 public SDK.
 Android and iOS host kits have releasable package paths, while the Flutter
 federated packages are still source-distributed from this repository. The macOS
 Flutter package is currently a stub without a real playback backend, and the
-macOS native VideoToolbox v2 decoder path remains opt-in experimental; FFmpeg
-software fallback is the default desktop route.
+macOS native VideoToolbox native-frame decoder path remains opt-in experimental;
+FFmpeg software fallback is the default desktop route.
 
 ## License
 

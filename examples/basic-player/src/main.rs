@@ -50,7 +50,7 @@ use player_runtime::{
     PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
     PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot, PlayerTimelineKind,
     PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState,
-    VideoPixelFormat,
+    SourceNormalizerMode, VideoPixelFormat,
 };
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -73,6 +73,8 @@ const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DECODER_PLUGIN_PATHS_ENV: &str = "VESPER_DECODER_PLUGIN_PATHS";
 const DECODER_PLUGIN_VIDEO_MODE_ENV: &str = "VESPER_DECODER_PLUGIN_VIDEO_MODE";
+const SOURCE_NORMALIZER_PLUGIN_PATHS_ENV: &str = "VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS";
+const SOURCE_NORMALIZER_MODE_ENV: &str = "VESPER_SOURCE_NORMALIZER_MODE";
 const FRAME_PROCESSOR_PLUGIN_PATHS_ENV: &str = "VESPER_FRAME_PROCESSOR_PLUGIN_PATHS";
 const FRAME_PROCESSOR_MODE_ENV: &str = "VESPER_FRAME_PROCESSOR_MODE";
 const PLAYBACK_DEBUG_ENV: &str = "VESPER_PLAYBACK_DEBUG";
@@ -1149,7 +1151,11 @@ impl DesktopPlayerApp {
             source = launch_plan.source.as_str(),
             decoded_audio = startup.decoded_audio.as_ref().map(audio_summary),
             video_decode = startup.video_decode.as_ref().map(video_decode_summary),
-            plugin_diagnostics = plugin_diagnostics_summary(&startup.plugin_diagnostics).as_deref(),
+            plugin_diagnostics = plugin_diagnostics_summary(
+                &startup.plugin_diagnostics,
+                startup.video_decode.as_ref(),
+            )
+            .as_deref(),
             initial_pixel_format = initial_frame.as_ref().map(video_pixel_format_label),
             supports_frame_output = capabilities.supports_frame_output,
             supports_external_video_surface = capabilities.supports_external_video_surface,
@@ -1165,7 +1171,7 @@ impl DesktopPlayerApp {
         self.seek_preview = None;
         self.host_message = None;
         self.last_plugin_diagnostics_summary =
-            plugin_diagnostics_summary(&startup.plugin_diagnostics);
+            plugin_diagnostics_summary(&startup.plugin_diagnostics, startup.video_decode.as_ref());
 
         if capabilities.supports_frame_output {
             #[cfg(target_os = "macos")]
@@ -2038,8 +2044,10 @@ impl DesktopPlayerApp {
         let events = runtime.drain_events();
         for event in events {
             if let PlayerRuntimeEvent::Initialized(startup) = &event {
-                self.last_plugin_diagnostics_summary =
-                    plugin_diagnostics_summary(&startup.plugin_diagnostics);
+                self.last_plugin_diagnostics_summary = plugin_diagnostics_summary(
+                    &startup.plugin_diagnostics,
+                    startup.video_decode.as_ref(),
+                );
                 self.overlay_dirty = true;
             }
             log_runtime_event(event);
@@ -2212,6 +2220,10 @@ fn basic_player_runtime_options() -> PlayerRuntimeOptions {
     PlayerRuntimeOptions::default()
         .with_decoder_plugin_library_paths(decoder_plugin_library_paths_from_env())
         .with_decoder_plugin_video_mode(decoder_plugin_video_mode_from_env())
+        .with_source_normalizer_plugin_library_paths(
+            source_normalizer_plugin_library_paths_from_env(),
+        )
+        .with_source_normalizer_mode(source_normalizer_mode_from_env())
         .with_frame_processor_library_paths(frame_processor_library_paths_from_env())
         .with_frame_processor_mode(frame_processor_mode_from_env())
 }
@@ -2232,6 +2244,34 @@ fn decoder_plugin_video_mode_from_value(value: Option<String>) -> PlayerDecoderP
             PlayerDecoderPluginVideoMode::PreferNativeFrame
         }
         _ => PlayerDecoderPluginVideoMode::DiagnosticsOnly,
+    }
+}
+
+fn source_normalizer_plugin_library_paths_from_env() -> Vec<PathBuf> {
+    std::env::var_os(SOURCE_NORMALIZER_PLUGIN_PATHS_ENV)
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default()
+}
+
+fn source_normalizer_mode_from_env() -> SourceNormalizerMode {
+    source_normalizer_mode_from_value(std::env::var(SOURCE_NORMALIZER_MODE_ENV).ok())
+}
+
+fn source_normalizer_mode_from_value(value: Option<String>) -> SourceNormalizerMode {
+    match value {
+        Some(value)
+            if value.eq_ignore_ascii_case("prefer-normalized")
+                || value.eq_ignore_ascii_case("prefer") =>
+        {
+            SourceNormalizerMode::PreferNormalized
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("require-normalized")
+                || value.eq_ignore_ascii_case("strict") =>
+        {
+            SourceNormalizerMode::RequireNormalized
+        }
+        _ => SourceNormalizerMode::Disabled,
     }
 }
 
@@ -2753,12 +2793,69 @@ fn video_decode_summary(info: &PlayerVideoDecodeInfo) -> String {
     )
 }
 
-fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<String> {
+fn plugin_diagnostics_summary(
+    records: &[PlayerPluginDiagnostic],
+    video_decode: Option<&PlayerVideoDecodeInfo>,
+) -> Option<String> {
     if records.is_empty() {
         return None;
     }
 
-    let total = records.len();
+    let mut sections = Vec::new();
+
+    let source_normalizer_records = records
+        .iter()
+        .filter(|record| record.plugin_kind.as_deref() == Some("source_normalizer"))
+        .collect::<Vec<_>>();
+    let source_normalizer_total = source_normalizer_records
+        .iter()
+        .map(|record| {
+            record
+                .plugin_name
+                .as_deref()
+                .or_else(|| (!record.path.is_empty()).then_some(record.path.as_str()))
+                .unwrap_or("unknown-source-normalizer")
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let supported_source_normalizers = records
+        .iter()
+        .filter(|record| {
+            record.plugin_kind.as_deref() == Some("source_normalizer")
+                && record.status == PlayerPluginDiagnosticStatus::Loaded
+                && record
+                    .message
+                    .as_deref()
+                    .is_some_and(|message| message.contains("selected profile"))
+        })
+        .map(|record| {
+            let name = record
+                .plugin_name
+                .as_deref()
+                .unwrap_or("unknown-source-normalizer");
+            let detail = record.message.as_deref().unwrap_or("loaded");
+            format!("{name}: {detail}")
+        })
+        .collect::<Vec<_>>();
+    if !supported_source_normalizers.is_empty() {
+        sections.push(format!(
+            "source normalizer: {}/{} active ({})",
+            supported_source_normalizers.len(),
+            source_normalizer_total.max(supported_source_normalizers.len()),
+            supported_source_normalizers.join("; ")
+        ));
+    }
+
+    let frame_processor_total = records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.status,
+                PlayerPluginDiagnosticStatus::FrameProcessorSupported
+                    | PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+            ) || record.plugin_kind.as_deref() == Some("frame_processor")
+        })
+        .count();
     let supported_frame_processors = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::FrameProcessorSupported)
@@ -2771,14 +2868,24 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
         })
         .collect::<Vec<_>>();
     if !supported_frame_processors.is_empty() {
-        return Some(format!(
-            "frame processor plugins: {}/{} supported ({}); internal playback mode controls whether processed frames are preferred",
+        sections.push(format!(
+            "frame processor plugins: {}/{} supported ({}); enabled for native-frame processing when the selected decode path emits native frames",
             supported_frame_processors.len(),
-            total,
+            frame_processor_total.max(supported_frame_processors.len()),
             supported_frame_processors.join(", ")
         ));
     }
 
+    let decoder_total = records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.status,
+                PlayerPluginDiagnosticStatus::DecoderSupported
+                    | PlayerPluginDiagnosticStatus::DecoderUnsupported
+            ) || record.plugin_kind.as_deref() == Some("decoder")
+        })
+        .count();
     let supported_decoders = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderSupported)
@@ -2796,19 +2903,28 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
         })
         .collect::<Vec<_>>();
     if !supported_decoders.is_empty() {
-        return Some(format!(
-            "decoder plugins: {}/{} supported ({}); diagnostic-only, playback still uses native-first/FFmpeg fallback",
+        let playback_note = if decoder_plugin_selected_for_playback(video_decode) {
+            "active in the native-frame playback path"
+        } else {
+            "available; native-frame mode controls playback routing"
+        };
+        sections.push(format!(
+            "decoder plugins: {}/{} supported ({}); {playback_note}",
             supported_decoders.len(),
-            total,
+            decoder_total.max(supported_decoders.len()),
             supported_decoders.join(", ")
         ));
+    }
+
+    if !sections.is_empty() {
+        return Some(sections.join(" | "));
     }
 
     let failed_count = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::LoadFailed)
         .count();
-    let loaded_count = total.saturating_sub(failed_count);
+    let loaded_count = records.len().saturating_sub(failed_count);
     let unsupported_codec_count = records
         .iter()
         .filter(|record| record.status == PlayerPluginDiagnosticStatus::DecoderUnsupported)
@@ -2823,8 +2939,19 @@ fn plugin_diagnostics_summary(records: &[PlayerPluginDiagnostic]) -> Option<Stri
         .count();
 
     Some(format!(
-        "plugins: 0/{total} supported, {loaded_count} loaded, {failed_count} failed, {unsupported_codec_count} unsupported decoder codec, {unsupported_frame_processor_count} unsupported frame processor, {unsupported_kind_count} unsupported kind"
+        "plugins: 0/{} supported, {loaded_count} loaded, {failed_count} failed, {unsupported_codec_count} unsupported decoder codec, {unsupported_frame_processor_count} unsupported frame processor, {unsupported_kind_count} unsupported kind",
+        records.len()
     ))
+}
+
+fn decoder_plugin_selected_for_playback(video_decode: Option<&PlayerVideoDecodeInfo>) -> bool {
+    video_decode
+        .and_then(|info| info.fallback_reason.as_deref())
+        .is_some_and(|reason| {
+            reason.contains("decoder plugin `")
+                || reason.contains("selected desktop decoder plugin path")
+                || reason.contains("source normalizer packet stream selected")
+        })
 }
 
 fn log_runtime_event(event: PlayerRuntimeEvent) {
@@ -2835,7 +2962,11 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
                 audio_output = ?startup.audio_output,
                 decoded_audio = startup.decoded_audio.as_ref().map(audio_summary),
                 video_decode = startup.video_decode.as_ref().map(video_decode_summary),
-                plugin_diagnostics = plugin_diagnostics_summary(&startup.plugin_diagnostics).as_deref(),
+                plugin_diagnostics = plugin_diagnostics_summary(
+                    &startup.plugin_diagnostics,
+                    startup.video_decode.as_ref(),
+                )
+                .as_deref(),
                 "player initialized"
             );
         }
@@ -2901,10 +3032,10 @@ mod tests {
         ControlAction, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL,
         DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus,
         decoder_plugin_video_mode_from_value, frame_processor_mode_from_value,
-        resolve_media_source_argument,
+        resolve_media_source_argument, source_normalizer_mode_from_value,
     };
     use player_render_wgpu::RenderFrameOutcome;
-    use player_runtime::{FrameProcessorMode, PlayerDecoderPluginVideoMode};
+    use player_runtime::{FrameProcessorMode, PlayerDecoderPluginVideoMode, SourceNormalizerMode};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -2940,6 +3071,34 @@ mod tests {
         assert_eq!(
             decoder_plugin_video_mode_from_value(Some("NATIVE-FRAME".to_owned())),
             PlayerDecoderPluginVideoMode::PreferNativeFrame
+        );
+    }
+
+    #[test]
+    fn source_normalizer_mode_defaults_to_disabled() {
+        assert_eq!(
+            source_normalizer_mode_from_value(None),
+            SourceNormalizerMode::Disabled
+        );
+        assert_eq!(
+            source_normalizer_mode_from_value(Some("disabled".to_owned())),
+            SourceNormalizerMode::Disabled
+        );
+    }
+
+    #[test]
+    fn source_normalizer_mode_parses_internal_modes() {
+        assert_eq!(
+            source_normalizer_mode_from_value(Some("prefer-normalized".to_owned())),
+            SourceNormalizerMode::PreferNormalized
+        );
+        assert_eq!(
+            source_normalizer_mode_from_value(Some("prefer".to_owned())),
+            SourceNormalizerMode::PreferNormalized
+        );
+        assert_eq!(
+            source_normalizer_mode_from_value(Some("strict".to_owned())),
+            SourceNormalizerMode::RequireNormalized
         );
     }
 

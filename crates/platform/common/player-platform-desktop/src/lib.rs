@@ -1167,28 +1167,28 @@ impl SoftwarePlayerRuntime {
             return Ok(None);
         }
 
-        let mut latest_frame = None;
+        let mut latest_due_frame = None;
         while let Some(next_frame) = self.next_frame.as_ref() {
             if !self.should_present_frame(next_frame.presentation_time) {
                 break;
             }
 
-            latest_frame = self
-                .next_frame
-                .take()
-                .map(|frame| {
-                    frame.present().map_err(|error| {
-                        player_error(
-                            PlayerErrorCode::BackendFailure,
-                            "failed to present decoded video frame",
-                            error,
-                        )
-                    })
-                })
-                .transpose()?
-                .flatten();
+            latest_due_frame = self.next_frame.take();
             self.fill_next_frame()?;
         }
+
+        let latest_frame = latest_due_frame
+            .map(|frame| {
+                frame.present().map_err(|error| {
+                    player_error(
+                        PlayerErrorCode::BackendFailure,
+                        "failed to present decoded video frame",
+                        error,
+                    )
+                })
+            })
+            .transpose()?
+            .flatten();
 
         self.refresh_playback_finished();
         self.update_buffering_state();
@@ -2755,6 +2755,7 @@ mod tests {
     use super::*;
     use player_model::MediaSource;
     use player_runtime::PlayerRuntimeOptions;
+    use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 
     #[test]
@@ -3191,6 +3192,56 @@ mod tests {
         assert!(seek_observed_drop.load(StdOrdering::SeqCst));
     }
 
+    #[test]
+    fn advance_presents_only_latest_due_deferred_frame() {
+        let presented_frames = Arc::new(StdMutex::new(Vec::new()));
+        let dropped_frames = Arc::new(StdMutex::new(Vec::new()));
+        let mut runtime = test_runtime_with_video_source(Box::new(DueFramesVideoSource {
+            frames: VecDeque::from([
+                timed_test_frame(
+                    Duration::from_millis(0),
+                    1,
+                    presented_frames.clone(),
+                    dropped_frames.clone(),
+                ),
+                timed_test_frame(
+                    Duration::from_millis(10),
+                    2,
+                    presented_frames.clone(),
+                    dropped_frames.clone(),
+                ),
+                timed_test_frame(
+                    Duration::from_millis(20),
+                    3,
+                    presented_frames.clone(),
+                    dropped_frames.clone(),
+                ),
+                timed_test_frame(
+                    Duration::from_millis(250),
+                    4,
+                    presented_frames.clone(),
+                    dropped_frames.clone(),
+                ),
+            ]),
+        }));
+        runtime.session.start_or_resume();
+        runtime.set_playback_clock(Duration::from_millis(100));
+
+        runtime
+            .try_advance()
+            .expect("advance should present latest due frame");
+
+        assert_eq!(locked_ids(&presented_frames), vec![3]);
+        assert_eq!(locked_ids(&dropped_frames), vec![1, 2]);
+        assert_eq!(
+            runtime
+                .next_frame
+                .as_ref()
+                .map(|frame| frame.presentation_time),
+            Some(Duration::from_millis(250))
+        );
+    }
+
     #[derive(Debug)]
     struct DropFlagPresentation {
         dropped: Arc<StdAtomicBool>,
@@ -3211,6 +3262,64 @@ mod tests {
     struct SeekOrderVideoSource {
         dropped_before_seek: Arc<StdAtomicBool>,
         seek_observed_drop: Arc<StdAtomicBool>,
+    }
+
+    #[derive(Debug)]
+    struct TrackFramePresentation {
+        id: u32,
+        presented: Arc<StdMutex<Vec<u32>>>,
+        dropped: Arc<StdMutex<Vec<u32>>>,
+        was_presented: bool,
+    }
+
+    impl DesktopVideoFramePresentation for TrackFramePresentation {
+        fn present(mut self: Box<Self>) -> anyhow::Result<()> {
+            self.was_presented = true;
+            self.presented
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(self.id);
+            Ok(())
+        }
+    }
+
+    impl Drop for TrackFramePresentation {
+        fn drop(&mut self) {
+            if !self.was_presented {
+                self.dropped
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push(self.id);
+            }
+        }
+    }
+
+    struct DueFramesVideoSource {
+        frames: VecDeque<DesktopVideoFrame>,
+    }
+
+    impl DesktopVideoSource for DueFramesVideoSource {
+        fn recv_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>> {
+            Ok(self.frames.pop_front())
+        }
+
+        fn try_recv_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
+            Ok(self
+                .frames
+                .pop_front()
+                .map(DesktopVideoFramePoll::Ready)
+                .unwrap_or(DesktopVideoFramePoll::EndOfStream))
+        }
+
+        fn seek_to(&mut self, _position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>> {
+            Ok(self.frames.pop_front())
+        }
+
+        fn buffered_frame_count(&self) -> usize {
+            self.frames.len()
+        }
+
+        fn set_prefetch_limit(&self, _limit: usize) {}
     }
 
     impl DesktopVideoSource for SeekOrderVideoSource {
@@ -3239,6 +3348,31 @@ mod tests {
         }
 
         fn set_prefetch_limit(&self, _limit: usize) {}
+    }
+
+    fn timed_test_frame(
+        presentation_time: Duration,
+        id: u32,
+        presented: Arc<StdMutex<Vec<u32>>>,
+        dropped: Arc<StdMutex<Vec<u32>>>,
+    ) -> DesktopVideoFrame {
+        DesktopVideoFrame::native_deferred(
+            presentation_time,
+            16,
+            16,
+            Box::new(TrackFramePresentation {
+                id,
+                presented,
+                dropped,
+                was_presented: false,
+            }),
+        )
+    }
+
+    fn locked_ids(ids: &StdMutex<Vec<u32>>) -> Vec<u32> {
+        ids.lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     fn test_runtime_with_video_source(

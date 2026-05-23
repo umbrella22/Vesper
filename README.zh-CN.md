@@ -40,7 +40,8 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
   以及面向带鉴权 headers、本地文件和 `content://` source 的本地 HTTP relay。
 - 在 Android、iOS 和 Flutter 移动端播放处于活动状态时，支持可配置的屏幕常亮处理。
 - 移动端使用平台原生 surface，而不是通过帧拷贝方式回传画面。
-- 可选的 remux / codec plugin 架构，覆盖更高级的媒体工作流。
+- 可选 plugin 架构，覆盖更高级的媒体工作流：下载后 remux、native-frame
+  decoder 实验、内部 frame processor 诊断，以及桌面优先的 source normalization。
 - 面向 FFI host 的 generation-checked C value handles。
 - Android、iOS、Flutter、Desktop Rust 和 C 的可运行 host 示例。
 
@@ -61,9 +62,10 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 | ABR `fixedTrack` 策略  | ✅ 精确                | ✅ iOS 15+ 上尽力进行 HLS/DASH 固定           | ✅                                   | ✅ 遵循各平台语义                   |
 | 韧性策略               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
 | 预加载预算             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
-| 下载管理器             | ✅                     | ✅                                            | ✅ 桌面 demo 中的 planner / executor | ✅ Android / iOS                    |
+| 下载管理器             | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export | ✅ public `player-host-desktop::download` service | ✅ Android / iOS                    |
 | 外部播放               | ✅ Cast / DLNA 可选    | ✅ AirPlay route picker                       | ❌                                   | ✅ Android Cast / DLNA、iOS AirPlay |
-| 硬件解码探测           | `VesperDecoderBackend` | `VesperCodecSupport`                          | macOS VideoToolbox v2 可选启用       | 通过移动端 capability 上报体现      |
+| 硬件解码探测           | `VesperDecoderBackend` | `VesperCodecSupport`                          | macOS VideoToolbox native-frame 可选启用 | 通过移动端 capability 上报体现      |
+| Plugin 启动诊断        | 内部 runtime diagnostics | 内部 runtime diagnostics                    | ✅ decoder / frame processor / source normalizer diagnostics | 在支持的平台通过 create-result diagnostics 暴露 |
 
 Flutter macOS package 目前只是实验性占位实现，尚未提供真实播放后端。产品 UI
 应以运行时能力标记为准，而不是假设上表能力在每个后端上都可用。
@@ -145,6 +147,11 @@ cargo run -p basic-player
 中粘贴远程 URL 后才会开始播放。桌面构建需要 demux / decode 支持时如何解析 FFmpeg，
 见 [Desktop FFmpeg](#desktop-ffmpeg)。
 
+桌面 plugin 实验需要显式选择启用。`basic-player` 可以通过环境变量配置的动态库路径
+加载 native-frame decoder plugin、frame processor diagnostic plugin，以及
+packet-stream source normalizer plugin。这些路径用于 SDK 开发和诊断，不属于
+Android / iOS 公开 host kit API。
+
 ### C ABI
 
 先从生成的头文件 [include/player_ffi.h](include/player_ffi.h) 开始，再运行
@@ -162,6 +169,10 @@ Android 以 AAR modules 分发：
 
 - `vesper-player-kit`：core controller、source model、JNI bridge、download manager
   和 native video surface selection。
+- `vesper-player-kit-external-playback`：可选 Google Cast、DLNA / UPnP AV
+  与本地 relay 集成。
+- `vesper-player-kit-ffmpeg-runtime`：供 remux 与 relay 工作流使用的可选
+  FFmpeg runtime package。
 - `vesper-player-kit-compose`：Compose adapter，提供 `VesperPlayerSurface` 和
   controller / state helpers。
 - `vesper-player-kit-compose-ui`：可选的 opinionated Compose player stage。
@@ -216,10 +227,10 @@ cargo check --workspace
 ./scripts/vesper desktop verify-remux
 ```
 
-Android 和 Flutter Android 构建会使用对应项目中提交的 Gradle wrapper，因此本地构建
-会与示例和脚本使用同一套 Gradle / Android Gradle Plugin 版本。
-如果 `lib/android` 没有独立 wrapper，Android 构建脚本会优先使用示例项目 wrapper，
-并可回退到仓库本地 `.gradle/wrapper/dists` 下已下载的 Gradle distribution。
+Android helper scripts 在本地开发时使用项目内已经缓存的 Gradle distribution，
+在 GitHub Actions 中使用 CI provisioned `gradle` executable。这样本地 agent
+工作不会触发在线 wrapper 下载，同时 CI 仍可通过 `gradle/actions/setup-gradle`
+安装 Gradle。
 
 ## 移动端 FFmpeg Profiles
 
@@ -233,6 +244,11 @@ file/pipe 协议，并验证网络与 OpenSSL 均已禁用。default profile 合
 ./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
 ./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
 ```
+
+Source normalization 使用独立的 runtime profile 文件
+`scripts/source-normalizer-profiles.toml`。这些 profiles 描述非常规 source 或
+容器不兼容 source 在运行时如何被识别和标准化；它们不会替代上面的构建期
+FFmpeg packaging profiles。
 
 调用方可通过 `--extra-libraries`、`--extra-demuxers`、`--extra-muxers`、
 `--extra-protocols`、`--extra-parsers`、`--extra-bsfs` 以及可重复使用的
@@ -328,8 +344,8 @@ Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载
 Vesper 仍在演进中，尚未作为稳定的 SDK 发布。Android 和 iOS host kits
 已经有可发布的打包路径；Flutter federated packages 目前仍从本仓库源码分发。
 macOS Flutter package 当前只是未接入真实播放后端的占位实现；macOS native
-VideoToolbox v2 decoder path 仍是可选启用的实验路径；桌面端默认路径仍是 FFmpeg
-software fallback。
+VideoToolbox native-frame decoder path 仍是可选启用的实验路径；桌面端默认路径仍是
+FFmpeg software fallback。
 
 ## 许可
 

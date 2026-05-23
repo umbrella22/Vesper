@@ -36,7 +36,10 @@ use player_plugin::{
     FrameProcessorOutputFrame, FrameProcessorReceiveOutput, FrameProcessorSession,
     FrameProcessorSessionConfig, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
     FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame, NativeFrameMetadata,
-    NativeHandleKind, VesperPluginKind,
+    NativeHandleKind, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
+    SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
+    SourceNormalizerReadPacketStatus, VesperPluginKind,
 };
 use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
@@ -55,7 +58,7 @@ use player_runtime::{
     PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent,
     PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning,
     PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoSurfaceTarget, PresentationState,
-    register_default_runtime_adapter_factory,
+    SourceNormalizerMode, register_default_runtime_adapter_factory,
 };
 use tracing::info;
 
@@ -67,6 +70,8 @@ const FRAME_PROCESSOR_DEBUG_ENV: &str = "VESPER_FRAME_PROCESSOR_DEBUG";
 const FRAME_PROCESSOR_DEBUG_TRACE_ENV: &str = "VESPER_FRAME_PROCESSOR_DEBUG_TRACE";
 const FRAME_PROCESSOR_DEBUG_WINDOW_ENV: &str = "VESPER_FRAME_PROCESSOR_DEBUG_WINDOW";
 const DEFAULT_FRAME_PROCESSOR_DEBUG_WINDOW: u64 = 120;
+const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_millis(5_000);
+const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_millis(40_000);
 
 pub use native::{
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MacosAvFoundationBridge,
@@ -221,6 +226,21 @@ pub fn open_macos_host_runtime_source_with_options(
         ));
     }
 
+    let normalization = prepare_source_normalizer_for_open(source, &options)?;
+    let source = normalization.source.clone();
+    if normalization.has_packet_stream() {
+        return open_macos_software_runtime_with_prepared_normalization(
+            source,
+            options,
+            Arc::new(AtomicBool::new(false)),
+            normalization,
+            Some(
+                "source normalizer packet stream selected; routed to desktop decoder plugin path"
+                    .to_owned(),
+            ),
+        );
+    }
+
     let native_factory = macos_system_native_runtime_adapter_factory();
 
     let native_initializer = PlayerRuntimeInitializer::probe_source_with_factory(
@@ -238,7 +258,12 @@ pub fn open_macos_host_runtime_source_with_options(
                 Ok(mut bootstrap) => {
                     bootstrap.startup =
                         apply_decoder_plugin_diagnostics(bootstrap.startup, &media_info, &options);
-                    Ok(bootstrap)
+                    bootstrap.startup =
+                        apply_source_normalizer_open_diagnostics(bootstrap.startup, &normalization);
+                    Ok(attach_source_normalizer_to_runtime(
+                        bootstrap,
+                        normalization,
+                    ))
                 }
                 Err(native_error) => open_software_fallback_runtime(
                     source,
@@ -247,13 +272,14 @@ pub fn open_macos_host_runtime_source_with_options(
                         "macos native host runtime failed to initialize; falling back to software desktop path: {}",
                         native_error.message()
                     )),
+                    normalization,
                 ),
             }
         }
         Ok(initializer) => {
             let fallback_reason =
                 macos_host_software_path_reason(&initializer.media_info(), &options);
-            open_software_fallback_runtime(source, options, fallback_reason)
+            open_software_fallback_runtime(source, options, fallback_reason, normalization)
         }
         Err(native_error) => open_software_fallback_runtime(
             source,
@@ -262,6 +288,7 @@ pub fn open_macos_host_runtime_source_with_options(
                 "macos native host runtime probe failed; selected software desktop path: {}",
                 native_error.message()
             )),
+            normalization,
         ),
     }
 }
@@ -278,6 +305,21 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
         ));
     }
 
+    let normalization = prepare_source_normalizer_for_open(source, &options)?;
+    let source = normalization.source.clone();
+    if normalization.has_packet_stream() {
+        return open_macos_software_runtime_with_prepared_normalization(
+            source,
+            options,
+            interrupt_flag,
+            normalization,
+            Some(
+                "source normalizer packet stream selected; routed to desktop decoder plugin path"
+                    .to_owned(),
+            ),
+        );
+    }
+
     let native_factory = macos_system_native_runtime_adapter_factory();
 
     let native_initializer = PlayerRuntimeInitializer::probe_source_with_factory(
@@ -295,7 +337,12 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
                 Ok(mut bootstrap) => {
                     bootstrap.startup =
                         apply_decoder_plugin_diagnostics(bootstrap.startup, &media_info, &options);
-                    Ok(bootstrap)
+                    bootstrap.startup =
+                        apply_source_normalizer_open_diagnostics(bootstrap.startup, &normalization);
+                    Ok(attach_source_normalizer_to_runtime(
+                        bootstrap,
+                        normalization,
+                    ))
                 }
                 Err(native_error) => open_software_fallback_runtime_with_interrupt(
                     source,
@@ -305,6 +352,7 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
                         "macos native host runtime failed to initialize; falling back to software desktop path: {}",
                         native_error.message()
                     )),
+                    normalization,
                 ),
             }
         }
@@ -316,6 +364,7 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
                 options,
                 interrupt_flag,
                 fallback_reason,
+                normalization,
             )
         }
         Err(native_error) => open_software_fallback_runtime_with_interrupt(
@@ -326,6 +375,7 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
                 "macos native host runtime probe failed; selected software desktop path: {}",
                 native_error.message()
             )),
+            normalization,
         ),
     }
 }
@@ -335,25 +385,75 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
 ) -> PlayerResult<PlayerRuntimeBootstrap> {
-    let selection = probe_platform_desktop_source_with_options(
-        MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-        source.clone(),
-        options.clone(),
+    let normalization = prepare_source_normalizer_for_open(source, &options)?;
+    open_macos_software_runtime_with_prepared_normalization(
+        normalization.source.clone(),
+        options,
+        interrupt_flag,
+        normalization,
+        None,
     )
-    .ok()
-    .and_then(|initializer| {
-        select_macos_native_frame_decoder(
-            &source,
-            &initializer.media_info(),
-            &options,
-            Some(interrupt_flag.clone()),
+}
+
+fn open_macos_software_runtime_with_prepared_normalization(
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+    mut normalization: MacosSourceNormalizationOutcome,
+    fallback_reason: Option<String>,
+) -> PlayerResult<PlayerRuntimeBootstrap> {
+    let source_normalizer_packet_session = normalization.packet_session.clone();
+    let packet_selection = select_macos_source_normalizer_packet_decoder(
+        normalization.packet_stream_info.as_ref(),
+        &options,
+    );
+    let selection = if packet_selection.is_some() {
+        packet_selection
+    } else {
+        probe_platform_desktop_source_with_options(
+            MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+            source.clone(),
+            options.clone(),
         )
-    });
+        .ok()
+        .and_then(|initializer| {
+            select_macos_native_frame_decoder(
+                &source,
+                &initializer.media_info(),
+                &options,
+                Some(interrupt_flag.clone()),
+            )
+        })
+    };
     let selected_plugin_name = selection
         .as_ref()
         .and_then(|selection| selection.plugin_name.clone());
 
     let open_result = match selection.clone() {
+        Some(selection) if normalization.has_packet_stream() => {
+            let packet_session = normalization.packet_session.clone().ok_or_else(|| {
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
+                    "source normalizer packet stream was selected without an open packet session",
+                )
+            })?;
+            open_platform_desktop_source_with_video_source_factory_and_options_and_interrupt(
+                MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                source.clone(),
+                options.clone(),
+                interrupt_flag.clone(),
+                Arc::new(MacosSourceNormalizerPacketVideoSourceFactory {
+                    decoder_plugin_path: selection.plugin_path,
+                    decoder_plugin_name: selection.plugin_name,
+                    video_surface: selection.video_surface,
+                    frame_processor_paths: selection.frame_processor_paths,
+                    frame_processor_mode: selection.frame_processor_mode,
+                    frame_processor_policy: selection.frame_processor_policy,
+                    packet_session,
+                }),
+                macos_native_frame_decoder_capabilities(),
+            )
+        }
         Some(selection) => {
             open_platform_desktop_source_with_video_source_factory_and_options_and_interrupt(
                 MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
@@ -381,7 +481,7 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
     let PlayerRuntimeAdapterBootstrap {
         runtime,
         initial_frame,
-        startup,
+        mut startup,
     } = match (open_result, selection) {
         (Ok(bootstrap), _) => bootstrap,
         (Err(native_error), Some(selection)) if strict_frame_processor_selection(&selection) => {
@@ -392,6 +492,66 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
                     native_error.message()
                 ),
             ));
+        }
+        (Err(native_error), Some(_)) if normalization.has_packet_stream() => {
+            let message = format!(
+                "source normalizer packet stream decoder plugin initialization failed: {}",
+                native_error.message()
+            );
+            if options.source_normalizer_mode == SourceNormalizerMode::RequireNormalized {
+                return Err(PlayerError::new(PlayerErrorCode::BackendFailure, message));
+            }
+            normalization
+                .diagnostics
+                .push(source_normalizer_runtime_diagnostic(None, message));
+            drop_source_normalizer_packet_session(&mut normalization);
+            let mut bootstrap = open_platform_desktop_source_with_options_and_interrupt(
+                MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                source.clone(),
+                options.clone(),
+                interrupt_flag,
+            )?;
+            apply_video_decode_fallback_reason(
+                &mut bootstrap.startup,
+                Some(format!(
+                    "source normalizer packet stream decoder plugin initialization failed; selected FFmpeg software path: {}",
+                    native_error.message()
+                )),
+            );
+            bootstrap
+        }
+        (Err(native_error), None) if normalization.has_packet_stream() => {
+            let message = source_normalizer_packet_decoder_unavailable_message(
+                &normalization,
+                &options,
+            )
+            .unwrap_or_else(|| {
+                format!(
+                    "source normalizer packet stream did not find a matching decoder plugin: {}",
+                    native_error.message()
+                )
+            });
+            if options.source_normalizer_mode == SourceNormalizerMode::RequireNormalized {
+                return Err(PlayerError::new(PlayerErrorCode::Unsupported, message));
+            }
+            normalization
+                .diagnostics
+                .push(source_normalizer_runtime_diagnostic(None, message));
+            drop_source_normalizer_packet_session(&mut normalization);
+            let mut bootstrap = open_platform_desktop_source_with_options_and_interrupt(
+                MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                source.clone(),
+                options.clone(),
+                interrupt_flag,
+            )?;
+            apply_video_decode_fallback_reason(
+                &mut bootstrap.startup,
+                Some(format!(
+                    "source normalizer packet stream did not find a matching decoder plugin; selected FFmpeg software path: {}",
+                    native_error.message()
+                )),
+            );
+            bootstrap
         }
         (Err(native_error), Some(_)) => {
             let mut bootstrap = open_platform_desktop_source_with_options_and_interrupt(
@@ -419,8 +579,8 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
             macos_native_frame_decoder_video_decode_info(selected_plugin_name.as_deref());
         diagnostics.has_video_surface = true;
     }
-    let runtime_fallback = diagnostics
-        .has_video_surface
+    apply_video_decode_fallback_reason(&mut startup, fallback_reason);
+    let runtime_fallback = (diagnostics.has_video_surface && !normalization.has_packet_stream())
         .then(|| MacosRuntimeActiveFallback {
             source,
             options: options.clone(),
@@ -435,12 +595,17 @@ pub fn open_macos_software_runtime_source_with_options_and_interrupt(
             runtime: Box::new(MacosRuntimeAdapter {
                 inner: runtime,
                 video_decode: diagnostics.video_decode.clone(),
+                plugin_diagnostics: diagnostics.plugin_diagnostics.clone(),
                 has_video_surface: diagnostics.has_video_surface,
                 runtime_fallback,
                 pending_runtime_fallback_events: VecDeque::new(),
+                source_normalizer_packet_session,
             }),
             initial_frame,
-            startup: apply_macos_runtime_diagnostics(startup, &diagnostics),
+            startup: apply_source_normalizer_open_diagnostics(
+                apply_macos_runtime_diagnostics(startup, &diagnostics),
+                &normalization,
+            ),
         },
     ))
 }
@@ -503,6 +668,22 @@ struct MacosRuntimeAdapterFallback {
     fallback_reason: String,
 }
 
+struct MacosSourceNormalizationOutcome {
+    source: MediaSource,
+    packet_session: Option<Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>>,
+    packet_stream_info: Option<player_plugin::SourceNormalizerPacketStreamInfo>,
+    diagnostics: Vec<PlayerPluginDiagnostic>,
+    selected_profile: Option<String>,
+    normalized_endpoint: Option<String>,
+    ready_latency: Option<Duration>,
+}
+
+impl MacosSourceNormalizationOutcome {
+    fn has_packet_stream(&self) -> bool {
+        self.packet_session.is_some() && self.packet_stream_info.is_some()
+    }
+}
+
 #[derive(Clone)]
 struct MacosRuntimeActiveFallback {
     source: MediaSource,
@@ -513,9 +694,13 @@ struct MacosRuntimeActiveFallback {
 struct MacosRuntimeAdapter {
     inner: Box<dyn PlayerRuntimeAdapter>,
     video_decode: PlayerVideoDecodeInfo,
+    plugin_diagnostics: Vec<PlayerPluginDiagnostic>,
     has_video_surface: bool,
     runtime_fallback: Option<MacosRuntimeActiveFallback>,
     pending_runtime_fallback_events: VecDeque<PlayerRuntimeEvent>,
+    #[allow(dead_code)]
+    source_normalizer_packet_session:
+        Option<Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>>,
 }
 
 impl PlayerRuntimeAdapterFactory for MacosHostPlayerRuntimeAdapterFactory {
@@ -754,9 +939,11 @@ fn wrap_macos_runtime_bootstrap(
         runtime: Box::new(MacosRuntimeAdapter {
             inner: runtime,
             video_decode: diagnostics.video_decode.clone(),
+            plugin_diagnostics: diagnostics.plugin_diagnostics.clone(),
             has_video_surface: diagnostics.has_video_surface,
             runtime_fallback,
             pending_runtime_fallback_events: VecDeque::new(),
+            source_normalizer_packet_session: None,
         }),
         initial_frame,
         startup: apply_macos_runtime_diagnostics(startup, &diagnostics),
@@ -816,9 +1003,13 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
             .drain_events()
             .into_iter()
             .map(|event| match event {
-                PlayerRuntimeEvent::Initialized(startup) => PlayerRuntimeEvent::Initialized(
-                    apply_video_decode_diagnostics(startup, &self.video_decode),
-                ),
+                PlayerRuntimeEvent::Initialized(startup) => {
+                    let startup = apply_video_decode_diagnostics(startup, &self.video_decode);
+                    PlayerRuntimeEvent::Initialized(append_plugin_diagnostics(
+                        startup,
+                        &self.plugin_diagnostics,
+                    ))
+                }
                 other => other,
             })
             .collect::<Vec<_>>();
@@ -920,11 +1111,103 @@ impl MacosRuntimeAdapter {
         if let Some(video_decode) = bootstrap.startup.video_decode.as_ref() {
             self.video_decode = video_decode.clone();
         }
+        self.plugin_diagnostics = bootstrap.startup.plugin_diagnostics.clone();
         self.has_video_surface = false;
         self.pending_runtime_fallback_events
             .extend(runtime_fallback_events(runtime_error_message));
 
         Ok(())
+    }
+}
+
+struct MacosSourceNormalizerRuntimeGuard {
+    inner: PlayerRuntime,
+    source_normalizer_packet_session:
+        Option<Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>>,
+    source_normalizer_diagnostics: Vec<PlayerPluginDiagnostic>,
+}
+
+impl PlayerRuntimeAdapter for MacosSourceNormalizerRuntimeGuard {
+    fn source_uri(&self) -> &str {
+        self.inner.source_uri()
+    }
+
+    fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn media_info(&self) -> &PlayerMediaInfo {
+        self.inner.media_info()
+    }
+
+    fn presentation_state(&self) -> PresentationState {
+        self.inner.presentation_state()
+    }
+
+    fn has_video_surface(&self) -> bool {
+        self.inner.has_video_surface()
+    }
+
+    fn is_interrupted(&self) -> bool {
+        self.inner.is_interrupted()
+    }
+
+    fn is_buffering(&self) -> bool {
+        self.inner.is_buffering()
+    }
+
+    fn playback_rate(&self) -> f32 {
+        self.inner.playback_rate()
+    }
+
+    fn progress(&self) -> PlaybackProgress {
+        self.inner.progress()
+    }
+
+    fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+        self.inner
+            .drain_events()
+            .into_iter()
+            .map(|event| match event {
+                PlayerRuntimeEvent::Initialized(startup) => PlayerRuntimeEvent::Initialized(
+                    append_plugin_diagnostics(startup, &self.source_normalizer_diagnostics),
+                ),
+                other => other,
+            })
+            .collect()
+    }
+
+    fn dispatch(
+        &mut self,
+        command: PlayerRuntimeCommand,
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
+        self.inner.dispatch(command)
+    }
+
+    fn replace_video_surface(
+        &mut self,
+        video_surface: Option<PlayerVideoSurfaceTarget>,
+    ) -> PlayerResult<()> {
+        self.inner.replace_video_surface(video_surface)
+    }
+
+    fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
+        self.inner.advance()
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.inner.next_deadline()
+    }
+}
+
+impl Drop for MacosSourceNormalizerRuntimeGuard {
+    fn drop(&mut self) {
+        if let Some(session) = self.source_normalizer_packet_session.take()
+            && let Ok(mut guard) = session.lock()
+            && let Some(mut packet_session) = guard.take()
+        {
+            let _ = packet_session.close();
+        }
     }
 }
 
@@ -982,6 +1265,29 @@ struct MacosNativeFrameVideoSourceFactory {
     frame_processor_paths: Vec<PathBuf>,
     frame_processor_mode: FrameProcessorMode,
     frame_processor_policy: FrameProcessorPolicy,
+}
+
+struct MacosSourceNormalizerPacketVideoSourceFactory {
+    decoder_plugin_path: PathBuf,
+    decoder_plugin_name: Option<String>,
+    video_surface: PlayerVideoSurfaceTarget,
+    frame_processor_paths: Vec<PathBuf>,
+    frame_processor_mode: FrameProcessorMode,
+    frame_processor_policy: FrameProcessorPolicy,
+    packet_session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
+}
+
+impl std::fmt::Debug for MacosSourceNormalizerPacketVideoSourceFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacosSourceNormalizerPacketVideoSourceFactory")
+            .field("decoder_plugin_path", &self.decoder_plugin_path)
+            .field("decoder_plugin_name", &self.decoder_plugin_name)
+            .field("video_surface", &self.video_surface)
+            .field("frame_processor_paths", &self.frame_processor_paths)
+            .field("frame_processor_mode", &self.frame_processor_mode)
+            .field("frame_processor_policy", &self.frame_processor_policy)
+            .finish_non_exhaustive()
+    }
 }
 
 struct MacosNativeFrameVideoSource {
@@ -1393,18 +1699,282 @@ impl Drop for MacosNativeFrameVideoSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MacosNativeFramePacketSendStatus {
+    Sent,
+    NeedMoreData,
+    EndOfStream,
+}
+
 trait MacosNativeFramePacketSource: Send {
-    fn next_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>>;
+    fn send_next_packet(
+        &mut self,
+        decoder_session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    ) -> anyhow::Result<MacosNativeFramePacketSendStatus>;
     fn seek_to(&mut self, position: Duration) -> anyhow::Result<()>;
 }
 
 impl MacosNativeFramePacketSource for VideoPacketSource {
-    fn next_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>> {
-        VideoPacketSource::next_packet(self)
+    fn send_next_packet(
+        &mut self,
+        decoder_session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    ) -> anyhow::Result<MacosNativeFramePacketSendStatus> {
+        match VideoPacketSource::next_packet(self)? {
+            Some(packet) => {
+                send_macos_native_frame_packet(decoder_session, packet)?;
+                Ok(MacosNativeFramePacketSendStatus::Sent)
+            }
+            None => Ok(MacosNativeFramePacketSendStatus::EndOfStream),
+        }
     }
 
     fn seek_to(&mut self, position: Duration) -> anyhow::Result<()> {
         VideoPacketSource::seek_to(self, position)
+    }
+}
+
+struct SourceNormalizerPacketSource {
+    session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
+    pending: Option<SourceNormalizerPendingPacket>,
+}
+
+#[derive(Debug)]
+struct SourceNormalizerPendingPacket {
+    packet: DecoderPacket,
+    data: Vec<u8>,
+}
+
+impl SourceNormalizerPacketSource {
+    fn new(session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>) -> Self {
+        Self {
+            session,
+            pending: None,
+        }
+    }
+
+    fn send_pending_packet(
+        &mut self,
+        decoder_session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+        pending: SourceNormalizerPendingPacket,
+    ) -> anyhow::Result<MacosNativeFramePacketSendStatus> {
+        let send_result = send_macos_native_frame_packet_bytes(
+            decoder_session,
+            pending.packet.clone(),
+            &pending.data,
+        );
+        match send_result {
+            Ok(result) if result.accepted => Ok(MacosNativeFramePacketSendStatus::Sent),
+            Ok(_) => {
+                self.pending = Some(pending);
+                Ok(MacosNativeFramePacketSendStatus::NeedMoreData)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for SourceNormalizerPacketSource {
+    fn drop(&mut self) {
+        self.pending = None;
+    }
+}
+
+impl MacosNativeFramePacketSource for SourceNormalizerPacketSource {
+    fn send_next_packet(
+        &mut self,
+        decoder_session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    ) -> anyhow::Result<MacosNativeFramePacketSendStatus> {
+        if let Some(pending) = self.pending.take() {
+            return self.send_pending_packet(decoder_session, pending);
+        }
+
+        let session_arc = self.session.clone();
+        let mut guard = session_arc
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source normalizer packet session is poisoned"))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("source normalizer packet session is not configured"))?;
+        let lease = session
+            .read_packet()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if lease.metadata.status == SourceNormalizerReadPacketStatus::EndOfStream {
+            return Ok(MacosNativeFramePacketSendStatus::EndOfStream);
+        }
+        if lease.metadata.status == SourceNormalizerReadPacketStatus::NeedMoreData {
+            return Ok(MacosNativeFramePacketSendStatus::NeedMoreData);
+        }
+        let metadata = source_normalizer_packet_metadata(&lease.metadata);
+        let data = lease.data.to_vec();
+        let handle = lease.handle;
+        drop(lease);
+        session
+            .release_packet(handle)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let metadata = metadata?;
+        let pending = SourceNormalizerPendingPacket {
+            packet: metadata,
+            data,
+        };
+        self.send_pending_packet(decoder_session, pending)
+    }
+
+    fn seek_to(&mut self, position: Duration) -> anyhow::Result<()> {
+        self.pending = None;
+        let mut guard = self
+            .session
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source normalizer packet session is poisoned"))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("source normalizer packet session is not configured"))?;
+        session
+            .seek(&SourceNormalizerPacketSeek {
+                position_millis: position.as_millis().min(u64::MAX as u128) as u64,
+                exact: false,
+            })
+            .map(|_| ())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+}
+
+impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory {
+    fn open_video_source(
+        &self,
+        source: MediaSource,
+        _buffer_capacity: usize,
+        _interrupt_flag: Option<Arc<AtomicBool>>,
+    ) -> anyhow::Result<DesktopVideoSourceBootstrap> {
+        let stream_info = {
+            let guard = self
+                .packet_session
+                .lock()
+                .map_err(|_| anyhow::anyhow!("source normalizer packet session is poisoned"))?;
+            let session = guard.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("source normalizer packet session is not configured")
+            })?;
+            macos_packet_stream_info_from_source_normalizer(&session.stream_info())?
+        };
+        let plugin = LoadedDynamicPlugin::load(&self.decoder_plugin_path).with_context(|| {
+            format!(
+                "failed to load native-frame decoder plugin {}",
+                self.decoder_plugin_path.display()
+            )
+        })?;
+        let factory = plugin.native_decoder_plugin_factory().ok_or_else(|| {
+            anyhow::anyhow!("decoder plugin does not export a v2 native-frame API")
+        })?;
+        if !factory
+            .capabilities()
+            .supports_codec(&stream_info.codec, DecoderMediaKind::Video)
+        {
+            anyhow::bail!(
+                "native-frame decoder plugin `{}` does not support {} video",
+                factory.name(),
+                stream_info.codec
+            );
+        }
+
+        let session = factory
+            .open_native_session(&DecoderSessionConfig {
+                codec: stream_info.codec.clone(),
+                media_kind: DecoderMediaKind::Video,
+                extradata: stream_info.extradata.clone(),
+                bitstream_format: Some(macos_decoder_bitstream_format(&stream_info.codec)),
+                width: stream_info.width,
+                height: stream_info.height,
+                coded_width: stream_info.width,
+                coded_height: stream_info.height,
+                prefer_hardware: true,
+                require_cpu_output: false,
+                ..DecoderSessionConfig::default()
+            })
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let session_info = session.session_info();
+        let presenter = MacosMetalLayerPresenter::new(self.video_surface)
+            .map_err(|error| anyhow::anyhow!(error.message().to_owned()))?;
+        let frame_processor_chain = open_macos_frame_processor_chain(
+            &stream_info,
+            &self.frame_processor_paths,
+            self.frame_processor_mode,
+            self.frame_processor_policy.clone(),
+        )?;
+        let decode_info = BackendVideoDecodeInfo {
+            selected_mode: BackendVideoDecoderMode::Hardware,
+            hardware_available: true,
+            hardware_backend: session_info
+                .selected_hardware_backend
+                .or_else(|| Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned())),
+            decoder_name: session_info.decoder_name.unwrap_or_else(|| {
+                self.decoder_plugin_name
+                    .clone()
+                    .unwrap_or_else(|| factory.name().to_owned())
+            }),
+            fallback_reason: None,
+        };
+        let probe = player_backend_ffmpeg::MediaProbe {
+            source: source.clone(),
+            duration: None,
+            bit_rate: None,
+            audio_streams: 0,
+            video_streams: 1,
+            best_video: Some(player_backend_ffmpeg::VideoStreamProbe {
+                index: stream_info.stream_index,
+                codec: stream_info.codec.clone(),
+                width: stream_info.width.unwrap_or_default(),
+                height: stream_info.height.unwrap_or_default(),
+                frame_rate: stream_info.frame_rate,
+            }),
+            best_audio: None,
+        };
+        let outstanding_frames = Arc::new(AtomicUsize::new(0));
+        let session = Arc::new(Mutex::new(session));
+        let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
+            frame_processor_chain,
+            presenter: Some(presenter),
+            presentation_epoch: 0,
+        }));
+        let (command_tx, command_rx) = mpsc::channel();
+        let (frame_tx, frame_rx) = mpsc::channel();
+        let current_generation = Arc::new(AtomicU64::new(0));
+        let buffered_frame_count = Arc::new(AtomicUsize::new(0));
+        let prefetch_limit = Arc::new(AtomicUsize::new(1));
+        let prefetch_wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+        let worker = spawn_macos_native_frame_prefetch_worker(
+            Box::new(SourceNormalizerPacketSource::new(
+                self.packet_session.clone(),
+            )),
+            session.clone(),
+            shared.clone(),
+            outstanding_frames.clone(),
+            command_rx,
+            frame_tx,
+            current_generation.clone(),
+            buffered_frame_count.clone(),
+            prefetch_limit.clone(),
+            prefetch_wakeup.clone(),
+        )?;
+
+        Ok(DesktopVideoSourceBootstrap {
+            source: Box::new(MacosNativeFrameVideoSource {
+                stream_info,
+                session,
+                shared,
+                outstanding_frames,
+                command_tx,
+                frame_rx,
+                generation: 0,
+                current_generation,
+                buffered_frame_count,
+                prefetch_limit,
+                prefetch_wakeup,
+                end_of_input_sent: false,
+                end_of_stream_received: false,
+                worker: Some(worker),
+            }),
+            decode_info,
+            probe,
+        })
     }
 }
 
@@ -1971,11 +2541,12 @@ fn decode_next_macos_native_frame_worker_event(
             continue;
         }
 
-        match packet_source.next_packet()? {
-            Some(packet) => {
-                send_macos_native_frame_packet(session, packet)?;
+        match packet_source.send_next_packet(session)? {
+            MacosNativeFramePacketSendStatus::Sent => {}
+            MacosNativeFramePacketSendStatus::NeedMoreData => {
+                thread::sleep(MACOS_NATIVE_FRAME_DECODER_DRAIN_RETRY_INTERVAL);
             }
-            None => {
+            MacosNativeFramePacketSendStatus::EndOfStream => {
                 send_macos_native_frame_end_of_stream(session)?;
                 *end_of_input_sent = true;
             }
@@ -2019,24 +2590,51 @@ fn send_macos_native_frame_packet(
     session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
     packet: CompressedVideoPacket,
 ) -> anyhow::Result<()> {
+    send_macos_native_frame_packet_bytes(
+        session,
+        DecoderPacket {
+            pts_us: packet.pts_us,
+            dts_us: packet.dts_us,
+            duration_us: packet.duration_us,
+            stream_index: packet.stream_index,
+            key_frame: packet.key_frame,
+            discontinuity: packet.discontinuity,
+            end_of_stream: false,
+        },
+        &packet.data,
+    )
+    .map(|_| ())
+}
+
+fn source_normalizer_packet_metadata(
+    metadata: &SourceNormalizerReadPacketMetadata,
+) -> anyhow::Result<DecoderPacket> {
+    let packet = metadata
+        .packet
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("source normalizer packet metadata was missing"))?;
+    Ok(DecoderPacket {
+        pts_us: packet.pts_us,
+        dts_us: packet.dts_us,
+        duration_us: packet.duration_us,
+        stream_index: packet.stream_index,
+        key_frame: packet.key_frame,
+        discontinuity: packet.discontinuity,
+        end_of_stream: packet.end_of_stream,
+    })
+}
+
+fn send_macos_native_frame_packet_bytes(
+    session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    packet: DecoderPacket,
+    data: &[u8],
+) -> anyhow::Result<player_plugin::DecoderPacketResult> {
     let mut session = session
         .lock()
         .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
     session
-        .send_packet(
-            &DecoderPacket {
-                pts_us: packet.pts_us,
-                dts_us: packet.dts_us,
-                duration_us: packet.duration_us,
-                stream_index: packet.stream_index,
-                key_frame: packet.key_frame,
-                discontinuity: packet.discontinuity,
-                end_of_stream: false,
-            },
-            &packet.data,
-        )
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    Ok(())
+        .send_packet(&packet, data)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 fn send_macos_native_frame_end_of_stream(
@@ -2919,6 +3517,92 @@ fn select_macos_native_frame_decoder(
     })
 }
 
+fn select_macos_source_normalizer_packet_decoder(
+    stream_info: Option<&player_plugin::SourceNormalizerPacketStreamInfo>,
+    options: &PlayerRuntimeOptions,
+) -> Option<MacosNativeFrameDecoderSelection> {
+    if options.decoder_plugin_video_mode != PlayerDecoderPluginVideoMode::PreferNativeFrame {
+        return None;
+    }
+    let video_surface = options.video_surface?;
+    if options.decoder_plugin_library_paths.is_empty() {
+        return None;
+    }
+    let video_stream = macos_packet_stream_info_from_source_normalizer(stream_info?).ok()?;
+    if video_stream.codec.is_empty() {
+        return None;
+    }
+    let request = DecoderPluginMatchRequest::video(video_stream.codec);
+    let registry = PluginRegistry::inspect_decoder_support(
+        &options.decoder_plugin_library_paths,
+        request.clone(),
+    );
+    let record = registry.best_native_decoder_for(&request)?;
+    let requirements = match record.capability_summary.as_ref() {
+        Some(PluginCapabilitySummary::Decoder(capabilities)) => {
+            capabilities.native_requirements.as_ref()
+        }
+        _ => None,
+    };
+    if requirements.is_some_and(|requirements| {
+        requirements.requires_native_device_context
+            || (!requirements.output_handle_kinds.is_empty()
+                && !requirements
+                    .output_handle_kinds
+                    .contains(&DecoderNativeHandleKind::CvPixelBuffer))
+    }) {
+        return None;
+    }
+    Some(MacosNativeFrameDecoderSelection {
+        plugin_path: record.path.clone(),
+        plugin_name: record.plugin_name.clone(),
+        video_surface,
+        frame_processor_paths: if options.frame_processor_mode == FrameProcessorMode::Disabled {
+            Vec::new()
+        } else {
+            options.frame_processor_library_paths.clone()
+        },
+        frame_processor_mode: options.frame_processor_mode,
+        frame_processor_policy: options.frame_processor_policy.clone(),
+    })
+}
+
+fn source_normalizer_packet_decoder_unavailable_message(
+    normalization: &MacosSourceNormalizationOutcome,
+    options: &PlayerRuntimeOptions,
+) -> Option<String> {
+    let stream_info = normalization.packet_stream_info.as_ref()?;
+    let video_stream = macos_packet_stream_info_from_source_normalizer(stream_info).ok()?;
+    if options.decoder_plugin_video_mode != PlayerDecoderPluginVideoMode::PreferNativeFrame {
+        return Some(format!(
+            "source normalizer packet stream for {} video requires native-frame decoder plugin mode",
+            video_stream.codec
+        ));
+    }
+    if options.video_surface.is_none() {
+        return Some(format!(
+            "source normalizer packet stream for {} video requires a macOS video surface",
+            video_stream.codec
+        ));
+    }
+    if options.decoder_plugin_library_paths.is_empty() {
+        return Some(format!(
+            "source normalizer packet stream for {} video requires a decoder plugin path",
+            video_stream.codec
+        ));
+    }
+    let request = DecoderPluginMatchRequest::video(video_stream.codec.clone());
+    let registry = PluginRegistry::inspect_decoder_support(
+        &options.decoder_plugin_library_paths,
+        request.clone(),
+    );
+    Some(format!(
+        "source normalizer packet stream for {} video found no matching native-frame decoder plugin: {}",
+        video_stream.codec,
+        source_normalizer_registry_notes(&registry)
+    ))
+}
+
 fn native_frame_decoder_codec(
     source: &MediaSource,
     media_info: &PlayerMediaInfo,
@@ -3047,16 +3731,33 @@ fn apply_macos_runtime_diagnostics(
     startup: PlayerRuntimeStartup,
     diagnostics: &MacosRuntimeDiagnostics,
 ) -> PlayerRuntimeStartup {
-    let mut startup = apply_video_decode_diagnostics(startup, &diagnostics.video_decode);
-    for diagnostic in &diagnostics.plugin_diagnostics {
-        if startup.plugin_diagnostics.iter().any(|existing| {
-            existing.path == diagnostic.path && existing.status == diagnostic.status
-        }) {
+    let startup = apply_video_decode_diagnostics(startup, &diagnostics.video_decode);
+    append_plugin_diagnostics(startup, &diagnostics.plugin_diagnostics)
+}
+
+fn append_plugin_diagnostics(
+    mut startup: PlayerRuntimeStartup,
+    diagnostics: &[PlayerPluginDiagnostic],
+) -> PlayerRuntimeStartup {
+    for diagnostic in diagnostics {
+        if startup
+            .plugin_diagnostics
+            .iter()
+            .any(|existing| same_plugin_diagnostic(existing, diagnostic))
+        {
             continue;
         }
         startup.plugin_diagnostics.push(diagnostic.clone());
     }
     startup
+}
+
+fn same_plugin_diagnostic(left: &PlayerPluginDiagnostic, right: &PlayerPluginDiagnostic) -> bool {
+    left.path == right.path
+        && left.plugin_name == right.plugin_name
+        && left.plugin_kind == right.plugin_kind
+        && left.status == right.status
+        && left.message == right.message
 }
 
 fn macos_video_decode_info(media_info: &PlayerMediaInfo) -> PlayerVideoDecodeInfo {
@@ -3124,6 +3825,325 @@ fn apply_frame_processor_plugin_diagnostics(
             .map(player_plugin_diagnostic_from_record),
     );
     startup
+}
+
+fn prepare_source_normalizer_for_open(
+    source: MediaSource,
+    options: &PlayerRuntimeOptions,
+) -> PlayerResult<MacosSourceNormalizationOutcome> {
+    let mut outcome = MacosSourceNormalizationOutcome {
+        source: source.clone(),
+        packet_session: None,
+        packet_stream_info: None,
+        diagnostics: Vec::new(),
+        selected_profile: None,
+        normalized_endpoint: None,
+        ready_latency: None,
+    };
+    if options.source_normalizer_mode == SourceNormalizerMode::Disabled {
+        return Ok(outcome);
+    }
+
+    if should_bypass_source_normalizer_for_native_adaptive(&source) {
+        let protocol = match source.protocol() {
+            MediaSourceProtocol::Hls => "HLS",
+            MediaSourceProtocol::Dash => "DASH",
+            _ => "adaptive",
+        };
+        outcome
+            .diagnostics
+            .push(source_normalizer_runtime_diagnostic(
+                None,
+                format!(
+                    "source normalizer packet stream skipped for {protocol} adaptive source; selected native adaptive playback path"
+                ),
+            ));
+        return Ok(outcome);
+    }
+
+    if options.source_normalizer_plugin_library_paths.is_empty() {
+        let message =
+            "source normalizer requested but no source normalizer plugin paths are configured"
+                .to_owned();
+        outcome
+            .diagnostics
+            .push(source_normalizer_runtime_diagnostic(None, message.clone()));
+        return match options.source_normalizer_mode {
+            SourceNormalizerMode::RequireNormalized => Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
+                format!("{message}; source normalizer mode is RequireNormalized"),
+            )),
+            SourceNormalizerMode::Disabled | SourceNormalizerMode::PreferNormalized => Ok(outcome),
+        };
+    }
+
+    let registry = PluginRegistry::inspect_source_normalizer_support(
+        &options.source_normalizer_plugin_library_paths,
+    );
+    outcome.diagnostics.extend(
+        registry
+            .records()
+            .iter()
+            .map(player_plugin_diagnostic_from_record),
+    );
+    if registry.best_source_normalizer().is_none() {
+        let message = format!(
+            "source normalizer requested but no supported source normalizer plugin is available: {}",
+            source_normalizer_registry_notes(&registry)
+        );
+        outcome
+            .diagnostics
+            .push(source_normalizer_runtime_diagnostic(None, message.clone()));
+        return match options.source_normalizer_mode {
+            SourceNormalizerMode::RequireNormalized => {
+                Err(PlayerError::new(PlayerErrorCode::Unsupported, message))
+            }
+            SourceNormalizerMode::Disabled | SourceNormalizerMode::PreferNormalized => Ok(outcome),
+        };
+    }
+
+    if let Some(packet_record) = registry.best_source_normalizer_packet() {
+        match open_source_normalizer_packet_session(&source, options, packet_record) {
+            Ok(ready) => {
+                outcome.selected_profile = ready.selected_profile.clone();
+                outcome.ready_latency = Some(ready.ready_latency);
+                outcome.normalized_endpoint =
+                    ready.stream_info.session_id.as_ref().map(|session_id| {
+                        format!("vesper-source-normalizer-packet://{session_id}")
+                    });
+                outcome.packet_stream_info = Some(ready.stream_info);
+                outcome.packet_session = Some(ready.session);
+                outcome
+                    .diagnostics
+                    .push(source_normalizer_runtime_diagnostic(
+                        ready.plugin_name.clone(),
+                        format!(
+                            "source normalizer selected profile {} via {}; ready in {} ms; output packet_stream",
+                            ready.selected_profile.as_deref().unwrap_or("auto-detected"),
+                            ready.plugin_name.as_deref().unwrap_or("unknown-normalizer"),
+                            ready.ready_latency.as_millis()
+                        ),
+                    ));
+                return Ok(outcome);
+            }
+            Err(error) => {
+                let message =
+                    format!("source normalizer packet stream failed before playback: {error}");
+                outcome
+                    .diagnostics
+                    .push(source_normalizer_runtime_diagnostic(
+                        packet_record.plugin_name.clone(),
+                        message.clone(),
+                    ));
+                if options.source_normalizer_mode == SourceNormalizerMode::RequireNormalized {
+                    return Err(PlayerError::new(PlayerErrorCode::BackendFailure, message));
+                }
+            }
+        }
+    } else {
+        let message = format!(
+            "source normalizer requested but no source_normalizer_packet_v2 plugin is available: {}",
+            source_normalizer_registry_notes(&registry)
+        );
+        outcome
+            .diagnostics
+            .push(source_normalizer_runtime_diagnostic(None, message.clone()));
+        if options.source_normalizer_mode == SourceNormalizerMode::RequireNormalized {
+            return Err(PlayerError::new(PlayerErrorCode::Unsupported, message));
+        }
+    }
+
+    if options.source_normalizer_mode == SourceNormalizerMode::RequireNormalized {
+        let message = "source normalizer mode is RequireNormalized but no normalized packet stream was produced".to_owned();
+        outcome
+            .diagnostics
+            .push(source_normalizer_runtime_diagnostic(None, message.clone()));
+        return Err(PlayerError::new(PlayerErrorCode::BackendFailure, message));
+    }
+
+    Ok(outcome)
+}
+
+fn should_bypass_source_normalizer_for_native_adaptive(source: &MediaSource) -> bool {
+    matches!(
+        source.protocol(),
+        MediaSourceProtocol::Hls | MediaSourceProtocol::Dash
+    )
+}
+
+struct ReadySourceNormalizerPacketSession {
+    session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
+    stream_info: player_plugin::SourceNormalizerPacketStreamInfo,
+    selected_profile: Option<String>,
+    plugin_name: Option<String>,
+    ready_latency: Duration,
+}
+
+fn open_source_normalizer_packet_session(
+    source: &MediaSource,
+    _options: &PlayerRuntimeOptions,
+    record: &PluginDiagnosticRecord,
+) -> Result<ReadySourceNormalizerPacketSession, String> {
+    let plugin = LoadedDynamicPlugin::load(&record.path)
+        .map_err(|error| format!("failed to load source normalizer plugin: {error}"))?;
+    let factory = plugin
+        .source_normalizer_packet_plugin_factory()
+        .ok_or_else(|| {
+            format!(
+                "{} is not a packet source normalizer plugin",
+                plugin.plugin_name()
+            )
+        })?;
+    let config = SourceNormalizerPacketSessionConfig {
+        runtime_profile: String::new(),
+        input: source.uri().to_owned(),
+        headers: Vec::new(),
+        startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT.as_millis() as u64),
+        session_timeout_ms: Some(SOURCE_NORMALIZER_SESSION_TIMEOUT.as_millis() as u64),
+        preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+    };
+    let started = Instant::now();
+    let session = factory
+        .open_packet_session(&config)
+        .map_err(|error| format!("open_packet_session failed: {error}"))?;
+    let stream_info = session.stream_info();
+    macos_packet_stream_info_from_source_normalizer(&stream_info)
+        .map_err(|error| format!("invalid packet stream info: {error}"))?;
+    Ok(ReadySourceNormalizerPacketSession {
+        selected_profile: stream_info.runtime_profile.clone(),
+        plugin_name: stream_info
+            .normalizer_name
+            .clone()
+            .or_else(|| Some(factory.name().to_owned())),
+        ready_latency: started.elapsed(),
+        stream_info,
+        session: Arc::new(Mutex::new(Some(session))),
+    })
+}
+
+fn macos_packet_stream_info_from_source_normalizer(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+) -> anyhow::Result<VideoPacketStreamInfo> {
+    let track = stream_info
+        .selected_track_index
+        .and_then(|selected| {
+            stream_info
+                .tracks
+                .iter()
+                .find(|track| track.stream_index == selected)
+        })
+        .or_else(|| {
+            stream_info
+                .tracks
+                .iter()
+                .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)
+        })
+        .ok_or_else(|| anyhow::anyhow!("source normalizer packet stream has no video track"))?;
+    macos_packet_track_info_from_source_normalizer(track)
+}
+
+fn macos_packet_track_info_from_source_normalizer(
+    track: &SourceNormalizerPacketTrackInfo,
+) -> anyhow::Result<VideoPacketStreamInfo> {
+    if track.media_kind != SourceNormalizerPacketMediaKind::Video {
+        anyhow::bail!("selected source normalizer packet track is not video");
+    }
+    Ok(VideoPacketStreamInfo {
+        stream_index: usize::try_from(track.stream_index).unwrap_or(usize::MAX),
+        codec: track.codec.clone(),
+        extradata: track.extradata.clone(),
+        width: track.width,
+        height: track.height,
+        frame_rate: track.frame_rate,
+    })
+}
+
+fn source_normalizer_runtime_diagnostic(
+    plugin_name: Option<String>,
+    message: String,
+) -> PlayerPluginDiagnostic {
+    PlayerPluginDiagnostic {
+        path: String::new(),
+        plugin_name,
+        plugin_kind: Some("source_normalizer".to_owned()),
+        status: PlayerPluginDiagnosticStatus::Loaded,
+        message: Some(message),
+        capability: None,
+    }
+}
+
+fn source_normalizer_registry_notes(registry: &PluginRegistry) -> String {
+    let notes = registry
+        .records()
+        .iter()
+        .map(PluginDiagnosticRecord::summary)
+        .collect::<Vec<_>>();
+    if notes.is_empty() {
+        "no plugin paths were inspected".to_owned()
+    } else {
+        notes.join("; ")
+    }
+}
+
+fn apply_source_normalizer_open_diagnostics(
+    mut startup: PlayerRuntimeStartup,
+    normalization: &MacosSourceNormalizationOutcome,
+) -> PlayerRuntimeStartup {
+    for diagnostic in &normalization.diagnostics {
+        startup.plugin_diagnostics.push(diagnostic.clone());
+    }
+    startup
+}
+
+fn drop_source_normalizer_packet_session(normalization: &mut MacosSourceNormalizationOutcome) {
+    if let Some(packet_session) = normalization.packet_session.take()
+        && let Ok(mut guard) = packet_session.lock()
+        && let Some(mut session) = guard.take()
+    {
+        let _ = session.close();
+    }
+    normalization.packet_stream_info = None;
+}
+
+fn attach_source_normalizer_to_runtime(
+    bootstrap: PlayerRuntimeBootstrap,
+    mut normalization: MacosSourceNormalizationOutcome,
+) -> PlayerRuntimeBootstrap {
+    if normalization.packet_session.is_some() {
+        let packet_session = normalization.packet_session.take();
+        let adapter_id = bootstrap.runtime.adapter_id().to_owned();
+        let PlayerRuntimeBootstrap {
+            runtime,
+            initial_frame,
+            startup,
+        } = bootstrap;
+        let source_normalizer_diagnostics = startup
+            .plugin_diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.plugin_kind.as_deref() == Some("source_normalizer"))
+            .cloned()
+            .collect::<Vec<_>>();
+        let adapter_id = if adapter_id == MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID {
+            MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID
+        } else if adapter_id == MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID {
+            MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
+        } else {
+            MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID
+        };
+        return PlayerRuntime::from_adapter_bootstrap(
+            adapter_id,
+            PlayerRuntimeAdapterBootstrap {
+                runtime: Box::new(MacosSourceNormalizerRuntimeGuard {
+                    inner: runtime,
+                    source_normalizer_packet_session: packet_session,
+                    source_normalizer_diagnostics,
+                }),
+                initial_frame,
+                startup,
+            },
+        );
+    }
+    bootstrap
 }
 
 #[cfg(test)]
@@ -3359,27 +4379,34 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
             PluginDiagnosticStatus::FrameProcessorUnsupported => {
                 PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
             }
+            PluginDiagnosticStatus::SourceNormalizerSupported => {
+                PlayerPluginDiagnosticStatus::Loaded
+            }
+            PluginDiagnosticStatus::SourceNormalizerUnsupported => {
+                PlayerPluginDiagnosticStatus::UnsupportedKind
+            }
         },
         message: record.message.clone(),
         capability: record
             .capability_summary
             .as_ref()
-            .map(player_plugin_capability_summary_from_loader),
+            .and_then(player_plugin_capability_summary_from_loader),
     }
 }
 
 fn player_plugin_capability_summary_from_loader(
     summary: &PluginCapabilitySummary,
-) -> PlayerPluginCapabilitySummary {
+) -> Option<PlayerPluginCapabilitySummary> {
     match summary {
-        PluginCapabilitySummary::Decoder(summary) => PlayerPluginCapabilitySummary::Decoder(
+        PluginCapabilitySummary::Decoder(summary) => Some(PlayerPluginCapabilitySummary::Decoder(
             player_decoder_capability_summary_from_loader(summary),
-        ),
+        )),
         PluginCapabilitySummary::FrameProcessor(summary) => {
-            PlayerPluginCapabilitySummary::FrameProcessor(
+            Some(PlayerPluginCapabilitySummary::FrameProcessor(
                 player_frame_processor_capability_summary_from_loader(summary),
-            )
+            ))
         }
+        PluginCapabilitySummary::SourceNormalizerPacket(_) => None,
     }
 }
 
@@ -3464,6 +4491,7 @@ fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
         VesperPluginKind::Decoder => "decoder",
         VesperPluginKind::BenchmarkSink => "benchmark_sink",
         VesperPluginKind::FrameProcessor => "frame_processor",
+        VesperPluginKind::SourceNormalizer => "source_normalizer",
     }
 }
 
@@ -3588,10 +4616,15 @@ fn open_software_fallback_runtime(
     source: MediaSource,
     options: PlayerRuntimeOptions,
     fallback_reason: Option<String>,
+    normalization: MacosSourceNormalizationOutcome,
 ) -> PlayerResult<PlayerRuntimeBootstrap> {
     let forward_strict_frame_processor_error = strict_frame_processor_fallback_enabled(&options);
-    match PlayerRuntime::open_source_with_factory(source, options, macos_runtime_adapter_factory())
-    {
+    let open_options = without_source_normalizer_options(options);
+    match PlayerRuntime::open_source_with_factory(
+        source,
+        open_options,
+        macos_runtime_adapter_factory(),
+    ) {
         Ok(mut bootstrap) => {
             if let Some(fallback_reason) = fallback_reason
                 && let Some(video_decode) = bootstrap.startup.video_decode.as_mut()
@@ -3603,7 +4636,12 @@ fn open_software_fallback_runtime(
                     _ => fallback_reason,
                 });
             }
-            Ok(bootstrap)
+            bootstrap.startup =
+                apply_source_normalizer_open_diagnostics(bootstrap.startup, &normalization);
+            Ok(attach_source_normalizer_to_runtime(
+                bootstrap,
+                normalization,
+            ))
         }
         Err(software_error) => match fallback_reason {
             Some(fallback_reason) => {
@@ -3632,16 +4670,23 @@ fn open_software_fallback_runtime_with_interrupt(
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
     fallback_reason: Option<String>,
+    normalization: MacosSourceNormalizationOutcome,
 ) -> PlayerResult<PlayerRuntimeBootstrap> {
     let forward_strict_frame_processor_error = strict_frame_processor_fallback_enabled(&options);
+    let open_options = without_source_normalizer_options(options);
     match open_macos_software_runtime_source_with_options_and_interrupt(
         source,
-        options,
+        open_options,
         interrupt_flag,
     ) {
         Ok(mut bootstrap) => {
             apply_video_decode_fallback_reason(&mut bootstrap.startup, fallback_reason);
-            Ok(bootstrap)
+            bootstrap.startup =
+                apply_source_normalizer_open_diagnostics(bootstrap.startup, &normalization);
+            Ok(attach_source_normalizer_to_runtime(
+                bootstrap,
+                normalization,
+            ))
         }
         Err(software_error) => match fallback_reason {
             Some(fallback_reason) => {
@@ -3696,6 +4741,12 @@ fn strict_frame_processor_fallback_enabled(options: &PlayerRuntimeOptions) -> bo
         && !options.frame_processor_library_paths.is_empty()
 }
 
+fn without_source_normalizer_options(mut options: PlayerRuntimeOptions) -> PlayerRuntimeOptions {
+    options.source_normalizer_mode = SourceNormalizerMode::Disabled;
+    options.source_normalizer_plugin_library_paths.clear();
+    options
+}
+
 fn should_forward_strict_frame_processor_fallback_error(
     strict_frame_processor_fallback: bool,
     error: &PlayerError,
@@ -3714,7 +4765,7 @@ mod tests {
     use std::os::raw::c_void;
     use std::path::{Path, PathBuf};
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     };
@@ -3726,21 +4777,26 @@ mod tests {
         FrameProcessorDebugState, MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID,
         MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         MacosFrameProcessorChain, MacosFrameProcessorNode, MacosHostPlayerRuntimeAdapterFactory,
-        MacosNativeFrameDecoderState, MacosNativeFramePacketSource, MacosNativeFramePrefetchWakeup,
-        MacosNativeFrameVideoSource, MacosRuntimeActiveFallback, MacosRuntimeAdapter,
-        MacosRuntimeAdapterFallback, MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
-        MacosSoftwarePlayerRuntimeAdapterFactory, apply_decoder_plugin_diagnostics,
-        apply_decoder_plugin_diagnostics_to_video_decode,
-        apply_decoder_plugin_registry_to_video_decode,
-        macos_native_frame_decoder_video_decode_info, macos_runtime_diagnostics,
-        macos_video_decode_info, open_macos_host_runtime_source_with_options,
+        MacosNativeFrameDecoderState, MacosNativeFramePacketSendStatus,
+        MacosNativeFramePacketSource, MacosNativeFramePrefetchWakeup, MacosNativeFrameVideoSource,
+        MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
+        MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
+        MacosSoftwarePlayerRuntimeAdapterFactory, MacosSourceNormalizationOutcome,
+        apply_decoder_plugin_diagnostics, apply_decoder_plugin_diagnostics_to_video_decode,
+        apply_decoder_plugin_registry_to_video_decode, apply_source_normalizer_open_diagnostics,
+        attach_source_normalizer_to_runtime, macos_native_frame_decoder_video_decode_info,
+        macos_runtime_diagnostics, macos_video_decode_info,
+        open_macos_host_runtime_source_with_options,
         open_macos_software_runtime_source_with_options_and_interrupt,
-        present_and_release_native_frame_with_presenter, present_if_current_epoch_and_release,
-        probe_macos_host_runtime_initializer_with_factories,
+        prepare_source_normalizer_for_open, present_and_release_native_frame_with_presenter,
+        present_if_current_epoch_and_release, probe_macos_host_runtime_initializer_with_factories,
         probe_macos_host_runtime_source_with_options, process_macos_native_frame,
-        release_native_frame_with_counter, should_forward_strict_frame_processor_fallback_error,
+        release_native_frame_with_counter, send_macos_native_frame_packet,
+        should_forward_strict_frame_processor_fallback_error,
         should_trigger_runtime_fallback_for_advance, should_trigger_runtime_fallback_for_command,
+        source_normalizer_packet_decoder_unavailable_message,
         spawn_macos_native_frame_prefetch_worker, strict_frame_processor_fallback_enabled,
+        without_source_normalizer_options,
     };
     use player_backend_ffmpeg::{
         CompressedVideoPacket, FfmpegBackend, VideoPacketSource, VideoPacketStreamInfo,
@@ -3749,13 +4805,17 @@ mod tests {
     use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
     use player_platform_desktop::{DesktopVideoFramePoll, DesktopVideoSource};
     use player_plugin::{
-        DecoderError, DecoderMediaKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
-        DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
+        DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeFrame,
+        DecoderNativeFrameMetadata, DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
         DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
         FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorOutputFrame,
         FrameProcessorReceiveOutput, FrameProcessorSession, FrameProcessorSessionInfo,
         FrameProcessorSubmitFrame, FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
-        NativeDecoderSession, NativeFrame, VesperPluginKind,
+        NativeDecoderSession, NativeFrame, SourceNormalizerError, SourceNormalizerOperationStatus,
+        SourceNormalizerPacket, SourceNormalizerPacketLease, SourceNormalizerPacketMediaKind,
+        SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+        SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
+        SourceNormalizerReadPacketMetadata, VesperPluginKind,
     };
     use player_plugin_loader::{
         DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, LoadedDynamicPlugin,
@@ -3765,13 +4825,13 @@ mod tests {
         DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
         FrameProcessorWarningKind, PlaybackProgress, PlayerError, PlayerErrorCode,
         PlayerFrameProcessingMetrics, PlayerMediaInfo, PlayerPluginCapabilitySummary,
-        PlayerPluginDiagnosticStatus, PlayerResult, PlayerRuntimeAdapter,
-        PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+        PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus, PlayerResult, PlayerRuntime,
+        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
         PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
         PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
         PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning,
         PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind,
-        PlayerVideoSurfaceTarget, PresentationState,
+        PlayerVideoSurfaceTarget, PresentationState, SourceNormalizerMode,
     };
     #[cfg(target_os = "macos")]
     use player_runtime::{PlayerDecoderPluginVideoMode, PlayerRuntimeInitializer};
@@ -4350,6 +5410,7 @@ mod tests {
                 hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
                 fallback_reason: None,
             },
+            plugin_diagnostics: Vec::new(),
             has_video_surface: true,
             runtime_fallback: Some(MacosRuntimeActiveFallback {
                 source: fallback_source.clone(),
@@ -4359,6 +5420,7 @@ mod tests {
                         .to_owned(),
             }),
             pending_runtime_fallback_events: VecDeque::new(),
+            source_normalizer_packet_session: None,
         };
         let mut adapter = adapter;
 
@@ -4437,6 +5499,7 @@ mod tests {
                 hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
                 fallback_reason: None,
             },
+            plugin_diagnostics: Vec::new(),
             has_video_surface: true,
             runtime_fallback: Some(MacosRuntimeActiveFallback {
                 source: MediaSource::new("fixture.mp4"),
@@ -4446,6 +5509,7 @@ mod tests {
                         .to_owned(),
             }),
             pending_runtime_fallback_events: VecDeque::new(),
+            source_normalizer_packet_session: None,
         };
         let fallback = adapter
             .runtime_fallback
@@ -4518,6 +5582,7 @@ mod tests {
                     hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
                     fallback_reason: None,
                 },
+                plugin_diagnostics: Vec::new(),
                 has_video_surface: true,
                 runtime_fallback: Some(MacosRuntimeActiveFallback {
                     source: MediaSource::new("fixture.mp4"),
@@ -4527,6 +5592,7 @@ mod tests {
                             .to_owned(),
                 }),
                 pending_runtime_fallback_events: VecDeque::new(),
+                source_normalizer_packet_session: None,
             };
             let fallback = adapter
                 .runtime_fallback
@@ -4653,6 +5719,7 @@ mod tests {
                     hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
                     fallback_reason: None,
                 },
+                plugin_diagnostics: Vec::new(),
                 has_video_surface: true,
                 runtime_fallback: Some(MacosRuntimeActiveFallback {
                     source: MediaSource::new("fixture.mp4"),
@@ -4662,6 +5729,7 @@ mod tests {
                             .to_owned(),
                 }),
                 pending_runtime_fallback_events: VecDeque::new(),
+                source_normalizer_packet_session: None,
             };
 
             let error = adapter
@@ -4773,6 +5841,207 @@ mod tests {
                 .unwrap_or_default()
                 .contains("decoder plugin paths configured")
         );
+    }
+
+    #[test]
+    fn macos_source_normalizer_disabled_keeps_original_source() {
+        let original = MediaSource::new("file:///tmp/original.flv");
+        let outcome = prepare_source_normalizer_for_open(
+            original.clone(),
+            &PlayerRuntimeOptions::default().with_source_normalizer_plugin_library_paths([
+                PathBuf::from("/tmp/missing-source-normalizer"),
+            ]),
+        )
+        .expect("disabled source normalizer should not inspect plugin paths");
+
+        assert_eq!(outcome.source.uri(), original.uri());
+        assert!(outcome.packet_session.is_none());
+        assert!(outcome.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn macos_source_normalizer_prefer_missing_plugin_falls_back_with_diagnostics() {
+        let outcome = prepare_source_normalizer_for_open(
+            MediaSource::new("file:///tmp/original.flv"),
+            &PlayerRuntimeOptions::default()
+                .with_source_normalizer_plugin_library_paths([PathBuf::from(
+                    "/tmp/missing-source-normalizer",
+                )])
+                .with_source_normalizer_mode(SourceNormalizerMode::PreferNormalized),
+        )
+        .expect("prefer mode should fall back when a plugin is missing");
+
+        assert_eq!(outcome.source.uri(), "file:///tmp/original.flv");
+        assert!(outcome.packet_session.is_none());
+        assert!(outcome.diagnostics.iter().any(|diagnostic| {
+            diagnostic.status == PlayerPluginDiagnosticStatus::LoadFailed
+                && diagnostic
+                    .message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("failed to open plugin library")
+        }));
+    }
+
+    #[test]
+    fn macos_source_normalizer_skips_native_adaptive_sources() {
+        let original = MediaSource::new("https://example.test/live/master.m3u8");
+        let outcome = prepare_source_normalizer_for_open(
+            original.clone(),
+            &PlayerRuntimeOptions::default()
+                .with_source_normalizer_plugin_library_paths([PathBuf::from(
+                    "/tmp/missing-source-normalizer",
+                )])
+                .with_source_normalizer_mode(SourceNormalizerMode::RequireNormalized),
+        )
+        .expect("native adaptive sources should bypass packet source normalization");
+
+        assert_eq!(outcome.source.uri(), original.uri());
+        assert!(outcome.packet_session.is_none());
+        assert!(outcome.packet_stream_info.is_none());
+        assert_eq!(outcome.diagnostics.len(), 1);
+        assert!(
+            outcome.diagnostics[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("skipped for HLS adaptive source")
+        );
+    }
+
+    #[test]
+    fn macos_source_normalizer_require_missing_plugin_fails() {
+        let result = prepare_source_normalizer_for_open(
+            MediaSource::new("file:///tmp/original.flv"),
+            &PlayerRuntimeOptions::default()
+                .with_source_normalizer_plugin_library_paths([PathBuf::from(
+                    "/tmp/missing-source-normalizer",
+                )])
+                .with_source_normalizer_mode(SourceNormalizerMode::RequireNormalized),
+        );
+        let error = match result {
+            Ok(_) => panic!("require mode should fail when no plugin is available"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), PlayerErrorCode::Unsupported);
+        assert!(
+            error
+                .message()
+                .contains("no supported source normalizer plugin")
+        );
+    }
+
+    #[test]
+    fn macos_source_normalizer_diagnostics_are_attached_once_opened() {
+        let normalization = MacosSourceNormalizationOutcome {
+            source: MediaSource::new("/tmp/normalized.mp4"),
+            packet_session: None,
+            packet_stream_info: None,
+            diagnostics: vec![PlayerPluginDiagnostic {
+                path: String::new(),
+                plugin_name: Some("fixture-normalizer".to_owned()),
+                plugin_kind: Some("source_normalizer".to_owned()),
+                status: PlayerPluginDiagnosticStatus::Loaded,
+                message: Some("source normalizer selected profile fixture".to_owned()),
+                capability: None,
+            }],
+            selected_profile: Some("fixture".to_owned()),
+            normalized_endpoint: Some("/tmp/normalized.mp4".to_owned()),
+            ready_latency: Some(Duration::from_millis(7)),
+        };
+        let startup = apply_source_normalizer_open_diagnostics(
+            startup_with_video_decode(macos_video_decode_info(&media_info_with_codec("H264"))),
+            &normalization,
+        );
+
+        assert!(startup.plugin_diagnostics.iter().any(|diagnostic| {
+            diagnostic.plugin_kind.as_deref() == Some("source_normalizer")
+                && diagnostic
+                    .message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("selected profile")
+        }));
+    }
+
+    #[test]
+    fn macos_source_normalizer_session_guard_keeps_runtime_source() {
+        let stream_info = fake_source_normalizer_packet_stream_info("H264");
+        let bootstrap = PlayerRuntime::from_adapter_bootstrap(
+            MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+            PlayerRuntimeAdapterBootstrap {
+                runtime: Box::new(FakeStrategyRuntime {
+                    capabilities: default_software_capabilities(),
+                    media_info: media_info_with_source_uri("/tmp/normalized.mp4", "H264"),
+                    playback_rate: 1.0,
+                    progress: PlaybackProgress::new(Duration::ZERO, None),
+                    state: PresentationState::Ready,
+                    events: VecDeque::new(),
+                    advance_error: None,
+                    dispatch_error: None,
+                }),
+                initial_frame: None,
+                startup: startup_with_video_decode(macos_video_decode_info(
+                    &media_info_with_codec("H264"),
+                )),
+            },
+        );
+        let bootstrap = attach_source_normalizer_to_runtime(
+            bootstrap,
+            MacosSourceNormalizationOutcome {
+                source: MediaSource::new("/tmp/normalized.mp4"),
+                packet_session: Some(Arc::new(Mutex::new(Some(Box::new(
+                    FakeSourceNormalizerPacketSession::new(stream_info),
+                ))))),
+                packet_stream_info: None,
+                diagnostics: Vec::new(),
+                selected_profile: Some("fixture".to_owned()),
+                normalized_endpoint: Some("/tmp/normalized.mp4".to_owned()),
+                ready_latency: Some(Duration::from_millis(1)),
+            },
+        );
+
+        assert_eq!(bootstrap.runtime.source_uri(), "/tmp/normalized.mp4");
+    }
+
+    #[test]
+    fn macos_source_normalizer_packet_decoder_requires_strict_decoder_inputs() {
+        let stream_info = fake_source_normalizer_packet_stream_info("H264");
+        let normalization = MacosSourceNormalizationOutcome {
+            source: MediaSource::new("file:///tmp/original.mp4"),
+            packet_session: Some(Arc::new(Mutex::new(Some(Box::new(
+                FakeSourceNormalizerPacketSession::new(stream_info.clone()),
+            ))))),
+            packet_stream_info: Some(stream_info),
+            diagnostics: Vec::new(),
+            selected_profile: Some("fixture-packet".to_owned()),
+            normalized_endpoint: Some("vesper-source-normalizer-packet://fake-session".to_owned()),
+            ready_latency: Some(Duration::from_millis(1)),
+        };
+
+        let message = source_normalizer_packet_decoder_unavailable_message(
+            &normalization,
+            &PlayerRuntimeOptions::default()
+                .with_source_normalizer_mode(SourceNormalizerMode::RequireNormalized),
+        )
+        .expect("missing decoder mode should produce diagnostics");
+
+        assert!(message.contains("requires native-frame decoder plugin mode"));
+    }
+
+    #[test]
+    fn macos_source_normalizer_options_are_cleared_for_fallback_reopen() {
+        let options = PlayerRuntimeOptions::default()
+            .with_source_normalizer_plugin_library_paths([PathBuf::from("plugin")])
+            .with_source_normalizer_mode(SourceNormalizerMode::PreferNormalized);
+        let cleared = without_source_normalizer_options(options);
+
+        assert_eq!(
+            cleared.source_normalizer_mode,
+            SourceNormalizerMode::Disabled
+        );
+        assert!(cleared.source_normalizer_plugin_library_paths.is_empty());
     }
 
     #[test]
@@ -6273,8 +7542,12 @@ mod tests {
     }
 
     fn media_info_with_codec(codec: &str) -> PlayerMediaInfo {
+        media_info_with_source_uri("fixture.mp4", codec)
+    }
+
+    fn media_info_with_source_uri(source_uri: &str, codec: &str) -> PlayerMediaInfo {
         PlayerMediaInfo {
-            source_uri: "fixture.mp4".to_owned(),
+            source_uri: source_uri.to_owned(),
             source_kind: player_runtime::MediaSourceKind::Local,
             source_protocol: player_runtime::MediaSourceProtocol::File,
             duration: None,
@@ -6290,6 +7563,25 @@ mod tests {
             best_audio: None,
             track_catalog: Default::default(),
             track_selection: Default::default(),
+        }
+    }
+
+    fn default_software_capabilities() -> PlayerRuntimeAdapterCapabilities {
+        PlayerRuntimeAdapterCapabilities {
+            adapter_id: MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+            backend_family: PlayerRuntimeAdapterBackendFamily::SoftwareDesktop,
+            supports_audio_output: true,
+            supports_frame_output: true,
+            supports_external_video_surface: false,
+            supports_seek: true,
+            supports_stop: true,
+            supports_playback_rate: true,
+            playback_rate_min: Some(0.5),
+            playback_rate_max: Some(3.0),
+            natural_playback_rate_max: Some(2.0),
+            supports_hardware_decode: false,
+            supports_streaming: true,
+            supports_hdr: false,
         }
     }
 
@@ -6667,6 +7959,104 @@ mod tests {
         dispatch_error: Option<PlayerError>,
     }
 
+    struct FakeSourceNormalizerPacketSession {
+        stream_info: SourceNormalizerPacketStreamInfo,
+        packet_data: Vec<u8>,
+        emitted_packet: bool,
+        outstanding_handle: Option<usize>,
+        closed: bool,
+    }
+
+    impl FakeSourceNormalizerPacketSession {
+        fn new(stream_info: SourceNormalizerPacketStreamInfo) -> Self {
+            Self {
+                stream_info,
+                packet_data: vec![0, 0, 1, 9],
+                emitted_packet: false,
+                outstanding_handle: None,
+                closed: false,
+            }
+        }
+    }
+
+    impl SourceNormalizerPacketSession for FakeSourceNormalizerPacketSession {
+        fn stream_info(&self) -> SourceNormalizerPacketStreamInfo {
+            self.stream_info.clone()
+        }
+
+        fn read_packet(
+            &mut self,
+        ) -> Result<SourceNormalizerPacketLease<'_>, SourceNormalizerError> {
+            if self.closed {
+                return Err(SourceNormalizerError::NotConfigured);
+            }
+            if self.outstanding_handle.is_some() {
+                return Err(SourceNormalizerError::abi_violation(
+                    "fake packet still needs release",
+                ));
+            }
+            if self.emitted_packet {
+                return Ok(SourceNormalizerPacketLease {
+                    metadata: SourceNormalizerReadPacketMetadata::end_of_stream(),
+                    data: &[],
+                    handle: 0,
+                });
+            }
+            self.emitted_packet = true;
+            self.outstanding_handle = Some(1);
+            Ok(SourceNormalizerPacketLease {
+                metadata: SourceNormalizerReadPacketMetadata::packet(SourceNormalizerPacket {
+                    pts_us: Some(0),
+                    dts_us: Some(0),
+                    duration_us: Some(41_667),
+                    stream_index: 0,
+                    key_frame: true,
+                    discontinuity: false,
+                    end_of_stream: false,
+                }),
+                data: &self.packet_data,
+                handle: 1,
+            })
+        }
+
+        fn release_packet(&mut self, packet_handle: usize) -> Result<(), SourceNormalizerError> {
+            if self.outstanding_handle == Some(packet_handle) {
+                self.outstanding_handle = None;
+                Ok(())
+            } else {
+                Err(SourceNormalizerError::abi_violation(
+                    "fake packet handle was not outstanding",
+                ))
+            }
+        }
+
+        fn seek(
+            &mut self,
+            _seek: &SourceNormalizerPacketSeek,
+        ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+            self.emitted_packet = false;
+            self.outstanding_handle = None;
+            Ok(SourceNormalizerOperationStatus {
+                completed: true,
+                message: None,
+            })
+        }
+
+        fn flush(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+            self.outstanding_handle = None;
+            Ok(SourceNormalizerOperationStatus {
+                completed: true,
+                message: None,
+            })
+        }
+
+        fn close(&mut self) -> Result<(), SourceNormalizerError> {
+            self.closed = true;
+            self.outstanding_handle = None;
+            Ok(())
+        }
+    }
+
     impl PlayerRuntimeAdapter for FakeStrategyRuntime {
         fn source_uri(&self) -> &str {
             &self.media_info.source_uri
@@ -6758,8 +8148,15 @@ mod tests {
     }
 
     impl MacosNativeFramePacketSource for FakeNativeFramePacketSource {
-        fn next_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>> {
-            Ok(self.packets.pop_front())
+        fn send_next_packet(
+            &mut self,
+            decoder_session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+        ) -> anyhow::Result<MacosNativeFramePacketSendStatus> {
+            let Some(packet) = self.packets.pop_front() else {
+                return Ok(MacosNativeFramePacketSendStatus::EndOfStream);
+            };
+            send_macos_native_frame_packet(decoder_session, packet)?;
+            Ok(MacosNativeFramePacketSendStatus::Sent)
         }
 
         fn seek_to(&mut self, _position: Duration) -> anyhow::Result<()> {
@@ -6958,6 +8355,34 @@ mod tests {
             width: Some(320),
             height: Some(180),
             frame_rate: Some(24.0),
+        }
+    }
+
+    fn fake_source_normalizer_packet_stream_info(codec: &str) -> SourceNormalizerPacketStreamInfo {
+        SourceNormalizerPacketStreamInfo {
+            session_id: Some("fake-session".to_owned()),
+            normalizer_name: Some("fake-normalizer".to_owned()),
+            runtime_profile: Some("fixture-packet".to_owned()),
+            selected_backend: Some("fake".to_owned()),
+            tracks: vec![SourceNormalizerPacketTrackInfo {
+                stream_index: 0,
+                media_kind: SourceNormalizerPacketMediaKind::Video,
+                codec: codec.to_owned(),
+                extradata: Vec::new(),
+                bitstream_format: Some(DecoderBitstreamFormat::Avcc),
+                width: Some(320),
+                height: Some(180),
+                coded_width: Some(320),
+                coded_height: Some(180),
+                sample_rate: None,
+                channels: None,
+                frame_rate: Some(24.0),
+                time_base_num: Some(1),
+                time_base_den: Some(24_000),
+            }],
+            selected_track_index: Some(0),
+            duration_millis: Some(1_000),
+            seekable: true,
         }
     }
 

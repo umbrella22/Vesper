@@ -1,0 +1,147 @@
+[runtime.source-normalizer.base]
+level = "remux_only"
+output_container = "fmp4"
+seekable = false
+priority = 0
+
+[runtime.source-normalizer.base.match]
+url_patterns = []
+mime = []
+byte_magic = []
+min_confidence = 0.50
+
+[runtime.source-normalizer.base.output_options]
+movflags = "+faststart+frag_keyframe+empty_moov"
+
+[runtime.source-normalizer.base.runtime]
+probe_timeout_ms = 30000
+startup_buffer_bytes = 1048576
+startup_buffer_timeout_ms = 5000
+read_idle_timeout_ms = 10000
+session_total_timeout_ms = 40000
+in_session_seek = false
+fallback_profile = "generic-fallback"
+
+[runtime.source-normalizer.base.input_options]
+probesize = 5000000
+analyzeduration = 10000000
+fpsprobesize = 0
+
+[runtime.source-normalizer.base.network]
+timeout = 10000000
+multiple_requests = true
+reconnect = true
+reconnect_at_eof = true
+reconnect_streamed = true
+reconnect_delay_max = 5
+
+[runtime.source-normalizer.base.required_capabilities]
+libraries = ["avformat", "avcodec", "avutil"]
+demuxers = []
+muxers = ["mp4", "mov"]
+protocols = ["file", "pipe"]
+bsfs = ["extract_extradata"]
+tls = "none"
+network = false
+
+[runtime.source-normalizer.flv]
+extends = "base"
+priority = 20
+input_demuxer = "flv"
+output_container = "fmp4"
+bitstream_filters = ["aac_adtstoasc"]
+timestamp_repair = true
+
+[runtime.source-normalizer.flv.match]
+url_patterns = ["*.bilibili.com/*", "*.acfun.cn/*", "*.douyu.com/*", "*.flv"]
+mime = ["video/x-flv"]
+byte_magic = ["464c56"]
+min_confidence = 0.75
+
+[runtime.source-normalizer.flv.output_options]
+movflags = "+faststart+frag_keyframe+empty_moov"
+
+[runtime.source-normalizer.flv.required_capabilities]
+demuxers = ["flv"]
+muxers = ["mp4", "mov"]
+protocols = ["file", "pipe", "http", "https"]
+bsfs = ["aac_adtstoasc"]
+tls = "native-or-openssl"
+network = true
+
+[runtime.source-normalizer.bilibili-hevc-flv]
+extends = "flv"
+priority = 40
+
+[runtime.source-normalizer.bilibili-hevc-flv.match]
+url_patterns = ["*.bilibili.com/*hevc*", "*.bilibili.com/*h265*"]
+mime = ["video/x-flv"]
+min_confidence = 0.80
+
+[runtime.source-normalizer.bilibili-hevc-flv.input_options]
+analyzeduration = 50000000
+probesize = 10000000
+
+[runtime.source-normalizer.broken-mp4]
+extends = "base"
+priority = 10
+input_demuxer = "mov"
+output_container = "fmp4"
+
+[runtime.source-normalizer.broken-mp4.match]
+mime = ["video/mp4"]
+byte_magic = ["66747970"]
+min_confidence = 0.65
+
+[runtime.source-normalizer.broken-mp4.input_options]
+analyzeduration = 30000000
+probesize = 15000000
+ignore_editlist = "1"
+
+[runtime.source-normalizer.hls-nonstandard]
+extends = "base"
+priority = 15
+input_demuxer = "hls"
+output_container = "hls"
+seekable = true
+
+[runtime.source-normalizer.hls-nonstandard.match]
+mime = ["application/vnd.apple.mpegurl", "application/x-mpegurl"]
+url_patterns = ["*.m3u8"]
+min_confidence = 0.70
+
+[runtime.source-normalizer.hls-nonstandard.required_capabilities]
+demuxers = ["hls", "mpegts", "mov"]
+muxers = ["hls", "mp4", "mov"]
+protocols = ["file", "pipe", "http", "https", "crypto"]
+tls = "native-or-openssl"
+network = true
+
+[runtime.source-normalizer.dash-weird]
+extends = "base"
+priority = 15
+input_demuxer = "dash"
+output_container = "hls"
+
+[runtime.source-normalizer.dash-weird.match]
+url_patterns = ["*.mpd", "*mpd*"]
+mime = ["application/dash+xml"]
+min_confidence = 0.70
+
+[runtime.source-normalizer.dash-weird.input_options]
+allowed_extensions = ".mpd"
+
+[runtime.source-normalizer.dash-weird.required_capabilities]
+demuxers = ["dash", "mov"]
+muxers = ["hls", "mp4", "mov"]
+protocols = ["file", "pipe", "http", "https"]
+tls = "native-or-openssl"
+network = true
+
+[runtime.source-normalizer.generic-fallback]
+extends = "base"
+priority = -1
+
+[runtime.source-normalizer.generic-fallback.match]
+url_patterns = ["*"]
+min_confidence = 0.10

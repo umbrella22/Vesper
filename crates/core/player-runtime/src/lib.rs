@@ -122,6 +122,8 @@ pub struct PlayerRuntimeOptions {
     pub video_surface: Option<PlayerVideoSurfaceTarget>,
     pub decoder_plugin_library_paths: Vec<PathBuf>,
     pub decoder_plugin_video_mode: PlayerDecoderPluginVideoMode,
+    pub source_normalizer_plugin_library_paths: Vec<PathBuf>,
+    pub source_normalizer_mode: SourceNormalizerMode,
     pub frame_processor_library_paths: Vec<PathBuf>,
     pub frame_processor_mode: FrameProcessorMode,
     pub frame_processor_policy: FrameProcessorPolicy,
@@ -139,6 +141,15 @@ pub struct PlayerRuntimeOptions {
 pub enum PlayerDecoderPluginVideoMode {
     DiagnosticsOnly,
     PreferNativeFrame,
+}
+
+/// Rust-internal source normalizer rollout mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceNormalizerMode {
+    #[default]
+    Disabled,
+    PreferNormalized,
+    RequireNormalized,
 }
 
 /// Rust-internal frame processor rollout mode.
@@ -658,6 +669,8 @@ impl Default for PlayerRuntimeOptions {
             video_surface: None,
             decoder_plugin_library_paths: Vec::new(),
             decoder_plugin_video_mode: PlayerDecoderPluginVideoMode::DiagnosticsOnly,
+            source_normalizer_plugin_library_paths: Vec::new(),
+            source_normalizer_mode: SourceNormalizerMode::Disabled,
             frame_processor_library_paths: Vec::new(),
             frame_processor_mode: FrameProcessorMode::Disabled,
             frame_processor_policy: FrameProcessorPolicy::default(),
@@ -689,6 +702,19 @@ impl PlayerRuntimeOptions {
 
     pub fn with_decoder_plugin_video_mode(mut self, mode: PlayerDecoderPluginVideoMode) -> Self {
         self.decoder_plugin_video_mode = mode;
+        self
+    }
+
+    pub fn with_source_normalizer_plugin_library_paths(
+        mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
+        self.source_normalizer_plugin_library_paths = paths.into_iter().collect();
+        self
+    }
+
+    pub fn with_source_normalizer_mode(mut self, mode: SourceNormalizerMode) -> Self {
+        self.source_normalizer_mode = mode;
         self
     }
 

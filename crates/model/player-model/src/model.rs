@@ -186,7 +186,10 @@ pub enum VideoPixelFormat {
 }
 
 fn classify_media_source_kind(uri: &str) -> MediaSourceKind {
-    if uri.starts_with("file://") || uri.starts_with("content://") || is_likely_local_file_path(uri)
+    if is_loopback_http_uri(uri)
+        || uri.starts_with("file://")
+        || uri.starts_with("content://")
+        || is_likely_local_file_path(uri)
     {
         MediaSourceKind::Local
     } else {
@@ -204,6 +207,10 @@ fn classify_media_source_protocol(uri: &str) -> MediaSourceProtocol {
         .split_once('?')
         .map(|(path, _)| path)
         .unwrap_or(lower_without_fragment);
+
+    if is_loopback_http_uri(uri) {
+        return MediaSourceProtocol::Progressive;
+    }
 
     if lower.starts_with("file://") {
         return MediaSourceProtocol::File;
@@ -230,6 +237,16 @@ fn classify_media_source_protocol(uri: &str) -> MediaSourceProtocol {
     }
 
     MediaSourceProtocol::Unknown
+}
+
+fn is_loopback_http_uri(uri: &str) -> bool {
+    // This intentionally recognizes the narrow loopback HTTP shape emitted by
+    // diagnostic/dev tooling; general URL parsing stays out of the model layer.
+    let lower = uri.to_ascii_lowercase();
+    lower.starts_with("http://127.0.0.1:")
+        || lower.starts_with("http://localhost:")
+        || lower.starts_with("https://127.0.0.1:")
+        || lower.starts_with("https://localhost:")
 }
 
 fn is_likely_local_file_path(uri: &str) -> bool {
@@ -281,6 +298,10 @@ mod tests {
         let relative_path = MediaSource::new("fixtures/video.mp4");
         assert_eq!(relative_path.kind(), MediaSourceKind::Local);
         assert_eq!(relative_path.protocol(), MediaSourceProtocol::File);
+
+        let loopback = MediaSource::new("http://127.0.0.1:49152/normalized.mp4");
+        assert_eq!(loopback.kind(), MediaSourceKind::Local);
+        assert_eq!(loopback.protocol(), MediaSourceProtocol::Progressive);
     }
 
     #[test]

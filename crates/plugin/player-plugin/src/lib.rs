@@ -8,17 +8,21 @@ mod frame_processor;
 mod hook;
 mod native_frame;
 mod processor;
+pub mod source_normalizer;
 
 pub use abi::{
     VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
     VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
-    VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
+    VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperBenchmarkSinkApi,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
     VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
     VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
     VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerPluginApiV2,
+    VesperSourceNormalizerReadPacketResult,
 };
 pub use benchmark::{
     BenchmarkEvent, BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
@@ -49,4 +53,13 @@ pub use processor::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream,
     ContentFormatKind, DownloadMetadata, OutputFormat, PostDownloadProcessor, ProcessorError,
     ProcessorOutput, ProcessorProgress, StreamKind,
+};
+pub use source_normalizer::{
+    SourceNormalizerError, SourceNormalizerNormalizeLevel, SourceNormalizerOperationStatus,
+    SourceNormalizerPacket, SourceNormalizerPacketCapabilities, SourceNormalizerPacketLease,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketPluginFactory,
+    SourceNormalizerPacketSeek, SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
+    SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
+    SourceNormalizerRequiredCapabilities,
 };

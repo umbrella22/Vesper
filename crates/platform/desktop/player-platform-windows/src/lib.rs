@@ -1626,27 +1626,34 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
             PluginDiagnosticStatus::FrameProcessorUnsupported => {
                 PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
             }
+            PluginDiagnosticStatus::SourceNormalizerSupported => {
+                PlayerPluginDiagnosticStatus::Loaded
+            }
+            PluginDiagnosticStatus::SourceNormalizerUnsupported => {
+                PlayerPluginDiagnosticStatus::UnsupportedKind
+            }
         },
         message: record.message.clone(),
         capability: record
             .capability_summary
             .as_ref()
-            .map(player_plugin_capability_summary_from_loader),
+            .and_then(player_plugin_capability_summary_from_loader),
     }
 }
 
 fn player_plugin_capability_summary_from_loader(
     summary: &PluginCapabilitySummary,
-) -> PlayerPluginCapabilitySummary {
+) -> Option<PlayerPluginCapabilitySummary> {
     match summary {
-        PluginCapabilitySummary::Decoder(summary) => PlayerPluginCapabilitySummary::Decoder(
+        PluginCapabilitySummary::Decoder(summary) => Some(PlayerPluginCapabilitySummary::Decoder(
             player_decoder_capability_summary_from_loader(summary),
-        ),
+        )),
         PluginCapabilitySummary::FrameProcessor(summary) => {
-            PlayerPluginCapabilitySummary::FrameProcessor(
+            Some(PlayerPluginCapabilitySummary::FrameProcessor(
                 player_frame_processor_capability_summary_from_loader(summary),
-            )
+            ))
         }
+        PluginCapabilitySummary::SourceNormalizerPacket(_) => None,
     }
 }
 
@@ -1731,6 +1738,7 @@ fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
         VesperPluginKind::Decoder => "decoder",
         VesperPluginKind::BenchmarkSink => "benchmark_sink",
         VesperPluginKind::FrameProcessor => "frame_processor",
+        VesperPluginKind::SourceNormalizer => "source_normalizer",
     }
 }
 
