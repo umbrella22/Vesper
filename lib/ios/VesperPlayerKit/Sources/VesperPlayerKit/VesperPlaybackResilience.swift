@@ -385,9 +385,8 @@ private enum VesperRuntimePreloadBudgetResolver {
             }
         }
         guard didResolve else {
-            preconditionFailure(
-                "VesperPlayerKit requires the linked Rust preload budget resolver on iOS."
-            )
+            iosHostLog("linked Rust preload budget resolver failed on iOS; using caller policy")
+            return policy
         }
 
         return VesperPreloadBudgetPolicy(
@@ -555,9 +554,8 @@ private enum VesperRuntimeResilienceResolver {
             }
         }
         guard didResolve else {
-            preconditionFailure(
-                "VesperPlayerKit requires the linked Rust defaults resolver on iOS."
-            )
+            iosHostLog("linked Rust defaults resolver failed on iOS; using caller resilience policy")
+            return policy
         }
 
         return VesperPlaybackResiliencePolicy(

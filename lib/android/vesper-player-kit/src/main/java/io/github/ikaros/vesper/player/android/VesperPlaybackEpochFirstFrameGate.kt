@@ -1,26 +1,41 @@
 package io.github.ikaros.vesper.player.android
 
-internal class VesperPlaybackEpochFirstFrameGate {
-    var currentEpoch: Long = 0L
-        private set
+import java.util.concurrent.atomic.AtomicLong
 
-    private var firstFrameRenderedEpoch: Long? = null
+internal class VesperPlaybackEpochFirstFrameGate {
+    private val epoch = AtomicLong(0L)
+    private val firstFrameRenderedEpoch = AtomicLong(NO_EPOCH)
+
+    val currentEpoch: Long
+        get() = epoch.get()
 
     fun advanceEpoch(): Long {
-        currentEpoch += 1L
-        firstFrameRenderedEpoch = null
-        return currentEpoch
+        val nextEpoch = epoch.incrementAndGet()
+        firstFrameRenderedEpoch.set(NO_EPOCH)
+        return nextEpoch
     }
 
     fun markFirstFrameRendered(): FirstFrameMark {
-        val isFirstForEpoch = firstFrameRenderedEpoch != currentEpoch
-        if (isFirstForEpoch) {
-            firstFrameRenderedEpoch = currentEpoch
+        val observedEpoch = epoch.get()
+        while (true) {
+            val renderedEpoch = firstFrameRenderedEpoch.get()
+            if (renderedEpoch == observedEpoch) {
+                return FirstFrameMark(
+                    playbackEpoch = observedEpoch,
+                    isFirstForEpoch = false,
+                )
+            }
+            if (firstFrameRenderedEpoch.compareAndSet(renderedEpoch, observedEpoch)) {
+                return FirstFrameMark(
+                    playbackEpoch = observedEpoch,
+                    isFirstForEpoch = true,
+                )
+            }
         }
-        return FirstFrameMark(
-            playbackEpoch = currentEpoch,
-            isFirstForEpoch = isFirstForEpoch,
-        )
+    }
+
+    private companion object {
+        const val NO_EPOCH = -1L
     }
 }
 

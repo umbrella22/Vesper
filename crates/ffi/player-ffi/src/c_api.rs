@@ -3282,7 +3282,7 @@ struct HandleRegistry<T> {
 }
 
 impl<T> HandleRegistry<T> {
-    fn insert(&mut self, value: T) -> Option<u64> {
+    fn insert(&mut self, value: T) -> Result<u64, HandleRegistryError> {
         let generation = self.allocate_generation();
         if let Some((slot_index, slot)) = self
             .slots
@@ -3291,13 +3291,15 @@ impl<T> HandleRegistry<T> {
             .find(|(_, slot)| slot.is_none())
         {
             *slot = Some(HandleSlot { generation, value });
-            let slot_index = u32::try_from(slot_index).ok()?;
-            return Some(encode_registry_handle(slot_index, generation));
+            let slot_index =
+                u32::try_from(slot_index).map_err(|_| HandleRegistryError::TooManyHandles)?;
+            return Ok(encode_registry_handle(slot_index, generation));
         }
 
-        let slot_index = u32::try_from(self.slots.len()).ok()?;
+        let slot_index =
+            u32::try_from(self.slots.len()).map_err(|_| HandleRegistryError::TooManyHandles)?;
         self.slots.push(Some(HandleSlot { generation, value }));
-        Some(encode_registry_handle(slot_index, generation))
+        Ok(encode_registry_handle(slot_index, generation))
     }
 
     fn get(&self, handle: u64) -> Option<&T> {
@@ -3336,6 +3338,11 @@ impl<T> HandleRegistry<T> {
             self.slots.pop();
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandleRegistryError {
+    TooManyHandles,
 }
 
 impl<T> Default for HandleRegistry<T> {
@@ -3393,22 +3400,28 @@ fn into_initializer_handle(
     initializer: FfiPlayerInitializer,
 ) -> Option<PlayerFfiInitializerHandle> {
     let pointer = Box::into_raw(Box::new(initializer)) as usize;
-    let Some(raw) = lock_initializer_registry().insert(pointer) else {
-        unsafe {
-            drop(Box::from_raw(pointer as *mut FfiPlayerInitializer));
+    let raw = match lock_initializer_registry().insert(pointer) {
+        Ok(raw) => raw,
+        Err(HandleRegistryError::TooManyHandles) => {
+            unsafe {
+                drop(Box::from_raw(pointer as *mut FfiPlayerInitializer));
+            }
+            return None;
         }
-        return None;
     };
     Some(PlayerFfiInitializerHandle { raw })
 }
 
 fn into_player_handle(player: FfiPlayer) -> Option<PlayerFfiHandle> {
     let pointer = Box::into_raw(Box::new(player)) as usize;
-    let Some(raw) = lock_player_registry().insert(pointer) else {
-        unsafe {
-            drop(Box::from_raw(pointer as *mut FfiPlayer));
+    let raw = match lock_player_registry().insert(pointer) {
+        Ok(raw) => raw,
+        Err(HandleRegistryError::TooManyHandles) => {
+            unsafe {
+                drop(Box::from_raw(pointer as *mut FfiPlayer));
+            }
+            return None;
         }
-        return None;
     };
     Some(PlayerFfiHandle { raw })
 }

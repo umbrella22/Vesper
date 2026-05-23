@@ -204,9 +204,8 @@ private enum VesperRuntimeTrackPreferenceResolver {
             var resolved = VesperRuntimeTrackPreferencePolicy()
             let didResolve = vesper_runtime_resolve_track_preferences(payload, &resolved)
             guard didResolve else {
-                preconditionFailure(
-                    "VesperPlayerKit requires the linked Rust track preference resolver on iOS."
-                )
+                iosHostLog("linked Rust track preference resolver failed on iOS; using caller policy")
+                return policy
             }
             defer { vesper_runtime_track_preferences_free(&resolved) }
             return VesperTrackPreferencePolicy(

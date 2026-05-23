@@ -1094,17 +1094,17 @@ impl MacosRuntimeAdapter {
 
         let mut runtime = bootstrap.runtime;
         if !progress.position().is_zero() {
-            let _ = runtime.dispatch(PlayerRuntimeCommand::SeekTo {
+            runtime.dispatch(PlayerRuntimeCommand::SeekTo {
                 position: progress.position(),
             })?;
         }
         if (playback_rate - 1.0).abs() > f32::EPSILON {
-            let _ = runtime.dispatch(PlayerRuntimeCommand::SetPlaybackRate {
+            runtime.dispatch(PlayerRuntimeCommand::SetPlaybackRate {
                 rate: playback_rate,
             })?;
         }
         if was_playing {
-            let _ = runtime.dispatch(PlayerRuntimeCommand::Play)?;
+            runtime.dispatch(PlayerRuntimeCommand::Play)?;
         }
 
         self.inner = runtime;
@@ -1202,11 +1202,24 @@ impl PlayerRuntimeAdapter for MacosSourceNormalizerRuntimeGuard {
 
 impl Drop for MacosSourceNormalizerRuntimeGuard {
     fn drop(&mut self) {
-        if let Some(session) = self.source_normalizer_packet_session.take()
-            && let Ok(mut guard) = session.lock()
-            && let Some(mut packet_session) = guard.take()
-        {
-            let _ = packet_session.close();
+        if let Some(session) = self.source_normalizer_packet_session.take() {
+            match session.lock() {
+                Ok(mut guard) => {
+                    if let Some(mut packet_session) = guard.take()
+                        && let Err(error) = packet_session.close()
+                    {
+                        tracing::warn!(
+                            error = %error,
+                            "source normalizer packet session close failed while dropping macOS runtime guard"
+                        );
+                    }
+                }
+                Err(_) => {
+                    tracing::error!(
+                        "source normalizer packet session mutex was poisoned while dropping macOS runtime guard"
+                    );
+                }
+            }
         }
     }
 }
@@ -1328,15 +1341,24 @@ struct MacosNativeFramePrefetchWakeupState {
 
 impl MacosNativeFramePrefetchWakeup {
     fn notify(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.sequence = state.sequence.wrapping_add(1);
-            self.changed.notify_all();
+        match self.state.lock() {
+            Ok(mut state) => {
+                state.sequence = state.sequence.wrapping_add(1);
+                self.changed.notify_all();
+            }
+            Err(_) => {
+                tracing::error!("macOS native frame prefetch wakeup state mutex was poisoned");
+            }
         }
     }
 
     fn wait_for_change(&self, observed_sequence: &mut u64) {
-        let Ok(state) = self.state.lock() else {
-            return;
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                tracing::error!("macOS native frame prefetch wakeup state mutex was poisoned");
+                return;
+            }
         };
         let sequence = state.sequence;
         if sequence != *observed_sequence {
@@ -1797,7 +1819,7 @@ impl MacosNativeFramePacketSource for SourceNormalizerPacketSource {
             .ok_or_else(|| anyhow::anyhow!("source normalizer packet session is not configured"))?;
         let lease = session
             .read_packet()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            .map_err(|error| anyhow::anyhow!("source normalizer read_packet failed: {error}"))?;
         if lease.metadata.status == SourceNormalizerReadPacketStatus::EndOfStream {
             return Ok(MacosNativeFramePacketSendStatus::EndOfStream);
         }
@@ -3528,7 +3550,17 @@ fn select_macos_source_normalizer_packet_decoder(
     if options.decoder_plugin_library_paths.is_empty() {
         return None;
     }
-    let video_stream = macos_packet_stream_info_from_source_normalizer(stream_info?).ok()?;
+    let stream_info = stream_info?;
+    let video_stream = match macos_packet_stream_info_from_source_normalizer(stream_info) {
+        Ok(video_stream) => video_stream,
+        Err(error) => {
+            tracing::debug!(
+                error = %error,
+                "source normalizer stream info could not be converted for decoder selection"
+            );
+            return None;
+        }
+    };
     if video_stream.codec.is_empty() {
         return None;
     }
@@ -3572,7 +3604,16 @@ fn source_normalizer_packet_decoder_unavailable_message(
     options: &PlayerRuntimeOptions,
 ) -> Option<String> {
     let stream_info = normalization.packet_stream_info.as_ref()?;
-    let video_stream = macos_packet_stream_info_from_source_normalizer(stream_info).ok()?;
+    let video_stream = match macos_packet_stream_info_from_source_normalizer(stream_info) {
+        Ok(video_stream) => video_stream,
+        Err(error) => {
+            tracing::debug!(
+                error = %error,
+                "source normalizer stream info could not be converted for decoder availability message"
+            );
+            return None;
+        }
+    };
     if options.decoder_plugin_video_mode != PlayerDecoderPluginVideoMode::PreferNativeFrame {
         return Some(format!(
             "source normalizer packet stream for {} video requires native-frame decoder plugin mode",
@@ -3615,11 +3656,20 @@ fn native_frame_decoder_codec(
         return None;
     }
 
-    let backend = FfmpegBackend::new().ok()?;
-    backend
-        .open_video_packet_source_with_interrupt(source.clone(), interrupt_flag)
-        .ok()
-        .map(|packet_source| packet_source.stream_info().codec.clone())
+    let backend = match FfmpegBackend::new() {
+        Ok(backend) => backend,
+        Err(error) => {
+            tracing::debug!(error = %error, "failed to initialize FFmpeg backend for codec probing");
+            return None;
+        }
+    };
+    match backend.open_video_packet_source_with_interrupt(source.clone(), interrupt_flag) {
+        Ok(packet_source) => Some(packet_source.stream_info().codec.clone()),
+        Err(error) => {
+            tracing::debug!(error = %error, "failed to open FFmpeg packet source for codec probing");
+            None
+        }
+    }
 }
 
 fn macos_decoder_bitstream_format(codec: &str) -> DecoderBitstreamFormat {

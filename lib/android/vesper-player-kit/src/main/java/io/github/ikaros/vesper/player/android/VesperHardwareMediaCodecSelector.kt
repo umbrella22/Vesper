@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.player.android
 
+import android.util.Log
 import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
@@ -42,6 +43,8 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
                 requiresSecureDecoder = false,
                 requiresTunnelingDecoder = false,
             ).isNotEmpty()
+        }.onFailure { error ->
+            Log.w(TAG, "failed to probe hardware decoder for $mimeType", error)
         }.getOrDefault(false)
     }
 }
@@ -80,6 +83,8 @@ internal fun vesperAndroidVideoCodecFamily(codec: String?): VesperAndroidVideoCo
         }
     return VesperAndroidVideoCodecFamily.Unknown
 }
+
+private const val TAG = "VesperMediaCodec"
 
 internal fun VesperAndroidVideoCodecFamily.toBenchmarkValue(): String =
     when (this) {

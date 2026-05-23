@@ -2098,6 +2098,9 @@ private func errorMap(from error: Error) -> [String: Any] {
         "code": code,
         "category": category,
         "retriable": false,
+        "details": [
+            "exception": String(describing: type(of: error)),
+        ],
     ]
 }
 
@@ -2107,6 +2110,9 @@ private func downloadErrorMap(from error: Error) -> [String: Any] {
         "category": "platform",
         "retriable": false,
         "message": error.localizedDescription,
+        "details": [
+            "exception": String(describing: type(of: error)),
+        ],
     ]
 }
 

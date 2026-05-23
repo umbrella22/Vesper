@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.absoluteValue
 
 internal class VesperNativePlayerBridge(
@@ -23,7 +24,7 @@ internal class VesperNativePlayerBridge(
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private var hasInitializedSource = false
-    private var isDisposed = false
+    private val isDisposed = AtomicBoolean(false)
     private var nativeUpdateEpoch = 0L
     private var pendingAutoPlay = false
     private val i18n = VesperPlayerI18n.fromContext(appContext)
@@ -71,7 +72,7 @@ internal class VesperNativePlayerBridge(
     }
 
     override fun initialize() {
-        if (isDisposed) {
+        if (isDisposed.get()) {
             return
         }
         recordBenchmark("initialize_start")
@@ -133,10 +134,9 @@ internal class VesperNativePlayerBridge(
     }
 
     override fun dispose() {
-        if (isDisposed) {
+        if (!isDisposed.compareAndSet(false, true)) {
             return
         }
-        isDisposed = true
         advanceNativeUpdateEpoch(clearListener = true)
         hasInitializedSource = false
         clearTrackState()
@@ -149,7 +149,7 @@ internal class VesperNativePlayerBridge(
     }
 
     override fun refresh() {
-        if (isDisposed) {
+        if (isDisposed.get()) {
             return
         }
         bindings.refreshSnapshot()
@@ -157,7 +157,7 @@ internal class VesperNativePlayerBridge(
     }
 
     override fun selectSource(source: VesperPlayerSource) {
-        if (isDisposed) {
+        if (isDisposed.get()) {
             return
         }
         recordBenchmark(
@@ -323,7 +323,7 @@ internal class VesperNativePlayerBridge(
     }
 
     override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) {
-        if (isDisposed) {
+        if (isDisposed.get()) {
             return
         }
         bindings.configureSystemPlayback(configuration)
@@ -331,7 +331,7 @@ internal class VesperNativePlayerBridge(
     }
 
     override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) {
-        if (isDisposed) {
+        if (isDisposed.get()) {
             return
         }
         bindings.updateSystemPlaybackMetadata(metadata)
@@ -355,7 +355,7 @@ internal class VesperNativePlayerBridge(
 
     private fun syncKeepScreenOn() {
         surfaceHost.setKeepScreenOn(
-            !isDisposed &&
+            !isDisposed.get() &&
                 keepScreenOnDuringPlayback &&
                 _uiState.value.playbackState == PlaybackStateUi.Playing,
         )
@@ -415,7 +415,7 @@ internal class VesperNativePlayerBridge(
     }
 
     private fun refreshFromNative() {
-        if (isDisposed) {
+        if (isDisposed.get()) {
             return
         }
         surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
@@ -541,7 +541,7 @@ internal class VesperNativePlayerBridge(
     private fun installNativeUpdateListener() {
         val epoch = nativeUpdateEpoch
         bindings.setOnNativeUpdateListener {
-            if (isDisposed || epoch != nativeUpdateEpoch) {
+            if (isDisposed.get() || epoch != nativeUpdateEpoch) {
                 return@setOnNativeUpdateListener
             }
             refreshFromNative()

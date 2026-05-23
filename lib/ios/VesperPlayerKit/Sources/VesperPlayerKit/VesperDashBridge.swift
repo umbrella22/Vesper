@@ -5,7 +5,7 @@ import VesperPlayerKitBridgeShim
 private let vesperDashATSFailureMessage =
     "iOS DASH playback requires HTTPS media URLs. The SDK does not relax App Transport Security for http:// resources; host apps that need insecure HTTP must fetch those resources outside the SDK and provide local file URLs."
 private let vesperDashNetworkStallTimeoutSeconds: TimeInterval = 30
-private let vesperDashNetworkResourceTimeoutSeconds: TimeInterval = 3_600
+private let vesperDashNetworkResourceTimeoutSeconds: TimeInterval = 60
 
 private struct VesperDashSegmentCacheKey: Hashable {
     let renditionId: String
@@ -78,7 +78,7 @@ enum VesperDashSegmentPayload {
             }
             let length = try checkedInt(size, field: "segment payload length")
             let handle = try FileHandle(forReadingFrom: url)
-            defer { try? handle.close() }
+            defer { closeFileHandle(handle, context: "segment payload") }
             try handle.seek(toOffset: offset)
             let data = try handle.read(upToCount: length) ?? Data()
             guard data.count == length else {
@@ -353,7 +353,7 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
         length: UInt64
     ) throws {
         let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
+        defer { closeFileHandle(handle, context: "segment response") }
         try handle.seek(toOffset: offset)
         var remaining = length
         while remaining > 0 {
@@ -424,7 +424,7 @@ actor VesperDashSession {
     private let benchmarkEventRecorder: BenchmarkEventRecorder?
 
     nonisolated var masterPlaylistURL: URL {
-        URL(string: "\(Self.scheme)://master/\(id)/master.m3u8")!
+        Self.localURL(host: "master", pathComponents: [id, "master.m3u8"])
     }
 
     init(
@@ -451,18 +451,18 @@ actor VesperDashSession {
     }
 
     deinit {
-        try? FileManager.default.removeItem(at: segmentCacheDirectory)
+        do {
+            try FileManager.default.removeItem(at: segmentCacheDirectory)
+        } catch {
+            iosHostLog("failed to remove DASH segment cache directory: \(error.localizedDescription)")
+        }
     }
 
     nonisolated func mediaPlaylistURL(for renditionId: String) -> URL {
-        let encodedId = renditionId.addingPercentEncoding(withAllowedCharacters: dashPathComponentAllowedCharacters)
-            ?? renditionId
-        return URL(string: "\(Self.scheme)://media/\(id)/\(encodedId).m3u8")!
+        Self.localURL(host: "media", pathComponents: [id, renditionId + ".m3u8"])
     }
 
     nonisolated func segmentURL(for renditionId: String, segment: VesperDashSegmentRequest) -> URL {
-        let encodedId = renditionId.addingPercentEncoding(withAllowedCharacters: dashPathComponentAllowedCharacters)
-            ?? renditionId
         let segmentName: String
         switch segment {
         case .initialization:
@@ -470,7 +470,21 @@ actor VesperDashSession {
         case let .media(index):
             segmentName = "\(index).m4s"
         }
-        return URL(string: "\(Self.scheme)://segment/\(id)/\(encodedId)/\(segmentName)")!
+        return Self.localURL(host: "segment", pathComponents: [id, renditionId, segmentName])
+    }
+
+    nonisolated private static func localURL(host: String, pathComponents: [String]) -> URL {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+        components.path = "/" + pathComponents
+            .map { $0.addingPercentEncoding(withAllowedCharacters: dashPathComponentAllowedCharacters) ?? $0 }
+            .joined(separator: "/")
+        if let url = components.url {
+            return url
+        }
+        iosHostLog("failed to construct DASH local URL for host=\(host)")
+        return URL(fileURLWithPath: "/")
     }
 
     nonisolated func route(for url: URL) -> VesperDashRoute? {
@@ -1237,7 +1251,7 @@ actor VesperDashSession {
             segmentCacheTotalBytes = segmentCacheTotalBytes.saturatingSubtract(existing.size)
         }
         try trimSegmentCache(reserving: size, addingEntry: addsEntry, protecting: key)
-        try? FileManager.default.removeItem(at: cacheURL)
+        removeFileIfPresent(cacheURL, context: "existing DASH segment cache file")
         try FileManager.default.moveItem(at: temporaryURL, to: cacheURL)
         cachedSegmentFiles[key] = VesperDashCachedSegmentFile(
             url: cacheURL,
@@ -1341,7 +1355,7 @@ actor VesperDashSession {
             )
             return
         }
-        try? handle.close()
+        closeFileHandle(handle, context: "\(label) MP4 box inspection")
         let bytes = [UInt8](data)
         var cursor = 0
         var types: [String] = []
@@ -1487,7 +1501,7 @@ actor VesperDashSession {
             cachedSegmentFiles[eviction.key] = nil
             segmentCacheTotalBytes = segmentCacheTotalBytes.saturatingSubtract(eviction.file.size)
             projectedBytes = projectedBytes.saturatingSubtract(eviction.file.size)
-            try? FileManager.default.removeItem(at: eviction.file.url)
+            removeFileIfPresent(eviction.file.url, context: "evicted DASH segment cache file")
 #if DEBUG
             iosHostLog(
                 "dashSegmentCache evict rendition=\(eviction.key.renditionId) segment=\(eviction.key.segment) bytes=\(eviction.file.size)"
@@ -2272,7 +2286,7 @@ class VesperDashNetworkClient {
             at: destinationURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try? FileManager.default.removeItem(at: destinationURL)
+        removeFileIfPresent(destinationURL, context: "existing DASH download destination")
 
         if url.isFileURL {
             return try copyLocalFile(url: url, byteRange: byteRange, to: destinationURL)
@@ -2288,7 +2302,7 @@ class VesperDashNetworkClient {
         let (temporaryURL, response) = try await session.download(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
-            try? FileManager.default.removeItem(at: temporaryURL)
+            removeFileIfPresent(temporaryURL, context: "failed DASH download temporary file")
             throw VesperDashBridgeError.network("HTTP \(httpResponse.statusCode) for \(url.absoluteString)")
         }
         try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
@@ -2317,7 +2331,7 @@ class VesperDashNetworkClient {
 
         let length = try checkedInt(byteRange.length, field: "local file byte range length")
         let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
+        defer { closeFileHandle(handle, context: "local byte range") }
         try handle.seek(toOffset: byteRange.start)
         let data = try handle.read(upToCount: length) ?? Data()
         guard data.count == length else {
@@ -2337,10 +2351,10 @@ class VesperDashNetworkClient {
         }
 
         let input = try FileHandle(forReadingFrom: url)
-        defer { try? input.close() }
+        defer { closeFileHandle(input, context: "local copy input") }
         FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
         let output = try FileHandle(forWritingTo: destinationURL)
-        defer { try? output.close() }
+        defer { closeFileHandle(output, context: "local copy output") }
 
         try input.seek(toOffset: byteRange.start)
         var remaining = byteRange.length
@@ -2466,6 +2480,25 @@ private func checkedInt(_ value: UInt64, field: String) throws -> Int {
         throw VesperDashBridgeError.invalidMp4("\(field) exceeds Int.max")
     }
     return Int(value)
+}
+
+private func closeFileHandle(_ handle: FileHandle, context: String) {
+    do {
+        try handle.close()
+    } catch {
+        iosHostLog("failed to close \(context) file handle: \(error.localizedDescription)")
+    }
+}
+
+private func removeFileIfPresent(_ url: URL, context: String) {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+        return
+    }
+    do {
+        try FileManager.default.removeItem(at: url)
+    } catch {
+        iosHostLog("failed to remove \(context): \(error.localizedDescription)")
+    }
 }
 
 private func startupPrefetchSegmentIndices(count: Int) -> [Int] {

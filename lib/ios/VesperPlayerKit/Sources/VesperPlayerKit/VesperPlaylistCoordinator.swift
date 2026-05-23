@@ -230,7 +230,8 @@ public final class VesperPlaylistCoordinator: ObservableObject {
         }
         freePlaylistCString(runtimeConfig.playlist_id)
         guard created, handle != 0 else {
-            preconditionFailure("native playlist session handle must not be zero")
+            iosHostLog("native playlist session creation failed")
+            return
         }
         sessionHandle = handle
     }
@@ -259,6 +260,10 @@ public final class VesperPlaylistCoordinator: ObservableObject {
         viewportHints = viewportHints.filter { hint in
             queue.contains(where: { $0.itemId == hint.itemId })
         }
+        guard sessionHandle != 0 else {
+            refreshSnapshot()
+            return
+        }
 
         var runtimeQueue = queue.map { $0.toRuntimeBridgePayload() }
         let replaced = runtimeQueue.withUnsafeMutableBufferPointer { buffer in
@@ -279,6 +284,10 @@ public final class VesperPlaylistCoordinator: ObservableObject {
         viewportHints = hints
             .filter { $0.kind != .hidden }
             .filter { hint in queue.contains(where: { $0.itemId == hint.itemId }) }
+        guard sessionHandle != 0 else {
+            refreshSnapshot()
+            return
+        }
 
         var runtimeHints = viewportHints.map { $0.toRuntimeBridgePayload() }
         let updated = runtimeHints.withUnsafeMutableBufferPointer { buffer in
@@ -297,6 +306,10 @@ public final class VesperPlaylistCoordinator: ObservableObject {
 
     public func clearViewportHints() {
         viewportHints.removeAll()
+        guard sessionHandle != 0 else {
+            refreshSnapshot()
+            return
+        }
         guard vesper_runtime_playlist_session_clear_viewport_hints(sessionHandle) else {
             return
         }
@@ -305,6 +318,9 @@ public final class VesperPlaylistCoordinator: ObservableObject {
     }
 
     public func advanceToNext() {
+        guard sessionHandle != 0 else {
+            return
+        }
         guard vesper_runtime_playlist_session_advance_to_next(sessionHandle) else {
             return
         }
@@ -313,6 +329,9 @@ public final class VesperPlaylistCoordinator: ObservableObject {
     }
 
     public func advanceToPrevious() {
+        guard sessionHandle != 0 else {
+            return
+        }
         guard vesper_runtime_playlist_session_advance_to_previous(sessionHandle) else {
             return
         }
@@ -321,6 +340,9 @@ public final class VesperPlaylistCoordinator: ObservableObject {
     }
 
     public func handlePlaybackCompleted() {
+        guard sessionHandle != 0 else {
+            return
+        }
         guard vesper_runtime_playlist_session_handle_playback_completed(sessionHandle) else {
             return
         }
@@ -329,6 +351,9 @@ public final class VesperPlaylistCoordinator: ObservableObject {
     }
 
     public func handlePlaybackFailed() {
+        guard sessionHandle != 0 else {
+            return
+        }
         guard vesper_runtime_playlist_session_handle_playback_failed(sessionHandle) else {
             return
         }
@@ -337,21 +362,24 @@ public final class VesperPlaylistCoordinator: ObservableObject {
     }
 
     private func refreshSnapshot() {
-        var runtimeActiveItem = VesperRuntimePlaylistActiveItem(item_id: nil, index: 0)
-        let hasActive = withUnsafeMutablePointer(to: &runtimeActiveItem) { pointer in
-            vesper_runtime_playlist_session_current_active_item(sessionHandle, pointer)
-        }
-
         let activeItem: VesperPlaylistActiveItem?
-        if hasActive, let itemIdPointer = runtimeActiveItem.item_id {
-            activeItem = VesperPlaylistActiveItem(
-                itemId: String(cString: itemIdPointer),
-                index: Int(runtimeActiveItem.index)
-            )
+        if sessionHandle != 0 {
+            var runtimeActiveItem = VesperRuntimePlaylistActiveItem(item_id: nil, index: 0)
+            let hasActive = withUnsafeMutablePointer(to: &runtimeActiveItem) { pointer in
+                vesper_runtime_playlist_session_current_active_item(sessionHandle, pointer)
+            }
+            if hasActive, let itemIdPointer = runtimeActiveItem.item_id {
+                activeItem = VesperPlaylistActiveItem(
+                    itemId: String(cString: itemIdPointer),
+                    index: Int(runtimeActiveItem.index)
+                )
+            } else {
+                activeItem = nil
+            }
+            vesper_runtime_playlist_active_item_free(&runtimeActiveItem)
         } else {
             activeItem = nil
         }
-        vesper_runtime_playlist_active_item_free(&runtimeActiveItem)
 
         let hintByItemId = Dictionary(
             uniqueKeysWithValues: viewportHints.map { ($0.itemId, $0.kind) }
@@ -376,6 +404,9 @@ public final class VesperPlaylistCoordinator: ObservableObject {
     }
 
     private func drainAndApplyPreloadCommands() {
+        guard sessionHandle != 0 else {
+            return
+        }
         var commands = VesperRuntimePreloadCommandList(commands: nil, len: 0)
         guard vesper_runtime_playlist_session_drain_preload_commands(sessionHandle, &commands) else {
             return
@@ -416,6 +447,7 @@ public final class VesperPlaylistCoordinator: ObservableObject {
         let handle = sessionHandle
         let headers = source.source.headers
         warmupTasks[task.taskId] = Task.detached(priority: .utility) {
+            guard !Task.isCancelled else { return }
             var request = URLRequest(url: source.url)
             applyHttpHeaders(headers, to: &request)
             request.cachePolicy = .returnCacheDataElseLoad
@@ -426,8 +458,11 @@ public final class VesperPlaylistCoordinator: ObservableObject {
             request.setValue("bytes=0-\(max(warmupBytes - 1, 0))", forHTTPHeaderField: "Range")
 
             do {
+                try Task.checkCancellation()
                 _ = try await URLSession.shared.data(for: request)
+                try Task.checkCancellation()
                 _ = vesper_runtime_playlist_session_complete_preload_task(handle, task.taskId)
+            } catch is CancellationError {
             } catch {
                 error.localizedDescription.withCString { message in
                     _ = vesper_runtime_playlist_session_fail_preload_task(
@@ -442,7 +477,9 @@ public final class VesperPlaylistCoordinator: ObservableObject {
             }
 
             _ = await MainActor.run {
-                self.warmupTasks.removeValue(forKey: task.taskId)
+                if !Task.isCancelled {
+                    self.warmupTasks.removeValue(forKey: task.taskId)
+                }
             }
         }
     }

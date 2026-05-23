@@ -50,15 +50,21 @@ class VesperRelayServer @JvmOverloads constructor(
     private val nowMillisProvider: () -> Long = System::currentTimeMillis,
     private val formatAdapter: VesperRelayFormatAdapter = VesperUnavailableRelayFormatAdapter(),
     private val diagnosticListener: (VesperRelayDiagnostic) -> Unit = {},
+    private val maxRequestThreads: Int = DEFAULT_MAX_REQUEST_THREADS,
+    private val maxActiveClients: Int = DEFAULT_MAX_ACTIVE_CLIENTS,
 ) {
     private val appContext = context?.applicationContext
     private val entries = ConcurrentHashMap<String, RelayEntry>()
     private val activeClients = ConcurrentHashMap.newKeySet<Socket>()
     private val random = SecureRandom()
     private val running = AtomicBoolean(false)
+    @Volatile
     private var serverSocket: ServerSocket? = null
+    @Volatile
     private var acceptExecutor: ExecutorService? = null
+    @Volatile
     private var requestExecutor: ExecutorService? = null
+    @Volatile
     private var boundAddress: InetAddress? = null
 
     @Synchronized
@@ -83,7 +89,7 @@ class VesperRelayServer @JvmOverloads constructor(
         val socket = ServerSocket(0, 50, bindAddress)
         serverSocket = socket
         boundAddress = bindAddress
-        requestExecutor = Executors.newCachedThreadPool { runnable ->
+        requestExecutor = Executors.newFixedThreadPool(maxRequestThreads.coerceAtLeast(1)) { runnable ->
             Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
         }
         acceptExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -241,6 +247,10 @@ class VesperRelayServer @JvmOverloads constructor(
                 runCatching { client.close() }
                 continue
             }
+            if (activeClients.size >= maxActiveClients.coerceAtLeast(1)) {
+                runCatching { client.close() }
+                continue
+            }
             val executor = requestExecutor
             if (executor == null || executor.isShutdown) {
                 runCatching { client.close() }
@@ -266,8 +276,8 @@ class VesperRelayServer @JvmOverloads constructor(
             if (error is InterruptedException) {
                 Thread.currentThread().interrupt()
             }
-            runCatching { socket.close() }
         } finally {
+            runCatching { socket.close() }
             activeClients.remove(socket)
         }
     }
@@ -600,6 +610,8 @@ private fun VesperRelayDiagnostic.withHttpStatus(status: Int): VesperRelayDiagno
     copy(details = details + ("httpStatus" to status.toString()))
 
 private const val DEFAULT_TOKEN_TTL_MILLIS = 30 * 60 * 1000L
+private const val DEFAULT_MAX_REQUEST_THREADS = 16
+private const val DEFAULT_MAX_ACTIVE_CLIENTS = 32
 
 data class ByteRangeRequest(
     val start: Long?,

@@ -7,6 +7,7 @@ internal class VesperNativePreloadCoordinator(
     preloadBudgetPolicy: VesperPreloadBudgetPolicy,
 ) {
     private val resolvedBudget = resolvePreloadBudget(preloadBudgetPolicy)
+    @Volatile
     private var sessionHandle: Long = 0L
 
     fun ensureSession(): Long {

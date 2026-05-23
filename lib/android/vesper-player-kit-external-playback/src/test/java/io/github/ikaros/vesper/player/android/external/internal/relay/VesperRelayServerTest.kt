@@ -150,6 +150,30 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun rejectsConnectionsOverActiveClientLimit() {
+        val limitedRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            maxRequestThreads = 1,
+            maxActiveClients = 1,
+        )
+        additionalRelays += limitedRelay
+        val file = File.createTempFile("vesper-relay", ".mp4")
+        file.writeText("data")
+        file.deleteOnExit()
+        val handle = limitedRelay.register(VesperPlayerSource.local(uri = file.absolutePath, label = "Local"))
+        val url = URL(handle.url)
+        val firstSocket = Socket(url.host, url.port)
+        try {
+            firstSocket.getOutputStream().write("GET ${url.file} HTTP/1.1\r\nHost: ${url.host}\r\n".toByteArray())
+            val rejected = runCatching { request(handle.url) }.getOrNull()
+            assertTrue(rejected == null || rejected.status != 200)
+        } finally {
+            firstSocket.close()
+        }
+    }
+
+    @Test
     fun pruneInvalidatesExpiredAdaptedEntriesOnNextRegister() {
         var nowMillis = 1_000L
         val adapter = RecordingFormatAdapter()

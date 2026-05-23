@@ -231,6 +231,8 @@ pub enum SourceNormalizerError {
     InvalidInput { message: String },
     #[error("source normalizer payload codec error: {message}")]
     PayloadCodec { message: String },
+    #[error("source normalizer configuration error: {message}")]
+    Configuration { message: String },
     #[error("source normalizer ABI violation: {message}")]
     AbiViolation { message: String },
     #[error("source normalizer session is not configured")]
@@ -246,6 +248,12 @@ pub enum SourceNormalizerError {
 impl SourceNormalizerError {
     pub fn payload_codec(message: impl Into<String>) -> Self {
         Self::PayloadCodec {
+            message: message.into(),
+        }
+    }
+
+    pub fn configuration(message: impl Into<String>) -> Self {
+        Self::Configuration {
             message: message.into(),
         }
     }

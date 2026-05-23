@@ -383,8 +383,13 @@ impl IosHostCommandSink {
 
 impl IosNativeCommandSink for IosHostCommandSink {
     fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerResult<()> {
-        if let Ok(mut queue) = self.queue.lock() {
-            queue.push_back(command);
+        match self.queue.lock() {
+            Ok(mut queue) => {
+                queue.push_back(command);
+            }
+            Err(_) => {
+                tracing::error!("ios native command queue mutex was poisoned");
+            }
         }
         Ok(())
     }
@@ -936,8 +941,13 @@ impl IosManagedNativeSessionController {
     }
 
     pub fn push_update(&self, update: IosNativeSessionUpdate) {
-        if let Ok(mut updates) = self.updates.lock() {
-            updates.push_back(update);
+        match self.updates.lock() {
+            Ok(mut updates) => {
+                updates.push_back(update);
+            }
+            Err(_) => {
+                tracing::error!("ios native session update mutex was poisoned");
+            }
         }
     }
 

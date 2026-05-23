@@ -27,6 +27,7 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
 public final class PlayerSurfaceView: UIView {
     private weak var attachedPlayer: AVPlayer?
     private var readyForDisplayObservation: NSKeyValueObservation?
+    private let playerLayer = AVPlayerLayer()
     var onReadyForDisplay: (() -> Void)?
 
     public override init(frame: CGRect) {
@@ -34,10 +35,15 @@ public final class PlayerSurfaceView: UIView {
         backgroundColor = UIColor.black
         layer.cornerRadius = 24
         layer.masksToBounds = true
+        configurePlayerLayer()
     }
 
     public required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+        super.init(coder: coder)
+        backgroundColor = UIColor.black
+        layer.cornerRadius = 24
+        layer.masksToBounds = true
+        configurePlayerLayer()
     }
 
     public override func layoutSubviews() {
@@ -76,15 +82,11 @@ public final class PlayerSurfaceView: UIView {
         attach(player: nil)
     }
 
-    private var playerLayer: AVPlayerLayer {
-        if let existing = layer.sublayers?.compactMap({ $0 as? AVPlayerLayer }).first {
-            return existing
+    private func configurePlayerLayer() {
+        playerLayer.frame = bounds
+        playerLayer.videoGravity = .resizeAspect
+        if playerLayer.superlayer == nil {
+            layer.addSublayer(playerLayer)
         }
-
-        let layer = AVPlayerLayer()
-        layer.frame = bounds
-        layer.videoGravity = .resizeAspect
-        self.layer.addSublayer(layer)
-        return layer
     }
 }

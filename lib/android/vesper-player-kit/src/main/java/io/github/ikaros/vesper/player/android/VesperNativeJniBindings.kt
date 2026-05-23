@@ -36,6 +36,7 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
 import java.net.URI
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.pow
 import kotlin.math.roundToLong
 
@@ -49,7 +50,9 @@ internal class VesperNativeJniBindings(
     private val i18n = VesperPlayerI18n.fromContext(appContext)
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    @Volatile
     private var sessionHandle: Long? = null
+    private val isDisposed = AtomicBoolean(false)
     private var player: ExoPlayer? = null
     private var playerListener: Player.Listener? = null
     private var analyticsListener: AnalyticsListener? = null
@@ -78,6 +81,7 @@ internal class VesperNativeJniBindings(
     ): NativeBridgeStartup {
         Log.i(TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
         dispose()
+        isDisposed.set(false)
         currentBenchmarkSourceProtocol = source.protocol
         firstFrameGate.advanceEpoch()
         recordBenchmark("source_load_start")
@@ -141,6 +145,9 @@ internal class VesperNativeJniBindings(
     }
 
     override fun dispose() {
+        if (!isDisposed.compareAndSet(false, true)) {
+            return
+        }
         Log.i(TAG, "dispose")
         preloadCoordinator.dispose()
         detachSurface()
@@ -153,10 +160,18 @@ internal class VesperNativeJniBindings(
         }
         analyticsListener = null
         systemPlaybackCoordinator.attachPlayer(null)
-        player?.release()
-        player = null
-        sessionHandle?.let(VesperNativeJni::disposeSession)
-        sessionHandle = null
+        val handle = sessionHandle
+        try {
+            runCatching { player?.release() }
+                .onFailure { error -> Log.w(TAG, "failed to release ExoPlayer", error) }
+        } finally {
+            player = null
+            if (handle != null) {
+                runCatching { VesperNativeJni.disposeSession(handle) }
+                    .onFailure { error -> Log.w(TAG, "failed to dispose native session", error) }
+            }
+            sessionHandle = null
+        }
         currentTrackCatalogState = VesperTrackCatalog.Empty
         currentTrackSelectionState = VesperTrackSelectionSnapshot()
         currentEffectiveVideoTrackIdState = null
@@ -167,6 +182,9 @@ internal class VesperNativeJniBindings(
     }
 
     override fun refreshSnapshot() {
+        if (isDisposed.get()) {
+            return
+        }
         pushSnapshotToRust()
     }
 
@@ -186,6 +204,9 @@ internal class VesperNativeJniBindings(
     }
 
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) {
+        if (isDisposed.get()) {
+            return
+        }
         Log.i(TAG, "attachSurface kind=$surfaceKind")
         recordBenchmark("surface_attach", mapOf("surfaceKind" to surfaceKind.name))
         attachedSurface = surface
@@ -198,6 +219,9 @@ internal class VesperNativeJniBindings(
     }
 
     override fun detachSurface() {
+        if (isDisposed.get()) {
+            return
+        }
         Log.i(TAG, "detachSurface")
         recordBenchmark("surface_detach")
         player?.clearVideoSurface()
@@ -207,10 +231,18 @@ internal class VesperNativeJniBindings(
     }
 
     override fun pollSnapshot(): NativeBridgeSnapshot? =
-        sessionHandle?.let(VesperNativeJni::pollSnapshot)
+        if (isDisposed.get()) {
+            null
+        } else {
+            sessionHandle?.let(VesperNativeJni::pollSnapshot)
+        }
 
     override fun drainEvents(): List<NativeBridgeEvent> =
-        sessionHandle?.let { VesperNativeJni.drainEvents(it).toList() } ?: emptyList()
+        if (isDisposed.get()) {
+            emptyList()
+        } else {
+            sessionHandle?.let { VesperNativeJni.drainEvents(it).toList() } ?: emptyList()
+        }
 
     override fun play() {
         Log.i(TAG, "play")
@@ -302,6 +334,9 @@ internal class VesperNativeJniBindings(
     }
 
     private fun dispatchRustCommand(action: (Long) -> Unit) {
+        if (isDisposed.get()) {
+            return
+        }
         val handle = sessionHandle ?: return
         action(handle)
         drainAndApplyNativeCommands()
@@ -311,6 +346,9 @@ internal class VesperNativeJniBindings(
     }
 
     private fun drainAndApplyNativeCommands() {
+        if (isDisposed.get()) {
+            return
+        }
         val handle = sessionHandle ?: return
         val exoPlayer = player ?: return
 

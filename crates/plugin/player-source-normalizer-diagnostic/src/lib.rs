@@ -169,15 +169,10 @@ unsafe extern "C" fn normalizer_read_packet(
 
         let handle = 1;
         session.emitted_packet = true;
-        session.leased_packet = Some(DiagnosticPacketLease {
+        let packet = session.leased_packet.insert(DiagnosticPacketLease {
             handle,
             data: DIAGNOSTIC_PACKET_BYTES.to_vec(),
         });
-        let Some(packet) = session.leased_packet.as_ref() else {
-            return read_packet_error(SourceNormalizerError::internal(
-                "diagnostic packet lease was not stored",
-            ));
-        };
         let metadata = SourceNormalizerReadPacketMetadata::packet(SourceNormalizerPacket {
             pts_us: session
                 .last_seek_millis
@@ -284,9 +279,9 @@ unsafe extern "C" fn normalizer_close_packet_session(
         }
         // SAFETY: the session pointer was allocated with `Box::into_raw` by
         // this plugin and close is called once by the host.
-        let mut session = unsafe { Box::from_raw(session.cast::<DiagnosticPacketSession>()) };
-        session.closed = true;
-        session.leased_packet = None;
+        // SAFETY: the session pointer was allocated with `Box::into_raw` by
+        // this plugin and close is called once by the host.
+        drop(unsafe { Box::from_raw(session.cast::<DiagnosticPacketSession>()) });
         process_success()
     })
 }

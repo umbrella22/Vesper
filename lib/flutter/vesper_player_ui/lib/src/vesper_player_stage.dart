@@ -429,14 +429,21 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleSeekCommit(double ratio) {
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _pendingSeekRatio = null;
     });
-    unawaited(widget.controller.seekToRatio(ratio));
+    _reportControllerCall(
+        widget.controller.seekToRatio(ratio), 'seek to ratio');
     _showControls();
   }
 
   void _handleSeekCancel() {
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _pendingSeekRatio = null;
     });
@@ -444,6 +451,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleTap() {
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _controlsVisible = !_controlsVisible;
     });
@@ -451,12 +461,13 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _togglePause() {
-    unawaited(widget.controller.togglePause());
+    _reportControllerCall(widget.controller.togglePause(), 'toggle pause');
     _showControls();
   }
 
   void _seekToLiveEdge() {
-    unawaited(widget.controller.seekToLiveEdge());
+    _reportControllerCall(
+        widget.controller.seekToLiveEdge(), 'seek to live edge');
     _showControls();
   }
 
@@ -498,7 +509,10 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           return;
         }
         _stageGestureKind = kind;
-        unawaited(_loadDeviceGestureBaseRatio(kind));
+        _reportControllerCall(
+          _loadDeviceGestureBaseRatio(kind),
+          'load device gesture base ratio',
+        );
       } else {
         return;
       }
@@ -569,17 +583,20 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       _deviceGestureSetQueued = true;
       return;
     }
-    unawaited(_applyDeviceGestureRatio());
+    _reportControllerCall(_applyDeviceGestureRatio(), 'apply device gesture');
   }
 
   Future<void> _applyDeviceGestureRatio() async {
-    if (_deviceGestureSetInFlight) {
+    if (!mounted || _deviceGestureSetInFlight) {
       return;
     }
     _deviceGestureSetInFlight = true;
     try {
       do {
         _deviceGestureSetQueued = false;
+        if (!mounted) {
+          return;
+        }
         final controls = widget.deviceControls;
         final kind = _stageGestureKind;
         final baseRatio = _deviceGestureBaseRatio;
@@ -635,9 +652,15 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _startTemporarySpeedGesture() {
+    if (!mounted) {
+      return;
+    }
     _resetStageGesture();
     _speedGestureRestoreRate ??= widget.snapshot.playbackRate;
-    unawaited(widget.controller.setPlaybackRate(2.0));
+    _reportControllerCall(
+      widget.controller.setPlaybackRate(2.0),
+      'start temporary speed gesture',
+    );
     _showGestureFeedback(
       _StageGestureFeedback(
         kind: _StageGestureKind.speed,
@@ -654,10 +677,16 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       return;
     }
     _speedGestureRestoreRate = null;
-    unawaited(widget.controller.setPlaybackRate(restoreRate));
+    _reportControllerCall(
+      widget.controller.setPlaybackRate(restoreRate),
+      'end temporary speed gesture',
+    );
   }
 
   void _showGestureFeedback(_StageGestureFeedback feedback) {
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _gestureFeedback = feedback;
     });
@@ -703,6 +732,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _showControls() {
+    if (!mounted) {
+      return;
+    }
     if (!_controlsVisible) {
       setState(() {
         _controlsVisible = true;
@@ -713,6 +745,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
 
   void _syncAutoHide() {
     _controlsTimer?.cancel();
+    if (!mounted) {
+      return;
+    }
     final snapshot = widget.snapshot;
     final shouldAutoHide =
         snapshot.playbackState == VesperPlaybackState.playing &&
@@ -739,6 +774,21 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         _controlsVisible = false;
       });
     });
+  }
+
+  void _reportControllerCall(Future<void> future, String context) {
+    unawaited(
+      future.catchError((Object error, StackTrace stackTrace) {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'vesper_player_ui',
+            context: ErrorDescription(context),
+          ),
+        );
+      }),
+    );
   }
 }
 

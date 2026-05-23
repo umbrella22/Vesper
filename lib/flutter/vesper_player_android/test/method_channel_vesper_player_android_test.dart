@@ -201,6 +201,50 @@ void main() {
     );
   });
 
+  test('typed unsupported platform error maps to unsupported exception',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async {
+      throw PlatformException(
+        code: 'vesper_operation_failed',
+        message: 'unsupported operation',
+        details: <String, Object?>{
+          'code': 'unsupported',
+          'category': 'capability',
+          'retriable': false,
+          'message': 'unsupported operation',
+        },
+      );
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    expect(
+      () => platform.refreshPlayer('android-player'),
+      throwsA(isA<VesperUnsupportedError>()),
+    );
+  });
+
+  test('non-capability unsupported platform error is not remapped', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async {
+      throw PlatformException(
+        code: 'vesper_operation_failed',
+        message: 'legacy unsupported',
+        details: <String, Object?>{
+          'code': 'unsupported',
+          'category': 'platform',
+          'message': 'unsupported platform failure',
+        },
+      );
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    expect(
+      () => platform.refreshPlayer('android-player'),
+      throwsA(isA<PlatformException>()),
+    );
+  });
+
   test('download output helpers forward payloads', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {

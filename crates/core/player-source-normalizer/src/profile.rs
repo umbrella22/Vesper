@@ -212,17 +212,6 @@ impl SourceNormalizerProfileSet {
             resolved.insert(name.clone(), profile);
         }
 
-        for (name, profile) in &resolved {
-            if let Some(fallback) = profile.fallback_profile() {
-                if !resolved.contains_key(fallback) {
-                    return Err(SourceNormalizerError::InvalidRuntimeProfile {
-                        profile: name.clone(),
-                        message: format!("fallback profile `{fallback}` does not exist"),
-                    });
-                }
-            }
-        }
-
         Ok(Self { profiles: resolved })
     }
 
@@ -324,6 +313,15 @@ fn resolve_profile(
         SourceNormalizerProfile::default()
     };
     apply_raw_profile(&mut profile, raw);
+    if let Some(fallback) = profile.fallback_profile()
+        && !raw_profiles.contains_key(fallback)
+    {
+        let chain = stack.join(" -> ");
+        return Err(SourceNormalizerError::InvalidRuntimeProfile {
+            profile: name.to_owned(),
+            message: format!("fallback profile `{fallback}` does not exist in `{chain}`"),
+        });
+    }
     stack.pop();
 
     resolved.insert(name.to_owned(), profile.clone());
@@ -616,6 +614,25 @@ fallback_profile = "missing"
         assert!(matches!(
             error,
             SourceNormalizerError::InvalidRuntimeProfile { .. }
+        ));
+    }
+
+    #[test]
+    fn validates_inherited_fallback_profile_exists_with_context() {
+        let input = r#"
+[runtime.source-normalizer.base]
+
+[runtime.source-normalizer.base.runtime]
+fallback_profile = "missing"
+
+[runtime.source-normalizer.child]
+extends = "base"
+"#;
+        let error = SourceNormalizerProfileSet::from_toml_str(input).expect_err("fallback");
+        assert!(matches!(
+            error,
+            SourceNormalizerError::InvalidRuntimeProfile { ref profile, ref message }
+                if profile == "base" && message.contains("base")
         ));
     }
 

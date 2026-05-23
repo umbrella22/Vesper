@@ -28,12 +28,14 @@ class VesperExternalPlaybackController {
   Stream<List<VesperExternalPlaybackRoute>>? _nativeRoutes;
   Stream<VesperExternalPlaybackSessionEvent>? _events;
   List<VesperExternalPlaybackRoute>? _latestRoutes;
+  bool _disposed = false;
 
   static Stream<List<VesperExternalPlaybackRoute>>? _sharedNativeRoutes;
   static Stream<VesperExternalPlaybackSessionEvent>? _sharedEvents;
   static List<VesperExternalPlaybackRoute>? _sharedLatestRoutes;
 
   Stream<List<VesperExternalPlaybackRoute>> get routes {
+    _ensureActive();
     final nativeRoutes = _usesDefaultRoutesEventChannel
         ? _sharedRoutesStream()
         : _instanceRoutesStream();
@@ -53,6 +55,7 @@ class VesperExternalPlaybackController {
   }
 
   Stream<VesperExternalPlaybackSessionEvent> get events {
+    _ensureActive();
     if (_usesDefaultSessionEventChannel) {
       return _sharedEventsStream();
     }
@@ -115,15 +118,18 @@ class VesperExternalPlaybackController {
     );
   }
 
-  Future<void> startDiscovery() => _methodChannel.invokeMethod<void>(
-        'startDiscovery',
-      );
+  Future<void> startDiscovery() {
+    _ensureActive();
+    return _methodChannel.invokeMethod<void>('startDiscovery');
+  }
 
-  Future<void> stopDiscovery() => _methodChannel.invokeMethod<void>(
-        'stopDiscovery',
-      );
+  Future<void> stopDiscovery() {
+    _ensureActive();
+    return _methodChannel.invokeMethod<void>('stopDiscovery');
+  }
 
   Future<VesperExternalPlaybackResult> connect(String routeId) {
+    _ensureActive();
     return _invokeResult('connect', <String, Object?>{'routeId': routeId});
   }
 
@@ -132,6 +138,7 @@ class VesperExternalPlaybackController {
     int startPositionMs = 0,
     bool autoplay = true,
   }) {
+    _ensureActive();
     return _invokeResult('load', <String, Object?>{
       'item': item.toMap(),
       'startPositionMs': startPositionMs,
@@ -147,6 +154,7 @@ class VesperExternalPlaybackController {
     VesperExternalFormatAdaptationConfig formatAdaptation =
         const VesperExternalFormatAdaptationConfig.disabled(),
   }) async {
+    _ensureActive();
     final wasPlaying =
         player.snapshot.playbackState == VesperPlaybackState.playing;
     final result = await load(
@@ -169,20 +177,48 @@ class VesperExternalPlaybackController {
     return result;
   }
 
-  Future<VesperExternalPlaybackResult> play() => _invokeResult('play');
+  Future<VesperExternalPlaybackResult> play() {
+    _ensureActive();
+    return _invokeResult('play');
+  }
 
-  Future<VesperExternalPlaybackResult> pause() => _invokeResult('pause');
+  Future<VesperExternalPlaybackResult> pause() {
+    _ensureActive();
+    return _invokeResult('pause');
+  }
 
-  Future<VesperExternalPlaybackResult> stop() => _invokeResult('stop');
+  Future<VesperExternalPlaybackResult> stop() {
+    _ensureActive();
+    return _invokeResult('stop');
+  }
 
   Future<VesperExternalPlaybackResult> seekTo(int positionMs) {
+    _ensureActive();
     return _invokeResult('seekTo', <String, Object?>{
       'positionMs': positionMs,
     });
   }
 
-  Future<VesperExternalPlaybackResult> disconnect() =>
-      _invokeResult('disconnect');
+  Future<VesperExternalPlaybackResult> disconnect() {
+    _ensureActive();
+    return _invokeResult('disconnect');
+  }
+
+  void dispose() {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
+    if (_usesDefaultRoutesEventChannel) {
+      _sharedLatestRoutes = null;
+    } else {
+      _latestRoutes = null;
+      _nativeRoutes = null;
+    }
+    if (!_usesDefaultSessionEventChannel) {
+      _events = null;
+    }
+  }
 
   Future<VesperExternalPlaybackResult> _invokeResult(
     String method, [
@@ -201,6 +237,14 @@ class VesperExternalPlaybackController {
       status: VesperExternalPlaybackResultStatus.failed,
       message: 'External playback operation did not return a result.',
     );
+  }
+
+  void _ensureActive() {
+    if (_disposed) {
+      throw StateError(
+        'VesperExternalPlaybackController has already been disposed.',
+      );
+    }
   }
 }
 

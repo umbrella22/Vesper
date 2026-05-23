@@ -75,10 +75,12 @@ internal class PlayerHostViewModel(
         VesperExternalPlaybackController(application.applicationContext)
 
     override fun onCleared() {
-        externalPlaybackController.release()
-        downloadManager.dispose()
-        playlistCoordinator.dispose()
-        controller.dispose()
+        listOf(
+            { externalPlaybackController.release() },
+            { downloadManager.dispose() },
+            { playlistCoordinator.dispose() },
+            { controller.dispose() },
+        ).forEach { cleanup -> runCatching { cleanup() } }
     }
 
     private fun bundledDownloadPluginLibraryPaths(application: Application): List<String> {

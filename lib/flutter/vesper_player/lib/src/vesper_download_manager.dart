@@ -54,12 +54,7 @@ class VesperDownloadManager {
   Stream<VesperDownloadSnapshot> get snapshots => _snapshotsController.stream;
 
   VesperDownloadTaskSnapshot? task(int taskId) {
-    for (final value in snapshot.tasks) {
-      if (value.taskId == taskId) {
-        return value;
-      }
-    }
-    return null;
+    return _tasksById[taskId];
   }
 
   List<VesperDownloadTaskSnapshot> tasksForAsset(String assetId) {
@@ -157,14 +152,26 @@ class VesperDownloadManager {
     } catch (error, stackTrace) {
       platformError = error;
       platformStackTrace = stackTrace;
-    } finally {
-      await _platformSubscription?.cancel();
-      _eventsController
-          .add(VesperDownloadDisposedEvent(downloadId: downloadId));
-      await _eventsController.close();
-      await _snapshotsController.close();
-      snapshotListenable.dispose();
     }
+
+    await _guardDisposeCleanup(
+      () => _platformSubscription?.cancel(),
+      context: 'cancel download event subscription',
+    );
+    _eventsController.add(VesperDownloadDisposedEvent(downloadId: downloadId));
+    await _guardDisposeCleanup(
+      _eventsController.close,
+      context: 'close download event stream',
+    );
+    await _guardDisposeCleanup(
+      _snapshotsController.close,
+      context: 'close download snapshot stream',
+    );
+    _guardDisposeSyncCleanup(
+      snapshotListenable.dispose,
+      context: 'dispose download snapshot listenable',
+    );
+    _tasksById.clear();
 
     if (platformError != null) {
       Error.throwWithStackTrace(platformError, platformStackTrace!);
@@ -307,6 +314,42 @@ class VesperDownloadManager {
   void _ensureActive() {
     if (_disposed) {
       throw StateError('VesperDownloadManager has already been disposed.');
+    }
+  }
+
+  Future<void> _guardDisposeCleanup(
+    FutureOr<void> Function() cleanup, {
+    required String context,
+  }) async {
+    try {
+      await cleanup();
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'vesper_player',
+          context: ErrorDescription(context),
+        ),
+      );
+    }
+  }
+
+  void _guardDisposeSyncCleanup(
+    VoidCallback cleanup, {
+    required String context,
+  }) {
+    try {
+      cleanup();
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'vesper_player',
+          context: ErrorDescription(context),
+        ),
+      );
     }
   }
 }

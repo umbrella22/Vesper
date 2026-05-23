@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import androidx.media3.datasource.DataSource
@@ -421,6 +422,7 @@ class VesperDownloadManager internal constructor(
     private val taskStore = DownloadTaskStore()
     private val lastProgressPersistence = mutableMapOf<VesperDownloadTaskId, ProgressPersistenceCheckpoint>()
     private val _snapshot = MutableStateFlow(VesperDownloadSnapshot(emptyList()))
+    @Volatile
     private var sessionHandle: Long = bindings.createDownloadSession(configuration.toNativePayload())
 
     val snapshot: StateFlow<VesperDownloadSnapshot> = _snapshot.asStateFlow()
@@ -2808,8 +2810,17 @@ internal class VesperForegroundDownloadExecutor(
             val headStatus = head.responseCode
             try {
                 head.inputStream.close()
-            } catch (_: Exception) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "failed to close HEAD probe stream for $sourceUri", error)
                 runCatching { head.errorStream?.close() }
+                    .onFailure { closeError ->
+                        Log.w(TAG, "failed to close HEAD probe error stream for $sourceUri", closeError)
+                    }
             }
             if (isExpiredHttpStatus(headStatus)) {
                 head.disconnect()
@@ -2833,8 +2844,17 @@ internal class VesperForegroundDownloadExecutor(
             val rangeStatus = range.responseCode
             try {
                 range.inputStream.close()
-            } catch (_: Exception) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "failed to close range probe stream for $sourceUri", error)
                 runCatching { range.errorStream?.close() }
+                    .onFailure { closeError ->
+                        Log.w(TAG, "failed to close range probe error stream for $sourceUri", closeError)
+                    }
             }
             if (isExpiredHttpStatus(rangeStatus)) {
                 range.disconnect()
@@ -4238,3 +4258,4 @@ private const val ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_BYTES = 512L * 1024L
 private const val ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_INTERVAL_MS = 250L
 private const val ANDROID_DOWNLOAD_PREPARE_TIMEOUT_MS = 15_000
 private const val ANDROID_HTTP_RANGE_NOT_SATISFIABLE = 416
+private const val TAG = "VesperDownloadManager"

@@ -53,6 +53,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var hasAppliedDefaultTrackPreferences = false
     private var pendingResilienceRestore: PendingResilienceRestore?
     private var retryTask: Task<Void, Never>?
+    private var stopSeekTimeoutTask: Task<Void, Never>?
     private var retryAttemptCount = 0
     private let cachePolicyToken = UUID()
     private let preloadCoordinator: VesperNativePreloadCoordinator
@@ -205,6 +206,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         recordBenchmark("dispose_command")
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
+        cancelStopSeekTimeout()
         pendingResilienceRestore = nil
         currentSource = nil
         hasAppliedDefaultTrackPreferences = false
@@ -257,6 +259,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private func tearDownActivePlayback() {
         releaseDashStartupAbrLimitIfNeeded(reason: "tearDown", item: player?.currentItem)
         _ = advancePlaybackEpoch()
+        cancelStopSeekTimeout()
         preloadCoordinator.cancelAll()
         VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
         pendingPlaybackStart = false
@@ -278,8 +281,6 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         recordBenchmark("attach_surface_host")
         if surfaceHost !== host {
             iosHostLog("attachSurfaceHost")
-        }
-        if surfaceHost !== host {
             surfaceHost?.onReadyForDisplay = nil
         }
         surfaceHost = host
@@ -370,6 +371,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = true
         let playbackEpoch = currentPlaybackEpoch()
+        scheduleStopSeekTimeout(playbackEpoch: playbackEpoch)
         player?.pause()
         player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
             guard let self else { return }
@@ -1047,6 +1049,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
         iosHostLog("stop seek completed")
         recordBenchmark("stop_seek_completed")
+        cancelStopSeekTimeout()
         isSeekingToStartAfterStop = false
         updateTimelinePosition(0)
         if pendingPlayAfterStopSeek {
@@ -2064,6 +2067,34 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         retryTask = nil
         if resetAttempts {
             retryAttemptCount = 0
+        }
+    }
+
+    private func cancelStopSeekTimeout() {
+        stopSeekTimeoutTask?.cancel()
+        stopSeekTimeoutTask = nil
+    }
+
+    private func scheduleStopSeekTimeout(playbackEpoch: UInt64) {
+        cancelStopSeekTimeout()
+        stopSeekTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.isPlaybackEpochCurrent(playbackEpoch), self.isSeekingToStartAfterStop else {
+                    return
+                }
+                iosHostLog("stop seek timed out")
+                self.recordBenchmark("stop_seek_timeout")
+                self.isSeekingToStartAfterStop = false
+                let shouldPlay = self.pendingPlayAfterStopSeek
+                self.pendingPlayAfterStopSeek = false
+                self.updateTimelinePosition(0)
+                if shouldPlay {
+                    self.startPlayback()
+                }
+                self.refreshPlaybackState()
+            }
         }
     }
 

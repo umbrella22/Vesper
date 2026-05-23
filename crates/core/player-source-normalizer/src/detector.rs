@@ -124,14 +124,13 @@ fn match_profile(
     let mut reasons = Vec::new();
     let rules = &profile.match_rules;
 
-    if !rules.url_patterns.is_empty()
-        && rules
-            .url_patterns
-            .iter()
-            .any(|pattern| wildcard_match(pattern, &context.url))
+    if let Some(pattern) = rules
+        .url_patterns
+        .iter()
+        .find(|pattern| wildcard_match(pattern, &context.url))
     {
         confidence += 0.45;
-        reasons.push("URL pattern matched");
+        reasons.push(format!("URL pattern matched: {pattern}"));
     }
 
     if let Some(mime) = &context.mime {
@@ -142,19 +141,18 @@ fn match_profile(
                 .any(|candidate| candidate.eq_ignore_ascii_case(mime))
         {
             confidence += 0.35;
-            reasons.push("MIME type matched");
+            reasons.push("MIME type matched".to_owned());
         }
     }
 
     if let Some(header) = header {
-        if !rules.byte_magic.is_empty()
-            && rules
-                .byte_magic
-                .iter()
-                .any(|magic| byte_magic_matches(magic, header))
+        if let Some(magic) = rules
+            .byte_magic
+            .iter()
+            .find(|magic| byte_magic_matches(magic, header))
         {
             confidence += 0.45;
-            reasons.push("byte magic matched");
+            reasons.push(format!("byte magic matched: {magic}"));
         }
     }
 

@@ -121,11 +121,14 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
     }
 
     private static func videoTrackLabel(representation: VesperDashRepresentation) -> String {
+        if let width = representation.width, let height = representation.height {
+            return "\(width)x\(height)"
+        }
         if let height = representation.height {
             return "\(height)p"
         }
-        if let width = representation.width, let height = representation.height {
-            return "\(width)x\(height)"
+        if let width = representation.width {
+            return "\(width)w"
         }
         if let bandwidth = representation.bandwidth {
             return "\(bandwidth)"

@@ -206,6 +206,17 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun disposeOnlyDelegatesOnce() {
+        val bindings = FakeBindings()
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        bridge.dispose()
+        bridge.dispose()
+
+        assertEquals(1, bindings.disposeCount)
+    }
+
+    @Test
     fun selectSourceFailureClearsStaleTrackState() {
         val bindings =
             FakeBindings(
@@ -613,6 +624,7 @@ private class FakeBindings(
 ) : VesperNativeBindings {
     var onInitialize: (() -> Unit)? = null
     val events = mutableListOf<NativeBridgeEvent>()
+    var disposeCount = 0
     private var updateListener: (() -> Unit)? = null
 
     override fun initialize(
@@ -624,7 +636,9 @@ private class FakeBindings(
         return NativeBridgeStartup(subtitle = null)
     }
 
-    override fun dispose() = Unit
+    override fun dispose() {
+        disposeCount += 1
+    }
 
     override fun refreshSnapshot() = Unit
 

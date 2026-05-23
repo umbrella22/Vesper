@@ -595,7 +595,9 @@ public final class VesperDownloadManager: ObservableObject {
         snapshot = VesperDownloadSnapshot(tasks: [])
         excludeDownloadItemFromBackup(stateStoreURL.deletingLastPathComponent())
         sessionHandle = bindings.createDownloadSession(configuration: configuration)
-        precondition(sessionHandle != 0, "native download session handle must not be zero")
+        if sessionHandle == 0 {
+            iosHostLog("native download session creation failed")
+        }
         restorePersistedTasks()
         forceFullSync()
     }
@@ -611,6 +613,9 @@ public final class VesperDownloadManager: ObservableObject {
         stateStore = nil
         snapshot = VesperDownloadSnapshot(tasks: [])
         sessionHandle = bindings.createDownloadSession(configuration: configuration)
+        if sessionHandle == 0 {
+            iosHostLog("native download session creation failed")
+        }
         forceFullSync()
     }
 
@@ -664,6 +669,9 @@ public final class VesperDownloadManager: ObservableObject {
         profile: VesperDownloadProfile = VesperDownloadProfile(),
         assetIndex: VesperDownloadAssetIndex = VesperDownloadAssetIndex()
     ) -> VesperDownloadTaskId? {
+        guard sessionHandle != 0 else {
+            return nil
+        }
         let normalizedAssetIndex: VesperDownloadAssetIndex
         do {
             normalizedAssetIndex = try VesperGeneratedDownloadResourceMaterializer(
@@ -757,6 +765,9 @@ public final class VesperDownloadManager: ObservableObject {
     }
 
     public func startTask(_ taskId: VesperDownloadTaskId) -> Bool {
+        guard sessionHandle != 0 else {
+            return false
+        }
         let started = bindings.startDownloadTask(sessionHandle: sessionHandle, taskId: taskId)
         if started {
             syncRuntimeState(processCommands: true)
@@ -765,6 +776,9 @@ public final class VesperDownloadManager: ObservableObject {
     }
 
     public func pauseTask(_ taskId: VesperDownloadTaskId) -> Bool {
+        guard sessionHandle != 0 else {
+            return false
+        }
         let paused = bindings.pauseDownloadTask(sessionHandle: sessionHandle, taskId: taskId)
         if paused {
             syncRuntimeState(processCommands: true)
@@ -773,6 +787,9 @@ public final class VesperDownloadManager: ObservableObject {
     }
 
     public func resumeTask(_ taskId: VesperDownloadTaskId) -> Bool {
+        guard sessionHandle != 0 else {
+            return false
+        }
         let resumed = bindings.resumeDownloadTask(sessionHandle: sessionHandle, taskId: taskId)
         if resumed {
             syncRuntimeState(processCommands: true)
@@ -781,6 +798,9 @@ public final class VesperDownloadManager: ObservableObject {
     }
 
     public func removeTask(_ taskId: VesperDownloadTaskId) -> Bool {
+        guard sessionHandle != 0 else {
+            return false
+        }
         let removed = bindings.removeDownloadTask(sessionHandle: sessionHandle, taskId: taskId)
         if removed {
             syncRuntimeState(processCommands: true)
@@ -2508,7 +2528,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
             fileManager.createFile(atPath: destinationURL.path, contents: nil)
         }
         let output = try FileHandle(forWritingTo: destinationURL)
-        defer { try? output.close() }
+        defer { closeDownloadFileHandle(output, context: "streamed resource output") }
         if resumeFromBytes > 0 {
             try output.seekToEnd()
         } else {
@@ -2749,7 +2769,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
             }
         }
         let output = try FileHandle(forWritingTo: destinationURL)
-        defer { try? output.close() }
+        defer { closeDownloadFileHandle(output, context: "known-size resource output") }
         if append {
             try output.seekToEnd()
         } else {
@@ -2845,7 +2865,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
             return
         }
         let output = try FileHandle(forWritingTo: url)
-        defer { try? output.close() }
+        defer { closeDownloadFileHandle(output, context: "download file truncation") }
         try output.truncate(atOffset: size)
     }
 
@@ -2864,8 +2884,8 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         let input = try FileHandle(forReadingFrom: sourceURL)
         let output = try FileHandle(forWritingTo: destinationURL)
         defer {
-            try? input.close()
-            try? output.close()
+            closeDownloadFileHandle(input, context: "local file input")
+            closeDownloadFileHandle(output, context: "local file output")
         }
 
         try input.seek(toOffset: (byteRange?.offset ?? 0) + resumeFromBytes)
@@ -3061,6 +3081,14 @@ private func rejectInsecureHTTPURL(_ url: URL) throws {
     throw VesperForegroundDownloadPreparationError.invalidSource(
         "\(vesperDownloadATSFailureMessage) URL: \(url.absoluteString)"
     )
+}
+
+private func closeDownloadFileHandle(_ handle: FileHandle, context: String) {
+    do {
+        try handle.close()
+    } catch {
+        iosHostLog("failed to close \(context) file handle: \(error.localizedDescription)")
+    }
 }
 
 func excludeDownloadItemFromBackup(_ url: URL, fileManager: FileManager = .default) {

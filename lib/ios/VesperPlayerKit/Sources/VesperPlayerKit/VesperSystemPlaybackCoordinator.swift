@@ -23,6 +23,7 @@ public final class VesperSystemPlaybackCoordinator {
     }
 
     deinit {
+        artworkTask?.cancel()
         if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
         }
@@ -231,10 +232,12 @@ public final class VesperSystemPlaybackCoordinator {
     ) {
         command.isEnabled = true
         let target = command.addTarget { event in
-            Task { @MainActor in
-                _ = handler(event)
+            if Thread.isMainThread {
+                return MainActor.assumeIsolated {
+                    handler(event)
+                }
             }
-            return .success
+            return .commandFailed
         }
         commandTargets.append((command, target))
     }
@@ -332,6 +335,7 @@ enum VesperSharedAudioSession {
 
     @discardableResult
     static func activate(owner: AnyObject) -> Bool {
+        assert(Thread.isMainThread)
         let ownerId = ObjectIdentifier(owner)
         do {
             let session = AVAudioSession.sharedInstance()
@@ -346,6 +350,7 @@ enum VesperSharedAudioSession {
     }
 
     static func deactivate(owner: AnyObject) {
+        assert(Thread.isMainThread)
         activeOwners.remove(ObjectIdentifier(owner))
         guard activeOwners.isEmpty else {
             return

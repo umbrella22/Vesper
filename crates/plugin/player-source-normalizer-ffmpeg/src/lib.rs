@@ -218,12 +218,7 @@ unsafe extern "C" fn normalizer_read_packet(
                             end_of_stream: false,
                         },
                     );
-                    session.leased_packet = Some(LeasedPacket { handle, data });
-                    let Some(leased) = session.leased_packet.as_ref() else {
-                        return read_packet_error(SourceNormalizerError::internal(
-                            "packet lease was not stored",
-                        ));
-                    };
+                    let leased = session.leased_packet.insert(LeasedPacket { handle, data });
                     return VesperSourceNormalizerReadPacketResult {
                         status: VesperPluginResultStatus::Success,
                         metadata: serialize_payload(&metadata),
@@ -344,9 +339,7 @@ unsafe extern "C" fn normalizer_close_packet_session(
         }
         // SAFETY: the session pointer was allocated with `Box::into_raw` by
         // this plugin and close is called once by the host.
-        let mut session = unsafe { Box::from_raw(session.cast::<PacketNormalizerSession>()) };
-        session.closed = true;
-        session.leased_packet = None;
+        drop(unsafe { Box::from_raw(session.cast::<PacketNormalizerSession>()) });
         process_success(&SourceNormalizerOperationStatus {
             completed: true,
             message: None,
@@ -564,7 +557,24 @@ fn unique_session_suffix() -> u128 {
 }
 
 fn map_core_error(error: player_source_normalizer::SourceNormalizerError) -> SourceNormalizerError {
-    SourceNormalizerError::internal(error.to_string())
+    use player_source_normalizer::SourceNormalizerError as CoreError;
+
+    let message = error.to_string();
+    match error {
+        CoreError::UnknownRuntimeProfile { profile } => {
+            SourceNormalizerError::UnsupportedRuntimeProfile { profile }
+        }
+        CoreError::ReadFile { .. }
+        | CoreError::ParseToml { .. }
+        | CoreError::UnknownFfmpegProfile { .. }
+        | CoreError::RuntimeProfileCycle { .. }
+        | CoreError::FfmpegProfileCycle { .. }
+        | CoreError::InvalidRuntimeProfile { .. }
+        | CoreError::CapabilityMismatch { .. } => SourceNormalizerError::configuration(message),
+        CoreError::SpawnFfmpeg { .. } | CoreError::FfmpegFailed { .. } => {
+            SourceNormalizerError::internal(message)
+        }
+    }
 }
 
 fn decode_json<T: serde::de::DeserializeOwned>(

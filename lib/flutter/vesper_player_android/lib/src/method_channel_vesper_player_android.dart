@@ -438,7 +438,11 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
 
   Future<T?> _invokeMethod<T>(String method, [Object? arguments]) async {
     _ensureMethodCallHandlerRegistered();
-    return _methodChannel.invokeMethod<T>(method, arguments);
+    try {
+      return await _methodChannel.invokeMethod<T>(method, arguments);
+    } on PlatformException catch (error) {
+      throw _mapPlatformException(error);
+    }
   }
 
   void _ensureMethodCallHandlerRegistered() {
@@ -469,6 +473,20 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
     );
     return plan?.toMap();
   }
+}
+
+Object _mapPlatformException(PlatformException error) {
+  final details = error.details;
+  final normalized = details is Map
+      ? Map<Object?, Object?>.from(details)
+      : <Object?, Object?>{};
+  if (normalized['code'] == VesperPlayerErrorCode.unsupported.name &&
+      normalized['category'] == VesperPlayerErrorCategory.capability.name) {
+    return VesperUnsupportedError(
+      normalized['message'] as String? ?? error.message,
+    );
+  }
+  return error;
 }
 
 VesperSystemPlaybackPermissionStatus _decodePermissionStatus(Object? raw) {

@@ -86,11 +86,11 @@ fn push_options(args: &mut Vec<String>, options: &HashMap<String, toml::Value>) 
         let value = &options[key];
         match value {
             toml::Value::Boolean(true) => {
-                args.push(format!("-{}", ffmpeg_option_name(key)));
+                args.push(format!("-{key}"));
                 args.push("1".to_owned());
             }
             toml::Value::Boolean(false) => {
-                args.push(format!("-{}", ffmpeg_option_name(key)));
+                args.push(format!("-{key}"));
                 args.push("0".to_owned());
             }
             toml::Value::Array(values) => {
@@ -100,13 +100,13 @@ fn push_options(args: &mut Vec<String>, options: &HashMap<String, toml::Value>) 
                     .collect::<Vec<_>>()
                     .join(",");
                 if !joined.is_empty() {
-                    args.push(format!("-{}", ffmpeg_option_name(key)));
+                    args.push(format!("-{key}"));
                     args.push(joined);
                 }
             }
             _ => {
                 if let Some(value) = toml_value_to_arg(value) {
-                    args.push(format!("-{}", ffmpeg_option_name(key)));
+                    args.push(format!("-{key}"));
                     args.push(value);
                 }
             }
@@ -145,10 +145,6 @@ fn toml_value_to_arg(value: &toml::Value) -> Option<String> {
         toml::Value::Boolean(value) => Some(if *value { "1" } else { "0" }.to_owned()),
         _ => None,
     }
-}
-
-fn ffmpeg_option_name(key: &str) -> String {
-    key.to_owned()
 }
 
 fn validate_profile_options(

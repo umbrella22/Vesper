@@ -45,7 +45,10 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   void didUpdateWidget(covariant VesperPlayerView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      unawaited(oldWidget.controller.clearViewport());
+      _reportAsyncViewportError(
+        oldWidget.controller.clearViewport(),
+        'clear old viewport',
+      );
       _lastViewport = null;
     }
     _scheduleViewportReport();
@@ -63,7 +66,8 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     WidgetsBinding.instance.removeObserver(_bindingObserver);
     _scrollPosition?.removeListener(_scheduleViewportReport);
     _scrollPosition = null;
-    unawaited(widget.controller.clearViewport());
+    _reportAsyncViewportError(
+        widget.controller.clearViewport(), 'clear viewport');
     super.dispose();
   }
 
@@ -184,7 +188,10 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     }
 
     _lastViewport = viewport;
-    unawaited(widget.controller.updateViewport(viewport));
+    _reportAsyncViewportError(
+      widget.controller.updateViewport(viewport),
+      'update viewport',
+    );
   }
 
   void _clearViewportIfNeeded() {
@@ -192,7 +199,8 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
       return;
     }
     _lastViewport = null;
-    unawaited(widget.controller.clearViewport());
+    _reportAsyncViewportError(
+        widget.controller.clearViewport(), 'clear viewport');
   }
 
   void _handleLifecycleChanged(AppLifecycleState state) {
@@ -220,6 +228,21 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
         (previous.top - next.top).abs() < 0.5 &&
         (previous.width - next.width).abs() < 0.5 &&
         (previous.height - next.height).abs() < 0.5;
+  }
+
+  void _reportAsyncViewportError(Future<void> future, String context) {
+    unawaited(
+      future.catchError((Object error, StackTrace stackTrace) {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'vesper_player',
+            context: ErrorDescription(context),
+          ),
+        );
+      }),
+    );
   }
 }
 

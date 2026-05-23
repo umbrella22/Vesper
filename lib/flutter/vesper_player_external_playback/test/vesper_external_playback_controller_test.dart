@@ -290,6 +290,57 @@ void main() {
     expect(calls.single.method, 'connect');
   });
 
+  test('dispose clears cached routes and rejects later operations', () async {
+    const customRoutesChannel = EventChannel(
+      'io.github.ikaros.vesper_player_external_playback_test/routes',
+    );
+    var routeListenCount = 0;
+    var routeCancelCount = 0;
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+      customRoutesChannel,
+      MockStreamHandler.inline(
+        onListen: (_, events) {
+          routeListenCount += 1;
+          events.success(<Object?>[
+            <String, Object?>{
+              'routeId': 'uuid:tv',
+              'name': 'Living Room TV',
+              'kind': 'dlna',
+            },
+          ]);
+        },
+        onCancel: (_) {
+          routeCancelCount += 1;
+        },
+      ),
+    );
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockStreamHandler(customRoutesChannel, null);
+    });
+
+    final controller = VesperExternalPlaybackController(
+      methodChannel: channel,
+      routesEventChannel: customRoutesChannel,
+    );
+    final routes = <List<VesperExternalPlaybackRoute>>[];
+    final subscription = controller.routes.listen(routes.add);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(routeListenCount, 1);
+    expect(routes.single.single.routeId, 'uuid:tv');
+
+    await subscription.cancel();
+    await Future<void>.delayed(Duration.zero);
+    expect(routeCancelCount, 1);
+
+    controller.dispose();
+    expect(() => controller.routes, throwsStateError);
+    expect(() => controller.connect('uuid:tv'), throwsStateError);
+  });
+
   testWidgets('route button wrapper preserves requested icon hit area',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;

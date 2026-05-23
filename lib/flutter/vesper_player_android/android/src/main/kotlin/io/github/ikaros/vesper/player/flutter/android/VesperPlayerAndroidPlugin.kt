@@ -1843,6 +1843,9 @@ private fun Throwable.toErrorMap(): Map<String, Any?> =
         "code" to "backendFailure",
         "category" to "platform",
         "retriable" to false,
+        "details" to mapOf(
+            "exception" to this::class.java.name,
+        ),
     )
 
 private fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
@@ -1851,6 +1854,9 @@ private fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
         "category" to "platform",
         "retriable" to false,
         "message" to (message ?: toString()),
+        "details" to mapOf(
+            "exception" to this::class.java.name,
+        ),
     )
 
 private fun List<VesperBenchmarkEvent>.toBenchmarkJsonArray(): JSONArray =

@@ -600,6 +600,8 @@ final class VesperExternalPlaybackMediaItem {
 
   factory VesperExternalPlaybackMediaItem.fromMap(Map<Object?, Object?> map) {
     final rawSources = map['sources'];
+    final rawMetadata = _rawMap(map['metadata']);
+    final rawFormatAdaptation = _rawMap(map['formatAdaptation']);
     return VesperExternalPlaybackMediaItem(
       sources: rawSources is Iterable
           ? rawSources
@@ -609,18 +611,16 @@ final class VesperExternalPlaybackMediaItem {
               .toList(growable: false)
           : const <VesperPlayerSource>[],
       metadata: VesperSystemPlaybackMetadata.fromMap(
-        _rawMap(map['metadata']) ?? const <Object?, Object?>{},
+        rawMetadata ?? const <Object?, Object?>{},
       ),
       proxyPolicy: _decodeEnum(
         VesperExternalProxyPolicy.values,
         map['proxyPolicy'],
         VesperExternalProxyPolicy.auto,
       ),
-      formatAdaptation: _rawMap(map['formatAdaptation']) == null
+      formatAdaptation: rawFormatAdaptation == null
           ? const VesperExternalFormatAdaptationConfig.disabled()
-          : VesperExternalFormatAdaptationConfig.fromMap(
-              _rawMap(map['formatAdaptation'])!,
-            ),
+          : VesperExternalFormatAdaptationConfig.fromMap(rawFormatAdaptation),
     );
   }
 
@@ -900,11 +900,12 @@ final class VesperRuntimeWarning {
       map['domain'],
       VesperRuntimeWarningDomain.frameProcessor,
     );
+    final rawFrameProcessor = _rawMap(map['frameProcessor']);
     return switch (domain) {
       VesperRuntimeWarningDomain.frameProcessor =>
         VesperRuntimeWarning.frameProcessor(
           VesperFrameProcessorWarning.fromMap(
-            _rawMap(map['frameProcessor']) ?? const <Object?, Object?>{},
+            rawFrameProcessor ?? const <Object?, Object?>{},
           ),
         ),
     };
@@ -1140,6 +1141,7 @@ final class VesperPluginDiagnostic {
   });
 
   factory VesperPluginDiagnostic.fromMap(Map<Object?, Object?> map) {
+    final rawCapability = _rawMap(map['capability']);
     return VesperPluginDiagnostic(
       path: map['path'] as String? ?? '',
       pluginName: map['pluginName'] as String?,
@@ -1150,9 +1152,9 @@ final class VesperPluginDiagnostic {
         VesperPluginDiagnosticStatus.unsupportedKind,
       ),
       message: map['message'] as String?,
-      capability: _rawMap(map['capability']) == null
+      capability: rawCapability == null
           ? null
-          : VesperPluginCapability.fromMap(_rawMap(map['capability'])!),
+          : VesperPluginCapability.fromMap(rawCapability),
     );
   }
 
@@ -1193,14 +1195,19 @@ T _decodeRequiredEnum<T extends Enum>(
   String key,
 ) {
   if (raw is! String) {
-    throw FormatException('Expected $key to be a string.');
+    throw FormatException(
+      'Expected $key to be a string, got ${raw.runtimeType}.',
+    );
   }
   for (final value in values) {
     if (value.name == raw) {
       return value;
     }
   }
-  throw FormatException('Unknown $key: $raw.');
+  throw FormatException(
+    'Unknown $key: $raw. Expected one of '
+    '${values.map((value) => value.name).join(', ')}.',
+  );
 }
 
 bool _decodeBool(
@@ -1233,7 +1240,7 @@ double? _decodeDouble(Map<Object?, Object?> map, String key) {
   return null;
 }
 
-Map<String, Object?> _stringKeyedMap(Map<Object?, Object?> source) {
+Map<String, Object?> _toStringKeyedMap(Map<Object?, Object?> source) {
   return source.map((key, value) => MapEntry(key.toString(), value));
 }
 
@@ -1675,6 +1682,7 @@ final class VesperTimeline {
 
   factory VesperTimeline.fromMap(Map<Object?, Object?> map) {
     final rawRange = map['seekableRange'];
+    final seekableRange = _rawMap(rawRange);
     return VesperTimeline(
       kind: _decodeEnum(
         VesperTimelineKind.values,
@@ -1682,8 +1690,8 @@ final class VesperTimeline {
         VesperTimelineKind.vod,
       ),
       isSeekable: _decodeBool(map, 'isSeekable'),
-      seekableRange: _rawMap(rawRange) != null
-          ? VesperSeekableRange.fromMap(_rawMap(rawRange)!)
+      seekableRange: seekableRange != null
+          ? VesperSeekableRange.fromMap(seekableRange)
           : null,
       liveEdgeMs: _decodeInt(map, 'liveEdgeMs'),
       positionMs: _decodeInt(map, 'positionMs') ?? 0,
@@ -2002,18 +2010,22 @@ final class VesperTrackSelectionSnapshot {
     final rawAudio = map['audio'];
     final rawSubtitle = map['subtitle'];
     final rawAbr = map['abrPolicy'];
+    final video = _rawMap(rawVideo);
+    final audio = _rawMap(rawAudio);
+    final subtitle = _rawMap(rawSubtitle);
+    final abrPolicy = _rawMap(rawAbr);
     return VesperTrackSelectionSnapshot(
-      video: _rawMap(rawVideo) != null
-          ? VesperTrackSelection.fromMap(_rawMap(rawVideo)!)
+      video: video != null
+          ? VesperTrackSelection.fromMap(video)
           : const VesperTrackSelection.auto(),
-      audio: _rawMap(rawAudio) != null
-          ? VesperTrackSelection.fromMap(_rawMap(rawAudio)!)
+      audio: audio != null
+          ? VesperTrackSelection.fromMap(audio)
           : const VesperTrackSelection.auto(),
-      subtitle: _rawMap(rawSubtitle) != null
-          ? VesperTrackSelection.fromMap(_rawMap(rawSubtitle)!)
+      subtitle: subtitle != null
+          ? VesperTrackSelection.fromMap(subtitle)
           : const VesperTrackSelection.disabled(),
-      abrPolicy: _rawMap(rawAbr) != null
-          ? VesperAbrPolicy.fromMap(_rawMap(rawAbr)!)
+      abrPolicy: abrPolicy != null
+          ? VesperAbrPolicy.fromMap(abrPolicy)
           : const VesperAbrPolicy.auto(),
     );
   }
@@ -2048,6 +2060,9 @@ final class VesperTrackPreferencePolicy {
     final rawAudioSelection = map['audioSelection'];
     final rawSubtitleSelection = map['subtitleSelection'];
     final rawAbrPolicy = map['abrPolicy'];
+    final audioSelection = _rawMap(rawAudioSelection);
+    final subtitleSelection = _rawMap(rawSubtitleSelection);
+    final abrPolicy = _rawMap(rawAbrPolicy);
     return VesperTrackPreferencePolicy(
       preferredAudioLanguage: map['preferredAudioLanguage'] as String?,
       preferredSubtitleLanguage: map['preferredSubtitleLanguage'] as String?,
@@ -2056,14 +2071,14 @@ final class VesperTrackPreferencePolicy {
         map,
         'selectUndeterminedSubtitleLanguage',
       ),
-      audioSelection: _rawMap(rawAudioSelection) != null
-          ? VesperTrackSelection.fromMap(_rawMap(rawAudioSelection)!)
+      audioSelection: audioSelection != null
+          ? VesperTrackSelection.fromMap(audioSelection)
           : const VesperTrackSelection.auto(),
-      subtitleSelection: _rawMap(rawSubtitleSelection) != null
-          ? VesperTrackSelection.fromMap(_rawMap(rawSubtitleSelection)!)
+      subtitleSelection: subtitleSelection != null
+          ? VesperTrackSelection.fromMap(subtitleSelection)
           : const VesperTrackSelection.disabled(),
-      abrPolicy: _rawMap(rawAbrPolicy) != null
-          ? VesperAbrPolicy.fromMap(_rawMap(rawAbrPolicy)!)
+      abrPolicy: abrPolicy != null
+          ? VesperAbrPolicy.fromMap(abrPolicy)
           : const VesperAbrPolicy.auto(),
     );
   }
@@ -2408,15 +2423,18 @@ final class VesperPlaybackResiliencePolicy {
     final rawBuffering = map['buffering'];
     final rawRetry = map['retry'];
     final rawCache = map['cache'];
+    final buffering = _rawMap(rawBuffering);
+    final retry = _rawMap(rawRetry);
+    final cache = _rawMap(rawCache);
     return VesperPlaybackResiliencePolicy(
-      buffering: _rawMap(rawBuffering) != null
-          ? VesperBufferingPolicy.fromMap(_rawMap(rawBuffering)!)
+      buffering: buffering != null
+          ? VesperBufferingPolicy.fromMap(buffering)
           : const VesperBufferingPolicy(),
-      retry: _rawMap(rawRetry) != null
-          ? VesperRetryPolicy.fromMap(_rawMap(rawRetry)!)
+      retry: retry != null
+          ? VesperRetryPolicy.fromMap(retry)
           : const VesperRetryPolicy(),
-      cache: _rawMap(rawCache) != null
-          ? VesperCachePolicy.fromMap(_rawMap(rawCache)!)
+      cache: cache != null
+          ? VesperCachePolicy.fromMap(cache)
           : const VesperCachePolicy(),
     );
   }
@@ -2637,6 +2655,15 @@ final class VesperPlayerSnapshot {
     final rawViewport = map['viewport'];
     final rawViewportHint = map['viewportHint'];
     final rawLastError = map['lastError'];
+    final timeline = _rawMap(rawTimeline);
+    final viewport = _rawMap(rawViewport);
+    final viewportHint = _rawMap(rawViewportHint);
+    final capabilities = _rawMap(rawCapabilities);
+    final trackCatalog = _rawMap(rawTrackCatalog);
+    final trackSelection = _rawMap(rawTrackSelection);
+    final videoVariantObservation = _rawMap(rawVideoVariantObservation);
+    final resiliencePolicy = _rawMap(rawResiliencePolicy);
+    final lastError = _rawMap(rawLastError);
     return VesperPlayerSnapshot(
       title: map['title'] as String? ?? 'Vesper',
       subtitle: map['subtitle'] as String? ?? '',
@@ -2650,33 +2677,32 @@ final class VesperPlayerSnapshot {
       isBuffering: _decodeBool(map, 'isBuffering'),
       isInterrupted: _decodeBool(map, 'isInterrupted'),
       hasVideoSurface: _decodeBool(map, 'hasVideoSurface'),
-      timeline: _rawMap(rawTimeline) != null
-          ? VesperTimeline.fromMap(_rawMap(rawTimeline)!)
+      timeline: timeline != null
+          ? VesperTimeline.fromMap(timeline)
           : const VesperTimeline.initial(),
-      viewport: _rawMap(rawViewport) != null
-          ? VesperPlayerViewport.fromMap(_rawMap(rawViewport)!)
-          : null,
-      viewportHint: _rawMap(rawViewportHint) != null
-          ? VesperViewportHint.fromMap(_rawMap(rawViewportHint)!)
+      viewport:
+          viewport != null ? VesperPlayerViewport.fromMap(viewport) : null,
+      viewportHint: viewportHint != null
+          ? VesperViewportHint.fromMap(viewportHint)
           : const VesperViewportHint.hidden(),
       backendFamily: _decodeEnum(
         VesperPlayerBackendFamily.values,
         map['backendFamily'],
         VesperPlayerBackendFamily.unknown,
       ),
-      capabilities: _rawMap(rawCapabilities) != null
-          ? VesperPlayerCapabilities.fromMap(_rawMap(rawCapabilities)!)
+      capabilities: capabilities != null
+          ? VesperPlayerCapabilities.fromMap(capabilities)
           : const VesperPlayerCapabilities.unsupported(),
-      trackCatalog: _rawMap(rawTrackCatalog) != null
-          ? VesperTrackCatalog.fromMap(_rawMap(rawTrackCatalog)!)
+      trackCatalog: trackCatalog != null
+          ? VesperTrackCatalog.fromMap(trackCatalog)
           : const VesperTrackCatalog(),
-      trackSelection: _rawMap(rawTrackSelection) != null
-          ? VesperTrackSelectionSnapshot.fromMap(_rawMap(rawTrackSelection)!)
+      trackSelection: trackSelection != null
+          ? VesperTrackSelectionSnapshot.fromMap(trackSelection)
           : const VesperTrackSelectionSnapshot(),
       effectiveVideoTrackId: rawEffectiveVideoTrackId as String?,
-      videoVariantObservation: _rawMap(rawVideoVariantObservation) != null
+      videoVariantObservation: videoVariantObservation != null
           ? VesperVideoVariantObservation.fromMap(
-              _rawMap(rawVideoVariantObservation)!,
+              videoVariantObservation,
             )
           : null,
       fixedTrackStatus: rawFixedTrackStatus is String
@@ -2686,14 +2712,13 @@ final class VesperPlayerSnapshot {
               VesperFixedTrackStatus.pending,
             )
           : null,
-      resiliencePolicy: _rawMap(rawResiliencePolicy) != null
+      resiliencePolicy: resiliencePolicy != null
           ? VesperPlaybackResiliencePolicy.fromMap(
-              _rawMap(rawResiliencePolicy)!,
+              resiliencePolicy,
             )
           : const VesperPlaybackResiliencePolicy(),
-      lastError: _rawMap(rawLastError) != null
-          ? VesperPlayerError.fromMap(_rawMap(rawLastError)!)
-          : null,
+      lastError:
+          lastError != null ? VesperPlayerError.fromMap(lastError) : null,
     );
   }
 
@@ -2803,7 +2828,7 @@ final class VesperPlayerSnapshot {
 Map<String, Object?> vesperDecodeMap(Object? raw) {
   final decoded = _rawMap(raw);
   if (decoded != null) {
-    return _stringKeyedMap(decoded);
+    return _toStringKeyedMap(decoded);
   }
   return <String, Object?>{};
 }

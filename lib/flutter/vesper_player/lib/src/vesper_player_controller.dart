@@ -94,13 +94,25 @@ class VesperPlayerController {
     } catch (error, stackTrace) {
       platformError = error;
       platformStackTrace = stackTrace;
-    } finally {
-      await _platformSubscription?.cancel();
-      _eventsController.add(VesperPlayerDisposedEvent(playerId: playerId));
-      await _eventsController.close();
-      await _snapshotsController.close();
-      snapshotListenable.dispose();
     }
+
+    await _guardDisposeCleanup(
+      () => _platformSubscription?.cancel(),
+      context: 'cancel player event subscription',
+    );
+    _eventsController.add(VesperPlayerDisposedEvent(playerId: playerId));
+    await _guardDisposeCleanup(
+      _eventsController.close,
+      context: 'close player event stream',
+    );
+    await _guardDisposeCleanup(
+      _snapshotsController.close,
+      context: 'close player snapshot stream',
+    );
+    _guardDisposeSyncCleanup(
+      snapshotListenable.dispose,
+      context: 'dispose player snapshot listenable',
+    );
 
     if (platformError != null) {
       Error.throwWithStackTrace(platformError, platformStackTrace!);
@@ -348,6 +360,42 @@ class VesperPlayerController {
         context: ErrorDescription('while forwarding a platform operation'),
       ),
     );
+  }
+
+  Future<void> _guardDisposeCleanup(
+    FutureOr<void> Function() cleanup, {
+    required String context,
+  }) async {
+    try {
+      await cleanup();
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'vesper_player',
+          context: ErrorDescription(context),
+        ),
+      );
+    }
+  }
+
+  void _guardDisposeSyncCleanup(
+    VoidCallback cleanup, {
+    required String context,
+  }) {
+    try {
+      cleanup();
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'vesper_player',
+          context: ErrorDescription(context),
+        ),
+      );
+    }
   }
 
   void _ensureActive() {

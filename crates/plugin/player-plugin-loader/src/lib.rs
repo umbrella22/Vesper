@@ -2365,7 +2365,13 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
 
 impl Drop for DynamicNativeDecoderSession {
     fn drop(&mut self) {
-        let _ = self.close();
+        if let Err(error) = self.close() {
+            tracing::error!(
+                plugin = %self.factory.name,
+                error = %error,
+                "native decoder plugin session close failed during drop"
+            );
+        }
     }
 }
 
@@ -2768,7 +2774,13 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
 
 impl Drop for DynamicFrameProcessorSession {
     fn drop(&mut self) {
-        let _ = self.close();
+        if let Err(error) = self.close() {
+            tracing::error!(
+                plugin = %self.factory.name,
+                error = %error,
+                "frame processor plugin session close failed during drop"
+            );
+        }
     }
 }
 
@@ -3183,7 +3195,13 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
 
 impl Drop for DynamicSourceNormalizerPacketSession {
     fn drop(&mut self) {
-        let _ = self.close();
+        if let Err(error) = self.close() {
+            tracing::error!(
+                plugin = %self.factory.name,
+                error = %error,
+                "source normalizer packet plugin session close failed during drop"
+            );
+        }
     }
 }
 

@@ -151,9 +151,12 @@ internal class VesperNativeSurfaceHost(
                 ) = Unit
 
                 override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-                    bindings.detachSurface()
-                    surface?.release()
-                    surface = null
+                    try {
+                        bindings.detachSurface()
+                    } finally {
+                        surface?.release()
+                        surface = null
+                    }
                     return true
                 }
 
