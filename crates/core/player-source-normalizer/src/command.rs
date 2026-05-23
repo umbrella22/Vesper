@@ -1,6 +1,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::{SourceNormalizerOutputContainer, SourceNormalizerProfile};
+use crate::{
+    SourceNormalizerError, SourceNormalizerOutputContainer, SourceNormalizerProfile,
+    SourceNormalizerResult,
+};
 
 /// Configuration used to plan one source normalization session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +36,9 @@ impl FfmpegCommandPlan {
 pub fn build_ffmpeg_command_plan(
     profile: &SourceNormalizerProfile,
     config: &SourceNormalizerSessionConfig,
-) -> FfmpegCommandPlan {
+) -> SourceNormalizerResult<FfmpegCommandPlan> {
+    validate_profile_options(profile, config)?;
+
     let mut args = vec!["-hide_banner".to_owned(), "-y".to_owned()];
 
     if let Some(input_demuxer) = &profile.input_demuxer {
@@ -68,10 +73,10 @@ pub fn build_ffmpeg_command_plan(
         args.push(config.output.display().to_string());
     }
 
-    FfmpegCommandPlan {
+    Ok(FfmpegCommandPlan {
         program: config.ffmpeg_program.clone(),
         args,
-    }
+    })
 }
 
 fn push_options(args: &mut Vec<String>, options: &HashMap<String, toml::Value>) {
@@ -146,6 +151,111 @@ fn ffmpeg_option_name(key: &str) -> String {
     key.to_owned()
 }
 
+fn validate_profile_options(
+    profile: &SourceNormalizerProfile,
+    config: &SourceNormalizerSessionConfig,
+) -> SourceNormalizerResult<()> {
+    validate_option_group(
+        &config.runtime_profile,
+        "input_options",
+        &profile.input_options,
+    )?;
+    validate_option_group(&config.runtime_profile, "network", &profile.network)?;
+    validate_option_group(
+        &config.runtime_profile,
+        "output_options",
+        &profile.output_options,
+    )?;
+    Ok(())
+}
+
+fn validate_option_group(
+    runtime_profile: &str,
+    group: &str,
+    options: &HashMap<String, toml::Value>,
+) -> SourceNormalizerResult<()> {
+    for (key, value) in options {
+        validate_option_key(runtime_profile, group, key)?;
+        validate_option_value(runtime_profile, group, key, value)?;
+    }
+    Ok(())
+}
+
+fn validate_option_key(
+    runtime_profile: &str,
+    group: &str,
+    key: &str,
+) -> SourceNormalizerResult<()> {
+    if key.is_empty() {
+        return invalid_option(
+            runtime_profile,
+            group,
+            key,
+            "FFmpeg option key must not be empty",
+        );
+    }
+    if key.starts_with('-') {
+        return invalid_option(
+            runtime_profile,
+            group,
+            key,
+            "FFmpeg option key must not include a leading '-'",
+        );
+    }
+    if key.chars().any(char::is_whitespace) {
+        return invalid_option(
+            runtime_profile,
+            group,
+            key,
+            "FFmpeg option key must not contain whitespace",
+        );
+    }
+    Ok(())
+}
+
+fn validate_option_value(
+    runtime_profile: &str,
+    group: &str,
+    key: &str,
+    value: &toml::Value,
+) -> SourceNormalizerResult<()> {
+    match value {
+        toml::Value::Table(_) => invalid_option(
+            runtime_profile,
+            group,
+            key,
+            "nested TOML tables are not supported for FFmpeg options",
+        ),
+        toml::Value::Array(values)
+            if values
+                .iter()
+                .any(|value| matches!(value, toml::Value::Table(_))) =>
+        {
+            invalid_option(
+                runtime_profile,
+                group,
+                key,
+                "nested TOML tables are not supported in FFmpeg option arrays",
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+fn invalid_option<T>(
+    runtime_profile: &str,
+    group: &str,
+    key: &str,
+    reason: &str,
+) -> SourceNormalizerResult<T> {
+    Err(SourceNormalizerError::InvalidRuntimeProfile {
+        profile: runtime_profile.to_owned(),
+        message: format!(
+            "{reason}: {group}.{key}; use the exact FFmpeg option name without implicit conversion"
+        ),
+    })
+}
+
 fn should_apply_network_options(input: &str) -> bool {
     let lower = input.to_ascii_lowercase();
     lower.starts_with("http://")
@@ -195,7 +305,8 @@ probesize = 5000000
                 ffmpeg_program: "ffmpeg".to_owned(),
                 output_to_stdout: false,
             },
-        );
+        )
+        .expect("command plan");
 
         assert!(plan.args.windows(2).any(|pair| pair == ["-c", "copy"]));
         assert!(plan.args.windows(2).any(|pair| pair == ["-f", "flv"]));
@@ -233,7 +344,8 @@ reconnect_at_eof = true
                 ffmpeg_program: "ffmpeg".to_owned(),
                 output_to_stdout: false,
             },
-        );
+        )
+        .expect("command plan");
 
         assert!(plan.args.iter().any(|arg| arg == "-fpsprobesize"));
         assert!(!plan.args.iter().any(|arg| arg == "-reconnect_at_eof"));
@@ -262,7 +374,8 @@ reconnect_at_eof = true
                 ffmpeg_program: "ffmpeg".to_owned(),
                 output_to_stdout: false,
             },
-        );
+        )
+        .expect("local command plan");
         let remote = build_ffmpeg_command_plan(
             profile,
             &SourceNormalizerSessionConfig {
@@ -272,7 +385,8 @@ reconnect_at_eof = true
                 ffmpeg_program: "ffmpeg".to_owned(),
                 output_to_stdout: false,
             },
-        );
+        )
+        .expect("remote command plan");
 
         assert!(!local.args.iter().any(|arg| arg == "-reconnect_at_eof"));
         assert!(remote.args.iter().any(|arg| arg == "-reconnect_at_eof"));
@@ -297,7 +411,8 @@ output_container = "fmp4"
                 ffmpeg_program: "ffmpeg".to_owned(),
                 output_to_stdout: true,
             },
-        );
+        )
+        .expect("command plan");
 
         assert!(plan.args.windows(2).any(|pair| pair == ["-c", "copy"]));
         assert_eq!(plan.args.last().map(String::as_str), Some("pipe:1"));
@@ -308,5 +423,69 @@ output_container = "fmp4"
         );
         assert!(!plan.args.iter().any(|arg| arg == "libx264"));
         assert!(!plan.args.iter().any(|arg| arg == "-vf"));
+    }
+
+    #[test]
+    fn command_rejects_invalid_ffmpeg_option_keys() {
+        for (key, expected) in [
+            ("", "must not be empty"),
+            ("-probesize", "must not include a leading '-'"),
+            ("probe size", "must not contain whitespace"),
+        ] {
+            let toml = format!(
+                r#"
+[runtime.source-normalizer.base]
+output_container = "fmp4"
+
+[runtime.source-normalizer.base.input_options]
+"{key}" = 1
+"#
+            );
+            let profiles = SourceNormalizerProfileSet::from_toml_str(&toml).expect("profiles");
+            let profile = profiles.require("base").expect("base");
+            let error = build_ffmpeg_command_plan(
+                profile,
+                &SourceNormalizerSessionConfig {
+                    runtime_profile: "base".to_owned(),
+                    input: "input.mp4".to_owned(),
+                    output: PathBuf::from("output.mp4"),
+                    ffmpeg_program: "ffmpeg".to_owned(),
+                    output_to_stdout: false,
+                },
+            )
+            .expect_err("invalid option key should fail");
+
+            assert!(format!("{error}").contains(expected));
+            assert!(format!("{error}").contains("exact FFmpeg option name"));
+        }
+    }
+
+    #[test]
+    fn command_rejects_nested_ffmpeg_option_tables() {
+        let profiles = SourceNormalizerProfileSet::from_toml_str(
+            r#"
+[runtime.source-normalizer.base]
+output_container = "fmp4"
+
+[runtime.source-normalizer.base.input_options.headers]
+User-Agent = "Vesper"
+"#,
+        )
+        .expect("profiles");
+        let profile = profiles.require("base").expect("base");
+        let error = build_ffmpeg_command_plan(
+            profile,
+            &SourceNormalizerSessionConfig {
+                runtime_profile: "base".to_owned(),
+                input: "input.mp4".to_owned(),
+                output: PathBuf::from("output.mp4"),
+                ffmpeg_program: "ffmpeg".to_owned(),
+                output_to_stdout: false,
+            },
+        )
+        .expect_err("nested option tables should fail");
+
+        assert!(format!("{error}").contains("nested TOML tables are not supported"));
+        assert!(format!("{error}").contains("input_options.headers"));
     }
 }

@@ -14,7 +14,11 @@ pub enum NormalizeLevel {
     /// Remux/copy normalization with optional bitstream filters.
     #[serde(alias = "remux_only", alias = "RemuxOnly")]
     RemuxOnly = 1,
-    /// Future packet repair work that still does not decode pixels.
+    /// Experimental packet repair level reserved for future work.
+    ///
+    /// Current implementations only guarantee remux/copy behavior; this level
+    /// is parsed so profile documents can describe future capabilities without
+    /// changing the wire spelling later.
     #[serde(alias = "packet_repair", alias = "PacketRepair")]
     PacketRepair = 2,
 }
@@ -141,10 +145,13 @@ pub struct SourceNormalizerProfile {
     #[serde(default)]
     pub match_rules: SourceMatchRules,
     #[serde(default)]
+    /// FFmpeg input options. Inherited options use shallow key override.
     pub input_options: HashMap<String, toml::Value>,
     #[serde(default)]
+    /// FFmpeg output options. Inherited options use shallow key override.
     pub output_options: HashMap<String, toml::Value>,
     #[serde(default)]
+    /// FFmpeg network options. Inherited options use shallow key override.
     pub network: HashMap<String, toml::Value>,
     #[serde(default)]
     pub runtime: SourceNormalizerRuntimePolicy,
@@ -450,6 +457,9 @@ fn default_session_total_timeout_ms() -> u64 {
 mod tests {
     use super::*;
 
+    const DEFAULT_PROFILE_TOML: &str =
+        include_str!("../../../../scripts/source-normalizer-profiles.toml");
+
     const SAMPLE: &str = r#"
 [runtime.source-normalizer.base]
 level = "remux_only"
@@ -503,6 +513,82 @@ priority = -1
     }
 
     #[test]
+    fn normalize_level_toml_names_are_stable() {
+        let profiles = SourceNormalizerProfileSet::from_toml_str(
+            r#"
+[runtime.source-normalizer.remux]
+level = "remux_only"
+
+[runtime.source-normalizer.repair]
+level = "packet_repair"
+"#,
+        )
+        .expect("profiles");
+
+        assert_eq!(
+            profiles.require("remux").expect("remux").level,
+            NormalizeLevel::RemuxOnly
+        );
+        assert_eq!(
+            profiles.require("repair").expect("repair").level,
+            NormalizeLevel::PacketRepair
+        );
+    }
+
+    #[test]
+    fn option_tables_use_shallow_override_for_inheritance() {
+        let profiles = SourceNormalizerProfileSet::from_toml_str(
+            r#"
+[runtime.source-normalizer.parent]
+
+[runtime.source-normalizer.parent.input_options]
+shared = "parent"
+parent_only = "kept"
+nested = { parent = true, keep = true }
+
+[runtime.source-normalizer.child]
+extends = "parent"
+
+[runtime.source-normalizer.child.input_options]
+shared = "child"
+child_only = "added"
+nested = { child = true }
+"#,
+        )
+        .expect("profiles");
+        let child = profiles.require("child").expect("child");
+
+        assert_eq!(
+            child.input_options.get("shared"),
+            Some(&toml::Value::String("child".to_owned()))
+        );
+        assert_eq!(
+            child.input_options.get("parent_only"),
+            Some(&toml::Value::String("kept".to_owned()))
+        );
+        assert_eq!(
+            child.input_options.get("child_only"),
+            Some(&toml::Value::String("added".to_owned()))
+        );
+        assert_eq!(
+            child
+                .input_options
+                .get("nested")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("parent")),
+            None
+        );
+        assert_eq!(
+            child
+                .input_options
+                .get("nested")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("child")),
+            Some(&toml::Value::Boolean(true))
+        );
+    }
+
+    #[test]
     fn detects_inheritance_cycle() {
         let input = r#"
 [runtime.source-normalizer.a]
@@ -543,5 +629,93 @@ fallback_profile = "missing"
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["flv", "base", "generic-fallback"]);
+    }
+
+    #[test]
+    fn default_source_normalizer_profiles_resolve_expected_semantics() {
+        let profiles =
+            SourceNormalizerProfileSet::from_toml_str(DEFAULT_PROFILE_TOML).expect("profiles");
+
+        let base = profiles.require("base").expect("base");
+        assert_eq!(base.level, NormalizeLevel::RemuxOnly);
+        assert_eq!(base.output_container, SourceNormalizerOutputContainer::Fmp4);
+        assert_eq!(base.runtime.probe_timeout_ms, 30_000);
+        assert_eq!(
+            base.runtime.fallback_profile.as_deref(),
+            Some("generic-fallback")
+        );
+        assert_eq!(
+            base.input_options.get("probesize"),
+            Some(&toml::Value::Integer(5_000_000))
+        );
+        assert_eq!(
+            base.network.get("timeout"),
+            Some(&toml::Value::Integer(10_000_000))
+        );
+        assert!(!base.required_capabilities.network);
+
+        let flv = profiles.require("flv").expect("flv");
+        assert_eq!(flv.input_demuxer.as_deref(), Some("flv"));
+        assert_eq!(
+            flv.network.get("reconnect_at_eof"),
+            Some(&toml::Value::Boolean(true))
+        );
+        assert_eq!(
+            flv.output_options.get("movflags"),
+            Some(&toml::Value::String(
+                "+faststart+frag_keyframe+empty_moov".to_owned()
+            ))
+        );
+        assert!(flv.required_capabilities.network);
+        assert!(
+            flv.required_capabilities
+                .demuxers
+                .contains(&"flv".to_owned())
+        );
+        assert!(
+            flv.required_capabilities
+                .protocols
+                .contains(&"https".to_owned())
+        );
+        assert_eq!(
+            flv.runtime.fallback_profile.as_deref(),
+            Some("generic-fallback")
+        );
+
+        let hevc = profiles.require("bilibili-hevc-flv").expect("hevc");
+        assert_eq!(
+            hevc.input_options.get("analyzeduration"),
+            Some(&toml::Value::Integer(50_000_000))
+        );
+        assert_eq!(
+            hevc.input_options.get("probesize"),
+            Some(&toml::Value::Integer(10_000_000))
+        );
+        assert_eq!(
+            hevc.output_options.get("movflags"),
+            Some(&toml::Value::String(
+                "+faststart+frag_keyframe+empty_moov".to_owned()
+            ))
+        );
+
+        let hls = profiles.require("hls-nonstandard").expect("hls");
+        assert_eq!(hls.output_container, SourceNormalizerOutputContainer::Hls);
+        assert!(hls.required_capabilities.network);
+        assert!(
+            hls.required_capabilities
+                .protocols
+                .contains(&"crypto".to_owned())
+        );
+
+        let dash = profiles.require("dash-weird").expect("dash");
+        assert_eq!(dash.output_container, SourceNormalizerOutputContainer::Hls);
+        assert!(dash.required_capabilities.network);
+        assert_eq!(
+            dash.input_options.get("allowed_extensions"),
+            Some(&toml::Value::String(".mpd".to_owned()))
+        );
+
+        let standalone = SourceNormalizerProfile::default();
+        assert_eq!(standalone.runtime, SourceNormalizerRuntimePolicy::default());
     }
 }

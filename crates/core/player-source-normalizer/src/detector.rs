@@ -94,6 +94,9 @@ impl SourceDetector for SourceRuntimeDetector {
     }
 
     fn probe_headers(&self, context: &ProbeContext) -> ProbeResult {
+        // Header probing currently uses the normalized hints in ProbeContext,
+        // including MIME. This remains the extension point for future
+        // header-specific filtering without changing detector callers.
         self.probe_url(context)
     }
 
@@ -280,6 +283,35 @@ min_confidence = 0.4
         );
 
         assert!(matches!(result, ProbeResult::Candidate(_)));
+    }
+
+    #[test]
+    fn probes_headers_with_mime_only_context() {
+        let profiles = SourceNormalizerProfileSet::from_toml_str(
+            r#"
+[runtime.source-normalizer.flv]
+
+[runtime.source-normalizer.flv.match]
+mime = ["video/x-flv"]
+min_confidence = 0.3
+"#,
+        )
+        .expect("profiles");
+        let detector = SourceRuntimeDetector::new(profiles);
+        let result = detector.probe_headers(&ProbeContext {
+            url: "https://example.test/stream".to_owned(),
+            mime: Some("video/x-flv".to_owned()),
+            headers: vec![("content-type".to_owned(), "video/x-flv".to_owned())],
+            timeout_ms: 1_000,
+        });
+
+        match result {
+            ProbeResult::Candidate(candidate) => {
+                assert_eq!(candidate.runtime_profile, "flv");
+                assert!(candidate.diagnostic_reason.contains("MIME type matched"));
+            }
+            other => panic!("expected MIME-only header candidate, got {other:?}"),
+        }
     }
 
     #[test]
