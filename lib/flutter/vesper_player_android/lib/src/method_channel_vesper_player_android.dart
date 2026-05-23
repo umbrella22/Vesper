@@ -484,9 +484,15 @@ Object _mapPlatformException(PlatformException error) {
       normalized['category'] == VesperPlayerErrorCategory.capability.name) {
     return VesperUnsupportedError(
       normalized['message'] as String? ?? error.message,
+      error.code,
+      _toStringKeyedMap(normalized),
     );
   }
   return error;
+}
+
+Map<String, Object?> _toStringKeyedMap(Map<Object?, Object?> source) {
+  return source.map((key, value) => MapEntry(key.toString(), value));
 }
 
 VesperSystemPlaybackPermissionStatus _decodePermissionStatus(Object? raw) {

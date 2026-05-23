@@ -854,11 +854,21 @@ void main() {
       'code': 'unsupported',
       'category': 'capability',
       'retriable': false,
+      'details': <Object?, Object?>{
+        'platformCode': 'vesper_operation_failed',
+        'native': true,
+      },
     });
 
     expect(error.code, VesperPlayerErrorCode.unsupported);
     expect(error.category, VesperPlayerErrorCategory.capability);
     expect(error.message, 'unsupported operation');
+    expect(error.details['platformCode'], 'vesper_operation_failed');
+    expect(error.details['native'], isTrue);
+    expect(error.toMap()['details'], <String, Object?>{
+      'platformCode': 'vesper_operation_failed',
+      'native': true,
+    });
 
     expect(
       () => VesperPlayerError.fromMap(<Object?, Object?>{

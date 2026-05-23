@@ -16,7 +16,7 @@ pub use command::{FfmpegCommandPlan, SourceNormalizerSessionConfig, build_ffmpeg
 pub use detector::{
     ProbeContext, ProbeResult, RuntimeProfileCandidate, SourceDetector, SourceRuntimeDetector,
 };
-pub use error::{SourceNormalizerError, SourceNormalizerResult};
+pub use error::{FfmpegCommandDiagnostic, SourceNormalizerError, SourceNormalizerResult};
 pub use ffmpeg_profile::{FfmpegBuildProfile, FfmpegBuildProfileSet, FfmpegBuildValidation};
 pub use profile::{
     NormalizeLevel, SourceMatchRules, SourceNormalizerOutputContainer, SourceNormalizerProfile,

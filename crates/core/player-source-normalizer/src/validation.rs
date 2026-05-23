@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     FfmpegBuildProfile, SourceNormalizerError, SourceNormalizerProfile, SourceNormalizerResult,
 };
@@ -114,8 +116,9 @@ fn missing_values(
     available: &[String],
     reasons: &mut Vec<String>,
 ) {
+    let available = available.iter().map(String::as_str).collect::<HashSet<_>>();
     for value in required {
-        if !available.iter().any(|candidate| candidate == value) {
+        if !available.contains(value.as_str()) {
             reasons.push(format!("missing {label} `{value}`"));
         }
     }

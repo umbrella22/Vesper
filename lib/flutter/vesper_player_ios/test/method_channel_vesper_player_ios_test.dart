@@ -274,9 +274,21 @@ void main() {
     });
     final platform = MethodChannelVesperPlayerIos();
 
-    expect(
-      () => platform.refreshPlayer('ios-player'),
-      throwsA(isA<VesperUnsupportedError>()),
+    await expectLater(
+      platform.refreshPlayer('ios-player'),
+      throwsA(
+        isA<VesperUnsupportedError>()
+            .having(
+              (error) => error.platformCode,
+              'platformCode',
+              'vesper_operation_failed',
+            )
+            .having(
+              (error) => error.platformDetails['code'],
+              'details.code',
+              'unsupported',
+            ),
+      ),
     );
   });
 

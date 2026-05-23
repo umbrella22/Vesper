@@ -155,9 +155,10 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     deinit {
+        bridgeObservation?.cancel()
         let token = screenSleepToken
         Task { @MainActor in
-            VesperScreenSleepCoordinator.setActive(false, for: token)
+            VesperScreenSleepCoordinator.release(token)
         }
     }
 
@@ -166,7 +167,7 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func dispose() {
-        VesperScreenSleepCoordinator.setActive(false, for: screenSleepToken)
+        VesperScreenSleepCoordinator.release(screenSleepToken)
         systemPlaybackCoordinator.clear()
         disposeImpl()
     }
@@ -319,5 +320,9 @@ private enum VesperScreenSleepCoordinator {
         guard activeTokens.isEmpty else { return }
         UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled ?? false
         previousIdleTimerDisabled = nil
+    }
+
+    static func release(_ token: VesperScreenSleepToken) {
+        setActive(false, for: token)
     }
 }

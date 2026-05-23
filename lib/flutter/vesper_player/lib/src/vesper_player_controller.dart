@@ -333,6 +333,7 @@ class VesperPlayerController {
             code: VesperPlayerErrorCode.unsupported,
             category: VesperPlayerErrorCategory.capability,
             retriable: false,
+            details: _unsupportedErrorDetails(error),
           )
         : VesperPlayerError(
             message: error.toString(),
@@ -360,6 +361,13 @@ class VesperPlayerController {
         context: ErrorDescription('while forwarding a platform operation'),
       ),
     );
+  }
+
+  Map<String, Object?> _unsupportedErrorDetails(VesperUnsupportedError error) {
+    return <String, Object?>{
+      if (error.platformCode != null) 'platformCode': error.platformCode,
+      ...error.platformDetails,
+    };
   }
 
   Future<void> _guardDisposeCleanup(

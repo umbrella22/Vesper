@@ -1196,7 +1196,7 @@ T _decodeRequiredEnum<T extends Enum>(
 ) {
   if (raw is! String) {
     throw FormatException(
-      'Expected $key to be a string, got ${raw.runtimeType}.',
+      'Expected enum field `$key` to be a string, got ${raw.runtimeType}.',
     );
   }
   for (final value in values) {
@@ -1205,7 +1205,7 @@ T _decodeRequiredEnum<T extends Enum>(
     }
   }
   throw FormatException(
-    'Unknown $key: $raw. Expected one of '
+    'Unknown enum value `$raw` for field `$key`. Expected one of '
     '${values.map((value) => value.name).join(', ')}.',
   );
 }
@@ -1269,6 +1269,14 @@ Map<String, String> _decodeStringMap(Object? raw) {
     }
   }
   return decoded;
+}
+
+Map<String, Object?> _decodeObjectMap(Object? raw) {
+  final map = _rawMap(raw);
+  if (map == null || map.isEmpty) {
+    return const <String, Object?>{};
+  }
+  return _toStringKeyedMap(map);
 }
 
 Set<String> _decodeStringSet(
@@ -2297,14 +2305,13 @@ final class VesperRetryPolicy {
 
   factory VesperRetryPolicy.fromMap(Map<Object?, Object?> map) {
     final rawMaxAttempts = map['maxAttempts'];
+    final maxAttempts = switch (rawMaxAttempts) {
+      int value => value,
+      null when map.containsKey('maxAttempts') => null,
+      _ => _vesperRetryMaxAttemptsUnset,
+    };
     return VesperRetryPolicy(
-      maxAttempts: map.containsKey('maxAttempts')
-          ? switch (rawMaxAttempts) {
-              int value => value,
-              null => null,
-              _ => _vesperRetryMaxAttemptsUnset,
-            }
-          : _vesperRetryMaxAttemptsUnset,
+      maxAttempts: maxAttempts,
       baseDelayMs: _decodeInt(map, 'baseDelayMs'),
       maxDelayMs: _decodeInt(map, 'maxDelayMs'),
       backoff: switch (map['backoff']) {
@@ -2563,6 +2570,7 @@ final class VesperPlayerError {
     required this.code,
     required this.category,
     required this.retriable,
+    this.details = const <String, Object?>{},
   });
 
   factory VesperPlayerError.fromMap(Map<Object?, Object?> map) {
@@ -2579,6 +2587,7 @@ final class VesperPlayerError {
         'category',
       ),
       retriable: _decodeBool(map, 'retriable'),
+      details: _decodeObjectMap(map['details']),
     );
   }
 
@@ -2586,6 +2595,7 @@ final class VesperPlayerError {
   final VesperPlayerErrorCode code;
   final VesperPlayerErrorCategory category;
   final bool retriable;
+  final Map<String, Object?> details;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -2593,6 +2603,7 @@ final class VesperPlayerError {
       'code': code.name,
       'category': category.name,
       'retriable': retriable,
+      'details': details,
     };
   }
 }

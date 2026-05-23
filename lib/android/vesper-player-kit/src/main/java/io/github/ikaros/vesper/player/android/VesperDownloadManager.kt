@@ -1364,8 +1364,9 @@ internal class VesperForegroundDownloadExecutor(
         DefaultDataSource.Factory(checkNotNull(appContext) { "Android Context is required for non-HTTP downloads" })
     }
 
-    private fun closeDataSourceQuietly(dataSource: DataSource) {
+    private fun closeDataSourceQuietly(dataSource: DataSource, context: String) {
         runCatching { dataSource.close() }
+            .onFailure { error -> Log.w(TAG, "failed to close download data source for $context", error) }
     }
 
     private suspend fun prepareAssetIndexWithRecovery(
@@ -2308,7 +2309,7 @@ internal class VesperForegroundDownloadExecutor(
                     }
                 }
             } finally {
-                closeDataSourceQuietly(dataSource)
+                closeDataSourceQuietly(dataSource, "copy $sourceUri")
             }
         }
         if (expected != null && totalWritten != expected) {
@@ -2716,7 +2717,7 @@ internal class VesperForegroundDownloadExecutor(
             }
             output.toString(Charsets.UTF_8.name())
         } finally {
-            closeDataSourceQuietly(dataSource)
+            closeDataSourceQuietly(dataSource, "fetch text $sourceUri")
         }
     }
 
@@ -2762,7 +2763,7 @@ internal class VesperForegroundDownloadExecutor(
             }
             length
         } finally {
-            closeDataSourceQuietly(dataSource)
+            closeDataSourceQuietly(dataSource, "probe content length $sourceUri")
         }
     }
 

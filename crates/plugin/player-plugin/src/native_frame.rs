@@ -56,6 +56,7 @@ pub struct NativeFrameMetadata {
 }
 
 /// A native frame handle plus metadata.
+#[must_use = "native frames may own externally retained resources and must be released through the producing session"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeFrame {
     pub metadata: NativeFrameMetadata,

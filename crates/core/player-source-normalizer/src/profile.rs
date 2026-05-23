@@ -324,6 +324,7 @@ fn resolve_profile(
     }
     stack.pop();
 
+    validate_profile(name, &profile)?;
     resolved.insert(name.to_owned(), profile.clone());
     Ok(profile)
 }
@@ -366,6 +367,39 @@ fn apply_raw_profile(profile: &mut SourceNormalizerProfile, raw: &RawSourceNorma
         profile.required_capabilities =
             merge_required_capabilities(&profile.required_capabilities, required_capabilities);
     }
+}
+
+fn validate_profile(name: &str, profile: &SourceNormalizerProfile) -> SourceNormalizerResult<()> {
+    for magic in &profile.match_rules.byte_magic {
+        validate_byte_magic(name, magic)?;
+    }
+    Ok(())
+}
+
+fn validate_byte_magic(profile: &str, magic: &str) -> SourceNormalizerResult<()> {
+    let normalized = magic
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if normalized.is_empty() {
+        return Err(SourceNormalizerError::InvalidRuntimeProfile {
+            profile: profile.to_owned(),
+            message: "byte magic must not be empty".to_owned(),
+        });
+    }
+    if normalized.len() % 2 != 0 {
+        return Err(SourceNormalizerError::InvalidRuntimeProfile {
+            profile: profile.to_owned(),
+            message: format!("byte magic `{magic}` must contain complete hex bytes"),
+        });
+    }
+    if !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(SourceNormalizerError::InvalidRuntimeProfile {
+            profile: profile.to_owned(),
+            message: format!("byte magic `{magic}` must be hexadecimal"),
+        });
+    }
+    Ok(())
 }
 
 fn merge_table(
@@ -633,6 +667,22 @@ extends = "base"
             error,
             SourceNormalizerError::InvalidRuntimeProfile { ref profile, ref message }
                 if profile == "base" && message.contains("base")
+        ));
+    }
+
+    #[test]
+    fn validates_byte_magic_hex_at_profile_load_time() {
+        let input = r#"
+[runtime.source-normalizer.flv]
+
+[runtime.source-normalizer.flv.match]
+byte_magic = ["46 4c 5"]
+"#;
+        let error = SourceNormalizerProfileSet::from_toml_str(input).expect_err("byte magic");
+        assert!(matches!(
+            error,
+            SourceNormalizerError::InvalidRuntimeProfile { ref profile, ref message }
+                if profile == "flv" && message.contains("complete hex bytes")
         ));
     }
 

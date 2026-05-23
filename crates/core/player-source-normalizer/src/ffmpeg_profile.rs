@@ -20,6 +20,11 @@ pub struct FfmpegBuildValidation {
 /// Resolved FFmpeg build profile capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 pub struct FfmpegBuildProfile {
+    /// Parent profile names inherited by this resolved profile.
+    ///
+    /// TOML accepts either `extends = "base"` or `extends = ["base", "network"]`;
+    /// the resolved value is always a list so multi-parent build profiles keep
+    /// their merge order explicit.
     #[serde(default)]
     pub extends: Vec<String>,
     #[serde(default)]

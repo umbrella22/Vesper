@@ -571,7 +571,8 @@ fn map_core_error(error: player_source_normalizer::SourceNormalizerError) -> Sou
         | CoreError::FfmpegProfileCycle { .. }
         | CoreError::InvalidRuntimeProfile { .. }
         | CoreError::CapabilityMismatch { .. } => SourceNormalizerError::configuration(message),
-        CoreError::SpawnFfmpeg { .. } | CoreError::FfmpegFailed { .. } => {
+        CoreError::SpawnFfmpeg { command, .. } | CoreError::FfmpegFailed { command, .. } => {
+            let _ = command;
             SourceNormalizerError::internal(message)
         }
     }

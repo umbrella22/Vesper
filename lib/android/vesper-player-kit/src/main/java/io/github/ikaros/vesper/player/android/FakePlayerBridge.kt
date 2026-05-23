@@ -7,6 +7,7 @@ import androidx.core.view.isEmpty
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal class FakePlayerBridge(
     initialSource: VesperPlayerSource? = null,
@@ -21,6 +22,7 @@ internal class FakePlayerBridge(
     private var attachedHost: ViewGroup? = null
     private val i18n = VesperPlayerI18n.fromContext(appContext)
     private val benchmarkRecorder = VesperBenchmarkRecorder(benchmarkConfiguration)
+    private val isDisposed = AtomicBoolean(false)
 
     private val _uiState = MutableStateFlow(
         PlayerHostUiState(
@@ -60,6 +62,9 @@ internal class FakePlayerBridge(
         _resiliencePolicy.asStateFlow()
 
     override fun initialize() {
+        if (isDisposed.get()) {
+            return
+        }
         recordBenchmark("initialize_start")
         if (currentSource == null) {
             recordBenchmark("initialize_without_source")
@@ -69,14 +74,21 @@ internal class FakePlayerBridge(
     }
 
     override fun dispose() {
+        if (!isDisposed.compareAndSet(false, true)) {
+            return
+        }
         recordBenchmark("dispose_command")
         attachedHost?.keepScreenOn = false
+        attachedHost = null
         benchmarkRecorder.dispose()
     }
 
     override fun refresh() = Unit
 
     override fun selectSource(source: VesperPlayerSource) {
+        if (isDisposed.get()) {
+            return
+        }
         recordBenchmark(
             "select_source_start",
             mapOf("targetProtocol" to source.protocol.name.lowercase()),
@@ -96,6 +108,9 @@ internal class FakePlayerBridge(
     }
 
     override fun attachSurfaceHost(host: ViewGroup) {
+        if (isDisposed.get()) {
+            return
+        }
         attachedHost?.keepScreenOn = false
         attachedHost = host
         if (host.isEmpty()) {
@@ -113,6 +128,9 @@ internal class FakePlayerBridge(
     }
 
     override fun detachSurfaceHost(host: ViewGroup?) {
+        if (isDisposed.get()) {
+            return
+        }
         if (host != null && attachedHost !== host) {
             return
         }
@@ -121,6 +139,9 @@ internal class FakePlayerBridge(
     }
 
     override fun play() {
+        if (isDisposed.get()) {
+            return
+        }
         recordBenchmark("play_command")
         updateState {
             copy(playbackState = PlaybackStateUi.Playing, isBuffering = false)
@@ -128,11 +149,17 @@ internal class FakePlayerBridge(
     }
 
     override fun pause() {
+        if (isDisposed.get()) {
+            return
+        }
         recordBenchmark("pause_command")
         updateState { copy(playbackState = PlaybackStateUi.Paused, isBuffering = false) }
     }
 
     override fun togglePause() {
+        if (isDisposed.get()) {
+            return
+        }
         when (_uiState.value.playbackState) {
             PlaybackStateUi.Playing -> pause()
             PlaybackStateUi.Ready,
@@ -143,6 +170,9 @@ internal class FakePlayerBridge(
     }
 
     override fun stop() {
+        if (isDisposed.get()) {
+            return
+        }
         recordBenchmark("stop_command")
         updateState {
             copy(
@@ -154,6 +184,9 @@ internal class FakePlayerBridge(
     }
 
     override fun seekBy(deltaMs: Long) {
+        if (isDisposed.get()) {
+            return
+        }
         updateState {
             val timeline = timeline
             val target = timeline.clampedPosition(timeline.positionMs + deltaMs)
@@ -163,6 +196,9 @@ internal class FakePlayerBridge(
     }
 
     override fun seekToRatio(ratio: Float) {
+        if (isDisposed.get()) {
+            return
+        }
         updateState {
             val timeline = timeline
             val position = timeline.positionForRatio(ratio)
@@ -172,6 +208,9 @@ internal class FakePlayerBridge(
     }
 
     override fun seekToLiveEdge() {
+        if (isDisposed.get()) {
+            return
+        }
         updateState {
             val liveEdge = timeline.goLivePositionMs ?: timeline.positionMs
             recordBenchmark("seek_start", mapOf("positionMs" to liveEdge.toString()))
@@ -180,6 +219,9 @@ internal class FakePlayerBridge(
     }
 
     override fun setPlaybackRate(rate: Float) {
+        if (isDisposed.get()) {
+            return
+        }
         recordBenchmark("set_playback_rate_command", mapOf("rate" to rate.toString()))
         updateState { copy(playbackRate = rate) }
     }
@@ -193,10 +235,16 @@ internal class FakePlayerBridge(
     override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
 
     override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) {
+        if (isDisposed.get()) {
+            return
+        }
         _resiliencePolicy.value = policy
     }
 
     override fun setKeepScreenOnDuringPlayback(enabled: Boolean) {
+        if (isDisposed.get()) {
+            return
+        }
         keepScreenOnDuringPlayback = enabled
         syncKeepScreenOn()
     }

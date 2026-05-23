@@ -53,8 +53,14 @@ final class VesperPlatformDownloadCreateResult {
 }
 
 class VesperUnsupportedError extends UnsupportedError {
-  VesperUnsupportedError([String? message])
-      : super(message ?? 'Vesper player is not supported on this platform.');
+  VesperUnsupportedError([
+    String? message,
+    this.platformCode,
+    this.platformDetails = const <String, Object?>{},
+  ]) : super(message ?? 'Vesper player is not supported on this platform.');
+
+  final String? platformCode;
+  final Map<String, Object?> platformDetails;
 }
 
 abstract class VesperPlayerPlatform extends PlatformInterface {

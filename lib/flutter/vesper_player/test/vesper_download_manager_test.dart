@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player/vesper_player.dart';
 
@@ -146,6 +147,39 @@ void main() {
     expect(diagnostic.capability?.kind, VesperPluginCapabilityKind.decoder);
     expect(diagnostic.capability?.decoder?.codecs.single.codec, 'h264');
   });
+
+  test('player controller preserves unsupported platform error details',
+      () async {
+    platform.playError = VesperUnsupportedError(
+      'unsupported operation',
+      'vesper_operation_failed',
+      <String, Object?>{
+        'code': 'unsupported',
+        'category': 'capability',
+        'nativeDetail': 'surface-missing',
+      },
+    );
+    final reportedErrors = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reportedErrors.add;
+    addTearDown(() {
+      FlutterError.onError = previousOnError;
+    });
+
+    final controller = await VesperPlayerController.create();
+    addTearDown(controller.dispose);
+
+    await expectLater(
+      controller.play(),
+      throwsA(isA<VesperUnsupportedError>()),
+    );
+
+    final error = controller.snapshot.lastError;
+    expect(error?.code, VesperPlayerErrorCode.unsupported);
+    expect(error?.details['platformCode'], 'vesper_operation_failed');
+    expect(error?.details['nativeDetail'], 'surface-missing');
+    expect(reportedErrors.single.exception, isA<VesperUnsupportedError>());
+  });
 }
 
 Future<void> _flushEvents() async {
@@ -209,6 +243,7 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
       const VesperDownloadSnapshot.initial();
   List<VesperPluginDiagnostic> playerPluginDiagnostics =
       const <VesperPluginDiagnostic>[];
+  Object? playError;
   int? sharedTaskId;
   String? sharedFileName;
   String? sharedMimeType;
@@ -346,7 +381,13 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
       throw UnimplementedError();
 
   @override
-  Future<void> play(String playerId) async => throw UnimplementedError();
+  Future<void> play(String playerId) async {
+    final error = playError;
+    if (error != null) {
+      throw error;
+    }
+    throw UnimplementedError();
+  }
 
   @override
   Future<void> pause(String playerId) async => throw UnimplementedError();

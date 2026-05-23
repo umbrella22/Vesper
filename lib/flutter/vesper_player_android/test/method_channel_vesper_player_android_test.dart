@@ -218,9 +218,21 @@ void main() {
     });
     final platform = MethodChannelVesperPlayerAndroid();
 
-    expect(
-      () => platform.refreshPlayer('android-player'),
-      throwsA(isA<VesperUnsupportedError>()),
+    await expectLater(
+      platform.refreshPlayer('android-player'),
+      throwsA(
+        isA<VesperUnsupportedError>()
+            .having(
+              (error) => error.platformCode,
+              'platformCode',
+              'vesper_operation_failed',
+            )
+            .having(
+              (error) => error.platformDetails['code'],
+              'details.code',
+              'unsupported',
+            ),
+      ),
     );
   });
 
