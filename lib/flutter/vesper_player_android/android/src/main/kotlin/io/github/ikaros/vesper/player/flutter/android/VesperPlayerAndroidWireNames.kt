@@ -5,11 +5,25 @@ import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.VesperAbrMode
 import io.github.ikaros.vesper.player.android.VesperBufferingPreset
 import io.github.ikaros.vesper.player.android.VesperCachePreset
+import io.github.ikaros.vesper.player.android.VesperDownloadAssetIndex
+import io.github.ikaros.vesper.player.android.VesperDownloadAssetStream
+import io.github.ikaros.vesper.player.android.VesperDownloadByteRange
 import io.github.ikaros.vesper.player.android.VesperDownloadContentFormat
+import io.github.ikaros.vesper.player.android.VesperDownloadError
 import io.github.ikaros.vesper.player.android.VesperDownloadOutputFormat
+import io.github.ikaros.vesper.player.android.VesperDownloadProfile
+import io.github.ikaros.vesper.player.android.VesperDownloadProgressSnapshot
+import io.github.ikaros.vesper.player.android.VesperDownloadResourceRecord
+import io.github.ikaros.vesper.player.android.VesperDownloadSegmentRecord
+import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadState
+import io.github.ikaros.vesper.player.android.VesperDownloadStaleResource
+import io.github.ikaros.vesper.player.android.VesperDownloadTaskProgressPatch
+import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
+import io.github.ikaros.vesper.player.android.VesperDownloadTaskStatePatch
 import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
 import io.github.ikaros.vesper.player.android.VesperPlayerBackendFamily
+import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
@@ -260,4 +274,3 @@ internal fun VesperDownloadOutputFormat.toWireName(): String =
         VesperDownloadOutputFormat.Mkv -> "mkv"
         VesperDownloadOutputFormat.Original -> "original"
     }
-
