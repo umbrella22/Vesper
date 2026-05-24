@@ -11,13 +11,14 @@ use player_runtime::{
     PlayerCachePolicy, PlayerCachePreset, PlayerError, PlayerErrorCategory, PlayerErrorCode,
     PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
     PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerPluginFrameProcessorCapabilitySummary, PlayerPreloadBudgetPolicy,
-    PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy, PlayerRetryBackoff,
-    PlayerRetryPolicy, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
-    PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerSeekableRange, PlayerSnapshot,
-    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerTrackPreferencePolicy, PlayerVideoDecodeInfo,
-    PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState, VideoPixelFormat,
+    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation,
+    PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy,
+    PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntime, PlayerRuntimeBootstrap,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer,
+    PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerSeekableRange,
+    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerTrackPreferencePolicy,
+    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState,
+    VideoPixelFormat,
 };
 
 pub type FfiResult<T> = Result<T, FfiError>;
@@ -351,6 +352,16 @@ pub enum FfiPluginCapabilitySummary {
     FrameProcessor(FfiPluginFrameProcessorCapabilitySummary),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FfiPluginParticipation {
+    #[default]
+    Unknown,
+    Available,
+    Selected,
+    Participated,
+    Bypassed,
+}
+
 #[derive(Debug, Clone)]
 pub struct FfiPluginDiagnostic {
     pub path: String,
@@ -359,6 +370,7 @@ pub struct FfiPluginDiagnostic {
     pub status: FfiPluginDiagnosticStatus,
     pub message: Option<String>,
     pub capability: Option<FfiPluginCapabilitySummary>,
+    pub participation: FfiPluginParticipation,
 }
 
 #[derive(Debug, Clone)]
@@ -1274,6 +1286,18 @@ impl From<PlayerPluginCapabilitySummary> for FfiPluginCapabilitySummary {
     }
 }
 
+impl From<PlayerPluginParticipation> for FfiPluginParticipation {
+    fn from(value: PlayerPluginParticipation) -> Self {
+        match value {
+            PlayerPluginParticipation::Unknown => Self::Unknown,
+            PlayerPluginParticipation::Available => Self::Available,
+            PlayerPluginParticipation::Selected => Self::Selected,
+            PlayerPluginParticipation::Participated => Self::Participated,
+            PlayerPluginParticipation::Bypassed => Self::Bypassed,
+        }
+    }
+}
+
 impl From<PlayerPluginDiagnostic> for FfiPluginDiagnostic {
     fn from(value: PlayerPluginDiagnostic) -> Self {
         Self {
@@ -1283,6 +1307,7 @@ impl From<PlayerPluginDiagnostic> for FfiPluginDiagnostic {
             status: value.status.into(),
             message: value.message,
             capability: value.capability.map(FfiPluginCapabilitySummary::from),
+            participation: value.participation.into(),
         }
     }
 }

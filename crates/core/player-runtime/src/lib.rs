@@ -453,6 +453,17 @@ pub enum PlayerPluginCapabilitySummary {
     FrameProcessor(PlayerPluginFrameProcessorCapabilitySummary),
 }
 
+/// Runtime participation state for plugin diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerPluginParticipation {
+    #[default]
+    Unknown,
+    Available,
+    Selected,
+    Participated,
+    Bypassed,
+}
+
 /// Rust-side plugin diagnostic record emitted by desktop runtime probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginDiagnostic {
@@ -462,6 +473,7 @@ pub struct PlayerPluginDiagnostic {
     pub status: PlayerPluginDiagnosticStatus,
     pub message: Option<String>,
     pub capability: Option<PlayerPluginCapabilitySummary>,
+    pub participation: PlayerPluginParticipation,
 }
 
 #[derive(Debug, Clone)]

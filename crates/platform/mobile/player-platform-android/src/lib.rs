@@ -12,12 +12,13 @@ use player_runtime::{
     MIN_PLAYBACK_RATE, MediaAbrMode, MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind,
     MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
     PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerResilienceMetrics, PlayerResilienceMetricsTracker,
-    PlayerResult, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSeekableRange,
-    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
+    PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResilienceMetrics,
+    PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind,
+    PlayerTimelineSnapshot, PresentationState,
 };
 
 pub use download::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
@@ -1627,6 +1628,7 @@ fn apply_android_frame_processor_diagnostics(
             "Android DirectNative playback does not support per-frame processors yet".to_owned(),
         ),
         capability: None,
+        participation: PlayerPluginParticipation::Bypassed,
     });
     startup
 }

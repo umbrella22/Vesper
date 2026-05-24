@@ -1,0 +1,10 @@
+{
+  "message": "fixture unsupported capability",
+  "code": "unsupported",
+  "category": "capability",
+  "retriable": false,
+  "details": {
+    "operation": "setAbrPolicy",
+    "trackId": "video:missing"
+  }
+}

@@ -38,11 +38,12 @@ use player_runtime::{
     FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
     PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
     PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerPluginFrameProcessorCapabilitySummary, PlayerResult, PlayerRuntime, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeEvent,
-    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,
-    PlayerVideoDecodeMode, register_default_runtime_adapter_factory,
+    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation, PlayerResult,
+    PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeBootstrap, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+    register_default_runtime_adapter_factory,
 };
 use std::collections::VecDeque;
 
@@ -1638,6 +1639,11 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
             .capability_summary
             .as_ref()
             .and_then(player_plugin_capability_summary_from_loader),
+        participation: if record.status == PluginDiagnosticStatus::DecoderSupported {
+            PlayerPluginParticipation::Available
+        } else {
+            PlayerPluginParticipation::Unknown
+        },
     }
 }
 

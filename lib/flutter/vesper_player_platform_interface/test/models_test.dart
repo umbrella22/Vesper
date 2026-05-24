@@ -1,7 +1,68 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('shared player error contract decodes stable fields and details', () {
+    final payload = _readContractMap('player_error.json');
+    final error = VesperPlayerError.fromMap(payload);
+
+    expect(error.message, 'fixture unsupported capability');
+    expect(error.code, VesperPlayerErrorCode.unsupported);
+    expect(error.category, VesperPlayerErrorCategory.capability);
+    expect(error.retriable, isFalse);
+    expect(error.details['operation'], 'setAbrPolicy');
+    expect(error.details['trackId'], 'video:missing');
+    expect(error.toMap()['code'], payload['code']);
+    expect(error.toMap()['category'], payload['category']);
+  });
+
+  test('shared download task contract decodes stable fields', () {
+    final payload = _readContractMap('download_task_snapshot.json');
+    final task = VesperDownloadTaskSnapshot.fromMap(payload);
+
+    expect(task.taskId, 42);
+    expect(task.assetId, 'asset-contract');
+    expect(task.source.source.protocol, VesperPlayerSourceProtocol.dash);
+    expect(task.source.contentFormat, VesperDownloadContentFormat.dashSegments);
+    expect(task.profile.targetOutputFormat, VesperDownloadOutputFormat.mp4);
+    expect(task.profile.selectedTrackIds, <String>['video:1080p', 'audio:ja']);
+    expect(task.state, VesperDownloadState.downloading);
+    expect(task.progress.receivedBytes, 2048);
+    expect(task.assetIndex.resources.single.resourceId, 'manifest');
+    expect(task.assetIndex.segments.single.byteRange?.offset, 128);
+    expect(task.assetIndex.streams.single.metadata['bandwidth'], '2400000');
+    expect(task.error, isNull);
+    expect(task.toMap()['state'], payload['state']);
+  });
+
+  test('shared system playback contract decodes stable fields', () {
+    final payload = _readContractMap('system_playback_configuration.json');
+    final configuration = VesperSystemPlaybackConfiguration.fromMap(payload);
+
+    expect(configuration.enabled, isTrue);
+    expect(configuration.backgroundMode,
+        VesperBackgroundPlaybackMode.continueAudio);
+    expect(configuration.metadata?.title, 'Contract Episode');
+    expect(configuration.metadata?.isLive, isTrue);
+    final controls = configuration.controls!;
+    expect(
+        controls.compactButtons.map((button) => button.kind),
+        <VesperSystemPlaybackControlKind>[
+          VesperSystemPlaybackControlKind.seekBack,
+          VesperSystemPlaybackControlKind.playPause,
+          VesperSystemPlaybackControlKind.seekForward,
+        ]);
+    expect(controls.toMap()['compactButtons'], <Object?>[
+      <String, Object?>{'kind': 'seekBack', 'seekOffsetMs': 10000},
+      <String, Object?>{'kind': 'playPause'},
+      <String, Object?>{'kind': 'seekForward', 'seekOffsetMs': 10000},
+    ]);
+    expect(configuration.toMap()['backgroundMode'], payload['backgroundMode']);
+  });
+
   test('render surface kind wire names stay stable', () {
     expect(VesperPlayerRenderSurfaceKind.auto.name, 'auto');
     expect(VesperPlayerRenderSurfaceKind.textureView.name, 'textureView');
@@ -973,4 +1034,13 @@ void main() {
         VesperBufferingPreset.streaming);
     expect(snapshot.resiliencePolicy.cache.preset, VesperCachePreset.streaming);
   });
+}
+
+Map<Object?, Object?> _readContractMap(String name) {
+  final decoded = jsonDecode(_contractFile(name).readAsStringSync());
+  return Map<Object?, Object?>.from(decoded as Map);
+}
+
+File _contractFile(String name) {
+  return File('../../../fixtures/contracts/$name');
 }

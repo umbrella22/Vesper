@@ -12,13 +12,13 @@ use player_runtime::{
     MIN_PLAYBACK_RATE, MediaAbrMode, MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind,
     MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
     PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerResilienceMetrics, PlayerResilienceMetricsTracker,
-    PlayerResult, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSnapshot,
-    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
-    PresentationState,
+    PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResilienceMetrics,
+    PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
+    PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
 };
 
 pub use download::{IosDownloadBridgeSession, IosDownloadCommand};
@@ -1698,6 +1698,7 @@ fn apply_ios_frame_processor_diagnostics(
             "iOS DirectNative playback does not support per-frame processors yet".to_owned(),
         ),
         capability: None,
+        participation: PlayerPluginParticipation::Bypassed,
     });
     startup
 }

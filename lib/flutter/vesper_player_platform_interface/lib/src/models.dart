@@ -934,6 +934,14 @@ enum VesperPluginDiagnosticStatus {
 
 enum VesperPluginCapabilityKind { decoder, frameProcessor }
 
+enum VesperPluginParticipation {
+  unknown,
+  available,
+  selected,
+  participated,
+  bypassed,
+}
+
 final class VesperPluginCodecCapability {
   const VesperPluginCodecCapability({
     required this.mediaKind,
@@ -1138,6 +1146,7 @@ final class VesperPluginDiagnostic {
     this.pluginKind,
     this.message,
     this.capability,
+    this.participation = VesperPluginParticipation.unknown,
   });
 
   factory VesperPluginDiagnostic.fromMap(Map<Object?, Object?> map) {
@@ -1155,6 +1164,11 @@ final class VesperPluginDiagnostic {
       capability: rawCapability == null
           ? null
           : VesperPluginCapability.fromMap(rawCapability),
+      participation: _decodeEnum(
+        VesperPluginParticipation.values,
+        map['participation'],
+        VesperPluginParticipation.unknown,
+      ),
     );
   }
 
@@ -1164,6 +1178,7 @@ final class VesperPluginDiagnostic {
   final VesperPluginDiagnosticStatus status;
   final String? message;
   final VesperPluginCapability? capability;
+  final VesperPluginParticipation participation;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -1173,6 +1188,8 @@ final class VesperPluginDiagnostic {
       'status': status.name,
       if (message != null) 'message': message,
       if (capability != null) 'capability': capability!.toMap(),
+      if (participation != VesperPluginParticipation.unknown)
+        'participation': participation.name,
     };
   }
 }

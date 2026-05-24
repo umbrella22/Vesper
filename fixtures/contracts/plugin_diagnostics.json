@@ -1,0 +1,60 @@
+[
+  {
+    "path": "/tmp/player-decoder-fixture.dylib",
+    "pluginName": "fixture-decoder",
+    "pluginKind": "decoder",
+    "status": "decoderSupported",
+    "participation": "participated",
+    "message": "fixture decoder loaded",
+    "capability": {
+      "kind": "decoder",
+      "decoder": {
+        "codecs": [
+          {
+            "mediaKind": "Video",
+            "codec": "h264"
+          }
+        ],
+        "legacyCodecs": [
+          "Video:h264"
+        ],
+        "supportsNativeFrameOutput": true,
+        "supportsHardwareDecode": true,
+        "supportsCpuVideoFrames": false,
+        "supportsAudioFrames": false,
+        "supportsGpuHandles": true,
+        "supportsFlush": true,
+        "supportsDrain": true,
+        "maxSessions": 1
+      }
+    }
+  },
+  {
+    "path": "/tmp/player-frame-processor-fixture.dylib",
+    "pluginName": "fixture-processor",
+    "pluginKind": "frame_processor",
+    "status": "frameProcessorSupported",
+    "participation": "available",
+    "message": "fixture processor loaded",
+    "capability": {
+      "kind": "frameProcessor",
+      "frameProcessor": {
+        "acceptedInputHandleKinds": [
+          "CvPixelBuffer"
+        ],
+        "outputHandleKinds": [
+          "CvPixelBuffer"
+        ],
+        "supportsVideoFrames": true,
+        "supportsInPlacePassthrough": true,
+        "preservesDimensions": true,
+        "mayChangeDimensions": false,
+        "preservesColorMetadata": true,
+        "preservesHdrMetadata": true,
+        "supportsFlush": true,
+        "maxSessions": 2,
+        "maxInFlightFrames": 4
+      }
+    }
+  }
+]

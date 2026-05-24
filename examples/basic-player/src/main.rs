@@ -2839,7 +2839,7 @@ fn plugin_diagnostics_summary(
         .collect::<Vec<_>>();
     if !supported_source_normalizers.is_empty() {
         sections.push(format!(
-            "source normalizer: {}/{} active ({})",
+            "source normalizer: {}/{} participated ({})",
             supported_source_normalizers.len(),
             source_normalizer_total.max(supported_source_normalizers.len()),
             supported_source_normalizers.join("; ")
@@ -2868,8 +2868,13 @@ fn plugin_diagnostics_summary(
         })
         .collect::<Vec<_>>();
     if !supported_frame_processors.is_empty() {
+        let participation_note = if decoder_plugin_selected_for_playback(video_decode) {
+            "available for selected native-frame route"
+        } else {
+            "available but bypassed by the current decode route"
+        };
         sections.push(format!(
-            "frame processor plugins: {}/{} supported ({}); enabled for native-frame processing when the selected decode path emits native frames",
+            "frame processor plugins: {}/{} supported ({}); {participation_note}",
             supported_frame_processors.len(),
             frame_processor_total.max(supported_frame_processors.len()),
             supported_frame_processors.join(", ")
@@ -2904,7 +2909,7 @@ fn plugin_diagnostics_summary(
         .collect::<Vec<_>>();
     if !supported_decoders.is_empty() {
         let playback_note = if decoder_plugin_selected_for_playback(video_decode) {
-            "active in the native-frame playback path"
+            "selected/participated in the native-frame playback path"
         } else {
             "available; native-frame mode controls playback routing"
         };

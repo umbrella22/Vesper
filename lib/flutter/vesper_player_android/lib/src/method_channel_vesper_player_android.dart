@@ -441,7 +441,7 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
     try {
       return await _methodChannel.invokeMethod<T>(method, arguments);
     } on PlatformException catch (error) {
-      throw _mapPlatformException(error);
+      throw vesperMapPlatformException(error);
     }
   }
 
@@ -473,26 +473,6 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
     );
     return plan?.toMap();
   }
-}
-
-Object _mapPlatformException(PlatformException error) {
-  final details = error.details;
-  final normalized = details is Map
-      ? Map<Object?, Object?>.from(details)
-      : <Object?, Object?>{};
-  if (normalized['code'] == VesperPlayerErrorCode.unsupported.name &&
-      normalized['category'] == VesperPlayerErrorCategory.capability.name) {
-    return VesperUnsupportedError(
-      normalized['message'] as String? ?? error.message,
-      error.code,
-      _toStringKeyedMap(normalized),
-    );
-  }
-  return error;
-}
-
-Map<String, Object?> _toStringKeyedMap(Map<Object?, Object?> source) {
-  return source.map((key, value) => MapEntry(key.toString(), value));
 }
 
 VesperSystemPlaybackPermissionStatus _decodePermissionStatus(Object? raw) {

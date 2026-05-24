@@ -79,6 +79,14 @@ typedef enum PlayerFfiPluginCapabilityKind {
   PLAYER_FFI_PLUGIN_CAPABILITY_KIND_FRAME_PROCESSOR = 2,
 } PlayerFfiPluginCapabilityKind;
 
+typedef enum PlayerFfiPluginParticipation {
+  PLAYER_FFI_PLUGIN_PARTICIPATION_UNKNOWN = 0,
+  PLAYER_FFI_PLUGIN_PARTICIPATION_AVAILABLE = 1,
+  PLAYER_FFI_PLUGIN_PARTICIPATION_SELECTED = 2,
+  PLAYER_FFI_PLUGIN_PARTICIPATION_PARTICIPATED = 3,
+  PLAYER_FFI_PLUGIN_PARTICIPATION_BYPASSED = 4,
+} PlayerFfiPluginParticipation;
+
 typedef enum PlayerFfiMediaSourceKind {
   PLAYER_FFI_MEDIA_SOURCE_KIND_LOCAL = 0,
   PLAYER_FFI_MEDIA_SOURCE_KIND_REMOTE = 1,
@@ -276,6 +284,7 @@ typedef struct PlayerFfiPluginDiagnostic {
   enum PlayerFfiPluginDiagnosticStatus status;
   char *message;
   struct PlayerFfiPluginCapabilitySummary capability;
+  enum PlayerFfiPluginParticipation participation;
 } PlayerFfiPluginDiagnostic;
 
 typedef struct PlayerFfiStartup {

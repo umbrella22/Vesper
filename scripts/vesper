@@ -16,6 +16,7 @@ Groups:
   mobile   verify-no-remux
   flutter  stage-pub | pub-dry-run | pub-publish
   release  notes | set-version | prepare-from-tag | metadata-from-tag | verify-version | verify-current
+  contract verify
 EOF
 }
 
@@ -129,6 +130,9 @@ case "$group:$command" in
     ;;
   release:verify-current)
     exec "$SCRIPT_DIR/release/version.sh" verify-current "$@"
+    ;;
+  contract:verify)
+    exec "$SCRIPT_DIR/verify-contract-fixtures.sh" "$@"
     ;;
   *)
     usage

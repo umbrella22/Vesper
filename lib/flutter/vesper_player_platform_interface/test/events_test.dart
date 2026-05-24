@@ -1,7 +1,35 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('shared plugin diagnostics contract decodes capability union', () {
+    final decoded = jsonDecode(
+        File('../../../fixtures/contracts/plugin_diagnostics.json')
+            .readAsStringSync()) as List<dynamic>;
+    final diagnostics = decoded
+        .map((value) => VesperPluginDiagnostic.fromMap(
+            Map<Object?, Object?>.from(value as Map)))
+        .toList(growable: false);
+
+    expect(diagnostics, hasLength(2));
+    expect(
+        diagnostics[0].status, VesperPluginDiagnosticStatus.decoderSupported);
+    expect(
+        diagnostics[0].participation, VesperPluginParticipation.participated);
+    expect(diagnostics[0].capability?.kind, VesperPluginCapabilityKind.decoder);
+    expect(diagnostics[0].capability?.decoder?.codecs.single.codec, 'h264');
+    expect(diagnostics[0].capability?.decoder?.supportsGpuHandles, isTrue);
+    expect(diagnostics[1].status,
+        VesperPluginDiagnosticStatus.frameProcessorSupported);
+    expect(diagnostics[1].capability?.kind,
+        VesperPluginCapabilityKind.frameProcessor);
+    expect(diagnostics[1].capability?.frameProcessor?.maxInFlightFrames, 4);
+    expect(diagnostics[1].participation, VesperPluginParticipation.available);
+  });
+
   test('download task update event decodes prepared task', () {
     final event = VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
       'downloadId': 'downloads',
@@ -156,6 +184,7 @@ void main() {
           'pluginName': 'fixture-decoder',
           'pluginKind': 'decoder',
           'status': 'decoderSupported',
+          'participation': 'selected',
           'message': 'fixture decoder loaded',
           'capability': <Object?, Object?>{
             'kind': 'decoder',
@@ -203,6 +232,7 @@ void main() {
     expect(result.pluginDiagnostics, hasLength(2));
     final decoder = result.pluginDiagnostics.first;
     expect(decoder.status, VesperPluginDiagnosticStatus.decoderSupported);
+    expect(decoder.participation, VesperPluginParticipation.selected);
     expect(decoder.capability?.kind, VesperPluginCapabilityKind.decoder);
     expect(decoder.capability?.decoder?.codecs.single.codec, 'h264');
     expect(decoder.capability?.decoder?.legacyCodecs.single, 'Video:h264');

@@ -1,9 +1,29 @@
 package io.github.ikaros.vesper.player.android
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VesperSystemPlaybackControlsTest {
+    @Test
+    fun sharedSystemPlaybackContractKeepsStableFields() {
+        val payload = contractText("system_playback_configuration.json")
+
+        assertTrue(payload.contains("\"enabled\": true"))
+        assertEquals(
+            VesperBackgroundPlaybackMode.ContinueAudio,
+            VesperBackgroundPlaybackMode.valueOf(
+                contractString(payload, "backgroundMode").replaceFirstChar { it.uppercase() },
+            ),
+        )
+        assertTrue(payload.contains("\"title\": \"Contract Episode\""))
+        assertTrue(payload.contains("\"isLive\": true"))
+        assertTrue(payload.contains("\"kind\": \"seekBack\""))
+        assertTrue(payload.contains("\"kind\": \"playPause\""))
+        assertTrue(payload.contains("\"kind\": \"seekForward\""))
+        assertTrue(payload.contains("\"seekOffsetMs\": 10000"))
+    }
+
     @Test
     fun videoDefaultUsesTenSecondSeekButtons() {
         val controls = VesperSystemPlaybackControls.videoDefault().normalized()

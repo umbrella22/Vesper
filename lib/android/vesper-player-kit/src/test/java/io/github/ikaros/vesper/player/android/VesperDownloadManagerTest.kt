@@ -23,6 +23,27 @@ import org.junit.Test
 
 class VesperDownloadManagerTest {
     @Test
+    fun sharedDownloadTaskContractKeepsStableFields() {
+        val payload = contractText("download_task_snapshot.json")
+
+        assertTrue(payload.contains("\"taskId\": 42"))
+        assertTrue(payload.contains("\"assetId\": \"asset-contract\""))
+        assertEquals(
+            VesperPlayerSourceProtocol.Dash,
+            VesperPlayerSourceProtocol.valueOf(
+                contractString(payload, "protocol").replaceFirstChar { it.uppercase() },
+            ),
+        )
+        assertTrue(payload.contains("\"contentFormat\": \"dashSegments\""))
+        assertTrue(payload.contains("\"targetOutputFormat\": \"mp4\""))
+        assertTrue(payload.contains("\"state\": \"downloading\""))
+        assertTrue(payload.contains("\"receivedBytes\": 2048"))
+        assertTrue(payload.contains("\"resourceId\": \"manifest\""))
+        assertTrue(payload.contains("\"offset\": 128"))
+        assertTrue(payload.contains("\"error\": null"))
+    }
+
+    @Test
     fun createTaskAutoStartRefreshesSnapshotAndStartsExecutor() {
         val bindings = FakeDownloadBindings(autoStart = true)
         val executor = RecordingDownloadExecutor()
@@ -405,7 +426,7 @@ private class InMemoryDownloadStateStore(
 
 private class FakeDownloadBindings(
     private val autoStart: Boolean,
-) : VesperDownloadManager.DownloadBindings {
+) : DownloadBindings {
     private val tasks = linkedMapOf<Long, NativeDownloadTask>()
     private val commands = mutableListOf<NativeDownloadCommand>()
     private val events = mutableListOf<NativeDownloadEvent>()

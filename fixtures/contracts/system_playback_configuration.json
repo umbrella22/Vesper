@@ -1,0 +1,30 @@
+{
+  "enabled": true,
+  "backgroundMode": "continueAudio",
+  "showSystemControls": true,
+  "showSeekActions": true,
+  "metadata": {
+    "title": "Contract Episode",
+    "artist": "Vesper",
+    "albumTitle": "SDK Samples",
+    "artworkUri": "https://example.com/artwork.jpg",
+    "contentUri": "https://example.com/video.m3u8",
+    "durationMs": 60000,
+    "isLive": true
+  },
+  "controls": {
+    "compactButtons": [
+      {
+        "kind": "seekBack",
+        "seekOffsetMs": 10000
+      },
+      {
+        "kind": "playPause"
+      },
+      {
+        "kind": "seekForward",
+        "seekOffsetMs": 10000
+      }
+    ]
+  }
+}

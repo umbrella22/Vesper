@@ -1,0 +1,90 @@
+{
+  "taskId": 42,
+  "assetId": "asset-contract",
+  "source": {
+    "source": {
+      "uri": "https://example.com/video.mpd",
+      "label": "Contract DASH",
+      "kind": "remote",
+      "protocol": "dash",
+      "headers": {
+        "Referer": "https://example.com/player",
+        "User-Agent": "VesperContract/1.0"
+      }
+    },
+    "contentFormat": "dashSegments",
+    "manifestUri": "https://example.com/video.mpd"
+  },
+  "profile": {
+    "variantId": "video-main",
+    "preferredAudioLanguage": "ja",
+    "preferredSubtitleLanguage": "en",
+    "selectedTrackIds": [
+      "video:1080p",
+      "audio:ja"
+    ],
+    "targetOutputFormat": "mp4",
+    "targetDirectory": "/tmp/vesper-contract",
+    "allowMeteredNetwork": false
+  },
+  "state": "downloading",
+  "progress": {
+    "receivedBytes": 2048,
+    "totalBytes": 4096,
+    "receivedSegments": 1,
+    "totalSegments": 2
+  },
+  "assetIndex": {
+    "contentFormat": "dashSegments",
+    "version": "1",
+    "etag": "etag-contract",
+    "checksum": "sha256:contract",
+    "totalSizeBytes": 4096,
+    "resources": [
+      {
+        "resourceId": "manifest",
+        "uri": "https://example.com/video.mpd",
+        "relativePath": "manifest.mpd",
+        "generatedText": null,
+        "sizeBytes": 512,
+        "etag": "manifest-etag",
+        "checksum": "sha256:manifest"
+      }
+    ],
+    "segments": [
+      {
+        "segmentId": "seg-1",
+        "uri": "https://example.com/seg-1.m4s",
+        "relativePath": "video/seg-1.m4s",
+        "sequence": 1,
+        "byteRange": {
+          "offset": 128,
+          "length": 1024
+        },
+        "sizeBytes": 1024,
+        "checksum": "sha256:seg-1"
+      }
+    ],
+    "streams": [
+      {
+        "streamId": "video-main",
+        "kind": "video",
+        "language": null,
+        "codec": "avc1.640028",
+        "label": "1080p",
+        "qualityRank": 1,
+        "resourceIds": [
+          "manifest"
+        ],
+        "segmentIds": [
+          "seg-1"
+        ],
+        "metadata": {
+          "bandwidth": "2400000"
+        }
+      }
+    ],
+    "completedPath": null
+  },
+  "error": null
+}

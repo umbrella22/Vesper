@@ -1,12 +1,45 @@
 package io.github.ikaros.vesper.player.android
 
 import androidx.media3.common.PlaybackException
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VesperNativeErrorMappingTest {
+    @Test
+    fun sharedPlayerErrorContractKeepsStableWireNames() {
+        val payload = contractText("player_error.json")
+
+        assertTrue(payload.contains("\"message\": \"fixture unsupported capability\""))
+        assertEquals(
+            VesperPlayerErrorCode.Unsupported,
+            VesperPlayerErrorCode.fromWireName(contractString(payload, "code")),
+        )
+        assertEquals(
+            VesperPlayerErrorCategory.Capability,
+            VesperPlayerErrorCategory.fromWireName(contractString(payload, "category")),
+        )
+        assertTrue(payload.contains("\"retriable\": false"))
+        assertTrue(payload.contains("\"operation\": \"setAbrPolicy\""))
+    }
+
+    @Test
+    fun sharedPluginDiagnosticsContractKeepsStableWireNames() {
+        val payload = contractText("plugin_diagnostics.json")
+
+        assertTrue(payload.contains("\"status\": \"decoderSupported\""))
+        assertTrue(payload.contains("\"participation\": \"participated\""))
+        assertTrue(payload.contains("\"pluginKind\": \"decoder\""))
+        assertTrue(payload.contains("\"codec\": \"h264\""))
+        assertTrue(payload.contains("\"status\": \"frameProcessorSupported\""))
+        assertTrue(payload.contains("\"participation\": \"available\""))
+        assertTrue(payload.contains("\"kind\": \"frameProcessor\""))
+        assertTrue(payload.contains("\"maxInFlightFrames\": 4"))
+    }
+
     @Test
     fun playbackExceptionNetworkErrorsMapToRetriableNetworkBackendFailure() {
         val error =
@@ -112,3 +145,23 @@ class VesperNativeErrorMappingTest {
     private fun playbackException(errorCode: Int): PlaybackException =
         PlaybackException("playback failed", null, errorCode)
 }
+
+internal fun contractText(name: String): String = contractFile(name).readText()
+
+internal fun contractString(
+    payload: String,
+    key: String,
+): String {
+    val match = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"([^\"]*)\"").find(payload)
+    assertNotNull("missing string key $key in contract fixture", match)
+    return checkNotNull(match).groupValues[1]
+}
+
+private fun contractFile(name: String): File =
+    listOf(
+        File("fixtures/contracts/$name"),
+        File("../fixtures/contracts/$name"),
+        File("../../fixtures/contracts/$name"),
+        File("../../../fixtures/contracts/$name"),
+    ).firstOrNull { it.isFile }
+        ?: error("contract fixture not found: $name")

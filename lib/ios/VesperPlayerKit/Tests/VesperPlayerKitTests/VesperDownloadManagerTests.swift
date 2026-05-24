@@ -444,7 +444,7 @@ final class VesperDownloadManagerTests: XCTestCase {
     }
 }
 
-private final class FakeDownloadBindings: @unchecked Sendable, VesperDownloadManager.DownloadBindings {
+private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings {
     private let autoStart: Bool
     private var tasks: [UInt64: StoredDownloadTask] = [:]
     private var commands: [StoredRuntimeCommand] = []
