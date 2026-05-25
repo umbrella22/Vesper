@@ -891,32 +891,6 @@ public final class VesperDownloadManager: ObservableObject {
     }
     #endif
 
-    private func preparedDownloadOutputURL(
-        taskId: VesperDownloadTaskId,
-        fileName: String?
-    ) throws -> URL {
-        let sourceURL = try outputURL(forTask: taskId)
-        guard let fileName, !fileName.isEmpty else {
-            return sourceURL
-        }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vesper-download-share", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let targetURL = directory.appendingPathComponent(sanitizedOutputFileName(fileName))
-        if FileManager.default.fileExists(atPath: targetURL.path) {
-            try FileManager.default.removeItem(at: targetURL)
-        }
-        try FileManager.default.copyItem(at: sourceURL, to: targetURL)
-        return targetURL
-    }
-
-    private func downloadOutputURL(from path: String) -> URL {
-        if let url = URL(string: path), url.isFileURL {
-            return url
-        }
-        return URL(fileURLWithPath: path)
-    }
-
     private func syncRuntimeState(processCommands: Bool) {
         guard sessionHandle != 0 else {
             taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))

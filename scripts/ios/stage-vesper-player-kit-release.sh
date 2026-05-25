@@ -83,5 +83,11 @@ ditto -c -k --sequesterRsrc --keepParent \
   --profile default \
   ios-arm64 ios-simulator-arm64
 
+if [[ ! -f "$OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" ]]; then
+  echo "Missing staged iOS FFmpeg runtime artifact:" >&2
+  echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" >&2
+  exit 1
+fi
+
 echo "Staged VesperPlayerKit iOS release assets into:"
 echo "  $OUTPUT_DIR"

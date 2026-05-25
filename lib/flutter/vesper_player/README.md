@@ -518,14 +518,16 @@ export flow because the SDK does not request legacy public storage permissions.
 
 `player-remux-ffmpeg` is an optional dynamic plugin that remuxes downloaded HLS,
 DASH, or FLV assets into `.mp4`. Android hosts must package the shared
-`vesper-player-kit-ffmpeg-runtime` AAR separately; the plugin `.so` does not
-bundle `libav*`. Export becomes available only after the host app packages the
-runtime, packages the plugin library, and passes the plugin absolute path
-through `VesperDownloadConfiguration.pluginLibraryPaths`.
+`vesper-player-kit-ffmpeg-runtime` AAR separately, and iOS hosts must embed the
+shared `VesperPlayerFfmpegRuntime.xcframework.zip` alongside
+`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`. Export becomes available only
+after the host app packages the runtime, packages the plugin library, and passes
+the plugin absolute path through `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 ```dart
 final pluginLibraryPaths = <String>[
   '/absolute/path/to/libvesper_remux_ffmpeg.so',
+  '/absolute/path/to/VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin',
 ];
 
 final manager = await VesperDownloadManager.create(
@@ -554,12 +556,14 @@ Key points:
 
 - `pluginLibraryPaths` must point to an already packaged and accessible
   Android `libvesper_remux_ffmpeg.so` or iOS remux plugin framework binary.
+  Do not include the iOS shared FFmpeg runtime path in `pluginLibraryPaths`.
 - `exportTaskOutput(...)` triggers the plugin and reports progress through
   `VesperDownloadExportProgressEvent`.
 - The mobile examples in this repository already show the full host wiring.
   Android builds the plugin during Gradle `preBuild`; iOS can either use the
   Xcode embed script during local development or consume the optional
-  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` release artifact.
+  `VesperPlayerFfmpegRuntime.xcframework.zip` and
+  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` release artifacts.
 - Depending on `vesper_player` alone does not pull FFmpeg into your app. That
   keeps app size stable when export is not needed.
 - FFmpeg prebuilts are selected through `./scripts/vesper ffmpeg --platform

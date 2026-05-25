@@ -22,7 +22,7 @@ package names and artifact-selection notes.
 
 ## Minimum Requirements
 
-- iOS 14.0+
+- iOS 17.0+
 - Xcode 16+
 - Apple Silicon Mac for Simulator builds
 - Rust toolchain with iOS targets installed (when consuming as a local Swift Package)
@@ -41,7 +41,7 @@ package:
 
 ### XCFramework
 
-For distribution, build a self-contained framework:
+For distribution, build the core FFmpeg-free framework:
 
 ```sh
 ./scripts/vesper ios kit-xcframework
@@ -252,23 +252,28 @@ host-provided path and keeps the original offline file in place.
 `exportTaskOutput(...)` uses an optional `player-remux-ffmpeg` dynamic plugin
 when the host wants to export downloaded HLS, DASH, or FLV assets to `.mp4`.
 FFmpeg is not embedded in the core `VesperPlayerKit.xcframework`. Release builds
-stage the optional plugin as `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
-which the host app signs and embeds explicitly.
+stage FFmpeg as `VesperPlayerFfmpegRuntime.xcframework.zip` and the remux
+plugin as `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`. The host app signs
+and embeds both XCFrameworks explicitly.
 
 For repository builds:
 
 ```sh
 ./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
+./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
 ```
 
-At runtime, pass the framework binary path through
-`VesperDownloadConfiguration.pluginLibraryPaths`.
+At runtime, pass the remux plugin framework binary path through
+`VesperDownloadConfiguration.pluginLibraryPaths`. Do not pass the shared FFmpeg
+runtime path as a plugin path; it is only a dynamic dependency of the plugin.
+Both artifacts must be built from the same FFmpeg profile so their profile hashes
+match.
 
-Bundling that plugin makes the host responsible for FFmpeg notices,
+Bundling the shared runtime makes the host responsible for FFmpeg notices,
 corresponding source, configure flags, and LGPL relinking rights. See
-[THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md) before publishing
-such an artifact.
+[THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md) before publishing such
+an artifact.
 
 ## Testing The Package
 

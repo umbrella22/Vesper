@@ -9,13 +9,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg-validate.sh"
 ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/ios/VesperPlayerKit"
 OUTPUT_DIR="$ROOT_DIR/dist/release/ios"
-BUILD_DIR="$PROJECT_DIR/.build/player-remux-ffmpeg-plugin"
-RAW_OUTPUT_DIR="$BUILD_DIR/raw"
+BUILD_DIR="$PROJECT_DIR/.build/player-ffmpeg-runtime"
 FRAMEWORK_STAGING_DIR="$BUILD_DIR/frameworks"
-XCFRAMEWORK_PATH="$BUILD_DIR/VesperPlayerRemuxFfmpegPlugin.xcframework"
-RUNTIME_BUILD_DIR="$PROJECT_DIR/.build/player-ffmpeg-runtime"
-RUNTIME_XCFRAMEWORK_PATH="$RUNTIME_BUILD_DIR/VesperPlayerFfmpegRuntime.xcframework"
-FRAMEWORK_NAME="VesperPlayerRemuxFfmpegPlugin"
+XCFRAMEWORK_PATH="$BUILD_DIR/VesperPlayerFfmpegRuntime.xcframework"
+FRAMEWORK_NAME="VesperPlayerFfmpegRuntime"
 FRAMEWORK_BUNDLE="$FRAMEWORK_NAME.framework"
 PROFILE="default"
 DRY_RUN=0
@@ -35,7 +32,7 @@ VESPER_RELEASE_VERSION="${VESPER_RELEASE_VERSION:-$(read_project_version)}"
 VESPER_RELEASE_BUILD="${VESPER_RELEASE_BUILD:-${VESPER_RELEASE_IOS_BUILD:-$(read_project_build)}}"
 
 if [[ -z "$VESPER_RELEASE_VERSION" || -z "$VESPER_RELEASE_BUILD" ]]; then
-  echo "Unable to resolve iOS remux plugin release version from project metadata." >&2
+  echo "Unable to resolve iOS FFmpeg runtime release version from project metadata." >&2
   exit 1
 fi
 
@@ -78,7 +75,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo "Unknown iOS remux plugin release option: $1" >&2
+      echo "Unknown iOS FFmpeg runtime release option: $1" >&2
       usage
       exit 1
       ;;
@@ -93,7 +90,7 @@ case " ${SELECTED_SLICES[*]} " in
   *" ios-arm64 "*)
     ;;
   *)
-    echo "iOS remux plugin release requires an ios-arm64 device slice." >&2
+    echo "iOS FFmpeg runtime release requires an ios-arm64 device slice." >&2
     exit 1
     ;;
 esac
@@ -137,17 +134,15 @@ vesper_ffmpeg_profile_resolve "$PROFILE" ios
 PROFILE_HASH="$(vesper_ffmpeg_profile_key apple)"
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  echo "Resolved iOS remux plugin release:"
+  echo "Resolved iOS FFmpeg runtime release:"
   vesper_ffmpeg_profile_print_resolved "$PROFILE" ios
   printf 'profile_hash=%s\n' "$PROFILE_HASH"
   echo "Selected slices:"
   printf '  %s\n' "${SELECTED_SLICES[@]}"
   echo "Build arguments:"
   printf '  %q\n' "${FFMPEG_ARGS[@]}" "${SELECTED_SLICES[@]}"
-  echo "Runtime zip:"
-  echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip"
   echo "Output zip:"
-  echo "  $OUTPUT_DIR/VesperPlayerRemuxFfmpegPlugin.xcframework.zip"
+  echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip"
   exit 0
 fi
 
@@ -159,7 +154,7 @@ framework_info_plist() {
   /usr/libexec/PlistBuddy -c "Clear dict" "$output_path" >/dev/null 2>&1 || true
   /usr/libexec/PlistBuddy -c "Add :CFBundleDevelopmentRegion string en" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string $FRAMEWORK_NAME" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string io.github.ikaros.vesper.player.remux-ffmpeg-plugin" "$output_path"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string io.github.ikaros.vesper.player.ffmpeg-runtime" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundleInfoDictionaryVersion string 6.0" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundleName string $FRAMEWORK_NAME" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string FMWK" "$output_path"
@@ -179,9 +174,68 @@ ensure_rpath() {
   fi
 }
 
+normalize_runtime_dylib() {
+  local binary_path="$1"
+  local current_id
+  local dylib_id
+
+  current_id="$(otool -D "$binary_path" | tail -n 1)"
+  dylib_id="${current_id##*/}"
+  if [[ -z "$dylib_id" || "$dylib_id" != lib*.dylib* ]]; then
+    dylib_id="$(basename "$binary_path")"
+  fi
+  install_name_tool -id "@rpath/$dylib_id" "$binary_path"
+  ensure_rpath "$binary_path" "@loader_path"
+}
+
+compile_runtime_anchor() {
+  local slice="$1"
+  local output_path="$2"
+  local sdk_name
+  local clang_target
+  local source_path
+
+  sdk_name="$(vesper_apple_slice_sdk "$slice")"
+  clang_target="$(vesper_apple_slice_clang_target "$slice" "$(vesper_apple_ios_deployment_target)")"
+  source_path="$BUILD_DIR/$slice-runtime-anchor.c"
+  cat >"$source_path" <<'EOF'
+void VesperPlayerFfmpegRuntimeLinkAnchor(void) {}
+EOF
+  xcrun --sdk "$sdk_name" clang \
+    -target "$clang_target" \
+    -dynamiclib \
+    -install_name "@rpath/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" \
+    "$source_path" \
+    -o "$output_path"
+  ensure_rpath "$output_path" "@loader_path/Frameworks"
+}
+
+copy_runtime_dylibs() {
+  local source_dir="$1"
+  local framework_dir="$2"
+  local runtime_dir="$framework_dir/Frameworks"
+  local copied_count=0
+  local runtime_binary
+
+  mkdir -p "$runtime_dir"
+  while IFS= read -r runtime_binary; do
+    cp -RP "$runtime_binary" "$runtime_dir/"
+    copied_count=$((copied_count + 1))
+  done < <(find "$source_dir" -maxdepth 1 \( -type f -o -type l \) -name 'lib*.dylib*' | sort)
+
+  if [[ "$copied_count" -eq 0 ]]; then
+    echo "Missing FFmpeg runtime dylibs in: $source_dir" >&2
+    exit 1
+  fi
+
+  while IFS= read -r runtime_binary; do
+    normalize_runtime_dylib "$runtime_binary"
+  done < <(find "$runtime_dir" -maxdepth 1 -type f -name 'lib*.dylib*' | sort)
+}
+
 create_framework() {
   local slice="$1"
-  local source_dir="$2"
+  local ffmpeg_lib_dir="$2"
   local platform_name="$3"
   local minimum_os_version="$4"
   local output_dir="$5"
@@ -192,10 +246,8 @@ create_framework() {
   rm -rf "$framework_dir"
   mkdir -p "$framework_dir/Headers" "$framework_dir/Modules" "$framework_dir/Resources"
 
-  cp "$source_dir/libvesper_remux_ffmpeg.dylib" "$binary_path"
-  install_name_tool -id "@rpath/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" "$binary_path"
-  ensure_rpath "$binary_path" "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks"
-  ensure_rpath "$binary_path" "@loader_path/Frameworks"
+  compile_runtime_anchor "$slice" "$binary_path"
+  copy_runtime_dylibs "$ffmpeg_lib_dir" "$framework_dir"
 
   metadata_path="$(vesper_apple_slice_output_root "$slice" "$FFMPEG_APPLE_DIR")/vesper-ffmpeg-build-metadata.txt"
   if [[ ! -f "$metadata_path" ]]; then
@@ -206,11 +258,11 @@ create_framework() {
   printf '%s\n' "$PROFILE_HASH" >"$framework_dir/Resources/profile-hash.txt"
 
   printf '%s\n' \
-    'void VesperPlayerRemuxFfmpegPluginLinkAnchor(void);' \
-    >"$framework_dir/Headers/VesperPlayerRemuxFfmpegPlugin.h"
+    'void VesperPlayerFfmpegRuntimeLinkAnchor(void);' \
+    >"$framework_dir/Headers/VesperPlayerFfmpegRuntime.h"
   printf '%s\n' \
-    'framework module VesperPlayerRemuxFfmpegPlugin {' \
-    '  umbrella header "VesperPlayerRemuxFfmpegPlugin.h"' \
+    'framework module VesperPlayerFfmpegRuntime {' \
+    '  umbrella header "VesperPlayerFfmpegRuntime.h"' \
     '  export *' \
     '  module * { export * }' \
     '}' \
@@ -218,98 +270,45 @@ create_framework() {
   framework_info_plist "$framework_dir/Info.plist" "$platform_name" "$minimum_os_version"
 }
 
-runtime_profile_hash_for_slice() {
-  local slice="$1"
-  local framework_path
-  local metadata_path
-  local profile_path
-
-  metadata_path="$(find "$RUNTIME_XCFRAMEWORK_PATH" -path "*/VesperPlayerFfmpegRuntime.framework/Resources/$slice-vesper-ffmpeg-build-metadata.txt" -type f | head -n 1 || true)"
-  if [[ -z "$metadata_path" ]]; then
-    echo "Unable to find $slice FFmpeg runtime metadata inside $RUNTIME_XCFRAMEWORK_PATH" >&2
-    exit 1
-  fi
-  framework_path="${metadata_path%/Resources/$slice-vesper-ffmpeg-build-metadata.txt}"
-  profile_path="$framework_path/Resources/profile-hash.txt"
-  if [[ ! -f "$profile_path" ]]; then
-    echo "Missing iOS FFmpeg runtime profile hash: $profile_path" >&2
-    exit 1
-  fi
-  cat "$profile_path"
-}
-
-verify_no_runtime_dylibs() {
-  local framework_dir="$1"
-  local unexpected
-
-  unexpected="$(
-    find "$framework_dir" -type f \
-      \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \) \
-      -print -quit
-  )"
-  if [[ -n "$unexpected" ]]; then
-    echo "iOS remux plugin framework must not bundle FFmpeg runtime dylibs:" >&2
-    echo "  $unexpected" >&2
-    echo "Embed VesperPlayerFfmpegRuntime.xcframework.zip alongside the plugin instead." >&2
-    exit 1
-  fi
-}
-
 vesper_require_command xcodebuild
 vesper_require_command install_name_tool
 vesper_require_command otool
 vesper_require_command lipo
+vesper_require_command xcrun
 
-rm -rf "$RAW_OUTPUT_DIR" "$FRAMEWORK_STAGING_DIR" "$XCFRAMEWORK_PATH"
-mkdir -p "$OUTPUT_DIR" "$FRAMEWORK_STAGING_DIR"
-
-"$ROOT_DIR/scripts/ios/stage-player-ffmpeg-runtime-release.sh" \
-  "$OUTPUT_DIR" \
-  --profile "$PROFILE" \
-  "${SELECTED_SLICES[@]}"
+rm -rf "$FRAMEWORK_STAGING_DIR" "$XCFRAMEWORK_PATH"
+mkdir -p "$OUTPUT_DIR" "$FRAMEWORK_STAGING_DIR" "$BUILD_DIR"
 
 export VESPER_DECLARED_FFMPEG_PROFILE="$PROFILE"
 export VESPER_DECLARED_FFMPEG_PLATFORM="ios"
-env \
-  VESPER_SKIP_APPLE_FFMPEG_PREBUILDS=1 \
-  "$ROOT_DIR/scripts/ios/build-player-remux-ffmpeg-plugin.sh" \
-    "$RAW_OUTPUT_DIR" \
-    release \
-    "${FFMPEG_ARGS[@]}" \
-    "${SELECTED_SLICES[@]}"
+"$ROOT_DIR/scripts/apple/build-ffmpeg-prebuilts.sh" \
+  "${FFMPEG_ARGS[@]}" \
+  "${SELECTED_SLICES[@]}"
 
 FRAMEWORK_ARGS=()
 for slice in "${SELECTED_SLICES[@]}"; do
   case "$slice" in
     ios-arm64)
-      source_dir="$RAW_OUTPUT_DIR/iphoneos"
       platform_name="iPhoneOS"
       ;;
     ios-simulator-arm64)
-      source_dir="$RAW_OUTPUT_DIR/iphonesimulator"
       platform_name="iPhoneSimulator"
       ;;
     *)
-      echo "Unsupported iOS remux plugin release slice: $slice" >&2
+      echo "Unsupported iOS FFmpeg runtime release slice: $slice" >&2
       exit 1
       ;;
   esac
 
-  if [[ ! -f "$source_dir/libvesper_remux_ffmpeg.dylib" ]]; then
-    echo "Missing remux plugin binary for $slice: $source_dir/libvesper_remux_ffmpeg.dylib" >&2
-    exit 1
-  fi
-
+  ffmpeg_dir="$(vesper_apple_slice_output_root "$slice" "$FFMPEG_APPLE_DIR")"
+  ffmpeg_libdir="$(vesper_apple_slice_output_libdir "$slice")"
   slice_framework_root="$FRAMEWORK_STAGING_DIR/$slice"
-  create_framework "$slice" "$source_dir" "$platform_name" "$(vesper_apple_ios_deployment_target)" "$slice_framework_root"
-  runtime_hash="$(runtime_profile_hash_for_slice "$slice")"
-  if [[ "$runtime_hash" != "$PROFILE_HASH" ]]; then
-    echo "iOS FFmpeg runtime profile hash mismatch for $slice:" >&2
-    echo "  runtime: $runtime_hash" >&2
-    echo "  plugin:  $PROFILE_HASH" >&2
-    exit 1
-  fi
-  verify_no_runtime_dylibs "$slice_framework_root/$FRAMEWORK_BUNDLE"
+  create_framework \
+    "$slice" \
+    "$ffmpeg_dir/lib/$ffmpeg_libdir" \
+    "$platform_name" \
+    "$(vesper_apple_ios_deployment_target)" \
+    "$slice_framework_root"
   lipo "$slice_framework_root/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" -verify_arch arm64
   FRAMEWORK_ARGS+=(-framework "$slice_framework_root/$FRAMEWORK_BUNDLE")
 done
@@ -320,9 +319,7 @@ xcodebuild -create-xcframework \
 
 ditto -c -k --sequesterRsrc --keepParent \
   "$XCFRAMEWORK_PATH" \
-  "$OUTPUT_DIR/VesperPlayerRemuxFfmpegPlugin.xcframework.zip"
+  "$OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip"
 
-echo "Staged optional iOS FFmpeg remux plugin release artifact:"
-echo "  $OUTPUT_DIR/VesperPlayerRemuxFfmpegPlugin.xcframework.zip"
-echo "Requires shared iOS FFmpeg runtime artifact:"
+echo "Staged optional iOS FFmpeg shared runtime release artifact:"
 echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip"

@@ -50,6 +50,14 @@ flutter build ios --release --no-codesign
 > flutter config --enable-swift-package-manager
 > ```
 
+The iOS Runner project includes a build phase that embeds the optional
+`VesperPlayerFfmpegRuntime.framework` and
+`VesperPlayerRemuxFfmpegPlugin.framework` for local `.mp4` export testing.
+Release hosts should consume the matching
+`VesperPlayerFfmpegRuntime.xcframework.zip` and
+`VesperPlayerRemuxFfmpegPlugin.xcframework.zip` artifacts built from the same
+FFmpeg profile.
+
 ## Test
 
 ```sh

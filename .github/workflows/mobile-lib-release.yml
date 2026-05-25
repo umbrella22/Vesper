@@ -346,7 +346,39 @@ jobs:
           temp_dir="$(mktemp -d)"
           trap 'rm -rf "$temp_dir"' EXIT
           unzip -q release-assets/ios/VesperPlayerKit.xcframework.zip -d "$temp_dir"
+          unzip -q release-assets/ios/VesperPlayerFfmpegRuntime.xcframework.zip -d "$temp_dir"
           unzip -q release-assets/ios/VesperPlayerRemuxFfmpegPlugin.xcframework.zip -d "$temp_dir"
+
+          if ! find "$temp_dir" -path '*VesperPlayerFfmpegRuntime.framework/Frameworks/libav*.dylib*' -type f | grep -q .; then
+            echo "Shared iOS FFmpeg runtime does not contain FFmpeg dylibs." >&2
+            exit 1
+          fi
+          if find "$temp_dir" -path '*VesperPlayerRemuxFfmpegPlugin.framework/*' -type f \
+            \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \) | grep -q .; then
+            echo "iOS remux plugin must not bundle FFmpeg runtime dylibs." >&2
+            find "$temp_dir" -path '*VesperPlayerRemuxFfmpegPlugin.framework/*' -type f \
+              \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \)
+            exit 1
+          fi
+          profile_hash_count=0
+          while IFS= read -r runtime_hash; do
+            profile_hash_count=$((profile_hash_count + 1))
+            plugin_hash="${runtime_hash//VesperPlayerFfmpegRuntime/VesperPlayerRemuxFfmpegPlugin}"
+            if [[ ! -f "$plugin_hash" ]]; then
+              echo "Missing matching iOS remux plugin profile hash for $runtime_hash" >&2
+              exit 1
+            fi
+            if ! cmp -s "$runtime_hash" "$plugin_hash"; then
+              echo "iOS FFmpeg runtime and remux plugin profile hashes differ:" >&2
+              echo "  runtime: $runtime_hash" >&2
+              echo "  plugin:  $plugin_hash" >&2
+              exit 1
+            fi
+          done < <(find "$temp_dir" -path '*VesperPlayerFfmpegRuntime.framework/Resources/profile-hash.txt' -type f | sort)
+          if [[ "$profile_hash_count" -eq 0 ]]; then
+            echo "Shared iOS FFmpeg runtime did not include profile-hash.txt." >&2
+            exit 1
+          fi
 
           while IFS= read -r -d '' binary; do
             info="$(lipo -info "$binary")"
@@ -360,6 +392,8 @@ jobs:
             find "$temp_dir" \
               \( \
                 -path '*VesperPlayerKit.framework/VesperPlayerKit' -o \
+                -path '*VesperPlayerFfmpegRuntime.framework/VesperPlayerFfmpegRuntime' -o \
+                -path '*VesperPlayerFfmpegRuntime.framework/Frameworks/lib*.dylib*' -o \
                 -path '*VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin' \
               \) \
               -print0

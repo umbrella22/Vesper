@@ -187,7 +187,7 @@ Android 以 AAR modules 分发：
 iOS 以 `VesperPlayerKit` 分发，可作为 local Swift Package 进行源码集成，也可作为
 XCFramework 进行 release packaging。公开 API 以 Swift 为主，面向 UIKit / SwiftUI host。
 
-最低要求：iOS 14.0+、Xcode 16+；发布产物面向 arm64 device / Apple Silicon Simulator。
+最低要求：iOS 17.0+、Xcode 16+；发布产物面向 arm64 device / Apple Silicon Simulator。
 
 ### Flutter
 
@@ -328,13 +328,15 @@ GitHub Releases 会以 `VesperPlayerKit` 产品名发布移动端下载产物：
 - Android FFmpeg 运行时：`VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
 - iOS framework 切片：`VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework：`VesperPlayerKit.xcframework.zip`
+- 可选 iOS FFmpeg 运行时：`VesperPlayerFfmpegRuntime.xcframework.zip`
 - 可选 iOS FFmpeg remux 插件：`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
 - 用于校验 release artifact 的 `SHA256SUMS.txt`
 
 Android 打包当前仅提供 `arm64-v8a`。iOS 打包仅提供 arm64 device、Apple
 Silicon Simulator 和可选 Catalyst slices。iOS 核心 `VesperPlayerKit.xcframework`
-不嵌入 FFmpeg；FFmpeg-backed remux 支持以独立可选 XCFramework 形式发布，由
-host app 单独签名和嵌入。
+不嵌入 FFmpeg；FFmpeg-backed remux 支持以独立可选 runtime 和 plugin
+XCFramework 形式发布，由 host app 单独签名和嵌入。这两个可选 iOS 产物必须
+来自同一个 FFmpeg profile，保证 `profile-hash.txt` 一致。
 
 Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载物的 host app
 在其自身 Gradle / Xcode 构建中不会运行本仓库的 JNI 或 FFmpeg 生成任务。

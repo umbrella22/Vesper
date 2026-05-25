@@ -235,7 +235,7 @@ emit_initial_release_en() {
 ## New Capabilities
 
 - Android ships a core host-kit AAR, Compose binding, Compose UI package, external playback extension, and split FFmpeg runtime package for arm64-v8a devices.
-- iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and optional FFmpeg remux plugin XCFramework.
+- iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and optional FFmpeg shared runtime plus remux plugin XCFrameworks.
 - Flutter and Android Compose sample apps are published with the release for quick integration checks.
 - Core capabilities include DASH / HLS bridging, offline download and export, remote media references, request-header forwarding, SegmentBase / byte-range handling, DLNA / AirPlay external playback, and FFmpeg remux post-processing.
 
@@ -257,14 +257,14 @@ emit_initial_release_zh() {
 ## 新增功能
 
 - Android 提供核心 Host Kit AAR、Compose 绑定、Compose UI 包、外部播放扩展和 FFmpeg Runtime 拆分包，面向 arm64-v8a 设备发布。
-- iOS 提供真机 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及可选的 FFmpeg remux 插件 XCFramework。
+- iOS 提供真机 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及可选的 FFmpeg shared runtime 和 remux 插件 XCFramework。
 - Flutter 示例和 Android Compose 示例随 release 一起提供，方便快速验证接入效果。
 - 核心能力覆盖 DASH / HLS 桥接、离线下载与导出、远程媒体引用、请求头透传、SegmentBase / byte-range 处理、DLNA / AirPlay 外部播放，以及 FFmpeg remux 后处理。
 
 ## 优化改进
 
 - Android 默认走硬件解码和 SurfaceView 路径，发布产物按模块拆分，便于宿主应用只接入需要的能力。
-- iOS 保持 SPM / XCFramework 分发路径，并把 FFmpeg 插件与主 SDK 分离，保留 FFmpeg 独立许可、notice、源码和 LGPL relinking 边界。
+- iOS 保持 SPM / XCFramework 分发路径，并把 FFmpeg shared runtime / plugin 与主 SDK 分离，保留 FFmpeg 独立许可、notice、源码和 LGPL relinking 边界。
 - 发布流程会生成校验和，并校验 Android / iOS 产物只包含预期的 arm64 切片。
 EOF
 }
@@ -518,6 +518,7 @@ contributor_lines="$(release_contributor_lines "$RANGE_SPEC")"
   emit_download_item "VesperPlayerKit-ios-arm64.framework.zip" "iOS device framework"
   emit_download_item "VesperPlayerKit-ios-simulator-arm64.framework.zip" "Apple Silicon simulator framework"
   emit_download_item "VesperPlayerKit.xcframework.zip" "Combined XCFramework"
+  emit_download_item "VesperPlayerFfmpegRuntime.xcframework.zip" "Optional FFmpeg shared runtime XCFramework"
   emit_download_item "VesperPlayerRemuxFfmpegPlugin.xcframework.zip" "Optional FFmpeg remux plugin XCFramework"
   echo
   echo "### Checksums and Licensing"

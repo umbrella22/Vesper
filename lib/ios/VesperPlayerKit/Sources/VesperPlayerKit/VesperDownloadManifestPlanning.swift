@@ -453,7 +453,7 @@ func parseIso8601DurationSeconds(_ value: String?) -> Double? {
     return total > 0 ? total : nil
 }
 
-private func xmlAttr(_ input: String, tag: String, attr: String) -> String? {
+func xmlAttr(_ input: String, tag: String, attr: String) -> String? {
     xmlOpenTag(input, tag: tag).flatMap { xmlAttrFromTag($0, attr: attr) }
 }
 
@@ -631,3 +631,9 @@ func hlsByteRangeKey(uri: String, byteRange: VesperDownloadByteRange?) -> String
 }
 
 func padded(_ value: UInt64, width: Int) -> String {
+    let text = String(value)
+    guard text.count < width else {
+        return text
+    }
+    return String(repeating: "0", count: width - text.count) + text
+}

@@ -42,6 +42,10 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
+    postBuildScripts:
+      - name: Embed player-remux-ffmpeg plugin
+        script: |
+          /bin/bash "$SRCROOT/../../scripts/ios/embed-player-remux-ffmpeg-plugin.sh" "VesperPlayerKit.framework"
     scheme:
       testTargets:
         - VesperPlayerHostDemoTests

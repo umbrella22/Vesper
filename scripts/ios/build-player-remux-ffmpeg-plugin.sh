@@ -48,19 +48,16 @@ ensure_loader_rpath() {
   fi
 }
 
-prepare_runtime_directory() {
-  local directory_path="$1"
-  local binary_path
-
-  while IFS= read -r binary_path; do
-    ensure_loader_rpath "$binary_path"
-  done < <(find "$directory_path" -maxdepth 1 -type f -name 'lib*.dylib*' | sort)
-}
-
 prepare_plugin_binary() {
   local binary_path="$1"
   install_name_tool -id "@rpath/libvesper_remux_ffmpeg.dylib" "$binary_path"
   ensure_loader_rpath "$binary_path"
+  if ! otool -l "$binary_path" | grep -Fq "@loader_path/VesperPlayerFfmpegRuntime.framework/Frameworks"; then
+    install_name_tool -add_rpath "@loader_path/VesperPlayerFfmpegRuntime.framework/Frameworks" "$binary_path"
+  fi
+  if ! otool -l "$binary_path" | grep -Fq "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks"; then
+    install_name_tool -add_rpath "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks" "$binary_path"
+  fi
 }
 
 selected_slices=()
@@ -75,7 +72,9 @@ done
 
 vesper_apple_require_rust_targets ${required_targets[@]+"${required_targets[@]}"}
 
-"$ROOT_DIR/scripts/apple/build-ffmpeg-prebuilts.sh" "$@"
+if [[ "${VESPER_SKIP_APPLE_FFMPEG_PREBUILDS:-0}" != "1" ]]; then
+  "$ROOT_DIR/scripts/apple/build-ffmpeg-prebuilts.sh" "$@"
+fi
 
 PROFILE_DIR="$PROFILE"
 BUILD_FLAGS=()
@@ -89,7 +88,6 @@ mkdir -p "$OUTPUT_DIR"
 for slice in "${selected_slices[@]}"; do
   rust_target="$(vesper_ios_slice_rust_target "$slice")"
   ffmpeg_dir="$(vesper_apple_slice_output_root "$slice" "$FFMPEG_APPLE_DIR")"
-  ffmpeg_libdir="$(vesper_apple_slice_output_libdir "$slice")"
   output_path="$(slice_output_path "$slice")"
   cargo_target_dir="$ROOT_DIR/target/player-remux-ffmpeg-ios/$(vesper_path_cache_key "$ffmpeg_dir")"
   cargo_command=(
@@ -112,10 +110,6 @@ for slice in "${selected_slices[@]}"; do
     "${cargo_command[@]}"
 
   cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libvesper_remux_ffmpeg.dylib" "$output_path"
-  if compgen -G "$ffmpeg_dir/lib/$ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
-    cp -RP "$ffmpeg_dir"/lib/"$ffmpeg_libdir"/lib*.dylib* "$(dirname "$output_path")/"
-  fi
-  prepare_runtime_directory "$(dirname "$output_path")"
   prepare_plugin_binary "$output_path"
 done
 
@@ -133,15 +127,19 @@ if [[ ${#simulator_slices[@]} -gt 0 ]]; then
   cp \
     "$(slice_output_path "${simulator_slices[0]}")" \
     "$OUTPUT_DIR/iphonesimulator/libvesper_remux_ffmpeg.dylib"
-  simulator_ffmpeg_dir="$(vesper_apple_slice_output_root "${simulator_slices[0]}" "$FFMPEG_APPLE_DIR")"
-  simulator_ffmpeg_libdir="$(vesper_apple_slice_output_libdir "${simulator_slices[0]}")"
-  if compgen -G "$simulator_ffmpeg_dir/lib/$simulator_ffmpeg_libdir/"'lib*.dylib*' >/dev/null; then
-    cp -RP \
-      "$simulator_ffmpeg_dir"/lib/"$simulator_ffmpeg_libdir"/lib*.dylib* \
-      "$OUTPUT_DIR/iphonesimulator/"
-  fi
-  prepare_runtime_directory "$OUTPUT_DIR/iphonesimulator"
   prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libvesper_remux_ffmpeg.dylib"
+fi
+
+unexpected_runtime="$(
+  find "$OUTPUT_DIR" -type f \
+    \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' -o -name 'libxml2*.dylib*' \) \
+    -print -quit
+)"
+if [[ -n "$unexpected_runtime" ]]; then
+  echo "iOS player-remux-ffmpeg must not bundle FFmpeg runtime dylibs:" >&2
+  echo "  $unexpected_runtime" >&2
+  echo "Embed VesperPlayerFfmpegRuntime.framework alongside the plugin instead." >&2
+  exit 1
 fi
 
 echo
@@ -155,3 +153,4 @@ echo "Selected slices:"
 for slice in "${selected_slices[@]}"; do
   echo "  $slice"
 done
+echo "The plugin no longer copies FFmpeg runtime dylibs; embed VesperPlayerFfmpegRuntime.framework instead."

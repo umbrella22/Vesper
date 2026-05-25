@@ -134,8 +134,8 @@ routing.
 ## Optional `player-remux-ffmpeg` Remux Plugin
 
 If the host app wants to export downloaded HLS, DASH, or FLV content to `.mp4`,
-it must embed the optional `player-remux-ffmpeg` runtime and pass the real
-plugin framework binary path through
+it must embed the optional shared FFmpeg runtime plus `player-remux-ffmpeg`
+plugin and pass the real plugin framework binary path through
 `VesperDownloadConfiguration.pluginLibraryPaths`. FFmpeg is not embedded in the
 core iOS host kit.
 
@@ -149,9 +149,11 @@ Typical setup:
 
    For the native iOS host kit, replace the argument with `VesperPlayerKit.framework`.
 
-2. For release downloads, embed and sign
+2. For release downloads, embed and sign both
+   `VesperPlayerFfmpegRuntime.xcframework.zip` and
    `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` instead of shipping bare
-   `.dylib` files.
+   `.dylib` files. Build both artifacts from the same FFmpeg profile so their
+   `profile-hash.txt` values match.
 3. Resolve the plugin framework binary at runtime from
    `Bundle.main.privateFrameworksPath` or the app `Frameworks` directory.
 4. Pass the resolved absolute path into the download manager configuration.
@@ -160,6 +162,7 @@ Apple FFmpeg prebuilts are built on demand through the root profile CLI:
 
 ```sh
 ./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
+./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
 ```
 
@@ -179,7 +182,7 @@ relinking rights. The repository-level release checklist is in
 
 ## Minimum Requirements
 
-- iOS 14.0+
+- iOS 17.0+
 - Flutter 3.41.0+
 
 ## Related Resources

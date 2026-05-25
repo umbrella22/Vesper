@@ -35,7 +35,7 @@ source is loaded.
 ## Requirements
 
 - Xcode 16+
-- iOS 14.0+ deployment target
+- iOS 17.0+ deployment target
 - Rust toolchain with iOS targets installed
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 - Apple Silicon Mac (Simulator slices are arm64-only)
@@ -57,6 +57,14 @@ source is loaded.
 
 3. Open `VesperPlayerHostDemo.xcodeproj` in Xcode and run on an arm64
    Simulator or device.
+
+The generated Xcode project includes a post-build script that embeds the
+optional `VesperPlayerFfmpegRuntime.framework` and
+`VesperPlayerRemuxFfmpegPlugin.framework` for local `.mp4` export testing.
+Release hosts should consume the matching
+`VesperPlayerFfmpegRuntime.xcframework.zip` and
+`VesperPlayerRemuxFfmpegPlugin.xcframework.zip` artifacts built from the same
+FFmpeg profile.
 
 ## Build From CLI
 

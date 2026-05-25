@@ -191,7 +191,7 @@ jobs:
       - name: Build Apple FFmpeg prebuilts
         run: ./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
 
-      - name: Build optional iOS remux plugin XCFramework
+      - name: Build optional iOS FFmpeg runtime and remux plugin XCFrameworks
         run: ./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-player-remux-ffmpeg-release --profile default ios-arm64 ios-simulator-arm64
 
       - name: Check iOS Rust adapter crate

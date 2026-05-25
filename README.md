@@ -206,7 +206,7 @@ iOS is distributed as `VesperPlayerKit`, available as a local Swift Package for
 source integration and as an XCFramework for release packaging. Public APIs are
 Swift-first and designed for UIKit / SwiftUI hosts.
 
-Minimum target: iOS 14.0+, Xcode 16+, and arm64 device / Apple Silicon Simulator
+Minimum target: iOS 17.0+, Xcode 16+, and arm64 device / Apple Silicon Simulator
 builds for the published artifacts.
 
 ### Flutter
@@ -370,6 +370,7 @@ name:
 - Flutter Android sample APK: `VesperPlayerFlutterHost-android-<abi>-debug-signed.apk`
 - iOS framework slices: `VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework: `VesperPlayerKit.xcframework.zip`
+- Optional iOS FFmpeg runtime: `VesperPlayerFfmpegRuntime.xcframework.zip`
 - Optional iOS FFmpeg remux plugin: `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
 - `SHA256SUMS.txt` for release artifact verification
 
@@ -378,7 +379,9 @@ sample APKs. The sample APKs are debug-signed for side-load evaluation only and
 are not production app-store artifacts. iOS packaging is arm64 only for device,
 Apple Silicon Simulator, and optional Catalyst slices. The iOS core
 `VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
-is shipped as a separate optional XCFramework that the host app signs and embeds.
+is shipped as separate optional runtime and plugin XCFrameworks that the host
+app signs and embeds. Both optional iOS artifacts must come from the same
+FFmpeg profile so their `profile-hash.txt` values match.
 
 Release AARs / XCFrameworks are fully packaged binary artifacts. Host apps that
 consume these downloads do not run the repository's local JNI or FFmpeg

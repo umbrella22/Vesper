@@ -10,7 +10,7 @@ scripts/
   lib/        Shared Bash functions and platform constants
   android/    Android private FFmpeg implementation details, JNI, AAR, release staging, remux plugin
   apple/      Apple private FFmpeg prebuilt implementation details
-  ios/        iOS FFI, XCFramework, remux plugin, embed phase, release staging
+  ios/        iOS FFI, XCFramework, FFmpeg runtime, remux plugin, embed phase, release staging
   desktop/    desktop FFmpeg, pkg-config wrapper, desktop plugin verification
   ffi/        C header generation / verification and C host smoke tests
   flutter/    Flutter pub staging, dry-run, and automated publish helpers
@@ -36,6 +36,7 @@ scripts/
 
 ./scripts/vesper ios ffi release
 ./scripts/vesper ios verify-bridge-shim
+./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios kit-xcframework
 ./scripts/vesper ios stage-release
@@ -116,13 +117,23 @@ The external-playback relay FFmpeg JNI library is built by the Android
 profile so the shared runtime and relay JNI profile hashes match.
 
 iOS core kit packaging does not include FFmpeg. Optional remux support is staged
-as a signable XCFramework:
+as two signable XCFrameworks: one shared FFmpeg runtime and one remux plugin:
 
 ```sh
+./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release \
+  --profile default \
+  ios-arm64 ios-simulator-arm64
+
 ./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release \
   --profile default \
   ios-arm64 ios-simulator-arm64
 ```
+
+The remux plugin release depends on the shared iOS FFmpeg runtime release and
+will stage it automatically when needed. The runtime and plugin artifacts both
+write `profile-hash.txt`; staging fails if the hashes do not match. The plugin
+XCFramework must not contain `libav*`, `libsw*`, `libxml2*`, `libssl*`, or
+`libcrypto*` dylibs.
 
 Supported overlays are:
 

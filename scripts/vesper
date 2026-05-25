@@ -11,7 +11,7 @@ Groups:
   ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
   android  jni | aar | remux-plugin | stage-release | sample-apks
-  ios      ffi | remux-plugin | stage-remux-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim
+  ios      ffi | remux-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
   flutter  stage-pub | pub-dry-run | pub-publish | verify-android-plugin
@@ -67,6 +67,9 @@ case "$group:$command" in
     ;;
   ios:remux-plugin)
     exec "$SCRIPT_DIR/ios/build-player-remux-ffmpeg-plugin.sh" "$@"
+    ;;
+  ios:ffmpeg-runtime-release)
+    exec "$SCRIPT_DIR/ios/stage-player-ffmpeg-runtime-release.sh" "$@"
     ;;
   ios:stage-remux-plugin-release)
     exec "$SCRIPT_DIR/ios/stage-player-remux-ffmpeg-plugin-release.sh" "$@"

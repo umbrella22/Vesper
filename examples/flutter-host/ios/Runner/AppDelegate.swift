@@ -208,10 +208,6 @@ import UIKit
     let frameworksPath = Bundle.main.privateFrameworksPath ?? Bundle.main.bundlePath + "/Frameworks"
     let candidates = [
       frameworksPath + "/VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin",
-      frameworksPath + "/vesper_player_ios.framework/libvesper_remux_ffmpeg.dylib",
-      frameworksPath + "/VesperPlayerKit.framework/libvesper_remux_ffmpeg.dylib",
-      frameworksPath + "/libvesper_remux_ffmpeg.dylib",
-      Bundle.main.bundlePath + "/libvesper_remux_ffmpeg.dylib",
     ]
 
     return candidates.compactMap { candidate in
