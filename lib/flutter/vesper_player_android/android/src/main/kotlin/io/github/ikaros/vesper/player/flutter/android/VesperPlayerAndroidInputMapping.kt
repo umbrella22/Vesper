@@ -92,8 +92,8 @@ internal fun Map<String, Any?>?.toFrameProcessorConfiguration():
 
 internal fun Any?.toVesperVideoSurfaceKind(): VesperVideoSurfaceKind =
     when (this as? String ?: "auto") {
-        "auto", "textureView" -> VesperVideoSurfaceKind.TextureView
-        "surfaceView" -> VesperVideoSurfaceKind.SurfaceView
+        "auto", "surfaceView" -> VesperVideoSurfaceKind.SurfaceView
+        "textureView" -> VesperVideoSurfaceKind.TextureView
         else -> throw IllegalArgumentException("Unknown renderSurfaceKind: $this.")
     }
 

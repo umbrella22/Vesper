@@ -141,10 +141,11 @@ Embeds the native video surface into Flutter UI.
 
 On Android, `VesperPlayerController.create(renderSurfaceKind: ...)` controls
 the native surface used by `VesperPlayerView`. The default `auto` mode uses
-`TextureView` for Flutter overlay and gesture compatibility. Select
-`surfaceView` explicitly for fullscreen HDR or high-frame-rate scenarios where
-host UI composition allows it. iOS accepts the option for API symmetry but
-always uses the platform's AVPlayer-backed surface.
+`SurfaceView` so Flutter 3.44+ hosts can take the high-fidelity native video
+path by default. Select `textureView` explicitly when a screen depends on
+complex Flutter overlays, scrolling, clipping, rounded corners, or
+animation-heavy composition. iOS accepts the option for API symmetry but always
+uses the platform's AVPlayer-backed surface.
 
 ```dart
 VesperPlayerView(

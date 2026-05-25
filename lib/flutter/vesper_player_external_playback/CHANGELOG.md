@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- The external playback Flutter package now requires Flutter 3.44.0 or newer.
+
+### Changed
+
+- Material widgets are imported through the official `material_ui` package.
+
 ## 0.3.0 - 2026-05-18
 
 ### Changed

@@ -19,7 +19,7 @@ Use this example as a reference for:
 
 ## Requirements
 
-- Flutter 3.41.0+
+- Flutter 3.44.0+
 - Android Studio + arm64 device or emulator (for Android target)
 - Xcode 16+ and an arm64 Simulator or device (for iOS target)
 - Rust toolchain with the corresponding mobile targets installed

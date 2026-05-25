@@ -156,10 +156,11 @@ fixed-track convergence directly, so Flutter UI can render the effective
 runtime state instead of only optimistic local intent.
 
 `createPlayer` also accepts `renderSurfaceKind` and `benchmarkConfiguration`.
-Android platform packages should map `auto` to a Flutter-overlay-safe default
-surface and allow explicit `surfaceView` opt-in. Native implementations should
-forward benchmark settings to the host kit and keep `consoleLogging` disabled by
-default.
+Android platform packages should map `auto` to `SurfaceView` for Flutter 3.44+
+native video playback and keep explicit `textureView` as the compatibility path
+for overlay-heavy or animation-heavy host screens. Native implementations
+should forward benchmark settings to the host kit and keep `consoleLogging`
+disabled by default.
 
 Mobile plugin configurations are intentionally conservative. SourceNormalizer
 `diagnosticsOnly` and `preflightOnly` can report plugin diagnostics, but mobile

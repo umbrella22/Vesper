@@ -72,7 +72,7 @@ VesperPlayerStage(
 ## Minimum Requirements
 
 - Dart SDK 3.6.0+
-- Flutter 3.41.0+
+- Flutter 3.44.0+
 
 ## Related Packages
 

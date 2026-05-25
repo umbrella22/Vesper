@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- The Flutter package family now requires Flutter 3.44.0 or newer.
+- Android `renderSurfaceKind: auto` now maps to `SurfaceView`; hosts that need
+  the previous overlay-oriented path should pass `textureView` explicitly.
+
+### Changed
+
+- Flutter UI package imports are prepared for the official `material_ui`
+  package split where SDK UI widgets use Material components.
+
 ## 0.3.0 - 2026-05-18
 
 ### Changed
