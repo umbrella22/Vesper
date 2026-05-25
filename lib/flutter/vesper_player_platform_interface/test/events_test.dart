@@ -14,7 +14,7 @@ void main() {
             Map<Object?, Object?>.from(value as Map)))
         .toList(growable: false);
 
-    expect(diagnostics, hasLength(2));
+    expect(diagnostics, hasLength(3));
     expect(
         diagnostics[0].status, VesperPluginDiagnosticStatus.decoderSupported);
     expect(
@@ -28,6 +28,21 @@ void main() {
         VesperPluginCapabilityKind.frameProcessor);
     expect(diagnostics[1].capability?.frameProcessor?.maxInFlightFrames, 4);
     expect(diagnostics[1].participation, VesperPluginParticipation.available);
+    expect(diagnostics[2].status,
+        VesperPluginDiagnosticStatus.sourceNormalizerSupported);
+    expect(diagnostics[2].participation, VesperPluginParticipation.bypassed);
+    expect(diagnostics[2].capability?.kind,
+        VesperPluginCapabilityKind.sourceNormalizer);
+    expect(
+      diagnostics[2]
+          .capability
+          ?.sourceNormalizer
+          ?.supportedRuntimeProfiles
+          .single,
+      'generic-fallback',
+    );
+    expect(
+        diagnostics[2].capability?.sourceNormalizer?.requiresNetwork, isFalse);
   });
 
   test('download task update event decodes prepared task', () {
@@ -226,10 +241,39 @@ void main() {
             },
           },
         },
+        <Object?, Object?>{
+          'path': '/tmp/player-source-normalizer-fixture.dylib',
+          'pluginName': 'fixture-source-normalizer',
+          'pluginKind': 'source_normalizer',
+          'status': 'sourceNormalizerSupported',
+          'participation': 'bypassed',
+          'message': 'fixture source normalizer preflight completed',
+          'capability': <Object?, Object?>{
+            'kind': 'sourceNormalizer',
+            'sourceNormalizer': <Object?, Object?>{
+              'supportedRuntimeProfiles': <String>['generic-fallback'],
+              'maxLevel': 'packet_repair',
+              'mediaKinds': <String>['video'],
+              'codecs': <String>['h264'],
+              'bitstreamFormats': <String>['annex_b'],
+              'supportsSeek': true,
+              'supportsFlush': true,
+              'requiredLibraries': <String>['avformat'],
+              'requiredDemuxers': <String>['mov'],
+              'requiredMuxers': <String>['mp4'],
+              'requiredProtocols': <String>['file'],
+              'requiredParsers': <String>['h264'],
+              'requiredBitstreamFilters': <String>['h264_mp4toannexb'],
+              'requiredTls': 'secure-transport',
+              'requiresNetwork': false,
+              'maxSessions': 1,
+            },
+          },
+        },
       ],
     });
 
-    expect(result.pluginDiagnostics, hasLength(2));
+    expect(result.pluginDiagnostics, hasLength(3));
     final decoder = result.pluginDiagnostics.first;
     expect(decoder.status, VesperPluginDiagnosticStatus.decoderSupported);
     expect(decoder.participation, VesperPluginParticipation.selected);
@@ -260,6 +304,46 @@ void main() {
     expect(
       frameProcessor.capability?.toMap()['kind'],
       VesperPluginCapabilityKind.frameProcessor.name,
+    );
+
+    final sourceNormalizer = result.pluginDiagnostics[2];
+    expect(
+      sourceNormalizer.status,
+      VesperPluginDiagnosticStatus.sourceNormalizerSupported,
+    );
+    expect(sourceNormalizer.participation, VesperPluginParticipation.bypassed);
+    expect(
+      sourceNormalizer.capability?.kind,
+      VesperPluginCapabilityKind.sourceNormalizer,
+    );
+    expect(
+      sourceNormalizer
+          .capability?.sourceNormalizer?.supportedRuntimeProfiles.single,
+      'generic-fallback',
+    );
+    expect(sourceNormalizer.capability?.sourceNormalizer?.requiresNetwork,
+        isFalse);
+  });
+
+  test('mobile plugin configurations round-trip through maps', () {
+    const sourceNormalizer = VesperSourceNormalizerConfiguration(
+      mode: VesperSourceNormalizerMode.preflightOnly,
+      pluginLibraryPaths: <String>['/tmp/libplayer_source_normalizer.dylib'],
+      runtimeProfile: 'generic-fallback',
+    );
+    const frameProcessor = VesperFrameProcessorConfiguration(
+      mode: VesperFrameProcessorMode.diagnosticsOnly,
+      pluginLibraryPaths: <String>['/tmp/libplayer_frame_processor.dylib'],
+    );
+
+    expect(
+      VesperSourceNormalizerConfiguration.fromMap(sourceNormalizer.toMap())
+          .runtimeProfile,
+      'generic-fallback',
+    );
+    expect(
+      VesperFrameProcessorConfiguration.fromMap(frameProcessor.toMap()).mode,
+      VesperFrameProcessorMode.diagnosticsOnly,
     );
   });
 }

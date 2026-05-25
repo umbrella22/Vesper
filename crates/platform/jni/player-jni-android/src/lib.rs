@@ -8,20 +8,21 @@ mod playlist_jni;
 mod preload_jni;
 mod sessions;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
+use jni::EnvUnowned;
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
 use jni::objects::{JClass, JObject, JObjectArray, JString};
 use jni::signature::{RuntimeFieldSignature, RuntimeMethodSignature};
 use jni::strings::JNIString;
 use jni::sys::{jboolean, jfloat, jint, jlong, jobject, jobjectArray, jstring};
-use jni::EnvUnowned;
-use player_platform_android::{
-    AndroidExoPlaybackSnapshot,
+use player_platform_android::AndroidExoPlaybackSnapshot;
+use player_platform_mobile::{
+    MobileFrameProcessorConfiguration, MobileSourceNormalizerConfiguration,
+    mobile_plugin_diagnostics_json,
 };
-use player_runtime::{
-    PlayerError, PlayerRuntimeCommand,
-};
+use player_runtime::{FrameProcessorMode, PlayerError, PlayerRuntimeCommand, SourceNormalizerMode};
 
 pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
 
@@ -38,8 +39,8 @@ use parsers::{
     exo_state_from_ordinal, parse_native_abr_policy, parse_native_buffering_policy,
     parse_native_cache_policy, parse_native_retry_policy, parse_native_track_catalog,
     parse_native_track_preferences, parse_native_track_selection,
-    parse_native_track_selection_snapshot, source_kind_from_ordinal,
-    source_protocol_from_ordinal, string_array_to_vec,
+    parse_native_track_selection_snapshot, source_kind_from_ordinal, source_protocol_from_ordinal,
+    string_array_to_vec, string_from_java_object,
 };
 pub(crate) use sessions::resolve_preload_budget_with_runtime;
 use sessions::{
@@ -117,6 +118,51 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_probeMobilePlugins(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    source_uri: JString<'_>,
+    source_mode_ordinal: jint,
+    source_plugin_library_paths: JObjectArray<'_>,
+    runtime_profile: JObject<'_>,
+    frame_mode_ordinal: jint,
+    frame_plugin_library_paths: JObjectArray<'_>,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let source_uri = source_uri.try_to_string(env)?;
+                let source_plugin_library_paths =
+                    string_array_to_vec(env, source_plugin_library_paths)?
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect();
+                let frame_plugin_library_paths =
+                    string_array_to_vec(env, frame_plugin_library_paths)?
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect();
+                let runtime_profile = string_from_java_object(env, runtime_profile)?;
+                let diagnostics_json = mobile_plugin_diagnostics_json(
+                    &player_model::MediaSource::new(source_uri),
+                    &MobileSourceNormalizerConfiguration {
+                        mode: source_normalizer_mode_from_ordinal(source_mode_ordinal),
+                        plugin_library_paths: source_plugin_library_paths,
+                        runtime_profile,
+                    },
+                    &MobileFrameProcessorConfiguration {
+                        mode: frame_processor_mode_from_ordinal(frame_mode_ordinal),
+                        plugin_library_paths: frame_plugin_library_paths,
+                    },
+                )
+                .unwrap_or_else(|_| "[]".to_owned());
+                Ok(env.new_string(diagnostics_json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeBenchmarkSinkSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -125,6 +171,21 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     run_jni_entry(&mut unowned_env, |_unowned_env| {
         dispose_benchmark_sink_session(handle);
     })
+}
+
+fn source_normalizer_mode_from_ordinal(ordinal: jint) -> SourceNormalizerMode {
+    match ordinal {
+        1 => SourceNormalizerMode::DiagnosticsOnly,
+        2 => SourceNormalizerMode::PreflightOnly,
+        _ => SourceNormalizerMode::Disabled,
+    }
+}
+
+fn frame_processor_mode_from_ordinal(ordinal: jint) -> FrameProcessorMode {
+    match ordinal {
+        1 => FrameProcessorMode::DiagnosticsOnly,
+        _ => FrameProcessorMode::Disabled,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -701,17 +762,17 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        HandleRegistry, error_category_from_jni_ordinal,
-        error_code_from_jni_ordinal, resolve_resilience_policy_with_runtime,
-        resolve_track_preferences_with_runtime, u64_to_jlong_saturating, u128_to_jlong_saturating,
-    };
     use super::handles::next_generation;
+    use super::{
+        HandleRegistry, error_category_from_jni_ordinal, error_code_from_jni_ordinal,
+        resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime,
+        u64_to_jlong_saturating, u128_to_jlong_saturating,
+    };
     use player_runtime::{
-        MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
-        MediaTrackSelection, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
-        PlayerCachePreset, PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff,
-        PlayerRetryPolicy, PlayerTrackPreferencePolicy,
+        MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
+        PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
+        PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff, PlayerRetryPolicy,
+        PlayerTrackPreferencePolicy,
     };
     use std::time::Duration;
 

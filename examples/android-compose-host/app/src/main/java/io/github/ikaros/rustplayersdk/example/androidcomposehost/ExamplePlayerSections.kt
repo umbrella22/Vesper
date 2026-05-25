@@ -599,6 +599,182 @@ internal fun ExampleResilienceSection(
 }
 
 @Composable
+internal fun ExamplePluginDiagnosticsSection(
+    palette: ExampleHostPalette,
+    sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    sourceNormalizerPluginLibraryPaths: List<String>,
+    frameProcessorPluginLibraryPaths: List<String>,
+    pluginDiagnostics: List<Map<String, Any?>>,
+    onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Unit,
+) {
+    val sourceNormalizerDiagnostics =
+        pluginDiagnostics.filter { diagnostic ->
+            diagnostic["pluginKind"] == "source_normalizer" ||
+                diagnostic["status"]?.toString()?.startsWith("sourceNormalizer") == true
+        }
+    val frameProcessorDiagnostics =
+        pluginDiagnostics.filter { diagnostic ->
+            diagnostic["pluginKind"] == "frame_processor" ||
+                diagnostic["status"]?.toString()?.startsWith("frameProcessor") == true
+        }
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_plugins_title),
+        subtitle = stringResource(R.string.example_plugins_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleSourceNormalizerSetting.values().forEach { setting ->
+                    SelectionChip(
+                        label = stringResource(setting.titleRes),
+                        selected = setting == sourceNormalizerSetting,
+                        onClick = { onSourceNormalizerSettingChange(setting) },
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(sourceNormalizerSetting.subtitleRes),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = palette.body,
+                    lineHeight = 22.sp,
+                ),
+            )
+
+            ExampleFactRow(
+                label = stringResource(R.string.example_plugins_source_normalizer_path),
+                value = sourceNormalizerPluginLibraryPaths.joinToString().ifBlank {
+                    stringResource(R.string.example_plugins_missing)
+                },
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_plugins_frame_processor_path),
+                value = frameProcessorPluginLibraryPaths.joinToString().ifBlank {
+                    stringResource(R.string.example_plugins_missing)
+                },
+                palette = palette,
+            )
+
+            PluginDiagnosticGroup(
+                title = stringResource(R.string.example_plugins_source_normalizer_group),
+                emptyLabel = stringResource(R.string.example_plugins_no_source_normalizer_diagnostics),
+                diagnostics = sourceNormalizerDiagnostics,
+                palette = palette,
+            )
+            PluginDiagnosticGroup(
+                title = stringResource(R.string.example_plugins_frame_processor_group),
+                emptyLabel = stringResource(R.string.example_plugins_no_frame_processor_diagnostics),
+                diagnostics = frameProcessorDiagnostics,
+                palette = palette,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PluginDiagnosticGroup(
+    title: String,
+    emptyLabel: String,
+    diagnostics: List<Map<String, Any?>>,
+    palette: ExampleHostPalette,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+        if (diagnostics.isEmpty()) {
+            Text(
+                text = emptyLabel,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            diagnostics.forEach { diagnostic ->
+                PluginDiagnosticRow(diagnostic = diagnostic, palette = palette)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginDiagnosticRow(
+    diagnostic: Map<String, Any?>,
+    palette: ExampleHostPalette,
+) {
+    val status = diagnostic["status"]?.toString().orEmpty()
+    val participation = diagnostic["participation"]?.toString().orEmpty()
+    val pluginName = diagnostic["pluginName"]?.toString().orEmpty()
+    val path = diagnostic["path"]?.toString().orEmpty()
+    val message = diagnostic["message"]?.toString().orEmpty()
+    val capability = diagnostic["capability"] as? Map<*, *>
+    val sourceNormalizer = capability?.get("sourceNormalizer") as? Map<*, *>
+    val profiles = (sourceNormalizer?.get("supportedRuntimeProfiles") as? List<*>)
+        ?.joinToString { value -> value.toString() }
+        .orEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.fieldBackground, RoundedCornerShape(18.dp))
+            .border(1.dp, palette.sectionStroke, RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Text(
+            text = listOf(pluginName, status)
+                .filter(String::isNotBlank)
+                .joinToString(" · ")
+                .ifBlank { stringResource(R.string.example_plugins_unknown_record) },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+        Text(
+            text = stringResource(
+                R.string.example_plugins_participation,
+                participation.ifBlank { "unknown" },
+            ),
+            style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+        )
+        if (profiles.isNotBlank()) {
+            Text(
+                text = stringResource(R.string.example_plugins_profiles, profiles),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (message.isNotBlank()) {
+            Text(
+                text = message,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (path.isNotBlank()) {
+            Text(
+                text = path,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall.copy(color = palette.body),
+            )
+        }
+    }
+}
+
+@Composable
 internal fun ThemeModeChip(
     icon: ImageVector,
     label: String,

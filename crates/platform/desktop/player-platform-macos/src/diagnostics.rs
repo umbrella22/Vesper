@@ -85,7 +85,10 @@ pub(crate) fn append_plugin_diagnostics(
     startup
 }
 
-pub(crate) fn same_plugin_diagnostic(left: &PlayerPluginDiagnostic, right: &PlayerPluginDiagnostic) -> bool {
+pub(crate) fn same_plugin_diagnostic(
+    left: &PlayerPluginDiagnostic,
+    right: &PlayerPluginDiagnostic,
+) -> bool {
     left.path == right.path
         && left.plugin_name == right.plugin_name
         && left.plugin_kind == right.plugin_kind
@@ -164,7 +167,6 @@ pub(crate) fn apply_frame_processor_plugin_diagnostics(
         }));
     startup
 }
-
 
 #[cfg(test)]
 pub(crate) fn apply_decoder_plugin_diagnostics_to_video_decode(
@@ -264,7 +266,9 @@ pub(crate) fn decoder_plugin_registry(
     ))
 }
 
-pub(crate) fn frame_processor_plugin_registry(options: &PlayerRuntimeOptions) -> Option<PluginRegistry> {
+pub(crate) fn frame_processor_plugin_registry(
+    options: &PlayerRuntimeOptions,
+) -> Option<PluginRegistry> {
     if options.frame_processor_mode == FrameProcessorMode::Disabled
         || options.frame_processor_library_paths.is_empty()
     {
@@ -403,10 +407,10 @@ pub(crate) fn player_plugin_diagnostic_from_record(
                 PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
             }
             PluginDiagnosticStatus::SourceNormalizerSupported => {
-                PlayerPluginDiagnosticStatus::Loaded
+                PlayerPluginDiagnosticStatus::SourceNormalizerSupported
             }
             PluginDiagnosticStatus::SourceNormalizerUnsupported => {
-                PlayerPluginDiagnosticStatus::UnsupportedKind
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
             }
         },
         message: record.message.clone(),
@@ -484,7 +488,42 @@ pub(crate) fn player_plugin_capability_summary_from_loader(
                 player_frame_processor_capability_summary_from_loader(summary),
             ))
         }
-        PluginCapabilitySummary::SourceNormalizerPacket(_) => None,
+        PluginCapabilitySummary::SourceNormalizerPacket(summary) => {
+            Some(PlayerPluginCapabilitySummary::SourceNormalizer(
+                player_source_normalizer_capability_summary_from_loader(summary),
+            ))
+        }
+    }
+}
+
+pub(crate) fn player_source_normalizer_capability_summary_from_loader(
+    summary: &SourceNormalizerPacketPluginCapabilitySummary,
+) -> player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
+    player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
+        supported_runtime_profiles: summary.supported_runtime_profiles.clone(),
+        max_level: format!("{:?}", summary.max_level),
+        media_kinds: summary
+            .media_kinds
+            .iter()
+            .map(|kind| format!("{kind:?}"))
+            .collect(),
+        codecs: summary.codecs.clone(),
+        bitstream_formats: summary
+            .bitstream_formats
+            .iter()
+            .map(|format| format!("{format:?}"))
+            .collect(),
+        supports_seek: summary.supports_seek,
+        supports_flush: summary.supports_flush,
+        required_libraries: summary.required_capabilities.libraries.clone(),
+        required_demuxers: summary.required_capabilities.demuxers.clone(),
+        required_muxers: summary.required_capabilities.muxers.clone(),
+        required_protocols: summary.required_capabilities.protocols.clone(),
+        required_parsers: summary.required_capabilities.parsers.clone(),
+        required_bitstream_filters: summary.required_capabilities.bitstream_filters.clone(),
+        required_tls: summary.required_capabilities.tls.clone(),
+        requires_network: summary.required_capabilities.network,
+        max_sessions: summary.max_sessions,
     }
 }
 

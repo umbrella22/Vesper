@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import CoreTransferable
 import MediaPlayer
 import Photos
@@ -9,12 +10,71 @@ import UniformTypeIdentifiers
 import VesperPlayerKit
 import VesperPlayerKitUI
 
+@MainActor
+private func makeExampleController(
+    sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    initialSource: VesperPlayerSource?,
+    resiliencePolicy: VesperPlaybackResiliencePolicy
+) -> VesperPlayerController {
+    let frameProcessorPaths = bundledFrameProcessorPluginLibraryPaths()
+    return VesperPlayerControllerFactory.makeDefault(
+        initialSource: initialSource,
+        resiliencePolicy: resiliencePolicy,
+        preloadBudgetPolicy: VesperPreloadBudgetPolicy(
+            maxConcurrentTasks: 0,
+            maxMemoryBytes: 0,
+            maxDiskBytes: 0,
+            warmupWindowMs: 0
+        ),
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+            mode: sourceNormalizerSetting.mode,
+            pluginLibraryPaths: bundledSourceNormalizerPluginLibraryPaths()
+        ),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration(
+            mode: frameProcessorPaths.isEmpty ? .disabled : .diagnosticsOnly,
+            pluginLibraryPaths: frameProcessorPaths
+        )
+    )
+}
+
+@MainActor
+private final class ExamplePlayerControllerStore: ObservableObject {
+    @Published private(set) var controller: VesperPlayerController
+
+    private var controllerObservation: AnyCancellable?
+
+    init(controller: VesperPlayerController) {
+        self.controller = controller
+        observe(controller)
+    }
+
+    func replace(with nextController: VesperPlayerController) -> VesperPlayerController {
+        let previousController = controller
+        controller = nextController
+        observe(nextController)
+        return previousController
+    }
+
+    func dispose() {
+        controllerObservation?.cancel()
+        controller.dispose()
+    }
+
+    private func observe(_ controller: VesperPlayerController) {
+        controllerObservation = controller.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in
+                self?.objectWillChange.send()
+            }
+        }
+    }
+}
+
 struct PlayerHostView: View {
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @AppStorage("vesper.example.ios.theme_mode") private var themeModeRaw = ExampleThemeMode.system.rawValue
-    @StateObject private var controller: VesperPlayerController
+    @StateObject private var controllerStore: ExamplePlayerControllerStore
     @StateObject private var playlistCoordinator: VesperPlaylistCoordinator
     @StateObject private var downloadManager: VesperDownloadManager
     @StateObject private var deviceControls = ExampleIOSDeviceControls()
@@ -31,6 +91,7 @@ struct PlayerHostView: View {
     @State private var isFullscreen = false
     @State private var selectedTab: ExampleHostTab = .player
     @State private var selectedResilienceProfile: ExampleResilienceProfile = .balanced
+    @State private var sourceNormalizerSetting: ExampleSourceNormalizerSetting = .preflightOnly
     @State private var isApplyingResilienceProfile = false
     @State private var hasHandledFinishedPlayback = false
     @State private var controlsHideTask: Task<Void, Never>?
@@ -48,15 +109,12 @@ struct PlayerHostView: View {
             maxDiskBytes: 256 * 1024 * 1024,
             warmupWindowMs: 30_000
         )
-        _controller = StateObject(
-            wrappedValue: VesperPlayerControllerFactory.makeDefault(
-                initialSource: nil,
-                resiliencePolicy: ExampleResilienceProfile.balanced.policy,
-                preloadBudgetPolicy: VesperPreloadBudgetPolicy(
-                    maxConcurrentTasks: 0,
-                    maxMemoryBytes: 0,
-                    maxDiskBytes: 0,
-                    warmupWindowMs: 0
+        _controllerStore = StateObject(
+            wrappedValue: ExamplePlayerControllerStore(
+                controller: makeExampleController(
+                    sourceNormalizerSetting: .preflightOnly,
+                    initialSource: nil,
+                    resiliencePolicy: ExampleResilienceProfile.balanced.policy
                 )
             )
         )
@@ -87,6 +145,10 @@ struct PlayerHostView: View {
         set { themeModeRaw = newValue.rawValue }
     }
 
+    private var controller: VesperPlayerController {
+        controllerStore.controller
+    }
+
     private var useDarkTheme: Bool {
         switch themeMode {
         case .system:
@@ -104,6 +166,14 @@ struct PlayerHostView: View {
 
     private var isDownloadExportPluginInstalled: Bool {
         !bundledDownloadPluginLibraryPaths().isEmpty
+    }
+
+    private var sourceNormalizerPluginLibraryPaths: [String] {
+        bundledSourceNormalizerPluginLibraryPaths()
+    }
+
+    private var frameProcessorPluginLibraryPaths: [String] {
+        bundledFrameProcessorPluginLibraryPaths()
     }
 
     var body: some View {
@@ -173,7 +243,7 @@ struct PlayerHostView: View {
             controlsHideTask?.cancel()
             downloadManager.dispose()
             playlistCoordinator.dispose()
-            controller.dispose()
+            controllerStore.dispose()
         }
         .onChange(of: playlistSnapshot.activeItem?.itemId) { _, activeItemId in
             guard
@@ -355,6 +425,15 @@ struct PlayerHostView: View {
                     onFocusPlaylistItem: focusPlaylistItem
                 )
 
+                ExamplePluginDiagnosticsSection(
+                    palette: palette,
+                    sourceNormalizerSetting: sourceNormalizerSetting,
+                    sourceNormalizerPluginLibraryPaths: sourceNormalizerPluginLibraryPaths,
+                    frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths,
+                    pluginDiagnostics: controller.pluginDiagnostics,
+                    onSourceNormalizerSettingChange: applySourceNormalizerSetting
+                )
+
                 ExampleResilienceSection(
                     palette: palette,
                     selectedProfile: selectedResilienceProfile,
@@ -469,13 +548,47 @@ struct PlayerHostView: View {
         }
     }
 
+    private func applySourceNormalizerSetting(_ setting: ExampleSourceNormalizerSetting) {
+        guard setting != sourceNormalizerSetting else {
+            return
+        }
+
+        let previousController = controller
+        let activeSource = activePlaylistSource()
+        let previousUiState = previousController.uiState
+        sourceNormalizerSetting = setting
+        let nextController = makeExampleController(
+            sourceNormalizerSetting: setting,
+            initialSource: activeSource,
+            resiliencePolicy: selectedResilienceProfile.policy
+        )
+        nextController.initialize()
+        if let activeSource {
+            configureSystemPlayback(for: activeSource, controller: nextController)
+            let restorePositionMs = previousUiState.timeline.positionMs
+            if restorePositionMs > 0 {
+                nextController.seek(by: restorePositionMs)
+            }
+            if previousUiState.playbackState == .playing {
+                nextController.play()
+            }
+        }
+        _ = controllerStore.replace(with: nextController)
+        previousController.dispose()
+        controlsVisible = true
+    }
+
     private func selectSourceForPlayback(_ source: VesperPlayerSource) {
         controller.selectSource(source)
         configureSystemPlayback(for: source)
     }
 
-    private func configureSystemPlayback(for source: VesperPlayerSource) {
-        controller.configureSystemPlayback(
+    private func configureSystemPlayback(
+        for source: VesperPlayerSource,
+        controller targetController: VesperPlayerController? = nil
+    ) {
+        let targetController = targetController ?? controller
+        targetController.configureSystemPlayback(
             VesperSystemPlaybackConfiguration(
                 metadata: VesperSystemPlaybackMetadata(
                     title: systemPlaybackTitle(for: source),
@@ -496,6 +609,16 @@ struct PlayerHostView: View {
             return lastPathComponent
         }
         return source.uri
+    }
+
+    private func activePlaylistSource() -> VesperPlayerSource? {
+        guard let activeItemId = playlistCoordinator.snapshot.activeItem?.itemId else {
+            return nil
+        }
+        return playlistCoordinator.snapshot.queue
+            .first(where: { $0.item.itemId == activeItemId })?
+            .item
+            .source
     }
 
     private func openRemoteSource() {

@@ -34,6 +34,10 @@ class VesperPlayerController {
     bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
+    VesperSourceNormalizerConfiguration sourceNormalizerConfiguration =
+        const VesperSourceNormalizerConfiguration(),
+    VesperFrameProcessorConfiguration frameProcessorConfiguration =
+        const VesperFrameProcessorConfiguration(),
   }) async {
     final platform = VesperPlayerPlatform.instance;
     final result = await platform.createPlayer(
@@ -44,6 +48,8 @@ class VesperPlayerController {
       preloadBudgetPolicy: preloadBudgetPolicy,
       keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
       benchmarkConfiguration: benchmarkConfiguration,
+      sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+      frameProcessorConfiguration: frameProcessorConfiguration,
     );
     return VesperPlayerController._(
       playerId: result.playerId,

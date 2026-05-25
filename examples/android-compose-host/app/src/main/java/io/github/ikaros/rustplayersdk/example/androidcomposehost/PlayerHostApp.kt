@@ -64,6 +64,7 @@ import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadPublicCollection
 import io.github.ikaros.vesper.player.android.VesperDownloadState
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
+import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
@@ -88,12 +89,21 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 @Composable
-fun PlayerHostApp(
+internal fun PlayerHostApp(
     controller: VesperPlayerController,
+    onRebuildController: (
+        ExampleSourceNormalizerSetting,
+        VesperPlayerSource?,
+        VesperPlaybackResiliencePolicy,
+        Boolean,
+        Long?,
+    ) -> VesperPlayerController,
     playlistCoordinator: VesperPlaylistCoordinator,
     downloadManager: VesperDownloadManager,
     externalPlaybackController: VesperExternalPlaybackController,
     isDownloadExportPluginInstalled: Boolean,
+    sourceNormalizerPluginLibraryPaths: List<String>,
+    frameProcessorPluginLibraryPaths: List<String>,
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -107,6 +117,9 @@ fun PlayerHostApp(
     var themeMode by rememberSaveable { mutableStateOf(ExampleThemeMode.System) }
     var selectedResilienceProfile by rememberSaveable {
         mutableStateOf(ExampleResilienceProfile.Balanced)
+    }
+    var sourceNormalizerSetting by rememberSaveable {
+        mutableStateOf(ExampleSourceNormalizerSetting.PreflightOnly)
     }
     val systemDarkTheme = isSystemInDarkTheme()
     val useDarkTheme =
@@ -261,6 +274,43 @@ fun PlayerHostApp(
                 controls = VesperSystemPlaybackControls.videoDefault(),
             ),
         )
+    }
+
+    fun applySourceNormalizerSetting(setting: ExampleSourceNormalizerSetting) {
+        if (setting == sourceNormalizerSetting) {
+            return
+        }
+        val activeSource = activePlaylistSource
+        val shouldResumePlayback = uiState.playbackState == PlaybackStateUi.Playing
+        val restorePositionMs = uiState.timeline.positionMs
+        sourceNormalizerSetting = setting
+        if (externalSession != null) {
+            scope.launch {
+                runCatching { externalPlaybackController.disconnectAsync() }
+            }
+            externalSession = null
+        }
+        val nextController =
+            onRebuildController(
+                setting,
+                activeSource,
+                selectedResilienceProfile.policy,
+                shouldResumePlayback,
+                restorePositionMs,
+            )
+        if (activeSource != null) {
+            nextController.configureSystemPlayback(
+                VesperSystemPlaybackConfiguration(
+                    metadata =
+                        VesperSystemPlaybackMetadata(
+                            title = activeSource.label.ifBlank { activeSource.uri },
+                            contentUri = activeSource.uri,
+                        ),
+                    controls = VesperSystemPlaybackControls.videoDefault(),
+                ),
+            )
+        }
+        controlsVisible = true
     }
 
     fun externalMediaItemFor(
@@ -1117,6 +1167,15 @@ fun PlayerHostApp(
                                         )
                                         controlsVisible = true
                                     },
+                                )
+
+                                ExamplePluginDiagnosticsSection(
+                                    palette = palette,
+                                    sourceNormalizerSetting = sourceNormalizerSetting,
+                                    sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
+                                    frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                                    pluginDiagnostics = controller.pluginDiagnostics,
+                                    onSourceNormalizerSettingChange = ::applySourceNormalizerSetting,
                                 )
 
                                 ExampleResilienceSection(

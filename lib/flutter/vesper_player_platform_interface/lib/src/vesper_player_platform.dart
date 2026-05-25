@@ -90,6 +90,10 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
+    VesperSourceNormalizerConfiguration sourceNormalizerConfiguration =
+        const VesperSourceNormalizerConfiguration(),
+    VesperFrameProcessorConfiguration frameProcessorConfiguration =
+        const VesperFrameProcessorConfiguration(),
   });
 
   Stream<VesperPlayerEvent> eventsFor(String playerId);
@@ -252,6 +256,10 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
     bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
+    VesperSourceNormalizerConfiguration sourceNormalizerConfiguration =
+        const VesperSourceNormalizerConfiguration(),
+    VesperFrameProcessorConfiguration frameProcessorConfiguration =
+        const VesperFrameProcessorConfiguration(),
   }) async {
     throw VesperUnsupportedError();
   }

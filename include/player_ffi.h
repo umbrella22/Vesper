@@ -71,12 +71,15 @@ typedef enum PlayerFfiPluginDiagnosticStatus {
   PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_DECODER_UNSUPPORTED = 4,
   PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_FRAME_PROCESSOR_SUPPORTED = 5,
   PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_FRAME_PROCESSOR_UNSUPPORTED = 6,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_SOURCE_NORMALIZER_SUPPORTED = 7,
+  PLAYER_FFI_PLUGIN_DIAGNOSTIC_STATUS_SOURCE_NORMALIZER_UNSUPPORTED = 8,
 } PlayerFfiPluginDiagnosticStatus;
 
 typedef enum PlayerFfiPluginCapabilityKind {
   PLAYER_FFI_PLUGIN_CAPABILITY_KIND_NONE = 0,
   PLAYER_FFI_PLUGIN_CAPABILITY_KIND_DECODER = 1,
   PLAYER_FFI_PLUGIN_CAPABILITY_KIND_FRAME_PROCESSOR = 2,
+  PLAYER_FFI_PLUGIN_CAPABILITY_KIND_SOURCE_NORMALIZER = 3,
 } PlayerFfiPluginCapabilityKind;
 
 typedef enum PlayerFfiPluginParticipation {
@@ -271,10 +274,41 @@ typedef struct PlayerFfiPluginFrameProcessorCapabilitySummary {
   uint32_t max_in_flight_frames;
 } PlayerFfiPluginFrameProcessorCapabilitySummary;
 
+typedef struct PlayerFfiPluginSourceNormalizerCapabilitySummary {
+  char **supported_runtime_profiles;
+  size_t supported_runtime_profiles_len;
+  char *max_level;
+  char **media_kinds;
+  size_t media_kinds_len;
+  char **codecs;
+  size_t codecs_len;
+  char **bitstream_formats;
+  size_t bitstream_formats_len;
+  bool supports_seek;
+  bool supports_flush;
+  char **required_libraries;
+  size_t required_libraries_len;
+  char **required_demuxers;
+  size_t required_demuxers_len;
+  char **required_muxers;
+  size_t required_muxers_len;
+  char **required_protocols;
+  size_t required_protocols_len;
+  char **required_parsers;
+  size_t required_parsers_len;
+  char **required_bitstream_filters;
+  size_t required_bitstream_filters_len;
+  char *required_tls;
+  bool requires_network;
+  bool has_max_sessions;
+  uint32_t max_sessions;
+} PlayerFfiPluginSourceNormalizerCapabilitySummary;
+
 typedef struct PlayerFfiPluginCapabilitySummary {
   enum PlayerFfiPluginCapabilityKind kind;
   struct PlayerFfiPluginDecoderCapabilitySummary decoder;
   struct PlayerFfiPluginFrameProcessorCapabilitySummary frame_processor;
+  struct PlayerFfiPluginSourceNormalizerCapabilitySummary source_normalizer;
 } PlayerFfiPluginCapabilitySummary;
 
 typedef struct PlayerFfiPluginDiagnostic {

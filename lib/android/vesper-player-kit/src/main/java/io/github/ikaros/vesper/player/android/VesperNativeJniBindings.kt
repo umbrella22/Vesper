@@ -74,6 +74,26 @@ internal class VesperNativeJniBindings(
     private var currentBenchmarkSourceProtocol: VesperPlayerSourceProtocol? = null
     private val firstFrameGate = VesperPlaybackEpochFirstFrameGate()
 
+    override fun probeMobilePlugins(
+        source: VesperPlayerSource,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration,
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration,
+    ): List<Map<String, Any?>> {
+        if (sourceNormalizerConfiguration.isDisabled && frameProcessorConfiguration.isDisabled) {
+            return emptyList()
+        }
+        VesperNativeLibrary.ensureLoaded()
+        val json = VesperNativeJni.probeMobilePlugins(
+            source.uri,
+            sourceNormalizerConfiguration.modeOrdinal,
+            sourceNormalizerConfiguration.pluginLibraryPaths.toTypedArray(),
+            sourceNormalizerConfiguration.runtimeProfile,
+            frameProcessorConfiguration.modeOrdinal,
+            frameProcessorConfiguration.pluginLibraryPaths.toTypedArray(),
+        )
+        return parsePluginDiagnosticsJson(json)
+    }
+
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,

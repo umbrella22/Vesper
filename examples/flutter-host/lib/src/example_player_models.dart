@@ -17,6 +17,41 @@ extension ExampleThemeModeLabels on ExampleThemeMode {
 
 enum ExampleResilienceProfile { balanced, streaming, resilient, lowLatency }
 
+enum ExampleSourceNormalizerSetting { disabled, diagnosticsOnly, preflightOnly }
+
+extension ExampleSourceNormalizerSettingLabels
+    on ExampleSourceNormalizerSetting {
+  String get title {
+    return switch (this) {
+      ExampleSourceNormalizerSetting.disabled => 'SourceNormalizer 关闭',
+      ExampleSourceNormalizerSetting.diagnosticsOnly => 'Diagnostics',
+      ExampleSourceNormalizerSetting.preflightOnly => 'Preflight',
+    };
+  }
+
+  String get subtitle {
+    return switch (this) {
+      ExampleSourceNormalizerSetting.disabled =>
+        '不会为播放探测加载 SourceNormalizer 插件。',
+      ExampleSourceNormalizerSetting.diagnosticsOnly =>
+        '只加载 SourceNormalizer 插件并上报 capability，不打开 packet session。',
+      ExampleSourceNormalizerSetting.preflightOnly =>
+        '加载 SourceNormalizer 插件，为当前 source 打开并关闭 packet session，然后继续播放原始 source。',
+    };
+  }
+
+  VesperSourceNormalizerMode get mode {
+    return switch (this) {
+      ExampleSourceNormalizerSetting.disabled =>
+        VesperSourceNormalizerMode.disabled,
+      ExampleSourceNormalizerSetting.diagnosticsOnly =>
+        VesperSourceNormalizerMode.diagnosticsOnly,
+      ExampleSourceNormalizerSetting.preflightOnly =>
+        VesperSourceNormalizerMode.preflightOnly,
+    };
+  }
+}
+
 enum ExampleSheetNoteTone { info, warm }
 
 final class ExampleSheetNoticeModel {

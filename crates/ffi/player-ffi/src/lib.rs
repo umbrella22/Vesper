@@ -12,13 +12,13 @@ use player_runtime::{
     PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
     PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
     PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation,
-    PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy,
-    PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntime, PlayerRuntimeBootstrap,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer,
-    PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerSeekableRange,
-    PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot, PlayerTrackPreferencePolicy,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState,
-    VideoPixelFormat,
+    PlayerPluginSourceNormalizerCapabilitySummary, PlayerPreloadBudgetPolicy,
+    PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy, PlayerRetryBackoff,
+    PlayerRetryPolicy, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
+    PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerSeekableRange, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerTrackPreferencePolicy, PlayerVideoDecodeInfo,
+    PlayerVideoDecodeMode, PlayerVideoInfo, PresentationState, VideoPixelFormat,
 };
 
 pub type FfiResult<T> = Result<T, FfiError>;
@@ -309,6 +309,8 @@ pub enum FfiPluginDiagnosticStatus {
     DecoderUnsupported,
     FrameProcessorSupported,
     FrameProcessorUnsupported,
+    SourceNormalizerSupported,
+    SourceNormalizerUnsupported,
 }
 
 #[derive(Debug, Clone)]
@@ -347,9 +349,30 @@ pub struct FfiPluginFrameProcessorCapabilitySummary {
 }
 
 #[derive(Debug, Clone)]
+pub struct FfiPluginSourceNormalizerCapabilitySummary {
+    pub supported_runtime_profiles: Vec<String>,
+    pub max_level: String,
+    pub media_kinds: Vec<String>,
+    pub codecs: Vec<String>,
+    pub bitstream_formats: Vec<String>,
+    pub supports_seek: bool,
+    pub supports_flush: bool,
+    pub required_libraries: Vec<String>,
+    pub required_demuxers: Vec<String>,
+    pub required_muxers: Vec<String>,
+    pub required_protocols: Vec<String>,
+    pub required_parsers: Vec<String>,
+    pub required_bitstream_filters: Vec<String>,
+    pub required_tls: Option<String>,
+    pub requires_network: bool,
+    pub max_sessions: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
 pub enum FfiPluginCapabilitySummary {
     Decoder(FfiPluginDecoderCapabilitySummary),
     FrameProcessor(FfiPluginFrameProcessorCapabilitySummary),
+    SourceNormalizer(FfiPluginSourceNormalizerCapabilitySummary),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1219,6 +1242,12 @@ impl From<PlayerPluginDiagnosticStatus> for FfiPluginDiagnosticStatus {
             PlayerPluginDiagnosticStatus::FrameProcessorUnsupported => {
                 Self::FrameProcessorUnsupported
             }
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported => {
+                Self::SourceNormalizerSupported
+            }
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported => {
+                Self::SourceNormalizerUnsupported
+            }
         }
     }
 }
@@ -1273,6 +1302,31 @@ impl From<PlayerPluginFrameProcessorCapabilitySummary>
     }
 }
 
+impl From<PlayerPluginSourceNormalizerCapabilitySummary>
+    for FfiPluginSourceNormalizerCapabilitySummary
+{
+    fn from(value: PlayerPluginSourceNormalizerCapabilitySummary) -> Self {
+        Self {
+            supported_runtime_profiles: value.supported_runtime_profiles,
+            max_level: value.max_level,
+            media_kinds: value.media_kinds,
+            codecs: value.codecs,
+            bitstream_formats: value.bitstream_formats,
+            supports_seek: value.supports_seek,
+            supports_flush: value.supports_flush,
+            required_libraries: value.required_libraries,
+            required_demuxers: value.required_demuxers,
+            required_muxers: value.required_muxers,
+            required_protocols: value.required_protocols,
+            required_parsers: value.required_parsers,
+            required_bitstream_filters: value.required_bitstream_filters,
+            required_tls: value.required_tls,
+            requires_network: value.requires_network,
+            max_sessions: value.max_sessions,
+        }
+    }
+}
+
 impl From<PlayerPluginCapabilitySummary> for FfiPluginCapabilitySummary {
     fn from(value: PlayerPluginCapabilitySummary) -> Self {
         match value {
@@ -1281,6 +1335,9 @@ impl From<PlayerPluginCapabilitySummary> for FfiPluginCapabilitySummary {
             }
             PlayerPluginCapabilitySummary::FrameProcessor(summary) => {
                 Self::FrameProcessor(FfiPluginFrameProcessorCapabilitySummary::from(summary))
+            }
+            PlayerPluginCapabilitySummary::SourceNormalizer(summary) => {
+                Self::SourceNormalizer(FfiPluginSourceNormalizerCapabilitySummary::from(summary))
             }
         }
     }

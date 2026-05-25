@@ -25,6 +25,14 @@ val isFlutterSplitPerAbiBuild =
 val workspaceRootDir = rootProject.layout.projectDirectory.dir("../../..")
 val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
 val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
+val playerSourceNormalizerPluginJniLibsDir =
+    layout.buildDirectory.dir("generated/playerSourceNormalizerFfmpeg/jniLibs")
+val playerSourceNormalizerPluginJniLibsDirFile =
+    playerSourceNormalizerPluginJniLibsDir.get().asFile
+val playerFrameProcessorDiagnosticPluginJniLibsDir =
+    layout.buildDirectory.dir("generated/playerFrameProcessorDiagnostic/jniLibs")
+val playerFrameProcessorDiagnosticPluginJniLibsDirFile =
+    playerFrameProcessorDiagnosticPluginJniLibsDir.get().asFile
 val playerFfmpegPluginBuildProfile =
     providers.provider {
         if (gradle.startParameter.taskNames.any { taskName ->
@@ -69,6 +77,12 @@ android {
 
     sourceSets {
         getByName("main").jniLibs.directories.add(playerFfmpegPluginJniLibsDirFile.absolutePath)
+        getByName("main").jniLibs.directories.add(
+            playerSourceNormalizerPluginJniLibsDirFile.absolutePath,
+        )
+        getByName("main").jniLibs.directories.add(
+            playerFrameProcessorDiagnosticPluginJniLibsDirFile.absolutePath,
+        )
     }
 
     packaging {
@@ -103,6 +117,8 @@ flutter {
 dependencies {
     implementation(project(":vesper-player-kit-ffmpeg-runtime"))
     implementation(project(":vesper-player-kit-external-playback"))
+    implementation(project(":vesper-player-kit-source-normalizer-ffmpeg"))
+    implementation(project(":vesper-player-kit-frame-processor-diagnostic"))
 }
 
 val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
@@ -135,8 +151,69 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
     }
 }
 
+val buildPlayerSourceNormalizerFfmpegAndroidPlugin by tasks.registering(Exec::class) {
+    description = "Builds the Android player-source-normalizer-ffmpeg plugin libraries used by the Flutter host."
+    group = "vesper"
+
+    val scriptFile = workspaceRootDir.file("scripts/android/build-player-source-normalizer-ffmpeg-plugin.sh")
+
+    inputs.file(scriptFile)
+    inputs.file(workspaceRootDir.file("Cargo.toml"))
+    inputs.file(workspaceRootDir.file("Cargo.lock"))
+    inputs.file(workspaceRootDir.file("scripts/source-normalizer-profiles.toml"))
+    inputs.dir(workspaceRootDir.dir("crates/plugin/player-source-normalizer-ffmpeg"))
+    inputs.dir(workspaceRootDir.dir("crates/plugin/player-plugin"))
+    inputs.dir(workspaceRootDir.dir("crates/plugin/player-plugin-loader"))
+    inputs.dir(workspaceRootDir.dir("third_party/ffmpeg/android"))
+    inputs.property("abis", configuredAndroidAbis)
+    inputs.property("profile", playerFfmpegPluginBuildProfile)
+    outputs.dir(playerSourceNormalizerPluginJniLibsDirFile)
+
+    workingDir = workspaceRootDir.asFile
+    environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
+
+    doFirst {
+        commandLine(
+            scriptFile.asFile.absolutePath,
+            playerSourceNormalizerPluginJniLibsDirFile.absolutePath,
+            playerFfmpegPluginBuildProfile.get(),
+            "--profile",
+            "default",
+        )
+    }
+}
+
+val buildPlayerFrameProcessorDiagnosticAndroidPlugin by tasks.registering(Exec::class) {
+    description = "Builds the Android player-frame-processor-diagnostic plugin libraries used by the Flutter host."
+    group = "vesper"
+
+    val scriptFile = workspaceRootDir.file("scripts/android/build-player-frame-processor-diagnostic-plugin.sh")
+
+    inputs.file(scriptFile)
+    inputs.file(workspaceRootDir.file("Cargo.toml"))
+    inputs.file(workspaceRootDir.file("Cargo.lock"))
+    inputs.dir(workspaceRootDir.dir("crates/plugin/player-frame-processor-diagnostic"))
+    inputs.dir(workspaceRootDir.dir("crates/plugin/player-plugin"))
+    inputs.property("abis", configuredAndroidAbis)
+    inputs.property("profile", playerFfmpegPluginBuildProfile)
+    outputs.dir(playerFrameProcessorDiagnosticPluginJniLibsDirFile)
+
+    workingDir = workspaceRootDir.asFile
+    environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
+
+    doFirst {
+        commandLine(
+            scriptFile.asFile.absolutePath,
+            playerFrameProcessorDiagnosticPluginJniLibsDirFile.absolutePath,
+            playerFfmpegPluginBuildProfile.get(),
+        )
+    }
+}
+
 tasks.named("preBuild").configure {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+    dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
+    dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
 }
 
 tasks.matching { task ->
@@ -145,6 +222,8 @@ tasks.matching { task ->
         (task.name.startsWith("lint") && task.name.contains("Analyze"))
 }.configureEach {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+    dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
+    dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
 }
 
 val ffmpegRuntimeProject = rootProject.project(":vesper-player-kit-ffmpeg-runtime")
@@ -156,6 +235,7 @@ ffmpegRuntimeProject.plugins.withId("com.android.library") {
             (task.name.startsWith("lint") && task.name.contains("Analyze"))
     }.configureEach {
         dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+        dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
     }
 }
 

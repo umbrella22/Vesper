@@ -50,6 +50,10 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedLastError
     }
 
+    var pluginDiagnostics: [[String: Any]] {
+        []
+    }
+
     private func recordBenchmark(
         _ eventName: String,
         attributes: [String: String] = [:]

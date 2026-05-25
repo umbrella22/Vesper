@@ -575,6 +575,32 @@ Key points:
   libxml2 notices when those libraries are included. See
   [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
+### Optional mobile plugin diagnostics
+
+`VesperPlayerController.create(...)` accepts two optional mobile plugin
+configurations:
+
+- `sourceNormalizerConfiguration` with `disabled`, `diagnosticsOnly`, and
+  `preflightOnly` modes
+- `frameProcessorConfiguration` with `disabled` and `diagnosticsOnly` modes
+
+Both are disabled by default. `pluginLibraryPaths` must contain plugin binary
+paths only: Android `.so` paths or iOS plugin framework binary paths. The
+Android FFmpeg runtime AAR and iOS `VesperPlayerFfmpegRuntime.xcframework.zip`
+are package dependencies and should not be placed in `pluginLibraryPaths`.
+
+SourceNormalizer mobile v1 is diagnostics/preflight only. It can load the
+optional FFmpeg plugin, report capability diagnostics in
+`controller.pluginDiagnostics`, and in `preflightOnly` mode attempt an
+open/close packet-session check for the selected source. Android ExoPlayer and
+iOS AVPlayer still play the original source, and preflight failures do not
+block playback.
+
+FrameProcessor mobile v1 is a diagnostics shell. The optional artifact can be
+packaged and probed for capabilities, but it does not open frame sessions,
+process frames, or participate in default mobile playback. Mobile Decoder
+artifacts remain deferred.
+
 Download task states:
 
 ```text

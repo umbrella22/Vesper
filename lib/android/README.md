@@ -10,13 +10,16 @@ artifacts and consumable from any Android app or library.
 | `vesper-player-kit`            | Core Android library: `VesperPlayerController`, `VesperPlayerSource`, `VesperTrackSelection`, `VesperDownloadManager`, JNI-backed `ExoPlayer` bridge, `libvesper_player_android.so` |
 | `vesper-player-kit-external-playback` | Optional Google Cast, DLNA / UPnP AV discovery, local HTTP relay, relay FFmpeg adaptation JNI, route button, and default Cast options provider                              |
 | `vesper-player-kit-ffmpeg-runtime`    | Optional FFmpeg runtime AAR used by download remux and external playback relay remux                                                                                        |
+| `vesper-player-kit-source-normalizer-ffmpeg` | Optional SourceNormalizer FFmpeg plugin AAR for mobile diagnostics and source preflight only; depends on the shared FFmpeg runtime and does not replace ExoPlayer sources |
+| `vesper-player-kit-frame-processor-diagnostic` | Optional FrameProcessor diagnostic plugin AAR for capability probing only; it does not open frame sessions or participate in playback                                  |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
-The external playback, FFmpeg runtime, Compose adapter, and higher-level Compose
-UI modules are optional. View-based or non-Compose hosts can depend on
-`vesper-player-kit` alone without pulling in Google Play Services, Cast
-Framework, DLNA discovery, FFmpeg, Compose, or Material3.
+The external playback, FFmpeg runtime, SourceNormalizer plugin, FrameProcessor
+diagnostic plugin, Compose adapter, and higher-level Compose UI modules are
+optional. View-based or non-Compose hosts can depend on `vesper-player-kit`
+alone without pulling in Google Play Services, Cast Framework, DLNA discovery,
+FFmpeg, plugin diagnostics, Compose, or Material3.
 
 Kotlin namespaces:
 
@@ -37,6 +40,8 @@ GitHub Releases publish the following artifacts via
 - `VesperPlayerKitComposeUi-android-arm64-v8a.aar`
 - `VesperPlayerKitExternalPlayback-android-arm64-v8a.aar`
 - `VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar`
+- `VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar`
+- `VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar`
 
 Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
 emulator. See [Release Downloads](../../README.md#release-downloads) for the
@@ -236,6 +241,27 @@ Optional Vesper FFmpeg features use a split runtime:
   relay FFmpeg adaptation APIs/JNI, but it must not carry its own `libav*`
   copies.
 - `player-remux-ffmpeg` contains only the download remux plugin `.so`.
+- `vesper-player-kit-source-normalizer-ffmpeg` contains only
+  `libplayer_source_normalizer_ffmpeg.so` plus profile metadata; it depends on
+  the shared runtime AAR and must not carry `libav*`, `libsw*`, `libxml2*`,
+  `libssl*`, or `libcrypto*` copies.
+- `vesper-player-kit-frame-processor-diagnostic` contains only
+  `libplayer_frame_processor_diagnostic.so` and does not depend on FFmpeg.
+
+The mobile SourceNormalizer configuration is opt-in through
+`VesperSourceNormalizerConfiguration`. `DiagnosticsOnly` loads the plugin and
+reports capabilities. `PreflightOnly` may open and close a packet session for
+the selected source and reports the result through `pluginDiagnostics`, but
+ExoPlayer still plays the original `VesperPlayerSource`. Preflight failure is
+non-fatal. `pluginLibraryPaths` must contain plugin `.so` paths only; the
+shared FFmpeg runtime AAR is resolved by Android packaging, not passed as a
+plugin path.
+
+The mobile FrameProcessor configuration is opt-in through
+`VesperFrameProcessorConfiguration`. Its v1 Android artifact is a diagnostics
+shell only: supported plugins are reported as available or failed to load, but
+they are never marked as participated, never open frame sessions, and never
+alter rendering. Mobile decoder extension artifacts remain deferred.
 
 Build the runtime through the root FFmpeg profile CLI:
 

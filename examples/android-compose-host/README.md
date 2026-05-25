@@ -21,6 +21,25 @@ Use this example as a reference for:
 - Built-in HLS demo source
 - Built-in DASH demo source
 - Generic remote URL field with `HLS / DASH / progressive` inference
+- SourceNormalizer plugin diagnostics panel. The example defaults to
+  `preflightOnly` and lets you switch among `disabled`, `diagnosticsOnly`, and
+  `preflightOnly` at runtime.
+- FrameProcessor diagnostic plugin logging. The example packages the diagnostic
+  plugin when available, but does not open frame sessions or alter rendering.
+
+## Optional Plugin Diagnostics
+
+The Android example packages the SourceNormalizer FFmpeg plugin and the
+FrameProcessor diagnostic plugin into generated `jniLibs` during Gradle builds.
+The app passes only plugin binary paths to `VesperPlayerController`; FFmpeg
+runtime libraries come from the shared `vesper-player-kit-ffmpeg-runtime` AAR
+and are not included in `pluginLibraryPaths`.
+
+SourceNormalizer mobile v1 is a diagnostics / preflight path. In
+`preflightOnly`, the host probes the selected source and then continues playing
+the original ExoPlayer source. A preflight failure is shown in the diagnostics
+panel and does not block playback. FrameProcessor remains debug diagnostics
+only in this example and is never marked as participating in mobile playback.
 
 ## Cast and DLNA
 

@@ -506,10 +506,34 @@ func formatStorageBytes(_ value: Int64?) -> String {
 }
 
 func bundledDownloadPluginLibraryPaths() -> [String] {
+    bundledFrameworkPluginLibraryPaths(
+        frameworkName: "VesperPlayerRemuxFfmpegPlugin",
+        binaryName: "VesperPlayerRemuxFfmpegPlugin"
+    )
+}
+
+func bundledSourceNormalizerPluginLibraryPaths() -> [String] {
+    bundledFrameworkPluginLibraryPaths(
+        frameworkName: "VesperPlayerSourceNormalizerFfmpegPlugin",
+        binaryName: "VesperPlayerSourceNormalizerFfmpegPlugin"
+    )
+}
+
+func bundledFrameProcessorPluginLibraryPaths() -> [String] {
+    bundledFrameworkPluginLibraryPaths(
+        frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
+        binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
+    )
+}
+
+private func bundledFrameworkPluginLibraryPaths(
+    frameworkName: String,
+    binaryName: String
+) -> [String] {
     let fileManager = FileManager.default
     let frameworksPath = Bundle.main.privateFrameworksPath ?? "\(Bundle.main.bundlePath)/Frameworks"
     let candidates = [
-        "\(frameworksPath)/VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin",
+        "\(frameworksPath)/\(frameworkName).framework/\(binaryName)",
     ]
 
     return candidates.compactMap { candidate in

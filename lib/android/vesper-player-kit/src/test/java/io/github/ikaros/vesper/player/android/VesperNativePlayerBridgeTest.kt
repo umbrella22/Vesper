@@ -159,6 +159,53 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun mobilePluginProbeExposesDiagnosticsWithoutReplacingPlaybackSource() {
+        val initialSource = VesperPlayerSource.hls("https://example.com/live.m3u8", "Live")
+        val diagnostics =
+            listOf(
+                mapOf(
+                    "pluginKind" to "source_normalizer",
+                    "status" to "sourceNormalizerSupported",
+                    "participation" to "available",
+                )
+            )
+        val bindings =
+            FakeBindings(
+                mobilePluginDiagnostics = diagnostics,
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = initialSource,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreflightOnly,
+                        pluginLibraryPaths = listOf("/tmp/libplayer_source_normalizer_ffmpeg.so"),
+                        runtimeProfile = "default",
+                    ),
+                frameProcessorConfiguration =
+                    VesperFrameProcessorConfiguration(
+                        mode = VesperFrameProcessorMode.DiagnosticsOnly,
+                        pluginLibraryPaths = listOf("/tmp/libplayer_frame_processor_diagnostic.so"),
+                    ),
+            )
+
+        bridge.initialize()
+
+        assertEquals(initialSource, bindings.lastProbeSource)
+        assertEquals(initialSource, bindings.lastInitializedSource)
+        assertEquals(diagnostics, bridge.pluginDiagnostics)
+        assertEquals(
+            VesperSourceNormalizerMode.PreflightOnly,
+            bindings.lastSourceNormalizerConfiguration?.mode,
+        )
+        assertEquals(
+            VesperFrameProcessorMode.DiagnosticsOnly,
+            bindings.lastFrameProcessorConfiguration?.mode,
+        )
+    }
+
+    @Test
     fun disposeClearsEffectiveVideoTrackIdImmediately() {
         val bindings =
             FakeBindings(
@@ -621,17 +668,34 @@ private class FakeBindings(
     var trackSelection: VesperTrackSelectionSnapshot = VesperTrackSelectionSnapshot(),
     var effectiveVideoTrackId: String? = null,
     var videoVariantObservation: VesperVideoVariantObservation? = null,
+    var mobilePluginDiagnostics: List<Map<String, Any?>> = emptyList(),
 ) : VesperNativeBindings {
     var onInitialize: (() -> Unit)? = null
     val events = mutableListOf<NativeBridgeEvent>()
     var disposeCount = 0
+    var lastProbeSource: VesperPlayerSource? = null
+    var lastSourceNormalizerConfiguration: VesperSourceNormalizerConfiguration? = null
+    var lastFrameProcessorConfiguration: VesperFrameProcessorConfiguration? = null
+    var lastInitializedSource: VesperPlayerSource? = null
     private var updateListener: (() -> Unit)? = null
+
+    override fun probeMobilePlugins(
+        source: VesperPlayerSource,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration,
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration,
+    ): List<Map<String, Any?>> {
+        lastProbeSource = source
+        lastSourceNormalizerConfiguration = sourceNormalizerConfiguration
+        lastFrameProcessorConfiguration = frameProcessorConfiguration
+        return mobilePluginDiagnostics
+    }
 
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         trackPreferencePolicy: VesperTrackPreferencePolicy,
     ): NativeBridgeStartup {
+        lastInitializedSource = source
         onInitialize?.invoke()
         return NativeBridgeStartup(subtitle = null)
     }

@@ -671,6 +671,20 @@ bool vesper_runtime_benchmark_sink_session_flush_json(
 
 void vesper_runtime_benchmark_string_free(char *value);
 
+bool vesper_mobile_plugin_diagnostics_json(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    uint32_t frame_mode,
+    char **frame_plugin_library_paths,
+    uintptr_t frame_plugin_library_paths_len,
+    char **out_json,
+    char **out_error_message);
+
+void vesper_mobile_plugin_diagnostics_string_free(char *value);
+
 bool vesper_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,

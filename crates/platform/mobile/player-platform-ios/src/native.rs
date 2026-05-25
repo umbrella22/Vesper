@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
+use player_platform_mobile::{MobilePluginConfiguration, apply_mobile_plugin_diagnostics};
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FrameProcessorMode, MAX_PLAYBACK_RATE,
-    MIN_PLAYBACK_RATE, MediaAbrMode, MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind,
-    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
-    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResilienceMetrics,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
+    MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError,
+    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics,
     PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
@@ -659,7 +659,11 @@ impl PlayerRuntimeAdapterFactory for IosNativePlayerRuntimeAdapterFactory {
             }
             None => (placeholder_media_info(&source), placeholder_startup()),
         };
-        let startup = apply_ios_frame_processor_diagnostics(startup, &options);
+        let startup = apply_mobile_plugin_diagnostics(
+            startup,
+            &source,
+            &MobilePluginConfiguration::from_runtime_options(&options),
+        );
 
         Ok(Box::new(IosNativePlayerRuntimeInitializer {
             bridge: self.bridge.clone(),
@@ -1666,33 +1670,6 @@ fn placeholder_startup() -> PlayerRuntimeStartup {
         video_decode: None,
         plugin_diagnostics: Vec::new(),
     }
-}
-
-fn apply_ios_frame_processor_diagnostics(
-    mut startup: PlayerRuntimeStartup,
-    options: &PlayerRuntimeOptions,
-) -> PlayerRuntimeStartup {
-    if options.frame_processor_mode == FrameProcessorMode::Disabled
-        && options.frame_processor_library_paths.is_empty()
-    {
-        return startup;
-    }
-    startup.plugin_diagnostics.push(PlayerPluginDiagnostic {
-        path: options
-            .frame_processor_library_paths
-            .first()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "internal-frame-processor-config".to_owned()),
-        plugin_name: None,
-        plugin_kind: Some("frame_processor".to_owned()),
-        status: PlayerPluginDiagnosticStatus::FrameProcessorUnsupported,
-        message: Some(
-            "iOS DirectNative playback does not support per-frame processors yet".to_owned(),
-        ),
-        capability: None,
-        participation: PlayerPluginParticipation::Bypassed,
-    });
-    startup
 }
 
 fn normalize_media_info(source: &MediaSource, mut media_info: PlayerMediaInfo) -> PlayerMediaInfo {

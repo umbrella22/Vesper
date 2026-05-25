@@ -33,6 +33,7 @@ use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
     FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
     PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+    SourceNormalizerPacketPluginCapabilitySummary,
 };
 use player_runtime::{
     FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
@@ -1628,10 +1629,10 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
                 PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
             }
             PluginDiagnosticStatus::SourceNormalizerSupported => {
-                PlayerPluginDiagnosticStatus::Loaded
+                PlayerPluginDiagnosticStatus::SourceNormalizerSupported
             }
             PluginDiagnosticStatus::SourceNormalizerUnsupported => {
-                PlayerPluginDiagnosticStatus::UnsupportedKind
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
             }
         },
         message: record.message.clone(),
@@ -1659,7 +1660,42 @@ fn player_plugin_capability_summary_from_loader(
                 player_frame_processor_capability_summary_from_loader(summary),
             ))
         }
-        PluginCapabilitySummary::SourceNormalizerPacket(_) => None,
+        PluginCapabilitySummary::SourceNormalizerPacket(summary) => {
+            Some(PlayerPluginCapabilitySummary::SourceNormalizer(
+                player_source_normalizer_capability_summary_from_loader(summary),
+            ))
+        }
+    }
+}
+
+fn player_source_normalizer_capability_summary_from_loader(
+    summary: &SourceNormalizerPacketPluginCapabilitySummary,
+) -> player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
+    player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
+        supported_runtime_profiles: summary.supported_runtime_profiles.clone(),
+        max_level: format!("{:?}", summary.max_level),
+        media_kinds: summary
+            .media_kinds
+            .iter()
+            .map(|kind| format!("{kind:?}"))
+            .collect(),
+        codecs: summary.codecs.clone(),
+        bitstream_formats: summary
+            .bitstream_formats
+            .iter()
+            .map(|format| format!("{format:?}"))
+            .collect(),
+        supports_seek: summary.supports_seek,
+        supports_flush: summary.supports_flush,
+        required_libraries: summary.required_capabilities.libraries.clone(),
+        required_demuxers: summary.required_capabilities.demuxers.clone(),
+        required_muxers: summary.required_capabilities.muxers.clone(),
+        required_protocols: summary.required_capabilities.protocols.clone(),
+        required_parsers: summary.required_capabilities.parsers.clone(),
+        required_bitstream_filters: summary.required_capabilities.bitstream_filters.clone(),
+        required_tls: summary.required_capabilities.tls.clone(),
+        requires_network: summary.required_capabilities.network,
+        max_sessions: summary.max_sessions,
     }
 }
 

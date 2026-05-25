@@ -510,6 +510,8 @@ contributor_lines="$(release_contributor_lines "$RANGE_SPEC")"
   emit_download_item "VesperPlayerKitComposeUi-android-arm64-v8a.aar" "Optional Compose UI controls AAR"
   emit_download_item "VesperPlayerKitExternalPlayback-android-arm64-v8a.aar" "External playback extension AAR"
   emit_download_item "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar" "FFmpeg runtime AAR"
+  emit_download_item "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar" "Optional SourceNormalizer FFmpeg diagnostics/preflight plugin AAR"
+  emit_download_item "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar" "Optional FrameProcessor diagnostic plugin AAR"
   emit_download_item "VesperPlayerAndroidComposeHost-android-arm64-v8a-debug-signed.apk" "Android Compose sample APK, debug-signed for side-load evaluation only"
   emit_download_item "VesperPlayerFlutterHost-android-arm64-v8a-debug-signed.apk" "Flutter Android sample APK, debug-signed for side-load evaluation only"
   echo
@@ -520,12 +522,14 @@ contributor_lines="$(release_contributor_lines "$RANGE_SPEC")"
   emit_download_item "VesperPlayerKit.xcframework.zip" "Combined XCFramework"
   emit_download_item "VesperPlayerFfmpegRuntime.xcframework.zip" "Optional FFmpeg shared runtime XCFramework"
   emit_download_item "VesperPlayerRemuxFfmpegPlugin.xcframework.zip" "Optional FFmpeg remux plugin XCFramework"
+  emit_download_item "VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" "Optional SourceNormalizer FFmpeg diagnostics/preflight plugin XCFramework"
+  emit_download_item "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip" "Optional FrameProcessor diagnostic plugin XCFramework"
   echo
   echo "### Checksums and Licensing"
   echo
   emit_download_item "SHA256SUMS.txt" "SHA-256 checksums for release artifacts"
   echo
-  echo "FFmpeg-backed artifacts keep FFmpeg's license, notices, corresponding source, configure flags, and LGPL relinking boundary separate from Vesper's Apache-2.0 source license."
+  echo "FFmpeg-backed artifacts keep FFmpeg's license, notices, corresponding source, configure flags, and LGPL relinking boundary separate from Vesper's Apache-2.0 source license. SourceNormalizer mobile v1 is diagnostics/preflight only, FrameProcessor mobile v1 is diagnostics-only, and Decoder mobile artifacts remain deferred."
   echo
   echo "## Release Contributors"
   echo

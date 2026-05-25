@@ -199,6 +199,38 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
+    func toSourceNormalizerConfiguration() -> VesperSourceNormalizerConfiguration {
+        let mode: VesperSourceNormalizerMode
+        switch self["mode"] as? String {
+        case "diagnosticsOnly":
+            mode = .diagnosticsOnly
+        case "preflightOnly":
+            mode = .preflightOnly
+        default:
+            mode = .disabled
+        }
+        return VesperSourceNormalizerConfiguration(
+            mode: mode,
+            pluginLibraryPaths:
+                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
+                    value as? String
+                } ?? [],
+            runtimeProfile: self["runtimeProfile"] as? String
+        )
+    }
+
+    func toFrameProcessorConfiguration() -> VesperFrameProcessorConfiguration {
+        let mode: VesperFrameProcessorMode =
+            (self["mode"] as? String) == "diagnosticsOnly" ? .diagnosticsOnly : .disabled
+        return VesperFrameProcessorConfiguration(
+            mode: mode,
+            pluginLibraryPaths:
+                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
+                    value as? String
+                } ?? []
+        )
+    }
+
     func toDownloadConfiguration() -> VesperDownloadConfiguration {
         VesperDownloadConfiguration(
             autoStart: self["autoStart"] as? Bool ?? true,
@@ -451,4 +483,3 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 }
-

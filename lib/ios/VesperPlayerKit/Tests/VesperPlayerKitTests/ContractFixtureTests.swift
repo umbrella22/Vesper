@@ -118,7 +118,7 @@ final class ContractFixtureTests: XCTestCase {
     func testSharedPluginDiagnosticsContractKeepsStableFields() throws {
         let payload = try contractArray("plugin_diagnostics")
 
-        XCTAssertEqual(payload.count, 2)
+        XCTAssertEqual(payload.count, 3)
         let decoder = try XCTUnwrap(payload.first)
         XCTAssertEqual(decoder["status"] as? String, "decoderSupported")
         XCTAssertEqual(decoder["participation"] as? String, "participated")
@@ -135,6 +135,15 @@ final class ContractFixtureTests: XCTestCase {
         XCTAssertEqual(processorCapability["kind"] as? String, "frameProcessor")
         let processorSummary = try XCTUnwrap(processorCapability["frameProcessor"] as? [String: Any])
         XCTAssertEqual(processorSummary["maxInFlightFrames"] as? Int, 4)
+
+        let sourceNormalizer = try XCTUnwrap(payload.dropFirst(2).first)
+        XCTAssertEqual(sourceNormalizer["status"] as? String, "sourceNormalizerSupported")
+        XCTAssertEqual(sourceNormalizer["participation"] as? String, "bypassed")
+        let sourceNormalizerCapability = try XCTUnwrap(sourceNormalizer["capability"] as? [String: Any])
+        XCTAssertEqual(sourceNormalizerCapability["kind"] as? String, "sourceNormalizer")
+        let sourceNormalizerSummary = try XCTUnwrap(sourceNormalizerCapability["sourceNormalizer"] as? [String: Any])
+        XCTAssertEqual(sourceNormalizerSummary["supportedRuntimeProfiles"] as? [String], ["generic-fallback"])
+        XCTAssertEqual(sourceNormalizerSummary["requiresNetwork"] as? Bool, false)
     }
 }
 

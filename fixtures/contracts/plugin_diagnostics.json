@@ -56,5 +56,54 @@
         "maxInFlightFrames": 4
       }
     }
+  },
+  {
+    "path": "/tmp/player-source-normalizer-fixture.dylib",
+    "pluginName": "fixture-source-normalizer",
+    "pluginKind": "source_normalizer",
+    "status": "sourceNormalizerSupported",
+    "participation": "bypassed",
+    "message": "fixture source normalizer preflight completed",
+    "capability": {
+      "kind": "sourceNormalizer",
+      "sourceNormalizer": {
+        "supportedRuntimeProfiles": [
+          "generic-fallback"
+        ],
+        "maxLevel": "packet_repair",
+        "mediaKinds": [
+          "video"
+        ],
+        "codecs": [
+          "h264"
+        ],
+        "bitstreamFormats": [
+          "annex_b"
+        ],
+        "supportsSeek": true,
+        "supportsFlush": true,
+        "requiredLibraries": [
+          "avformat"
+        ],
+        "requiredDemuxers": [
+          "mov"
+        ],
+        "requiredMuxers": [
+          "mp4"
+        ],
+        "requiredProtocols": [
+          "file"
+        ],
+        "requiredParsers": [
+          "h264"
+        ],
+        "requiredBitstreamFilters": [
+          "h264_mp4toannexb"
+        ],
+        "requiredTls": "secure-transport",
+        "requiresNetwork": false,
+        "maxSessions": 1
+      }
+    }
   }
 ]

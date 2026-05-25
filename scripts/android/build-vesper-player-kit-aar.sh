@@ -15,6 +15,8 @@ GRADLE_CMD=("$(vesper_android_resolve_gradle "$PROJECT_DIR" "$FALLBACK_PROJECT_D
 exec "${GRADLE_CMD[@]}" -p "$PROJECT_DIR" \
     ":vesper-player-kit:$MODULE_TASK" \
     ":vesper-player-kit-ffmpeg-runtime:$MODULE_TASK" \
+    ":vesper-player-kit-source-normalizer-ffmpeg:$MODULE_TASK" \
+    ":vesper-player-kit-frame-processor-diagnostic:$MODULE_TASK" \
     ":vesper-player-kit-external-playback:$MODULE_TASK" \
     ":vesper-player-kit-compose:$MODULE_TASK" \
     ":vesper-player-kit-compose-ui:$MODULE_TASK"

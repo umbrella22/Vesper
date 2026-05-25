@@ -267,6 +267,198 @@ struct ExampleResilienceSection: View {
     }
 }
 
+struct ExamplePluginDiagnosticsSection: View {
+    let palette: ExampleHostPalette
+    let sourceNormalizerSetting: ExampleSourceNormalizerSetting
+    let sourceNormalizerPluginLibraryPaths: [String]
+    let frameProcessorPluginLibraryPaths: [String]
+    let pluginDiagnostics: [[String: Any]]
+    let onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Void
+
+    private var sourceNormalizerDiagnostics: [[String: Any]] {
+        pluginDiagnostics.filter { diagnostic in
+            diagnostic["pluginKind"] as? String == "source_normalizer" ||
+                (diagnostic["status"] as? String)?.hasPrefix("sourceNormalizer") == true
+        }
+    }
+
+    private var frameProcessorDiagnostics: [[String: Any]] {
+        pluginDiagnostics.filter { diagnostic in
+            diagnostic["pluginKind"] as? String == "frame_processor" ||
+                (diagnostic["status"] as? String)?.hasPrefix("frameProcessor") == true
+        }
+    }
+
+    var body: some View {
+        ExampleSectionShell(
+            palette: palette,
+            title: ExampleI18n.pluginDiagnosticsTitle,
+            subtitle: ExampleI18n.pluginDiagnosticsSubtitle
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(ExampleSourceNormalizerSetting.allCases) { setting in
+                            Button(setting.title) {
+                                onSourceNormalizerSettingChange(setting)
+                            }
+                            .buttonStyle(.plain)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(
+                                setting == sourceNormalizerSetting
+                                    ? palette.primaryAction
+                                    : Color.white.opacity(0.08),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(setting == sourceNormalizerSetting ? .white : palette.title)
+                        }
+                    }
+                }
+
+                Text(sourceNormalizerSetting.subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(palette.body)
+                    .lineSpacing(4)
+
+                ExampleFactRow(
+                    label: ExampleI18n.pluginSourcePath,
+                    value: pluginDisplayValue(sourceNormalizerPluginLibraryPaths),
+                    palette: palette
+                )
+                ExampleFactRow(
+                    label: ExampleI18n.pluginFramePath,
+                    value: pluginDisplayValue(frameProcessorPluginLibraryPaths),
+                    palette: palette
+                )
+
+                PluginDiagnosticGroup(
+                    title: ExampleI18n.pluginSourceNormalizerGroup,
+                    emptyLabel: ExampleI18n.pluginNoSourceNormalizerDiagnostics,
+                    diagnostics: sourceNormalizerDiagnostics,
+                    palette: palette
+                )
+                PluginDiagnosticGroup(
+                    title: ExampleI18n.pluginFrameProcessorGroup,
+                    emptyLabel: ExampleI18n.pluginNoFrameProcessorDiagnostics,
+                    diagnostics: frameProcessorDiagnostics,
+                    palette: palette
+                )
+            }
+        }
+    }
+}
+
+private struct PluginDiagnosticGroup: View {
+    let title: String
+    let emptyLabel: String
+    let diagnostics: [[String: Any]]
+    let palette: ExampleHostPalette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(palette.title)
+            if diagnostics.isEmpty {
+                Text(emptyLabel)
+                    .font(.footnote)
+                    .foregroundStyle(palette.body)
+            } else {
+                ForEach(Array(diagnostics.enumerated()), id: \.offset) { _, diagnostic in
+                    PluginDiagnosticRow(diagnostic: diagnostic, palette: palette)
+                }
+            }
+        }
+    }
+}
+
+private struct PluginDiagnosticRow: View {
+    let diagnostic: [String: Any]
+    let palette: ExampleHostPalette
+
+    private var status: String {
+        diagnostic["status"] as? String ?? ""
+    }
+
+    private var participation: String {
+        let value = diagnostic["participation"] as? String ?? ""
+        return value.isEmpty ? "unknown" : value
+    }
+
+    private var pluginName: String {
+        diagnostic["pluginName"] as? String ?? ""
+    }
+
+    private var message: String {
+        diagnostic["message"] as? String ?? ""
+    }
+
+    private var path: String {
+        diagnostic["path"] as? String ?? ""
+    }
+
+    private var profiles: String {
+        guard
+            let capability = diagnostic["capability"] as? [String: Any],
+            let sourceNormalizer = capability["sourceNormalizer"] as? [String: Any],
+            let values = sourceNormalizer["supportedRuntimeProfiles"] as? [String]
+        else {
+            return ""
+        }
+        return values.joined(separator: ", ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(pluginRecordTitle(pluginName: pluginName, status: status))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(palette.title)
+            Text(ExampleI18n.pluginParticipation(participation))
+                .font(.footnote)
+                .foregroundStyle(palette.body)
+            if !profiles.isEmpty {
+                Text(ExampleI18n.pluginProfiles(profiles))
+                    .font(.footnote)
+                    .lineLimit(2)
+                    .foregroundStyle(palette.body)
+            }
+            if !message.isEmpty {
+                Text(message)
+                    .font(.footnote)
+                    .lineLimit(3)
+                    .foregroundStyle(palette.body)
+            }
+            if !path.isEmpty {
+                Text(path)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundStyle(palette.body)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.fieldBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(palette.sectionStroke, lineWidth: 1)
+        )
+    }
+}
+
+private func pluginDisplayValue(_ paths: [String]) -> String {
+    let value = paths.joined(separator: ", ")
+    return value.isEmpty ? ExampleI18n.pluginMissing : value
+}
+
+private func pluginRecordTitle(pluginName: String, status: String) -> String {
+    let value = [pluginName, status].filter { !$0.isEmpty }.joined(separator: " · ")
+    return value.isEmpty ? ExampleI18n.pluginUnknownRecord : value
+}
+
 struct ExampleThemeModeChip: View {
     let mode: ExampleThemeMode
     let selected: Bool

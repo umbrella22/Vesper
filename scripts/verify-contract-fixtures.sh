@@ -57,15 +57,19 @@ require_text_in_tree crates/ffi/player-ffi/src/c_api "PlayerFfiErrorCode::Unsupp
 
 require_flutter_models_text "decoderSupported"
 require_flutter_models_text "frameProcessorSupported"
+require_flutter_models_text "sourceNormalizerSupported"
 require_flutter_models_text "VesperPluginParticipation"
 require_text crates/core/player-runtime/src/lib.rs "DecoderSupported"
 require_text crates/core/player-runtime/src/lib.rs "FrameProcessorSupported"
+require_text crates/core/player-runtime/src/lib.rs "SourceNormalizerSupported"
 require_text crates/core/player-runtime/src/lib.rs "PlayerPluginParticipation"
 require_text_in_tree crates/ffi/player-ffi/src/c_api "DecoderSupported"
 require_text_in_tree crates/ffi/player-ffi/src/c_api "FrameProcessorSupported"
+require_text_in_tree crates/ffi/player-ffi/src/c_api "SourceNormalizerSupported"
 require_text_in_tree crates/ffi/player-ffi/src/c_api "PlayerFfiPluginParticipation"
 require_text fixtures/contracts/plugin_diagnostics.json '"participation": "participated"'
 require_text fixtures/contracts/plugin_diagnostics.json '"participation": "available"'
+require_text fixtures/contracts/plugin_diagnostics.json '"participation": "bypassed"'
 
 require_text lib/flutter/vesper_player_platform_interface/lib/src/download_models.dart "dashSegments"
 require_text lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/VesperDownloadManager.kt "DashSegments"

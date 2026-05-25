@@ -106,6 +106,47 @@ enum ExampleResilienceProfile: String, CaseIterable, Identifiable {
     }
 }
 
+enum ExampleSourceNormalizerSetting: String, CaseIterable, Identifiable {
+    case disabled
+    case diagnosticsOnly
+    case preflightOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .disabled:
+            return ExampleI18n.pluginSourceNormalizerDisabled
+        case .diagnosticsOnly:
+            return ExampleI18n.pluginSourceNormalizerDiagnostics
+        case .preflightOnly:
+            return ExampleI18n.pluginSourceNormalizerPreflight
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .disabled:
+            return ExampleI18n.pluginSourceNormalizerDisabledSubtitle
+        case .diagnosticsOnly:
+            return ExampleI18n.pluginSourceNormalizerDiagnosticsSubtitle
+        case .preflightOnly:
+            return ExampleI18n.pluginSourceNormalizerPreflightSubtitle
+        }
+    }
+
+    var mode: VesperSourceNormalizerMode {
+        switch self {
+        case .disabled:
+            return .disabled
+        case .diagnosticsOnly:
+            return .diagnosticsOnly
+        case .preflightOnly:
+            return .preflightOnly
+        }
+    }
+}
+
 struct ExampleHostPalette {
     let pageTop: Color
     let pageBottom: Color

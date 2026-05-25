@@ -35,9 +35,29 @@ abstract final class ExampleLocalMediaPicker {
   }
 
   static Future<List<String>> bundledDownloadPluginLibraryPaths() async {
-    final response = await _channel.invokeMethod<Object?>(
-      'bundledDownloadPluginLibraryPaths',
+    return _bundledPluginLibraryPaths('bundledDownloadPluginLibraryPaths');
+  }
+
+  static Future<List<String>>
+  bundledSourceNormalizerPluginLibraryPaths() async {
+    return _bundledPluginLibraryPaths(
+      'bundledSourceNormalizerPluginLibraryPaths',
     );
+  }
+
+  static Future<List<String>> bundledFrameProcessorPluginLibraryPaths() async {
+    return _bundledPluginLibraryPaths(
+      'bundledFrameProcessorPluginLibraryPaths',
+    );
+  }
+
+  static Future<List<String>> _bundledPluginLibraryPaths(String method) async {
+    final Object? response;
+    try {
+      response = await _channel.invokeMethod<Object?>(method);
+    } on MissingPluginException {
+      return const <String>[];
+    }
     if (response == null) {
       return const <String>[];
     }

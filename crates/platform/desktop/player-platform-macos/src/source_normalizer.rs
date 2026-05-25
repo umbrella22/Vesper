@@ -104,7 +104,6 @@ impl Drop for MacosSourceNormalizerRuntimeGuard {
     }
 }
 
-
 pub(crate) fn source_normalizer_packet_decoder_unavailable_message(
     normalization: &MacosSourceNormalizationOutcome,
     options: &PlayerRuntimeOptions,
@@ -149,7 +148,6 @@ pub(crate) fn source_normalizer_packet_decoder_unavailable_message(
         source_normalizer_registry_notes(&registry)
     ))
 }
-
 
 pub(crate) fn prepare_source_normalizer_for_open(
     source: MediaSource,
@@ -202,7 +200,10 @@ pub(crate) fn prepare_source_normalizer_for_open(
                 PlayerErrorCode::Unsupported,
                 format!("{message}; source normalizer mode is RequireNormalized"),
             )),
-            SourceNormalizerMode::Disabled | SourceNormalizerMode::PreferNormalized => Ok(outcome),
+            SourceNormalizerMode::Disabled
+            | SourceNormalizerMode::DiagnosticsOnly
+            | SourceNormalizerMode::PreflightOnly
+            | SourceNormalizerMode::PreferNormalized => Ok(outcome),
         };
     }
 
@@ -233,7 +234,10 @@ pub(crate) fn prepare_source_normalizer_for_open(
             SourceNormalizerMode::RequireNormalized => {
                 Err(PlayerError::new(PlayerErrorCode::Unsupported, message))
             }
-            SourceNormalizerMode::Disabled | SourceNormalizerMode::PreferNormalized => Ok(outcome),
+            SourceNormalizerMode::Disabled
+            | SourceNormalizerMode::DiagnosticsOnly
+            | SourceNormalizerMode::PreflightOnly
+            | SourceNormalizerMode::PreferNormalized => Ok(outcome),
         };
     }
 
@@ -442,7 +446,9 @@ pub(crate) fn apply_source_normalizer_open_diagnostics(
     startup
 }
 
-pub(crate) fn drop_source_normalizer_packet_session(normalization: &mut MacosSourceNormalizationOutcome) {
+pub(crate) fn drop_source_normalizer_packet_session(
+    normalization: &mut MacosSourceNormalizationOutcome,
+) {
     if let Some(packet_session) = normalization.packet_session.take()
         && let Ok(mut guard) = packet_session.lock()
         && let Some(mut session) = guard.take()

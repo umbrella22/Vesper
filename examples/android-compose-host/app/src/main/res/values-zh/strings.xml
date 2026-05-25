@@ -129,6 +129,25 @@
     <string name="example_resilience_backoff_linear">线性</string>
     <string name="example_resilience_backoff_exponential">指数</string>
 
+    <string name="example_plugins_title">插件诊断</string>
+    <string name="example_plugins_subtitle">SourceNormalizer 可切换为诊断或 source preflight。移动端播放仍使用原始 source；FrameProcessor 仅记录 debug 能力诊断。</string>
+    <string name="example_plugins_source_normalizer_disabled">SourceNormalizer 关闭</string>
+    <string name="example_plugins_source_normalizer_disabled_subtitle">不会为播放探测加载 SourceNormalizer 插件。</string>
+    <string name="example_plugins_source_normalizer_diagnostics">Diagnostics</string>
+    <string name="example_plugins_source_normalizer_diagnostics_subtitle">只加载 SourceNormalizer 插件并上报 capability，不打开 packet session。</string>
+    <string name="example_plugins_source_normalizer_preflight">Preflight</string>
+    <string name="example_plugins_source_normalizer_preflight_subtitle">加载 SourceNormalizer 插件，为当前 source 打开并关闭 packet session，然后继续播放原始 source。</string>
+    <string name="example_plugins_source_normalizer_path">source</string>
+    <string name="example_plugins_frame_processor_path">frame</string>
+    <string name="example_plugins_missing">缺失</string>
+    <string name="example_plugins_source_normalizer_group">SourceNormalizer</string>
+    <string name="example_plugins_frame_processor_group">FrameProcessor Debug</string>
+    <string name="example_plugins_no_source_normalizer_diagnostics">暂无 SourceNormalizer 诊断。</string>
+    <string name="example_plugins_no_frame_processor_diagnostics">暂无 FrameProcessor debug 诊断。</string>
+    <string name="example_plugins_unknown_record">插件诊断</string>
+    <string name="example_plugins_participation">participation：%1$s</string>
+    <string name="example_plugins_profiles">profiles：%1$s</string>
+
     <string name="example_sheet_menu_subtitle">打开音轨、字幕、画质和速度控制，同时避免播放器浮层过于拥挤。</string>
     <string name="example_sheet_quality_subtitle">切换自适应视频，或将流固定到某个具体画质轨道。</string>
     <string name="example_sheet_audio_subtitle">选择当前流暴露出来的音频节目。</string>

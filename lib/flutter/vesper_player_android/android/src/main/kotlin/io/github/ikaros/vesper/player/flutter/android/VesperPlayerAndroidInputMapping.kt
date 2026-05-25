@@ -19,6 +19,8 @@ import io.github.ikaros.vesper.player.android.VesperDownloadResourceRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSegmentRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadStreamKind
+import io.github.ikaros.vesper.player.android.VesperFrameProcessorConfiguration
+import io.github.ikaros.vesper.player.android.VesperFrameProcessorMode
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
@@ -26,6 +28,8 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
+import io.github.ikaros.vesper.player.android.VesperSourceNormalizerConfiguration
+import io.github.ikaros.vesper.player.android.VesperSourceNormalizerMode
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlButton
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlKind
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
@@ -47,6 +51,44 @@ internal fun Map<String, Any?>.toBenchmarkConfiguration(): VesperBenchmarkConfig
                 ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
                 ?: emptyList(),
     )
+
+internal fun Map<String, Any?>?.toSourceNormalizerConfiguration():
+    VesperSourceNormalizerConfiguration {
+    if (this == null) {
+        return VesperSourceNormalizerConfiguration()
+    }
+    return VesperSourceNormalizerConfiguration(
+        mode =
+            when (this["mode"] as? String) {
+                "diagnosticsOnly" -> VesperSourceNormalizerMode.DiagnosticsOnly
+                "preflightOnly" -> VesperSourceNormalizerMode.PreflightOnly
+                else -> VesperSourceNormalizerMode.Disabled
+            },
+        pluginLibraryPaths =
+            (this["pluginLibraryPaths"] as? List<*>)
+                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
+                ?: emptyList(),
+        runtimeProfile = (this["runtimeProfile"] as? String)?.takeIf(String::isNotEmpty),
+    )
+}
+
+internal fun Map<String, Any?>?.toFrameProcessorConfiguration():
+    VesperFrameProcessorConfiguration {
+    if (this == null) {
+        return VesperFrameProcessorConfiguration()
+    }
+    return VesperFrameProcessorConfiguration(
+        mode =
+            when (this["mode"] as? String) {
+                "diagnosticsOnly" -> VesperFrameProcessorMode.DiagnosticsOnly
+                else -> VesperFrameProcessorMode.Disabled
+            },
+        pluginLibraryPaths =
+            (this["pluginLibraryPaths"] as? List<*>)
+                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
+                ?: emptyList(),
+    )
+}
 
 internal fun Any?.toVesperVideoSurfaceKind(): VesperVideoSurfaceKind =
     when (this as? String ?: "auto") {
@@ -412,4 +454,3 @@ internal fun Map<String, Any?>.toCachePolicy(): VesperCachePolicy =
         maxMemoryBytes = (this["maxMemoryBytes"] as? Number)?.toLong(),
         maxDiskBytes = (this["maxDiskBytes"] as? Number)?.toLong(),
     )
-

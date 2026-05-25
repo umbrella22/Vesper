@@ -416,6 +416,19 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             } else {
                 benchmarkConfiguration = .disabled
             }
+            let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
+            if let sourceNormalizerMap = try nestedMap(arguments["sourceNormalizer"]) {
+                sourceNormalizerConfiguration =
+                    sourceNormalizerMap.toSourceNormalizerConfiguration()
+            } else {
+                sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration()
+            }
+            let frameProcessorConfiguration: VesperFrameProcessorConfiguration
+            if let frameProcessorMap = try nestedMap(arguments["frameProcessor"]) {
+                frameProcessorConfiguration = frameProcessorMap.toFrameProcessorConfiguration()
+            } else {
+                frameProcessorConfiguration = VesperFrameProcessorConfiguration()
+            }
             let keepScreenOnDuringPlayback =
                 (arguments["keepScreenOnDuringPlayback"] as? Bool) ?? true
 
@@ -427,7 +440,9 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     trackPreferencePolicy: trackPreferencePolicy,
                     preloadBudgetPolicy: preloadBudgetPolicy,
                     keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
-                    benchmarkConfiguration: benchmarkConfiguration
+                    benchmarkConfiguration: benchmarkConfiguration,
+                    sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+                    frameProcessorConfiguration: frameProcessorConfiguration
                 ),
                 benchmarkConsoleLogging: benchmarkConfiguration.consoleLogging
             )
@@ -437,6 +452,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             result([
                 "playerId": session.id,
                 "snapshot": buildSnapshotMap(for: session),
+                "pluginDiagnostics": session.controller.pluginDiagnostics,
             ])
         } catch {
             result(asFlutterError(error, code: "vesper_create_failed"))

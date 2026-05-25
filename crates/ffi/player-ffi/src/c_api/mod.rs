@@ -23,6 +23,7 @@ use crate::{
     FfiPluginDiagnosticStatus as BridgePluginDiagnosticStatus,
     FfiPluginFrameProcessorCapabilitySummary as BridgePluginFrameProcessorCapabilitySummary,
     FfiPluginParticipation as BridgePluginParticipation,
+    FfiPluginSourceNormalizerCapabilitySummary as BridgePluginSourceNormalizerCapabilitySummary,
     FfiPreloadBudgetPolicy as BridgePreloadBudgetPolicy, FfiProgress as BridgeProgress,
     FfiResolvedPreloadBudgetPolicy as BridgeResolvedPreloadBudgetPolicy,
     FfiResolvedResiliencePolicy as BridgeResolvedResiliencePolicy,
@@ -1078,4 +1079,3 @@ pub unsafe extern "C" fn player_ffi_event_list_free(events: *mut PlayerFfiEventL
         *events = PlayerFfiEventList::default();
     });
 }
-

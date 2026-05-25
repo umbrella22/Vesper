@@ -5,6 +5,7 @@ part 'models/playback_models.dart';
 part 'models/resilience_models.dart';
 part 'models/runtime_warning_models.dart';
 part 'models/plugin_diagnostic_models.dart';
+part 'models/mobile_plugin_configuration_models.dart';
 part 'models/source_models.dart';
 part 'models/capability_models.dart';
 part 'models/viewport_models.dart';

@@ -15,6 +15,10 @@ internal object PlayerBridgeFactory {
         surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
         keepScreenOnDuringPlayback: Boolean = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+            VesperSourceNormalizerConfiguration(),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration =
+            VesperFrameProcessorConfiguration(),
     ): PlayerBridge =
         when (defaultBackend) {
             PlayerBridgeBackend.FakeDemo ->
@@ -46,6 +50,8 @@ internal object PlayerBridgeFactory {
                     keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                     appContext = context.applicationContext,
                     surfaceKind = surfaceKind,
+                    sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                    frameProcessorConfiguration = frameProcessorConfiguration,
                 )
             }
         }

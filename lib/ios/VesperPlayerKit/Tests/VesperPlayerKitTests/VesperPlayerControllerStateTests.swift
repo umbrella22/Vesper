@@ -175,6 +175,7 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     var fixedTrackStatus: VesperFixedTrackStatus? { publishedFixedTrackStatus }
     var resiliencePolicy: VesperPlaybackResiliencePolicy { publishedResiliencePolicy }
     var lastError: VesperPlayerError? { publishedLastError }
+    var pluginDiagnostics: [[String: Any]] { [] }
 
     func initialize() {}
     func dispose() {}

@@ -11,6 +11,14 @@ internal object VesperNativeJni {
     external fun createPreloadSession(preloadBudget: NativeResolvedPreloadBudgetPolicy): Long
     external fun createDownloadSession(config: NativeDownloadConfig): Long
     external fun createBenchmarkSinkSession(pluginLibraryPaths: Array<String>): Long
+    external fun probeMobilePlugins(
+        sourceUri: String,
+        sourceModeOrdinal: Int,
+        sourcePluginLibraryPaths: Array<String>,
+        runtimeProfile: String?,
+        frameModeOrdinal: Int,
+        framePluginLibraryPaths: Array<String>,
+    ): String
     external fun createPlaylistSession(
         config: NativePlaylistConfig,
         preloadBudget: NativeResolvedPreloadBudgetPolicy,

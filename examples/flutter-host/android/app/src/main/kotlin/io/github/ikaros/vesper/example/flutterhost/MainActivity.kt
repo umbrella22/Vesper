@@ -24,7 +24,12 @@ class MainActivity : FlutterActivity() {
     ).setMethodCallHandler { call, result ->
       when (call.method) {
         "pickVideo" -> launchVideoPicker(result)
-        "bundledDownloadPluginLibraryPaths" -> result.success(bundledDownloadPluginLibraryPaths())
+        "bundledDownloadPluginLibraryPaths" ->
+          result.success(bundledPluginLibraryPaths("vesper_remux_ffmpeg"))
+        "bundledSourceNormalizerPluginLibraryPaths" ->
+          result.success(bundledPluginLibraryPaths("player_source_normalizer_ffmpeg"))
+        "bundledFrameProcessorPluginLibraryPaths" ->
+          result.success(bundledPluginLibraryPaths("player_frame_processor_diagnostic"))
         "saveVideoToGallery" -> saveVideoToGallery(call, result)
         else -> result.notImplemented()
       }
@@ -119,8 +124,7 @@ class MainActivity : FlutterActivity() {
     return fallback ?: "本地视频"
   }
 
-  private fun bundledDownloadPluginLibraryPaths(): List<String> {
-    val libraryName = "vesper_remux_ffmpeg"
+  private fun bundledPluginLibraryPaths(libraryName: String): List<String> {
     val resolvedPath =
       (classLoader as? BaseDexClassLoader)?.findLibrary(libraryName)?.takeIf { path ->
         path.isNotBlank() && File(path).isFile

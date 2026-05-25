@@ -138,6 +138,29 @@ enum ExampleI18n {
         string("example.resilience.cache_value", preset, memory, disk)
     }
 
+    static var pluginDiagnosticsTitle: String { string("example.plugins.title") }
+    static var pluginDiagnosticsSubtitle: String { string("example.plugins.subtitle") }
+    static var pluginSourceNormalizerDisabled: String { string("example.plugins.source_normalizer.disabled") }
+    static var pluginSourceNormalizerDisabledSubtitle: String { string("example.plugins.source_normalizer.disabled_subtitle") }
+    static var pluginSourceNormalizerDiagnostics: String { string("example.plugins.source_normalizer.diagnostics") }
+    static var pluginSourceNormalizerDiagnosticsSubtitle: String { string("example.plugins.source_normalizer.diagnostics_subtitle") }
+    static var pluginSourceNormalizerPreflight: String { string("example.plugins.source_normalizer.preflight") }
+    static var pluginSourceNormalizerPreflightSubtitle: String { string("example.plugins.source_normalizer.preflight_subtitle") }
+    static var pluginSourceNormalizerGroup: String { string("example.plugins.source_normalizer.group") }
+    static var pluginFrameProcessorGroup: String { string("example.plugins.frame_processor.group") }
+    static var pluginSourcePath: String { string("example.plugins.source_path") }
+    static var pluginFramePath: String { string("example.plugins.frame_path") }
+    static var pluginMissing: String { string("example.plugins.missing") }
+    static var pluginNoSourceNormalizerDiagnostics: String { string("example.plugins.no_source_normalizer_diagnostics") }
+    static var pluginNoFrameProcessorDiagnostics: String { string("example.plugins.no_frame_processor_diagnostics") }
+    static var pluginUnknownRecord: String { string("example.plugins.unknown_record") }
+    static func pluginParticipation(_ value: String) -> String {
+        string("example.plugins.participation", value)
+    }
+    static func pluginProfiles(_ value: String) -> String {
+        string("example.plugins.profiles", value)
+    }
+
     static var preparingSelectedVideo: String { string("example.message.preparing_selected_video") }
     static var preparingVideoFromPhotos: String { string("example.message.preparing_video_from_photos") }
     static var invalidRemoteUrl: String { string("example.message.invalid_remote_url") }

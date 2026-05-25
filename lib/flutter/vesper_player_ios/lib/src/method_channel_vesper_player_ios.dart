@@ -52,6 +52,10 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
     bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
+    VesperSourceNormalizerConfiguration sourceNormalizerConfiguration =
+        const VesperSourceNormalizerConfiguration(),
+    VesperFrameProcessorConfiguration frameProcessorConfiguration =
+        const VesperFrameProcessorConfiguration(),
   }) async {
     final trackPreferenceMap = trackPreferencePolicy.toMap();
     final preloadBudgetMap = preloadBudgetPolicy.toMap();
@@ -67,6 +71,10 @@ class MethodChannelVesperPlayerIos extends VesperPlayerPlatform {
         'keepScreenOnDuringPlayback': keepScreenOnDuringPlayback,
       if (benchmarkConfiguration.hasOverrides)
         'benchmarkConfiguration': benchmarkConfiguration.toMap(),
+      if (sourceNormalizerConfiguration.hasOverrides)
+        'sourceNormalizer': sourceNormalizerConfiguration.toMap(),
+      if (frameProcessorConfiguration.hasOverrides)
+        'frameProcessor': frameProcessorConfiguration.toMap(),
     });
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)

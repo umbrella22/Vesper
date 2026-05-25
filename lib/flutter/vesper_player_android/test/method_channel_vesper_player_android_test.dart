@@ -92,6 +92,35 @@ void main() {
     );
   });
 
+  test('createPlayer forwards mobile plugin configurations when provided',
+      () async {
+    final platform = MethodChannelVesperPlayerAndroid();
+    const sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+      mode: VesperSourceNormalizerMode.preflightOnly,
+      pluginLibraryPaths: <String>['/data/local/tmp/libsource.so'],
+      runtimeProfile: 'generic-fallback',
+    );
+    const frameProcessorConfiguration = VesperFrameProcessorConfiguration(
+      mode: VesperFrameProcessorMode.diagnosticsOnly,
+      pluginLibraryPaths: <String>['/data/local/tmp/libframe.so'],
+    );
+
+    await platform.createPlayer(
+      sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+      frameProcessorConfiguration: frameProcessorConfiguration,
+    );
+
+    expect(calls, hasLength(1));
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      containsPair('sourceNormalizer', sourceNormalizerConfiguration.toMap()),
+    );
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      containsPair('frameProcessor', frameProcessorConfiguration.toMap()),
+    );
+  });
+
   test('createPlayer forwards explicit texture render surface kind', () async {
     final platform = MethodChannelVesperPlayerAndroid();
 

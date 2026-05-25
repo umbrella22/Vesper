@@ -11,8 +11,12 @@ ROOT_DIR="$VESPER_REPO_ROOT"
 FRAMEWORK_BUNDLE_NAME="${1:-}"
 RUNTIME_FRAMEWORK_NAME="VesperPlayerFfmpegRuntime.framework"
 PLUGIN_FRAMEWORK_NAME="VesperPlayerRemuxFfmpegPlugin.framework"
+SOURCE_NORMALIZER_FRAMEWORK_NAME="VesperPlayerSourceNormalizerFfmpegPlugin.framework"
+FRAME_PROCESSOR_FRAMEWORK_NAME="VesperPlayerFrameProcessorDiagnosticPlugin.framework"
 RUNTIME_BINARY_NAME="VesperPlayerFfmpegRuntime"
 PLUGIN_BINARY_NAME="VesperPlayerRemuxFfmpegPlugin"
+SOURCE_NORMALIZER_BINARY_NAME="VesperPlayerSourceNormalizerFfmpegPlugin"
+FRAME_PROCESSOR_BINARY_NAME="VesperPlayerFrameProcessorDiagnosticPlugin"
 FFMPEG_PROFILE="${VESPER_IOS_FFMPEG_PROFILE:-${VESPER_APPLE_FFMPEG_PROFILE:-${VESPER_FFMPEG_PROFILE:-default}}}"
 
 if [[ -z "$FRAMEWORK_BUNDLE_NAME" ]]; then
@@ -248,7 +252,11 @@ frameworks_directory="$(resolve_frameworks_directory)"
 plugin_library_directory="$(resolve_plugin_library_directory)"
 runtime_framework_dir="$frameworks_directory/$RUNTIME_FRAMEWORK_NAME"
 plugin_framework_dir="$frameworks_directory/$PLUGIN_FRAMEWORK_NAME"
+source_normalizer_framework_dir="$frameworks_directory/$SOURCE_NORMALIZER_FRAMEWORK_NAME"
+frame_processor_framework_dir="$frameworks_directory/$FRAME_PROCESSOR_FRAMEWORK_NAME"
 output_dir="${DERIVED_FILE_DIR:-${TARGET_TEMP_DIR:-/tmp}}/vesper-ios-player-remux-ffmpeg"
+source_normalizer_output_dir="${DERIVED_FILE_DIR:-${TARGET_TEMP_DIR:-/tmp}}/vesper-ios-player-source-normalizer-ffmpeg"
+frame_processor_output_dir="${DERIVED_FILE_DIR:-${TARGET_TEMP_DIR:-/tmp}}/vesper-ios-player-frame-processor-diagnostic"
 runtime_anchor_source="$output_dir/runtime-anchor.c"
 
 FFMPEG_ARGS=()
@@ -271,10 +279,31 @@ env \
     "$build_profile" \
     "${FFMPEG_ARGS[@]}" \
     "${selected_slices[@]}"
+env \
+  VESPER_SKIP_APPLE_FFMPEG_PREBUILDS=1 \
+  "$ROOT_DIR/scripts/ios/build-player-source-normalizer-ffmpeg-plugin.sh" \
+    "$source_normalizer_output_dir" \
+    "$build_profile" \
+    "${FFMPEG_ARGS[@]}" \
+    "${selected_slices[@]}"
+"$ROOT_DIR/scripts/ios/build-player-frame-processor-diagnostic-plugin.sh" \
+  "$frame_processor_output_dir" \
+  "$build_profile" \
+  "${selected_slices[@]}"
 
 source_dir="$output_dir/$source_subdir"
+source_normalizer_source_dir="$source_normalizer_output_dir/$source_subdir"
+frame_processor_source_dir="$frame_processor_output_dir/$source_subdir"
 if [[ ! -f "$source_dir/libvesper_remux_ffmpeg.dylib" ]]; then
   echo "Expected player-remux-ffmpeg output was not found: $source_dir/libvesper_remux_ffmpeg.dylib" >&2
+  exit 1
+fi
+if [[ ! -f "$source_normalizer_source_dir/libplayer_source_normalizer_ffmpeg.dylib" ]]; then
+  echo "Expected player-source-normalizer-ffmpeg output was not found: $source_normalizer_source_dir/libplayer_source_normalizer_ffmpeg.dylib" >&2
+  exit 1
+fi
+if [[ ! -f "$frame_processor_source_dir/libplayer_frame_processor_diagnostic.dylib" ]]; then
+  echo "Expected player-frame-processor-diagnostic output was not found: $frame_processor_source_dir/libplayer_frame_processor_diagnostic.dylib" >&2
   exit 1
 fi
 
@@ -297,14 +326,24 @@ if [[ ! -f "$metadata_path" ]]; then
   exit 1
 fi
 
-rm -rf "$runtime_framework_dir" "$plugin_framework_dir"
+rm -rf \
+  "$runtime_framework_dir" \
+  "$plugin_framework_dir" \
+  "$source_normalizer_framework_dir" \
+  "$frame_processor_framework_dir"
 mkdir -p \
   "$runtime_framework_dir/Headers" \
   "$runtime_framework_dir/Modules" \
   "$runtime_framework_dir/Resources" \
   "$plugin_framework_dir/Headers" \
   "$plugin_framework_dir/Modules" \
-  "$plugin_framework_dir/Resources"
+  "$plugin_framework_dir/Resources" \
+  "$source_normalizer_framework_dir/Headers" \
+  "$source_normalizer_framework_dir/Modules" \
+  "$source_normalizer_framework_dir/Resources" \
+  "$frame_processor_framework_dir/Headers" \
+  "$frame_processor_framework_dir/Modules" \
+  "$frame_processor_framework_dir/Resources"
 
 compile_runtime_anchor "$slice" "$runtime_framework_dir/$RUNTIME_BINARY_NAME" "$runtime_anchor_source"
 copy_runtime_dylibs "$ffmpeg_dir/lib/$ffmpeg_libdir" "$runtime_framework_dir"
@@ -345,6 +384,43 @@ framework_info_plist \
   "$platform_name" \
   "$(vesper_apple_ios_deployment_target)"
 
+cp "$source_normalizer_source_dir/libplayer_source_normalizer_ffmpeg.dylib" "$source_normalizer_framework_dir/$SOURCE_NORMALIZER_BINARY_NAME"
+install_name_tool -id "@rpath/$SOURCE_NORMALIZER_FRAMEWORK_NAME/$SOURCE_NORMALIZER_BINARY_NAME" "$source_normalizer_framework_dir/$SOURCE_NORMALIZER_BINARY_NAME"
+ensure_rpath "$source_normalizer_framework_dir/$SOURCE_NORMALIZER_BINARY_NAME" "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks"
+cp "$metadata_path" "$source_normalizer_framework_dir/Resources/$slice-vesper-ffmpeg-build-metadata.txt"
+printf '%s\n' "$profile_hash" >"$source_normalizer_framework_dir/Resources/profile-hash.txt"
+printf '%s\n' 'void VesperPlayerSourceNormalizerFfmpegPluginLinkAnchor(void);' >"$source_normalizer_framework_dir/Headers/VesperPlayerSourceNormalizerFfmpegPlugin.h"
+printf '%s\n' \
+  'framework module VesperPlayerSourceNormalizerFfmpegPlugin {' \
+  '  umbrella header "VesperPlayerSourceNormalizerFfmpegPlugin.h"' \
+  '  export *' \
+  '  module * { export * }' \
+  '}' \
+  >"$source_normalizer_framework_dir/Modules/module.modulemap"
+framework_info_plist \
+  "$source_normalizer_framework_dir/Info.plist" \
+  "$SOURCE_NORMALIZER_BINARY_NAME" \
+  "io.github.ikaros.vesper.player.source-normalizer-ffmpeg-plugin" \
+  "$platform_name" \
+  "$(vesper_apple_ios_deployment_target)"
+
+cp "$frame_processor_source_dir/libplayer_frame_processor_diagnostic.dylib" "$frame_processor_framework_dir/$FRAME_PROCESSOR_BINARY_NAME"
+install_name_tool -id "@rpath/$FRAME_PROCESSOR_FRAMEWORK_NAME/$FRAME_PROCESSOR_BINARY_NAME" "$frame_processor_framework_dir/$FRAME_PROCESSOR_BINARY_NAME"
+printf '%s\n' 'void VesperPlayerFrameProcessorDiagnosticPluginLinkAnchor(void);' >"$frame_processor_framework_dir/Headers/VesperPlayerFrameProcessorDiagnosticPlugin.h"
+printf '%s\n' \
+  'framework module VesperPlayerFrameProcessorDiagnosticPlugin {' \
+  '  umbrella header "VesperPlayerFrameProcessorDiagnosticPlugin.h"' \
+  '  export *' \
+  '  module * { export * }' \
+  '}' \
+  >"$frame_processor_framework_dir/Modules/module.modulemap"
+framework_info_plist \
+  "$frame_processor_framework_dir/Info.plist" \
+  "$FRAME_PROCESSOR_BINARY_NAME" \
+  "io.github.ikaros.vesper.player.frame-processor-diagnostic-plugin" \
+  "$platform_name" \
+  "$(vesper_apple_ios_deployment_target)"
+
 if [[ "$plugin_library_directory" != "$frameworks_directory" && "$plugin_library_directory" != "$plugin_framework_dir" ]]; then
   ln -sfn "$plugin_framework_dir/$PLUGIN_BINARY_NAME" "$plugin_library_directory/libvesper_remux_ffmpeg.dylib"
 fi
@@ -355,6 +431,8 @@ if [[ "${CODE_SIGNING_ALLOWED:-NO}" != "NO" ]]; then
   done < <(find "$runtime_framework_dir/Frameworks" -maxdepth 1 -type f -name 'lib*.dylib*' | sort)
   sign_path "$runtime_framework_dir"
   sign_path "$plugin_framework_dir"
+  sign_path "$source_normalizer_framework_dir"
+  sign_path "$frame_processor_framework_dir"
   if [[ "$plugin_library_directory" == *.framework && "$plugin_library_directory" != "$plugin_framework_dir" ]]; then
     sign_path "$plugin_library_directory"
   fi
@@ -369,4 +447,4 @@ if [[ "${CODE_SIGNING_ALLOWED:-NO}" != "NO" ]]; then
   fi
 fi
 
-echo "Embedded VesperPlayerFfmpegRuntime and VesperPlayerRemuxFfmpegPlugin into $frameworks_directory"
+echo "Embedded VesperPlayerFfmpegRuntime, remux, SourceNormalizer, and FrameProcessor diagnostic plugins into $frameworks_directory"

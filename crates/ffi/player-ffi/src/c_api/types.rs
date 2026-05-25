@@ -223,6 +223,8 @@ pub enum PlayerFfiPluginDiagnosticStatus {
     DecoderUnsupported = 4,
     FrameProcessorSupported = 5,
     FrameProcessorUnsupported = 6,
+    SourceNormalizerSupported = 7,
+    SourceNormalizerUnsupported = 8,
 }
 
 #[repr(C)]
@@ -232,6 +234,7 @@ pub enum PlayerFfiPluginCapabilityKind {
     None = 0,
     Decoder = 1,
     FrameProcessor = 2,
+    SourceNormalizer = 3,
 }
 
 #[repr(C)]
@@ -568,10 +571,43 @@ pub struct PlayerFfiPluginFrameProcessorCapabilitySummary {
 
 #[repr(C)]
 #[derive(Debug, Default)]
+pub struct PlayerFfiPluginSourceNormalizerCapabilitySummary {
+    pub supported_runtime_profiles: *mut *mut c_char,
+    pub supported_runtime_profiles_len: usize,
+    pub max_level: *mut c_char,
+    pub media_kinds: *mut *mut c_char,
+    pub media_kinds_len: usize,
+    pub codecs: *mut *mut c_char,
+    pub codecs_len: usize,
+    pub bitstream_formats: *mut *mut c_char,
+    pub bitstream_formats_len: usize,
+    pub supports_seek: bool,
+    pub supports_flush: bool,
+    pub required_libraries: *mut *mut c_char,
+    pub required_libraries_len: usize,
+    pub required_demuxers: *mut *mut c_char,
+    pub required_demuxers_len: usize,
+    pub required_muxers: *mut *mut c_char,
+    pub required_muxers_len: usize,
+    pub required_protocols: *mut *mut c_char,
+    pub required_protocols_len: usize,
+    pub required_parsers: *mut *mut c_char,
+    pub required_parsers_len: usize,
+    pub required_bitstream_filters: *mut *mut c_char,
+    pub required_bitstream_filters_len: usize,
+    pub required_tls: *mut c_char,
+    pub requires_network: bool,
+    pub has_max_sessions: bool,
+    pub max_sessions: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
 pub struct PlayerFfiPluginCapabilitySummary {
     pub kind: PlayerFfiPluginCapabilityKind,
     pub decoder: PlayerFfiPluginDecoderCapabilitySummary,
     pub frame_processor: PlayerFfiPluginFrameProcessorCapabilitySummary,
+    pub source_normalizer: PlayerFfiPluginSourceNormalizerCapabilitySummary,
 }
 
 #[repr(C)]
@@ -735,4 +771,3 @@ pub struct PlayerFfiEventList {
     pub ptr: *mut PlayerFfiEvent,
     pub len: usize,
 }
-

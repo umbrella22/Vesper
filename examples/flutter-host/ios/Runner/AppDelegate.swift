@@ -29,7 +29,26 @@ import UIKit
       case "pickVideo":
         self?.presentVideoPicker(result: result)
       case "bundledDownloadPluginLibraryPaths":
-        result(self?.bundledDownloadPluginLibraryPaths() ?? [])
+        result(
+          self?.bundledFrameworkPluginLibraryPaths(
+            frameworkName: "VesperPlayerRemuxFfmpegPlugin",
+            binaryName: "VesperPlayerRemuxFfmpegPlugin"
+          ) ?? []
+        )
+      case "bundledSourceNormalizerPluginLibraryPaths":
+        result(
+          self?.bundledFrameworkPluginLibraryPaths(
+            frameworkName: "VesperPlayerSourceNormalizerFfmpegPlugin",
+            binaryName: "VesperPlayerSourceNormalizerFfmpegPlugin"
+          ) ?? []
+        )
+      case "bundledFrameProcessorPluginLibraryPaths":
+        result(
+          self?.bundledFrameworkPluginLibraryPaths(
+            frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
+            binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
+          ) ?? []
+        )
       case "saveVideoToGallery":
         self?.handleSaveVideoToGallery(call: call, result: result)
       default:
@@ -203,11 +222,14 @@ import UIKit
     return keyWindow?.rootViewController
   }
 
-  private func bundledDownloadPluginLibraryPaths() -> [String] {
+  private func bundledFrameworkPluginLibraryPaths(
+    frameworkName: String,
+    binaryName: String
+  ) -> [String] {
     let fileManager = FileManager.default
     let frameworksPath = Bundle.main.privateFrameworksPath ?? Bundle.main.bundlePath + "/Frameworks"
     let candidates = [
-      frameworksPath + "/VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin",
+      frameworksPath + "/\(frameworkName).framework/\(binaryName)",
     ]
 
     return candidates.compactMap { candidate in

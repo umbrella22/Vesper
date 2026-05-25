@@ -251,6 +251,7 @@ internal interface PlayerBridge {
     val effectiveVideoTrackId: StateFlow<String?>
     val videoVariantObservation: StateFlow<VesperVideoVariantObservation?>
     val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
+    val pluginDiagnostics: List<Map<String, Any?>>
 
     fun initialize()
     fun dispose()

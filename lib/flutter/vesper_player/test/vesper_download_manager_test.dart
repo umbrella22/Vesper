@@ -353,6 +353,10 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
     bool keepScreenOnDuringPlayback = true,
     VesperBenchmarkConfiguration benchmarkConfiguration =
         const VesperBenchmarkConfiguration.disabled(),
+    VesperSourceNormalizerConfiguration sourceNormalizerConfiguration =
+        const VesperSourceNormalizerConfiguration(),
+    VesperFrameProcessorConfiguration frameProcessorConfiguration =
+        const VesperFrameProcessorConfiguration(),
   }) async {
     return VesperPlatformCreateResult(
       playerId: 'test-player',

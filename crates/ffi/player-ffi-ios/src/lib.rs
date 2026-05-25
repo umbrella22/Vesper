@@ -6,11 +6,18 @@ use std::ptr;
 use std::slice;
 use std::time::{Duration, Instant};
 
-use player_platform_ios::{IosDownloadBridgeSession, IosPlaylistBridgeSession, IosPreloadBridgeSession};
+use player_model::MediaSource;
+use player_platform_ios::{
+    IosDownloadBridgeSession, IosPlaylistBridgeSession, IosPreloadBridgeSession,
+};
+use player_platform_mobile::{
+    MobileFrameProcessorConfiguration, MobileSourceNormalizerConfiguration,
+    mobile_plugin_diagnostics_json,
+};
 use player_plugin::ProcessorProgress;
 use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_runtime::{
-    DownloadTaskSnapshot, PlayerError, PreloadBudget,
+    DownloadTaskSnapshot, FrameProcessorMode, PlayerError, PreloadBudget, SourceNormalizerMode,
     policy::{
         resolve_preload_budget as resolve_preload_budget_with_runtime,
         resolve_resilience_policy as resolve_resilience_policy_with_runtime,
@@ -22,10 +29,10 @@ mod conversions;
 mod handles;
 mod types;
 
-pub use types::*;
-pub(crate) use types::ResolvedDownloadConfig;
 use conversions::*;
 use handles::*;
+pub(crate) use types::ResolvedDownloadConfig;
+pub use types::*;
 
 #[cfg(test)]
 mod tests;
@@ -2307,6 +2314,119 @@ pub unsafe extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_c
 
 /// # Safety
 ///
+/// String and array pointers must be valid for the duration of the call. The returned JSON string
+/// is allocated by Rust and must be released with `player_ffi_mobile_plugin_diagnostics_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
+    source_uri: *const c_char,
+    source_mode: u32,
+    source_plugin_library_paths: *mut *mut c_char,
+    source_plugin_library_paths_len: usize,
+    runtime_profile: *const c_char,
+    frame_mode: u32,
+    frame_plugin_library_paths: *mut *mut c_char,
+    frame_plugin_library_paths_len: usize,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_json, ptr::null_mut());
+        }
+
+        let source_uri = match read_optional_c_string(source_uri, "source_uri") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::NullPointer, "source_uri was null"),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let source_plugin_library_paths = match read_string_list(
+            source_plugin_library_paths,
+            source_plugin_library_paths_len,
+            "source_plugin_library_paths",
+        ) {
+            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let frame_plugin_library_paths = match read_string_list(
+            frame_plugin_library_paths,
+            frame_plugin_library_paths_len,
+            "frame_plugin_library_paths",
+        ) {
+            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let runtime_profile = match read_optional_c_string(runtime_profile, "runtime_profile") {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let diagnostics_json = match mobile_plugin_diagnostics_json(
+            &MediaSource::new(source_uri),
+            &MobileSourceNormalizerConfiguration {
+                mode: source_normalizer_mode_from_u32(source_mode),
+                plugin_library_paths: source_plugin_library_paths,
+                runtime_profile,
+            },
+            &MobileFrameProcessorConfiguration {
+                mode: frame_processor_mode_from_u32(frame_mode),
+                plugin_library_paths: frame_plugin_library_paths,
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(diagnostics_json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// `value` must either be null or a Rust-owned string returned by
+/// `player_ffi_mobile_plugin_diagnostics_json`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_string_free(value: *mut c_char) {
+    ffi_void(|| {
+        let mut value = value;
+        free_c_string(&mut value);
+    });
+}
+
+/// # Safety
+///
 /// Raw pointers and opaque handles passed to this FFI entry point must either be null when
 /// the parameter is documented as optional or point to valid objects allocated by the
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
@@ -2363,6 +2483,21 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_execute_json(
         }
         PlayerFfiCallStatus::Ok
     })
+}
+
+fn source_normalizer_mode_from_u32(value: u32) -> SourceNormalizerMode {
+    match value {
+        1 => SourceNormalizerMode::DiagnosticsOnly,
+        2 => SourceNormalizerMode::PreflightOnly,
+        _ => SourceNormalizerMode::Disabled,
+    }
+}
+
+fn frame_processor_mode_from_u32(value: u32) -> FrameProcessorMode {
+    match value {
+        1 => FrameProcessorMode::DiagnosticsOnly,
+        _ => FrameProcessorMode::Disabled,
+    }
 }
 
 /// # Safety

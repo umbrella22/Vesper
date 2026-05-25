@@ -14,7 +14,11 @@ enum PlayerBridgeFactory {
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
         keepScreenOnDuringPlayback: Bool = true,
-        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
+        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+            VesperSourceNormalizerConfiguration(),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration =
+            VesperFrameProcessorConfiguration()
     ) -> VesperPlayerController {
         switch defaultBackend {
         case .fakeDemo:
@@ -35,7 +39,9 @@ enum PlayerBridgeFactory {
                     resiliencePolicy: resiliencePolicy,
                     trackPreferencePolicy: trackPreferencePolicy,
                     preloadBudgetPolicy: preloadBudgetPolicy,
-                    benchmarkConfiguration: benchmarkConfiguration
+                    benchmarkConfiguration: benchmarkConfiguration,
+                    sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+                    frameProcessorConfiguration: frameProcessorConfiguration
                 ),
                 keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
@@ -55,7 +61,11 @@ public enum VesperPlayerControllerFactory {
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
         keepScreenOnDuringPlayback: Bool = true,
-        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
+        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+            VesperSourceNormalizerConfiguration(),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration =
+            VesperFrameProcessorConfiguration()
     ) -> VesperPlayerController {
         PlayerBridgeFactory.makeDefaultBridge(
             initialSource: initialSource,
@@ -63,7 +73,9 @@ public enum VesperPlayerControllerFactory {
             trackPreferencePolicy: trackPreferencePolicy,
             preloadBudgetPolicy: preloadBudgetPolicy,
             keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
-            benchmarkConfiguration: benchmarkConfiguration
+            benchmarkConfiguration: benchmarkConfiguration,
+            sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+            frameProcessorConfiguration: frameProcessorConfiguration
         )
     }
 }

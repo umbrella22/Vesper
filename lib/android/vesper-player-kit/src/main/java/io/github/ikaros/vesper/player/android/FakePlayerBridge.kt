@@ -60,6 +60,7 @@ internal class FakePlayerBridge(
         _videoVariantObservation.asStateFlow()
     override val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy> =
         _resiliencePolicy.asStateFlow()
+    override val pluginDiagnostics: List<Map<String, Any?>> = emptyList()
 
     override fun initialize() {
         if (isDisposed.get()) {

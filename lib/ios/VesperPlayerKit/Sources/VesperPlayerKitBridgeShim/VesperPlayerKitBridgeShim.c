@@ -696,6 +696,20 @@ extern PlayerFfiCallStatus player_ffi_benchmark_session_flush_json(
 
 extern void player_ffi_benchmark_report_string_free(char *value);
 
+extern PlayerFfiCallStatus player_ffi_mobile_plugin_diagnostics_json(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    uint32_t frame_mode,
+    char **frame_plugin_library_paths,
+    uintptr_t frame_plugin_library_paths_len,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern void player_ffi_mobile_plugin_diagnostics_string_free(char *value);
+
 extern PlayerFfiCallStatus player_ffi_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,
@@ -2918,6 +2932,54 @@ bool vesper_runtime_benchmark_sink_session_flush_json(
 
 void vesper_runtime_benchmark_string_free(char *value) {
   player_ffi_benchmark_report_string_free(value);
+}
+
+bool vesper_mobile_plugin_diagnostics_json(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    uint32_t frame_mode,
+    char **frame_plugin_library_paths,
+    uintptr_t frame_plugin_library_paths_len,
+    char **out_json,
+    char **out_error_message) {
+  if (source_uri == NULL || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_mobile_plugin_diagnostics_json(
+      source_uri,
+      source_mode,
+      source_plugin_library_paths,
+      source_plugin_library_paths_len,
+      runtime_profile,
+      frame_mode,
+      frame_plugin_library_paths,
+      frame_plugin_library_paths_len,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_json != NULL;
+}
+
+void vesper_mobile_plugin_diagnostics_string_free(char *value) {
+  player_ffi_mobile_plugin_diagnostics_string_free(value);
 }
 
 bool vesper_dash_bridge_execute_json(

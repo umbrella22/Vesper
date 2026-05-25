@@ -8,9 +8,11 @@ enum VesperPluginDiagnosticStatus {
   decoderUnsupported,
   frameProcessorSupported,
   frameProcessorUnsupported,
+  sourceNormalizerSupported,
+  sourceNormalizerUnsupported,
 }
 
-enum VesperPluginCapabilityKind { decoder, frameProcessor }
+enum VesperPluginCapabilityKind { decoder, frameProcessor, sourceNormalizer }
 
 enum VesperPluginParticipation {
   unknown,
@@ -173,14 +175,105 @@ final class VesperPluginFrameProcessorCapabilitySummary {
   }
 }
 
+final class VesperPluginSourceNormalizerCapabilitySummary {
+  const VesperPluginSourceNormalizerCapabilitySummary({
+    this.supportedRuntimeProfiles = const <String>[],
+    this.maxLevel = '',
+    this.mediaKinds = const <String>[],
+    this.codecs = const <String>[],
+    this.bitstreamFormats = const <String>[],
+    this.supportsSeek = false,
+    this.supportsFlush = false,
+    this.requiredLibraries = const <String>[],
+    this.requiredDemuxers = const <String>[],
+    this.requiredMuxers = const <String>[],
+    this.requiredProtocols = const <String>[],
+    this.requiredParsers = const <String>[],
+    this.requiredBitstreamFilters = const <String>[],
+    this.requiredTls,
+    this.requiresNetwork = false,
+    this.maxSessions,
+  });
+
+  factory VesperPluginSourceNormalizerCapabilitySummary.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    return VesperPluginSourceNormalizerCapabilitySummary(
+      supportedRuntimeProfiles:
+          _decodeStringList(map['supportedRuntimeProfiles']),
+      maxLevel: map['maxLevel'] as String? ?? '',
+      mediaKinds: _decodeStringList(map['mediaKinds']),
+      codecs: _decodeStringList(map['codecs']),
+      bitstreamFormats: _decodeStringList(map['bitstreamFormats']),
+      supportsSeek: _decodeBool(map, 'supportsSeek'),
+      supportsFlush: _decodeBool(map, 'supportsFlush'),
+      requiredLibraries: _decodeStringList(map['requiredLibraries']),
+      requiredDemuxers: _decodeStringList(map['requiredDemuxers']),
+      requiredMuxers: _decodeStringList(map['requiredMuxers']),
+      requiredProtocols: _decodeStringList(map['requiredProtocols']),
+      requiredParsers: _decodeStringList(map['requiredParsers']),
+      requiredBitstreamFilters:
+          _decodeStringList(map['requiredBitstreamFilters']),
+      requiredTls: map['requiredTls'] as String?,
+      requiresNetwork: _decodeBool(map, 'requiresNetwork'),
+      maxSessions: _decodeInt(map, 'maxSessions'),
+    );
+  }
+
+  final List<String> supportedRuntimeProfiles;
+  final String maxLevel;
+  final List<String> mediaKinds;
+  final List<String> codecs;
+  final List<String> bitstreamFormats;
+  final bool supportsSeek;
+  final bool supportsFlush;
+  final List<String> requiredLibraries;
+  final List<String> requiredDemuxers;
+  final List<String> requiredMuxers;
+  final List<String> requiredProtocols;
+  final List<String> requiredParsers;
+  final List<String> requiredBitstreamFilters;
+  final String? requiredTls;
+  final bool requiresNetwork;
+  final int? maxSessions;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'supportedRuntimeProfiles': supportedRuntimeProfiles,
+      'maxLevel': maxLevel,
+      'mediaKinds': mediaKinds,
+      'codecs': codecs,
+      'bitstreamFormats': bitstreamFormats,
+      'supportsSeek': supportsSeek,
+      'supportsFlush': supportsFlush,
+      'requiredLibraries': requiredLibraries,
+      'requiredDemuxers': requiredDemuxers,
+      'requiredMuxers': requiredMuxers,
+      'requiredProtocols': requiredProtocols,
+      'requiredParsers': requiredParsers,
+      'requiredBitstreamFilters': requiredBitstreamFilters,
+      if (requiredTls != null) 'requiredTls': requiredTls,
+      'requiresNetwork': requiresNetwork,
+      if (maxSessions != null) 'maxSessions': maxSessions,
+    };
+  }
+}
+
 final class VesperPluginCapability {
   const VesperPluginCapability.decoder(this.decoder)
       : kind = VesperPluginCapabilityKind.decoder,
-        frameProcessor = null;
+        frameProcessor = null,
+        sourceNormalizer = null;
 
   const VesperPluginCapability.frameProcessor(this.frameProcessor)
       : kind = VesperPluginCapabilityKind.frameProcessor,
-        decoder = null;
+        decoder = null,
+        sourceNormalizer = null;
+
+  const VesperPluginCapability.sourceNormalizer(this.sourceNormalizer)
+      : kind = VesperPluginCapabilityKind.sourceNormalizer,
+        decoder = null,
+        frameProcessor = null;
 
   factory VesperPluginCapability.fromMap(Map<Object?, Object?> map) {
     final kind = _decodeEnum(
@@ -200,18 +293,27 @@ final class VesperPluginCapability {
             _rawMap(map['frameProcessor']) ?? const <Object?, Object?>{},
           ),
         ),
+      VesperPluginCapabilityKind.sourceNormalizer =>
+        VesperPluginCapability.sourceNormalizer(
+          VesperPluginSourceNormalizerCapabilitySummary.fromMap(
+            _rawMap(map['sourceNormalizer']) ?? const <Object?, Object?>{},
+          ),
+        ),
     };
   }
 
   final VesperPluginCapabilityKind kind;
   final VesperPluginDecoderCapabilitySummary? decoder;
   final VesperPluginFrameProcessorCapabilitySummary? frameProcessor;
+  final VesperPluginSourceNormalizerCapabilitySummary? sourceNormalizer;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'kind': kind.name,
       if (decoder != null) 'decoder': decoder!.toMap(),
       if (frameProcessor != null) 'frameProcessor': frameProcessor!.toMap(),
+      if (sourceNormalizer != null)
+        'sourceNormalizer': sourceNormalizer!.toMap(),
     };
   }
 }
@@ -397,4 +499,3 @@ List<String> _decodeStringList(Object? raw) {
 }
 
 const Object _vesperRetryMaxAttemptsUnset = Object();
-

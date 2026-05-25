@@ -14,6 +14,8 @@ authors. Application code should usually depend on `vesper_player` directly.
 - `VesperPlatformCreateResult`: the result type returned by `createPlayer`
 - `VesperBenchmarkConfiguration`: opt-in benchmark capture and console logging settings forwarded by `createPlayer`
 - `VesperPlayerRenderSurfaceKind`: Flutter-facing Android render surface preference forwarded by `createPlayer`
+- `VesperSourceNormalizerConfiguration`: optional mobile plugin diagnostics / source preflight configuration, disabled by default
+- `VesperFrameProcessorConfiguration`: optional mobile FrameProcessor capability diagnostics configuration, disabled by default
 - `VesperSystemPlaybackConfiguration`: optional system media session and background audio integration
 - `VesperExternalPlaybackAvailability`: AirPlay / Cast route availability DTOs for optional UI and platform packages
 - External playback DTOs used by optional Cast / DLNA packages, including route,
@@ -158,6 +160,13 @@ Android platform packages should map `auto` to a Flutter-overlay-safe default
 surface and allow explicit `surfaceView` opt-in. Native implementations should
 forward benchmark settings to the host kit and keep `consoleLogging` disabled by
 default.
+
+Mobile plugin configurations are intentionally conservative. SourceNormalizer
+`diagnosticsOnly` and `preflightOnly` can report plugin diagnostics, but mobile
+platforms must keep playback on the original platform source unless a later
+contract explicitly adds playback substitution. FrameProcessor
+`diagnosticsOnly` must report availability without opening frame sessions or
+marking the plugin as participated.
 
 Coarse capability fields such as `supportsTrackSelection` or
 `supportsAbrPolicy` should not be treated as implicit support for every

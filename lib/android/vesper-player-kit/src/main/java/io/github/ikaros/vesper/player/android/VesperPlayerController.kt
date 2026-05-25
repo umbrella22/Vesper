@@ -31,6 +31,9 @@ class VesperPlayerController internal constructor(
     val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
         get() = bridge.resiliencePolicy
 
+    val pluginDiagnostics: List<Map<String, Any?>>
+        get() = bridge.pluginDiagnostics
+
     fun initialize() = bridge.initialize()
 
     fun dispose() = bridge.dispose()
@@ -104,6 +107,10 @@ object VesperPlayerControllerFactory {
         surfaceKind: VesperVideoSurfaceKind = VesperVideoSurfaceKind.SurfaceView,
         keepScreenOnDuringPlayback: Boolean = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+            VesperSourceNormalizerConfiguration(),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration =
+            VesperFrameProcessorConfiguration(),
     ): VesperPlayerController =
         VesperPlayerController(
             PlayerBridgeFactory.createDefault(
@@ -116,6 +123,8 @@ object VesperPlayerControllerFactory {
                 surfaceKind = surfaceKind.toNativeSurfaceKind(),
                 keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                 benchmarkConfiguration = benchmarkConfiguration,
+                sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                frameProcessorConfiguration = frameProcessorConfiguration,
             )
         )
 

@@ -19,6 +19,11 @@ Use this example as a reference for:
 - Double-tap seek
 - Video-only Photos picker
 - Built-in Apple HLS sample preset
+- SourceNormalizer plugin diagnostics panel. The example defaults to
+  `preflightOnly` and lets you switch among `disabled`, `diagnosticsOnly`, and
+  `preflightOnly` at runtime.
+- FrameProcessor diagnostic plugin logging. The example embeds the diagnostic
+  plugin when available, but does not open frame sessions or alter rendering.
 
 Demo URLs are owned by the example. The reusable package under
 [`lib/ios/VesperPlayerKit`](../../lib/ios/VesperPlayerKit/) only exposes
@@ -59,12 +64,28 @@ source is loaded.
    Simulator or device.
 
 The generated Xcode project includes a post-build script that embeds the
-optional `VesperPlayerFfmpegRuntime.framework` and
-`VesperPlayerRemuxFfmpegPlugin.framework` for local `.mp4` export testing.
-Release hosts should consume the matching
+optional `VesperPlayerFfmpegRuntime.framework`,
+`VesperPlayerRemuxFfmpegPlugin.framework`,
+`VesperPlayerSourceNormalizerFfmpegPlugin.framework`, and
+`VesperPlayerFrameProcessorDiagnosticPlugin.framework`. Release hosts should
+consume the matching
 `VesperPlayerFfmpegRuntime.xcframework.zip` and
-`VesperPlayerRemuxFfmpegPlugin.xcframework.zip` artifacts built from the same
-FFmpeg profile.
+`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
+`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`, and
+`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` artifacts built
+from the same FFmpeg profile where applicable.
+
+## Optional Plugin Diagnostics
+
+The iOS example passes only plugin framework binary paths to
+`VesperPlayerController`. The shared `VesperPlayerFfmpegRuntime.framework` is
+embedded and signed by the host, but it is not passed as a plugin path.
+
+SourceNormalizer mobile v1 is a diagnostics / preflight path. In
+`preflightOnly`, the host probes the selected source and then continues playing
+the original AVPlayer source. A preflight failure is shown in the diagnostics
+panel and does not block playback. FrameProcessor remains debug diagnostics
+only in this example and is never marked as participating in mobile playback.
 
 ## Build From CLI
 

@@ -491,6 +491,7 @@ protocol PlayerBridge: AnyObject {
     var fixedTrackStatus: VesperFixedTrackStatus? { get }
     var resiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var lastError: VesperPlayerError? { get }
+    var pluginDiagnostics: [[String: Any]] { get }
     var routePickerPlayer: AVPlayer? { get }
 
     func initialize()

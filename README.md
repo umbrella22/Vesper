@@ -172,6 +172,23 @@ normalizer plugins through environment-configured library paths. These paths are
 intended for SDK development and diagnostics, not for Android / iOS public
 host-kit APIs.
 
+Recommended SourceNormalizer smoke command:
+
+```sh
+VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libplayer_source_normalizer_ffmpeg.dylib \
+VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
+cargo run -p basic-player
+```
+
+FrameProcessor remains a diagnostics / debug route unless you explicitly choose
+a stricter desktop processing mode:
+
+```sh
+VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagnostic.dylib \
+VESPER_FRAME_PROCESSOR_MODE=diagnostics \
+cargo run -p basic-player
+```
+
 ### C ABI
 
 Start with the generated header at [include/player_ffi.h](include/player_ffi.h),
@@ -366,12 +383,16 @@ name:
 - Android Compose UI: `VesperPlayerKitComposeUi-android-<abi>.aar`
 - Android external playback: `VesperPlayerKitExternalPlayback-android-<abi>.aar`
 - Android FFmpeg runtime: `VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
+- Optional Android SourceNormalizer FFmpeg plugin: `VesperPlayerKitSourceNormalizerFfmpeg-android-<abi>.aar`
+- Optional Android FrameProcessor diagnostic plugin: `VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar`
 - Android Compose sample APK: `VesperPlayerAndroidComposeHost-android-<abi>-debug-signed.apk`
 - Flutter Android sample APK: `VesperPlayerFlutterHost-android-<abi>-debug-signed.apk`
 - iOS framework slices: `VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework: `VesperPlayerKit.xcframework.zip`
 - Optional iOS FFmpeg runtime: `VesperPlayerFfmpegRuntime.xcframework.zip`
 - Optional iOS FFmpeg remux plugin: `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
+- Optional iOS SourceNormalizer FFmpeg plugin: `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`
+- Optional iOS FrameProcessor diagnostic plugin: `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
 - `SHA256SUMS.txt` for release artifact verification
 
 Android packaging is currently `arm64-v8a` only, including the downloadable
@@ -379,9 +400,20 @@ sample APKs. The sample APKs are debug-signed for side-load evaluation only and
 are not production app-store artifacts. iOS packaging is arm64 only for device,
 Apple Silicon Simulator, and optional Catalyst slices. The iOS core
 `VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
-is shipped as separate optional runtime and plugin XCFrameworks that the host
-app signs and embeds. Both optional iOS artifacts must come from the same
-FFmpeg profile so their `profile-hash.txt` values match.
+and SourceNormalizer preflight support are shipped as separate optional runtime
+and plugin artifacts that the host app signs and embeds. Plugin library path
+configuration points only at plugin binaries; the shared FFmpeg runtime is a
+package dependency, not a plugin path. All FFmpeg-backed optional plugins and
+their shared runtime must come from the same FFmpeg profile so
+`profile-hash.txt` values match.
+
+The mobile SourceNormalizer artifact is a v1 diagnostics/preflight boundary. It
+can load the optional plugin and attempt an open/close packet-session preflight
+for the selected source, but Android ExoPlayer and iOS AVPlayer still play the
+original source. The mobile FrameProcessor artifact is diagnostics-only: it can
+be packaged and probed for capabilities, but it does not open frame sessions,
+process frames, or participate in default mobile playback. Mobile Decoder
+artifacts and configuration remain deferred.
 
 Release AARs / XCFrameworks are fully packaged binary artifacts. Host apps that
 consume these downloads do not run the repository's local JNI or FFmpeg

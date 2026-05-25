@@ -10,8 +10,8 @@ Usage: scripts/vesper <group> <command> [args...]
 Groups:
   ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
-  android  jni | aar | remux-plugin | stage-release | sample-apks
-  ios      ffi | remux-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim
+  android  jni | aar | remux-plugin | source-normalizer-plugin | frame-processor-plugin | stage-release | sample-apks
+  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
   flutter  stage-pub | pub-dry-run | pub-publish | verify-android-plugin
@@ -56,6 +56,12 @@ case "$group:$command" in
   android:remux-plugin)
     exec "$SCRIPT_DIR/android/build-player-remux-ffmpeg-plugin.sh" "$@"
     ;;
+  android:source-normalizer-plugin)
+    exec "$SCRIPT_DIR/android/build-player-source-normalizer-ffmpeg-plugin.sh" "$@"
+    ;;
+  android:frame-processor-plugin)
+    exec "$SCRIPT_DIR/android/build-player-frame-processor-diagnostic-plugin.sh" "$@"
+    ;;
   android:stage-release)
     exec "$SCRIPT_DIR/android/stage-vesper-player-kit-release.sh" "$@"
     ;;
@@ -68,11 +74,23 @@ case "$group:$command" in
   ios:remux-plugin)
     exec "$SCRIPT_DIR/ios/build-player-remux-ffmpeg-plugin.sh" "$@"
     ;;
+  ios:source-normalizer-plugin)
+    exec "$SCRIPT_DIR/ios/build-player-source-normalizer-ffmpeg-plugin.sh" "$@"
+    ;;
+  ios:frame-processor-plugin)
+    exec "$SCRIPT_DIR/ios/build-player-frame-processor-diagnostic-plugin.sh" "$@"
+    ;;
   ios:ffmpeg-runtime-release)
     exec "$SCRIPT_DIR/ios/stage-player-ffmpeg-runtime-release.sh" "$@"
     ;;
   ios:stage-remux-plugin-release)
     exec "$SCRIPT_DIR/ios/stage-player-remux-ffmpeg-plugin-release.sh" "$@"
+    ;;
+  ios:stage-source-normalizer-plugin-release)
+    exec "$SCRIPT_DIR/ios/stage-player-source-normalizer-ffmpeg-plugin-release.sh" "$@"
+    ;;
+  ios:stage-frame-processor-plugin-release)
+    exec "$SCRIPT_DIR/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" "$@"
     ;;
   ios:kit-xcframework)
     exec "$SCRIPT_DIR/ios/build-vesper-player-kit-xcframework.sh" "$@"

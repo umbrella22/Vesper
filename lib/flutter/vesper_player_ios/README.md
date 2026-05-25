@@ -180,6 +180,28 @@ exact corresponding FFmpeg source and configure flags, and preserve LGPL
 relinking rights. The repository-level release checklist is in
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
+## Optional Mobile Plugin Diagnostics
+
+`createPlayer` forwards
+`VesperSourceNormalizerConfiguration` and
+`VesperFrameProcessorConfiguration` to `VesperPlayerKit`. Both are disabled by
+default.
+
+For SourceNormalizer v1, `diagnosticsOnly` loads the optional plugin and reports
+capabilities through `pluginDiagnostics`; `preflightOnly` may also open and
+close a packet session for the selected source. AVPlayer still receives the
+original source, and preflight failures are non-fatal. Hosts that embed
+`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` must also embed and
+sign the matching `VesperPlayerFfmpegRuntime.xcframework.zip`; both artifacts
+must have matching `profile-hash.txt` values. The shared runtime framework is
+not a plugin path.
+
+For FrameProcessor v1,
+`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` is a diagnostics
+shell only. It can report capability diagnostics, but it never opens frame
+sessions, processes frames, or participates in iOS playback. Mobile Decoder
+artifacts remain deferred.
+
 ## Minimum Requirements
 
 - iOS 17.0+

@@ -1644,6 +1644,7 @@ dependencies = [
  "player-dash-hls-bridge",
  "player-model",
  "player-platform-ios",
+ "player-platform-mobile",
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
@@ -1690,9 +1691,11 @@ dependencies = [
  "jni 0.22.4",
  "player-model",
  "player-platform-android",
+ "player-platform-mobile",
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
+ "serde_json",
 ]
 
 [[package]]
@@ -1707,6 +1710,7 @@ name = "player-platform-android"
 version = "0.3.0"
 dependencies = [
  "player-model",
+ "player-platform-mobile",
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
@@ -1738,6 +1742,7 @@ name = "player-platform-ios"
 version = "0.3.0"
 dependencies = [
  "player-model",
+ "player-platform-mobile",
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
@@ -1766,6 +1771,18 @@ dependencies = [
  "player-plugin-loader",
  "player-runtime",
  "tracing",
+]
+
+[[package]]
+name = "player-platform-mobile"
+version = "0.3.0"
+dependencies = [
+ "player-model",
+ "player-plugin",
+ "player-plugin-loader",
+ "player-runtime",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

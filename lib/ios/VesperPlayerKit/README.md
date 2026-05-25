@@ -14,6 +14,12 @@ GitHub Releases publish the following artifacts via
 - `VesperPlayerKit-ios-arm64.framework.zip` — device-only packaging
 - `VesperPlayerKit-ios-simulator-arm64.framework.zip` — Apple Silicon Simulator
 - `VesperPlayerKit.xcframework.zip` — combined device + Apple Silicon Simulator
+- `VesperPlayerFfmpegRuntime.xcframework.zip` — optional shared FFmpeg runtime
+- `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` — optional download remux plugin
+- `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` — optional
+  SourceNormalizer diagnostics / source-preflight plugin
+- `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` — optional
+  FrameProcessor diagnostics shell
 
 Apple packaging is `arm64`-only across iOS device, iOS Simulator, and (when
 enabled) Mac Catalyst. Use an Apple Silicon Mac for Simulator validation. See
@@ -274,6 +280,34 @@ Bundling the shared runtime makes the host responsible for FFmpeg notices,
 corresponding source, configure flags, and LGPL relinking rights. See
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md) before publishing such
 an artifact.
+
+## Optional Mobile Plugin Diagnostics
+
+`VesperSourceNormalizerConfiguration` and `VesperFrameProcessorConfiguration`
+are disabled by default. When enabled, their `pluginLibraryPaths` must point to
+plugin framework binaries only. Do not pass
+`VesperPlayerFfmpegRuntime.framework/VesperPlayerFfmpegRuntime` as a plugin
+path; it is a dynamic dependency that the host embeds and signs alongside the
+plugin.
+
+SourceNormalizer mobile v1 supports `diagnosticsOnly` and `preflightOnly`.
+Diagnostics mode loads the optional plugin and reports its capabilities through
+`VesperPlayerController.pluginDiagnostics`. Preflight mode additionally attempts
+to open and close a packet session for the selected source and records the
+selected profile or failure reason, but AVPlayer still receives and plays the
+original `VesperPlayerSource`. A failed preflight does not block playback.
+
+The optional
+`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` depends on the
+shared `VesperPlayerFfmpegRuntime.xcframework.zip`; both artifacts must be
+built from the same FFmpeg profile so their `profile-hash.txt` values match.
+The SourceNormalizer plugin XCFramework must not contain FFmpeg dylibs.
+
+FrameProcessor mobile v1 is intentionally diagnostics-only.
+`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` can be embedded and
+probed for capabilities, but the iOS host kit does not open frame sessions,
+does not process AVPlayer frames, and never marks the plugin as participated in
+default mobile playback. Mobile decoder plugin artifacts remain deferred.
 
 ## Testing The Package
 

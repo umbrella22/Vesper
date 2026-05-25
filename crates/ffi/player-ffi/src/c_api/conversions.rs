@@ -552,6 +552,12 @@ impl From<BridgePluginDiagnosticStatus> for PlayerFfiPluginDiagnosticStatus {
             BridgePluginDiagnosticStatus::FrameProcessorUnsupported => {
                 Self::FrameProcessorUnsupported
             }
+            BridgePluginDiagnosticStatus::SourceNormalizerSupported => {
+                Self::SourceNormalizerSupported
+            }
+            BridgePluginDiagnosticStatus::SourceNormalizerUnsupported => {
+                Self::SourceNormalizerUnsupported
+            }
         }
     }
 }
@@ -620,6 +626,63 @@ impl From<BridgePluginFrameProcessorCapabilitySummary>
     }
 }
 
+impl From<BridgePluginSourceNormalizerCapabilitySummary>
+    for PlayerFfiPluginSourceNormalizerCapabilitySummary
+{
+    fn from(value: BridgePluginSourceNormalizerCapabilitySummary) -> Self {
+        let (supported_runtime_profiles, supported_runtime_profiles_len) =
+            into_owned_c_string_array(value.supported_runtime_profiles);
+        let (media_kinds, media_kinds_len) = into_owned_c_string_array(value.media_kinds);
+        let (codecs, codecs_len) = into_owned_c_string_array(value.codecs);
+        let (bitstream_formats, bitstream_formats_len) =
+            into_owned_c_string_array(value.bitstream_formats);
+        let (required_libraries, required_libraries_len) =
+            into_owned_c_string_array(value.required_libraries);
+        let (required_demuxers, required_demuxers_len) =
+            into_owned_c_string_array(value.required_demuxers);
+        let (required_muxers, required_muxers_len) =
+            into_owned_c_string_array(value.required_muxers);
+        let (required_protocols, required_protocols_len) =
+            into_owned_c_string_array(value.required_protocols);
+        let (required_parsers, required_parsers_len) =
+            into_owned_c_string_array(value.required_parsers);
+        let (required_bitstream_filters, required_bitstream_filters_len) =
+            into_owned_c_string_array(value.required_bitstream_filters);
+        Self {
+            supported_runtime_profiles,
+            supported_runtime_profiles_len,
+            max_level: into_c_string_ptr(value.max_level),
+            media_kinds,
+            media_kinds_len,
+            codecs,
+            codecs_len,
+            bitstream_formats,
+            bitstream_formats_len,
+            supports_seek: value.supports_seek,
+            supports_flush: value.supports_flush,
+            required_libraries,
+            required_libraries_len,
+            required_demuxers,
+            required_demuxers_len,
+            required_muxers,
+            required_muxers_len,
+            required_protocols,
+            required_protocols_len,
+            required_parsers,
+            required_parsers_len,
+            required_bitstream_filters,
+            required_bitstream_filters_len,
+            required_tls: value
+                .required_tls
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            requires_network: value.requires_network,
+            has_max_sessions: value.max_sessions.is_some(),
+            max_sessions: value.max_sessions.unwrap_or_default(),
+        }
+    }
+}
+
 impl From<BridgePluginCapabilitySummary> for PlayerFfiPluginCapabilitySummary {
     fn from(value: BridgePluginCapabilitySummary) -> Self {
         match value {
@@ -627,11 +690,19 @@ impl From<BridgePluginCapabilitySummary> for PlayerFfiPluginCapabilitySummary {
                 kind: PlayerFfiPluginCapabilityKind::Decoder,
                 decoder: summary.into(),
                 frame_processor: PlayerFfiPluginFrameProcessorCapabilitySummary::default(),
+                source_normalizer: PlayerFfiPluginSourceNormalizerCapabilitySummary::default(),
             },
             BridgePluginCapabilitySummary::FrameProcessor(summary) => Self {
                 kind: PlayerFfiPluginCapabilityKind::FrameProcessor,
                 decoder: PlayerFfiPluginDecoderCapabilitySummary::default(),
                 frame_processor: summary.into(),
+                source_normalizer: PlayerFfiPluginSourceNormalizerCapabilitySummary::default(),
+            },
+            BridgePluginCapabilitySummary::SourceNormalizer(summary) => Self {
+                kind: PlayerFfiPluginCapabilityKind::SourceNormalizer,
+                decoder: PlayerFfiPluginDecoderCapabilitySummary::default(),
+                frame_processor: PlayerFfiPluginFrameProcessorCapabilitySummary::default(),
+                source_normalizer: summary.into(),
             },
         }
     }
@@ -927,4 +998,3 @@ impl From<BridgeEvent> for PlayerFfiEvent {
         }
     }
 }
-

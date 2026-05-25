@@ -21,6 +21,10 @@ internal class VesperNativePlayerBridge(
     private var keepScreenOnDuringPlayback: Boolean = true,
     appContext: Context? = null,
     surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+    private val sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+        VesperSourceNormalizerConfiguration(),
+    private val frameProcessorConfiguration: VesperFrameProcessorConfiguration =
+        VesperFrameProcessorConfiguration(),
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private var hasInitializedSource = false
@@ -54,6 +58,8 @@ internal class VesperNativePlayerBridge(
     private val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     private val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
     private val surfaceHost = VesperNativeSurfaceHost(bindings, surfaceKind)
+    private var currentPluginDiagnostics: List<Map<String, Any?>> =
+        initialSource?.let(::probePluginsForSource) ?: emptyList()
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.VesperNativeStub
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
@@ -66,6 +72,8 @@ internal class VesperNativePlayerBridge(
         _videoVariantObservation.asStateFlow()
     override val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy> =
         _resiliencePolicy.asStateFlow()
+    override val pluginDiagnostics: List<Map<String, Any?>>
+        get() = currentPluginDiagnostics
 
     init {
         installNativeUpdateListener()
@@ -90,6 +98,7 @@ internal class VesperNativePlayerBridge(
             return
         }
 
+        currentPluginDiagnostics = probePluginsForSource(source)
         advanceNativeUpdateEpoch()
         runCatching { bindings.initialize(source, currentResiliencePolicy, trackPreferencePolicy) }
             .onSuccess {
@@ -181,6 +190,21 @@ internal class VesperNativePlayerBridge(
             )
         }
         initialize()
+    }
+
+    private fun probePluginsForSource(source: VesperPlayerSource): List<Map<String, Any?>> {
+        if (sourceNormalizerConfiguration.isDisabled && frameProcessorConfiguration.isDisabled) {
+            return emptyList()
+        }
+        return runCatching {
+            bindings.probeMobilePlugins(
+                source = source,
+                sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                frameProcessorConfiguration = frameProcessorConfiguration,
+            )
+        }.onFailure { error ->
+            Log.w(TAG, "mobile plugin diagnostics failed for source=${source.uri}", error)
+        }.getOrDefault(emptyList())
     }
 
     override fun attachSurfaceHost(host: ViewGroup) {
@@ -606,6 +630,12 @@ private data class PreservedPlaybackState(
 }
 
 internal interface VesperNativeBindings {
+    fun probeMobilePlugins(
+        source: VesperPlayerSource,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration,
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration,
+    ): List<Map<String, Any?>>
+
     fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
@@ -638,6 +668,12 @@ internal interface VesperNativeBindings {
 }
 
 private class MissingVesperNativeBindings : VesperNativeBindings {
+    override fun probeMobilePlugins(
+        source: VesperPlayerSource,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration,
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration,
+    ): List<Map<String, Any?>> = emptyList()
+
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,

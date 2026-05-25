@@ -10,6 +10,12 @@ Use this example as a reference for:
 - Source selection, quality / audio / subtitle / speed sheets
 - Configuring `VesperPlaybackResiliencePolicy`
 - Exercising Android external playback through Cast / DLNA and iOS AirPlay
+- SourceNormalizer plugin diagnostics panel on Android and iOS. The example
+  defaults to `preflightOnly` and lets you switch among `disabled`,
+  `diagnosticsOnly`, and `preflightOnly` at runtime.
+- FrameProcessor diagnostic plugin logging when the optional artifact is
+  bundled. The example does not expose a mobile FrameProcessor toggle and does
+  not route frames through the plugin.
 
 ## Requirements
 
@@ -50,13 +56,34 @@ flutter build ios --release --no-codesign
 > flutter config --enable-swift-package-manager
 > ```
 
-The iOS Runner project includes a build phase that embeds the optional
-`VesperPlayerFfmpegRuntime.framework` and
-`VesperPlayerRemuxFfmpegPlugin.framework` for local `.mp4` export testing.
-Release hosts should consume the matching
+The Android Runner project builds and packages the optional remux,
+SourceNormalizer, and FrameProcessor diagnostic plugin `.so` files into
+generated `jniLibs`. The iOS Runner project includes a build phase that embeds
+the optional `VesperPlayerFfmpegRuntime.framework`,
+`VesperPlayerRemuxFfmpegPlugin.framework`,
+`VesperPlayerSourceNormalizerFfmpegPlugin.framework`, and
+`VesperPlayerFrameProcessorDiagnosticPlugin.framework`. Release hosts should
+consume the matching
 `VesperPlayerFfmpegRuntime.xcframework.zip` and
-`VesperPlayerRemuxFfmpegPlugin.xcframework.zip` artifacts built from the same
-FFmpeg profile.
+`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
+`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`, and
+`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` artifacts built
+from the same FFmpeg profile where applicable.
+
+## Optional Plugin Diagnostics
+
+The Flutter example asks the native Android / iOS host for bundled plugin binary
+paths and passes only those plugin paths to `VesperPlayerController.create`.
+FFmpeg runtime libraries are provided by the Android runtime AAR or by the iOS
+`VesperPlayerFfmpegRuntime.framework`; neither runtime is passed as a plugin
+path.
+
+SourceNormalizer mobile v1 is a diagnostics / preflight path. In
+`preflightOnly`, the host probes the selected source and then continues playing
+the original Android or iOS source. A preflight failure is shown in the
+diagnostics panel and does not block playback. FrameProcessor remains debug
+diagnostics only in this example and is never marked as participating in mobile
+playback.
 
 ## Test
 

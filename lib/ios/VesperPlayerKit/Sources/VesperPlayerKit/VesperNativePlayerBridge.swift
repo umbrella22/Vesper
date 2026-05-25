@@ -58,6 +58,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private let cachePolicyToken = UUID()
     private let preloadCoordinator: VesperNativePreloadCoordinator
     private let benchmarkRecorder: VesperBenchmarkRecorder
+    private let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
+    private let frameProcessorConfiguration: VesperFrameProcessorConfiguration
+    private var currentPluginDiagnostics: [[String: Any]]
     private var fixedTrackConvergenceState: FixedTrackConvergenceState?
     private var fixedTrackIssueActive = false
     private var audioSessionActive = false
@@ -94,6 +97,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedLastError
     }
 
+    var pluginDiagnostics: [[String: Any]] {
+        currentPluginDiagnostics
+    }
+
     var routePickerPlayer: AVPlayer? {
         player
     }
@@ -114,12 +121,25 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         resiliencePolicy: VesperPlaybackResiliencePolicy = VesperPlaybackResiliencePolicy(),
         trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
         preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
-        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled
+        benchmarkConfiguration: VesperBenchmarkConfiguration = .disabled,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+            VesperSourceNormalizerConfiguration(),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration =
+            VesperFrameProcessorConfiguration()
     ) {
         currentSource = initialSource
         currentResiliencePolicy = resiliencePolicy
         self.trackPreferencePolicy = trackPreferencePolicy
         resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
+        self.sourceNormalizerConfiguration = sourceNormalizerConfiguration
+        self.frameProcessorConfiguration = frameProcessorConfiguration
+        currentPluginDiagnostics = initialSource.map {
+            VesperMobilePluginDiagnosticsProbe.run(
+                source: $0,
+                sourceNormalizer: sourceNormalizerConfiguration,
+                frameProcessor: frameProcessorConfiguration
+            )
+        } ?? []
         benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
         preloadCoordinator = VesperNativePreloadCoordinator(
             budgetPolicy: preloadBudgetPolicy.resolvedForRuntime()
@@ -180,6 +200,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         iosHostLog(
             "initialize source=\(currentSource.uri) label=\(currentSource.label) kind=\(currentSource.kind.rawValue) protocol=\(currentSource.protocol.rawValue) autoPlay=\(shouldAutoPlay)"
         )
+        currentPluginDiagnostics = probePlugins(for: currentSource)
         do {
             configureAudioSessionIfNeeded()
             try loadCurrentSource()
@@ -254,6 +275,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
         }
         initialize()
+    }
+
+    private func probePlugins(for source: VesperPlayerSource) -> [[String: Any]] {
+        VesperMobilePluginDiagnosticsProbe.run(
+            source: source,
+            sourceNormalizer: sourceNormalizerConfiguration,
+            frameProcessor: frameProcessorConfiguration
+        )
     }
 
     private func tearDownActivePlayback() {

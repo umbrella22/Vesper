@@ -148,6 +148,8 @@ pub enum PlayerDecoderPluginVideoMode {
 pub enum SourceNormalizerMode {
     #[default]
     Disabled,
+    DiagnosticsOnly,
+    PreflightOnly,
     PreferNormalized,
     RequireNormalized,
 }
@@ -406,6 +408,8 @@ pub enum PlayerPluginDiagnosticStatus {
     DecoderUnsupported,
     FrameProcessorSupported,
     FrameProcessorUnsupported,
+    SourceNormalizerSupported,
+    SourceNormalizerUnsupported,
 }
 
 /// Rust-side codec capability summary emitted by decoder plugin diagnostics.
@@ -446,11 +450,33 @@ pub struct PlayerPluginFrameProcessorCapabilitySummary {
     pub max_in_flight_frames: Option<u32>,
 }
 
+/// Rust-side source normalizer capability summary emitted by runtime probes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerPluginSourceNormalizerCapabilitySummary {
+    pub supported_runtime_profiles: Vec<String>,
+    pub max_level: String,
+    pub media_kinds: Vec<String>,
+    pub codecs: Vec<String>,
+    pub bitstream_formats: Vec<String>,
+    pub supports_seek: bool,
+    pub supports_flush: bool,
+    pub required_libraries: Vec<String>,
+    pub required_demuxers: Vec<String>,
+    pub required_muxers: Vec<String>,
+    pub required_protocols: Vec<String>,
+    pub required_parsers: Vec<String>,
+    pub required_bitstream_filters: Vec<String>,
+    pub required_tls: Option<String>,
+    pub requires_network: bool,
+    pub max_sessions: Option<u32>,
+}
+
 /// Rust-side capability summary emitted by plugin diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerPluginCapabilitySummary {
     Decoder(PlayerPluginDecoderCapabilitySummary),
     FrameProcessor(PlayerPluginFrameProcessorCapabilitySummary),
+    SourceNormalizer(PlayerPluginSourceNormalizerCapabilitySummary),
 }
 
 /// Runtime participation state for plugin diagnostics.
@@ -1575,7 +1601,7 @@ mod tests {
         PlayerResolvedPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy,
         PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeWarning, PlayerRuntimeWarningDomain,
         PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
-        PlayerTrackPreferencePolicy, PresentationState,
+        PlayerTrackPreferencePolicy, PresentationState, SourceNormalizerMode,
     };
     use std::time::Duration;
 
@@ -1754,6 +1780,11 @@ mod tests {
     fn runtime_options_default_to_shared_resilience_baseline() {
         let options = PlayerRuntimeOptions::default();
 
+        assert_eq!(
+            options.source_normalizer_mode,
+            SourceNormalizerMode::Disabled
+        );
+        assert!(options.source_normalizer_plugin_library_paths.is_empty());
         assert_eq!(options.frame_processor_mode, FrameProcessorMode::Disabled);
         assert!(options.frame_processor_library_paths.is_empty());
         assert_eq!(
@@ -1780,6 +1811,10 @@ mod tests {
     #[test]
     fn runtime_options_builder_sets_frame_processor_mode() {
         let options = PlayerRuntimeOptions::default()
+            .with_source_normalizer_mode(SourceNormalizerMode::PreflightOnly)
+            .with_source_normalizer_plugin_library_paths([std::path::PathBuf::from(
+                "/tmp/source-normalizer",
+            )])
             .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
             .with_frame_processor_library_paths([std::path::PathBuf::from("/tmp/frame-processor")])
             .with_frame_processor_policy(FrameProcessorPolicy {
@@ -1789,6 +1824,14 @@ mod tests {
                 max_in_flight_frames_per_processor: 1,
             });
 
+        assert_eq!(
+            options.source_normalizer_mode,
+            SourceNormalizerMode::PreflightOnly
+        );
+        assert_eq!(
+            options.source_normalizer_plugin_library_paths,
+            vec![std::path::PathBuf::from("/tmp/source-normalizer")]
+        );
         assert_eq!(
             options.frame_processor_mode,
             FrameProcessorMode::RequireProcessed

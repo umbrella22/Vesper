@@ -65,6 +65,8 @@ public final class VesperPlayerController: ObservableObject {
         publishedLastError
     }
 
+    public private(set) var pluginDiagnostics: [[String: Any]]
+
     private var bridgeObservation: AnyCancellable?
     private let initializeImpl: () -> Void
     private let disposeImpl: () -> Void
@@ -107,6 +109,7 @@ public final class VesperPlayerController: ObservableObject {
         publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
         publishedResiliencePolicy = bridge.publishedResiliencePolicy
         publishedLastError = bridge.publishedLastError
+        pluginDiagnostics = bridge.pluginDiagnostics
         initializeImpl = bridge.initialize
         disposeImpl = bridge.dispose
         refreshImpl = bridge.refresh
@@ -147,6 +150,7 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
                 self.publishedResiliencePolicy = bridge.publishedResiliencePolicy
                 self.publishedLastError = bridge.publishedLastError
+                self.pluginDiagnostics = bridge.pluginDiagnostics
                 self.systemPlaybackCoordinator.updatePlaybackState(self.publishedUiState)
                 self.updateScreenSleepPolicy()
             }

@@ -50,7 +50,10 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   ExampleHostTab _selectedTab = ExampleHostTab.player;
   ExampleResilienceProfile _selectedResilienceProfile =
       ExampleResilienceProfile.balanced;
+  ExampleSourceNormalizerSetting _sourceNormalizerSetting =
+      ExampleSourceNormalizerSetting.preflightOnly;
   bool _isApplyingResilienceProfile = false;
+  bool _isRebuildingController = false;
   bool _sheetOpen = false;
   List<String> _playlistItemIds = <String>[flutterHlsPlaylistItemId];
   String? _activePlaylistItemId = flutterHlsPlaylistItemId;
@@ -58,6 +61,8 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   String? _externalPlaybackMessage;
   bool _externalPlaybackMessageIsDiagnostic = false;
   bool _isDownloadExportPluginInstalled = false;
+  List<String> _sourceNormalizerPluginLibraryPaths = const <String>[];
+  List<String> _frameProcessorPluginLibraryPaths = const <String>[];
   bool _externalPlaybackPausedLocalPlayback = false;
   VesperSystemPlaybackPermissionStatus _systemPlaybackPermissionStatus =
       VesperSystemPlaybackPermissionStatus.notRequired;
@@ -133,19 +138,49 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     super.dispose();
   }
 
-  Future<VesperPlayerController> _createController() async {
+  Future<VesperPlayerController> _createController({
+    VesperPlayerSource? initialSource,
+    bool preservePlaylistState = false,
+  }) async {
     VesperPlayerController? nextController;
     try {
+      final pluginPaths =
+          await Future.wait<List<String>>(<Future<List<String>>>[
+            ExampleLocalMediaPicker.bundledSourceNormalizerPluginLibraryPaths(),
+            ExampleLocalMediaPicker.bundledFrameProcessorPluginLibraryPaths(),
+          ]);
+      if (mounted) {
+        setState(() {
+          _sourceNormalizerPluginLibraryPaths = pluginPaths[0];
+          _frameProcessorPluginLibraryPaths = pluginPaths[1];
+        });
+      } else {
+        _sourceNormalizerPluginLibraryPaths = pluginPaths[0];
+        _frameProcessorPluginLibraryPaths = pluginPaths[1];
+      }
+
+      final selectedSource = initialSource ?? flutterHlsDemoSource();
       nextController = await VesperPlayerController.create(
+        initialSource: selectedSource,
         renderSurfaceKind: VesperPlayerRenderSurfaceKind.surfaceView,
         resiliencePolicy: _selectedResilienceProfile.policy,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+          mode: _sourceNormalizerSetting.mode,
+          pluginLibraryPaths: pluginPaths[0],
+        ),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration(
+          mode: pluginPaths[1].isEmpty
+              ? VesperFrameProcessorMode.disabled
+              : VesperFrameProcessorMode.diagnosticsOnly,
+          pluginLibraryPaths: pluginPaths[1],
+        ),
       );
       await nextController.initialize();
-      final initialSource = flutterHlsDemoSource();
-      await nextController.selectSource(initialSource);
-      await _configureSystemPlayback(nextController, initialSource);
-      _playlistItemIds = <String>[flutterHlsPlaylistItemId];
-      _activePlaylistItemId = flutterHlsPlaylistItemId;
+      await _configureSystemPlayback(nextController, selectedSource);
+      if (!preservePlaylistState) {
+        _playlistItemIds = <String>[flutterHlsPlaylistItemId];
+        _activePlaylistItemId = flutterHlsPlaylistItemId;
+      }
 
       final previous = _controller;
       _controller = nextController;
@@ -158,6 +193,52 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         _disposeControllerSilently(nextController);
       }
       rethrow;
+    }
+  }
+
+  Future<void> _applySourceNormalizerSetting(
+    ExampleSourceNormalizerSetting setting,
+  ) async {
+    if (setting == _sourceNormalizerSetting || _isRebuildingController) {
+      return;
+    }
+
+    final previousController = _controller ?? await _controllerFuture;
+    final activeSource = _activePlaylistItemId == null
+        ? null
+        : _playlistSourceForItem(_activePlaylistItemId!);
+    final previousSnapshot = previousController.snapshot;
+    final restorePositionMs = previousSnapshot.timeline.positionMs;
+    final shouldResumePlayback =
+        previousSnapshot.playbackState == VesperPlaybackState.playing;
+
+    setState(() {
+      _sourceNormalizerSetting = setting;
+      _isRebuildingController = true;
+      _controllerFuture = _createController(
+        initialSource: activeSource,
+        preservePlaylistState: true,
+      );
+    });
+
+    try {
+      final nextController = await _controllerFuture;
+      if (restorePositionMs > 0) {
+        await nextController.seekBy(restorePositionMs);
+      }
+      if (shouldResumePlayback) {
+        await nextController.play();
+      }
+    } catch (error) {
+      if (mounted) {
+        _showMessage('SourceNormalizer 配置切换失败：$error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRebuildingController = false;
+        });
+      }
     }
   }
 
@@ -247,8 +328,47 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     if (source.kind == VesperPlayerSourceKind.remote) {
       _remoteUrlController.text = source.uri;
     }
+    if (_sourceNormalizerSetting ==
+        ExampleSourceNormalizerSetting.preflightOnly) {
+      await _rebuildControllerForSource(
+        source,
+        shouldResumePlayback:
+            controller.snapshot.playbackState == VesperPlaybackState.playing,
+      );
+      return;
+    }
     await controller.selectSource(source);
     await _configureSystemPlayback(controller, source);
+  }
+
+  Future<void> _rebuildControllerForSource(
+    VesperPlayerSource source, {
+    required bool shouldResumePlayback,
+  }) async {
+    if (_isRebuildingController) {
+      return;
+    }
+
+    setState(() {
+      _isRebuildingController = true;
+      _controllerFuture = _createController(
+        initialSource: source,
+        preservePlaylistState: true,
+      );
+    });
+
+    try {
+      final nextController = await _controllerFuture;
+      if (shouldResumePlayback) {
+        await nextController.play();
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRebuildingController = false;
+        });
+      }
+    }
   }
 
   Future<void> _configureSystemPlayback(
@@ -1008,6 +1128,12 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
                     right: 18,
                     child: ExampleBusyPill(label: '正在应用策略'),
                   ),
+                if (_isRebuildingController)
+                  const Positioned(
+                    top: 18,
+                    left: 18,
+                    child: ExampleBusyPill(label: '正在切换插件'),
+                  ),
               ],
             );
           },
@@ -1100,6 +1226,17 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
             playlistItems: playlistItems,
             onSelectItem: (itemId) =>
                 unawaited(_focusPlaylistItem(controller, itemId)),
+          ),
+          const SizedBox(height: 18),
+          ExamplePluginDiagnosticsSection(
+            palette: palette,
+            sourceNormalizerSetting: _sourceNormalizerSetting,
+            sourceNormalizerPluginLibraryPaths:
+                _sourceNormalizerPluginLibraryPaths,
+            frameProcessorPluginLibraryPaths: _frameProcessorPluginLibraryPaths,
+            pluginDiagnostics: controller.pluginDiagnostics,
+            onSourceNormalizerSettingChange: (setting) =>
+                unawaited(_applySourceNormalizerSetting(setting)),
           ),
           const SizedBox(height: 18),
           ExampleSystemPlaybackSection(

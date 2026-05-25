@@ -37,3 +37,16 @@ tls = "none"
 [profile.default.validation]
 forbid_network = true
 forbid_openssl = true
+
+[profile.source-normalizer]
+extends = "default"
+demuxers = ["flv", "mov", "matroska", "mpegts", "aac"]
+muxers = ["mp4", "mov"]
+protocols = ["file", "pipe"]
+parsers = ["aac", "ac3", "av1", "h264", "hevc", "mpeg4video", "opus", "vp8", "vp9"]
+bsfs = ["aac_adtstoasc", "extract_extradata", "h264_mp4toannexb", "hevc_mp4toannexb"]
+tls = "none"
+
+[profile.source-normalizer.validation]
+forbid_network = true
+forbid_openssl = true

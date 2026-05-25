@@ -11,6 +11,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaylistSwitchPolicy
 import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHint
 import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHintKind
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.ikaros.vesper.player.android.VesperSourceNormalizerMode
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import kotlin.math.abs
 
@@ -60,6 +61,28 @@ internal enum class ExampleResilienceProfile(
                 Resilient -> VesperPlaybackResiliencePolicy.resilient()
                 LowLatency -> VesperPlaybackResiliencePolicy.lowLatency()
             }
+}
+
+internal enum class ExampleSourceNormalizerSetting(
+    @get:StringRes val titleRes: Int,
+    @get:StringRes val subtitleRes: Int,
+    val mode: VesperSourceNormalizerMode,
+) {
+    Disabled(
+        R.string.example_plugins_source_normalizer_disabled,
+        R.string.example_plugins_source_normalizer_disabled_subtitle,
+        VesperSourceNormalizerMode.Disabled,
+    ),
+    DiagnosticsOnly(
+        R.string.example_plugins_source_normalizer_diagnostics,
+        R.string.example_plugins_source_normalizer_diagnostics_subtitle,
+        VesperSourceNormalizerMode.DiagnosticsOnly,
+    ),
+    PreflightOnly(
+        R.string.example_plugins_source_normalizer_preflight,
+        R.string.example_plugins_source_normalizer_preflight_subtitle,
+        VesperSourceNormalizerMode.PreflightOnly,
+    ),
 }
 
 internal data class ExampleHostPalette(

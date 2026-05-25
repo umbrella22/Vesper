@@ -81,7 +81,9 @@ pub(crate) fn free_plugin_codec_capability(codec: &mut PlayerFfiPluginCodecCapab
     *codec = PlayerFfiPluginCodecCapability::default();
 }
 
-pub(crate) fn free_plugin_decoder_capability(capability: &mut PlayerFfiPluginDecoderCapabilitySummary) {
+pub(crate) fn free_plugin_decoder_capability(
+    capability: &mut PlayerFfiPluginDecoderCapabilitySummary,
+) {
     if !capability.codecs.is_null() {
         unsafe {
             let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
@@ -111,9 +113,52 @@ pub(crate) fn free_plugin_frame_processor_capability(
     *capability = PlayerFfiPluginFrameProcessorCapabilitySummary::default();
 }
 
+pub(crate) fn free_plugin_source_normalizer_capability(
+    capability: &mut PlayerFfiPluginSourceNormalizerCapabilitySummary,
+) {
+    free_c_string_array(
+        &mut capability.supported_runtime_profiles,
+        capability.supported_runtime_profiles_len,
+    );
+    free_c_string(&mut capability.max_level);
+    free_c_string_array(&mut capability.media_kinds, capability.media_kinds_len);
+    free_c_string_array(&mut capability.codecs, capability.codecs_len);
+    free_c_string_array(
+        &mut capability.bitstream_formats,
+        capability.bitstream_formats_len,
+    );
+    free_c_string_array(
+        &mut capability.required_libraries,
+        capability.required_libraries_len,
+    );
+    free_c_string_array(
+        &mut capability.required_demuxers,
+        capability.required_demuxers_len,
+    );
+    free_c_string_array(
+        &mut capability.required_muxers,
+        capability.required_muxers_len,
+    );
+    free_c_string_array(
+        &mut capability.required_protocols,
+        capability.required_protocols_len,
+    );
+    free_c_string_array(
+        &mut capability.required_parsers,
+        capability.required_parsers_len,
+    );
+    free_c_string_array(
+        &mut capability.required_bitstream_filters,
+        capability.required_bitstream_filters_len,
+    );
+    free_c_string(&mut capability.required_tls);
+    *capability = PlayerFfiPluginSourceNormalizerCapabilitySummary::default();
+}
+
 pub(crate) fn free_plugin_capability(capability: &mut PlayerFfiPluginCapabilitySummary) {
     free_plugin_decoder_capability(&mut capability.decoder);
     free_plugin_frame_processor_capability(&mut capability.frame_processor);
+    free_plugin_source_normalizer_capability(&mut capability.source_normalizer);
     *capability = PlayerFfiPluginCapabilitySummary::default();
 }
 
@@ -194,4 +239,3 @@ pub(crate) fn free_event(event: &mut PlayerFfiEvent) {
     unsafe { player_ffi_error_free(&mut event.error) };
     *event = PlayerFfiEvent::default();
 }
-

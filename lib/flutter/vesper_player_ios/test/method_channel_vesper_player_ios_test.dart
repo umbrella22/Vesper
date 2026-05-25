@@ -170,6 +170,39 @@ void main() {
     );
   });
 
+  test('createPlayer forwards mobile plugin configurations when provided',
+      () async {
+    final platform = MethodChannelVesperPlayerIos();
+    const sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+      mode: VesperSourceNormalizerMode.preflightOnly,
+      pluginLibraryPaths: <String>[
+        '/Frameworks/SourceNormalizer.framework/SourceNormalizer'
+      ],
+      runtimeProfile: 'generic-fallback',
+    );
+    const frameProcessorConfiguration = VesperFrameProcessorConfiguration(
+      mode: VesperFrameProcessorMode.diagnosticsOnly,
+      pluginLibraryPaths: <String>[
+        '/Frameworks/FrameProcessor.framework/FrameProcessor'
+      ],
+    );
+
+    await platform.createPlayer(
+      sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+      frameProcessorConfiguration: frameProcessorConfiguration,
+    );
+
+    expect(calls, hasLength(1));
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      containsPair('sourceNormalizer', sourceNormalizerConfiguration.toMap()),
+    );
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      containsPair('frameProcessor', frameProcessorConfiguration.toMap()),
+    );
+  });
+
   test('createPlayer accepts explicit render surface kind', () async {
     final platform = MethodChannelVesperPlayerIos();
 

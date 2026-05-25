@@ -15,7 +15,7 @@
     use player_runtime::{
         DecodedVideoFrame, FrameProcessorMode, MediaAbrMode, MediaAbrPolicy, MediaTrack,
         MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot,
-        PlaybackProgress, PlayerErrorCode, PlayerMediaInfo, PlayerPluginDiagnosticStatus,
+        PlaybackProgress, PlayerErrorCode, PlayerMediaInfo, PlayerPluginParticipation,
         PlayerResilienceMetrics, PlayerResult, PlayerRuntimeAdapterBackendFamily,
         PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
         PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup,
@@ -41,16 +41,13 @@
     }
 
     #[test]
-    fn android_frame_processor_config_reports_unsupported_diagnostic() {
+    fn android_frame_processor_config_reports_missing_plugin_diagnostic() {
         let factory = AndroidNativePlayerRuntimeAdapterFactory::default();
         let initializer = factory
             .probe_source_with_options(
                 MediaSource::new("placeholder.mp4"),
                 PlayerRuntimeOptions::default()
-                    .with_frame_processor_mode(FrameProcessorMode::PreferProcessed)
-                    .with_frame_processor_library_paths([std::path::PathBuf::from(
-                        "/tmp/player-frame-processor-diagnostic",
-                    )]),
+                    .with_frame_processor_mode(FrameProcessorMode::DiagnosticsOnly),
             )
             .expect("android skeleton probe should succeed");
 
@@ -60,14 +57,13 @@
             .iter()
             .find(|diagnostic| diagnostic.plugin_kind.as_deref() == Some("frame_processor"))
             .expect("frame processor configuration should report a diagnostic");
-        assert_eq!(
-            diagnostic.status,
-            PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
-        );
+        assert_eq!(diagnostic.participation, PlayerPluginParticipation::Unknown);
         assert!(
-            diagnostic.message.as_deref().unwrap_or_default().contains(
-                "Android DirectNative playback does not support per-frame processors yet"
-            )
+            diagnostic
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("no plugin paths")
         );
     }
 

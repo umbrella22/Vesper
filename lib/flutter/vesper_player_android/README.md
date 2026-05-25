@@ -163,6 +163,28 @@ rights, and track OpenSSL / libxml2 notices when those libraries are included.
 The repository-level release checklist is in
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
+## Optional Mobile Plugin Diagnostics
+
+`createPlayer` forwards
+`VesperSourceNormalizerConfiguration` and
+`VesperFrameProcessorConfiguration` to the Android host kit. Both are disabled
+by default.
+
+For SourceNormalizer v1, `diagnosticsOnly` loads the optional plugin and reports
+capabilities through `pluginDiagnostics`; `preflightOnly` may also open and
+close a packet session for the selected source. The Android player still gives
+the original source to ExoPlayer, and preflight failures are non-fatal. Hosts
+that package `VesperPlayerKitSourceNormalizerFfmpeg-android-<abi>.aar` must also
+package the matching `VesperPlayerKitFfmpegRuntime-android-<abi>.aar`; the
+SourceNormalizer AAR carries plugin metadata/profile hash but must not contain
+FFmpeg runtime `.so` files.
+
+For FrameProcessor v1,
+`VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar` is a diagnostics
+shell only. It can report capability diagnostics, but it never opens frame
+sessions, processes frames, or participates in Android playback. Mobile Decoder
+artifacts remain deferred.
+
 ## Minimum Requirements
 
 - Android API Level 26+

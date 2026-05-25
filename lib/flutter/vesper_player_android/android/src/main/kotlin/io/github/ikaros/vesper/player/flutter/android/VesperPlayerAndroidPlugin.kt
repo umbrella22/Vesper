@@ -508,6 +508,14 @@ class VesperPlayerAndroidPlugin :
             val resiliencePolicyMap = arguments["resiliencePolicy"] as? Map<*, *>
             val trackPreferencePolicyMap = arguments["trackPreferencePolicy"] as? Map<*, *>
             val preloadBudgetPolicyMap = arguments["preloadBudgetPolicy"] as? Map<*, *>
+            val sourceNormalizerConfiguration =
+                (arguments["sourceNormalizer"] as? Map<*, *>)
+                    ?.stringMap()
+                    .toSourceNormalizerConfiguration()
+            val frameProcessorConfiguration =
+                (arguments["frameProcessor"] as? Map<*, *>)
+                    ?.stringMap()
+                    .toFrameProcessorConfiguration()
             val benchmarkConfiguration =
                 (arguments["benchmarkConfiguration"] as? Map<*, *>)
                     ?.stringMap()
@@ -533,6 +541,8 @@ class VesperPlayerAndroidPlugin :
                     keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                     benchmarkConfiguration = benchmarkConfiguration,
                     surfaceKind = surfaceKind,
+                    sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                    frameProcessorConfiguration = frameProcessorConfiguration,
                 ),
                 benchmarkConsoleLogging = benchmarkConfiguration.consoleLogging,
             )
@@ -543,6 +553,7 @@ class VesperPlayerAndroidPlugin :
             mapOf(
                 "playerId" to session.id,
                 "snapshot" to buildSnapshotMap(session),
+                "pluginDiagnostics" to session.controller.pluginDiagnostics,
             )
         }.onSuccess(result::success)
             .onFailure { error ->
