@@ -400,17 +400,18 @@ sample APKs. The sample APKs are debug-signed for side-load evaluation only and
 are not production app-store artifacts. iOS packaging is arm64 only for device,
 Apple Silicon Simulator, and optional Catalyst slices. The iOS core
 `VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
-and SourceNormalizer preflight support are shipped as separate optional runtime
+and SourceNormalizer support are shipped as separate optional runtime
 and plugin artifacts that the host app signs and embeds. Plugin library path
 configuration points only at plugin binaries; the shared FFmpeg runtime is a
 package dependency, not a plugin path. All FFmpeg-backed optional plugins and
 their shared runtime must come from the same FFmpeg profile so
 `profile-hash.txt` values match.
 
-The mobile SourceNormalizer artifact is a v1 diagnostics/preflight boundary. It
-can load the optional plugin and attempt an open/close packet-session preflight
-for the selected source, but Android ExoPlayer and iOS AVPlayer still play the
-original source. The mobile FrameProcessor artifact is diagnostics-only: it can
+The mobile SourceNormalizer artifact can run diagnostics/preflight and, in
+`preferNormalized` or `requireNormalized`, expose disk-backed fMP4 or
+short-window HLS output to Android ExoPlayer and iOS AVPlayer through local
+resource layers. Packet-stream output remains reserved for the future native
+frame pipeline. The mobile FrameProcessor artifact is diagnostics-only: it can
 be packaged and probed for capabilities, but it does not open frame sessions,
 process frames, or participate in default mobile playback. Mobile Decoder
 artifacts and configuration remain deferred.

@@ -710,6 +710,25 @@ extern PlayerFfiCallStatus player_ffi_mobile_plugin_diagnostics_json(
 
 extern void player_ffi_mobile_plugin_diagnostics_string_free(char *value);
 
+extern PlayerFfiCallStatus player_ffi_source_normalizer_resource_open(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    const char *output_root,
+    bool force_normalized,
+    uint64_t *out_handle,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_source_normalizer_resource_poll(
+    uint64_t handle,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern void player_ffi_source_normalizer_resource_dispose(uint64_t handle);
+
 extern PlayerFfiCallStatus player_ffi_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,
@@ -2980,6 +2999,85 @@ bool vesper_mobile_plugin_diagnostics_json(
 
 void vesper_mobile_plugin_diagnostics_string_free(char *value) {
   player_ffi_mobile_plugin_diagnostics_string_free(value);
+}
+
+bool vesper_source_normalizer_resource_open(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    const char *output_root,
+    bool force_normalized,
+    uint64_t *out_handle,
+    char **out_json,
+    char **out_error_message) {
+  if (source_uri == NULL || output_root == NULL || out_handle == NULL || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_handle = 0;
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_source_normalizer_resource_open(
+      source_uri,
+      source_mode,
+      source_plugin_library_paths,
+      source_plugin_library_paths_len,
+      runtime_profile,
+      output_root,
+      force_normalized,
+      out_handle,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_handle != 0 && *out_json != NULL;
+}
+
+bool vesper_source_normalizer_resource_poll(
+    uint64_t handle,
+    char **out_json,
+    char **out_error_message) {
+  if (handle == 0 || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_source_normalizer_resource_poll(
+      handle,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_json != NULL;
+}
+
+void vesper_source_normalizer_resource_dispose(uint64_t handle) {
+  player_ffi_source_normalizer_resource_dispose(handle);
 }
 
 bool vesper_dash_bridge_execute_json(

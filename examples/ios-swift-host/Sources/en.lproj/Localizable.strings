@@ -104,13 +104,17 @@
 "example.resilience.cache_value" = "%@ · memory %@ / disk %@";
 
 "example.plugins.title" = "Plugin Diagnostics";
-"example.plugins.subtitle" = "SourceNormalizer can be switched for diagnostics or source preflight. Mobile playback still uses the original source; FrameProcessor is logged only as diagnostic capability.";
+"example.plugins.subtitle" = "SourceNormalizer can be switched from diagnostics/preflight into normalized playback routes. FrameProcessor is logged only as diagnostic capability.";
 "example.plugins.source_normalizer.disabled" = "SourceNormalizer Off";
 "example.plugins.source_normalizer.disabled_subtitle" = "The SourceNormalizer plugin is not loaded for playback probes.";
 "example.plugins.source_normalizer.diagnostics" = "Diagnostics";
 "example.plugins.source_normalizer.diagnostics_subtitle" = "Load the SourceNormalizer plugin and report capability without opening a packet session.";
 "example.plugins.source_normalizer.preflight" = "Preflight";
 "example.plugins.source_normalizer.preflight_subtitle" = "Load the SourceNormalizer plugin, open and close a packet session for the selected source, then continue playing the original source.";
+"example.plugins.source_normalizer.prefer" = "Prefer normalized";
+"example.plugins.source_normalizer.prefer_subtitle" = "Try disk-backed fMP4/HLS normalized playback and fall back to the original source on failure.";
+"example.plugins.source_normalizer.require" = "Require normalized";
+"example.plugins.source_normalizer.require_subtitle" = "Require disk-backed normalized playback and surface an error instead of falling back.";
 "example.plugins.source_normalizer.group" = "SourceNormalizer";
 "example.plugins.frame_processor.group" = "FrameProcessor Debug";
 "example.plugins.source_path" = "source";
@@ -121,6 +125,9 @@
 "example.plugins.unknown_record" = "Plugin diagnostic";
 "example.plugins.participation" = "participation: %@";
 "example.plugins.profiles" = "profiles: %@";
+"example.plugins.route" = "route: %@";
+"example.plugins.cache" = "cache: %@";
+"example.plugins.resource" = "resource: %@";
 
 "example.message.preparing_selected_video" = "Preparing selected video...";
 "example.message.preparing_video_from_photos" = "Preparing video from Photos...";

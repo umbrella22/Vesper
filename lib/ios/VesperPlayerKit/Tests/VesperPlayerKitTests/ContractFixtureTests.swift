@@ -143,6 +143,7 @@ final class ContractFixtureTests: XCTestCase {
         XCTAssertEqual(sourceNormalizerCapability["kind"] as? String, "sourceNormalizer")
         let sourceNormalizerSummary = try XCTUnwrap(sourceNormalizerCapability["sourceNormalizer"] as? [String: Any])
         XCTAssertEqual(sourceNormalizerSummary["supportedRuntimeProfiles"] as? [String], ["generic-fallback"])
+        XCTAssertEqual(sourceNormalizerSummary["supportedOutputRoutes"] as? [String], ["packetStream"])
         XCTAssertEqual(sourceNormalizerSummary["requiresNetwork"] as? Bool, false)
     }
 }

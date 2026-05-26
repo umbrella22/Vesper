@@ -277,6 +277,8 @@ typedef struct PlayerFfiPluginFrameProcessorCapabilitySummary {
 typedef struct PlayerFfiPluginSourceNormalizerCapabilitySummary {
   char **supported_runtime_profiles;
   size_t supported_runtime_profiles_len;
+  char **supported_output_routes;
+  size_t supported_output_routes_len;
   char *max_level;
   char **media_kinds;
   size_t media_kinds_len;
@@ -286,6 +288,11 @@ typedef struct PlayerFfiPluginSourceNormalizerCapabilitySummary {
   size_t bitstream_formats_len;
   bool supports_seek;
   bool supports_flush;
+  bool supports_growing_resources;
+  bool supports_range_reads;
+  bool supports_cancel;
+  char **content_types;
+  size_t content_types_len;
   char **required_libraries;
   size_t required_libraries_len;
   char **required_demuxers;
@@ -300,6 +307,14 @@ typedef struct PlayerFfiPluginSourceNormalizerCapabilitySummary {
   size_t required_bitstream_filters_len;
   char *required_tls;
   bool requires_network;
+  bool has_session_read_buffer_bytes;
+  uint64_t session_read_buffer_bytes;
+  bool has_manifest_snapshot_bytes;
+  uint64_t manifest_snapshot_bytes;
+  bool has_session_disk_soft_cap_bytes;
+  uint64_t session_disk_soft_cap_bytes;
+  bool has_global_disk_soft_cap_bytes;
+  uint64_t global_disk_soft_cap_bytes;
   bool has_max_sessions;
   uint32_t max_sessions;
 } PlayerFfiPluginSourceNormalizerCapabilitySummary;

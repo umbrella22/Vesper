@@ -62,6 +62,8 @@ internal fun Map<String, Any?>?.toSourceNormalizerConfiguration():
             when (this["mode"] as? String) {
                 "diagnosticsOnly" -> VesperSourceNormalizerMode.DiagnosticsOnly
                 "preflightOnly" -> VesperSourceNormalizerMode.PreflightOnly
+                "preferNormalized" -> VesperSourceNormalizerMode.PreferNormalized
+                "requireNormalized" -> VesperSourceNormalizerMode.RequireNormalized
                 else -> VesperSourceNormalizerMode.Disabled
             },
         pluginLibraryPaths =

@@ -2,7 +2,9 @@ use jni::Env;
 use jni::errors::Result as JniResult;
 use jni::objects::{JObject, JValue};
 use jni::sys::jint;
-use player_platform_android::{AndroidHostCommand, AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind};
+use player_platform_android::{
+    AndroidHostCommand, AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind,
+};
 use player_runtime::{
     MediaAbrMode, MediaAbrPolicy, MediaTrackSelection, MediaTrackSelectionMode,
     PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,

@@ -60,6 +60,81 @@ impl SourceNormalizerPacketCapabilities {
     }
 }
 
+/// Normalized output route produced by a source normalizer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceNormalizerOutputRoute {
+    /// Disk-backed fragmented MP4 output intended to be exposed as a local stream.
+    Fmp4LocalStream,
+    /// Disk-backed short-window HLS output intended for nonstandard adaptive input.
+    HlsShortWindow,
+    /// Compressed packet stream intended for the SDK-controlled native frame lane.
+    PacketStream,
+}
+
+impl SourceNormalizerOutputRoute {
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Fmp4LocalStream => "fmp4LocalStream",
+            Self::HlsShortWindow => "hlsShortWindow",
+            Self::PacketStream => "packetStream",
+        }
+    }
+}
+
+/// Resource session cache limits shared by plugin and platform hosts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceCachePolicy {
+    /// Maximum bytes read into memory per active session.
+    pub session_read_buffer_bytes: u64,
+    /// Maximum bytes used for manifest and metadata snapshots per session.
+    pub manifest_snapshot_bytes: u64,
+    /// Soft disk limit for one resource session.
+    pub session_disk_soft_cap_bytes: u64,
+    /// Soft disk limit for all normalized-resource sessions owned by a host.
+    pub global_disk_soft_cap_bytes: u64,
+}
+
+impl Default for SourceNormalizerResourceCachePolicy {
+    fn default() -> Self {
+        Self {
+            session_read_buffer_bytes: 4 * 1024 * 1024,
+            manifest_snapshot_bytes: 512 * 1024,
+            session_disk_soft_cap_bytes: 512 * 1024 * 1024,
+            global_disk_soft_cap_bytes: 1536 * 1024 * 1024,
+        }
+    }
+}
+
+/// Capabilities advertised by a resource-output source normalizer plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceCapabilities {
+    pub supported_runtime_profiles: Vec<String>,
+    pub supported_output_routes: Vec<SourceNormalizerOutputRoute>,
+    pub max_level: SourceNormalizerNormalizeLevel,
+    pub content_types: Vec<String>,
+    pub supports_growing_resources: bool,
+    pub supports_range_reads: bool,
+    pub supports_cancel: bool,
+    pub required_capabilities: SourceNormalizerRequiredCapabilities,
+    pub cache_policy: SourceNormalizerResourceCachePolicy,
+    pub max_sessions: Option<u32>,
+}
+
+impl SourceNormalizerResourceCapabilities {
+    /// Returns whether this plugin advertises a runtime profile.
+    pub fn supports_runtime_profile(&self, runtime_profile: &str) -> bool {
+        self.supported_runtime_profiles
+            .iter()
+            .any(|profile| profile.eq_ignore_ascii_case(runtime_profile))
+    }
+
+    /// Returns whether this plugin advertises an output route.
+    pub fn supports_output_route(&self, route: SourceNormalizerOutputRoute) -> bool {
+        self.supported_output_routes.contains(&route)
+    }
+}
+
 /// Packet stream media kind produced by a source normalizer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum SourceNormalizerPacketMediaKind {
@@ -82,6 +157,24 @@ pub struct SourceNormalizerPacketSessionConfig {
     pub session_timeout_ms: Option<u64>,
     #[serde(default)]
     pub preferred_media_kind: SourceNormalizerPacketMediaKind,
+}
+
+/// Configuration used to open one disk-backed resource source normalizer session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceSessionConfig {
+    pub runtime_profile: String,
+    pub input: String,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    pub output_root: String,
+    #[serde(default)]
+    pub cache_policy: SourceNormalizerResourceCachePolicy,
+    #[serde(default)]
+    pub preferred_route: Option<SourceNormalizerOutputRoute>,
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub read_idle_timeout_ms: Option<u64>,
 }
 
 /// Track metadata exposed by a packet-stream source normalizer.
@@ -147,6 +240,72 @@ impl Default for SourceNormalizerPacketStreamInfo {
             seekable: false,
         }
     }
+}
+
+/// Disk-backed resource produced by a source normalizer session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceInfo {
+    pub role: String,
+    pub path: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub byte_length: Option<u64>,
+    #[serde(default)]
+    pub growing: bool,
+}
+
+/// Resource-output metadata returned after opening a source normalizer session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceSessionInfo {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub normalizer_name: Option<String>,
+    #[serde(default)]
+    pub runtime_profile: Option<String>,
+    #[serde(default)]
+    pub selected_backend: Option<String>,
+    pub output_route: SourceNormalizerOutputRoute,
+    pub container: String,
+    #[serde(default)]
+    pub primary_resource_path: Option<String>,
+    #[serde(default)]
+    pub primary_content_type: Option<String>,
+    #[serde(default)]
+    pub resources: Vec<SourceNormalizerResourceInfo>,
+    #[serde(default)]
+    pub tracks: Vec<SourceNormalizerPacketTrackInfo>,
+    #[serde(default)]
+    pub duration_millis: Option<u64>,
+    #[serde(default)]
+    pub seekable: bool,
+    #[serde(default)]
+    pub disk_bytes_used: Option<u64>,
+}
+
+/// Resource-output worker state returned by `SourceNormalizerResourceSession::poll`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceNormalizerResourceSessionState {
+    Starting,
+    Ready,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Resource-output worker status returned by a source normalizer session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceSessionStatus {
+    pub state: SourceNormalizerResourceSessionState,
+    #[serde(default)]
+    pub info: Option<SourceNormalizerResourceSessionInfo>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub disk_bytes_used: Option<u64>,
 }
 
 /// Packet read status encoded in source normalizer packet metadata.
@@ -295,6 +454,18 @@ pub trait SourceNormalizerPacketPluginFactory: Send + Sync {
     ) -> Result<Box<dyn SourceNormalizerPacketSession>, SourceNormalizerError>;
 }
 
+/// Creates resource-output source normalizer sessions for one plugin.
+pub trait SourceNormalizerResourcePluginFactory: Send + Sync {
+    fn name(&self) -> &str;
+
+    fn resource_capabilities(&self) -> SourceNormalizerResourceCapabilities;
+
+    fn open_resource_session(
+        &self,
+        config: &SourceNormalizerResourceSessionConfig,
+    ) -> Result<Box<dyn SourceNormalizerResourceSession>, SourceNormalizerError>;
+}
+
 /// Borrowed packet returned by a packet-stream source normalizer.
 pub struct SourceNormalizerPacketLease<'a> {
     pub metadata: SourceNormalizerReadPacketMetadata,
@@ -330,13 +501,25 @@ pub trait SourceNormalizerPacketSession: Send {
     fn close(&mut self) -> Result<(), SourceNormalizerError>;
 }
 
+/// Stateful resource-output source normalizer session.
+pub trait SourceNormalizerResourceSession: Send {
+    fn session_info(&self) -> SourceNormalizerResourceSessionInfo;
+
+    fn poll(&mut self) -> Result<SourceNormalizerResourceSessionStatus, SourceNormalizerError>;
+
+    fn cancel(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError>;
+
+    fn close(&mut self) -> Result<(), SourceNormalizerError>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        SourceNormalizerPacket, SourceNormalizerPacketCapabilities,
+        SourceNormalizerOutputRoute, SourceNormalizerPacket, SourceNormalizerPacketCapabilities,
         SourceNormalizerPacketMediaKind, SourceNormalizerPacketTrackInfo,
         SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
-        SourceNormalizerRequiredCapabilities,
+        SourceNormalizerRequiredCapabilities, SourceNormalizerResourceCachePolicy,
+        SourceNormalizerResourceCapabilities,
     };
     use crate::{
         DecoderBitstreamFormat, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperPluginKind,
@@ -346,6 +529,40 @@ mod tests {
     fn source_normalizer_abi_constants_are_stable() {
         assert_eq!(VesperPluginKind::SourceNormalizer as u32, 6);
         assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, 2);
+    }
+
+    #[test]
+    fn source_normalizer_resource_capabilities_round_trip_through_json() {
+        let capabilities = SourceNormalizerResourceCapabilities {
+            supported_runtime_profiles: vec!["local-stream".to_owned()],
+            supported_output_routes: vec![
+                SourceNormalizerOutputRoute::Fmp4LocalStream,
+                SourceNormalizerOutputRoute::HlsShortWindow,
+            ],
+            max_level: Default::default(),
+            content_types: vec![
+                "video/mp4".to_owned(),
+                "application/vnd.apple.mpegurl".to_owned(),
+            ],
+            supports_growing_resources: true,
+            supports_range_reads: true,
+            supports_cancel: true,
+            required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+            cache_policy: SourceNormalizerResourceCachePolicy::default(),
+            max_sessions: Some(2),
+        };
+
+        let encoded = serde_json::to_string(&capabilities).expect("serialize capabilities");
+        let decoded: SourceNormalizerResourceCapabilities =
+            serde_json::from_str(&encoded).expect("deserialize capabilities");
+
+        assert_eq!(decoded, capabilities);
+        assert!(decoded.supports_runtime_profile("LOCAL-STREAM"));
+        assert!(decoded.supports_output_route(SourceNormalizerOutputRoute::Fmp4LocalStream));
+        assert_eq!(
+            SourceNormalizerOutputRoute::HlsShortWindow.wire_name(),
+            "hlsShortWindow"
+        );
     }
 
     #[test]

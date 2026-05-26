@@ -1909,6 +1909,7 @@ dependencies = [
  "player-source-normalizer",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

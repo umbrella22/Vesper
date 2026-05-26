@@ -1,6 +1,8 @@
 use super::*;
 
-pub(crate) fn strict_frame_processor_selection(selection: &MacosNativeFrameDecoderSelection) -> bool {
+pub(crate) fn strict_frame_processor_selection(
+    selection: &MacosNativeFrameDecoderSelection,
+) -> bool {
     selection.frame_processor_mode == FrameProcessorMode::RequireProcessed
         && !selection.frame_processor_paths.is_empty()
 }
@@ -14,7 +16,6 @@ pub(crate) struct MacosNativeFrameDecoderSelection {
     pub(crate) frame_processor_mode: FrameProcessorMode,
     pub(crate) frame_processor_policy: FrameProcessorPolicy,
 }
-
 
 pub(crate) fn select_macos_native_frame_decoder(
     source: &MediaSource,

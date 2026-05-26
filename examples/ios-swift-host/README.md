@@ -20,8 +20,8 @@ Use this example as a reference for:
 - Video-only Photos picker
 - Built-in Apple HLS sample preset
 - SourceNormalizer plugin diagnostics panel. The example defaults to
-  `preflightOnly` and lets you switch among `disabled`, `diagnosticsOnly`, and
-  `preflightOnly` at runtime.
+  `preflightOnly` and lets you switch among `disabled`, `diagnosticsOnly`,
+  `preflightOnly`, `preferNormalized`, and `requireNormalized` at runtime.
 - FrameProcessor diagnostic plugin logging. The example embeds the diagnostic
   plugin when available, but does not open frame sessions or alter rendering.
 
@@ -81,11 +81,14 @@ The iOS example passes only plugin framework binary paths to
 `VesperPlayerController`. The shared `VesperPlayerFfmpegRuntime.framework` is
 embedded and signed by the host, but it is not passed as a plugin path.
 
-SourceNormalizer mobile v1 is a diagnostics / preflight path. In
-`preflightOnly`, the host probes the selected source and then continues playing
-the original AVPlayer source. A preflight failure is shown in the diagnostics
-panel and does not block playback. FrameProcessor remains debug diagnostics
-only in this example and is never marked as participating in mobile playback.
+SourceNormalizer diagnostics and preflight modes do not change playback. In
+`preferNormalized` and `requireNormalized`, the host may open a disk-backed
+normalized resource session and hand the resulting fMP4 or short-window HLS
+resource to AVPlayer through a `vesper-normalized://` resource loader.
+`preferNormalized` falls back to the original source on failure;
+`requireNormalized` reports a source error. FrameProcessor remains
+debug diagnostics only in this example and is never marked as participating in
+mobile playback.
 
 ## Build From CLI
 

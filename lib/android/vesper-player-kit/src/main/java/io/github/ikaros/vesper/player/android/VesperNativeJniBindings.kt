@@ -36,6 +36,7 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
 import java.net.URI
+import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.pow
 import kotlin.math.roundToLong
@@ -45,6 +46,8 @@ internal class VesperNativeJniBindings(
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     private val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
     private val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
+    private val sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+        VesperSourceNormalizerConfiguration(),
 ) : VesperNativeBindings {
     private val appContext = context.applicationContext
     private val i18n = VesperPlayerI18n.fromContext(appContext)
@@ -71,7 +74,9 @@ internal class VesperNativeJniBindings(
             preloadBudgetPolicy = preloadBudgetPolicy,
         )
     private val systemPlaybackCoordinator = VesperAndroidSystemPlaybackCoordinator(appContext)
+    private val sourceNormalizerLoopbackServer = VesperSourceNormalizerLoopbackServer()
     private var currentBenchmarkSourceProtocol: VesperPlayerSourceProtocol? = null
+    private var currentSourceNormalizerResource: NativeSourceNormalizerResource? = null
     private val firstFrameGate = VesperPlaybackEpochFirstFrameGate()
 
     override fun probeMobilePlugins(
@@ -110,6 +115,8 @@ internal class VesperNativeJniBindings(
         val handle = VesperNativeJni.createSession(source.uri)
         check(handle != 0L) { "native session handle must not be zero" }
         sessionHandle = handle
+        val normalizedResource = openSourceNormalizerResourceForPlayback(source)
+        val playbackSource = normalizedResource?.playbackSource ?: source
         val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
         val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
         val renderersFactory =
@@ -120,16 +127,16 @@ internal class VesperNativeJniBindings(
         val mediaSourceFactory =
             DefaultMediaSourceFactory(appContext)
                 .setDataSourceFactory(
-                    buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache, source.headers)
+                    buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache, playbackSource.headers)
                 )
                 .setLoadErrorHandlingPolicy(
-                    buildLoadErrorHandlingPolicy(source, resolvedResiliencePolicy.retry) { attempt, delayMs ->
+                    buildLoadErrorHandlingPolicy(playbackSource, resolvedResiliencePolicy.retry) { attempt, delayMs ->
                         VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
                     }
                 )
         Log.i(
             TAG,
-            "using decoderBackend=$decoderBackend extensionRendererMode=${decoderBackend.toExtensionRendererMode()}",
+            "using decoderBackend=$decoderBackend extensionRendererMode=${decoderBackend.toExtensionRendererMode()} sourceNormalizerRoute=${normalizedResource?.outputRoute ?: "native"}",
         )
         val exoPlayer =
             ExoPlayer.Builder(appContext, renderersFactory)
@@ -141,7 +148,7 @@ internal class VesperNativeJniBindings(
         val analytics = buildAnalyticsListener()
         exoPlayer.addListener(listener)
         exoPlayer.addAnalyticsListener(analytics)
-        exoPlayer.setMediaItem(buildMediaItem(source))
+        exoPlayer.setMediaItem(buildMediaItem(playbackSource))
         attachedSurface?.let { surface ->
             Log.i(TAG, "reusing attached surface for source=${source.uri}")
             exoPlayer.setVideoSurface(surface)
@@ -160,7 +167,8 @@ internal class VesperNativeJniBindings(
         notifyNativeUpdate()
 
         return NativeBridgeStartup(
-            subtitle = i18n.sourceSubtitle(source),
+            subtitle = normalizedResource?.subtitle ?: i18n.sourceSubtitle(source),
+            pluginDiagnostics = normalizedResource?.diagnostics ?: emptyList(),
         )
     }
 
@@ -190,6 +198,8 @@ internal class VesperNativeJniBindings(
                 runCatching { VesperNativeJni.disposeSession(handle) }
                     .onFailure { error -> Log.w(TAG, "failed to dispose native session", error) }
             }
+            closeCurrentSourceNormalizerResource()
+            sourceNormalizerLoopbackServer.stop()
             sessionHandle = null
         }
         currentTrackCatalogState = VesperTrackCatalog.Empty
@@ -793,6 +803,52 @@ internal class VesperNativeJniBindings(
         }
     }
 
+    private fun openSourceNormalizerResourceForPlayback(
+        source: VesperPlayerSource,
+    ): NativeSourceNormalizerResource? {
+        closeCurrentSourceNormalizerResource()
+        if (!sourceNormalizerConfiguration.shouldOpenNormalizedResource) {
+            return null
+        }
+        VesperNativeLibrary.ensureLoaded()
+        val outputRoot = File(appContext.cacheDir, "vesper-source-normalizer").absolutePath
+        val json =
+            try {
+                VesperNativeJni.openSourceNormalizerResource(
+                    source.uri,
+                    sourceNormalizerConfiguration.modeOrdinal,
+                    sourceNormalizerConfiguration.pluginLibraryPaths.toTypedArray(),
+                    sourceNormalizerConfiguration.runtimeProfile,
+                    outputRoot,
+                    sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized,
+                )
+            } catch (error: Throwable) {
+                if (sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized) {
+                    throw error
+                }
+                Log.w(TAG, "source normalizer normalized resource open failed; using original source", error)
+                null
+            } ?: return null
+
+        val resource = parseSourceNormalizerResource(json, source, sourceNormalizerLoopbackServer) ?: return null
+        currentSourceNormalizerResource = resource
+        Log.i(
+            TAG,
+            "source normalizer resource selected route=${resource.outputRoute} playbackUri=${resource.playbackSource.uri}",
+        )
+        return resource
+    }
+
+    private fun closeCurrentSourceNormalizerResource() {
+        val resource = currentSourceNormalizerResource ?: return
+        currentSourceNormalizerResource = null
+        resource.loopbackToken?.let(sourceNormalizerLoopbackServer::invalidate)
+        runCatching { VesperNativeJni.disposeSourceNormalizerResource(resource.handle) }
+            .onFailure { error ->
+                Log.w(TAG, "failed to dispose source normalizer resource session", error)
+            }
+    }
+
     private fun recordBenchmark(
         eventName: String,
         attributes: Map<String, String> = emptyMap(),
@@ -806,6 +862,94 @@ internal class VesperNativeJniBindings(
         benchmarkRecorder.record(eventName, currentBenchmarkSourceProtocol, enrichedAttributes)
     }
 }
+
+private data class NativeSourceNormalizerResource(
+    val handle: Long,
+    val outputRoute: String,
+    val loopbackToken: String?,
+    val playbackSource: VesperPlayerSource,
+    val diagnostics: List<Map<String, Any?>>,
+) {
+    val subtitle: String
+        get() = "SourceNormalizer $outputRoute"
+}
+
+private val VesperSourceNormalizerConfiguration.shouldOpenNormalizedResource: Boolean
+    get() =
+        mode == VesperSourceNormalizerMode.PreferNormalized ||
+            mode == VesperSourceNormalizerMode.RequireNormalized
+
+private const val DEFAULT_NORMALIZED_READ_BUFFER_BYTES = 4L * 1024L * 1024L
+
+private fun parseSourceNormalizerResource(
+    json: String,
+    originalSource: VesperPlayerSource,
+    loopbackServer: VesperSourceNormalizerLoopbackServer,
+): NativeSourceNormalizerResource? =
+    runCatching {
+        val value = JSONObject(json)
+        val handle = value.optLong("handle", 0L)
+        val route = value.optString("outputRoute").takeIf(String::isNotBlank) ?: return null
+        val primaryPath =
+            value.optString("primaryResourcePath").takeIf(String::isNotBlank) ?: return null
+        if (handle == 0L) {
+            return null
+        }
+        val cachePolicy = value.optJSONObject("cachePolicy")
+        val loopbackHandle =
+            loopbackServer.register(
+                VesperNormalizedResourceRegistration(
+                    outputRoute = route,
+                    primaryResourcePath = primaryPath,
+                    primaryContentType = value.optString("primaryContentType").takeIf(String::isNotBlank),
+                    sessionReadBufferBytes =
+                        cachePolicy?.optLong("sessionReadBufferBytes", DEFAULT_NORMALIZED_READ_BUFFER_BYTES)
+                            ?: DEFAULT_NORMALIZED_READ_BUFFER_BYTES,
+                )
+            )
+        val playbackProtocol =
+            when (route) {
+                "hlsShortWindow" -> VesperPlayerSourceProtocol.Hls
+                "fmp4LocalStream" -> VesperPlayerSourceProtocol.Progressive
+                else -> return null
+            }
+        NativeSourceNormalizerResource(
+            handle = handle,
+            outputRoute = route,
+            loopbackToken = loopbackHandle.token,
+            playbackSource =
+                VesperPlayerSource(
+                    uri = loopbackHandle.playbackUri,
+                    label = originalSource.label,
+                    kind = VesperPlayerSourceKind.Remote,
+                    protocol = playbackProtocol,
+                ),
+            diagnostics = value.optJSONArray("diagnostics")?.let { array ->
+                List(array.length()) { index ->
+                    val diagnostic = jsonObjectToMap(array.getJSONObject(index)).toMutableMap()
+                    diagnostic["outputRoute"] = route
+                    value.optString("selectedProfile").takeIf(String::isNotBlank)?.let {
+                        diagnostic["selectedProfile"] = it
+                    }
+                    value.optString("primaryContentType").takeIf(String::isNotBlank)?.let {
+                        diagnostic["contentType"] = it
+                    }
+                    diagnostic["primaryResource"] = primaryPath
+                    if (value.has("diskBytesUsed")) {
+                        diagnostic["diskBytesUsed"] = value.optLong("diskBytesUsed")
+                    }
+                    value.optJSONObject("cachePolicy")?.let {
+                        diagnostic["cachePolicy"] = jsonObjectToMap(it)
+                    }
+                    diagnostic["playbackUri"] = loopbackHandle.playbackUri
+                    diagnostic["participation"] = "participated"
+                    diagnostic
+                }
+            } ?: emptyList(),
+        )
+    }.onFailure { error ->
+        Log.w(TAG, "failed to parse source normalizer resource open result", error)
+    }.getOrNull()
 
 private fun buildLoadControl(
     bufferingPolicy: NativeBufferingPolicy,

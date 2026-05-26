@@ -714,6 +714,12 @@ private fun PluginDiagnosticRow(
     val pluginName = diagnostic["pluginName"]?.toString().orEmpty()
     val path = diagnostic["path"]?.toString().orEmpty()
     val message = diagnostic["message"]?.toString().orEmpty()
+    val outputRoute = diagnostic["outputRoute"]?.toString().orEmpty()
+    val selectedProfile = diagnostic["selectedProfile"]?.toString().orEmpty()
+    val primaryResource = diagnostic["primaryResource"]?.toString().orEmpty()
+    val diskBytesUsed = (diagnostic["diskBytesUsed"] as? Number)?.toLong()
+    val cachePolicy = diagnostic["cachePolicy"] as? Map<*, *>
+    val cacheLimit = (cachePolicy?.get("sessionDiskSoftCapBytes") as? Number)?.toLong()
     val capability = diagnostic["capability"] as? Map<*, *>
     val sourceNormalizer = capability?.get("sourceNormalizer") as? Map<*, *>
     val profiles = (sourceNormalizer?.get("supportedRuntimeProfiles") as? List<*>)
@@ -747,6 +753,28 @@ private fun PluginDiagnosticRow(
             ),
             style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
         )
+        if (outputRoute.isNotBlank() || selectedProfile.isNotBlank()) {
+            Text(
+                text = stringResource(
+                    R.string.example_plugins_route,
+                    listOf(outputRoute, selectedProfile)
+                        .filter(String::isNotBlank)
+                        .joinToString(" · "),
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (diskBytesUsed != null || cacheLimit != null) {
+            Text(
+                text = stringResource(
+                    R.string.example_plugins_cache,
+                    "${diskBytesUsed?.let(::formatBytes) ?: "-"} / ${cacheLimit?.let(::formatBytes) ?: "-"}",
+                ),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
         if (profiles.isNotBlank()) {
             Text(
                 text = stringResource(R.string.example_plugins_profiles, profiles),
@@ -761,6 +789,14 @@ private fun PluginDiagnosticRow(
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (primaryResource.isNotBlank()) {
+            Text(
+                text = stringResource(R.string.example_plugins_resource, primaryResource),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall.copy(color = palette.body),
             )
         }
         if (path.isNotBlank()) {

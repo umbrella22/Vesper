@@ -118,12 +118,51 @@ impl From<&SourceNormalizerPacketCapabilities> for SourceNormalizerPacketPluginC
     }
 }
 
+/// Compact capability summary for one resource-output source normalizer plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceNormalizerResourcePluginCapabilitySummary {
+    pub supported_runtime_profiles: Vec<String>,
+    pub supported_output_routes: Vec<String>,
+    pub max_level: player_plugin::SourceNormalizerNormalizeLevel,
+    pub content_types: Vec<String>,
+    pub supports_growing_resources: bool,
+    pub supports_range_reads: bool,
+    pub supports_cancel: bool,
+    pub required_capabilities: player_plugin::SourceNormalizerRequiredCapabilities,
+    pub cache_policy: player_plugin::SourceNormalizerResourceCachePolicy,
+    pub max_sessions: Option<u32>,
+}
+
+impl From<&SourceNormalizerResourceCapabilities>
+    for SourceNormalizerResourcePluginCapabilitySummary
+{
+    fn from(capabilities: &SourceNormalizerResourceCapabilities) -> Self {
+        Self {
+            supported_runtime_profiles: capabilities.supported_runtime_profiles.clone(),
+            supported_output_routes: capabilities
+                .supported_output_routes
+                .iter()
+                .map(|route| route.wire_name().to_owned())
+                .collect(),
+            max_level: capabilities.max_level,
+            content_types: capabilities.content_types.clone(),
+            supports_growing_resources: capabilities.supports_growing_resources,
+            supports_range_reads: capabilities.supports_range_reads,
+            supports_cancel: capabilities.supports_cancel,
+            required_capabilities: capabilities.required_capabilities.clone(),
+            cache_policy: capabilities.cache_policy.clone(),
+            max_sessions: capabilities.max_sessions,
+        }
+    }
+}
+
 /// Capability summary for one loaded plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginCapabilitySummary {
     Decoder(DecoderPluginCapabilitySummary),
     FrameProcessor(FrameProcessorPluginCapabilitySummary),
     SourceNormalizerPacket(SourceNormalizerPacketPluginCapabilitySummary),
+    SourceNormalizerResource(SourceNormalizerResourcePluginCapabilitySummary),
 }
 
 impl DecoderPluginCapabilitySummary {
@@ -197,6 +236,15 @@ pub(crate) fn source_normalizer_packet_capability_summary(
 ) -> Option<&SourceNormalizerPacketPluginCapabilitySummary> {
     match record.capability_summary.as_ref() {
         Some(PluginCapabilitySummary::SourceNormalizerPacket(summary)) => Some(summary),
+        _ => None,
+    }
+}
+
+pub(crate) fn source_normalizer_resource_capability_summary(
+    record: &PluginDiagnosticRecord,
+) -> Option<&SourceNormalizerResourcePluginCapabilitySummary> {
+    match record.capability_summary.as_ref() {
+        Some(PluginCapabilitySummary::SourceNormalizerResource(summary)) => Some(summary),
         _ => None,
     }
 }
@@ -284,13 +332,7 @@ impl PluginDiagnosticRecord {
                             FrameProcessorPluginCapabilitySummary::from(&capabilities),
                         )
                     })
-                    .or_else(|| {
-                        source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
-                            PluginCapabilitySummary::SourceNormalizerPacket(
-                                SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
-                            )
-                        })
-                    }),
+                    .or_else(|| source_normalizer_capability_summary(plugin)),
                 message: Some(format!("{} is not a decoder plugin", plugin.plugin_name())),
             },
         }
@@ -344,13 +386,8 @@ impl PluginDiagnosticRecord {
             status: PluginDiagnosticStatus::UnsupportedKind,
             plugin_name: Some(plugin.plugin_name().to_owned()),
             plugin_kind: Some(plugin.plugin_kind()),
-            capability_summary: decoder_summary.or_else(|| {
-                source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
-                    PluginCapabilitySummary::SourceNormalizerPacket(
-                        SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
-                    )
-                })
-            }),
+            capability_summary: decoder_summary
+                .or_else(|| source_normalizer_capability_summary(plugin)),
             message: Some(format!(
                 "{} is not a frame processor plugin",
                 plugin.plugin_name()
@@ -363,6 +400,35 @@ impl PluginDiagnosticRecord {
         plugin: &LoadedDynamicPlugin,
     ) -> Self {
         let path = path.into();
+        if let Some((name, capabilities)) = source_normalizer_resource_summary(plugin) {
+            let capability_summary =
+                SourceNormalizerResourcePluginCapabilitySummary::from(&capabilities);
+            let supported = !capabilities.supported_runtime_profiles.is_empty()
+                && !capabilities.supported_output_routes.is_empty();
+            let status = if supported {
+                PluginDiagnosticStatus::SourceNormalizerSupported
+            } else {
+                PluginDiagnosticStatus::SourceNormalizerUnsupported
+            };
+            let message = if supported {
+                format!("{name} source_normalizer_resource_v3 plugin loaded")
+            } else if capabilities.supported_runtime_profiles.is_empty() {
+                format!("{name} does not advertise resource source normalizer runtime profiles")
+            } else {
+                format!("{name} does not advertise resource source normalizer output routes")
+            };
+            return Self {
+                path,
+                status,
+                plugin_name: Some(name),
+                plugin_kind: Some(plugin.plugin_kind()),
+                capability_summary: Some(PluginCapabilitySummary::SourceNormalizerResource(
+                    capability_summary,
+                )),
+                message: Some(message),
+            };
+        }
+
         if let Some((name, capabilities)) = source_normalizer_packet_summary(plugin) {
             let capability_summary =
                 SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities);
@@ -411,13 +477,7 @@ impl PluginDiagnosticRecord {
                     )
                 })
             })
-            .or_else(|| {
-                source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
-                    PluginCapabilitySummary::SourceNormalizerPacket(
-                        SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
-                    )
-                })
-            });
+            .or_else(|| source_normalizer_capability_summary(plugin));
 
         Self {
             path,
@@ -494,10 +554,44 @@ fn source_normalizer_packet_summary(
         .map(|factory| (factory.name().to_owned(), factory.packet_capabilities()))
 }
 
+fn source_normalizer_resource_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<(String, SourceNormalizerResourceCapabilities)> {
+    plugin
+        .source_normalizer_resource_plugin_factory()
+        .map(|factory| (factory.name().to_owned(), factory.resource_capabilities()))
+}
+
 fn source_normalizer_packet_factory_summary(
     plugin: &LoadedDynamicPlugin,
 ) -> Option<SourceNormalizerPacketCapabilities> {
     plugin
         .source_normalizer_packet_plugin_factory()
         .map(|factory| factory.packet_capabilities())
+}
+
+fn source_normalizer_resource_factory_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<SourceNormalizerResourceCapabilities> {
+    plugin
+        .source_normalizer_resource_plugin_factory()
+        .map(|factory| factory.resource_capabilities())
+}
+
+fn source_normalizer_capability_summary(
+    plugin: &LoadedDynamicPlugin,
+) -> Option<PluginCapabilitySummary> {
+    source_normalizer_resource_factory_summary(plugin)
+        .map(|capabilities| {
+            PluginCapabilitySummary::SourceNormalizerResource(
+                SourceNormalizerResourcePluginCapabilitySummary::from(&capabilities),
+            )
+        })
+        .or_else(|| {
+            source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
+                PluginCapabilitySummary::SourceNormalizerPacket(
+                    SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
+                )
+            })
+        })
 }

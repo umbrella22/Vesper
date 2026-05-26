@@ -83,6 +83,16 @@ internal enum class ExampleSourceNormalizerSetting(
         R.string.example_plugins_source_normalizer_preflight_subtitle,
         VesperSourceNormalizerMode.PreflightOnly,
     ),
+    PreferNormalized(
+        R.string.example_plugins_source_normalizer_prefer,
+        R.string.example_plugins_source_normalizer_prefer_subtitle,
+        VesperSourceNormalizerMode.PreferNormalized,
+    ),
+    RequireNormalized(
+        R.string.example_plugins_source_normalizer_require,
+        R.string.example_plugins_source_normalizer_require_subtitle,
+        VesperSourceNormalizerMode.RequireNormalized,
+    ),
 }
 
 internal data class ExampleHostPalette(

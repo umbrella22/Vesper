@@ -11,7 +11,7 @@ byte_magic = []
 min_confidence = 0.50
 
 [runtime.source-normalizer.base.output_options]
-movflags = "+faststart+frag_keyframe+empty_moov"
+movflags = "+frag_keyframe+empty_moov+default_base_moof"
 
 [runtime.source-normalizer.base.runtime]
 probe_timeout_ms = 30000
@@ -19,6 +19,11 @@ startup_buffer_bytes = 1048576
 startup_buffer_timeout_ms = 5000
 read_idle_timeout_ms = 10000
 session_total_timeout_ms = 40000
+active_session_total_timeout_ms = 0
+session_read_buffer_bytes = 4194304
+manifest_snapshot_bytes = 524288
+session_disk_soft_cap_bytes = 536870912
+global_disk_soft_cap_bytes = 1610612736
 in_session_seek = false
 fallback_profile = "generic-fallback"
 
@@ -59,7 +64,7 @@ byte_magic = ["464c56"]
 min_confidence = 0.75
 
 [runtime.source-normalizer.flv.output_options]
-movflags = "+faststart+frag_keyframe+empty_moov"
+movflags = "+frag_keyframe+empty_moov+default_base_moof"
 
 [runtime.source-normalizer.flv.required_capabilities]
 demuxers = ["flv"]
@@ -117,6 +122,27 @@ protocols = ["file", "pipe", "http", "https", "crypto"]
 tls = "native-or-openssl"
 network = true
 
+[runtime.source-normalizer.hls-nonstandard.output_options]
+hls_time = 3
+hls_list_size = 6
+hls_flags = "delete_segments+append_list+omit_endlist+independent_segments"
+hls_delete_threshold = 2
+hls_segment_type = "fmp4"
+
+[runtime.source-normalizer.hls-nonstandard.runtime]
+probe_timeout_ms = 30000
+startup_buffer_bytes = 1048576
+startup_buffer_timeout_ms = 5000
+read_idle_timeout_ms = 10000
+session_total_timeout_ms = 40000
+active_session_total_timeout_ms = 0
+session_read_buffer_bytes = 4194304
+manifest_snapshot_bytes = 524288
+session_disk_soft_cap_bytes = 536870912
+global_disk_soft_cap_bytes = 1610612736
+in_session_seek = false
+fallback_profile = "generic-fallback"
+
 [runtime.source-normalizer.dash-weird]
 extends = "base"
 priority = 15
@@ -137,6 +163,27 @@ muxers = ["hls", "mp4", "mov"]
 protocols = ["file", "pipe", "http", "https"]
 tls = "native-or-openssl"
 network = true
+
+[runtime.source-normalizer.dash-weird.output_options]
+hls_time = 3
+hls_list_size = 6
+hls_flags = "delete_segments+append_list+omit_endlist+independent_segments"
+hls_delete_threshold = 2
+hls_segment_type = "fmp4"
+
+[runtime.source-normalizer.dash-weird.runtime]
+probe_timeout_ms = 30000
+startup_buffer_bytes = 1048576
+startup_buffer_timeout_ms = 5000
+read_idle_timeout_ms = 10000
+session_total_timeout_ms = 40000
+active_session_total_timeout_ms = 0
+session_read_buffer_bytes = 4194304
+manifest_snapshot_bytes = 524288
+session_disk_soft_cap_bytes = 536870912
+global_disk_soft_cap_bytes = 1610612736
+in_session_seek = false
+fallback_profile = "generic-fallback"
 
 [runtime.source-normalizer.generic-fallback]
 extends = "base"

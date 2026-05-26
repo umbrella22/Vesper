@@ -12,7 +12,9 @@ use player_platform_ios::{
 };
 use player_platform_mobile::{
     MobileFrameProcessorConfiguration, MobileSourceNormalizerConfiguration,
-    mobile_plugin_diagnostics_json,
+    MobileSourceNormalizerRouteDecision, mobile_plugin_diagnostics_json,
+    mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
+    open_mobile_source_normalizer_resource,
 };
 use player_plugin::ProcessorProgress;
 use player_plugin_loader::BenchmarkSinkPluginSession;
@@ -2427,6 +2429,238 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_string_free(value:
 
 /// # Safety
 ///
+/// String and array pointers must be valid for the duration of the call. The returned JSON string
+/// is allocated by Rust and must be released with
+/// `player_ffi_mobile_plugin_diagnostics_string_free`. The returned handle must be disposed with
+/// `player_ffi_source_normalizer_resource_dispose`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
+    source_uri: *const c_char,
+    source_mode: u32,
+    source_plugin_library_paths: *mut *mut c_char,
+    source_plugin_library_paths_len: usize,
+    runtime_profile: *const c_char,
+    output_root: *const c_char,
+    force_normalized: bool,
+    out_handle: *mut u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_handle.is_null() || out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::NullPointer,
+                    "out_handle or out_json was null",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_handle, 0);
+            ptr::write(out_json, ptr::null_mut());
+        }
+
+        let source_uri = match read_optional_c_string(source_uri, "source_uri") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::NullPointer, "source_uri was null"),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let output_root = match read_optional_c_string(output_root, "output_root") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::NullPointer, "output_root was null"),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let plugin_library_paths = match read_string_list(
+            source_plugin_library_paths,
+            source_plugin_library_paths_len,
+            "source_plugin_library_paths",
+        ) {
+            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let runtime_profile = match read_optional_c_string(runtime_profile, "runtime_profile") {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let decision = if force_normalized {
+            MobileSourceNormalizerRouteDecision::Force
+        } else {
+            MobileSourceNormalizerRouteDecision::NativeFirst
+        };
+        let opened = match open_mobile_source_normalizer_resource(
+            &MediaSource::new(source_uri),
+            &MobileSourceNormalizerConfiguration {
+                mode: source_normalizer_mode_from_u32(source_mode),
+                plugin_library_paths,
+                runtime_profile,
+            },
+            output_root,
+            decision,
+        ) {
+            Ok(Some(opened)) => opened,
+            Ok(None) => return PlayerFfiCallStatus::Ok,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let mut sessions = match source_normalizer_resource_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "source normalizer resource registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let handle = sessions.insert(opened);
+        let Some(opened) = sessions.get(handle) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidState,
+                    "source normalizer resource registry insert failed",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        let json = match mobile_source_normalizer_resource_open_json(handle, opened, None) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = sessions.remove(handle);
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        unsafe {
+            ptr::write(out_handle, handle);
+            ptr::write(out_json, into_c_string_ptr(json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// The handle must have been returned by `player_ffi_source_normalizer_resource_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_source_normalizer_resource_poll(
+    handle: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_json, ptr::null_mut());
+        }
+        let mut sessions = match source_normalizer_resource_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "source normalizer resource registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let Some(opened) = sessions.get_mut(handle) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "invalid source normalizer resource handle",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        let status = match opened.session.poll() {
+            Ok(status) => status,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        opened.status = status;
+        let json = match mobile_source_normalizer_resource_status_json(handle, opened, None) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// The handle must have been returned by `player_ffi_source_normalizer_resource_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_source_normalizer_resource_dispose(handle: u64) {
+    ffi_void(|| {
+        if let Ok(mut sessions) = source_normalizer_resource_sessions().lock() {
+            sessions.remove(handle);
+        }
+    });
+}
+
+/// # Safety
+///
 /// Raw pointers and opaque handles passed to this FFI entry point must either be null when
 /// the parameter is documented as optional or point to valid objects allocated by the
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
@@ -2489,6 +2723,8 @@ fn source_normalizer_mode_from_u32(value: u32) -> SourceNormalizerMode {
     match value {
         1 => SourceNormalizerMode::DiagnosticsOnly,
         2 => SourceNormalizerMode::PreflightOnly,
+        3 => SourceNormalizerMode::PreferNormalized,
+        4 => SourceNormalizerMode::RequireNormalized,
         _ => SourceNormalizerMode::Disabled,
     }
 }

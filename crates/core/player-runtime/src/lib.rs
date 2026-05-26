@@ -454,12 +454,17 @@ pub struct PlayerPluginFrameProcessorCapabilitySummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginSourceNormalizerCapabilitySummary {
     pub supported_runtime_profiles: Vec<String>,
+    pub supported_output_routes: Vec<String>,
     pub max_level: String,
     pub media_kinds: Vec<String>,
     pub codecs: Vec<String>,
     pub bitstream_formats: Vec<String>,
     pub supports_seek: bool,
     pub supports_flush: bool,
+    pub supports_growing_resources: bool,
+    pub supports_range_reads: bool,
+    pub supports_cancel: bool,
+    pub content_types: Vec<String>,
     pub required_libraries: Vec<String>,
     pub required_demuxers: Vec<String>,
     pub required_muxers: Vec<String>,
@@ -468,6 +473,10 @@ pub struct PlayerPluginSourceNormalizerCapabilitySummary {
     pub required_bitstream_filters: Vec<String>,
     pub required_tls: Option<String>,
     pub requires_network: bool,
+    pub session_read_buffer_bytes: Option<u64>,
+    pub manifest_snapshot_bytes: Option<u64>,
+    pub session_disk_soft_cap_bytes: Option<u64>,
+    pub global_disk_soft_cap_bytes: Option<u64>,
     pub max_sessions: Option<u32>,
 }
 

@@ -70,6 +70,14 @@ impl<T> HandleRegistry<T> {
             .flatten()
     }
 
+    pub(crate) fn get_mut(&mut self, handle: impl Borrow<i64>) -> Option<&mut T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get_mut(slot_index as usize)?;
+        (slot.generation == generation)
+            .then_some(slot.value.as_mut())
+            .flatten()
+    }
+
     pub(crate) fn remove(&mut self, handle: impl Borrow<i64>) -> Option<T> {
         let (slot_index, generation) = decode_handle(*handle.borrow())?;
         let slot = self.slots.get_mut(slot_index as usize)?;

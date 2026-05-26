@@ -45,7 +45,7 @@ use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
     FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
     PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
-    SourceNormalizerPacketPluginCapabilitySummary,
+    SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,

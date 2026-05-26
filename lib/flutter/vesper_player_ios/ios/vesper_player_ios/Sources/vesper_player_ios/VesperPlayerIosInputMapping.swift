@@ -206,6 +206,10 @@ extension Dictionary where Key == String, Value == Any {
             mode = .diagnosticsOnly
         case "preflightOnly":
             mode = .preflightOnly
+        case "preferNormalized":
+            mode = .preferNormalized
+        case "requireNormalized":
+            mode = .requireNormalized
         default:
             mode = .disabled
         }

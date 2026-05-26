@@ -33,7 +33,7 @@ use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
     FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
     PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
-    SourceNormalizerPacketPluginCapabilitySummary,
+    SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_runtime::{
     FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
@@ -1665,6 +1665,11 @@ fn player_plugin_capability_summary_from_loader(
                 player_source_normalizer_capability_summary_from_loader(summary),
             ))
         }
+        PluginCapabilitySummary::SourceNormalizerResource(summary) => {
+            Some(PlayerPluginCapabilitySummary::SourceNormalizer(
+                player_source_normalizer_resource_capability_summary_from_loader(summary),
+            ))
+        }
     }
 }
 
@@ -1673,6 +1678,7 @@ fn player_source_normalizer_capability_summary_from_loader(
 ) -> player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
     player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
         supported_runtime_profiles: summary.supported_runtime_profiles.clone(),
+        supported_output_routes: vec!["packetStream".to_owned()],
         max_level: format!("{:?}", summary.max_level),
         media_kinds: summary
             .media_kinds
@@ -1687,6 +1693,10 @@ fn player_source_normalizer_capability_summary_from_loader(
             .collect(),
         supports_seek: summary.supports_seek,
         supports_flush: summary.supports_flush,
+        supports_growing_resources: false,
+        supports_range_reads: false,
+        supports_cancel: false,
+        content_types: Vec::new(),
         required_libraries: summary.required_capabilities.libraries.clone(),
         required_demuxers: summary.required_capabilities.demuxers.clone(),
         required_muxers: summary.required_capabilities.muxers.clone(),
@@ -1695,6 +1705,42 @@ fn player_source_normalizer_capability_summary_from_loader(
         required_bitstream_filters: summary.required_capabilities.bitstream_filters.clone(),
         required_tls: summary.required_capabilities.tls.clone(),
         requires_network: summary.required_capabilities.network,
+        session_read_buffer_bytes: None,
+        manifest_snapshot_bytes: None,
+        session_disk_soft_cap_bytes: None,
+        global_disk_soft_cap_bytes: None,
+        max_sessions: summary.max_sessions,
+    }
+}
+
+fn player_source_normalizer_resource_capability_summary_from_loader(
+    summary: &SourceNormalizerResourcePluginCapabilitySummary,
+) -> player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
+    player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
+        supported_runtime_profiles: summary.supported_runtime_profiles.clone(),
+        supported_output_routes: summary.supported_output_routes.clone(),
+        max_level: format!("{:?}", summary.max_level),
+        media_kinds: Vec::new(),
+        codecs: Vec::new(),
+        bitstream_formats: Vec::new(),
+        supports_seek: false,
+        supports_flush: false,
+        supports_growing_resources: summary.supports_growing_resources,
+        supports_range_reads: summary.supports_range_reads,
+        supports_cancel: summary.supports_cancel,
+        content_types: summary.content_types.clone(),
+        required_libraries: summary.required_capabilities.libraries.clone(),
+        required_demuxers: summary.required_capabilities.demuxers.clone(),
+        required_muxers: summary.required_capabilities.muxers.clone(),
+        required_protocols: summary.required_capabilities.protocols.clone(),
+        required_parsers: summary.required_capabilities.parsers.clone(),
+        required_bitstream_filters: summary.required_capabilities.bitstream_filters.clone(),
+        required_tls: summary.required_capabilities.tls.clone(),
+        requires_network: summary.required_capabilities.network,
+        session_read_buffer_bytes: Some(summary.cache_policy.session_read_buffer_bytes),
+        manifest_snapshot_bytes: Some(summary.cache_policy.manifest_snapshot_bytes),
+        session_disk_soft_cap_bytes: Some(summary.cache_policy.session_disk_soft_cap_bytes),
+        global_disk_soft_cap_bytes: Some(summary.cache_policy.global_disk_soft_cap_bytes),
         max_sessions: summary.max_sessions,
     }
 }

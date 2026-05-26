@@ -24,16 +24,21 @@ use player_plugin::{
     SourceNormalizerPacketPluginFactory, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
     SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
     SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
+    SourceNormalizerResourceCapabilities, SourceNormalizerResourcePluginFactory,
+    SourceNormalizerResourceSession, SourceNormalizerResourceSessionConfig,
+    SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionStatus,
     VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
     VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
     VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
-    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
     VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
     VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
     VesperPluginResultStatus, VesperPostDownloadProcessorApi,
-    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerPluginApiV2,
+    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerOpenResourceSessionResult,
+    VesperSourceNormalizerPluginApiV2, VesperSourceNormalizerPluginApiV3,
     VesperSourceNormalizerReadPacketResult,
 };
 use serde::de::DeserializeOwned;
@@ -55,6 +60,7 @@ pub use diagnostics::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
     FrameProcessorPluginCapabilitySummary, PluginCapabilitySummary, PluginDiagnosticRecord,
     PluginDiagnosticStatus, SourceNormalizerPacketPluginCapabilitySummary,
+    SourceNormalizerResourcePluginCapabilitySummary,
 };
 pub use dynamic_api::{LoadedDynamicPlugin, PluginLoadError};
 pub use registry::{PluginRegistry, PluginRegistryReport};
@@ -64,14 +70,16 @@ pub(crate) use decoder::DynamicNativeDecoderPluginFactory;
 pub(crate) use dynamic_api::{
     CheckedBenchmarkSinkApi, CheckedFrameProcessorPluginApi, CheckedNativeDecoderPluginApi,
     CheckedPipelineEventHookApi, CheckedPostDownloadProcessorApi,
-    CheckedSourceNormalizerPacketPluginApi, FreeBytesFn, LibraryHolder, ProcessJsonFn,
-    native_handle_kind_code,
+    CheckedSourceNormalizerPacketPluginApi, CheckedSourceNormalizerResourcePluginApi, FreeBytesFn,
+    LibraryHolder, ProcessJsonFn, native_handle_kind_code,
 };
 pub(crate) use frame_processor::DynamicFrameProcessorPluginFactory;
 pub(crate) use payload::*;
 pub(crate) use pipeline_event::DynamicPipelineEventHook;
 pub(crate) use post_download::DynamicPostDownloadProcessor;
-pub(crate) use source_normalizer::DynamicSourceNormalizerPacketPluginFactory;
+pub(crate) use source_normalizer::{
+    DynamicSourceNormalizerPacketPluginFactory, DynamicSourceNormalizerResourcePluginFactory,
+};
 
 #[cfg(test)]
 mod tests;

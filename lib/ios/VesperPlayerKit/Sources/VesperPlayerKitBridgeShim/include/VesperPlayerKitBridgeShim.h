@@ -685,6 +685,25 @@ bool vesper_mobile_plugin_diagnostics_json(
 
 void vesper_mobile_plugin_diagnostics_string_free(char *value);
 
+bool vesper_source_normalizer_resource_open(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    const char *output_root,
+    bool force_normalized,
+    uint64_t *out_handle,
+    char **out_json,
+    char **out_error_message);
+
+bool vesper_source_normalizer_resource_poll(
+    uint64_t handle,
+    char **out_json,
+    char **out_error_message);
+
+void vesper_source_normalizer_resource_dispose(uint64_t handle);
+
 bool vesper_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,

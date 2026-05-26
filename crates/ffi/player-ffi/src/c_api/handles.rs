@@ -181,13 +181,19 @@ pub(crate) fn destroy_initializer_handle(handle: PlayerFfiInitializerHandle) -> 
     true
 }
 
-pub(crate) fn with_player_ref<R>(handle: PlayerFfiHandle, f: impl FnOnce(&FfiPlayer) -> R) -> Option<R> {
+pub(crate) fn with_player_ref<R>(
+    handle: PlayerFfiHandle,
+    f: impl FnOnce(&FfiPlayer) -> R,
+) -> Option<R> {
     let registry = lock_player_registry();
     let pointer = registry.get(handle.raw).copied()?;
     unsafe { Some(f(&*(pointer as *const FfiPlayer))) }
 }
 
-pub(crate) fn with_player_mut<R>(handle: PlayerFfiHandle, f: impl FnOnce(&mut FfiPlayer) -> R) -> Option<R> {
+pub(crate) fn with_player_mut<R>(
+    handle: PlayerFfiHandle,
+    f: impl FnOnce(&mut FfiPlayer) -> R,
+) -> Option<R> {
     let mut registry = lock_player_registry();
     let pointer = registry.get_mut(handle.raw).copied()?;
     unsafe { Some(f(&mut *(pointer as *mut FfiPlayer))) }
@@ -241,7 +247,9 @@ pub(crate) fn error_mut(error: *mut PlayerFfiError) -> Option<&'static mut Playe
     unsafe { Some(&mut *error) }
 }
 
-pub(crate) fn media_info_mut(media_info: *mut PlayerFfiMediaInfo) -> Option<&'static mut PlayerFfiMediaInfo> {
+pub(crate) fn media_info_mut(
+    media_info: *mut PlayerFfiMediaInfo,
+) -> Option<&'static mut PlayerFfiMediaInfo> {
     if media_info.is_null() {
         return None;
     }
@@ -267,7 +275,9 @@ pub(crate) fn startup_mut(startup: *mut PlayerFfiStartup) -> Option<&'static mut
     unsafe { Some(&mut *startup) }
 }
 
-pub(crate) fn snapshot_mut(snapshot: *mut PlayerFfiSnapshot) -> Option<&'static mut PlayerFfiSnapshot> {
+pub(crate) fn snapshot_mut(
+    snapshot: *mut PlayerFfiSnapshot,
+) -> Option<&'static mut PlayerFfiSnapshot> {
     if snapshot.is_null() {
         return None;
     }
@@ -275,7 +285,9 @@ pub(crate) fn snapshot_mut(snapshot: *mut PlayerFfiSnapshot) -> Option<&'static 
     unsafe { Some(&mut *snapshot) }
 }
 
-pub(crate) fn video_frame_mut(frame: *mut PlayerFfiVideoFrame) -> Option<&'static mut PlayerFfiVideoFrame> {
+pub(crate) fn video_frame_mut(
+    frame: *mut PlayerFfiVideoFrame,
+) -> Option<&'static mut PlayerFfiVideoFrame> {
     if frame.is_null() {
         return None;
     }
@@ -283,7 +295,9 @@ pub(crate) fn video_frame_mut(frame: *mut PlayerFfiVideoFrame) -> Option<&'stati
     unsafe { Some(&mut *frame) }
 }
 
-pub(crate) fn event_list_mut(events: *mut PlayerFfiEventList) -> Option<&'static mut PlayerFfiEventList> {
+pub(crate) fn event_list_mut(
+    events: *mut PlayerFfiEventList,
+) -> Option<&'static mut PlayerFfiEventList> {
     if events.is_null() {
         return None;
     }

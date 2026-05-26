@@ -12,7 +12,8 @@ Use this example as a reference for:
 - Exercising Android external playback through Cast / DLNA and iOS AirPlay
 - SourceNormalizer plugin diagnostics panel on Android and iOS. The example
   defaults to `preflightOnly` and lets you switch among `disabled`,
-  `diagnosticsOnly`, and `preflightOnly` at runtime.
+  `diagnosticsOnly`, `preflightOnly`, `preferNormalized`, and
+  `requireNormalized` at runtime.
 - FrameProcessor diagnostic plugin logging when the optional artifact is
   bundled. The example does not expose a mobile FrameProcessor toggle and does
   not route frames through the plugin.
@@ -78,12 +79,14 @@ FFmpeg runtime libraries are provided by the Android runtime AAR or by the iOS
 `VesperPlayerFfmpegRuntime.framework`; neither runtime is passed as a plugin
 path.
 
-SourceNormalizer mobile v1 is a diagnostics / preflight path. In
-`preflightOnly`, the host probes the selected source and then continues playing
-the original Android or iOS source. A preflight failure is shown in the
-diagnostics panel and does not block playback. FrameProcessor remains debug
-diagnostics only in this example and is never marked as participating in mobile
-playback.
+SourceNormalizer diagnostics and preflight modes do not change playback. In
+`preferNormalized` and `requireNormalized`, the Android and iOS host kits may
+open a disk-backed normalized resource session and hand the resulting fMP4 or
+short-window HLS resource to the platform player through Android loopback HTTP
+or the iOS `vesper-normalized://` resource loader. `preferNormalized` falls
+back to the original source on failure; `requireNormalized` reports a source error.
+FrameProcessor remains debug diagnostics only in this example and is never
+marked as participating in mobile playback.
 
 ## Test
 

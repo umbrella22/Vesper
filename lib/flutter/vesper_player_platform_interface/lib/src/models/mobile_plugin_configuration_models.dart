@@ -4,6 +4,8 @@ enum VesperSourceNormalizerMode {
   disabled,
   diagnosticsOnly,
   preflightOnly,
+  preferNormalized,
+  requireNormalized,
 }
 
 final class VesperSourceNormalizerConfiguration {

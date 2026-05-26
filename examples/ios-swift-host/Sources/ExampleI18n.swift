@@ -146,6 +146,10 @@ enum ExampleI18n {
     static var pluginSourceNormalizerDiagnosticsSubtitle: String { string("example.plugins.source_normalizer.diagnostics_subtitle") }
     static var pluginSourceNormalizerPreflight: String { string("example.plugins.source_normalizer.preflight") }
     static var pluginSourceNormalizerPreflightSubtitle: String { string("example.plugins.source_normalizer.preflight_subtitle") }
+    static var pluginSourceNormalizerPrefer: String { string("example.plugins.source_normalizer.prefer") }
+    static var pluginSourceNormalizerPreferSubtitle: String { string("example.plugins.source_normalizer.prefer_subtitle") }
+    static var pluginSourceNormalizerRequire: String { string("example.plugins.source_normalizer.require") }
+    static var pluginSourceNormalizerRequireSubtitle: String { string("example.plugins.source_normalizer.require_subtitle") }
     static var pluginSourceNormalizerGroup: String { string("example.plugins.source_normalizer.group") }
     static var pluginFrameProcessorGroup: String { string("example.plugins.frame_processor.group") }
     static var pluginSourcePath: String { string("example.plugins.source_path") }
@@ -159,6 +163,15 @@ enum ExampleI18n {
     }
     static func pluginProfiles(_ value: String) -> String {
         string("example.plugins.profiles", value)
+    }
+    static func pluginRoute(_ value: String) -> String {
+        string("example.plugins.route", value)
+    }
+    static func pluginCache(_ value: String) -> String {
+        string("example.plugins.cache", value)
+    }
+    static func pluginResource(_ value: String) -> String {
+        string("example.plugins.resource", value)
     }
 
     static var preparingSelectedVideo: String { string("example.message.preparing_selected_video") }

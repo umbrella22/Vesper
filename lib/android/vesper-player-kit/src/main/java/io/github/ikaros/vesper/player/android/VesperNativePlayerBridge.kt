@@ -102,6 +102,9 @@ internal class VesperNativePlayerBridge(
         advanceNativeUpdateEpoch()
         runCatching { bindings.initialize(source, currentResiliencePolicy, trackPreferencePolicy) }
             .onSuccess {
+                if (it.pluginDiagnostics.isNotEmpty()) {
+                    currentPluginDiagnostics = it.pluginDiagnostics
+                }
                 recordBenchmark("initialize_completed")
                 hasInitializedSource = true
                 Log.i(

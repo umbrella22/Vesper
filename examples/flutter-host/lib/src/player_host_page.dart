@@ -328,8 +328,9 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     if (source.kind == VesperPlayerSourceKind.remote) {
       _remoteUrlController.text = source.uri;
     }
-    if (_sourceNormalizerSetting ==
-        ExampleSourceNormalizerSetting.preflightOnly) {
+    if (_sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled &&
+        _sourceNormalizerSetting !=
+            ExampleSourceNormalizerSetting.diagnosticsOnly) {
       await _rebuildControllerForSource(
         source,
         shouldResumePlayback:

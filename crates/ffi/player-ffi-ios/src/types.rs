@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use std::ffi::{c_char, c_void};
+use std::path::PathBuf;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -665,4 +665,3 @@ pub struct PlayerFfiDownloadEventList {
     pub events: *mut PlayerFfiDownloadEvent,
     pub len: usize,
 }
-

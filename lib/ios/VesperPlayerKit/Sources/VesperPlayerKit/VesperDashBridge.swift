@@ -32,8 +32,7 @@ private struct VesperDashCachedSegmentFile {
 }
 
 private enum VesperDashResourceResponse {
-    case data(Data, contentType: String)
-    case segment(VesperDashSegmentPayload)
+    case resource(VesperLocalResourceBody)
     case redirect(URL)
 }
 
@@ -66,6 +65,22 @@ enum VesperDashSegmentPayload {
         return false
     }
 
+    var localResourceBody: VesperLocalResourceBody {
+        switch self {
+        case let .data(data, contentType):
+            .data(data, contentType: avResourceContentType(forSegmentContentType: contentType))
+        case let .file(url, offset, size, removeAfterServing, contentType):
+            .file(
+                url: url,
+                offset: offset,
+                length: size,
+                contentType: avResourceContentType(forSegmentContentType: contentType),
+                removeAfterServing: removeAfterServing,
+                growingPolicy: nil
+            )
+        }
+    }
+
     func readData() throws -> Data {
         switch self {
         case let .data(data, _):
@@ -93,6 +108,17 @@ enum VesperDashSegmentPayload {
             try? FileManager.default.removeItem(at: url)
         }
     }
+}
+
+private func avResourceContentType(forSegmentContentType contentType: String) -> String {
+    let normalized = contentType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if normalized.contains("vtt") {
+        return "public.webvtt"
+    }
+    if normalized.hasPrefix("public.") {
+        return contentType
+    }
+    return "public.mpeg-4"
 }
 
 private struct VesperDashSegmentPayloadResult {
@@ -166,14 +192,18 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                 let response: VesperDashResourceResponse
                 switch route {
                 case .master:
-                    response = .data(
-                        try await session.masterPlaylistData(),
-                        contentType: "public.m3u-playlist"
+                    response = .resource(
+                        .data(
+                            try await session.masterPlaylistData(),
+                            contentType: "public.m3u-playlist"
+                        )
                     )
                 case let .media(renditionId):
-                    response = .data(
-                        try await session.mediaPlaylistData(renditionId: renditionId),
-                        contentType: "public.m3u-playlist"
+                    response = .resource(
+                        .data(
+                            try await session.mediaPlaylistData(renditionId: renditionId),
+                            contentType: "public.m3u-playlist"
+                        )
                     )
                 case let .segment(renditionId, segment):
                     switch segment {
@@ -192,13 +222,13 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                         )
 #endif
                         // contentType must be a UTI, not a MIME type. fMP4 / ISO BMFF maps to public.mpeg-4.
-                        response = .data(initData, contentType: "public.mpeg-4")
+                        response = .resource(.data(initData, contentType: "public.mpeg-4"))
                     case .media:
-                        response = .segment(
+                        response = .resource(
                             try await session.segmentResourcePayload(
                                 renditionId: renditionId,
                                 segment: segment
-                            )
+                            ).localResourceBody
                         )
                     }
                 }
@@ -229,36 +259,8 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
             self.tasks.removeValue(forKey: requestId)
 
             switch response {
-            case let .data(data, contentType):
-                loadingRequest.contentInformationRequest?.contentType = contentType
-                loadingRequest.contentInformationRequest?.contentLength = Int64(data.count)
-                loadingRequest.contentInformationRequest?.isByteRangeAccessSupported = true
-                if let dataRequest = loadingRequest.dataRequest {
-                    do {
-                        try self.respond(to: dataRequest, with: data)
-                    } catch {
-                        loadingRequest.finishLoading(with: error)
-                        return
-                    }
-                }
-                loadingRequest.finishLoading()
-            case let .segment(payload):
-                defer { payload.cleanupIfTemporary() }
-                do {
-                    loadingRequest.contentInformationRequest?.contentType = self.avContentType(
-                        forSegmentContentType: payload.contentType
-                    )
-                    loadingRequest.contentInformationRequest?.contentLength = try self.checkedContentLength(
-                        payload.size
-                    )
-                    loadingRequest.contentInformationRequest?.isByteRangeAccessSupported = true
-                    if let dataRequest = loadingRequest.dataRequest {
-                        try self.respond(to: dataRequest, with: payload)
-                    }
-                    loadingRequest.finishLoading()
-                } catch {
-                    loadingRequest.finishLoading(with: error)
-                }
+            case let .resource(body):
+                VesperLocalResourceResponder.finish(loadingRequest, body: body)
             case let .redirect(url):
                 var request = URLRequest(url: url)
                 request.cachePolicy = .returnCacheDataElseLoad
@@ -286,100 +288,8 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
     ) {
         resourceLoadingQueue.async { [weak self] in
             self?.tasks.removeValue(forKey: requestId)
-            loadingRequest.finishLoading(with: error)
+            VesperLocalResourceResponder.finish(loadingRequest, error: error)
         }
-    }
-
-    private func respond(
-        to dataRequest: AVAssetResourceLoadingDataRequest,
-        with data: Data
-    ) throws {
-        let requestedOffset = dataRequest.currentOffset != 0
-            ? dataRequest.currentOffset
-            : dataRequest.requestedOffset
-        guard requestedOffset >= 0 else {
-            throw VesperDashBridgeError.invalidManifest("negative playlist byte offset requested")
-        }
-        let offset = Int(requestedOffset)
-        guard offset <= data.count else {
-            throw VesperDashBridgeError.invalidManifest("playlist byte offset exceeds response size")
-        }
-        let remaining = data.count - offset
-        let requestedLength = dataRequest.requestedLength > 0
-            ? min(dataRequest.requestedLength, remaining)
-            : remaining
-        guard requestedLength >= 0 else {
-            throw VesperDashBridgeError.invalidManifest("negative playlist byte length requested")
-        }
-        dataRequest.respond(with: data.subdata(in: offset..<(offset + requestedLength)))
-    }
-
-    private func respond(
-        to dataRequest: AVAssetResourceLoadingDataRequest,
-        with payload: VesperDashSegmentPayload
-    ) throws {
-        let requestedOffset = dataRequest.currentOffset != 0
-            ? dataRequest.currentOffset
-            : dataRequest.requestedOffset
-        guard requestedOffset >= 0 else {
-            throw VesperDashBridgeError.invalidManifest("negative segment byte offset requested")
-        }
-        let offset = UInt64(requestedOffset)
-        guard offset <= payload.size else {
-            throw VesperDashBridgeError.invalidManifest("segment byte offset exceeds response size")
-        }
-        let remaining = payload.size - offset
-        let requestedLength = dataRequest.requestedLength > 0
-            ? min(UInt64(dataRequest.requestedLength), remaining)
-            : remaining
-        guard requestedLength > 0 else {
-            return
-        }
-
-        switch payload {
-        case let .data(data, _):
-            let startIndex = try checkedInt(offset, field: "segment response offset")
-            let length = try checkedInt(requestedLength, field: "segment response length")
-            dataRequest.respond(with: data.subdata(in: startIndex..<(startIndex + length)))
-        case let .file(url, fileOffset, _, _, _):
-            try respond(to: dataRequest, withFileAt: url, offset: fileOffset + offset, length: requestedLength)
-        }
-    }
-
-    private func respond(
-        to dataRequest: AVAssetResourceLoadingDataRequest,
-        withFileAt url: URL,
-        offset: UInt64,
-        length: UInt64
-    ) throws {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { closeFileHandle(handle, context: "segment response") }
-        try handle.seek(toOffset: offset)
-        var remaining = length
-        while remaining > 0 {
-            let count = min(try checkedInt(remaining, field: "segment response remaining"), 256 * 1024)
-            let data = try handle.read(upToCount: count) ?? Data()
-            guard !data.isEmpty else {
-                throw VesperDashBridgeError.network("segment file is shorter than requested")
-            }
-            dataRequest.respond(with: data)
-            remaining = remaining.saturatingSubtract(UInt64(data.count))
-        }
-    }
-
-    private func checkedContentLength(_ value: UInt64) throws -> Int64 {
-        guard value <= UInt64(Int64.max) else {
-            throw VesperDashBridgeError.network("segment response exceeds Int64.max")
-        }
-        return Int64(value)
-    }
-
-    private func avContentType(forSegmentContentType contentType: String) -> String {
-        let normalized = contentType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized.contains("vtt") {
-            return "public.webvtt"
-        }
-        return "public.mpeg-4"
     }
 }
 
@@ -477,7 +387,7 @@ actor VesperDashSession {
         var components = URLComponents()
         components.scheme = scheme
         components.host = host
-        components.path = "/" + pathComponents
+        components.percentEncodedPath = "/" + pathComponents
             .map { $0.addingPercentEncoding(withAllowedCharacters: dashPathComponentAllowedCharacters) ?? $0 }
             .joined(separator: "/")
         if let url = components.url {

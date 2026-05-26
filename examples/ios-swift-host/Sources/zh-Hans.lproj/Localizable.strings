@@ -104,13 +104,17 @@
 "example.resilience.cache_value" = "%@ · 内存 %@ / 磁盘 %@";
 
 "example.plugins.title" = "插件诊断";
-"example.plugins.subtitle" = "SourceNormalizer 可切换为诊断或 source preflight。移动端播放仍使用原始 source；FrameProcessor 仅记录 debug 能力诊断。";
+"example.plugins.subtitle" = "SourceNormalizer 可从 diagnostics/preflight 切到 normalized playback 路线；FrameProcessor 仅记录 debug 能力诊断。";
 "example.plugins.source_normalizer.disabled" = "SourceNormalizer 关闭";
 "example.plugins.source_normalizer.disabled_subtitle" = "不会为播放探测加载 SourceNormalizer 插件。";
 "example.plugins.source_normalizer.diagnostics" = "Diagnostics";
 "example.plugins.source_normalizer.diagnostics_subtitle" = "只加载 SourceNormalizer 插件并上报 capability，不打开 packet session。";
 "example.plugins.source_normalizer.preflight" = "Preflight";
 "example.plugins.source_normalizer.preflight_subtitle" = "加载 SourceNormalizer 插件，为当前 source 打开并关闭 packet session，然后继续播放原始 source。";
+"example.plugins.source_normalizer.prefer" = "Prefer normalized";
+"example.plugins.source_normalizer.prefer_subtitle" = "尝试使用 disk-backed fMP4/HLS normalized playback，失败时回退原始 source。";
+"example.plugins.source_normalizer.require" = "Require normalized";
+"example.plugins.source_normalizer.require_subtitle" = "要求使用 disk-backed normalized playback，失败时直接展示错误。";
 "example.plugins.source_normalizer.group" = "SourceNormalizer";
 "example.plugins.frame_processor.group" = "FrameProcessor Debug";
 "example.plugins.source_path" = "source";
@@ -121,6 +125,9 @@
 "example.plugins.unknown_record" = "插件诊断";
 "example.plugins.participation" = "participation：%@";
 "example.plugins.profiles" = "profiles：%@";
+"example.plugins.route" = "route：%@";
+"example.plugins.cache" = "cache：%@";
+"example.plugins.resource" = "resource：%@";
 
 "example.message.preparing_selected_video" = "正在准备所选视频...";
 "example.message.preparing_video_from_photos" = "正在准备来自相册的视频...";

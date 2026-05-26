@@ -7,6 +7,8 @@ enum class VesperSourceNormalizerMode {
     Disabled,
     DiagnosticsOnly,
     PreflightOnly,
+    PreferNormalized,
+    RequireNormalized,
 }
 
 data class VesperSourceNormalizerConfiguration(
@@ -22,6 +24,8 @@ data class VesperSourceNormalizerConfiguration(
             VesperSourceNormalizerMode.Disabled -> 0
             VesperSourceNormalizerMode.DiagnosticsOnly -> 1
             VesperSourceNormalizerMode.PreflightOnly -> 2
+            VesperSourceNormalizerMode.PreferNormalized -> 3
+            VesperSourceNormalizerMode.RequireNormalized -> 4
         }
 }
 
@@ -56,7 +60,7 @@ internal fun parsePluginDiagnosticsJson(json: String?): List<Map<String, Any?>> 
     }.getOrDefault(emptyList())
 }
 
-private fun jsonObjectToMap(value: JSONObject): Map<String, Any?> {
+internal fun jsonObjectToMap(value: JSONObject): Map<String, Any?> {
     val result = linkedMapOf<String, Any?>()
     val keys = value.keys()
     while (keys.hasNext()) {

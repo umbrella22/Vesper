@@ -20,7 +20,9 @@ use jni::sys::{jboolean, jfloat, jint, jlong, jobject, jobjectArray, jstring};
 use player_platform_android::AndroidExoPlaybackSnapshot;
 use player_platform_mobile::{
     MobileFrameProcessorConfiguration, MobileSourceNormalizerConfiguration,
-    mobile_plugin_diagnostics_json,
+    MobileSourceNormalizerRouteDecision, mobile_plugin_diagnostics_json,
+    mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
+    open_mobile_source_normalizer_resource,
 };
 use player_runtime::{FrameProcessorMode, PlayerError, PlayerRuntimeCommand, SourceNormalizerMode};
 
@@ -44,9 +46,10 @@ use parsers::{
 };
 pub(crate) use sessions::resolve_preload_budget_with_runtime;
 use sessions::{
-    dispose_benchmark_sink_session, new_benchmark_sink_session, new_session,
+    dispose_benchmark_sink_session, dispose_source_normalizer_resource_session,
+    new_benchmark_sink_session, new_session, new_source_normalizer_resource_session,
     resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime, sessions,
-    with_benchmark_sink_session, with_session_mut,
+    with_benchmark_sink_session, with_session_mut, with_source_normalizer_resource_session_mut,
 };
 
 pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
@@ -163,6 +166,112 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_openSourceNormalizerResource(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    source_uri: JString<'_>,
+    source_mode_ordinal: jint,
+    source_plugin_library_paths: JObjectArray<'_>,
+    runtime_profile: JObject<'_>,
+    output_root: JString<'_>,
+    force_normalized: jboolean,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let source_uri = source_uri.try_to_string(env)?;
+                let plugin_library_paths = string_array_to_vec(env, source_plugin_library_paths)?
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect();
+                let runtime_profile = string_from_java_object(env, runtime_profile)?;
+                let output_root = output_root.try_to_string(env)?;
+                let decision = if force_normalized {
+                    MobileSourceNormalizerRouteDecision::Force
+                } else {
+                    MobileSourceNormalizerRouteDecision::NativeFirst
+                };
+                let opened = match open_mobile_source_normalizer_resource(
+                    &player_model::MediaSource::new(source_uri),
+                    &MobileSourceNormalizerConfiguration {
+                        mode: source_normalizer_mode_from_ordinal(source_mode_ordinal),
+                        plugin_library_paths,
+                        runtime_profile,
+                    },
+                    output_root,
+                    decision,
+                ) {
+                    Ok(Some(opened)) => opened,
+                    Ok(None) => return Ok(std::ptr::null_mut()),
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(message),
+                        )?;
+                        return Ok(std::ptr::null_mut());
+                    }
+                };
+                let handle = match new_source_normalizer_resource_session(opened) {
+                    Ok(handle) => handle,
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(message),
+                        )?;
+                        return Ok(std::ptr::null_mut());
+                    }
+                };
+                let Some(json) =
+                    with_source_normalizer_resource_session_mut(env, handle, |opened| {
+                        mobile_source_normalizer_resource_open_json(handle as u64, opened, None)
+                            .map_err(|error| error.to_string())
+                    })
+                else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_pollSourceNormalizerResource(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(json) =
+                    with_source_normalizer_resource_session_mut(env, handle, |opened| {
+                        let status = opened.session.poll().map_err(|error| error.to_string())?;
+                        opened.status = status;
+                        mobile_source_normalizer_resource_status_json(handle as u64, opened, None)
+                            .map_err(|error| error.to_string())
+                    })
+                else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeSourceNormalizerResource(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    run_jni_entry(&mut unowned_env, |_unowned_env| {
+        dispose_source_normalizer_resource_session(handle);
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeBenchmarkSinkSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -177,6 +286,8 @@ fn source_normalizer_mode_from_ordinal(ordinal: jint) -> SourceNormalizerMode {
     match ordinal {
         1 => SourceNormalizerMode::DiagnosticsOnly,
         2 => SourceNormalizerMode::PreflightOnly,
+        3 => SourceNormalizerMode::PreferNormalized,
+        4 => SourceNormalizerMode::RequireNormalized,
         _ => SourceNormalizerMode::Disabled,
     }
 }

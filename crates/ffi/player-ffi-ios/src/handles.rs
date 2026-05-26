@@ -4,6 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use player_platform_ios::{
     IosDownloadBridgeSession, IosPlaylistBridgeSession, IosPreloadBridgeSession,
 };
+use player_platform_mobile::MobileSourceNormalizerResourceOpen;
 use player_plugin_loader::BenchmarkSinkPluginSession;
 
 #[derive(Debug)]
@@ -100,6 +101,9 @@ static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaylistBridgeSession
     OnceLock::new();
 static BENCHMARK_SESSIONS: OnceLock<Mutex<HandleRegistry<BenchmarkSinkPluginSession>>> =
     OnceLock::new();
+static SOURCE_NORMALIZER_RESOURCE_SESSIONS: OnceLock<
+    Mutex<HandleRegistry<MobileSourceNormalizerResourceOpen>>,
+> = OnceLock::new();
 
 pub(crate) fn preload_sessions() -> &'static Mutex<HandleRegistry<IosPreloadBridgeSession>> {
     PRELOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
@@ -115,4 +119,9 @@ pub(crate) fn playlist_sessions() -> &'static Mutex<HandleRegistry<IosPlaylistBr
 
 pub(crate) fn benchmark_sessions() -> &'static Mutex<HandleRegistry<BenchmarkSinkPluginSession>> {
     BENCHMARK_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
+}
+
+pub(crate) fn source_normalizer_resource_sessions()
+-> &'static Mutex<HandleRegistry<MobileSourceNormalizerResourceOpen>> {
+    SOURCE_NORMALIZER_RESOURCE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }

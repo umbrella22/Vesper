@@ -269,9 +269,7 @@ fn dynamic_native_decoder_plugin_receives_native_device_context() {
             media_kind: DecoderMediaKind::Video,
             prefer_hardware: true,
             require_cpu_output: false,
-            native_device_context: Some(DecoderNativeDeviceContext::D3D11Device {
-                device_ptr: 42,
-            }),
+            native_device_context: Some(DecoderNativeDeviceContext::D3D11Device { device_ptr: 42 }),
             ..DecoderSessionConfig::default()
         })
         .expect("open native decoder session");

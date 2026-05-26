@@ -120,6 +120,10 @@ pub(crate) fn free_plugin_source_normalizer_capability(
         &mut capability.supported_runtime_profiles,
         capability.supported_runtime_profiles_len,
     );
+    free_c_string_array(
+        &mut capability.supported_output_routes,
+        capability.supported_output_routes_len,
+    );
     free_c_string(&mut capability.max_level);
     free_c_string_array(&mut capability.media_kinds, capability.media_kinds_len);
     free_c_string_array(&mut capability.codecs, capability.codecs_len);
@@ -127,6 +131,7 @@ pub(crate) fn free_plugin_source_normalizer_capability(
         &mut capability.bitstream_formats,
         capability.bitstream_formats_len,
     );
+    free_c_string_array(&mut capability.content_types, capability.content_types_len);
     free_c_string_array(
         &mut capability.required_libraries,
         capability.required_libraries_len,

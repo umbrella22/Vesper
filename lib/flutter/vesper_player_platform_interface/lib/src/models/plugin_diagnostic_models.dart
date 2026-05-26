@@ -178,12 +178,17 @@ final class VesperPluginFrameProcessorCapabilitySummary {
 final class VesperPluginSourceNormalizerCapabilitySummary {
   const VesperPluginSourceNormalizerCapabilitySummary({
     this.supportedRuntimeProfiles = const <String>[],
+    this.supportedOutputRoutes = const <String>[],
     this.maxLevel = '',
     this.mediaKinds = const <String>[],
     this.codecs = const <String>[],
     this.bitstreamFormats = const <String>[],
     this.supportsSeek = false,
     this.supportsFlush = false,
+    this.supportsGrowingResources = false,
+    this.supportsRangeReads = false,
+    this.supportsCancel = false,
+    this.contentTypes = const <String>[],
     this.requiredLibraries = const <String>[],
     this.requiredDemuxers = const <String>[],
     this.requiredMuxers = const <String>[],
@@ -192,6 +197,10 @@ final class VesperPluginSourceNormalizerCapabilitySummary {
     this.requiredBitstreamFilters = const <String>[],
     this.requiredTls,
     this.requiresNetwork = false,
+    this.sessionReadBufferBytes,
+    this.manifestSnapshotBytes,
+    this.sessionDiskSoftCapBytes,
+    this.globalDiskSoftCapBytes,
     this.maxSessions,
   });
 
@@ -201,12 +210,18 @@ final class VesperPluginSourceNormalizerCapabilitySummary {
     return VesperPluginSourceNormalizerCapabilitySummary(
       supportedRuntimeProfiles:
           _decodeStringList(map['supportedRuntimeProfiles']),
+      supportedOutputRoutes: _decodeStringList(map['supportedOutputRoutes']),
       maxLevel: map['maxLevel'] as String? ?? '',
       mediaKinds: _decodeStringList(map['mediaKinds']),
       codecs: _decodeStringList(map['codecs']),
       bitstreamFormats: _decodeStringList(map['bitstreamFormats']),
       supportsSeek: _decodeBool(map, 'supportsSeek'),
       supportsFlush: _decodeBool(map, 'supportsFlush'),
+      supportsGrowingResources:
+          _decodeBool(map, 'supportsGrowingResources'),
+      supportsRangeReads: _decodeBool(map, 'supportsRangeReads'),
+      supportsCancel: _decodeBool(map, 'supportsCancel'),
+      contentTypes: _decodeStringList(map['contentTypes']),
       requiredLibraries: _decodeStringList(map['requiredLibraries']),
       requiredDemuxers: _decodeStringList(map['requiredDemuxers']),
       requiredMuxers: _decodeStringList(map['requiredMuxers']),
@@ -216,17 +231,26 @@ final class VesperPluginSourceNormalizerCapabilitySummary {
           _decodeStringList(map['requiredBitstreamFilters']),
       requiredTls: map['requiredTls'] as String?,
       requiresNetwork: _decodeBool(map, 'requiresNetwork'),
+      sessionReadBufferBytes: _decodeInt(map, 'sessionReadBufferBytes'),
+      manifestSnapshotBytes: _decodeInt(map, 'manifestSnapshotBytes'),
+      sessionDiskSoftCapBytes: _decodeInt(map, 'sessionDiskSoftCapBytes'),
+      globalDiskSoftCapBytes: _decodeInt(map, 'globalDiskSoftCapBytes'),
       maxSessions: _decodeInt(map, 'maxSessions'),
     );
   }
 
   final List<String> supportedRuntimeProfiles;
+  final List<String> supportedOutputRoutes;
   final String maxLevel;
   final List<String> mediaKinds;
   final List<String> codecs;
   final List<String> bitstreamFormats;
   final bool supportsSeek;
   final bool supportsFlush;
+  final bool supportsGrowingResources;
+  final bool supportsRangeReads;
+  final bool supportsCancel;
+  final List<String> contentTypes;
   final List<String> requiredLibraries;
   final List<String> requiredDemuxers;
   final List<String> requiredMuxers;
@@ -235,17 +259,26 @@ final class VesperPluginSourceNormalizerCapabilitySummary {
   final List<String> requiredBitstreamFilters;
   final String? requiredTls;
   final bool requiresNetwork;
+  final int? sessionReadBufferBytes;
+  final int? manifestSnapshotBytes;
+  final int? sessionDiskSoftCapBytes;
+  final int? globalDiskSoftCapBytes;
   final int? maxSessions;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'supportedRuntimeProfiles': supportedRuntimeProfiles,
+      'supportedOutputRoutes': supportedOutputRoutes,
       'maxLevel': maxLevel,
       'mediaKinds': mediaKinds,
       'codecs': codecs,
       'bitstreamFormats': bitstreamFormats,
       'supportsSeek': supportsSeek,
       'supportsFlush': supportsFlush,
+      'supportsGrowingResources': supportsGrowingResources,
+      'supportsRangeReads': supportsRangeReads,
+      'supportsCancel': supportsCancel,
+      'contentTypes': contentTypes,
       'requiredLibraries': requiredLibraries,
       'requiredDemuxers': requiredDemuxers,
       'requiredMuxers': requiredMuxers,
@@ -254,6 +287,14 @@ final class VesperPluginSourceNormalizerCapabilitySummary {
       'requiredBitstreamFilters': requiredBitstreamFilters,
       if (requiredTls != null) 'requiredTls': requiredTls,
       'requiresNetwork': requiresNetwork,
+      if (sessionReadBufferBytes != null)
+        'sessionReadBufferBytes': sessionReadBufferBytes,
+      if (manifestSnapshotBytes != null)
+        'manifestSnapshotBytes': manifestSnapshotBytes,
+      if (sessionDiskSoftCapBytes != null)
+        'sessionDiskSoftCapBytes': sessionDiskSoftCapBytes,
+      if (globalDiskSoftCapBytes != null)
+        'globalDiskSoftCapBytes': globalDiskSoftCapBytes,
       if (maxSessions != null) 'maxSessions': maxSessions,
     };
   }
@@ -327,10 +368,20 @@ final class VesperPluginDiagnostic {
     this.message,
     this.capability,
     this.participation = VesperPluginParticipation.unknown,
+    this.extra = const <String, Object?>{},
   });
 
   factory VesperPluginDiagnostic.fromMap(Map<Object?, Object?> map) {
     final rawCapability = _rawMap(map['capability']);
+    final knownKeys = <Object?>{
+      'path',
+      'pluginName',
+      'pluginKind',
+      'status',
+      'message',
+      'capability',
+      'participation',
+    };
     return VesperPluginDiagnostic(
       path: map['path'] as String? ?? '',
       pluginName: map['pluginName'] as String?,
@@ -349,6 +400,11 @@ final class VesperPluginDiagnostic {
         map['participation'],
         VesperPluginParticipation.unknown,
       ),
+      extra: <String, Object?>{
+        for (final entry in map.entries)
+          if (entry.key is String && !knownKeys.contains(entry.key))
+            entry.key! as String: entry.value,
+      },
     );
   }
 
@@ -359,6 +415,7 @@ final class VesperPluginDiagnostic {
   final String? message;
   final VesperPluginCapability? capability;
   final VesperPluginParticipation participation;
+  final Map<String, Object?> extra;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -370,6 +427,7 @@ final class VesperPluginDiagnostic {
       if (capability != null) 'capability': capability!.toMap(),
       if (participation != VesperPluginParticipation.unknown)
         'participation': participation.name,
+      ...extra,
     };
   }
 }

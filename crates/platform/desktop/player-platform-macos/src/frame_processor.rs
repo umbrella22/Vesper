@@ -517,7 +517,10 @@ impl MacosFrameProcessorChain {
         decision
     }
 
-    pub(crate) fn release_processor_outputs(&mut self, mut outputs: Vec<ProcessorOwnedNativeFrame>) {
+    pub(crate) fn release_processor_outputs(
+        &mut self,
+        mut outputs: Vec<ProcessorOwnedNativeFrame>,
+    ) {
         while let Some(output) = outputs.pop() {
             if let Some(node) = self
                 .processors
@@ -606,7 +609,10 @@ pub(crate) struct FrameProcessorWarningDetails {
 }
 
 impl FrameProcessorWarningDetails {
-    pub(crate) fn from_output_timing(output: &FrameProcessorOutputFrame, deadline: Duration) -> Self {
+    pub(crate) fn from_output_timing(
+        output: &FrameProcessorOutputFrame,
+        deadline: Duration,
+    ) -> Self {
         let deadline_us = deadline.as_micros() as u64;
         Self {
             output_handle_kind: Some(format!("{:?}", output.frame.metadata.handle_kind)),

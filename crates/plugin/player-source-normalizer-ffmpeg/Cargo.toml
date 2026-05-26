@@ -14,3 +14,4 @@ player-plugin = { path = "../player-plugin" }
 player-source-normalizer = { path = "../../core/player-source-normalizer" }
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true

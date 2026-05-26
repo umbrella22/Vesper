@@ -19,9 +19,33 @@ impl Drop for DynamicSourceNormalizerPacketPluginFactoryInner {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct DynamicSourceNormalizerResourcePluginFactoryInner {
+    #[allow(dead_code)]
+    library: Option<Arc<LibraryHolder>>,
+    name: String,
+    api: CheckedSourceNormalizerResourcePluginApi,
+    capabilities: SourceNormalizerResourceCapabilities,
+}
+
+impl Drop for DynamicSourceNormalizerResourcePluginFactoryInner {
+    fn drop(&mut self) {
+        if let Some(destroy) = self.api.destroy {
+            // SAFETY: `destroy` and `context` come from the validated plugin ABI
+            // table and are only invoked once when this wrapper is dropped.
+            unsafe { destroy(self.api.context) };
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DynamicSourceNormalizerPacketPluginFactory {
     inner: Arc<DynamicSourceNormalizerPacketPluginFactoryInner>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DynamicSourceNormalizerResourcePluginFactory {
+    inner: Arc<DynamicSourceNormalizerResourcePluginFactoryInner>,
 }
 
 impl DynamicSourceNormalizerPacketPluginFactory {
@@ -54,6 +78,45 @@ impl DynamicSourceNormalizerPacketPluginFactory {
 
         Ok(Self {
             inner: Arc::new(DynamicSourceNormalizerPacketPluginFactoryInner {
+                library,
+                name,
+                api,
+                capabilities,
+            }),
+        })
+    }
+}
+
+impl DynamicSourceNormalizerResourcePluginFactory {
+    pub(crate) fn new(
+        library: Option<Arc<LibraryHolder>>,
+        fallback_name: String,
+        api: CheckedSourceNormalizerResourcePluginApi,
+    ) -> Result<Self, PluginLoadError> {
+        let name = if let Some(name_fn) = api.name {
+            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
+            // the returned pointer is interpreted immediately as an optional
+            // NUL-terminated UTF-8 string.
+            let name_ptr = unsafe { name_fn(api.context) };
+            if name_ptr.is_null() {
+                fallback_name
+            } else {
+                c_string_field(name_ptr, "source_normalizer_resource_name")?
+            }
+        } else {
+            fallback_name
+        };
+        let capabilities = decode_plugin_bytes::<SourceNormalizerResourceCapabilities>(
+            // SAFETY: the validated API guarantees `resource_capabilities_json`
+            // and `free_bytes` are present.
+            unsafe { (api.resource_capabilities_json)(api.context) },
+            api.free_bytes,
+            api.context,
+        )
+        .map_err(map_capabilities_payload_error)?;
+
+        Ok(Self {
+            inner: Arc::new(DynamicSourceNormalizerResourcePluginFactoryInner {
                 library,
                 name,
                 api,
@@ -138,6 +201,80 @@ impl SourceNormalizerPacketPluginFactory for DynamicSourceNormalizerPacketPlugin
     }
 }
 
+impl SourceNormalizerResourcePluginFactory for DynamicSourceNormalizerResourcePluginFactory {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn resource_capabilities(&self) -> SourceNormalizerResourceCapabilities {
+        self.inner.capabilities.clone()
+    }
+
+    fn open_resource_session(
+        &self,
+        config: &SourceNormalizerResourceSessionConfig,
+    ) -> Result<Box<dyn SourceNormalizerResourceSession>, SourceNormalizerError> {
+        let config_json = serde_json::to_vec(config).map_err(|error| {
+            SourceNormalizerError::payload_codec(format!(
+                "serialize source normalizer resource config for `{}` failed: {error}",
+                self.inner.name
+            ))
+        })?;
+
+        // SAFETY: the validated plugin API guarantees
+        // `open_resource_session_json` is present, and `config_json` remains
+        // alive for the duration of this synchronous callback.
+        let result = unsafe {
+            (self.inner.api.open_resource_session_json)(
+                self.inner.api.context,
+                config_json.as_ptr(),
+                config_json.len(),
+            )
+        };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                if result.session.is_null() {
+                    reclaim_plugin_payload(
+                        result.payload,
+                        self.inner.api.free_bytes,
+                        self.inner.api.context,
+                    );
+                    return Err(SourceNormalizerError::abi_violation(format!(
+                        "source normalizer resource plugin `{}` returned a null session pointer",
+                        self.inner.name
+                    )));
+                }
+                let session_info = decode_plugin_bytes::<SourceNormalizerResourceSessionInfo>(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                )
+                .map_err(|error| {
+                    map_source_normalizer_payload_error(
+                        &self.inner.name,
+                        "open_resource_session",
+                        error,
+                    )
+                })?;
+                Ok(Box::new(DynamicSourceNormalizerResourceSession {
+                    factory: self.inner.clone(),
+                    session: result.session,
+                    session_info,
+                    closed: false,
+                }))
+            }
+            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+                result.payload,
+                self.inner.api.free_bytes,
+                self.inner.api.context,
+                &self.inner.name,
+                "open_resource_session",
+            )),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DynamicSourceNormalizerPacketSession {
     factory: Arc<DynamicSourceNormalizerPacketPluginFactoryInner>,
@@ -152,6 +289,20 @@ struct DynamicSourceNormalizerPacketSession {
 // session pointer to be safe to move across threads when exported through this
 // API.
 unsafe impl Send for DynamicSourceNormalizerPacketSession {}
+
+#[derive(Debug)]
+struct DynamicSourceNormalizerResourceSession {
+    factory: Arc<DynamicSourceNormalizerResourcePluginFactoryInner>,
+    session: *mut c_void,
+    session_info: SourceNormalizerResourceSessionInfo,
+    closed: bool,
+}
+
+// SAFETY: the dynamic source normalizer resource session is only exposed
+// through `SourceNormalizerResourceSession: Send`; the plugin ABI requires the
+// opaque session pointer to be safe to move across threads when exported
+// through this API.
+unsafe impl Send for DynamicSourceNormalizerResourceSession {}
 
 impl DynamicSourceNormalizerPacketSession {
     fn ensure_open(&self) -> Result<(), SourceNormalizerError> {
@@ -230,6 +381,42 @@ impl DynamicSourceNormalizerPacketSession {
             self.factory.api.free_bytes,
             self.factory.api.context,
         );
+    }
+}
+
+impl DynamicSourceNormalizerResourceSession {
+    fn ensure_open(&self) -> Result<(), SourceNormalizerError> {
+        if self.closed || self.session.is_null() {
+            Err(SourceNormalizerError::NotConfigured)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn decode_operation_result(
+        &self,
+        result: VesperPluginProcessResult,
+        operation: &'static str,
+    ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                decode_plugin_bytes_or_default::<SourceNormalizerOperationStatus>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_source_normalizer_payload_error(&self.factory.name, operation, error)
+                })
+            }
+            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                operation,
+            )),
+        }
     }
 }
 
@@ -409,6 +596,66 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
     }
 }
 
+impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession {
+    fn session_info(&self) -> SourceNormalizerResourceSessionInfo {
+        self.session_info.clone()
+    }
+
+    fn poll(&mut self) -> Result<SourceNormalizerResourceSessionStatus, SourceNormalizerError> {
+        self.ensure_open()?;
+        // SAFETY: the validated plugin API guarantees `poll_resource_session`
+        // is present and returns a JSON status payload reclaimed below.
+        let result = unsafe {
+            (self.factory.api.poll_resource_session)(self.factory.api.context, self.session)
+        };
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                decode_plugin_bytes::<SourceNormalizerResourceSessionStatus>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_source_normalizer_payload_error(&self.factory.name, "poll_resource", error)
+                })
+            }
+            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                "poll_resource",
+            )),
+        }
+    }
+
+    fn cancel(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        self.ensure_open()?;
+        // SAFETY: the validated plugin API guarantees `cancel_resource_session`
+        // is present for resource sessions.
+        let result = unsafe {
+            (self.factory.api.cancel_resource_session)(self.factory.api.context, self.session)
+        };
+        self.decode_operation_result(result, "cancel_resource")
+    }
+
+    fn close(&mut self) -> Result<(), SourceNormalizerError> {
+        if self.closed || self.session.is_null() {
+            return Ok(());
+        }
+        // SAFETY: the validated plugin API guarantees `close_resource_session`
+        // is present and consumes or releases the opaque session pointer exactly
+        // once.
+        let result = unsafe {
+            (self.factory.api.close_resource_session)(self.factory.api.context, self.session)
+        };
+        self.closed = true;
+        self.session = std::ptr::null_mut();
+        self.decode_operation_result(result, "close_resource")
+            .map(|_| ())
+    }
+}
+
 impl Drop for DynamicSourceNormalizerPacketSession {
     fn drop(&mut self) {
         if let Err(error) = self.close() {
@@ -416,6 +663,18 @@ impl Drop for DynamicSourceNormalizerPacketSession {
                 plugin = %self.factory.name,
                 error = %error,
                 "source normalizer packet plugin session close failed during drop"
+            );
+        }
+    }
+}
+
+impl Drop for DynamicSourceNormalizerResourceSession {
+    fn drop(&mut self) {
+        if let Err(error) = self.close() {
+            tracing::error!(
+                plugin = %self.factory.name,
+                error = %error,
+                "source normalizer resource plugin session close failed during drop"
             );
         }
     }

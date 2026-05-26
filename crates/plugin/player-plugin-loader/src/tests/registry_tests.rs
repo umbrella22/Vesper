@@ -65,8 +65,7 @@ fn plugin_registry_reports_decoder_codec_match() {
 
     assert_eq!(record.status, PluginDiagnosticStatus::DecoderSupported);
     assert_eq!(record.plugin_name.as_deref(), Some("fixture-decoder"));
-    let Some(PluginCapabilitySummary::Decoder(capabilities)) =
-        record.capability_summary.as_ref()
+    let Some(PluginCapabilitySummary::Decoder(capabilities)) = record.capability_summary.as_ref()
     else {
         panic!("expected decoder capabilities");
     };
@@ -131,8 +130,8 @@ fn plugin_registry_report_counts_and_best_decoder_are_stable() {
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&processor_api as *const VesperPostDownloadProcessorApi).cast(),
     };
-    let processor = LoadedDynamicPlugin::from_descriptor(None, &processor_descriptor)
-        .expect("load processor");
+    let processor =
+        LoadedDynamicPlugin::from_descriptor(None, &processor_descriptor).expect("load processor");
 
     let request = DecoderPluginMatchRequest::video("fixture-video");
     let registry = PluginRegistry::from_records(vec![
@@ -177,9 +176,10 @@ fn plugin_registry_report_counts_and_best_decoder_are_stable() {
     );
     assert_eq!(report.diagnostic_notes.len(), 3);
     assert!(
-        report.diagnostic_notes.iter().any(
-            |note| note == "fixture-decoder does not advertise Video missing-video support"
-        )
+        report
+            .diagnostic_notes
+            .iter()
+            .any(|note| note == "fixture-decoder does not advertise Video missing-video support")
     );
 }
 
@@ -195,12 +195,11 @@ fn plugin_registry_prefers_native_decoder_candidates_when_requested() {
     let native_decoder = LoadedDynamicPlugin::from_descriptor(None, &native_descriptor)
         .expect("load native decoder");
     let request = DecoderPluginMatchRequest::video("fixture-video");
-    let registry =
-        PluginRegistry::from_records(vec![PluginDiagnosticRecord::from_loaded_plugin(
-            PathBuf::from("fixture-native-decoder"),
-            &native_decoder,
-            Some(&request),
-        )]);
+    let registry = PluginRegistry::from_records(vec![PluginDiagnosticRecord::from_loaded_plugin(
+        PathBuf::from("fixture-native-decoder"),
+        &native_decoder,
+        Some(&request),
+    )]);
 
     assert!(registry.supports_decoder(&request));
     assert!(registry.supports_native_decoder(&request));

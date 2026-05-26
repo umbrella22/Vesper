@@ -980,7 +980,10 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
 }
 
 impl MacosRuntimeAdapter {
-    pub(crate) fn activate_runtime_fallback(&mut self, runtime_error_message: &str) -> PlayerResult<()> {
+    pub(crate) fn activate_runtime_fallback(
+        &mut self,
+        runtime_error_message: &str,
+    ) -> PlayerResult<()> {
         let Some(fallback) = self.runtime_fallback.take() else {
             return Ok(());
         };

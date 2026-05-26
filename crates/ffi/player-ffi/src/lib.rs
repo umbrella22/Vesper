@@ -351,12 +351,17 @@ pub struct FfiPluginFrameProcessorCapabilitySummary {
 #[derive(Debug, Clone)]
 pub struct FfiPluginSourceNormalizerCapabilitySummary {
     pub supported_runtime_profiles: Vec<String>,
+    pub supported_output_routes: Vec<String>,
     pub max_level: String,
     pub media_kinds: Vec<String>,
     pub codecs: Vec<String>,
     pub bitstream_formats: Vec<String>,
     pub supports_seek: bool,
     pub supports_flush: bool,
+    pub supports_growing_resources: bool,
+    pub supports_range_reads: bool,
+    pub supports_cancel: bool,
+    pub content_types: Vec<String>,
     pub required_libraries: Vec<String>,
     pub required_demuxers: Vec<String>,
     pub required_muxers: Vec<String>,
@@ -365,6 +370,10 @@ pub struct FfiPluginSourceNormalizerCapabilitySummary {
     pub required_bitstream_filters: Vec<String>,
     pub required_tls: Option<String>,
     pub requires_network: bool,
+    pub session_read_buffer_bytes: Option<u64>,
+    pub manifest_snapshot_bytes: Option<u64>,
+    pub session_disk_soft_cap_bytes: Option<u64>,
+    pub global_disk_soft_cap_bytes: Option<u64>,
     pub max_sessions: Option<u32>,
 }
 
@@ -1308,12 +1317,17 @@ impl From<PlayerPluginSourceNormalizerCapabilitySummary>
     fn from(value: PlayerPluginSourceNormalizerCapabilitySummary) -> Self {
         Self {
             supported_runtime_profiles: value.supported_runtime_profiles,
+            supported_output_routes: value.supported_output_routes,
             max_level: value.max_level,
             media_kinds: value.media_kinds,
             codecs: value.codecs,
             bitstream_formats: value.bitstream_formats,
             supports_seek: value.supports_seek,
             supports_flush: value.supports_flush,
+            supports_growing_resources: value.supports_growing_resources,
+            supports_range_reads: value.supports_range_reads,
+            supports_cancel: value.supports_cancel,
+            content_types: value.content_types,
             required_libraries: value.required_libraries,
             required_demuxers: value.required_demuxers,
             required_muxers: value.required_muxers,
@@ -1322,6 +1336,10 @@ impl From<PlayerPluginSourceNormalizerCapabilitySummary>
             required_bitstream_filters: value.required_bitstream_filters,
             required_tls: value.required_tls,
             requires_network: value.requires_network,
+            session_read_buffer_bytes: value.session_read_buffer_bytes,
+            manifest_snapshot_bytes: value.manifest_snapshot_bytes,
+            session_disk_soft_cap_bytes: value.session_disk_soft_cap_bytes,
+            global_disk_soft_cap_bytes: value.global_disk_soft_cap_bytes,
             max_sessions: value.max_sessions,
         }
     }

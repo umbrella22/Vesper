@@ -356,18 +356,19 @@ GitHub Releases 会以 `VesperPlayerKit` 产品名发布移动端下载产物：
 Android 打包当前仅提供 `arm64-v8a`。iOS 打包仅提供 arm64 device、Apple
 Silicon Simulator 和可选 Catalyst slices。iOS 核心 `VesperPlayerKit.xcframework`
 不嵌入 FFmpeg；FFmpeg-backed remux 支持以独立可选 runtime 和 plugin
-XCFramework 形式发布，由 host app 单独签名和嵌入。SourceNormalizer preflight
+XCFramework 形式发布，由 host app 单独签名和嵌入。SourceNormalizer
 也沿用同一个 shared runtime 边界。plugin library path 配置只传插件 binary；
 shared FFmpeg runtime 是包依赖，不放进 plugin path。所有 FFmpeg-backed optional
 plugins 与 shared runtime 必须来自同一个 FFmpeg profile，保证
 `profile-hash.txt` 一致。
 
-移动端 SourceNormalizer artifact 的 v1 成功标准是 diagnostics / preflight：
-它可以加载可选插件，并对当前 source 尝试 open/close packet session，但 Android
-ExoPlayer 与 iOS AVPlayer 仍播放原始 source。移动端 FrameProcessor artifact
-仅是 diagnostics shell：可以打包、加载、上报 capability，但不会打开 frame
-session、不会处理真实帧，也不会参与默认移动端播放。移动端 Decoder artifact
-与配置继续暂停。
+移动端 SourceNormalizer artifact 可以做 diagnostics / preflight，并在
+`preferNormalized` 或 `requireNormalized` 下把 disk-backed fMP4 或
+short-window HLS 输出通过本地资源层交给 Android ExoPlayer 与 iOS AVPlayer。
+packet-stream 输出仍保留给后续 native frame pipeline。移动端 FrameProcessor
+artifact 仅是 diagnostics shell：可以打包、加载、上报 capability，但不会打开
+frame session、不会处理真实帧，也不会参与默认移动端播放。移动端 Decoder
+artifact 与配置继续暂停。
 
 Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载物的 host app
 在其自身 Gradle / Xcode 构建中不会运行本仓库的 JNI 或 FFmpeg 生成任务。

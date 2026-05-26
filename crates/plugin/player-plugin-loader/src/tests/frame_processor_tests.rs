@@ -274,10 +274,9 @@ fn plugin_registry_reports_frame_processor_support() {
 #[test]
 #[ignore = "requires a built player-frame-processor-diagnostic shared library artifact"]
 fn dynamic_loader_opens_real_frame_processor_diagnostic_shared_library() {
-    let plugin_path =
-        resolve_frame_processor_diagnostic_plugin_path().unwrap_or_else(|error| {
-            panic!("failed to resolve frame processor diagnostic plugin path: {error}")
-        });
+    let plugin_path = resolve_frame_processor_diagnostic_plugin_path().unwrap_or_else(|error| {
+        panic!("failed to resolve frame processor diagnostic plugin path: {error}")
+    });
 
     let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
         panic!(

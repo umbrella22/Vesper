@@ -40,6 +40,7 @@ internal object PlayerBridgeFactory {
                             preloadBudgetPolicy = preloadBudgetPolicy,
                             decoderBackend = decoderBackend,
                             benchmarkRecorder = benchmarkRecorder,
+                            sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                         ),
                     initialSource = initialSource,
                     currentResiliencePolicy = resiliencePolicy,

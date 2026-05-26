@@ -83,6 +83,16 @@ pub struct SourceNormalizerRuntimePolicy {
     #[serde(default = "default_session_total_timeout_ms")]
     pub session_total_timeout_ms: u64,
     #[serde(default)]
+    pub active_session_total_timeout_ms: Option<u64>,
+    #[serde(default = "default_session_read_buffer_bytes")]
+    pub session_read_buffer_bytes: u64,
+    #[serde(default = "default_manifest_snapshot_bytes")]
+    pub manifest_snapshot_bytes: u64,
+    #[serde(default = "default_session_disk_soft_cap_bytes")]
+    pub session_disk_soft_cap_bytes: u64,
+    #[serde(default = "default_global_disk_soft_cap_bytes")]
+    pub global_disk_soft_cap_bytes: u64,
+    #[serde(default)]
     pub in_session_seek: bool,
     #[serde(default)]
     pub fallback_profile: Option<String>,
@@ -96,6 +106,11 @@ impl Default for SourceNormalizerRuntimePolicy {
             startup_buffer_timeout_ms: default_startup_buffer_timeout_ms(),
             read_idle_timeout_ms: default_read_idle_timeout_ms(),
             session_total_timeout_ms: default_session_total_timeout_ms(),
+            active_session_total_timeout_ms: None,
+            session_read_buffer_bytes: default_session_read_buffer_bytes(),
+            manifest_snapshot_bytes: default_manifest_snapshot_bytes(),
+            session_disk_soft_cap_bytes: default_session_disk_soft_cap_bytes(),
+            global_disk_soft_cap_bytes: default_global_disk_soft_cap_bytes(),
             in_session_seek: false,
             fallback_profile: None,
         }
@@ -485,6 +500,22 @@ fn default_session_total_timeout_ms() -> u64 {
     40_000
 }
 
+fn default_session_read_buffer_bytes() -> u64 {
+    4 * 1024 * 1024
+}
+
+fn default_manifest_snapshot_bytes() -> u64 {
+    512 * 1024
+}
+
+fn default_session_disk_soft_cap_bytes() -> u64 {
+    512 * 1024 * 1024
+}
+
+fn default_global_disk_soft_cap_bytes() -> u64 {
+    1536 * 1024 * 1024
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,9 +761,14 @@ byte_magic = ["46 4c 5"]
         assert_eq!(
             flv.output_options.get("movflags"),
             Some(&toml::Value::String(
-                "+faststart+frag_keyframe+empty_moov".to_owned()
+                "+frag_keyframe+empty_moov+default_base_moof".to_owned()
             ))
         );
+        assert_eq!(flv.runtime.active_session_total_timeout_ms, Some(0));
+        assert_eq!(flv.runtime.session_read_buffer_bytes, 4 * 1024 * 1024);
+        assert_eq!(flv.runtime.manifest_snapshot_bytes, 512 * 1024);
+        assert_eq!(flv.runtime.session_disk_soft_cap_bytes, 512 * 1024 * 1024);
+        assert_eq!(flv.runtime.global_disk_soft_cap_bytes, 1536 * 1024 * 1024);
         assert!(flv.required_capabilities.network);
         assert!(
             flv.required_capabilities
@@ -761,12 +797,23 @@ byte_magic = ["46 4c 5"]
         assert_eq!(
             hevc.output_options.get("movflags"),
             Some(&toml::Value::String(
-                "+faststart+frag_keyframe+empty_moov".to_owned()
+                "+frag_keyframe+empty_moov+default_base_moof".to_owned()
             ))
         );
 
         let hls = profiles.require("hls-nonstandard").expect("hls");
         assert_eq!(hls.output_container, SourceNormalizerOutputContainer::Hls);
+        assert_eq!(
+            hls.output_options.get("hls_list_size"),
+            Some(&toml::Value::Integer(6))
+        );
+        assert_eq!(
+            hls.output_options.get("hls_flags"),
+            Some(&toml::Value::String(
+                "delete_segments+append_list+omit_endlist+independent_segments".to_owned()
+            ))
+        );
+        assert_eq!(hls.runtime.active_session_total_timeout_ms, Some(0));
         assert!(hls.required_capabilities.network);
         assert!(
             hls.required_capabilities

@@ -632,10 +632,13 @@ impl From<BridgePluginSourceNormalizerCapabilitySummary>
     fn from(value: BridgePluginSourceNormalizerCapabilitySummary) -> Self {
         let (supported_runtime_profiles, supported_runtime_profiles_len) =
             into_owned_c_string_array(value.supported_runtime_profiles);
+        let (supported_output_routes, supported_output_routes_len) =
+            into_owned_c_string_array(value.supported_output_routes);
         let (media_kinds, media_kinds_len) = into_owned_c_string_array(value.media_kinds);
         let (codecs, codecs_len) = into_owned_c_string_array(value.codecs);
         let (bitstream_formats, bitstream_formats_len) =
             into_owned_c_string_array(value.bitstream_formats);
+        let (content_types, content_types_len) = into_owned_c_string_array(value.content_types);
         let (required_libraries, required_libraries_len) =
             into_owned_c_string_array(value.required_libraries);
         let (required_demuxers, required_demuxers_len) =
@@ -651,6 +654,8 @@ impl From<BridgePluginSourceNormalizerCapabilitySummary>
         Self {
             supported_runtime_profiles,
             supported_runtime_profiles_len,
+            supported_output_routes,
+            supported_output_routes_len,
             max_level: into_c_string_ptr(value.max_level),
             media_kinds,
             media_kinds_len,
@@ -660,6 +665,11 @@ impl From<BridgePluginSourceNormalizerCapabilitySummary>
             bitstream_formats_len,
             supports_seek: value.supports_seek,
             supports_flush: value.supports_flush,
+            supports_growing_resources: value.supports_growing_resources,
+            supports_range_reads: value.supports_range_reads,
+            supports_cancel: value.supports_cancel,
+            content_types,
+            content_types_len,
             required_libraries,
             required_libraries_len,
             required_demuxers,
@@ -677,6 +687,14 @@ impl From<BridgePluginSourceNormalizerCapabilitySummary>
                 .map(into_c_string_ptr)
                 .unwrap_or(ptr::null_mut()),
             requires_network: value.requires_network,
+            has_session_read_buffer_bytes: value.session_read_buffer_bytes.is_some(),
+            session_read_buffer_bytes: value.session_read_buffer_bytes.unwrap_or_default(),
+            has_manifest_snapshot_bytes: value.manifest_snapshot_bytes.is_some(),
+            manifest_snapshot_bytes: value.manifest_snapshot_bytes.unwrap_or_default(),
+            has_session_disk_soft_cap_bytes: value.session_disk_soft_cap_bytes.is_some(),
+            session_disk_soft_cap_bytes: value.session_disk_soft_cap_bytes.unwrap_or_default(),
+            has_global_disk_soft_cap_bytes: value.global_disk_soft_cap_bytes.is_some(),
+            global_disk_soft_cap_bytes: value.global_disk_soft_cap_bytes.unwrap_or_default(),
             has_max_sessions: value.max_sessions.is_some(),
             max_sessions: value.max_sessions.unwrap_or_default(),
         }

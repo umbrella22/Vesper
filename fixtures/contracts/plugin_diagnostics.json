@@ -70,6 +70,9 @@
         "supportedRuntimeProfiles": [
           "generic-fallback"
         ],
+        "supportedOutputRoutes": [
+          "packetStream"
+        ],
         "maxLevel": "packet_repair",
         "mediaKinds": [
           "video"
@@ -82,6 +85,10 @@
         ],
         "supportsSeek": true,
         "supportsFlush": true,
+        "supportsGrowingResources": false,
+        "supportsRangeReads": false,
+        "supportsCancel": false,
+        "contentTypes": [],
         "requiredLibraries": [
           "avformat"
         ],

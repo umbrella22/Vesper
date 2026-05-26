@@ -1,7 +1,7 @@
 mod download;
+mod native;
 mod playlist;
 mod preload;
-mod native;
 
 pub use download::{IosDownloadBridgeSession, IosDownloadCommand};
 pub use native::*;

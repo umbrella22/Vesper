@@ -290,12 +290,16 @@ plugin framework binaries only. Do not pass
 path; it is a dynamic dependency that the host embeds and signs alongside the
 plugin.
 
-SourceNormalizer mobile v1 supports `diagnosticsOnly` and `preflightOnly`.
-Diagnostics mode loads the optional plugin and reports its capabilities through
-`VesperPlayerController.pluginDiagnostics`. Preflight mode additionally attempts
-to open and close a packet session for the selected source and records the
-selected profile or failure reason, but AVPlayer still receives and plays the
-original `VesperPlayerSource`. A failed preflight does not block playback.
+SourceNormalizer mobile supports `diagnosticsOnly`, `preflightOnly`,
+`preferNormalized`, and `requireNormalized`. Diagnostics mode loads the optional
+plugin and reports its capabilities through
+`VesperPlayerController.pluginDiagnostics`. Preflight mode opens and closes a
+packet session for the selected source without changing playback.
+`preferNormalized` and `requireNormalized` may open a disk-backed normalized
+resource session and hand the resulting fMP4 or short-window HLS resource to
+AVPlayer. `preferNormalized` falls back to the original source when
+normalization fails; `requireNormalized` reports a source error. Standard DASH
+still uses the existing DASH bridge unless normalization is explicitly required.
 
 The optional
 `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` depends on the

@@ -39,6 +39,8 @@ pub struct LoadedDynamicPlugin {
     frame_processor_plugin_factory: Option<Arc<DynamicFrameProcessorPluginFactory>>,
     source_normalizer_packet_plugin_factory:
         Option<Arc<DynamicSourceNormalizerPacketPluginFactory>>,
+    source_normalizer_resource_plugin_factory:
+        Option<Arc<DynamicSourceNormalizerResourcePluginFactory>>,
 }
 
 impl LoadedDynamicPlugin {
@@ -119,6 +121,14 @@ impl LoadedDynamicPlugin {
             .map(|factory| factory as Arc<dyn SourceNormalizerPacketPluginFactory>)
     }
 
+    pub fn source_normalizer_resource_plugin_factory(
+        &self,
+    ) -> Option<Arc<dyn SourceNormalizerResourcePluginFactory>> {
+        self.source_normalizer_resource_plugin_factory
+            .clone()
+            .map(|factory| factory as Arc<dyn SourceNormalizerResourcePluginFactory>)
+    }
+
     pub(crate) fn from_descriptor(
         library: Option<Arc<LibraryHolder>>,
         descriptor: &VesperPluginDescriptor,
@@ -130,9 +140,21 @@ impl LoadedDynamicPlugin {
             }
             VesperPluginKind::Decoder => VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
             VesperPluginKind::FrameProcessor => VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
-            VesperPluginKind::SourceNormalizer => VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+            VesperPluginKind::SourceNormalizer => {
+                if descriptor.abi_version != VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2
+                    && descriptor.abi_version != VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3
+                {
+                    return Err(PluginLoadError::AbiVersionMismatch {
+                        expected: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
+                        actual: descriptor.abi_version,
+                    });
+                }
+                descriptor.abi_version
+            }
         };
-        if descriptor.abi_version != expected_abi_version {
+        if descriptor.plugin_kind != VesperPluginKind::SourceNormalizer
+            && descriptor.abi_version != expected_abi_version
+        {
             return Err(PluginLoadError::AbiVersionMismatch {
                 expected: expected_abi_version,
                 actual: descriptor.abi_version,
@@ -164,6 +186,7 @@ impl LoadedDynamicPlugin {
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: None,
                     source_normalizer_packet_plugin_factory: None,
+                    source_normalizer_resource_plugin_factory: None,
                 })
             }
             VesperPluginKind::PipelineEventHook => {
@@ -189,6 +212,7 @@ impl LoadedDynamicPlugin {
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: None,
                     source_normalizer_packet_plugin_factory: None,
+                    source_normalizer_resource_plugin_factory: None,
                 })
             }
             VesperPluginKind::BenchmarkSink => {
@@ -214,6 +238,7 @@ impl LoadedDynamicPlugin {
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: None,
                     source_normalizer_packet_plugin_factory: None,
+                    source_normalizer_resource_plugin_factory: None,
                 })
             }
             VesperPluginKind::Decoder => {
@@ -238,6 +263,7 @@ impl LoadedDynamicPlugin {
                     native_decoder_plugin_factory: Some(Arc::new(factory)),
                     frame_processor_plugin_factory: None,
                     source_normalizer_packet_plugin_factory: None,
+                    source_normalizer_resource_plugin_factory: None,
                 })
             }
             VesperPluginKind::FrameProcessor => {
@@ -262,21 +288,51 @@ impl LoadedDynamicPlugin {
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: Some(Arc::new(factory)),
                     source_normalizer_packet_plugin_factory: None,
+                    source_normalizer_resource_plugin_factory: None,
                 })
             }
             VesperPluginKind::SourceNormalizer => {
-                let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV2>();
-                let api =
-                    // SAFETY: `descriptor.api` must point at the v2 source normalizer
-                    // ABI table when the plugin exports a valid source normalizer descriptor.
-                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                        field: "source_normalizer_plugin_api_v2",
-                    })?;
-                let factory = DynamicSourceNormalizerPacketPluginFactory::new(
-                    library,
-                    descriptor_name.clone(),
-                    CheckedSourceNormalizerPacketPluginApi::try_from(*api)?,
-                )?;
+                let (packet_factory, resource_factory) = if descriptor.abi_version
+                    == VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3
+                {
+                    let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV3>();
+                    let api =
+                            // SAFETY: `descriptor.api` must point at the v3 source normalizer
+                            // ABI table when the plugin exports a valid v3 descriptor.
+                            unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                                field: "source_normalizer_plugin_api_v3",
+                            })?;
+                    let packet_api = CheckedSourceNormalizerPacketPluginApi::try_from(*api)?;
+                    let resource_api = CheckedSourceNormalizerResourcePluginApi::try_from(*api)?;
+                    let packet_factory = DynamicSourceNormalizerPacketPluginFactory::new(
+                        library.clone(),
+                        descriptor_name.clone(),
+                        packet_api,
+                    )?;
+                    let resource_factory = DynamicSourceNormalizerResourcePluginFactory::new(
+                        library,
+                        descriptor_name.clone(),
+                        resource_api,
+                    )?;
+                    (
+                        Some(Arc::new(packet_factory)),
+                        Some(Arc::new(resource_factory)),
+                    )
+                } else {
+                    let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV2>();
+                    let api =
+                            // SAFETY: `descriptor.api` must point at the v2 source normalizer
+                            // ABI table when the plugin exports a valid source normalizer descriptor.
+                            unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                                field: "source_normalizer_plugin_api_v2",
+                            })?;
+                    let factory = DynamicSourceNormalizerPacketPluginFactory::new(
+                        library,
+                        descriptor_name.clone(),
+                        CheckedSourceNormalizerPacketPluginApi::try_from(*api)?,
+                    )?;
+                    (Some(Arc::new(factory)), None)
+                };
                 Ok(Self {
                     name: descriptor_name,
                     plugin_kind: descriptor.plugin_kind,
@@ -285,7 +341,8 @@ impl LoadedDynamicPlugin {
                     benchmark_sink: None,
                     native_decoder_plugin_factory: None,
                     frame_processor_plugin_factory: None,
-                    source_normalizer_packet_plugin_factory: Some(Arc::new(factory)),
+                    source_normalizer_packet_plugin_factory: packet_factory,
+                    source_normalizer_resource_plugin_factory: resource_factory,
                 })
             }
         }
@@ -300,8 +357,10 @@ pub(crate) struct LibraryHolder {
 
 pub(crate) type DestroyFn = unsafe extern "C" fn(context: *mut c_void);
 pub(crate) type NameFn = unsafe extern "C" fn(context: *mut c_void) -> *const c_char;
-pub(crate) type CapabilitiesJsonFn = unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes;
-pub(crate) type FreeBytesFn = unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes);
+pub(crate) type CapabilitiesJsonFn =
+    unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes;
+pub(crate) type FreeBytesFn =
+    unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes);
 pub(crate) type ProcessJsonFn = unsafe extern "C" fn(
     context: *mut c_void,
     input_json: *const u8,
@@ -319,7 +378,8 @@ pub(crate) type OnBenchmarkEventBatchJsonFn = unsafe extern "C" fn(
     batch_json: *const u8,
     batch_json_len: usize,
 ) -> VesperPluginProcessResult;
-pub(crate) type BenchmarkFlushJsonFn = unsafe extern "C" fn(context: *mut c_void) -> VesperPluginProcessResult;
+pub(crate) type BenchmarkFlushJsonFn =
+    unsafe extern "C" fn(context: *mut c_void) -> VesperPluginProcessResult;
 pub(crate) type DecoderOpenSessionJsonFn = unsafe extern "C" fn(
     context: *mut c_void,
     config_json: *const u8,
@@ -333,10 +393,11 @@ pub(crate) type DecoderSendPacketFn = unsafe extern "C" fn(
     packet_data: *const u8,
     packet_data_len: usize,
 ) -> VesperPluginProcessResult;
-pub(crate) type DecoderReceiveNativeFrameFn = unsafe extern "C" fn(
-    context: *mut c_void,
-    session: *mut c_void,
-) -> VesperDecoderReceiveNativeFrameResult;
+pub(crate) type DecoderReceiveNativeFrameFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperDecoderReceiveNativeFrameResult;
 pub(crate) type DecoderReleaseNativeFrameFn = unsafe extern "C" fn(
     context: *mut c_void,
     session: *mut c_void,
@@ -357,11 +418,13 @@ pub(crate) type FrameProcessorSubmitFrameJsonFn = unsafe extern "C" fn(
     submit_json: *const u8,
     submit_json_len: usize,
     handle: usize,
-) -> VesperPluginProcessResult;
-pub(crate) type FrameProcessorReceiveFrameFn = unsafe extern "C" fn(
-    context: *mut c_void,
-    session: *mut c_void,
-) -> VesperFrameProcessorReceiveFrameResult;
+)
+    -> VesperPluginProcessResult;
+pub(crate) type FrameProcessorReceiveFrameFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperFrameProcessorReceiveFrameResult;
 pub(crate) type FrameProcessorReleaseFrameFn = unsafe extern "C" fn(
     context: *mut c_void,
     session: *mut c_void,
@@ -370,12 +433,13 @@ pub(crate) type FrameProcessorReleaseFrameFn = unsafe extern "C" fn(
 ) -> VesperPluginProcessResult;
 pub(crate) type FrameProcessorSessionOperationFn =
     unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
-pub(crate) type SourceNormalizerSeekSessionJsonFn = unsafe extern "C" fn(
-    context: *mut c_void,
-    session: *mut c_void,
-    seek_json: *const u8,
-    seek_json_len: usize,
-) -> VesperPluginProcessResult;
+pub(crate) type SourceNormalizerSeekSessionJsonFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        session: *mut c_void,
+        seek_json: *const u8,
+        seek_json_len: usize,
+    ) -> VesperPluginProcessResult;
 pub(crate) type SourceNormalizerSessionOperationFn =
     unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
 pub(crate) type SourceNormalizerOpenPacketSessionJsonFn =
@@ -384,15 +448,23 @@ pub(crate) type SourceNormalizerOpenPacketSessionJsonFn =
         config_json: *const u8,
         config_json_len: usize,
     ) -> VesperSourceNormalizerOpenPacketSessionResult;
-pub(crate) type SourceNormalizerReadPacketFn = unsafe extern "C" fn(
-    context: *mut c_void,
-    session: *mut c_void,
-) -> VesperSourceNormalizerReadPacketResult;
+pub(crate) type SourceNormalizerReadPacketFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperSourceNormalizerReadPacketResult;
 pub(crate) type SourceNormalizerReleasePacketFn = unsafe extern "C" fn(
     context: *mut c_void,
     session: *mut c_void,
     packet_handle: usize,
-) -> VesperPluginProcessResult;
+)
+    -> VesperPluginProcessResult;
+pub(crate) type SourceNormalizerOpenResourceSessionJsonFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        config_json: *const u8,
+        config_json_len: usize,
+    ) -> VesperSourceNormalizerOpenResourceSessionResult;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CheckedPostDownloadProcessorApi {
@@ -699,6 +771,110 @@ impl TryFrom<VesperSourceNormalizerPluginApiV2> for CheckedSourceNormalizerPacke
             close_packet_session: api.close_packet_session.ok_or(
                 PluginLoadError::MissingField {
                     field: "source_normalizer_plugin_api_v2.close_packet_session",
+                },
+            )?,
+        })
+    }
+}
+
+impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerPacketPluginApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperSourceNormalizerPluginApiV3) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: None,
+            name: api.name,
+            packet_capabilities_json: api.packet_capabilities_json.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.packet_capabilities_json",
+                },
+            )?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v3.free_bytes",
+            })?,
+            open_packet_session_json: api.open_packet_session_json.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.open_packet_session_json",
+                },
+            )?,
+            read_packet: api.read_packet.ok_or(PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v3.read_packet",
+            })?,
+            release_packet: api.release_packet.ok_or(PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v3.release_packet",
+            })?,
+            seek_packet_session_json: api.seek_packet_session_json,
+            flush_packet_session: api.flush_packet_session.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.flush_packet_session",
+                },
+            )?,
+            close_packet_session: api.close_packet_session.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.close_packet_session",
+                },
+            )?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CheckedSourceNormalizerResourcePluginApi {
+    pub(crate) context: *mut c_void,
+    pub(crate) destroy: Option<DestroyFn>,
+    pub(crate) name: Option<NameFn>,
+    pub(crate) resource_capabilities_json: CapabilitiesJsonFn,
+    pub(crate) free_bytes: FreeBytesFn,
+    pub(crate) open_resource_session_json: SourceNormalizerOpenResourceSessionJsonFn,
+    pub(crate) poll_resource_session: SourceNormalizerSessionOperationFn,
+    pub(crate) cancel_resource_session: SourceNormalizerSessionOperationFn,
+    pub(crate) close_resource_session: SourceNormalizerSessionOperationFn,
+}
+
+// SAFETY: this wrapper only stores function pointers and the opaque plugin
+// context from a validated ABI table. The plugin contract requires that these
+// values uphold the `Send + Sync` guarantees exposed through
+// `SourceNormalizerResourcePluginFactory`.
+unsafe impl Send for CheckedSourceNormalizerResourcePluginApi {}
+// SAFETY: same reasoning as above; the validated ABI table is shared behind an
+// `Arc` and relies on the plugin to make the context safe for concurrent use.
+unsafe impl Sync for CheckedSourceNormalizerResourcePluginApi {}
+
+impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerResourcePluginApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperSourceNormalizerPluginApiV3) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            resource_capabilities_json: api.resource_capabilities_json.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.resource_capabilities_json",
+                },
+            )?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "source_normalizer_plugin_api_v3.free_bytes",
+            })?,
+            open_resource_session_json: api.open_resource_session_json.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.open_resource_session_json",
+                },
+            )?,
+            poll_resource_session: api.poll_resource_session.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.poll_resource_session",
+                },
+            )?,
+            cancel_resource_session: api.cancel_resource_session.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.cancel_resource_session",
+                },
+            )?,
+            close_resource_session: api.close_resource_session.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_v3.close_resource_session",
                 },
             )?,
         })

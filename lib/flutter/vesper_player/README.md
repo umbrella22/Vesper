@@ -590,12 +590,13 @@ paths only: Android `.so` paths or iOS plugin framework binary paths. The
 Android FFmpeg runtime AAR and iOS `VesperPlayerFfmpegRuntime.xcframework.zip`
 are package dependencies and should not be placed in `pluginLibraryPaths`.
 
-SourceNormalizer mobile v1 is diagnostics/preflight only. It can load the
-optional FFmpeg plugin, report capability diagnostics in
-`controller.pluginDiagnostics`, and in `preflightOnly` mode attempt an
-open/close packet-session check for the selected source. Android ExoPlayer and
-iOS AVPlayer still play the original source, and preflight failures do not
-block playback.
+SourceNormalizer mobile can load the optional FFmpeg plugin, report capability
+diagnostics in `controller.pluginDiagnostics`, and in `preflightOnly` mode
+attempt an open/close packet-session check for the selected source.
+`preferNormalized` and `requireNormalized` are opt-in host-kit paths that may
+replace the platform source with a disk-backed fMP4 or short-window HLS
+resource. `preferNormalized` falls back to the original source when
+normalization fails; `requireNormalized` reports a source error.
 
 FrameProcessor mobile v1 is a diagnostics shell. The optional artifact can be
 packaged and probed for capabilities, but it does not open frame sessions,

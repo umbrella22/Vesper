@@ -19,6 +19,16 @@ internal object VesperNativeJni {
         frameModeOrdinal: Int,
         framePluginLibraryPaths: Array<String>,
     ): String
+    external fun openSourceNormalizerResource(
+        sourceUri: String,
+        sourceModeOrdinal: Int,
+        sourcePluginLibraryPaths: Array<String>,
+        runtimeProfile: String?,
+        outputRoot: String,
+        forceNormalized: Boolean,
+    ): String?
+    external fun pollSourceNormalizerResource(sessionHandle: Long): String?
+    external fun disposeSourceNormalizerResource(sessionHandle: Long)
     external fun createPlaylistSession(
         config: NativePlaylistConfig,
         preloadBudget: NativeResolvedPreloadBudgetPolicy,

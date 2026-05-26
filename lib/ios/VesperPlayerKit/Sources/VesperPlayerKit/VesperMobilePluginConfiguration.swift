@@ -5,6 +5,8 @@ public enum VesperSourceNormalizerMode: String, Equatable {
     case disabled
     case diagnosticsOnly
     case preflightOnly
+    case preferNormalized
+    case requireNormalized
 }
 
 public struct VesperSourceNormalizerConfiguration: Equatable {
@@ -34,6 +36,10 @@ public struct VesperSourceNormalizerConfiguration: Equatable {
             1
         case .preflightOnly:
             2
+        case .preferNormalized:
+            3
+        case .requireNormalized:
+            4
         }
     }
 }
@@ -128,6 +134,107 @@ enum VesperMobilePluginDiagnosticsProbe {
             return []
         }
         return records
+    }
+}
+
+struct VesperSourceNormalizerResourceOpenResult {
+    let handle: UInt64
+    let outputRoute: String
+    let selectedProfile: String?
+    let container: String
+    let primaryResourcePath: String
+    let primaryContentType: String?
+    let playbackUri: String?
+    let resources: [[String: Any]]
+    let cachePolicy: [String: Any]
+    let diagnostics: [[String: Any]]
+
+    var playbackURL: URL? {
+        if let playbackUri, let url = URL(string: playbackUri) {
+            return url
+        }
+        return URL(fileURLWithPath: primaryResourcePath)
+    }
+}
+
+enum VesperMobileSourceNormalizerResource {
+    static func open(
+        source: VesperPlayerSource,
+        configuration: VesperSourceNormalizerConfiguration,
+        outputRoot: URL,
+        forceNormalized: Bool
+    ) -> VesperSourceNormalizerResourceOpenResult? {
+        guard configuration.mode == .preferNormalized || configuration.mode == .requireNormalized else {
+            return nil
+        }
+
+        var handle: UInt64 = 0
+        var outputPointer: UnsafeMutablePointer<CChar>?
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let ok = source.uri.withCString { sourceUriPointer in
+            outputRoot.path.withCString { outputRootPointer in
+                withOptionalCString(configuration.runtimeProfile) { runtimeProfilePointer in
+                    withCStringArray(configuration.pluginLibraryPaths) { pathPointers, pathCount in
+                        vesper_source_normalizer_resource_open(
+                            sourceUriPointer,
+                            configuration.ffiMode,
+                            pathPointers,
+                            UInt(pathCount),
+                            runtimeProfilePointer,
+                            outputRootPointer,
+                            forceNormalized,
+                            &handle,
+                            &outputPointer,
+                            &errorPointer
+                        )
+                    }
+                }
+            }
+        }
+        defer {
+            if let outputPointer {
+                vesper_mobile_plugin_diagnostics_string_free(outputPointer)
+            }
+            if let errorPointer {
+                vesper_mobile_plugin_diagnostics_string_free(errorPointer)
+            }
+        }
+
+        guard ok, handle != 0, let outputPointer else {
+            if let errorPointer {
+                iosHostLog("source normalizer resource open failed: \(String(cString: errorPointer))")
+            }
+            return nil
+        }
+
+        let json = String(cString: outputPointer)
+        guard
+            let data = json.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let route = object["outputRoute"] as? String,
+            let primaryPath = object["primaryResourcePath"] as? String
+        else {
+            vesper_source_normalizer_resource_dispose(handle)
+            return nil
+        }
+
+        return VesperSourceNormalizerResourceOpenResult(
+            handle: handle,
+            outputRoute: route,
+            selectedProfile: object["selectedProfile"] as? String,
+            container: object["container"] as? String ?? "",
+            primaryResourcePath: primaryPath,
+            primaryContentType: object["primaryContentType"] as? String,
+            playbackUri: object["playbackUri"] as? String,
+            resources: object["resources"] as? [[String: Any]] ?? [],
+            cachePolicy: object["cachePolicy"] as? [String: Any] ?? [:],
+            diagnostics: object["diagnostics"] as? [[String: Any]] ?? []
+        )
+    }
+
+    static func dispose(handle: UInt64) {
+        guard handle != 0 else { return }
+        vesper_source_normalizer_resource_dispose(handle)
     }
 }
 

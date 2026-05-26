@@ -335,7 +335,7 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
       palette: palette,
       title: '插件诊断',
       subtitle:
-          'SourceNormalizer 可切换为诊断或 source preflight。移动端播放仍使用原始 source；FrameProcessor 仅记录 debug 能力诊断。',
+          'SourceNormalizer 可从 diagnostics/preflight 切到 normalized playback 路线；FrameProcessor 仅记录 debug 能力诊断。',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -458,6 +458,15 @@ class PluginDiagnosticRow extends StatelessWidget {
     final profiles =
         diagnostic.capability?.sourceNormalizer?.supportedRuntimeProfiles ??
         const <String>[];
+    final extra = diagnostic.extra;
+    final outputRoute = extra['outputRoute']?.toString() ?? '';
+    final selectedProfile = extra['selectedProfile']?.toString() ?? '';
+    final primaryResource = extra['primaryResource']?.toString() ?? '';
+    final diskBytesUsed = extra['diskBytesUsed'];
+    final cachePolicy = extra['cachePolicy'];
+    final cacheLimit = cachePolicy is Map
+        ? cachePolicy['sessionDiskSoftCapBytes']
+        : null;
     final title = <String>[
       diagnostic.pluginName ?? '',
       diagnostic.status.name,
@@ -490,6 +499,26 @@ class PluginDiagnosticRow extends StatelessWidget {
               context,
             ).textTheme.bodySmall?.copyWith(color: palette.body),
           ),
+          if (outputRoute.isNotEmpty || selectedProfile.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              'route: ${<String>[outputRoute, selectedProfile].where((value) => value.isNotEmpty).join(' · ')}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.body),
+            ),
+          ],
+          if (diskBytesUsed is num || cacheLimit is num) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              'cache: ${formatBytes((diskBytesUsed as num?)?.toInt())} / ${formatBytes((cacheLimit as num?)?.toInt())}',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.body),
+            ),
+          ],
           if (profiles.isNotEmpty) ...<Widget>[
             const SizedBox(height: 5),
             Text(
@@ -510,6 +539,17 @@ class PluginDiagnosticRow extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.body),
+            ),
+          ],
+          if (primaryResource.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              'resource: $primaryResource',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: palette.body),
             ),
           ],
           if (diagnostic.path.isNotEmpty) ...<Widget>[

@@ -130,13 +130,17 @@
     <string name="example_resilience_backoff_exponential">Exponential</string>
 
     <string name="example_plugins_title">Plugin Diagnostics</string>
-    <string name="example_plugins_subtitle">SourceNormalizer can be switched for diagnostics or source preflight. Mobile playback still uses the original source; FrameProcessor is logged only as diagnostic capability.</string>
+    <string name="example_plugins_subtitle">SourceNormalizer can be switched from diagnostics/preflight into normalized playback routes. FrameProcessor is logged only as diagnostic capability.</string>
     <string name="example_plugins_source_normalizer_disabled">SourceNormalizer Off</string>
     <string name="example_plugins_source_normalizer_disabled_subtitle">The SourceNormalizer plugin is not loaded for playback probes.</string>
     <string name="example_plugins_source_normalizer_diagnostics">Diagnostics</string>
     <string name="example_plugins_source_normalizer_diagnostics_subtitle">Load the SourceNormalizer plugin and report capability without opening a packet session.</string>
     <string name="example_plugins_source_normalizer_preflight">Preflight</string>
     <string name="example_plugins_source_normalizer_preflight_subtitle">Load the SourceNormalizer plugin, open and close a packet session for the selected source, then continue playing the original source.</string>
+    <string name="example_plugins_source_normalizer_prefer">Prefer normalized</string>
+    <string name="example_plugins_source_normalizer_prefer_subtitle">Try disk-backed fMP4/HLS normalized playback and fall back to the original source on failure.</string>
+    <string name="example_plugins_source_normalizer_require">Require normalized</string>
+    <string name="example_plugins_source_normalizer_require_subtitle">Require disk-backed normalized playback and surface an error instead of falling back.</string>
     <string name="example_plugins_source_normalizer_path">source</string>
     <string name="example_plugins_frame_processor_path">frame</string>
     <string name="example_plugins_missing">missing</string>
@@ -147,6 +151,9 @@
     <string name="example_plugins_unknown_record">Plugin diagnostic</string>
     <string name="example_plugins_participation">participation: %1$s</string>
     <string name="example_plugins_profiles">profiles: %1$s</string>
+    <string name="example_plugins_route">route: %1$s</string>
+    <string name="example_plugins_cache">cache: %1$s</string>
+    <string name="example_plugins_resource">resource: %1$s</string>
 
     <string name="example_sheet_menu_subtitle">Open track, subtitle, quality, and speed controls without crowding the player overlay.</string>
     <string name="example_sheet_quality_subtitle">Switch adaptive video or pin the stream to a specific quality track.</string>

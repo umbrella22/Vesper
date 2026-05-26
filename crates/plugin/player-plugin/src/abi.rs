@@ -507,6 +507,30 @@ impl Default for VesperSourceNormalizerOpenPacketSessionResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperSourceNormalizerPluginApiV3::open_resource_session_json`.
+///
+/// When `status` is `Success`, `session` must be a plugin-owned opaque session
+/// pointer and `payload` must encode a `SourceNormalizerResourceSessionInfo`
+/// JSON document. When `status` is `Failure`, `session` must be null and
+/// `payload` must encode a `SourceNormalizerError` JSON document.
+pub struct VesperSourceNormalizerOpenResourceSessionResult {
+    pub status: VesperPluginResultStatus,
+    pub session: *mut c_void,
+    pub payload: VesperPluginBytes,
+}
+
+impl Default for VesperSourceNormalizerOpenResourceSessionResult {
+    fn default() -> Self {
+        Self {
+            status: VesperPluginResultStatus::Success,
+            session: std::ptr::null_mut(),
+            payload: VesperPluginBytes::null(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 /// Result returned by `VesperSourceNormalizerPluginApiV2::read_packet`.
 ///
 /// On success, `metadata` must encode `SourceNormalizerReadPacketMetadata`.
@@ -599,6 +623,98 @@ unsafe impl Sync for VesperSourceNormalizerPluginApiV2 {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// C ABI exposed by a source normalizer plugin with resource-output support.
+///
+/// V3 preserves the V2 packet callbacks and adds optional disk-backed resource
+/// sessions for fMP4 local stream and short-window HLS routes. Resource session
+/// payloads are JSON-encoded and all returned byte buffers must be reclaimed
+/// with the matching `free_bytes` callback from the same dynamic library.
+pub struct VesperSourceNormalizerPluginApiV3 {
+    pub context: *mut c_void,
+    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
+    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
+    pub packet_capabilities_json:
+        Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub open_packet_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            config_json: *const u8,
+            config_json_len: usize,
+        ) -> VesperSourceNormalizerOpenPacketSessionResult,
+    >,
+    pub read_packet: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperSourceNormalizerReadPacketResult,
+    >,
+    pub release_packet: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            packet_handle: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub seek_packet_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            seek_json: *const u8,
+            seek_json_len: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub flush_packet_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub close_packet_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub resource_capabilities_json:
+        Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub open_resource_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            config_json: *const u8,
+            config_json_len: usize,
+        ) -> VesperSourceNormalizerOpenResourceSessionResult,
+    >,
+    pub poll_resource_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub cancel_resource_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub close_resource_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
+}
+
+// SAFETY: host-side wrappers only expose this API behind source normalizer
+// factory traits, and plugin authors must uphold the declared `Send + Sync`
+// contract for the underlying context pointer.
+unsafe impl Send for VesperSourceNormalizerPluginApiV3 {}
+// SAFETY: same reasoning as above; the plugin context is required to be safe for
+// concurrent shared access when exposed as a source normalizer plugin.
+unsafe impl Sync for VesperSourceNormalizerPluginApiV3 {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 /// Plugin descriptor exported by `vesper_plugin_entry`.
 ///
 /// `plugin_name` must be a valid NUL-terminated UTF-8 string and `api` must
@@ -625,5 +741,7 @@ pub const VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3: u32 = 3;
 pub const VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1: u32 = 1;
 /// ABI version used by packet-stream source normalizer plugins.
 pub const VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2: u32 = 2;
+/// Source normalizer ABI with disk-backed resource-output sessions.
+pub const VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3: u32 = 3;
 /// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

@@ -48,7 +48,9 @@ pub(crate) fn read_track_selection(
     })
 }
 
-pub(crate) fn read_abr_policy(policy: *const PlayerFfiAbrPolicy) -> Result<BridgeAbrPolicy, PlayerFfiError> {
+pub(crate) fn read_abr_policy(
+    policy: *const PlayerFfiAbrPolicy,
+) -> Result<BridgeAbrPolicy, PlayerFfiError> {
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,

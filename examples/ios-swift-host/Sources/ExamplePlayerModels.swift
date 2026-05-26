@@ -110,6 +110,8 @@ enum ExampleSourceNormalizerSetting: String, CaseIterable, Identifiable {
     case disabled
     case diagnosticsOnly
     case preflightOnly
+    case preferNormalized
+    case requireNormalized
 
     var id: String { rawValue }
 
@@ -121,6 +123,10 @@ enum ExampleSourceNormalizerSetting: String, CaseIterable, Identifiable {
             return ExampleI18n.pluginSourceNormalizerDiagnostics
         case .preflightOnly:
             return ExampleI18n.pluginSourceNormalizerPreflight
+        case .preferNormalized:
+            return ExampleI18n.pluginSourceNormalizerPrefer
+        case .requireNormalized:
+            return ExampleI18n.pluginSourceNormalizerRequire
         }
     }
 
@@ -132,6 +138,10 @@ enum ExampleSourceNormalizerSetting: String, CaseIterable, Identifiable {
             return ExampleI18n.pluginSourceNormalizerDiagnosticsSubtitle
         case .preflightOnly:
             return ExampleI18n.pluginSourceNormalizerPreflightSubtitle
+        case .preferNormalized:
+            return ExampleI18n.pluginSourceNormalizerPreferSubtitle
+        case .requireNormalized:
+            return ExampleI18n.pluginSourceNormalizerRequireSubtitle
         }
     }
 
@@ -143,6 +153,10 @@ enum ExampleSourceNormalizerSetting: String, CaseIterable, Identifiable {
             return .diagnosticsOnly
         case .preflightOnly:
             return .preflightOnly
+        case .preferNormalized:
+            return .preferNormalized
+        case .requireNormalized:
+            return .requireNormalized
         }
     }
 }

@@ -32,7 +32,6 @@ pub(crate) fn should_trigger_runtime_fallback_for_command(
     }
 }
 
-
 pub(crate) fn should_prefer_native_host_runtime(
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
@@ -279,7 +278,9 @@ pub(crate) fn strict_frame_processor_fallback_enabled(options: &PlayerRuntimeOpt
         && !options.frame_processor_library_paths.is_empty()
 }
 
-pub(crate) fn without_source_normalizer_options(mut options: PlayerRuntimeOptions) -> PlayerRuntimeOptions {
+pub(crate) fn without_source_normalizer_options(
+    mut options: PlayerRuntimeOptions,
+) -> PlayerRuntimeOptions {
     options.source_normalizer_mode = SourceNormalizerMode::Disabled;
     options.source_normalizer_plugin_library_paths.clear();
     options

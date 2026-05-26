@@ -395,6 +395,28 @@ private struct PluginDiagnosticRow: View {
         diagnostic["message"] as? String ?? ""
     }
 
+    private var route: String {
+        let values = [
+            diagnostic["outputRoute"] as? String ?? "",
+            diagnostic["selectedProfile"] as? String ?? ""
+        ].filter { !$0.isEmpty }
+        return values.joined(separator: " · ")
+    }
+
+    private var cache: String {
+        let diskBytes = diagnostic["diskBytesUsed"] as? NSNumber
+        let cachePolicy = diagnostic["cachePolicy"] as? [String: Any]
+        let diskLimit = cachePolicy?["sessionDiskSoftCapBytes"] as? NSNumber
+        guard diskBytes != nil || diskLimit != nil else {
+            return ""
+        }
+        return "\(formatStorageBytes(diskBytes?.int64Value)) / \(formatStorageBytes(diskLimit?.int64Value))"
+    }
+
+    private var resource: String {
+        diagnostic["primaryResource"] as? String ?? ""
+    }
+
     private var path: String {
         diagnostic["path"] as? String ?? ""
     }
@@ -419,6 +441,17 @@ private struct PluginDiagnosticRow: View {
             Text(ExampleI18n.pluginParticipation(participation))
                 .font(.footnote)
                 .foregroundStyle(palette.body)
+            if !route.isEmpty {
+                Text(ExampleI18n.pluginRoute(route))
+                    .font(.footnote)
+                    .lineLimit(1)
+                    .foregroundStyle(palette.body)
+            }
+            if !cache.isEmpty {
+                Text(ExampleI18n.pluginCache(cache))
+                    .font(.footnote)
+                    .foregroundStyle(palette.body)
+            }
             if !profiles.isEmpty {
                 Text(ExampleI18n.pluginProfiles(profiles))
                     .font(.footnote)
@@ -429,6 +462,12 @@ private struct PluginDiagnosticRow: View {
                 Text(message)
                     .font(.footnote)
                     .lineLimit(3)
+                    .foregroundStyle(palette.body)
+            }
+            if !resource.isEmpty {
+                Text(ExampleI18n.pluginResource(resource))
+                    .font(.caption2)
+                    .lineLimit(1)
                     .foregroundStyle(palette.body)
             }
             if !path.isEmpty {

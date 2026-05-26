@@ -163,11 +163,12 @@ should forward benchmark settings to the host kit and keep `consoleLogging`
 disabled by default.
 
 Mobile plugin configurations are intentionally conservative. SourceNormalizer
-`diagnosticsOnly` and `preflightOnly` can report plugin diagnostics, but mobile
-platforms must keep playback on the original platform source unless a later
-contract explicitly adds playback substitution. FrameProcessor
-`diagnosticsOnly` must report availability without opening frame sessions or
-marking the plugin as participated.
+`diagnosticsOnly` and `preflightOnly` report plugin diagnostics without changing
+the platform source. `preferNormalized` and `requireNormalized` are explicit
+normalized-resource modes owned by the Android and iOS host kits; Flutter only
+passes configuration and decodes diagnostics. FrameProcessor `diagnosticsOnly`
+must report availability without opening frame sessions or marking the plugin
+as participated.
 
 Coarse capability fields such as `supportsTrackSelection` or
 `supportsAbrPolicy` should not be treated as implicit support for every

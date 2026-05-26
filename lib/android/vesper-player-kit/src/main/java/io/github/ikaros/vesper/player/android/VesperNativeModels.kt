@@ -38,6 +38,7 @@ internal enum class NativeErrorCategory {
 
 internal data class NativeBridgeStartup(
     val subtitle: String? = null,
+    val pluginDiagnostics: List<Map<String, Any?>> = emptyList(),
 )
 
 internal data class NativeBridgeSnapshot(

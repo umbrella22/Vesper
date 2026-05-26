@@ -17,7 +17,13 @@ extension ExampleThemeModeLabels on ExampleThemeMode {
 
 enum ExampleResilienceProfile { balanced, streaming, resilient, lowLatency }
 
-enum ExampleSourceNormalizerSetting { disabled, diagnosticsOnly, preflightOnly }
+enum ExampleSourceNormalizerSetting {
+  disabled,
+  diagnosticsOnly,
+  preflightOnly,
+  preferNormalized,
+  requireNormalized,
+}
 
 extension ExampleSourceNormalizerSettingLabels
     on ExampleSourceNormalizerSetting {
@@ -26,6 +32,8 @@ extension ExampleSourceNormalizerSettingLabels
       ExampleSourceNormalizerSetting.disabled => 'SourceNormalizer 关闭',
       ExampleSourceNormalizerSetting.diagnosticsOnly => 'Diagnostics',
       ExampleSourceNormalizerSetting.preflightOnly => 'Preflight',
+      ExampleSourceNormalizerSetting.preferNormalized => 'Prefer normalized',
+      ExampleSourceNormalizerSetting.requireNormalized => 'Require normalized',
     };
   }
 
@@ -37,6 +45,10 @@ extension ExampleSourceNormalizerSettingLabels
         '只加载 SourceNormalizer 插件并上报 capability，不打开 packet session。',
       ExampleSourceNormalizerSetting.preflightOnly =>
         '加载 SourceNormalizer 插件，为当前 source 打开并关闭 packet session，然后继续播放原始 source。',
+      ExampleSourceNormalizerSetting.preferNormalized =>
+        '尝试使用 disk-backed fMP4/HLS normalized playback，失败时回退原始 source。',
+      ExampleSourceNormalizerSetting.requireNormalized =>
+        '要求使用 disk-backed normalized playback，失败时直接展示错误。',
     };
   }
 
@@ -48,6 +60,10 @@ extension ExampleSourceNormalizerSettingLabels
         VesperSourceNormalizerMode.diagnosticsOnly,
       ExampleSourceNormalizerSetting.preflightOnly =>
         VesperSourceNormalizerMode.preflightOnly,
+      ExampleSourceNormalizerSetting.preferNormalized =>
+        VesperSourceNormalizerMode.preferNormalized,
+      ExampleSourceNormalizerSetting.requireNormalized =>
+        VesperSourceNormalizerMode.requireNormalized,
     };
   }
 }

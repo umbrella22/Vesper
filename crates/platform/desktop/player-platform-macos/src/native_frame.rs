@@ -226,7 +226,11 @@ impl FrameProcessorDebugState {
         }
     }
 
-    pub(crate) fn observe_submit(&mut self, queue_depth: Option<u32>, in_flight_frames: Option<u32>) {
+    pub(crate) fn observe_submit(
+        &mut self,
+        queue_depth: Option<u32>,
+        in_flight_frames: Option<u32>,
+    ) {
         if !self.enabled {
             return;
         }
@@ -1223,7 +1227,9 @@ pub(crate) fn wait_for_macos_native_frame_prefetch_work(
     wakeup.wait_for_change(observed_sequence);
 }
 
-pub(crate) fn macos_native_frame_worker_frame_generation(event: &MacosNativeFrameWorkerEvent) -> Option<u64> {
+pub(crate) fn macos_native_frame_worker_frame_generation(
+    event: &MacosNativeFrameWorkerEvent,
+) -> Option<u64> {
     match event {
         MacosNativeFrameWorkerEvent::Frame { generation, .. } => Some(*generation),
         _ => None,

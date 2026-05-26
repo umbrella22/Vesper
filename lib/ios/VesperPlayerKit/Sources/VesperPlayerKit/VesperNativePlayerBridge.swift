@@ -23,6 +23,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var player: AVPlayer?
     private var currentDashSession: VesperDashSession?
     private var dashResourceLoaderDelegate: VesperDashResourceLoaderDelegate?
+    private var currentSourceNormalizerResource: VesperSourceNormalizerResourceOpenResult?
+    private var sourceNormalizerResourceSession: VesperSourceNormalizerResourceSession?
+    private var sourceNormalizerResourceLoaderDelegate: VesperSourceNormalizerResourceLoaderDelegate?
     private weak var surfaceHost: PlayerSurfaceView?
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
@@ -214,6 +217,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         } catch {
             pendingAutoPlay = false
             iosHostLog("initialize failed: \(error.localizedDescription)")
+            closeCurrentSourceNormalizerResource()
             recordBenchmark(
                 "initialize_failed",
                 attributes: ["error": error.localizedDescription]
@@ -300,6 +304,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         player = nil
         currentDashSession = nil
         dashResourceLoaderDelegate = nil
+        closeCurrentSourceNormalizerResource()
         resetTrackState()
     }
 
@@ -755,8 +760,30 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
 
         recordBenchmark("source_load_start")
-        let url = try resolvedUrl(for: currentSource)
-        iosHostLog("loadCurrentSource url=\(url.absoluteString)")
+        let normalizedResource = openSourceNormalizerResourceIfNeeded(for: currentSource)
+        let normalizedSession = makeSourceNormalizerResourceSession(for: normalizedResource)
+        let playbackSource = normalizedPlaybackSource(
+            original: currentSource,
+            resource: normalizedResource
+        )
+        let url: URL
+        if let normalizedURL = normalizedSession?.playbackURL {
+            url = normalizedURL
+        } else if normalizedResource != nil && sourceNormalizerConfiguration.mode == .requireNormalized {
+            throw NSError(
+                domain: "io.github.ikaros.vesper.host.ios",
+                code: -2,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "SourceNormalizer requireNormalized failed to create a playback resource loader session."
+                ]
+            )
+        } else {
+            url = try resolvedUrl(for: currentSource)
+        }
+        iosHostLog(
+            "loadCurrentSource url=\(url.absoluteString) sourceNormalizerRoute=\(normalizedResource?.outputRoute ?? "native")"
+        )
         let resolvedResiliencePolicy = currentResiliencePolicy.resolvedForRuntimeSource(currentSource)
         resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
         let cachePolicy = resolvedCachePolicy(resolvedResiliencePolicy.cache)
@@ -767,7 +794,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         preloadCoordinator.configure(cachePolicy: cachePolicy)
         preloadCoordinator.warmCurrentSource(source: currentSource, url: url)
         releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
-        let item = makePlayerItem(for: currentSource, url: url)
+        let item = makePlayerItem(for: playbackSource, url: url)
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
         let player = AVPlayer(playerItem: item)
@@ -781,7 +808,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         pendingPlaybackStart = false
         hasAppliedDefaultTrackPreferences = false
         resetTrackState()
-        applyDashStartupAbrLimitIfNeeded(for: currentSource, to: item)
+        applyDashStartupAbrLimitIfNeeded(for: playbackSource, to: item)
         self.player = player
         surfaceHost?.attach(player: player)
         installObservers(for: player, item: item, playbackEpoch: playbackEpoch)
@@ -790,7 +817,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         updateState {
             PlayerHostUiState(
                 title: $0.title,
-                subtitle: sourceSubtitle(for: currentSource),
+                subtitle: normalizedResource.map { "SourceNormalizer \($0.outputRoute)" }
+                    ?? sourceSubtitle(for: currentSource),
                 sourceLabel: currentSource.label,
                 playbackState: .ready,
                 playbackRate: $0.playbackRate,
@@ -809,9 +837,28 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     }
 
     private func makePlayerItem(for source: VesperPlayerSource, url: URL) -> AVPlayerItem {
+        if isVesperSourceNormalizerURL(url) {
+            currentDashSession = nil
+            dashResourceLoaderDelegate = nil
+            guard let session = sourceNormalizerResourceSession else {
+                return AVPlayerItem(url: url)
+            }
+            let loaderDelegate = VesperSourceNormalizerResourceLoaderDelegate(session: session)
+            let asset = AVURLAsset(url: url)
+            asset.resourceLoader.setDelegate(
+                loaderDelegate,
+                queue: loaderDelegate.resourceLoadingQueue
+            )
+            sourceNormalizerResourceLoaderDelegate = loaderDelegate
+            iosHostLog("configured SourceNormalizer resource loader url=\(url.absoluteString)")
+            recordBenchmark("source_normalizer_resource_loader_configured")
+            return AVPlayerItem(asset: asset)
+        }
+
         guard source.protocol == .dash else {
             currentDashSession = nil
             dashResourceLoaderDelegate = nil
+            sourceNormalizerResourceLoaderDelegate = nil
             guard !source.headers.isEmpty else {
                 return AVPlayerItem(url: url)
             }
@@ -848,9 +895,119 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         currentDashSession = session
         dashResourceLoaderDelegate = loaderDelegate
+        sourceNormalizerResourceLoaderDelegate = nil
         iosHostLog("configured DASH bridge master=\(session.masterPlaylistURL.absoluteString)")
         recordBenchmark("dash_bridge_configured")
         return AVPlayerItem(asset: asset)
+    }
+
+    private func openSourceNormalizerResourceIfNeeded(
+        for source: VesperPlayerSource
+    ) -> VesperSourceNormalizerResourceOpenResult? {
+        closeCurrentSourceNormalizerResource()
+        guard sourceNormalizerConfiguration.mode == .preferNormalized ||
+            sourceNormalizerConfiguration.mode == .requireNormalized
+        else {
+            return nil
+        }
+
+        let outputRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-source-normalizer", isDirectory: true)
+        let resource = VesperMobileSourceNormalizerResource.open(
+            source: source,
+            configuration: sourceNormalizerConfiguration,
+            outputRoot: outputRoot,
+            forceNormalized: sourceNormalizerConfiguration.mode == .requireNormalized
+        )
+        guard let resource else {
+            if sourceNormalizerConfiguration.mode == .requireNormalized {
+                reportCommandError(
+                    code: .backendFailure,
+                    category: .source,
+                    message: "SourceNormalizer requireNormalized failed to open a normalized resource"
+                )
+            }
+            return nil
+        }
+
+        currentSourceNormalizerResource = resource
+        if !resource.diagnostics.isEmpty {
+            currentPluginDiagnostics = resource.diagnostics.map { diagnostic in
+                var enriched = diagnostic
+                enriched["outputRoute"] = resource.outputRoute
+                enriched["selectedProfile"] = resource.selectedProfile
+                enriched["contentType"] = resource.primaryContentType
+                enriched["primaryResource"] = resource.primaryResourcePath
+                enriched["cachePolicy"] = resource.cachePolicy
+                enriched["participation"] = "participated"
+                return enriched
+            }
+        }
+        iosHostLog(
+            "source normalizer resource selected route=\(resource.outputRoute) path=\(resource.primaryResourcePath)"
+        )
+        return resource
+    }
+
+    private func makeSourceNormalizerResourceSession(
+        for resource: VesperSourceNormalizerResourceOpenResult?
+    ) -> VesperSourceNormalizerResourceSession? {
+        guard let resource else {
+            sourceNormalizerResourceSession = nil
+            sourceNormalizerResourceLoaderDelegate = nil
+            return nil
+        }
+        do {
+            let session = try VesperSourceNormalizerResourceSession(resource: resource)
+            sourceNormalizerResourceSession = session
+            return session
+        } catch {
+            iosHostLog("source normalizer resource loader setup failed: \(error.localizedDescription)")
+            if sourceNormalizerConfiguration.mode == .requireNormalized {
+                reportCommandError(
+                    code: .backendFailure,
+                    category: .source,
+                    message: error.localizedDescription
+                )
+            }
+            return nil
+        }
+    }
+
+    private func closeCurrentSourceNormalizerResource() {
+        guard let resource = currentSourceNormalizerResource else {
+            return
+        }
+        currentSourceNormalizerResource = nil
+        sourceNormalizerResourceSession = nil
+        sourceNormalizerResourceLoaderDelegate = nil
+        VesperMobileSourceNormalizerResource.dispose(handle: resource.handle)
+    }
+
+    private func normalizedPlaybackSource(
+        original: VesperPlayerSource,
+        resource: VesperSourceNormalizerResourceOpenResult?
+    ) -> VesperPlayerSource {
+        guard let resource else {
+            return original
+        }
+        let playbackProtocol: VesperPlayerSourceProtocol
+        switch resource.outputRoute {
+        case "hlsShortWindow":
+            playbackProtocol = .hls
+        case "fmp4LocalStream":
+            playbackProtocol = .progressive
+        default:
+            return original
+        }
+        return VesperPlayerSource(
+            uri: sourceNormalizerResourceSession?.playbackURL.absoluteString
+                ?? resource.playbackURL?.absoluteString
+                ?? original.uri,
+            label: original.label,
+            kind: .local,
+            protocol: playbackProtocol
+        )
     }
 
     private func seekToPosition(_ positionMs: Int64) {

@@ -42,6 +42,10 @@ void main() {
       'generic-fallback',
     );
     expect(
+      diagnostics[2].capability?.sourceNormalizer?.supportedOutputRoutes.single,
+      'packetStream',
+    );
+    expect(
         diagnostics[2].capability?.sourceNormalizer?.requiresNetwork, isFalse);
   });
 
@@ -252,12 +256,17 @@ void main() {
             'kind': 'sourceNormalizer',
             'sourceNormalizer': <Object?, Object?>{
               'supportedRuntimeProfiles': <String>['generic-fallback'],
+              'supportedOutputRoutes': <String>['packetStream'],
               'maxLevel': 'packet_repair',
               'mediaKinds': <String>['video'],
               'codecs': <String>['h264'],
               'bitstreamFormats': <String>['annex_b'],
               'supportsSeek': true,
               'supportsFlush': true,
+              'supportsGrowingResources': false,
+              'supportsRangeReads': false,
+              'supportsCancel': false,
+              'contentTypes': <String>[],
               'requiredLibraries': <String>['avformat'],
               'requiredDemuxers': <String>['mov'],
               'requiredMuxers': <String>['mp4'],
@@ -321,13 +330,18 @@ void main() {
           .capability?.sourceNormalizer?.supportedRuntimeProfiles.single,
       'generic-fallback',
     );
+    expect(
+      sourceNormalizer
+          .capability?.sourceNormalizer?.supportedOutputRoutes.single,
+      'packetStream',
+    );
     expect(sourceNormalizer.capability?.sourceNormalizer?.requiresNetwork,
         isFalse);
   });
 
   test('mobile plugin configurations round-trip through maps', () {
     const sourceNormalizer = VesperSourceNormalizerConfiguration(
-      mode: VesperSourceNormalizerMode.preflightOnly,
+      mode: VesperSourceNormalizerMode.requireNormalized,
       pluginLibraryPaths: <String>['/tmp/libplayer_source_normalizer.dylib'],
       runtimeProfile: 'generic-fallback',
     );
@@ -338,8 +352,8 @@ void main() {
 
     expect(
       VesperSourceNormalizerConfiguration.fromMap(sourceNormalizer.toMap())
-          .runtimeProfile,
-      'generic-fallback',
+          .mode,
+      VesperSourceNormalizerMode.requireNormalized,
     );
     expect(
       VesperFrameProcessorConfiguration.fromMap(frameProcessor.toMap()).mode,

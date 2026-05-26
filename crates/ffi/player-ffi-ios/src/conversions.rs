@@ -21,8 +21,9 @@ use player_runtime::{
     PlayerPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy,
     PlaylistActiveItem, PlaylistCoordinatorConfig, PlaylistFailureStrategy, PlaylistNeighborWindow,
     PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistSwitchPolicy,
-    PlaylistViewportHint, PlaylistViewportHintKind, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind,
-    PreloadConfig, PreloadPriority, PreloadSelectionHint, PreloadTaskSnapshot,
+    PlaylistViewportHint, PlaylistViewportHintKind, PreloadBudgetScope, PreloadCandidate,
+    PreloadCandidateKind, PreloadConfig, PreloadPriority, PreloadSelectionHint,
+    PreloadTaskSnapshot,
 };
 
 use crate::*;
@@ -54,7 +55,9 @@ pub(crate) fn read_track_selection(
     })
 }
 
-pub(crate) fn read_abr_policy(policy: &PlayerFfiAbrPolicy) -> Result<MediaAbrPolicy, PlayerFfiError> {
+pub(crate) fn read_abr_policy(
+    policy: &PlayerFfiAbrPolicy,
+) -> Result<MediaAbrPolicy, PlayerFfiError> {
     Ok(MediaAbrPolicy {
         mode: policy.mode.into(),
         track_id: read_optional_c_string(policy.track_id, "policy.track_id")?,
@@ -562,7 +565,9 @@ pub(crate) fn player_error_to_ffi(error: PlayerError) -> PlayerFfiError {
     }
 }
 
-pub(crate) fn map_player_error(error: &PlayerError) -> (PlayerFfiErrorCode, PlayerFfiErrorCategory) {
+pub(crate) fn map_player_error(
+    error: &PlayerError,
+) -> (PlayerFfiErrorCode, PlayerFfiErrorCategory) {
     (
         error_code_to_ffi(error.code()),
         error_category_to_ffi(error.category()),
@@ -806,7 +811,9 @@ pub(crate) fn download_segment_record_to_ffi(
     }
 }
 
-pub(crate) fn download_asset_stream_to_ffi(stream: DownloadAssetStream) -> PlayerFfiDownloadAssetStream {
+pub(crate) fn download_asset_stream_to_ffi(
+    stream: DownloadAssetStream,
+) -> PlayerFfiDownloadAssetStream {
     let (resource_ids, resource_ids_len) = into_c_string_list(stream.resource_ids);
     let (segment_ids, segment_ids_len) = into_c_string_list(stream.segment_ids);
     let (metadata_keys, metadata_values): (Vec<_>, Vec<_>) = stream.metadata.into_iter().unzip();
@@ -841,7 +848,9 @@ pub(crate) fn download_asset_stream_to_ffi(stream: DownloadAssetStream) -> Playe
     }
 }
 
-pub(crate) fn download_asset_index_to_ffi(asset_index: &DownloadAssetIndex) -> PlayerFfiDownloadAssetIndex {
+pub(crate) fn download_asset_index_to_ffi(
+    asset_index: &DownloadAssetIndex,
+) -> PlayerFfiDownloadAssetIndex {
     let resources = asset_index
         .resources
         .iter()
@@ -1881,4 +1890,3 @@ impl From<MediaAbrPolicy> for PlayerFfiAbrPolicy {
 pub(crate) fn duration_to_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
-
