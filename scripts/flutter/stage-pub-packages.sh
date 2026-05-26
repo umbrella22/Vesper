@@ -34,10 +34,12 @@ rewrite_pubspec() {
 
   perl -0pi -e 's/^publish_to:\s*none\n//m; s/^publish_to:\s*'\''none'\''\n//m; s/^publish_to:\s*"none"\n//m' "$pubspec"
   perl -0pi -e "s{^version: .*}{version: $VERSION}m" "$pubspec"
-  perl -0pi -e "s{^homepage:.*}{homepage: https://github.com/ikaros/rust-player-sdk\nrepository: https://github.com/ikaros/rust-player-sdk\nissue_tracker: https://github.com/ikaros/rust-player-sdk/issues}m" "$pubspec"
+  perl -0pi -e 's/^repository:.*\n//m; s/^issue_tracker:.*\n//m' "$pubspec"
+  perl -0pi -e "s{^homepage:.*}{homepage: https://github.com/umbrella22/Vesper\nrepository: https://github.com/umbrella22/Vesper\nissue_tracker: https://github.com/umbrella22/Vesper/issues}m" "$pubspec"
 
   for package in "${packages[@]}"; do
     perl -0pi -e "s{^  $package:\\n    path: \\.\\./$package\\n}{  $package: ^$VERSION\n}mg" "$pubspec"
+    perl -0pi -e "s{^  $package: \\^[0-9]+\\.[0-9]+\\.[0-9]+(?:[+-][A-Za-z0-9.-]+)?\\n}{  $package: ^$VERSION\n}mg" "$pubspec"
   done
 }
 
@@ -55,6 +57,7 @@ for package in "${packages[@]}"; do
     --exclude '.dart_tool' \
     --exclude 'build' \
     --exclude 'pubspec.lock' \
+    --exclude 'pubspec_overrides.yaml' \
     "$source_dir/" "$stage_dir/"
 
   cp "$ROOT_DIR/LICENSE" "$stage_dir/LICENSE"

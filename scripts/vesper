@@ -14,7 +14,7 @@ Groups:
   ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
-  flutter  stage-pub | pub-dry-run | pub-publish | verify-android-plugin
+  flutter  stage-pub | pub-dry-run | pub-publish | local-overrides | verify-android-plugin
   release  notes | set-version | prepare-from-tag | metadata-from-tag | verify-version | verify-current
   contract verify
 EOF
@@ -133,6 +133,9 @@ case "$group:$command" in
     ;;
   flutter:pub-publish)
     exec "$SCRIPT_DIR/flutter/publish-pub-packages.sh" "$@"
+    ;;
+  flutter:local-overrides)
+    exec "$SCRIPT_DIR/flutter/write-local-overrides.sh" "$@"
     ;;
   flutter:verify-android-plugin)
     exec "$SCRIPT_DIR/flutter/verify-android-plugin.sh" "$@"

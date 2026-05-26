@@ -1,8 +1,8 @@
 name: vesper_player_macos
 description: macOS experimental placeholder package for Vesper Player Flutter implementation.
 version: 0.3.0
-homepage: https://github.com/ikaros/rust-player-sdk
-publish_to: none
+homepage: https://github.com/umbrella22/Vesper
+repository: https://github.com/umbrella22/Vesper
 
 environment:
   sdk: ">=3.6.0 <4.0.0"
@@ -11,5 +11,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  vesper_player_platform_interface:
-    path: ../vesper_player_platform_interface
+  vesper_player_platform_interface: ^0.3.0
+
+dev_dependencies:
+  flutter_lints: ^6.0.0

@@ -4,6 +4,7 @@
 flutter_aliplayer-7.12.0/*
 flutter_tencent/*
 third_party/*
+plugins/*
 
 # Development notes (local only, not committed)
 devnotes/
@@ -31,6 +32,21 @@ lib/android/.kotlin/
 lib/android/build/
 lib/android/vesper-player-kit/build/
 lib/android/vesper-player-kit-software/build/
+lib/android/vesper-player-kit-cast/build/
+lib/android/vesper-player-kit-relay/build/
+lib/android/vesper-player-kit-dlna/build/
+lib/android/vesper-player-kit-ffmpeg-runtime/build/
+lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs/*
+lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime/*
+lib/android/vesper-player-kit-source-normalizer-ffmpeg/build/
+lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs/*
+lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/assets/vesper-source-normalizer-ffmpeg/*
+lib/android/vesper-player-kit-frame-processor-diagnostic/build/
+lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs/*
+lib/android/vesper-player-kit-external-playback/build/
+lib/android/vesper-player-kit-external-playback/src/main/jniLibs/*
+lib/android/vesper-player-kit-relay-ffmpeg/build/
+lib/android/vesper-player-kit-relay-ffmpeg/src/main/jniLibs/*
 lib/android/vesper-player-kit-compose/build/
 lib/android/vesper-player-kit-compose-ui/build/
 lib/android/vesper-player-kit/src/main/jniLibs/*
@@ -91,11 +107,13 @@ lib/flutter/**/android/.gradle/
 lib/flutter/**/android/local.properties
 lib/flutter/**/*.iml
 lib/flutter/**/pubspec.lock
+lib/flutter/**/pubspec_overrides.yaml
 
 # Flutter example generated artifacts
 examples/flutter-host/.dart_tool/
 examples/flutter-host/.idea/
 examples/flutter-host/build/
+examples/flutter-host/pubspec_overrides.yaml
 examples/flutter-host/ios/Pods/
 examples/flutter-host/ios/.symlinks/
 examples/flutter-host/ios/Flutter/ephemeral/

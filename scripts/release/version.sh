@@ -263,6 +263,20 @@ set_version() {
     perl -0pi -e "s{^version: [0-9]+\\.[0-9]+\\.[0-9]+}{version: $version}m" "$pubspec"
   done
 
+  for pubspec in "$ROOT_DIR"/lib/flutter/*/pubspec.yaml; do
+    for package in \
+      vesper_player \
+      vesper_player_android \
+      vesper_player_external_playback \
+      vesper_player_ios \
+      vesper_player_macos \
+      vesper_player_platform_interface \
+      vesper_player_ui
+    do
+      perl -0pi -e "s{^  $package: \^[0-9]+\.[0-9]+\.[0-9]+(?:[+-][A-Za-z0-9.-]+)?\n}{  $package: ^$version\n}mg" "$pubspec"
+    done
+  done
+
   for gradle_file in \
     "$ROOT_DIR/lib/flutter/vesper_player_android/android/build.gradle" \
     "$ROOT_DIR/lib/flutter/vesper_player_external_playback/android/build.gradle"
