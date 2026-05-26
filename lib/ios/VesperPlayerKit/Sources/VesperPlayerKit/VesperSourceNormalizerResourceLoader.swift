@@ -16,7 +16,13 @@ final class VesperSourceNormalizerResourceSession {
         primaryURL = URL(fileURLWithPath: resource.primaryResourcePath)
         rootDirectory = primaryURL.deletingLastPathComponent()
         let bufferValue = resource.cachePolicy["sessionReadBufferBytes"] as? NSNumber
-        readBufferBytes = max(16 * 1024, min(bufferValue?.intValue ?? 4 * 1024 * 1024, 1024 * 1024))
+        readBufferBytes = max(
+            vesperLocalResourceMinReadBufferBytes,
+            min(
+                bufferValue?.intValue ?? vesperLocalResourceDefaultReadBufferBytes,
+                vesperLocalResourceMaxReadBufferBytes
+            )
+        )
         let lastPathComponent = resource.outputRoute == "hlsShortWindow" ? "index.m3u8" : "primary"
         guard let url = URL(string: "vesper-normalized://session/\(id)/\(lastPathComponent)") else {
             throw NSError(

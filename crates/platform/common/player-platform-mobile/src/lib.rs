@@ -1150,9 +1150,7 @@ impl From<&SourceNormalizerResourceCachePolicy> for MobileSourceNormalizerCacheP
     }
 }
 
-impl From<&player_plugin::SourceNormalizerResourceInfo>
-    for MobileSourceNormalizerResourceInfoWire
-{
+impl From<&player_plugin::SourceNormalizerResourceInfo> for MobileSourceNormalizerResourceInfoWire {
     fn from(value: &player_plugin::SourceNormalizerResourceInfo) -> Self {
         Self {
             role: value.role.clone(),
@@ -1530,6 +1528,26 @@ mod tests {
         .expect("prefer native-first bypass should not error");
 
         assert!(opened.is_none());
+    }
+
+    #[test]
+    fn prefer_normalized_native_first_bypasses_standard_dash_sources() {
+        let opened = open_mobile_source_normalizer_resource(
+            &MediaSource::new("https://cdn.example.test/manifest.mpd"),
+            &MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::PreferNormalized,
+                plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                runtime_profile: Some("generic-fallback".to_owned()),
+            },
+            std::env::temp_dir().display().to_string(),
+            MobileSourceNormalizerRouteDecision::NativeFirst,
+        )
+        .expect("prefer native-first DASH bypass should not error");
+
+        assert!(
+            opened.is_none(),
+            "standard DASH stays native-first; generic fallback must not force normalization"
+        );
     }
 
     #[test]

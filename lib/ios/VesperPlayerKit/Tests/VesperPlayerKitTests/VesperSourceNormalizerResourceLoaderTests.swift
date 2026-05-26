@@ -54,6 +54,38 @@ final class VesperSourceNormalizerResourceLoaderTests: XCTestCase {
         XCTAssertEqual(session.contentType(for: segment), "public.mpeg-4")
     }
 
+    func testSessionReadPolicyKeepsFourMiBProfileBuffer() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let primary = directory.appendingPathComponent("normalized.mp4")
+        try Data("media".utf8).write(to: primary)
+        let session = try VesperSourceNormalizerResourceSession(
+            resource: makeResource(
+                route: "fmp4LocalStream",
+                primary: primary,
+                sessionReadBufferBytes: 4 * 1024 * 1024
+            )
+        )
+
+        XCTAssertEqual(session.readPolicy.bufferBytes, 4 * 1024 * 1024)
+    }
+
+    func testSessionReadPolicyCapsOversizedProfileBufferAtFourMiB() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let primary = directory.appendingPathComponent("normalized.mp4")
+        try Data("media".utf8).write(to: primary)
+        let session = try VesperSourceNormalizerResourceSession(
+            resource: makeResource(
+                route: "fmp4LocalStream",
+                primary: primary,
+                sessionReadBufferBytes: 16 * 1024 * 1024
+            )
+        )
+
+        XCTAssertEqual(session.readPolicy.bufferBytes, 4 * 1024 * 1024)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -63,7 +95,8 @@ final class VesperSourceNormalizerResourceLoaderTests: XCTestCase {
 
     private func makeResource(
         route: String,
-        primary: URL
+        primary: URL,
+        sessionReadBufferBytes: Int = 4096
     ) -> VesperSourceNormalizerResourceOpenResult {
         VesperSourceNormalizerResourceOpenResult(
             handle: 42,
@@ -76,7 +109,7 @@ final class VesperSourceNormalizerResourceLoaderTests: XCTestCase {
                 : "video/mp4",
             playbackUri: nil,
             resources: [],
-            cachePolicy: ["sessionReadBufferBytes": 4096],
+            cachePolicy: ["sessionReadBufferBytes": sessionReadBufferBytes],
             diagnostics: []
         )
     }

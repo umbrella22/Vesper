@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::Path,
+    time::Duration,
 };
 
 use serde::Deserialize;
@@ -114,6 +115,18 @@ impl Default for SourceNormalizerRuntimePolicy {
             in_session_seek: false,
             fallback_profile: None,
         }
+    }
+}
+
+impl SourceNormalizerRuntimePolicy {
+    /// Active playback session total timeout.
+    ///
+    /// `None` and `Some(0)` both mean "unbounded"; positive values are
+    /// interpreted as milliseconds.
+    pub fn active_session_total_timeout(&self) -> Option<Duration> {
+        self.active_session_total_timeout_ms
+            .filter(|timeout_ms| *timeout_ms > 0)
+            .map(Duration::from_millis)
     }
 }
 
@@ -831,5 +844,38 @@ byte_magic = ["46 4c 5"]
 
         let standalone = SourceNormalizerProfile::default();
         assert_eq!(standalone.runtime, SourceNormalizerRuntimePolicy::default());
+    }
+
+    #[test]
+    fn active_session_total_timeout_ms_none_is_unbounded() {
+        let policy = SourceNormalizerRuntimePolicy {
+            active_session_total_timeout_ms: None,
+            ..SourceNormalizerRuntimePolicy::default()
+        };
+
+        assert_eq!(policy.active_session_total_timeout(), None);
+    }
+
+    #[test]
+    fn active_session_total_timeout_ms_zero_is_unbounded() {
+        let policy = SourceNormalizerRuntimePolicy {
+            active_session_total_timeout_ms: Some(0),
+            ..SourceNormalizerRuntimePolicy::default()
+        };
+
+        assert_eq!(policy.active_session_total_timeout(), None);
+    }
+
+    #[test]
+    fn active_session_total_timeout_ms_positive_sets_deadline() {
+        let policy = SourceNormalizerRuntimePolicy {
+            active_session_total_timeout_ms: Some(1),
+            ..SourceNormalizerRuntimePolicy::default()
+        };
+
+        assert_eq!(
+            policy.active_session_total_timeout(),
+            Some(Duration::from_millis(1))
+        );
     }
 }

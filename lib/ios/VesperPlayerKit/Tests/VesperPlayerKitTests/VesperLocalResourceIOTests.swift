@@ -104,6 +104,18 @@ final class VesperLocalResourceIOTests: XCTestCase {
         XCTAssertEqual(String(data: data, encoding: .utf8), "345")
     }
 
+    func testReadPolicyAllowsFourMiBProfileBuffer() {
+        let policy = VesperLocalResourceReadPolicy(bufferBytes: 4 * 1024 * 1024)
+
+        XCTAssertEqual(policy.bufferBytes, 4 * 1024 * 1024)
+    }
+
+    func testReadPolicyCapsOversizedBufferAtFourMiB() {
+        let policy = VesperLocalResourceReadPolicy(bufferBytes: 16 * 1024 * 1024)
+
+        XCTAssertEqual(policy.bufferBytes, 4 * 1024 * 1024)
+    }
+
     func testTemporaryFileCleanupRemovesFile() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -159,6 +171,43 @@ final class VesperLocalResourceIOTests: XCTestCase {
         wait(for: [writerFinished], timeout: 1)
 
         XCTAssertEqual(String(data: data, encoding: .utf8), "4567")
+    }
+
+    func testGrowingFileReadsRangeBeyondInitialContentLength() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("growing-range.bin")
+        try Data("0123".utf8).write(to: file)
+
+        let body = VesperLocalResourceBody.file(
+            url: file,
+            offset: 0,
+            length: 4,
+            contentType: "public.data",
+            removeAfterServing: false,
+            growingPolicy: VesperGrowingFileReadPolicy(timeoutSeconds: 1, pollSeconds: 0.01)
+        )
+        let writerFinished = expectation(description: "growing range writer finished")
+        DispatchQueue.global(qos: .userInitiated).async {
+            Thread.sleep(forTimeInterval: 0.05)
+            do {
+                var data = try Data(contentsOf: file)
+                data.append(Data("456789".utf8))
+                try data.write(to: file)
+            } catch {
+                XCTFail("Failed to append growing range bytes: \(error)")
+            }
+            writerFinished.fulfill()
+        }
+
+        let data = try VesperLocalResourceResponder.readDataForTesting(
+            body: body,
+            requestedOffset: 6,
+            requestedLength: 4
+        )
+        wait(for: [writerFinished], timeout: 1)
+
+        XCTAssertEqual(String(data: data, encoding: .utf8), "6789")
     }
 
     func testPathContainmentRejectsSiblingDirectoryPrefix() throws {

@@ -1,6 +1,10 @@
 @preconcurrency import AVFoundation
 import Foundation
 
+let vesperLocalResourceMinReadBufferBytes = 16 * 1024
+let vesperLocalResourceMaxReadBufferBytes = 4 * 1024 * 1024
+let vesperLocalResourceDefaultReadBufferBytes = 4 * 1024 * 1024
+
 enum VesperLocalResourceOutOfRangeBehavior {
     case fail
     case finishEmpty
@@ -11,10 +15,13 @@ struct VesperLocalResourceReadPolicy {
     let outOfRangeBehavior: VesperLocalResourceOutOfRangeBehavior
 
     init(
-        bufferBytes: Int = 256 * 1024,
+        bufferBytes: Int = vesperLocalResourceDefaultReadBufferBytes,
         outOfRangeBehavior: VesperLocalResourceOutOfRangeBehavior = .fail
     ) {
-        self.bufferBytes = max(16 * 1024, min(bufferBytes, 1024 * 1024))
+        self.bufferBytes = max(
+            vesperLocalResourceMinReadBufferBytes,
+            min(bufferBytes, vesperLocalResourceMaxReadBufferBytes)
+        )
         self.outOfRangeBehavior = outOfRangeBehavior
     }
 }
@@ -374,6 +381,9 @@ func vesperLocalResourceWaitForFileLength(
     timeoutSeconds: TimeInterval,
     pollSeconds: TimeInterval
 ) -> UInt64 {
+    // This blocks with Thread.sleep while a growing media file catches up.
+    // Call it only from AVAssetResourceLoader/background resource queues, never
+    // from the main queue.
     let deadline = Date().addingTimeInterval(max(0, timeoutSeconds))
     var currentLength = (try? vesperLocalResourceFileSize(url)) ?? 0
     while currentLength < targetLength && Date() < deadline {

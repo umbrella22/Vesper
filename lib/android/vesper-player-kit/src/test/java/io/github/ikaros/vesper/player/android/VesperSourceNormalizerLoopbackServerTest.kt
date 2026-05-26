@@ -116,6 +116,7 @@ class VesperSourceNormalizerLoopbackServerTest {
 
             assertEquals(200, connection.responseCode)
             assertEquals(null, connection.getHeaderField("Content-Length"))
+            assertEquals("close", connection.getHeaderField("Connection"))
             assertEquals("init-fragment", connection.inputStream.bufferedReader().readText())
             writer.join(1_000)
         } finally {

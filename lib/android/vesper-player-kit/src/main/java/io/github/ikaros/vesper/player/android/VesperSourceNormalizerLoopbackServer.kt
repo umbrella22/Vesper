@@ -347,6 +347,9 @@ private fun writeFileResponse(
         !headOnly &&
         (range == null || (range.start == 0L && range.end == null))
     ) {
+        // Growing primary streams are close-delimited on purpose: ExoPlayer can
+        // keep reading until the session closes, while Range and HEAD requests
+        // still use fixed Content-Length responses below.
         output.writeStatusAndHeaders(
             200,
             200.reasonPhrase(),
