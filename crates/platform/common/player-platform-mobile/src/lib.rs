@@ -83,6 +83,19 @@ pub struct MobileSourceNormalizerResourceOpen {
     pub diagnostics: Vec<PlayerPluginDiagnostic>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileSourceNormalizerPlaybackDecision {
+    pub action: MobileSourceNormalizerPlaybackAction,
+    pub reason: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MobileSourceNormalizerPlaybackAction {
+    BypassNativeFirst,
+    TryNormalized,
+    Disabled,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MobileSourceNormalizerResourceWire {
@@ -107,6 +120,12 @@ pub struct MobileSourceNormalizerResourceWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_bytes_used: Option<u64>,
     pub cache_policy: MobileSourceNormalizerCachePolicyWire,
+    pub route: String,
+    pub participation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_quota: Option<u64>,
     pub diagnostics: Vec<MobilePluginDiagnosticOwnedWire>,
 }
 
@@ -178,16 +197,12 @@ pub fn open_mobile_source_normalizer_resource(
     output_root: impl Into<String>,
     decision: MobileSourceNormalizerRouteDecision,
 ) -> Result<Option<MobileSourceNormalizerResourceOpen>, String> {
-    if !matches!(
-        configuration.mode,
-        SourceNormalizerMode::PreferNormalized | SourceNormalizerMode::RequireNormalized
-    ) {
+    let playback_decision =
+        mobile_source_normalizer_playback_decision(source, configuration, decision);
+    if playback_decision.action == MobileSourceNormalizerPlaybackAction::Disabled {
         return Ok(None);
     }
-    if decision == MobileSourceNormalizerRouteDecision::NativeFirst
-        && native_first_source_normalizer_bypass(source)
-        && configuration.mode != SourceNormalizerMode::RequireNormalized
-    {
+    if playback_decision.action == MobileSourceNormalizerPlaybackAction::BypassNativeFirst {
         return Ok(None);
     }
 
@@ -257,6 +272,37 @@ pub fn open_mobile_source_normalizer_resource(
     }
 }
 
+pub fn mobile_source_normalizer_playback_decision(
+    source: &MediaSource,
+    configuration: &MobileSourceNormalizerConfiguration,
+    decision: MobileSourceNormalizerRouteDecision,
+) -> MobileSourceNormalizerPlaybackDecision {
+    if !matches!(
+        configuration.mode,
+        SourceNormalizerMode::PreferNormalized | SourceNormalizerMode::RequireNormalized
+    ) {
+        return MobileSourceNormalizerPlaybackDecision {
+            action: MobileSourceNormalizerPlaybackAction::Disabled,
+            reason: "source normalizer normalized playback is disabled",
+        };
+    }
+
+    if decision == MobileSourceNormalizerRouteDecision::NativeFirst
+        && native_first_source_normalizer_bypass(source, configuration)
+        && configuration.mode != SourceNormalizerMode::RequireNormalized
+    {
+        return MobileSourceNormalizerPlaybackDecision {
+            action: MobileSourceNormalizerPlaybackAction::BypassNativeFirst,
+            reason: "standard source stays native-first",
+        };
+    }
+
+    MobileSourceNormalizerPlaybackDecision {
+        action: MobileSourceNormalizerPlaybackAction::TryNormalized,
+        reason: "normalized playback requested",
+    }
+}
+
 pub fn mobile_source_normalizer_resource_open_json(
     handle: u64,
     opened: &MobileSourceNormalizerResourceOpen,
@@ -312,6 +358,25 @@ pub fn source_normalizer_diagnostics(
     if configuration.mode == SourceNormalizerMode::PreferNormalized
         || configuration.mode == SourceNormalizerMode::RequireNormalized
     {
+        let decision = mobile_source_normalizer_playback_decision(
+            source,
+            configuration,
+            MobileSourceNormalizerRouteDecision::NativeFirst,
+        );
+        if decision.action == MobileSourceNormalizerPlaybackAction::BypassNativeFirst {
+            diagnostics.push(runtime_source_normalizer_diagnostic(
+                String::new(),
+                None,
+                PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                format!(
+                    "source normalizer normalized-resource probe bypassed; route=native; fallbackReason={}",
+                    decision.reason
+                ),
+                PlayerPluginParticipation::Bypassed,
+            ));
+            return diagnostics;
+        }
+
         let Some(record) = registry.best_source_normalizer_resource() else {
             diagnostics.push(runtime_source_normalizer_diagnostic(
                 String::new(),
@@ -701,36 +766,63 @@ fn resource_status_has_primary_bytes(status: &SourceNormalizerResourceSessionSta
         return false;
     }
     match info.output_route {
-        SourceNormalizerOutputRoute::Fmp4LocalStream => {
-            let primary_len = std::fs::metadata(primary_path)
-                .ok()
-                .map(|metadata| metadata.len())
-                .unwrap_or_default();
-            primary_len > 32 && file_contains_box_marker(primary_path, &[b"moov", b"moof"])
-        }
+        SourceNormalizerOutputRoute::Fmp4LocalStream => fmp4_local_stream_ready(primary_path),
         SourceNormalizerOutputRoute::HlsShortWindow => {
-            let playlist_ready = std::fs::read_to_string(primary_path)
-                .map(|playlist| {
-                    playlist.contains("#EXTM3U")
-                        && (playlist.contains("#EXTINF") || playlist.contains("#EXT-X-MAP"))
-                })
-                .unwrap_or(false);
-            if !playlist_ready {
-                return false;
-            }
-            info.resources.iter().any(|resource| {
-                resource.path != primary_path
-                    && resource.byte_length.unwrap_or_default() > 0
-                    && (resource.role == "segment"
-                        || resource
-                            .content_type
-                            .as_deref()
-                            .map(|content_type| content_type.starts_with("video/"))
-                            .unwrap_or(false))
-            })
+            hls_short_window_ready(primary_path, &info.resources)
         }
         SourceNormalizerOutputRoute::PacketStream => false,
     }
+}
+
+fn fmp4_local_stream_ready(primary_path: &str) -> bool {
+    let primary_len = std::fs::metadata(primary_path)
+        .ok()
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
+    primary_len > 32
+        && file_contains_box_marker(primary_path, &[b"ftyp", b"moov"])
+        && file_contains_box_marker(primary_path, &[b"moof", b"mdat"])
+}
+
+fn hls_short_window_ready(
+    primary_path: &str,
+    resources: &[player_plugin::SourceNormalizerResourceInfo],
+) -> bool {
+    let playlist = match std::fs::read_to_string(primary_path) {
+        Ok(playlist) => playlist,
+        Err(_) => return false,
+    };
+    if !playlist.contains("#EXTM3U") || !playlist.contains("#EXTINF") {
+        return false;
+    }
+    let has_init = playlist.contains("#EXT-X-MAP")
+        || resources.iter().any(|resource| {
+            resource.path != primary_path
+                && resource.byte_length.unwrap_or_default() > 0
+                && resource
+                    .path
+                    .rsplit(std::path::MAIN_SEPARATOR)
+                    .next()
+                    .map(|name| name == "init.mp4")
+                    .unwrap_or(false)
+        });
+    let has_media_segment = resources.iter().any(|resource| {
+        let file_name = resource.path.rsplit(std::path::MAIN_SEPARATOR).next();
+        resource.path != primary_path
+            && resource.byte_length.unwrap_or_default() > 0
+            && file_name != Some("init.mp4")
+            && (resource.role == "segment"
+                || resource
+                    .content_type
+                    .as_deref()
+                    .map(|content_type| content_type.starts_with("video/"))
+                    .unwrap_or(false))
+            && file_name
+                .map(|name| playlist.contains(name))
+                .unwrap_or(false)
+    });
+
+    has_init && has_media_segment
 }
 
 fn file_contains_box_marker(path: &str, markers: &[&[u8; 4]]) -> bool {
@@ -741,6 +833,14 @@ fn file_contains_box_marker(path: &str, markers: &[&[u8; 4]]) -> bool {
     bytes[..max_scan]
         .windows(4)
         .any(|window| markers.iter().any(|marker| window == marker.as_slice()))
+}
+
+fn resource_participation(route: SourceNormalizerOutputRoute) -> PlayerPluginParticipation {
+    match route {
+        SourceNormalizerOutputRoute::Fmp4LocalStream
+        | SourceNormalizerOutputRoute::HlsShortWindow => PlayerPluginParticipation::Selected,
+        SourceNormalizerOutputRoute::PacketStream => PlayerPluginParticipation::Bypassed,
+    }
 }
 
 fn diagnostic_from_record(
@@ -1022,10 +1122,35 @@ fn preferred_resource_route_for_source(
     }
 }
 
-fn native_first_source_normalizer_bypass(source: &MediaSource) -> bool {
+fn native_first_source_normalizer_bypass(
+    source: &MediaSource,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> bool {
+    match source.protocol() {
+        player_runtime::MediaSourceProtocol::Hls | player_runtime::MediaSourceProtocol::Dash => {
+            true
+        }
+        player_runtime::MediaSourceProtocol::File
+        | player_runtime::MediaSourceProtocol::Progressive => {
+            configuration.runtime_profile.is_none() && is_standard_progressive_mp4_source(source)
+        }
+        _ => false,
+    }
+}
+
+fn is_standard_progressive_mp4_source(source: &MediaSource) -> bool {
+    let lower = source.uri().to_ascii_lowercase();
+    let lower_without_fragment = lower
+        .split_once('#')
+        .map(|(path, _)| path)
+        .unwrap_or(lower.as_str());
+    let lower_path = lower_without_fragment
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(lower_without_fragment);
     matches!(
-        source.protocol(),
-        player_runtime::MediaSourceProtocol::Hls | player_runtime::MediaSourceProtocol::Dash
+        lower_path.rsplit_once('.').map(|(_, extension)| extension),
+        Some("mp4" | "m4v" | "mov")
     )
 }
 
@@ -1130,6 +1255,11 @@ impl MobileSourceNormalizerResourceWire {
             message: opened.status.message.clone(),
             disk_bytes_used: opened.status.disk_bytes_used.or(info.disk_bytes_used),
             cache_policy: MobileSourceNormalizerCachePolicyWire::from(&opened.cache_policy),
+            route: info.output_route.wire_name().to_owned(),
+            participation: participation_wire_name(resource_participation(info.output_route))
+                .to_owned(),
+            fallback_reason: None,
+            cache_quota: Some(opened.cache_policy.session_disk_soft_cap_bytes),
             diagnostics: opened
                 .diagnostics
                 .iter()
@@ -1435,6 +1565,7 @@ fn participation_wire_name(participation: PlayerPluginParticipation) -> &'static
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn disabled_configs_emit_no_diagnostics() {
@@ -1531,6 +1662,69 @@ mod tests {
     }
 
     #[test]
+    fn prefer_normalized_native_first_bypasses_standard_progressive_mp4() {
+        let decision = mobile_source_normalizer_playback_decision(
+            &MediaSource::new("https://cdn.example.test/video.mp4?token=abc"),
+            &MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::PreferNormalized,
+                runtime_profile: None,
+                plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+            },
+            MobileSourceNormalizerRouteDecision::NativeFirst,
+        );
+
+        assert_eq!(
+            decision.action,
+            MobileSourceNormalizerPlaybackAction::BypassNativeFirst
+        );
+    }
+
+    #[test]
+    fn explicit_profile_can_try_normalized_progressive_source() {
+        let decision = mobile_source_normalizer_playback_decision(
+            &MediaSource::new("https://cdn.example.test/video.mp4"),
+            &MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::PreferNormalized,
+                runtime_profile: Some("generic-fallback".to_owned()),
+                plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+            },
+            MobileSourceNormalizerRouteDecision::NativeFirst,
+        );
+
+        assert_eq!(
+            decision.action,
+            MobileSourceNormalizerPlaybackAction::TryNormalized
+        );
+    }
+
+    #[test]
+    fn source_normalizer_probe_bypasses_standard_hls_without_opening_resource() {
+        let diagnostics = source_normalizer_diagnostics(
+            &MediaSource::new("https://cdn.example.test/master.m3u8"),
+            &MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::PreferNormalized,
+                plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                runtime_profile: Some("generic-fallback".to_owned()),
+            },
+        );
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.participation == PlayerPluginParticipation::Bypassed
+                    && diagnostic
+                        .message
+                        .as_deref()
+                        .map(|message| {
+                            message.contains("route=native")
+                                && message.contains("standard source stays native-first")
+                        })
+                        .unwrap_or(false)
+            }),
+            "standard HLS should stay native-first in preferNormalized diagnostics"
+        );
+    }
+
+    #[test]
     fn prefer_normalized_native_first_bypasses_standard_dash_sources() {
         let opened = open_mobile_source_normalizer_resource(
             &MediaSource::new("https://cdn.example.test/manifest.mpd"),
@@ -1551,6 +1745,25 @@ mod tests {
     }
 
     #[test]
+    fn require_normalized_overrides_native_first_dash_bypass() {
+        let result = open_mobile_source_normalizer_resource(
+            &MediaSource::new("https://cdn.example.test/manifest.mpd"),
+            &MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::RequireNormalized,
+                plugin_library_paths: Vec::new(),
+                runtime_profile: Some("generic-fallback".to_owned()),
+            },
+            std::env::temp_dir().display().to_string(),
+            MobileSourceNormalizerRouteDecision::NativeFirst,
+        );
+        let Err(error) = result else {
+            panic!("requireNormalized must try normalized route even for standard DASH");
+        };
+
+        assert!(error.contains("no plugin paths"));
+    }
+
+    #[test]
     fn require_normalized_errors_when_plugin_paths_are_missing() {
         let result = open_mobile_source_normalizer_resource(
             &MediaSource::new("file:///tmp/input.flv"),
@@ -1566,5 +1779,117 @@ mod tests {
         };
 
         assert!(error.contains("no plugin paths"));
+    }
+
+    #[test]
+    fn source_normalizer_smoke_matrix_documents_full_loop_expectations() {
+        let manifest =
+            include_str!("../../../../../fixtures/media/source-normalizer-smoke-matrix.json");
+        let value: Value = serde_json::from_str(manifest).expect("parse smoke matrix");
+        let cases = value["cases"].as_array().expect("cases array");
+
+        for required in [
+            "standard-progressive-mp4",
+            "standard-hls-native-first",
+            "standard-dash-native-first",
+            "flv-to-fmp4-local-stream",
+            "hevc-flv-to-fmp4-local-stream",
+            "broken-progressive-mp4-to-fmp4-local-stream",
+            "nonstandard-hls-short-window",
+            "weird-dash-short-window-fallback",
+            "require-normalized-missing-plugin-fails",
+        ] {
+            assert!(
+                cases.iter().any(|case| case["id"] == required),
+                "missing smoke matrix case {required}"
+            );
+        }
+
+        let standard_hls = cases
+            .iter()
+            .find(|case| case["id"] == "standard-hls-native-first")
+            .expect("standard HLS case");
+        assert_eq!(standard_hls["expectedRoute"], "native");
+        assert_eq!(standard_hls["expectedParticipation"], "bypassed");
+
+        let flv = cases
+            .iter()
+            .find(|case| case["id"] == "flv-to-fmp4-local-stream")
+            .expect("FLV case");
+        assert_eq!(flv["expectedRoute"], "fmp4LocalStream");
+        assert_eq!(flv["expectedParticipation"], "participated");
+
+        let weird_dash = cases
+            .iter()
+            .find(|case| case["id"] == "weird-dash-short-window-fallback")
+            .expect("weird DASH case");
+        assert_eq!(weird_dash["expectedRoute"], "hlsShortWindow");
+        assert_eq!(weird_dash["decision"], "force");
+    }
+
+    #[test]
+    fn fmp4_readiness_requires_init_and_first_fragment_markers() {
+        let directory =
+            std::env::temp_dir().join(format!("vesper-fmp4-readiness-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create temp dir");
+        let path = directory.join("normalized.mp4");
+
+        std::fs::write(&path, b"\0\0\0 ftyp\0\0\0 moov").expect("write init-only fmp4");
+        assert!(!fmp4_local_stream_ready(path.to_str().expect("utf8 path")));
+
+        std::fs::write(
+            &path,
+            b"\0\0\0 ftyp\0\0\0 moov\0\0\0 moof\0\0\0 mdatpayload",
+        )
+        .expect("write fragmented fmp4");
+        assert!(fmp4_local_stream_ready(path.to_str().expect("utf8 path")));
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn hls_short_window_readiness_requires_playlist_init_and_media_segment() {
+        let directory =
+            std::env::temp_dir().join(format!("vesper-hls-readiness-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create temp dir");
+        let playlist = directory.join("index.m3u8");
+        let init = directory.join("init.mp4");
+        let segment = directory.join("segment_00001.m4s");
+        std::fs::write(
+            &playlist,
+            "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:3,\nsegment_00001.m4s\n",
+        )
+        .expect("write playlist");
+        std::fs::write(&init, b"init").expect("write init");
+
+        let init_only = vec![player_plugin::SourceNormalizerResourceInfo {
+            role: "segment".to_owned(),
+            path: init.display().to_string(),
+            content_type: Some("video/mp4".to_owned()),
+            byte_length: Some(4),
+            growing: false,
+        }];
+        assert!(!hls_short_window_ready(
+            playlist.to_str().expect("utf8 path"),
+            &init_only
+        ));
+
+        std::fs::write(&segment, b"segment").expect("write segment");
+        let ready = vec![
+            init_only[0].clone(),
+            player_plugin::SourceNormalizerResourceInfo {
+                role: "segment".to_owned(),
+                path: segment.display().to_string(),
+                content_type: Some("video/mp4".to_owned()),
+                byte_length: Some(7),
+                growing: false,
+            },
+        ];
+        assert!(hls_short_window_ready(
+            playlist.to_str().expect("utf8 path"),
+            &ready
+        ));
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

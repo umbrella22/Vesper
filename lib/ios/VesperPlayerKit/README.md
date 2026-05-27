@@ -300,6 +300,8 @@ resource session and hand the resulting fMP4 or short-window HLS resource to
 AVPlayer. `preferNormalized` falls back to the original source when
 normalization fails; `requireNormalized` reports a source error. Standard DASH
 still uses the existing DASH bridge unless normalization is explicitly required.
+Standard HLS and DASH stay native-first by default, and the repository smoke
+expectations live in `fixtures/media/source-normalizer-smoke-matrix.json`.
 
 The optional
 `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` depends on the

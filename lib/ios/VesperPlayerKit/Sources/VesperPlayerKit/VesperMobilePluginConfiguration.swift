@@ -147,6 +147,10 @@ struct VesperSourceNormalizerResourceOpenResult {
     let playbackUri: String?
     let resources: [[String: Any]]
     let cachePolicy: [String: Any]
+    let route: String?
+    let participation: String?
+    let fallbackReason: String?
+    let cacheQuota: UInt64?
     let diagnostics: [[String: Any]]
 
     var playbackURL: URL? {
@@ -228,6 +232,10 @@ enum VesperMobileSourceNormalizerResource {
             playbackUri: object["playbackUri"] as? String,
             resources: object["resources"] as? [[String: Any]] ?? [],
             cachePolicy: object["cachePolicy"] as? [String: Any] ?? [:],
+            route: object["route"] as? String,
+            participation: object["participation"] as? String,
+            fallbackReason: object["fallbackReason"] as? String,
+            cacheQuota: (object["cacheQuota"] as? NSNumber)?.uint64Value,
             diagnostics: object["diagnostics"] as? [[String: Any]] ?? []
         )
     }

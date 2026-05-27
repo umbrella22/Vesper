@@ -255,7 +255,13 @@ the selected source and reports the result through `pluginDiagnostics`, but
 ExoPlayer still plays the original `VesperPlayerSource`. Preflight failure is
 non-fatal. `pluginLibraryPaths` must contain plugin `.so` paths only; the
 shared FFmpeg runtime AAR is resolved by Android packaging, not passed as a
-plugin path.
+plugin path. `PreferNormalized` and `RequireNormalized` may replace the
+platform source with a disk-backed fMP4 or short-window HLS resource served by
+the internal loopback server. `PreferNormalized` falls back to the original
+source when normalization fails; `RequireNormalized` reports a source error.
+Standard HLS and DASH stay native-first unless normalization is explicitly
+required or forced by a test profile. The repository smoke expectations live in
+`fixtures/media/source-normalizer-smoke-matrix.json`.
 
 The mobile FrameProcessor configuration is opt-in through
 `VesperFrameProcessorConfiguration`. Its v1 Android artifact is a diagnostics

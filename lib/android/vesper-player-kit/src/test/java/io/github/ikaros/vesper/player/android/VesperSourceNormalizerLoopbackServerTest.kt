@@ -48,6 +48,61 @@ class VesperSourceNormalizerLoopbackServerTest {
     }
 
     @Test
+    fun loopbackServerServesHeadWithContentLength() {
+        val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
+        val file = File(directory, "normalized.mp4")
+        file.writeBytes("0123456789abcdef".toByteArray())
+        val server = VesperSourceNormalizerLoopbackServer()
+        try {
+            val handle =
+                server.register(
+                    VesperNormalizedResourceRegistration(
+                        outputRoute = "fmp4LocalStream",
+                        primaryResourcePath = file.absolutePath,
+                        primaryContentType = "video/mp4",
+                        sessionReadBufferBytes = 4096,
+                    )
+                )
+            val connection = URL(handle.playbackUri).openConnection() as HttpURLConnection
+            connection.requestMethod = "HEAD"
+
+            assertEquals(200, connection.responseCode)
+            assertEquals("16", connection.getHeaderField("Content-Length"))
+            assertTrue(connection.inputStream.readBytes().isEmpty())
+        } finally {
+            server.stop()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun loopbackServerRejectsUnsatisfiableRange() {
+        val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
+        val file = File(directory, "normalized.mp4")
+        file.writeBytes("0123456789abcdef".toByteArray())
+        val server = VesperSourceNormalizerLoopbackServer()
+        try {
+            val handle =
+                server.register(
+                    VesperNormalizedResourceRegistration(
+                        outputRoute = "fmp4LocalStream",
+                        primaryResourcePath = file.absolutePath,
+                        primaryContentType = "video/mp4",
+                        sessionReadBufferBytes = 4096,
+                    )
+                )
+            val connection = URL(handle.playbackUri).openConnection() as HttpURLConnection
+            connection.setRequestProperty("Range", "bytes=32-64")
+
+            assertEquals(416, connection.responseCode)
+            assertEquals("bytes */16", connection.getHeaderField("Content-Range"))
+        } finally {
+            server.stop()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun loopbackServerWaitsForGrowingPrimaryRange() {
         val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
         val file = File(directory, "normalized.mp4")
@@ -148,6 +203,32 @@ class VesperSourceNormalizerLoopbackServerTest {
                 )
             assertNotNull(handle.token)
             now = 111L
+            val connection = URL(handle.playbackUri).openConnection() as HttpURLConnection
+
+            assertEquals(404, connection.responseCode)
+        } finally {
+            server.stop()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun loopbackServerInvalidatesRegisteredToken() {
+        val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
+        val file = File(directory, "normalized.mp4")
+        file.writeText("media")
+        val server = VesperSourceNormalizerLoopbackServer()
+        try {
+            val handle =
+                server.register(
+                    VesperNormalizedResourceRegistration(
+                        outputRoute = "fmp4LocalStream",
+                        primaryResourcePath = file.absolutePath,
+                        primaryContentType = "video/mp4",
+                        sessionReadBufferBytes = 4096,
+                    )
+                )
+            server.invalidate(handle.token)
             val connection = URL(handle.playbackUri).openConnection() as HttpURLConnection
 
             assertEquals(404, connection.responseCode)

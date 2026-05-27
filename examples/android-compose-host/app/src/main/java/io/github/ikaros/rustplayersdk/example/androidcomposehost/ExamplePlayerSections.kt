@@ -714,12 +714,17 @@ private fun PluginDiagnosticRow(
     val pluginName = diagnostic["pluginName"]?.toString().orEmpty()
     val path = diagnostic["path"]?.toString().orEmpty()
     val message = diagnostic["message"]?.toString().orEmpty()
-    val outputRoute = diagnostic["outputRoute"]?.toString().orEmpty()
+    val outputRoute =
+        diagnostic["route"]?.toString()?.takeIf(String::isNotBlank)
+            ?: diagnostic["outputRoute"]?.toString().orEmpty()
     val selectedProfile = diagnostic["selectedProfile"]?.toString().orEmpty()
     val primaryResource = diagnostic["primaryResource"]?.toString().orEmpty()
     val diskBytesUsed = (diagnostic["diskBytesUsed"] as? Number)?.toLong()
+    val fallbackReason = diagnostic["fallbackReason"]?.toString().orEmpty()
     val cachePolicy = diagnostic["cachePolicy"] as? Map<*, *>
-    val cacheLimit = (cachePolicy?.get("sessionDiskSoftCapBytes") as? Number)?.toLong()
+    val cacheLimit =
+        (diagnostic["cacheQuota"] as? Number)?.toLong()
+            ?: (cachePolicy?.get("sessionDiskSoftCapBytes") as? Number)?.toLong()
     val capability = diagnostic["capability"] as? Map<*, *>
     val sourceNormalizer = capability?.get("sourceNormalizer") as? Map<*, *>
     val profiles = (sourceNormalizer?.get("supportedRuntimeProfiles") as? List<*>)
@@ -787,6 +792,14 @@ private fun PluginDiagnosticRow(
             Text(
                 text = message,
                 maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (fallbackReason.isNotBlank()) {
+            Text(
+                text = fallbackReason,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
             )

@@ -84,9 +84,12 @@ SourceNormalizer diagnostics and preflight modes do not change playback. In
 open a disk-backed normalized resource session and hand the resulting fMP4 or
 short-window HLS resource to the platform player through Android loopback HTTP
 or the iOS `vesper-normalized://` resource loader. `preferNormalized` falls
-back to the original source on failure; `requireNormalized` reports a source error.
-FrameProcessor remains debug diagnostics only in this example and is never
-marked as participating in mobile playback.
+back to the original source on failure; `requireNormalized` reports a source
+error. Standard HLS and DASH stay native-first unless normalization is
+explicitly required or forced. The plugin diagnostics panel shows route,
+profile, cache usage, fallback reason, and participation. FrameProcessor
+remains debug diagnostics only in this example and is never marked as
+participating in mobile playback.
 
 ## Test
 

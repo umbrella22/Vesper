@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "defaults": {
+    "mode": "preferNormalized",
+    "decision": "nativeFirst",
+    "frameProcessorMobilePlayback": "diagnosticsOnly",
+    "decoderMobilePlayback": "deferred"
+  },
+  "cases": [
+    {
+      "id": "standard-progressive-mp4",
+      "uri": "fixtures/media/tiny-h264-aac.m4v",
+      "protocol": "file",
+      "expectedRoute": "native",
+      "expectedParticipation": "bypassed",
+      "reason": "normal progressive MP4 should not require SourceNormalizer"
+    },
+    {
+      "id": "standard-hls-native-first",
+      "uri": "https://cdn.example.test/standard/master.m3u8",
+      "protocol": "hls",
+      "expectedRoute": "native",
+      "expectedParticipation": "bypassed",
+      "reason": "standard HLS stays native-first when preferNormalized is not forced"
+    },
+    {
+      "id": "standard-dash-native-first",
+      "uri": "https://cdn.example.test/standard/manifest.mpd",
+      "protocol": "dash",
+      "expectedRoute": "native",
+      "expectedParticipation": "bypassed",
+      "reason": "standard DASH stays native-first and iOS keeps the existing DASH bridge"
+    },
+    {
+      "id": "flv-to-fmp4-local-stream",
+      "uri": "fixtures/media/generated/tiny-h264-aac.flv",
+      "protocol": "file",
+      "runtimeProfile": "flv",
+      "expectedRoute": "fmp4LocalStream",
+      "expectedParticipation": "participated",
+      "fixtureGeneration": "generate from fixtures/media/tiny-h264-aac.m4v with the repo FFmpeg runtime before manual smoke"
+    },
+    {
+      "id": "hevc-flv-to-fmp4-local-stream",
+      "uri": "fixtures/media/generated/tiny-hevc-aac.flv",
+      "protocol": "file",
+      "runtimeProfile": "hevc-flv",
+      "expectedRoute": "fmp4LocalStream",
+      "expectedParticipation": "participated",
+      "fixtureGeneration": "generate or supply locally; do not commit large HEVC media"
+    },
+    {
+      "id": "broken-progressive-mp4-to-fmp4-local-stream",
+      "uri": "fixtures/media/generated/tiny-broken-progressive.mp4",
+      "protocol": "file",
+      "runtimeProfile": "generic-fallback",
+      "expectedRoute": "fmp4LocalStream",
+      "expectedParticipation": "participated",
+      "fixtureGeneration": "small repaired/remux fixture only; large real-world captures stay local"
+    },
+    {
+      "id": "nonstandard-hls-short-window",
+      "uri": "fixtures/media/generated/nonstandard/index.m3u8",
+      "protocol": "hls",
+      "decision": "force",
+      "runtimeProfile": "hls-nonstandard",
+      "expectedRoute": "hlsShortWindow",
+      "expectedParticipation": "participated",
+      "fixtureGeneration": "small generated fMP4 HLS window; keep segment count minimal"
+    },
+    {
+      "id": "weird-dash-short-window-fallback",
+      "uri": "fixtures/media/generated/weird-dash/manifest.mpd",
+      "protocol": "dash",
+      "decision": "force",
+      "runtimeProfile": "dash-weird",
+      "expectedRoute": "hlsShortWindow",
+      "expectedParticipation": "participated",
+      "fixtureGeneration": "small generated DASH input used only for SourceNormalizer fallback smoke"
+    },
+    {
+      "id": "require-normalized-missing-plugin-fails",
+      "uri": "https://cdn.example.test/standard/manifest.mpd",
+      "protocol": "dash",
+      "mode": "requireNormalized",
+      "decision": "nativeFirst",
+      "expectedRoute": "error",
+      "expectedParticipation": "bypassed",
+      "expectedErrorContains": "no plugin paths"
+    }
+  ]
+}

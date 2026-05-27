@@ -939,6 +939,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 enriched["contentType"] = resource.primaryContentType
                 enriched["primaryResource"] = resource.primaryResourcePath
                 enriched["cachePolicy"] = resource.cachePolicy
+                enriched["route"] = resource.route ?? resource.outputRoute
+                if let cacheQuota = resource.cacheQuota {
+                    enriched["cacheQuota"] = cacheQuota
+                }
+                if let fallbackReason = resource.fallbackReason {
+                    enriched["fallbackReason"] = fallbackReason
+                }
                 enriched["participation"] = "participated"
                 return enriched
             }

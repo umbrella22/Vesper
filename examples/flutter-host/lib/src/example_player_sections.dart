@@ -459,14 +459,16 @@ class PluginDiagnosticRow extends StatelessWidget {
         diagnostic.capability?.sourceNormalizer?.supportedRuntimeProfiles ??
         const <String>[];
     final extra = diagnostic.extra;
-    final outputRoute = extra['outputRoute']?.toString() ?? '';
+    final outputRoute =
+        extra['route']?.toString() ?? extra['outputRoute']?.toString() ?? '';
     final selectedProfile = extra['selectedProfile']?.toString() ?? '';
     final primaryResource = extra['primaryResource']?.toString() ?? '';
+    final fallbackReason = extra['fallbackReason']?.toString() ?? '';
     final diskBytesUsed = extra['diskBytesUsed'];
     final cachePolicy = extra['cachePolicy'];
-    final cacheLimit = cachePolicy is Map
-        ? cachePolicy['sessionDiskSoftCapBytes']
-        : null;
+    final cacheLimit =
+        extra['cacheQuota'] ??
+        (cachePolicy is Map ? cachePolicy['sessionDiskSoftCapBytes'] : null);
     final title = <String>[
       diagnostic.pluginName ?? '',
       diagnostic.status.name,
@@ -535,6 +537,17 @@ class PluginDiagnosticRow extends StatelessWidget {
             Text(
               diagnostic.message!,
               maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.body),
+            ),
+          ],
+          if (fallbackReason.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              fallbackReason,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(
                 context,

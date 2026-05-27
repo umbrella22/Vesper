@@ -397,7 +397,7 @@ private struct PluginDiagnosticRow: View {
 
     private var route: String {
         let values = [
-            diagnostic["outputRoute"] as? String ?? "",
+            diagnostic["route"] as? String ?? diagnostic["outputRoute"] as? String ?? "",
             diagnostic["selectedProfile"] as? String ?? ""
         ].filter { !$0.isEmpty }
         return values.joined(separator: " · ")
@@ -406,7 +406,8 @@ private struct PluginDiagnosticRow: View {
     private var cache: String {
         let diskBytes = diagnostic["diskBytesUsed"] as? NSNumber
         let cachePolicy = diagnostic["cachePolicy"] as? [String: Any]
-        let diskLimit = cachePolicy?["sessionDiskSoftCapBytes"] as? NSNumber
+        let diskLimit = diagnostic["cacheQuota"] as? NSNumber
+            ?? cachePolicy?["sessionDiskSoftCapBytes"] as? NSNumber
         guard diskBytes != nil || diskLimit != nil else {
             return ""
         }
@@ -415,6 +416,10 @@ private struct PluginDiagnosticRow: View {
 
     private var resource: String {
         diagnostic["primaryResource"] as? String ?? ""
+    }
+
+    private var fallbackReason: String {
+        diagnostic["fallbackReason"] as? String ?? ""
     }
 
     private var path: String {
@@ -462,6 +467,12 @@ private struct PluginDiagnosticRow: View {
                 Text(message)
                     .font(.footnote)
                     .lineLimit(3)
+                    .foregroundStyle(palette.body)
+            }
+            if !fallbackReason.isEmpty {
+                Text(fallbackReason)
+                    .font(.footnote)
+                    .lineLimit(2)
                     .foregroundStyle(palette.body)
             }
             if !resource.isEmpty {

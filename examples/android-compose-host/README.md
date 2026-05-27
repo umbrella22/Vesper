@@ -40,9 +40,11 @@ SourceNormalizer diagnostics and preflight modes do not change playback. In
 normalized resource session and hand the resulting fMP4 or short-window HLS
 resource to ExoPlayer through a loopback `127.0.0.1` resource server with Range
 support. `preferNormalized` falls back to the original source on failure;
-`requireNormalized` reports a source error. FrameProcessor remains
-debug diagnostics only in this example and is never marked as participating in
-mobile playback.
+`requireNormalized` reports a source error. Standard HLS and DASH stay
+native-first unless normalization is explicitly required or forced. The plugin
+diagnostics panel shows route, profile, cache usage, fallback reason, and
+participation. FrameProcessor remains debug diagnostics only in this example
+and is never marked as participating in mobile playback.
 
 ## Cast and DLNA
 

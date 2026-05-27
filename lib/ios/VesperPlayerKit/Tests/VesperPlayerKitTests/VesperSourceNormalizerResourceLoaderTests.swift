@@ -54,6 +54,26 @@ final class VesperSourceNormalizerResourceLoaderTests: XCTestCase {
         XCTAssertEqual(session.contentType(for: segment), "public.mpeg-4")
     }
 
+    func testHlsSegmentBodyDoesNotUseGrowingPolicy() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let playlist = directory.appendingPathComponent("index.m3u8")
+        let segment = directory.appendingPathComponent("segment_00001.m4s")
+        try Data("#EXTM3U\n#EXTINF:3,\nsegment_00001.m4s\n".utf8).write(to: playlist)
+        try Data("segment".utf8).write(to: segment)
+        let session = try VesperSourceNormalizerResourceSession(
+            resource: makeResource(route: "hlsShortWindow", primary: playlist)
+        )
+
+        let body = try session.localResourceBody(for: segment)
+
+        if case let .file(_, _, _, _, _, growingPolicy) = body {
+            XCTAssertNil(growingPolicy)
+        } else {
+            XCTFail("Expected HLS segment file body")
+        }
+    }
+
     func testSessionReadPolicyKeepsFourMiBProfileBuffer() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -110,6 +130,10 @@ final class VesperSourceNormalizerResourceLoaderTests: XCTestCase {
             playbackUri: nil,
             resources: [],
             cachePolicy: ["sessionReadBufferBytes": sessionReadBufferBytes],
+            route: route,
+            participation: "participated",
+            fallbackReason: nil,
+            cacheQuota: 512 * 1024 * 1024,
             diagnostics: []
         )
     }

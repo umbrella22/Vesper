@@ -108,27 +108,25 @@ for abi in "${selected_abis[@]}"; do
   SOURCE_NORMALIZER_INPUT_AAR="$SOURCE_NORMALIZER_MODULE_DIR/build/outputs/aar/vesper-player-kit-source-normalizer-ffmpeg-release.aar"
   SOURCE_NORMALIZER_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKitSourceNormalizerFfmpeg-android-$abi.aar"
   cp "$SOURCE_NORMALIZER_INPUT_AAR" "$SOURCE_NORMALIZER_OUTPUT_AAR"
-  if ! unzip -Z1 "$SOURCE_NORMALIZER_OUTPUT_AAR" | grep -q '^assets/vesper-source-normalizer-ffmpeg/profile-hash.txt$'; then
+  source_normalizer_entries="$(unzip -Z1 "$SOURCE_NORMALIZER_OUTPUT_AAR")"
+  if ! grep -q '^assets/vesper-source-normalizer-ffmpeg/profile-hash.txt$' <<<"$source_normalizer_entries"; then
     echo "Android SourceNormalizer AAR is missing profile-hash.txt metadata:" >&2
     echo "  $SOURCE_NORMALIZER_OUTPUT_AAR" >&2
     exit 1
   fi
-  if unzip -Z1 "$SOURCE_NORMALIZER_OUTPUT_AAR" \
-    | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >/dev/null; then
+  if grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' <<<"$source_normalizer_entries" >/dev/null; then
     echo "Android SourceNormalizer AAR must not bundle FFmpeg runtime libraries:" >&2
-    unzip -Z1 "$SOURCE_NORMALIZER_OUTPUT_AAR" \
-      | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >&2
+    grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' <<<"$source_normalizer_entries" >&2
     exit 1
   fi
 
   FRAME_PROCESSOR_INPUT_AAR="$FRAME_PROCESSOR_MODULE_DIR/build/outputs/aar/vesper-player-kit-frame-processor-diagnostic-release.aar"
   FRAME_PROCESSOR_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKitFrameProcessorDiagnostic-android-$abi.aar"
   cp "$FRAME_PROCESSOR_INPUT_AAR" "$FRAME_PROCESSOR_OUTPUT_AAR"
-  if unzip -Z1 "$FRAME_PROCESSOR_OUTPUT_AAR" \
-    | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >/dev/null; then
+  frame_processor_entries="$(unzip -Z1 "$FRAME_PROCESSOR_OUTPUT_AAR")"
+  if grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' <<<"$frame_processor_entries" >/dev/null; then
     echo "Android FrameProcessor diagnostic AAR must not bundle FFmpeg runtime libraries:" >&2
-    unzip -Z1 "$FRAME_PROCESSOR_OUTPUT_AAR" \
-      | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >&2
+    grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' <<<"$frame_processor_entries" >&2
     exit 1
   fi
 

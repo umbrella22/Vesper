@@ -941,6 +941,15 @@ private fun parseSourceNormalizerResource(
                     value.optJSONObject("cachePolicy")?.let {
                         diagnostic["cachePolicy"] = jsonObjectToMap(it)
                     }
+                    if (value.has("cacheQuota")) {
+                        diagnostic["cacheQuota"] = value.optLong("cacheQuota")
+                    }
+                    value.optString("fallbackReason").takeIf(String::isNotBlank)?.let {
+                        diagnostic["fallbackReason"] = it
+                    }
+                    value.optString("route").takeIf(String::isNotBlank)?.let {
+                        diagnostic["route"] = it
+                    }
                     diagnostic["playbackUri"] = loopbackHandle.playbackUri
                     diagnostic["participation"] = "participated"
                     diagnostic

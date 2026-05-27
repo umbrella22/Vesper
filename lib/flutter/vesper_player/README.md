@@ -581,8 +581,8 @@ Key points:
 `VesperPlayerController.create(...)` accepts two optional mobile plugin
 configurations:
 
-- `sourceNormalizerConfiguration` with `disabled`, `diagnosticsOnly`, and
-  `preflightOnly` modes
+- `sourceNormalizerConfiguration` with `disabled`, `diagnosticsOnly`,
+  `preflightOnly`, `preferNormalized`, and `requireNormalized` modes
 - `frameProcessorConfiguration` with `disabled` and `diagnosticsOnly` modes
 
 Both are disabled by default. `pluginLibraryPaths` must contain plugin binary
@@ -596,7 +596,10 @@ attempt an open/close packet-session check for the selected source.
 `preferNormalized` and `requireNormalized` are opt-in host-kit paths that may
 replace the platform source with a disk-backed fMP4 or short-window HLS
 resource. `preferNormalized` falls back to the original source when
-normalization fails; `requireNormalized` reports a source error.
+normalization fails; `requireNormalized` reports a source error. Standard HLS
+and DASH stay native-first by default unless normalization is explicitly
+required or forced by a test profile. The repository smoke expectations live in
+`fixtures/media/source-normalizer-smoke-matrix.json`.
 
 FrameProcessor mobile v1 is a diagnostics shell. The optional artifact can be
 packaged and probed for capabilities, but it does not open frame sessions,

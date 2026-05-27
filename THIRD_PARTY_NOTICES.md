@@ -28,15 +28,20 @@ Release gate:
   notice, source, or relinking obligations by itself
 - Android artifacts that bundle `vesper-player-kit-ffmpeg-runtime` must be
   reviewed as FFmpeg redistribution artifacts. The Android
-  `player-remux-ffmpeg` plugin and `vesper-player-kit-external-playback` relay
-  FFmpeg JNI layer must not carry their own `libav*` copies; they depend on the
-  shared runtime profile selected by the host
+  `player-remux-ffmpeg` plugin, `player-source-normalizer-ffmpeg` plugin, and
+  `vesper-player-kit-external-playback` relay FFmpeg JNI layer must not carry
+  their own `libav*` copies; they depend on the shared runtime profile selected
+  by the host
 - iOS core `VesperPlayerKit.xcframework` must not embed FFmpeg. Optional iOS
-  FFmpeg/remux support is split into a shared signable
+  FFmpeg-backed remux and SourceNormalizer support is split into a shared signable
   `VesperPlayerFfmpegRuntime.xcframework.zip` plus plugin XCFrameworks such as
-  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`; the shared runtime remains
-  under FFmpeg's own redistribution boundary, and plugin/runtime
-  `profile-hash.txt` values must match before release
+  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` and
+  `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`; the shared
+  runtime remains under FFmpeg's own redistribution boundary, and
+  plugin/runtime `profile-hash.txt` values must match before release
+- mobile FrameProcessor diagnostic artifacts do not bundle FFmpeg and must stay
+  outside the FFmpeg redistribution boundary unless a future implementation adds
+  an FFmpeg-backed dependency
 - offline MP4 export support for HLS, DASH, and FLV inputs uses the existing
   optional remux-plugin boundary and does not by itself add a repository-bundled
   FFmpeg binary
@@ -91,10 +96,13 @@ Default Vesper scripts are intended to stay on the LGPL-oriented side:
   dynamic FFmpeg when possible, and any statically linked redistributed binary
   must include an LGPL-compliant way to relink against a modified FFmpeg build
 - `scripts/vesper android remux-plugin`,
+  `scripts/vesper android source-normalizer-plugin`,
   `scripts/vesper ios ffmpeg-runtime-release`, and
-  `scripts/vesper ios stage-remux-plugin-release` produce optional runtime or
-  plugin artifacts; bundling those artifacts in an app is an explicit decision
-  by the host and triggers the same FFmpeg redistribution review
+  `scripts/vesper ios stage-remux-plugin-release`, and
+  `scripts/vesper ios stage-source-normalizer-plugin-release` produce optional
+  runtime or plugin artifacts; bundling those artifacts in an app is an
+  explicit decision by the host and triggers the same FFmpeg redistribution
+  review
 
 Before shipping any artifact that includes FFmpeg libraries:
 
@@ -136,7 +144,7 @@ License mode: <LGPLv2.1-or-later|LGPLv3-or-later|GPL|nonfree>
 Linkage: <dynamic|static|mixed>
 Build command: <scripts/vesper ...>
 Configure flags: <full configure line>
-Artifact scope: <Android remux plugin / iOS FFmpeg runtime / iOS remux plugin / desktop app / other>
+Artifact scope: <Android FFmpeg runtime / Android SourceNormalizer plugin / iOS FFmpeg runtime / iOS remux plugin / iOS SourceNormalizer plugin / desktop app / other>
 Bundled FFmpeg libraries: <libavcodec, libavformat, ...>
 Bundled external libraries: <OpenSSL, libxml2, ...>
 FFmpeg source location: <same release download URL / source bundle URL>
