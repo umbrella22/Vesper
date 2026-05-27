@@ -231,10 +231,11 @@ pub fn open_mobile_source_normalizer_resource(
             .iter()
             .map(|record| diagnostic_from_record(record, source_normalizer_participation(record))),
     );
-    let Some(record) = registry.best_source_normalizer_resource() else {
-        let message = format!(
-            "source normalizer normalized-resource open skipped because no resource-output plugin is available: {}",
-            mobile_source_normalizer_registry_notes(&registry)
+    let Some(record) = best_mobile_source_normalizer_resource(&registry, configuration) else {
+        let message = source_normalizer_resource_selection_failure_message(
+            "normalized-resource open",
+            &registry,
+            configuration,
         );
         diagnostics.push(runtime_source_normalizer_diagnostic(
             String::new(),
@@ -377,12 +378,16 @@ pub fn source_normalizer_diagnostics(
             return diagnostics;
         }
 
-        let Some(record) = registry.best_source_normalizer_resource() else {
+        let Some(record) = best_mobile_source_normalizer_resource(&registry, configuration) else {
             diagnostics.push(runtime_source_normalizer_diagnostic(
                 String::new(),
                 None,
                 PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
-                "source normalizer resource probe skipped because no resource-output source normalizer plugin is available",
+                source_normalizer_resource_selection_failure_message(
+                    "resource probe",
+                    &registry,
+                    configuration,
+                ),
                 PlayerPluginParticipation::Bypassed,
             ));
             return diagnostics;
@@ -721,6 +726,18 @@ fn open_source_normalizer_resource_session(
 fn wait_for_resource_session_ready(
     session: &mut dyn SourceNormalizerResourceSession,
 ) -> Result<SourceNormalizerResourceSessionStatus, String> {
+    wait_for_resource_session_ready_with_policy(
+        session,
+        SOURCE_NORMALIZER_RESOURCE_READY_TIMEOUT,
+        SOURCE_NORMALIZER_RESOURCE_POLL_INTERVAL,
+    )
+}
+
+fn wait_for_resource_session_ready_with_policy(
+    session: &mut dyn SourceNormalizerResourceSession,
+    ready_timeout: Duration,
+    poll_interval: Duration,
+) -> Result<SourceNormalizerResourceSessionStatus, String> {
     let started = Instant::now();
     loop {
         let status = session
@@ -744,12 +761,12 @@ fn wait_for_resource_session_ready(
                 if resource_status_has_primary_bytes(&status) {
                     return Ok(status);
                 }
-                if started.elapsed() >= SOURCE_NORMALIZER_RESOURCE_READY_TIMEOUT {
+                if started.elapsed() >= ready_timeout {
                     return Err(status.message.unwrap_or_else(|| {
                         "source normalizer resource did not produce a readable primary resource before startup timeout".to_owned()
                     }));
                 }
-                std::thread::sleep(SOURCE_NORMALIZER_RESOURCE_POLL_INTERVAL);
+                std::thread::sleep(poll_interval);
             }
         }
     }
@@ -1132,9 +1149,47 @@ fn native_first_source_normalizer_bypass(
         }
         player_runtime::MediaSourceProtocol::File
         | player_runtime::MediaSourceProtocol::Progressive => {
+            // Only ordinary MP4/M4V/MOV sources without an explicit runtime
+            // profile stay native-first. A configured profile such as `flv` or
+            // `generic-fallback` is caller intent to try the normalized route.
             configuration.runtime_profile.is_none() && is_standard_progressive_mp4_source(source)
         }
         _ => false,
+    }
+}
+
+fn configured_runtime_profile(configuration: &MobileSourceNormalizerConfiguration) -> Option<&str> {
+    configuration
+        .runtime_profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty())
+}
+
+fn best_mobile_source_normalizer_resource<'a>(
+    registry: &'a PluginRegistry,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Option<&'a PluginDiagnosticRecord> {
+    match configured_runtime_profile(configuration) {
+        Some(profile) => registry.best_source_normalizer_resource_for_profile(profile),
+        None => registry.best_source_normalizer_resource(),
+    }
+}
+
+fn source_normalizer_resource_selection_failure_message(
+    operation: &str,
+    registry: &PluginRegistry,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> String {
+    match configured_runtime_profile(configuration) {
+        Some(profile) => format!(
+            "source normalizer {operation} skipped because no resource-output plugin supports runtime profile '{profile}': {}",
+            mobile_source_normalizer_registry_notes(registry)
+        ),
+        None => format!(
+            "source normalizer {operation} skipped because no resource-output plugin is available: {}",
+            mobile_source_normalizer_registry_notes(registry)
+        ),
     }
 }
 
@@ -1565,6 +1620,7 @@ fn participation_wire_name(participation: PlayerPluginParticipation) -> &'static
 #[cfg(test)]
 mod tests {
     use super::*;
+    use player_plugin::SourceNormalizerRequiredCapabilities;
     use serde_json::Value;
 
     #[test]
@@ -1698,6 +1754,51 @@ mod tests {
     }
 
     #[test]
+    fn mobile_resource_selection_uses_explicit_runtime_profile() {
+        let registry = PluginRegistry::from_records(vec![
+            mobile_resource_record("generic-resource", &["generic-fallback"]),
+            mobile_resource_record("flv-resource", &["flv"]),
+        ]);
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreferNormalized,
+            runtime_profile: Some("FLV".to_owned()),
+            plugin_library_paths: vec![PathBuf::from("/plugins/generic.so")],
+        };
+
+        assert_eq!(
+            best_mobile_source_normalizer_resource(&registry, &configuration)
+                .and_then(|record| record.plugin_name.as_deref()),
+            Some("flv-resource")
+        );
+    }
+
+    #[test]
+    fn mobile_resource_selection_ignores_packet_only_profile_match() {
+        let registry = PluginRegistry::from_records(vec![
+            mobile_packet_record("packet-only", &["flv"]),
+            mobile_resource_record("resource-generic", &["generic-fallback"]),
+        ]);
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreferNormalized,
+            runtime_profile: Some("flv".to_owned()),
+            plugin_library_paths: vec![PathBuf::from("/plugins/packet.so")],
+        };
+
+        assert!(
+            best_mobile_source_normalizer_resource(&registry, &configuration).is_none(),
+            "mobile resource playback must not use a packet-only SourceNormalizer"
+        );
+        assert!(
+            source_normalizer_resource_selection_failure_message(
+                "resource probe",
+                &registry,
+                &configuration,
+            )
+            .contains("runtime profile 'flv'")
+        );
+    }
+
+    #[test]
     fn source_normalizer_probe_bypasses_standard_hls_without_opening_resource() {
         let diagnostics = source_normalizer_diagnostics(
             &MediaSource::new("https://cdn.example.test/master.m3u8"),
@@ -1786,6 +1887,10 @@ mod tests {
         let manifest =
             include_str!("../../../../../fixtures/media/source-normalizer-smoke-matrix.json");
         let value: Value = serde_json::from_str(manifest).expect("parse smoke matrix");
+        assert_eq!(
+            value["generatedBy"],
+            "scripts/media/generate-source-normalizer-smoke-fixtures.sh"
+        );
         let cases = value["cases"].as_array().expect("cases array");
 
         for required in [
@@ -1825,6 +1930,35 @@ mod tests {
             .expect("weird DASH case");
         assert_eq!(weird_dash["expectedRoute"], "hlsShortWindow");
         assert_eq!(weird_dash["decision"], "force");
+
+        for case in cases
+            .iter()
+            .filter(|case| case.get("fixtureGeneration").is_some())
+        {
+            let required_files = case["requiredFiles"]
+                .as_array()
+                .unwrap_or_else(|| panic!("generated case {} must list requiredFiles", case["id"]));
+            assert!(
+                !required_files.is_empty(),
+                "generated case {} must document generated artifacts",
+                case["id"]
+            );
+            for required_file in required_files {
+                let path = required_file.as_str().expect("required file path");
+                assert!(
+                    path.starts_with("fixtures/media/generated/"),
+                    "generated fixture path must stay under fixtures/media/generated/: {path}"
+                );
+                let repo_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../../../../")
+                    .join(path);
+                if !repo_path.exists() {
+                    eprintln!(
+                        "skipping generated smoke fixture {path}; run scripts/media/generate-source-normalizer-smoke-fixtures.sh"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1891,5 +2025,133 @@ mod tests {
         ));
 
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn resource_readiness_wait_has_total_timeout() {
+        let mut session = NeverReadyResourceSession::default();
+        let started = Instant::now();
+        let result = wait_for_resource_session_ready_with_policy(
+            &mut session,
+            Duration::from_millis(5),
+            Duration::from_millis(1),
+        );
+
+        let Err(error) = result else {
+            panic!("never-ready session should time out");
+        };
+        assert!(error.contains("readable primary resource"));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "test timeout path should not wait for the production 10s timeout"
+        );
+        assert!(session.polls > 0);
+    }
+
+    fn mobile_resource_record(name: &str, profiles: &[&str]) -> PluginDiagnosticRecord {
+        PluginDiagnosticRecord {
+            path: PathBuf::from(format!("/plugins/{name}.so")),
+            status: PluginDiagnosticStatus::SourceNormalizerSupported,
+            plugin_name: Some(name.to_owned()),
+            plugin_kind: Some(player_plugin::VesperPluginKind::SourceNormalizer),
+            capability_summary: Some(PluginCapabilitySummary::SourceNormalizerResource(
+                SourceNormalizerResourcePluginCapabilitySummary {
+                    supported_runtime_profiles: profiles
+                        .iter()
+                        .map(|profile| (*profile).to_owned())
+                        .collect(),
+                    supported_output_routes: vec!["fmp4LocalStream".to_owned()],
+                    max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+                    content_types: vec!["video/mp4".to_owned()],
+                    supports_growing_resources: true,
+                    supports_range_reads: true,
+                    supports_cancel: true,
+                    required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+                    cache_policy: SourceNormalizerResourceCachePolicy::default(),
+                    max_sessions: Some(1),
+                },
+            )),
+            message: Some("source_normalizer_resource_v3".to_owned()),
+        }
+    }
+
+    fn mobile_packet_record(name: &str, profiles: &[&str]) -> PluginDiagnosticRecord {
+        PluginDiagnosticRecord {
+            path: PathBuf::from(format!("/plugins/{name}.so")),
+            status: PluginDiagnosticStatus::SourceNormalizerSupported,
+            plugin_name: Some(name.to_owned()),
+            plugin_kind: Some(player_plugin::VesperPluginKind::SourceNormalizer),
+            capability_summary: Some(PluginCapabilitySummary::SourceNormalizerPacket(
+                SourceNormalizerPacketPluginCapabilitySummary {
+                    supported_runtime_profiles: profiles
+                        .iter()
+                        .map(|profile| (*profile).to_owned())
+                        .collect(),
+                    max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+                    media_kinds: vec![SourceNormalizerPacketMediaKind::Video],
+                    codecs: vec!["h264".to_owned()],
+                    bitstream_formats: vec![DecoderBitstreamFormat::AnnexB],
+                    supports_seek: true,
+                    supports_flush: true,
+                    required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+                    max_sessions: Some(1),
+                },
+            )),
+            message: Some("source_normalizer_packet_v2".to_owned()),
+        }
+    }
+
+    #[derive(Default)]
+    struct NeverReadyResourceSession {
+        polls: usize,
+    }
+
+    impl SourceNormalizerResourceSession for NeverReadyResourceSession {
+        fn session_info(&self) -> SourceNormalizerResourceSessionInfo {
+            SourceNormalizerResourceSessionInfo {
+                session_id: Some("never-ready".to_owned()),
+                normalizer_name: Some("test".to_owned()),
+                runtime_profile: Some("test".to_owned()),
+                selected_backend: None,
+                output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
+                container: "mp4".to_owned(),
+                primary_resource_path: None,
+                primary_content_type: Some("video/mp4".to_owned()),
+                resources: Vec::new(),
+                tracks: Vec::new(),
+                duration_millis: None,
+                seekable: false,
+                disk_bytes_used: None,
+            }
+        }
+
+        fn poll(
+            &mut self,
+        ) -> Result<SourceNormalizerResourceSessionStatus, player_plugin::SourceNormalizerError>
+        {
+            self.polls += 1;
+            Ok(SourceNormalizerResourceSessionStatus {
+                state: SourceNormalizerResourceSessionState::Running,
+                info: Some(self.session_info()),
+                message: None,
+                disk_bytes_used: None,
+            })
+        }
+
+        fn cancel(
+            &mut self,
+        ) -> Result<
+            player_plugin::SourceNormalizerOperationStatus,
+            player_plugin::SourceNormalizerError,
+        > {
+            Ok(player_plugin::SourceNormalizerOperationStatus {
+                completed: true,
+                message: None,
+            })
+        }
+
+        fn close(&mut self) -> Result<(), player_plugin::SourceNormalizerError> {
+            Ok(())
+        }
     }
 }

@@ -168,6 +168,23 @@ impl PluginRegistry {
         })
     }
 
+    pub fn best_source_normalizer_resource_for_profile(
+        &self,
+        runtime_profile: &str,
+    ) -> Option<&PluginDiagnosticRecord> {
+        self.records.iter().find(|record| {
+            record.status == PluginDiagnosticStatus::SourceNormalizerSupported
+                && source_normalizer_resource_capability_summary(record).is_some_and(
+                    |capabilities| {
+                        capabilities
+                            .supported_runtime_profiles
+                            .iter()
+                            .any(|profile| profile.eq_ignore_ascii_case(runtime_profile))
+                    },
+                )
+        })
+    }
+
     pub fn best_source_normalizer_for_profile(
         &self,
         runtime_profile: &str,

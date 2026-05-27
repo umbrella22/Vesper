@@ -1,7 +1,8 @@
 use super::{
     DecoderPluginCodecSummary, DecoderPluginMatchRequest, LoadedDynamicPlugin,
     PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginLoadError,
-    PluginRegistry,
+    PluginRegistry, SourceNormalizerPacketPluginCapabilitySummary,
+    SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_plugin::{
     AssemblyMode, BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkReport, BenchmarkSinkStatus,
@@ -23,10 +24,10 @@ use player_plugin::{
     SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
     SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
     SourceNormalizerReadPacketStatus, SourceNormalizerRequiredCapabilities,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
-    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperBenchmarkSinkApi,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    SourceNormalizerResourceCachePolicy, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
+    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
     VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
     VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind,

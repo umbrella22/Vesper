@@ -70,6 +70,8 @@ internal class VesperSourceNormalizerLoopbackServer(
         entries.remove(token)
     }
 
+    internal fun entryCountForTest(): Int = entries.size
+
     @Synchronized
     fun stop() {
         running.set(false)
@@ -166,6 +168,7 @@ internal class VesperSourceNormalizerLoopbackServer(
             output.writeSimpleResponse(405, "Method Not Allowed", mapOf("Allow" to "GET, HEAD"))
             return
         }
+        pruneExpiredEntries()
         val route = NormalizedRoute.parse(path)
         if (route == null) {
             output.writeSimpleResponse(404, "Not Found")

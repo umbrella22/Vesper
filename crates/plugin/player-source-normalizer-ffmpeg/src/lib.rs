@@ -81,6 +81,8 @@ struct ResourceWorkerState {
 
 impl Drop for PacketNormalizerSession {
     fn drop(&mut self) {
+        // Leased packet data is owned Rust memory, and the FFmpeg input context
+        // is released by its own Drop implementation after this session drops.
         self.leased_packet = None;
         self.closed = true;
     }

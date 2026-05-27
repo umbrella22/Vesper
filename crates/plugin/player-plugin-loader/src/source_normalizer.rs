@@ -2,8 +2,8 @@ use super::*;
 
 #[derive(Debug)]
 pub(crate) struct DynamicSourceNormalizerPacketPluginFactoryInner {
-    #[allow(dead_code)]
-    library: Option<Arc<LibraryHolder>>,
+    // Held so the dynamic library stays loaded for the whole factory/session lifetime.
+    _library_holder: Option<Arc<LibraryHolder>>,
     name: String,
     api: CheckedSourceNormalizerPacketPluginApi,
     capabilities: SourceNormalizerPacketCapabilities,
@@ -21,8 +21,8 @@ impl Drop for DynamicSourceNormalizerPacketPluginFactoryInner {
 
 #[derive(Debug)]
 pub(crate) struct DynamicSourceNormalizerResourcePluginFactoryInner {
-    #[allow(dead_code)]
-    library: Option<Arc<LibraryHolder>>,
+    // Held so the dynamic library stays loaded for the whole factory/session lifetime.
+    _library_holder: Option<Arc<LibraryHolder>>,
     name: String,
     api: CheckedSourceNormalizerResourcePluginApi,
     capabilities: SourceNormalizerResourceCapabilities,
@@ -78,7 +78,7 @@ impl DynamicSourceNormalizerPacketPluginFactory {
 
         Ok(Self {
             inner: Arc::new(DynamicSourceNormalizerPacketPluginFactoryInner {
-                library,
+                _library_holder: library,
                 name,
                 api,
                 capabilities,
@@ -117,7 +117,7 @@ impl DynamicSourceNormalizerResourcePluginFactory {
 
         Ok(Self {
             inner: Arc::new(DynamicSourceNormalizerResourcePluginFactoryInner {
-                library,
+                _library_holder: library,
                 name,
                 api,
                 capabilities,
@@ -670,6 +670,8 @@ impl Drop for DynamicSourceNormalizerPacketSession {
 
 impl Drop for DynamicSourceNormalizerResourceSession {
     fn drop(&mut self) {
+        // Normal close drops the plugin-owned session handle. Drop also covers
+        // panic or early-return host paths so resource workers are not left alive.
         if let Err(error) = self.close() {
             tracing::error!(
                 plugin = %self.factory.name,

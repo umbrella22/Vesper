@@ -203,3 +203,98 @@ fn plugin_registry_reports_source_normalizer_packet_v2_support() {
         Some("test-source-normalizer-packet")
     );
 }
+
+#[test]
+fn plugin_registry_selects_resource_source_normalizer_by_profile() {
+    let registry = PluginRegistry::from_records(vec![
+        resource_source_normalizer_record("generic-resource", &["generic-fallback"]),
+        resource_source_normalizer_record("flv-resource", &["flv", "hevc-flv"]),
+    ]);
+
+    assert_eq!(
+        registry
+            .best_source_normalizer_resource_for_profile("flv")
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("flv-resource")
+    );
+    assert_eq!(
+        registry
+            .best_source_normalizer_resource_for_profile("HEVC-FLV")
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("flv-resource")
+    );
+}
+
+#[test]
+fn plugin_registry_resource_profile_selection_ignores_packet_only_match() {
+    let registry = PluginRegistry::from_records(vec![
+        packet_source_normalizer_record("packet-only", &["flv"]),
+        resource_source_normalizer_record("resource-generic", &["generic-fallback"]),
+    ]);
+
+    assert_eq!(
+        registry
+            .best_source_normalizer_for_profile("flv")
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("packet-only")
+    );
+    assert!(
+        registry
+            .best_source_normalizer_resource_for_profile("flv")
+            .is_none(),
+        "mobile resource playback must not select a packet-only profile match"
+    );
+}
+
+fn resource_source_normalizer_record(name: &str, profiles: &[&str]) -> PluginDiagnosticRecord {
+    PluginDiagnosticRecord {
+        path: PathBuf::from(format!("/plugins/{name}.so")),
+        status: PluginDiagnosticStatus::SourceNormalizerSupported,
+        plugin_name: Some(name.to_owned()),
+        plugin_kind: Some(VesperPluginKind::SourceNormalizer),
+        capability_summary: Some(PluginCapabilitySummary::SourceNormalizerResource(
+            SourceNormalizerResourcePluginCapabilitySummary {
+                supported_runtime_profiles: profiles
+                    .iter()
+                    .map(|profile| (*profile).to_owned())
+                    .collect(),
+                supported_output_routes: vec!["fmp4LocalStream".to_owned()],
+                max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+                content_types: vec!["video/mp4".to_owned()],
+                supports_growing_resources: true,
+                supports_range_reads: true,
+                supports_cancel: true,
+                required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+                cache_policy: SourceNormalizerResourceCachePolicy::default(),
+                max_sessions: Some(1),
+            },
+        )),
+        message: Some("source_normalizer_resource_v3".to_owned()),
+    }
+}
+
+fn packet_source_normalizer_record(name: &str, profiles: &[&str]) -> PluginDiagnosticRecord {
+    PluginDiagnosticRecord {
+        path: PathBuf::from(format!("/plugins/{name}.so")),
+        status: PluginDiagnosticStatus::SourceNormalizerSupported,
+        plugin_name: Some(name.to_owned()),
+        plugin_kind: Some(VesperPluginKind::SourceNormalizer),
+        capability_summary: Some(PluginCapabilitySummary::SourceNormalizerPacket(
+            SourceNormalizerPacketPluginCapabilitySummary {
+                supported_runtime_profiles: profiles
+                    .iter()
+                    .map(|profile| (*profile).to_owned())
+                    .collect(),
+                max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+                media_kinds: vec![SourceNormalizerPacketMediaKind::Video],
+                codecs: vec!["h264".to_owned()],
+                bitstream_formats: vec![DecoderBitstreamFormat::AnnexB],
+                supports_seek: true,
+                supports_flush: true,
+                required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+                max_sessions: Some(1),
+            },
+        )),
+        message: Some("source_normalizer_packet_v2".to_owned()),
+    }
+}

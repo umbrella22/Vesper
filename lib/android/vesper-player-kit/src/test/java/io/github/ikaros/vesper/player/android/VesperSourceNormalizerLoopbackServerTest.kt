@@ -213,6 +213,40 @@ class VesperSourceNormalizerLoopbackServerTest {
     }
 
     @Test
+    fun loopbackServerPrunesExpiredTokensBeforeRequestHandling() {
+        var now = 100L
+        val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
+        val file = File(directory, "normalized.mp4")
+        file.writeText("media")
+        val server =
+            VesperSourceNormalizerLoopbackServer(
+                tokenTtlMillis = 10L,
+                nowMillisProvider = { now },
+            )
+        try {
+            val expiredHandle =
+                server.register(
+                    VesperNormalizedResourceRegistration(
+                        outputRoute = "fmp4LocalStream",
+                        primaryResourcePath = file.absolutePath,
+                        primaryContentType = "video/mp4",
+                        sessionReadBufferBytes = 4096,
+                    )
+                )
+            assertEquals(1, server.entryCountForTest())
+
+            now = 111L
+            val connection = URL(expiredHandle.playbackUri).openConnection() as HttpURLConnection
+
+            assertEquals(404, connection.responseCode)
+            assertEquals(0, server.entryCountForTest())
+        } finally {
+            server.stop()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun loopbackServerInvalidatesRegisteredToken() {
         val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
         val file = File(directory, "normalized.mp4")

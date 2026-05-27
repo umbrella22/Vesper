@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "generatedBy": "scripts/media/generate-source-normalizer-smoke-fixtures.sh",
   "defaults": {
     "mode": "preferNormalized",
     "decision": "nativeFirst",
@@ -38,6 +39,9 @@
       "runtimeProfile": "flv",
       "expectedRoute": "fmp4LocalStream",
       "expectedParticipation": "participated",
+      "requiredFiles": [
+        "fixtures/media/generated/tiny-h264-aac.flv"
+      ],
       "fixtureGeneration": "generate from fixtures/media/tiny-h264-aac.m4v with the repo FFmpeg runtime before manual smoke"
     },
     {
@@ -47,6 +51,9 @@
       "runtimeProfile": "hevc-flv",
       "expectedRoute": "fmp4LocalStream",
       "expectedParticipation": "participated",
+      "requiredFiles": [
+        "fixtures/media/generated/tiny-hevc-aac.flv"
+      ],
       "fixtureGeneration": "generate or supply locally; do not commit large HEVC media"
     },
     {
@@ -56,6 +63,9 @@
       "runtimeProfile": "generic-fallback",
       "expectedRoute": "fmp4LocalStream",
       "expectedParticipation": "participated",
+      "requiredFiles": [
+        "fixtures/media/generated/tiny-broken-progressive.mp4"
+      ],
       "fixtureGeneration": "small repaired/remux fixture only; large real-world captures stay local"
     },
     {
@@ -66,6 +76,10 @@
       "runtimeProfile": "hls-nonstandard",
       "expectedRoute": "hlsShortWindow",
       "expectedParticipation": "participated",
+      "requiredFiles": [
+        "fixtures/media/generated/nonstandard/index.m3u8",
+        "fixtures/media/generated/nonstandard/init.mp4"
+      ],
       "fixtureGeneration": "small generated fMP4 HLS window; keep segment count minimal"
     },
     {
@@ -76,6 +90,9 @@
       "runtimeProfile": "dash-weird",
       "expectedRoute": "hlsShortWindow",
       "expectedParticipation": "participated",
+      "requiredFiles": [
+        "fixtures/media/generated/weird-dash/manifest.mpd"
+      ],
       "fixtureGeneration": "small generated DASH input used only for SourceNormalizer fallback smoke"
     },
     {
