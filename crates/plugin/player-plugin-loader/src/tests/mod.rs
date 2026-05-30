@@ -1,7 +1,7 @@
 use super::{
-    DecoderPluginCodecSummary, DecoderPluginMatchRequest, LoadedDynamicPlugin,
-    PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginLoadError,
-    PluginRegistry, SourceNormalizerPacketPluginCapabilitySummary,
+    DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
+    LoadedDynamicPlugin, PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus,
+    PluginLoadError, PluginRegistry, SourceNormalizerPacketPluginCapabilitySummary,
     SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_plugin::{
@@ -11,28 +11,37 @@ use player_plugin::{
     DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeDeviceContextKind,
     DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
     DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
-    DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
-    DecoderSessionInfo, DownloadMetadata, FrameProcessorCapabilities, FrameProcessorError,
-    FrameProcessorFrameTimings, FrameProcessorOperationStatus, FrameProcessorReceiveFrameMetadata,
-    FrameProcessorReceiveOutput, FrameProcessorSessionConfig, FrameProcessorSessionInfo,
-    FrameProcessorSubmitFrame, FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeFrame,
-    NativeFrameMetadata, NativeFrameReleaseTracking, NativeHandleKind, OutputFormat, PipelineEvent,
+    DecoderPcmFrameMetadata, DecoderPcmSampleLayout, DecoderReceiveFrameStatus,
+    DecoderReceiveNativeFrameMetadata,
+    DecoderReceiveNativeFrameOutput, DecoderReceivePcmFrameMetadata, DecoderReceivePcmFrameOutput,
+    DecoderSessionConfig, DecoderSessionInfo, DownloadMetadata, FrameProcessorCapabilities,
+    FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorOperationStatus,
+    FrameProcessorReceiveFrameMetadata, FrameProcessorReceiveOutput, FrameProcessorSessionConfig,
+    FrameProcessorSessionInfo, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
+    FrameProcessorSubmitStatus, NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile,
+    NativeFrameReleaseTracking, NativeHandleKind, OutputFormat, PipelineEvent,
     ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
     SourceNormalizerError, SourceNormalizerNormalizeLevel, SourceNormalizerOperationStatus,
-    SourceNormalizerPacket, SourceNormalizerPacketCapabilities, SourceNormalizerPacketMediaKind,
-    SourceNormalizerPacketPluginFactory, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
-    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
-    SourceNormalizerReadPacketStatus, SourceNormalizerRequiredCapabilities,
-    SourceNormalizerResourceCachePolicy, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
-    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
-    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+    SourceNormalizerOutputRoute, SourceNormalizerPacket, SourceNormalizerPacketCapabilities,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketPluginFactory,
+    SourceNormalizerPacketSeek, SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
+    SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
+    SourceNormalizerRequiredCapabilities, SourceNormalizerResourceCachePolicy,
+    SourceNormalizerResourceCapabilities, SourceNormalizerResourceInfo,
+    SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionState,
+    SourceNormalizerResourceSessionStatus, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_V4, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
     VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
+    VesperDecoderPluginApiV4, VesperDecoderReceiveNativeFrameResult,
+    VesperDecoderReceivePcmFrameResult, VesperFrameProcessorOpenSessionResult,
     VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
     VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind,
     VesperPluginProcessResult, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
-    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerPluginApiV2,
+    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerOpenResourceSessionResult,
+    VesperSourceNormalizerPluginApiV2, VesperSourceNormalizerPluginApiV3,
     VesperSourceNormalizerReadPacketResult,
 };
 use std::collections::BTreeMap;
@@ -118,6 +127,9 @@ struct RecordingProgress {
     ratios: Mutex<Vec<f32>>,
 }
 
+#[derive(Debug, Default)]
+struct FixtureSourceNormalizerResourceSession;
+
 impl RecordingProgress {
     fn ratios(&self) -> Vec<f32> {
         self.ratios
@@ -184,6 +196,24 @@ fn fixture_native_decoder_api() -> VesperDecoderPluginApiV2 {
     }
 }
 
+fn fixture_native_decoder_pcm_api() -> VesperDecoderPluginApiV4 {
+    VesperDecoderPluginApiV4 {
+        context: std::ptr::null_mut(),
+        destroy: None,
+        name: Some(fixture_decoder_name),
+        capabilities_json: Some(fixture_native_decoder_pcm_capabilities_json),
+        native_requirements_json: Some(fixture_native_decoder_requirements_json),
+        free_bytes: Some(fixture_free_bytes),
+        open_session_json: Some(fixture_native_decoder_open_session_json),
+        send_packet: Some(fixture_decoder_send_packet),
+        receive_native_frame: Some(fixture_decoder_receive_native_frame),
+        release_native_frame: Some(fixture_decoder_release_native_frame),
+        flush_session: Some(fixture_decoder_flush_session),
+        close_session: Some(fixture_decoder_close_session),
+        receive_pcm_frame: Some(fixture_decoder_receive_pcm_frame),
+    }
+}
+
 fn fixture_frame_processor_api() -> VesperFrameProcessorPluginApiV1 {
     VesperFrameProcessorPluginApiV1 {
         context: std::ptr::null_mut(),
@@ -212,6 +242,27 @@ fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV2 {
         seek_packet_session_json: Some(fixture_source_normalizer_seek_packet_session_json),
         flush_packet_session: Some(fixture_source_normalizer_flush_packet_session),
         close_packet_session: Some(fixture_source_normalizer_close_packet_session),
+        free_bytes: Some(fixture_free_bytes),
+    }
+}
+
+fn fixture_source_normalizer_dual_api() -> VesperSourceNormalizerPluginApiV3 {
+    VesperSourceNormalizerPluginApiV3 {
+        context: std::ptr::null_mut(),
+        destroy: None,
+        name: Some(fixture_source_normalizer_packet_name),
+        packet_capabilities_json: Some(fixture_source_normalizer_packet_capabilities_json),
+        open_packet_session_json: Some(fixture_source_normalizer_open_packet_session_json),
+        read_packet: Some(fixture_source_normalizer_read_packet),
+        release_packet: Some(fixture_source_normalizer_release_packet),
+        seek_packet_session_json: Some(fixture_source_normalizer_seek_packet_session_json),
+        flush_packet_session: Some(fixture_source_normalizer_flush_packet_session),
+        close_packet_session: Some(fixture_source_normalizer_close_packet_session),
+        resource_capabilities_json: Some(fixture_source_normalizer_resource_capabilities_json),
+        open_resource_session_json: Some(fixture_source_normalizer_open_resource_session_json),
+        poll_resource_session: Some(fixture_source_normalizer_poll_resource_session),
+        cancel_resource_session: Some(fixture_source_normalizer_cancel_resource_session),
+        close_resource_session: Some(fixture_source_normalizer_close_resource_session),
         free_bytes: Some(fixture_free_bytes),
     }
 }
@@ -357,12 +408,44 @@ unsafe extern "C" fn fixture_native_decoder_capabilities_json(
     VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
 }
 
+unsafe extern "C" fn fixture_native_decoder_pcm_capabilities_json(
+    _context: *mut c_void,
+) -> VesperPluginBytes {
+    let capabilities = DecoderCapabilities {
+        codecs: vec![
+            DecoderCodecCapability {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                profiles: vec!["baseline".to_owned()],
+                output_formats: vec![DecoderFrameFormat::Nv12],
+            },
+            DecoderCodecCapability {
+                codec: "fixture-audio".to_owned(),
+                media_kind: DecoderMediaKind::Audio,
+                profiles: Vec::new(),
+                output_formats: vec![DecoderFrameFormat::F32],
+            },
+        ],
+        supports_hardware_decode: true,
+        supports_cpu_video_frames: false,
+        supports_audio_frames: true,
+        supports_gpu_handles: true,
+        supports_flush: true,
+        supports_drain: true,
+        max_sessions: Some(1),
+    };
+    VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
+}
+
 unsafe extern "C" fn fixture_native_decoder_requirements_json(
     _context: *mut c_void,
 ) -> VesperPluginBytes {
     let requirements = DecoderNativeRequirements {
         required_device_context_kinds: Vec::new(),
         output_handle_kinds: vec![DecoderNativeHandleKind::IoSurface],
+        output_pipeline_profiles: vec![NativeFramePipelineProfile::Unknown(
+            "io_surface".to_owned(),
+        )],
         requires_native_device_context: false,
         accepted_bitstream_formats: vec![DecoderBitstreamFormat::Unknown("fixture".to_owned())],
     };
@@ -375,6 +458,36 @@ unsafe extern "C" fn fixture_native_decoder_requirements_json(
 struct FixtureDecoderSession {
     last_pts_us: Option<i64>,
     pending_frame: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Default)]
+struct FixtureDecoderRecordingContext {
+    opened_configs: Mutex<Vec<DecoderSessionConfig>>,
+}
+
+impl FixtureDecoderRecordingContext {
+    fn opened_configs(&self) -> Vec<DecoderSessionConfig> {
+        self.opened_configs
+            .lock()
+            .map(|configs| configs.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// Records the byte lengths reclaimed through `free_bytes`, so tests can assert
+/// that plugin-owned buffers are released on every code path.
+#[derive(Debug, Default)]
+struct FixtureFreeBytesRecorder {
+    freed_lens: Mutex<Vec<usize>>,
+}
+
+impl FixtureFreeBytesRecorder {
+    fn freed_lens(&self) -> Vec<usize> {
+        self.freed_lens
+            .lock()
+            .map(|lens| lens.clone())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -404,7 +517,11 @@ unsafe extern "C" fn fixture_native_decoder_open_session_json(
         Ok(config) => config,
         Err(error) => return decoder_open_error(error),
     };
-    if config.codec != "fixture-video" || config.media_kind != DecoderMediaKind::Video {
+    let is_fixture_video =
+        config.codec == "fixture-video" && config.media_kind == DecoderMediaKind::Video;
+    let is_fixture_audio =
+        config.codec == "fixture-audio" && config.media_kind == DecoderMediaKind::Audio;
+    if !is_fixture_video && !is_fixture_audio {
         return decoder_open_error(DecoderError::UnsupportedCodec {
             codec: config.codec,
         });
@@ -420,12 +537,40 @@ unsafe extern "C" fn fixture_native_decoder_open_session_json(
     let info = DecoderSessionInfo {
         decoder_name: Some("fixture-decoder".to_owned()),
         selected_hardware_backend,
-        output_format: Some(DecoderFrameFormat::Nv12),
+        output_format: Some(if is_fixture_audio {
+            DecoderFrameFormat::F32
+        } else {
+            DecoderFrameFormat::Nv12
+        }),
     };
     VesperDecoderOpenSessionResult {
         status: VesperPluginResultStatus::Success,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(serde_json::to_vec(&info).expect("serialize info")),
+    }
+}
+
+unsafe extern "C" fn fixture_native_decoder_recording_open_session_json(
+    context: *mut c_void,
+    config_json: *const u8,
+    config_json_len: usize,
+) -> VesperDecoderOpenSessionResult {
+    let config = decode_fixture_json::<DecoderSessionConfig>(config_json, config_json_len);
+    if let (Some(context), Ok(config)) = (
+        // SAFETY: fixture tests pass a `FixtureDecoderRecordingContext` pointer
+        // through the descriptor context for this callback.
+        unsafe { context.cast::<FixtureDecoderRecordingContext>().as_ref() },
+        config.as_ref(),
+    ) {
+        let _ = context
+            .opened_configs
+            .lock()
+            .map(|mut configs| configs.push(config.clone()));
+    }
+    // SAFETY: this test helper forwards the same validated JSON pointer and
+    // length to the base fixture open-session callback.
+    unsafe {
+        fixture_native_decoder_open_session_json(std::ptr::null_mut(), config_json, config_json_len)
     }
 }
 
@@ -487,6 +632,11 @@ unsafe extern "C" fn fixture_decoder_receive_native_frame(
         coded_height: Some(2),
         visible_rect: None,
         handle_kind: DecoderNativeHandleKind::IoSurface,
+        pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
+        color_space: None,
+        hdr_metadata: None,
+        sync_info: None,
+        transform: None,
         frame_id: Some(handle as u64),
         release_tracking: Some(DecoderNativeFrameReleaseTracking {
             frame_id: Some(handle as u64),
@@ -523,6 +673,11 @@ unsafe extern "C" fn fixture_decoder_receive_null_native_frame(
         coded_height: Some(2),
         visible_rect: None,
         handle_kind: DecoderNativeHandleKind::IoSurface,
+        pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
+        color_space: None,
+        hdr_metadata: None,
+        sync_info: None,
+        transform: None,
         frame_id: None,
         release_tracking: Some(DecoderNativeFrameReleaseTracking {
             frame_id: None,
@@ -530,6 +685,52 @@ unsafe extern "C" fn fixture_decoder_receive_null_native_frame(
         }),
     };
     decoder_native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), 0)
+}
+
+unsafe extern "C" fn fixture_decoder_receive_pcm_frame(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperDecoderReceivePcmFrameResult {
+    // SAFETY: fixture tests pass the session pointer allocated by the
+    // matching open-session callback for this ABI table.
+    let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+        return decoder_pcm_frame_error(DecoderError::NotConfigured);
+    };
+    let Some(data) = session.pending_frame.take() else {
+        return decoder_pcm_frame_success(&DecoderReceivePcmFrameMetadata::need_more_input(), None);
+    };
+    let mut metadata = DecoderPcmFrameMetadata::audio(
+        "fixture-audio",
+        DecoderFrameFormat::F32,
+        48_000,
+        2,
+        DecoderPcmSampleLayout::Interleaved,
+        1_024,
+    );
+    metadata.pts_us = session.last_pts_us;
+    metadata.duration_us = Some(21_333);
+    metadata.channel_layout = Some("stereo".to_owned());
+    decoder_pcm_frame_success(&DecoderReceivePcmFrameMetadata::frame(metadata), Some(data))
+}
+
+/// Returns a `Frame` status whose frame metadata is missing while still owning a
+/// non-empty PCM data buffer. Exercises the loader's error path that must reclaim
+/// `result.data` before surfacing the ABI violation.
+unsafe extern "C" fn fixture_decoder_receive_pcm_frame_missing_frame(
+    _context: *mut c_void,
+    _session: *mut c_void,
+) -> VesperDecoderReceivePcmFrameResult {
+    let metadata = DecoderReceivePcmFrameMetadata {
+        status: DecoderReceiveFrameStatus::Frame,
+        frame: None,
+    };
+    VesperDecoderReceivePcmFrameResult {
+        status: VesperPluginResultStatus::Success,
+        metadata: VesperPluginBytes::from_vec(
+            serde_json::to_vec(&metadata).expect("serialize malformed PCM metadata"),
+        ),
+        data: VesperPluginBytes::from_vec(vec![7u8; 4096]),
+    }
 }
 
 unsafe extern "C" fn fixture_decoder_release_native_frame(
@@ -584,6 +785,12 @@ unsafe extern "C" fn fixture_frame_processor_capabilities_json(
     let capabilities = FrameProcessorCapabilities {
         accepted_input_handle_kinds: vec![NativeHandleKind::IoSurface],
         output_handle_kinds: vec![NativeHandleKind::IoSurface],
+        accepted_input_pipeline_profiles: vec![NativeFramePipelineProfile::Unknown(
+            "io_surface".to_owned(),
+        )],
+        output_pipeline_profiles: vec![NativeFramePipelineProfile::Unknown(
+            "io_surface".to_owned(),
+        )],
         supports_video_frames: true,
         supports_in_place_passthrough: true,
         preserves_dimensions: true,
@@ -623,6 +830,7 @@ unsafe extern "C" fn fixture_frame_processor_open_session_json(
         processor_name: Some("test-frame-processor".to_owned()),
         selected_backend: Some("fixture-native".to_owned()),
         output_handle_kind: Some(NativeHandleKind::IoSurface),
+        output_pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
         max_in_flight_frames: Some(1),
     };
     VesperFrameProcessorOpenSessionResult {
@@ -790,6 +998,26 @@ unsafe extern "C" fn fixture_source_normalizer_packet_capabilities_json(
     )
 }
 
+unsafe extern "C" fn fixture_source_normalizer_resource_capabilities_json(
+    _context: *mut c_void,
+) -> VesperPluginBytes {
+    let capabilities = SourceNormalizerResourceCapabilities {
+        supported_runtime_profiles: vec!["fixture-resource".to_owned()],
+        supported_output_routes: vec![SourceNormalizerOutputRoute::Fmp4LocalStream],
+        max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+        content_types: vec!["video/mp4".to_owned()],
+        supports_growing_resources: true,
+        supports_range_reads: true,
+        supports_cancel: true,
+        required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+        cache_policy: SourceNormalizerResourceCachePolicy::default(),
+        max_sessions: Some(1),
+    };
+    VesperPluginBytes::from_vec(
+        serde_json::to_vec(&capabilities).expect("serialize source normalizer resource caps"),
+    )
+}
+
 unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
     _context: *mut c_void,
     config_json: *const u8,
@@ -834,6 +1062,11 @@ unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
             coded_height: Some(16),
             sample_rate: None,
             channels: None,
+            channel_layout: None,
+            codec_delay_samples: None,
+            priming_samples: None,
+            trailing_padding_samples: None,
+            seek_preroll_samples: None,
             frame_rate: Some(30.0),
             time_base_num: Some(1),
             time_base_den: Some(90_000),
@@ -854,6 +1087,107 @@ unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
             serde_json::to_vec(&info).expect("serialize source normalizer packet info"),
         ),
     }
+}
+
+unsafe extern "C" fn fixture_source_normalizer_open_resource_session_json(
+    _context: *mut c_void,
+    config_json: *const u8,
+    config_json_len: usize,
+) -> VesperSourceNormalizerOpenResourceSessionResult {
+    let config = match decode_source_normalizer_fixture_json::<
+        player_plugin::SourceNormalizerResourceSessionConfig,
+    >(config_json, config_json_len)
+    {
+        Ok(config) => config,
+        Err(error) => {
+            return VesperSourceNormalizerOpenResourceSessionResult {
+                status: VesperPluginResultStatus::Failure,
+                session: std::ptr::null_mut(),
+                payload: VesperPluginBytes::from_vec(
+                    serde_json::to_vec(&error).expect("serialize source normalizer error"),
+                ),
+            };
+        }
+    };
+    let info = SourceNormalizerResourceSessionInfo {
+        session_id: Some("fixture-resource-session".to_owned()),
+        normalizer_name: Some("test-source-normalizer-packet".to_owned()),
+        runtime_profile: Some(config.runtime_profile),
+        selected_backend: Some("fixture".to_owned()),
+        output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
+        container: "mp4".to_owned(),
+        primary_resource_path: Some(format!("{}/fixture.mp4", config.output_root)),
+        primary_content_type: Some("video/mp4".to_owned()),
+        resources: vec![SourceNormalizerResourceInfo {
+            role: "primary".to_owned(),
+            path: format!("{}/fixture.mp4", config.output_root),
+            content_type: Some("video/mp4".to_owned()),
+            byte_length: Some(0),
+            growing: false,
+        }],
+        tracks: Vec::new(),
+        duration_millis: Some(1_000),
+        seekable: true,
+        disk_bytes_used: Some(0),
+    };
+    let session = Box::into_raw(Box::new(FixtureSourceNormalizerResourceSession));
+    VesperSourceNormalizerOpenResourceSessionResult {
+        status: VesperPluginResultStatus::Success,
+        session: session.cast::<c_void>(),
+        payload: VesperPluginBytes::from_vec(
+            serde_json::to_vec(&info).expect("serialize source normalizer resource info"),
+        ),
+    }
+}
+
+unsafe extern "C" fn fixture_source_normalizer_poll_resource_session(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperPluginProcessResult {
+    if session.is_null() {
+        return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+    }
+    let status = SourceNormalizerResourceSessionStatus {
+        state: SourceNormalizerResourceSessionState::Completed,
+        info: None,
+        message: None,
+        disk_bytes_used: Some(0),
+    };
+    VesperPluginProcessResult {
+        status: VesperPluginResultStatus::Success,
+        payload: VesperPluginBytes::from_vec(
+            serde_json::to_vec(&status).expect("serialize source normalizer resource status"),
+        ),
+    }
+}
+
+unsafe extern "C" fn fixture_source_normalizer_cancel_resource_session(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperPluginProcessResult {
+    if session.is_null() {
+        return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+    }
+    source_normalizer_process_success(&SourceNormalizerOperationStatus {
+        completed: true,
+        message: None,
+    })
+}
+
+unsafe extern "C" fn fixture_source_normalizer_close_resource_session(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperPluginProcessResult {
+    if session.is_null() {
+        return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+    }
+    // SAFETY: the session pointer was allocated with `Box::into_raw` by the
+    // matching fixture open-resource callback and close is called once.
+    let _ = unsafe { Box::from_raw(session.cast::<FixtureSourceNormalizerResourceSession>()) };
+    source_normalizer_process_success(&SourceNormalizerOperationStatus {
+        completed: true,
+        message: None,
+    })
 }
 
 unsafe extern "C" fn fixture_source_normalizer_read_packet(
@@ -895,8 +1229,14 @@ unsafe extern "C" fn fixture_source_normalizer_read_packet(
             dts_us: Some(1_000),
             duration_us: Some(33_333),
             stream_index: 0,
+            media_kind: SourceNormalizerPacketMediaKind::Video,
             key_frame: true,
             discontinuity: session.last_seek.is_some(),
+            sample_rate: None,
+            channels: None,
+            channel_layout: None,
+            sample_format: None,
+            frame_count: None,
             end_of_stream: false,
         }),
         Some((packet.data.as_ptr(), packet.data.len(), packet.handle)),
@@ -1107,6 +1447,29 @@ fn decoder_native_frame_error(error: DecoderError) -> VesperDecoderReceiveNative
     }
 }
 
+fn decoder_pcm_frame_success(
+    metadata: &DecoderReceivePcmFrameMetadata,
+    data: Option<Vec<u8>>,
+) -> VesperDecoderReceivePcmFrameResult {
+    VesperDecoderReceivePcmFrameResult {
+        status: VesperPluginResultStatus::Success,
+        metadata: VesperPluginBytes::from_vec(
+            serde_json::to_vec(metadata).expect("serialize PCM frame metadata"),
+        ),
+        data: data
+            .map(VesperPluginBytes::from_vec)
+            .unwrap_or_else(VesperPluginBytes::null),
+    }
+}
+
+fn decoder_pcm_frame_error(error: DecoderError) -> VesperDecoderReceivePcmFrameResult {
+    VesperDecoderReceivePcmFrameResult {
+        status: VesperPluginResultStatus::Failure,
+        metadata: VesperPluginBytes::from_vec(serde_json::to_vec(&error).expect("serialize error")),
+        data: VesperPluginBytes::null(),
+    }
+}
+
 fn decode_frame_processor_fixture_json<T: serde::de::DeserializeOwned>(
     data: *const u8,
     len: usize,
@@ -1274,6 +1637,11 @@ fn fixture_native_frame() -> NativeFrame {
             coded_height: Some(2),
             visible_rect: None,
             handle_kind: NativeHandleKind::IoSurface,
+            pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
+            color_space: None,
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
             frame_id: Some(41),
             release_tracking: Some(NativeFrameReleaseTracking {
                 frame_id: Some(41),
@@ -1285,6 +1653,25 @@ fn fixture_native_frame() -> NativeFrame {
 }
 
 unsafe extern "C" fn fixture_free_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
+    // SAFETY: the fixture only reclaims buffers it allocated with
+    // `VesperPluginBytes::from_vec`.
+    let _ = unsafe { payload.into_vec() };
+}
+
+/// Like `fixture_free_bytes`, but records every reclaimed buffer length against a
+/// `FixtureFreeBytesRecorder` passed through `context`, so tests can prove that
+/// plugin-owned buffers are freed on each return path.
+unsafe extern "C" fn fixture_recording_free_bytes(
+    context: *mut c_void,
+    payload: VesperPluginBytes,
+) {
+    // SAFETY: tests that install this callback pass a `FixtureFreeBytesRecorder`
+    // pointer as the plugin context for the duration of the call.
+    if let Some(recorder) = unsafe { context.cast::<FixtureFreeBytesRecorder>().as_ref() } {
+        if let Ok(mut freed) = recorder.freed_lens.lock() {
+            freed.push(payload.len);
+        }
+    }
     // SAFETY: the fixture only reclaims buffers it allocated with
     // `VesperPluginBytes::from_vec`.
     let _ = unsafe { payload.into_vec() };

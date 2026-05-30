@@ -1,4 +1,7 @@
-#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+#![cfg_attr(
+    not(any(target_os = "macos", target_os = "ios")),
+    allow(dead_code, unused_imports)
+)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::{c_char, c_void};
@@ -8,13 +11,15 @@ use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements,
     DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-    DecoderSessionConfig, DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    DecoderSessionConfig, DecoderSessionInfo, NativeFramePipelineProfile,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-decoder-videotoolbox\0";
+const VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED: bool =
+    cfg!(any(target_os = "macos", target_os = "ios"));
 
 struct PluginBundle {
     api: VesperDecoderPluginApiV2,
@@ -166,10 +171,10 @@ fn decoder_capabilities() -> DecoderCapabilities {
             video_codec_capability("HVC1"),
             video_codec_capability("HEV1"),
         ],
-        supports_hardware_decode: cfg!(target_os = "macos"),
+        supports_hardware_decode: VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED,
         supports_cpu_video_frames: false,
         supports_audio_frames: false,
-        supports_gpu_handles: cfg!(target_os = "macos"),
+        supports_gpu_handles: VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED,
         supports_flush: true,
         supports_drain: true,
         max_sessions: None,
@@ -180,6 +185,7 @@ fn decoder_native_requirements() -> DecoderNativeRequirements {
     DecoderNativeRequirements {
         required_device_context_kinds: Vec::new(),
         output_handle_kinds: vec![DecoderNativeHandleKind::CvPixelBuffer],
+        output_pipeline_profiles: vec![NativeFramePipelineProfile::VideoToolboxCvPixelBuffer],
         requires_native_device_context: false,
         accepted_bitstream_formats: vec![
             DecoderBitstreamFormat::Avcc,
@@ -328,7 +334,7 @@ fn video_codec_kind(codec: &str) -> Option<VideoCodecKind> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod platform {
     use std::collections::VecDeque;
     use std::ffi::c_void;
@@ -340,8 +346,9 @@ mod platform {
         DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
         DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
         DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-        DecoderSessionConfig, DecoderSessionInfo, VesperDecoderOpenSessionResult,
-        VesperDecoderReceiveNativeFrameResult, VesperPluginProcessResult,
+        DecoderSessionConfig, DecoderSessionInfo, NativeFramePipelineProfile,
+        VesperDecoderOpenSessionResult, VesperDecoderReceiveNativeFrameResult,
+        VesperPluginProcessResult,
     };
 
     use super::{
@@ -803,6 +810,11 @@ mod platform {
                     coded_height: None,
                     visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+                    pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
+                    color_space: None,
+                    hdr_metadata: None,
+                    sync_info: None,
+                    transform: None,
                     frame_id: Some(frame.pixel_buffer as u64),
                     release_tracking: Some(DecoderNativeFrameReleaseTracking {
                         frame_id: Some(frame.pixel_buffer as u64),
@@ -1611,7 +1623,7 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod platform {
     use std::ffi::c_void;
 
@@ -1624,7 +1636,7 @@ mod platform {
 
     pub fn open_session(_config: DecoderSessionConfig) -> VesperDecoderOpenSessionResult {
         open_error(DecoderError::internal(
-            "VideoToolbox decoder plugin is only available on macOS",
+            "VideoToolbox decoder plugin is only available on Apple VideoToolbox platforms",
         ))
     }
 
@@ -1670,7 +1682,7 @@ mod tests {
         assert!(capabilities.supports_codec("avc1", player_plugin::DecoderMediaKind::Video));
         assert!(capabilities.supports_codec("HEVC", player_plugin::DecoderMediaKind::Video));
         assert!(capabilities.supports_codec("hvc1", player_plugin::DecoderMediaKind::Video));
-        assert!(capabilities.supports_gpu_handles == cfg!(target_os = "macos"));
+        assert!(capabilities.supports_gpu_handles == super::VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED);
         assert!(!capabilities.supports_cpu_video_frames);
     }
 

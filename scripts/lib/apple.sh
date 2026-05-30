@@ -143,3 +143,76 @@ vesper_apple_extract_libxml2_version() {
 
   sed -n 's/^#define LIBXML_DOTTED_VERSION "\(.*\)"$/\1/p' "$header_path" | head -n 1
 }
+
+vesper_apple_platform_sdk_name() {
+  case "$1" in
+    iPhoneOS)
+      echo "iphoneos"
+      ;;
+    iPhoneSimulator)
+      echo "iphonesimulator"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+vesper_apple_xcode_actual_version() {
+  local xcode_version="$1"
+  local major
+  local minor
+
+  major="${xcode_version%%.*}"
+  if [[ "$xcode_version" == *.* ]]; then
+    minor="${xcode_version#*.}"
+    minor="${minor%%.*}"
+  else
+    minor="0"
+  fi
+
+  printf '%s%s0\n' "$major" "$minor"
+}
+
+vesper_apple_add_plist_string() {
+  local output_path="$1"
+  local key="$2"
+  local value="$3"
+
+  [[ -n "$value" ]] || return 0
+  /usr/libexec/PlistBuddy -c "Delete :$key" "$output_path" >/dev/null 2>&1 || true
+  /usr/libexec/PlistBuddy -c "Add :$key string $value" "$output_path"
+}
+
+vesper_apple_add_framework_install_metadata() {
+  local output_path="$1"
+  local platform_name="$2"
+  local sdk_name
+  local sdk_version
+  local sdk_build
+  local xcode_version
+  local xcode_build
+
+  sdk_name="$(vesper_apple_platform_sdk_name "$platform_name")"
+  sdk_version="$(xcodebuild -sdk "$sdk_name" -version SDKVersion 2>/dev/null || true)"
+  sdk_build="$(xcodebuild -sdk "$sdk_name" -version ProductBuildVersion 2>/dev/null || true)"
+  xcode_version="$(xcodebuild -version 2>/dev/null | awk '/^Xcode / {print $2; exit}' || true)"
+  xcode_build="$(xcodebuild -version 2>/dev/null | awk '/^Build version / {print $3; exit}' || true)"
+
+  vesper_apple_add_plist_string "$output_path" BuildMachineOSBuild "$(sw_vers -buildVersion 2>/dev/null || true)"
+  vesper_apple_add_plist_string "$output_path" DTCompiler "com.apple.compilers.llvm.clang.1_0"
+  vesper_apple_add_plist_string "$output_path" DTPlatformBuild "$sdk_build"
+  vesper_apple_add_plist_string "$output_path" DTPlatformName "$sdk_name"
+  vesper_apple_add_plist_string "$output_path" DTPlatformVersion "$sdk_version"
+  vesper_apple_add_plist_string "$output_path" DTSDKBuild "$sdk_build"
+  vesper_apple_add_plist_string "$output_path" DTSDKName "${sdk_name}${sdk_version}"
+  if [[ -n "$xcode_version" ]]; then
+    vesper_apple_add_plist_string "$output_path" DTXcode "$(vesper_apple_xcode_actual_version "$xcode_version")"
+  fi
+  vesper_apple_add_plist_string "$output_path" DTXcodeBuild "$xcode_build"
+
+  /usr/libexec/PlistBuddy -c "Delete :UIDeviceFamily" "$output_path" >/dev/null 2>&1 || true
+  /usr/libexec/PlistBuddy -c "Add :UIDeviceFamily array" "$output_path"
+  /usr/libexec/PlistBuddy -c "Add :UIDeviceFamily:0 integer 1" "$output_path"
+  /usr/libexec/PlistBuddy -c "Add :UIDeviceFamily:1 integer 2" "$output_path"
+}

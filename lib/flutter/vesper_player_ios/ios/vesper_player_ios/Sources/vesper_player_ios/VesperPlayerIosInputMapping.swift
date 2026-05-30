@@ -235,6 +235,32 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
+    func toNativeFramePipelineConfiguration() -> VesperNativeFramePipelineConfiguration {
+        let mode: VesperNativeFramePipelineMode
+        switch self["mode"] as? String {
+        case "diagnosticsOnly":
+            mode = .diagnosticsOnly
+        case "preferNativeFrame":
+            mode = .preferNativeFrame
+        case "requireNativeFrame":
+            mode = .requireNativeFrame
+        default:
+            mode = .disabled
+        }
+        return VesperNativeFramePipelineConfiguration(
+            mode: mode,
+            decoderPluginLibraryPaths:
+                (self["decoderPluginLibraryPaths"] as? [Any])?.compactMap { value in
+                    value as? String
+                } ?? [],
+            frameProcessorPluginLibraryPaths:
+                (self["frameProcessorPluginLibraryPaths"] as? [Any])?.compactMap { value in
+                    value as? String
+                } ?? [],
+            maxInFlightFrames: (self["maxInFlightFrames"] as? NSNumber)?.intValue
+        )
+    }
+
     func toDownloadConfiguration() -> VesperDownloadConfiguration {
         VesperDownloadConfiguration(
             autoStart: self["autoStart"] as? Bool ?? true,

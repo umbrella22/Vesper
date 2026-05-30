@@ -104,10 +104,20 @@ void main() {
       mode: VesperFrameProcessorMode.diagnosticsOnly,
       pluginLibraryPaths: <String>['/data/local/tmp/libframe.so'],
     );
+    const nativeFramePipelineConfiguration =
+        VesperNativeFramePipelineConfiguration(
+      mode: VesperNativeFramePipelineMode.preferNativeFrame,
+      decoderPluginLibraryPaths: <String>['/data/local/tmp/libdecoder.so'],
+      frameProcessorPluginLibraryPaths: <String>[
+        '/data/local/tmp/libframe.so'
+      ],
+      maxInFlightFrames: 2,
+    );
 
     await platform.createPlayer(
       sourceNormalizerConfiguration: sourceNormalizerConfiguration,
       frameProcessorConfiguration: frameProcessorConfiguration,
+      nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
     );
 
     expect(calls, hasLength(1));
@@ -118,6 +128,13 @@ void main() {
     expect(
       Map<Object?, Object?>.from(calls.single.arguments as Map),
       containsPair('frameProcessor', frameProcessorConfiguration.toMap()),
+    );
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      containsPair(
+        'nativeFramePipeline',
+        nativeFramePipelineConfiguration.toMap(),
+      ),
     );
   });
 

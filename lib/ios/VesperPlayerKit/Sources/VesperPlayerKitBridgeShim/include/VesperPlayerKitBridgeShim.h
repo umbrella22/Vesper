@@ -704,6 +704,47 @@ bool vesper_source_normalizer_resource_poll(
 
 void vesper_source_normalizer_resource_dispose(uint64_t handle);
 
+bool vesper_ios_native_frame_pipeline_open(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    uint32_t native_frame_mode,
+    char **decoder_plugin_library_paths,
+    uintptr_t decoder_plugin_library_paths_len,
+    char **frame_plugin_library_paths,
+    uintptr_t frame_plugin_library_paths_len,
+    uint32_t max_in_flight_frames,
+    uint64_t *out_handle,
+    char **out_json,
+    char **out_error_message);
+
+bool vesper_ios_native_frame_pipeline_advance(
+    uint64_t handle,
+    char **out_json,
+    char **out_error_message);
+
+bool vesper_ios_native_frame_pipeline_release_frame(
+    uint64_t handle,
+    uint64_t frame_handle,
+    bool presented,
+    char **out_json,
+    char **out_error_message);
+
+bool vesper_ios_native_frame_pipeline_flush(
+    uint64_t handle,
+    char **out_json,
+    char **out_error_message);
+
+bool vesper_ios_native_frame_pipeline_seek(
+    uint64_t handle,
+    uint64_t position_millis,
+    char **out_json,
+    char **out_error_message);
+
+void vesper_ios_native_frame_pipeline_close(uint64_t handle);
+
 bool vesper_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,

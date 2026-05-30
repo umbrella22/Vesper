@@ -12,15 +12,16 @@ pub mod source_normalizer;
 
 pub use abi::{
     VESPER_DECODER_PLUGIN_ABI_VERSION_V2, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
-    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
-    VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
-    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveNativeFrameResult, VesperFrameProcessorOpenSessionResult,
-    VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
-    VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginProgressCallbacks,
-    VesperPluginResultStatus, VesperPostDownloadProcessorApi,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_V4, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
+    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2, VesperDecoderPluginApiV4,
+    VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult,
+    VesperFrameProcessorOpenSessionResult, VesperFrameProcessorPluginApiV1,
+    VesperFrameProcessorReceiveFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
+    VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
+    VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerOpenResourceSessionResult,
     VesperSourceNormalizerPluginApiV2, VesperSourceNormalizerPluginApiV3,
     VesperSourceNormalizerReadPacketResult,
@@ -35,8 +36,10 @@ pub use decoder::{
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext,
     DecoderNativeDeviceContextKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
     DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderNativeRequirements,
-    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveFrameStatus,
-    DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
+    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderPcmFrame,
+    DecoderPcmFrameMetadata, DecoderPcmSampleLayout, DecoderReceiveFrameStatus,
+    DecoderReceiveNativeFrameMetadata, DecoderReceiveNativeFrameOutput,
+    DecoderReceivePcmFrameMetadata, DecoderReceivePcmFrameOutput, DecoderSessionConfig,
     DecoderSessionInfo, DecoderVisibleRect, NativeDecoderPluginFactory, NativeDecoderSession,
 };
 pub use frame_processor::{
@@ -48,7 +51,8 @@ pub use frame_processor::{
 };
 pub use hook::{PipelineEvent, PipelineEventHook};
 pub use native_frame::{
-    NativeFrame, NativeFrameMetadata, NativeFrameReleaseTracking, NativeHandleKind, VisibleRect,
+    NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
+    NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind, VisibleRect,
 };
 pub use processor::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream,

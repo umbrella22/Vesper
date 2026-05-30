@@ -19,6 +19,8 @@ internal object PlayerBridgeFactory {
             VesperSourceNormalizerConfiguration(),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
             VesperFrameProcessorConfiguration(),
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
+            VesperNativeFramePipelineConfiguration(),
     ): PlayerBridge =
         when (defaultBackend) {
             PlayerBridgeBackend.FakeDemo ->
@@ -53,6 +55,7 @@ internal object PlayerBridgeFactory {
                     surfaceKind = surfaceKind,
                     sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                     frameProcessorConfiguration = frameProcessorConfiguration,
+                    nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
                 )
             }
         }

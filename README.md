@@ -180,6 +180,23 @@ VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
 cargo run -p basic-player
 ```
 
+Recommended macOS native-frame closed-loop smoke command:
+
+```sh
+VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libplayer_source_normalizer_ffmpeg.dylib \
+VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
+VESPER_DECODER_PLUGIN_PATHS=target/debug/libplayer_decoder_videotoolbox.dylib \
+VESPER_DECODER_PLUGIN_VIDEO_MODE=native-frame \
+VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagnostic.dylib \
+VESPER_FRAME_PROCESSOR_MODE=prefer-processed \
+VESPER_FRAME_PROCESSOR_DEBUG=1 \
+cargo run -p basic-player
+```
+
+This route is expected to show SourceNormalizer `selected` until the packet
+stream is handed to the VideoToolbox native-frame decoder and presenter; only
+then should diagnostics mark it as `participated`.
+
 FrameProcessor remains a diagnostics / debug route unless you explicitly choose
 a stricter desktop processing mode:
 

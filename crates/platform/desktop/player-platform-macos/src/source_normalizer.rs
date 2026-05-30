@@ -177,7 +177,8 @@ pub(crate) fn prepare_source_normalizer_for_open(
             .push(source_normalizer_runtime_diagnostic(
                 None,
                 format!(
-                    "source normalizer packet stream skipped for {protocol} adaptive source; selected native adaptive playback path"
+                    "source normalizer packet stream skipped for {protocol} adaptive source; selected {} route",
+                    PlayerPlaybackRoute::SystemPlayer.wire_name()
                 ),
                 PlayerPluginParticipation::Bypassed,
             ));
@@ -250,19 +251,34 @@ pub(crate) fn prepare_source_normalizer_for_open(
                     ready.stream_info.session_id.as_ref().map(|session_id| {
                         format!("vesper-source-normalizer-packet://{session_id}")
                     });
+                let audio_decoder_registry =
+                    source_normalizer_audio_decoder_registry(&ready.stream_info, options);
+                let packet_stream_summary =
+                    source_normalizer_packet_stream_summary_with_audio_decoder_readiness(
+                        &ready.stream_info,
+                        audio_decoder_registry.as_ref(),
+                    );
+                let packet_stream_details =
+                    source_normalizer_packet_stream_details_with_audio_decoder_readiness(
+                        &ready.stream_info,
+                        audio_decoder_registry.as_ref(),
+                    );
                 outcome.packet_stream_info = Some(ready.stream_info);
                 outcome.packet_session = Some(ready.session);
                 outcome
                     .diagnostics
-                    .push(source_normalizer_runtime_diagnostic(
+                    .push(source_normalizer_runtime_diagnostic_with_details(
                         ready.plugin_name.clone(),
                         format!(
-                            "source normalizer selected profile {} via {}; ready in {} ms; output packet_stream",
+                            "source normalizer selected profile {} via {}; ready in {} ms; output packet_stream; {}; waiting for {} decoder handoff",
                             ready.selected_profile.as_deref().unwrap_or("auto-detected"),
                             ready.plugin_name.as_deref().unwrap_or("unknown-normalizer"),
-                            ready.ready_latency.as_millis()
+                            ready.ready_latency.as_millis(),
+                            packet_stream_summary,
+                            PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
                         ),
-                        PlayerPluginParticipation::Participated,
+                        PlayerPluginParticipation::Selected,
+                        packet_stream_details,
                     ));
                 return Ok(outcome);
             }
@@ -412,6 +428,20 @@ pub(crate) fn source_normalizer_runtime_diagnostic(
     message: String,
     participation: PlayerPluginParticipation,
 ) -> PlayerPluginDiagnostic {
+    source_normalizer_runtime_diagnostic_with_details(
+        plugin_name,
+        message,
+        participation,
+        Vec::new(),
+    )
+}
+
+pub(crate) fn source_normalizer_runtime_diagnostic_with_details(
+    plugin_name: Option<String>,
+    message: String,
+    participation: PlayerPluginParticipation,
+    details: Vec<PlayerPluginDiagnosticDetail>,
+) -> PlayerPluginDiagnostic {
     PlayerPluginDiagnostic {
         path: String::new(),
         plugin_name,
@@ -420,7 +450,257 @@ pub(crate) fn source_normalizer_runtime_diagnostic(
         message: Some(message),
         capability: None,
         participation,
+        details,
     }
+}
+
+pub(crate) fn source_normalizer_packet_stream_summary(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+) -> String {
+    let details = SourceNormalizerPacketStreamDiagnosticDetails::from_stream_info(stream_info);
+    format!(
+        "tracks video={} audio={}; selectedVideoStreamIndex={}; selectedVideoMediaKind={}; selectedVideoCodec={}; audioStreamIndex={}; audioMediaKind={}; audioTrackCodec={}; seekable={}; durationMs={}; route={}",
+        details.video_tracks,
+        details.audio_tracks,
+        details.selected_video_stream_index,
+        details.selected_video_media_kind,
+        details.selected_video_codec,
+        details.audio_stream_index,
+        details.audio_media_kind,
+        details.audio_codec,
+        details.seekable,
+        details.duration_ms,
+        details.route
+    )
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceNormalizerPacketStreamDiagnosticDetails {
+    video_tracks: usize,
+    audio_tracks: usize,
+    selected_video_stream_index: String,
+    selected_video_media_kind: &'static str,
+    selected_video_codec: String,
+    audio_stream_index: String,
+    audio_media_kind: &'static str,
+    audio_codec: String,
+    seekable: bool,
+    duration_ms: String,
+    route: &'static str,
+}
+
+impl SourceNormalizerPacketStreamDiagnosticDetails {
+    pub(crate) fn from_stream_info(
+        stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+    ) -> Self {
+        let video_tracks = stream_info
+            .tracks
+            .iter()
+            .filter(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)
+            .count();
+        let audio_tracks = stream_info
+            .tracks
+            .iter()
+            .filter(|track| track.media_kind == SourceNormalizerPacketMediaKind::Audio)
+            .count();
+        let selected_video = stream_info
+            .selected_track_index
+            .and_then(|selected| {
+                stream_info
+                    .tracks
+                    .iter()
+                    .find(|track| track.stream_index == selected)
+            })
+            .filter(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)
+            .or_else(|| {
+                stream_info
+                    .tracks
+                    .iter()
+                    .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)
+            });
+        let audio_track = stream_info
+            .tracks
+            .iter()
+            .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Audio);
+        Self {
+            video_tracks,
+            audio_tracks,
+            selected_video_stream_index: selected_video
+                .map(|track| track.stream_index.to_string())
+                .unwrap_or_else(|| "none".to_owned()),
+            selected_video_media_kind: selected_video
+                .map(|track| source_normalizer_packet_media_kind_wire_name(track.media_kind))
+                .unwrap_or("none"),
+            selected_video_codec: selected_video
+                .map(|track| track.codec.clone())
+                .unwrap_or_else(|| "unknown".to_owned()),
+            audio_stream_index: audio_track
+                .map(|track| track.stream_index.to_string())
+                .unwrap_or_else(|| "none".to_owned()),
+            audio_media_kind: audio_track
+                .map(|track| source_normalizer_packet_media_kind_wire_name(track.media_kind))
+                .unwrap_or("none"),
+            audio_codec: audio_track
+                .map(|track| track.codec.clone())
+                .unwrap_or_else(|| "none".to_owned()),
+            seekable: stream_info.seekable,
+            duration_ms: stream_info
+                .duration_millis
+                .map(|duration| duration.to_string())
+                .unwrap_or_else(|| "unknown".to_owned()),
+            route: PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
+        }
+    }
+
+    pub(crate) fn into_plugin_details(self) -> Vec<PlayerPluginDiagnosticDetail> {
+        vec![
+            source_normalizer_detail("videoTracks", self.video_tracks.to_string()),
+            source_normalizer_detail("audioTracks", self.audio_tracks.to_string()),
+            source_normalizer_detail("selectedVideoStreamIndex", self.selected_video_stream_index),
+            source_normalizer_detail("selectedVideoMediaKind", self.selected_video_media_kind),
+            source_normalizer_detail("selectedVideoCodec", self.selected_video_codec),
+            source_normalizer_detail("audioStreamIndex", self.audio_stream_index),
+            source_normalizer_detail("audioMediaKind", self.audio_media_kind),
+            source_normalizer_detail("audioTrackCodec", self.audio_codec),
+            source_normalizer_detail("seekable", self.seekable.to_string()),
+            source_normalizer_detail("durationMs", self.duration_ms),
+            source_normalizer_detail("route", self.route),
+        ]
+    }
+}
+
+pub(crate) fn source_normalizer_packet_stream_details(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+) -> Vec<PlayerPluginDiagnosticDetail> {
+    SourceNormalizerPacketStreamDiagnosticDetails::from_stream_info(stream_info)
+        .into_plugin_details()
+}
+
+pub(crate) fn source_normalizer_packet_media_kind_wire_name(
+    media_kind: SourceNormalizerPacketMediaKind,
+) -> &'static str {
+    match media_kind {
+        SourceNormalizerPacketMediaKind::Video => "video",
+        SourceNormalizerPacketMediaKind::Audio => "audio",
+        SourceNormalizerPacketMediaKind::Subtitle => "subtitle",
+    }
+}
+
+pub(crate) fn source_normalizer_packet_stream_summary_with_audio_decoder_readiness(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+    audio_decoder_registry: Option<&PluginRegistry>,
+) -> String {
+    format!(
+        "{}; {}",
+        source_normalizer_packet_stream_summary(stream_info),
+        source_normalizer_audio_decoder_readiness_note(stream_info, audio_decoder_registry)
+    )
+}
+
+pub(crate) fn source_normalizer_packet_stream_details_with_audio_decoder_readiness(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+    audio_decoder_registry: Option<&PluginRegistry>,
+) -> Vec<PlayerPluginDiagnosticDetail> {
+    let mut details = source_normalizer_packet_stream_details(stream_info);
+    details.extend(source_normalizer_audio_decoder_readiness_details(
+        stream_info,
+        audio_decoder_registry,
+    ));
+    details
+}
+
+pub(crate) fn source_normalizer_audio_decoder_readiness_note(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+    audio_decoder_registry: Option<&PluginRegistry>,
+) -> String {
+    let Some(audio_track) = stream_info
+        .tracks
+        .iter()
+        .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Audio)
+    else {
+        return "audioDecoderPlugin=none; audioDecoderPluginReady=false; audioDecoder=none"
+            .to_owned();
+    };
+    let Some(registry) = audio_decoder_registry else {
+        return "audioDecoderPlugin=none; audioDecoderPluginReady=false; audioDecoder=none"
+            .to_owned();
+    };
+    let request = DecoderPluginMatchRequest::audio(audio_track.codec.clone());
+    if let Some(record) = registry.best_pcm_audio_decoder_for(&request) {
+        let plugin = record.plugin_name.as_deref().unwrap_or("unknown-decoder");
+        return format!(
+            "audioDecoderPlugin={plugin}; audioDecoderPluginReady=true; audioDecoder=none"
+        );
+    }
+    "audioDecoderPlugin=none; audioDecoderPluginReady=false; audioDecoder=none".to_owned()
+}
+
+pub(crate) fn source_normalizer_audio_decoder_readiness_details(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+    audio_decoder_registry: Option<&PluginRegistry>,
+) -> Vec<PlayerPluginDiagnosticDetail> {
+    let mut details = Vec::new();
+    let Some(audio_track) = stream_info
+        .tracks
+        .iter()
+        .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Audio)
+    else {
+        details.push(source_normalizer_detail("audioDecoderPlugin", "none"));
+        details.push(source_normalizer_detail("audioDecoderPluginReady", "false"));
+        details.push(source_normalizer_detail("audioDecoder", "none"));
+        return details;
+    };
+    let plugin_name = audio_decoder_registry.and_then(|registry| {
+        registry
+            .best_pcm_audio_decoder_for(&DecoderPluginMatchRequest::audio(
+                audio_track.codec.clone(),
+            ))
+            .and_then(|record| record.plugin_name.clone())
+    });
+    details.push(source_normalizer_detail(
+        "audioDecoderPlugin",
+        plugin_name.unwrap_or_else(|| "none".to_owned()),
+    ));
+    details.push(source_normalizer_detail(
+        "audioDecoderPluginReady",
+        (audio_decoder_registry
+            .and_then(|registry| {
+                registry.best_pcm_audio_decoder_for(&DecoderPluginMatchRequest::audio(
+                    audio_track.codec.clone(),
+                ))
+            })
+            .is_some())
+        .to_string(),
+    ));
+    details.push(source_normalizer_detail("audioDecoder", "none"));
+    details
+}
+
+pub(crate) fn source_normalizer_detail(
+    key: impl Into<String>,
+    value: impl Into<String>,
+) -> PlayerPluginDiagnosticDetail {
+    PlayerPluginDiagnosticDetail {
+        key: key.into(),
+        value: value.into(),
+    }
+}
+
+pub(crate) fn source_normalizer_audio_decoder_registry(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+    options: &PlayerRuntimeOptions,
+) -> Option<PluginRegistry> {
+    let audio_track = stream_info
+        .tracks
+        .iter()
+        .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Audio)?;
+    if options.decoder_plugin_library_paths.is_empty() {
+        return None;
+    }
+    Some(PluginRegistry::inspect_decoder_support(
+        &options.decoder_plugin_library_paths,
+        DecoderPluginMatchRequest::audio(audio_track.codec.clone()),
+    ))
 }
 
 pub(crate) fn source_normalizer_registry_notes(registry: &PluginRegistry) -> String {
@@ -444,6 +724,32 @@ pub(crate) fn apply_source_normalizer_open_diagnostics(
         startup.plugin_diagnostics.push(diagnostic.clone());
     }
     startup
+}
+
+pub(crate) fn mark_source_normalizer_packet_stream_participated(
+    normalization: &mut MacosSourceNormalizationOutcome,
+    decoder_plugin_name: Option<&str>,
+) {
+    if !normalization.has_packet_stream() {
+        return;
+    }
+    for diagnostic in &mut normalization.diagnostics {
+        if diagnostic.plugin_kind.as_deref() != Some("source_normalizer") {
+            continue;
+        }
+        let Some(message) = diagnostic.message.as_mut() else {
+            continue;
+        };
+        if !message.contains("output packet_stream") {
+            continue;
+        }
+        diagnostic.participation = PlayerPluginParticipation::Participated;
+        let decoder = decoder_plugin_name.unwrap_or("selected native-frame decoder");
+        message.push_str(&format!(
+            "; handed to {decoder} and macOS {} presenter",
+            PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+        ));
+    }
 }
 
 pub(crate) fn drop_source_normalizer_packet_session(

@@ -110,6 +110,14 @@ pub(crate) fn free_plugin_frame_processor_capability(
         &mut capability.output_handle_kinds,
         capability.output_handle_kinds_len,
     );
+    free_c_string_array(
+        &mut capability.accepted_input_pipeline_profiles,
+        capability.accepted_input_pipeline_profiles_len,
+    );
+    free_c_string_array(
+        &mut capability.output_pipeline_profiles,
+        capability.output_pipeline_profiles_len,
+    );
     *capability = PlayerFfiPluginFrameProcessorCapabilitySummary::default();
 }
 

@@ -1,5 +1,9 @@
 use super::*;
 
+pub(crate) fn macos_route_label(route: PlayerPlaybackRoute) -> &'static str {
+    route.wire_name()
+}
+
 pub(crate) fn should_trigger_runtime_fallback_for_advance(error: &PlayerError) -> bool {
     if error.code() != PlayerErrorCode::BackendFailure {
         return false;
@@ -57,13 +61,15 @@ pub(crate) fn macos_host_software_path_reason(
     let best_video = media_info.best_video.as_ref()?;
     if should_route_macos_host_to_decoder_plugin_path(media_info, options) {
         return Some(format!(
-            "native-frame decoder plugin playback requested for {} video; selected desktop decoder plugin path",
-            best_video.codec
+            "native-frame decoder plugin playback requested for {} video; selected {} route",
+            best_video.codec,
+            macos_route_label(PlayerPlaybackRoute::SdkManagedNativeFrame)
         ));
     }
     Some(format!(
-        "macos native host runtime requires an external video surface for {} playback; selected software desktop path",
-        best_video.codec
+        "macos native host runtime requires an external video surface for {} playback; selected {} route",
+        best_video.codec,
+        macos_route_label(PlayerPlaybackRoute::SoftwareDecoder)
     ))
 }
 
@@ -107,7 +113,8 @@ pub(crate) fn probe_macos_host_runtime_initializer_with_factories(
             options,
             software_fallback_factory.as_ref(),
             Some(format!(
-                "macos native host runtime probe failed; selected software desktop path: {}",
+                "macos native host runtime probe failed; selected {} route: {}",
+                macos_route_label(PlayerPlaybackRoute::SoftwareDecoder),
                 native_error.message()
             )),
         ),

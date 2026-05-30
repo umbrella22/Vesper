@@ -104,7 +104,7 @@
 "example.resilience.cache_value" = "%@ · 内存 %@ / 磁盘 %@";
 
 "example.plugins.title" = "插件诊断";
-"example.plugins.subtitle" = "SourceNormalizer 可从 diagnostics/preflight 切到 normalized playback 路线；FrameProcessor 仅记录 debug 能力诊断。";
+"example.plugins.subtitle" = "默认播放仍走 AVPlayer。SDK-managed Native Frame Pipeline 是显式启用的硬件优先路线：SourceNormalizer packet、VideoToolbox、可选 FrameProcessor 和 Metal 展示。";
 "example.plugins.source_normalizer.disabled" = "SourceNormalizer 关闭";
 "example.plugins.source_normalizer.disabled_subtitle" = "不会为播放探测加载 SourceNormalizer 插件。";
 "example.plugins.source_normalizer.diagnostics" = "Diagnostics";
@@ -117,17 +117,29 @@
 "example.plugins.source_normalizer.require_subtitle" = "要求使用 disk-backed normalized playback，失败时直接展示错误。";
 "example.plugins.source_normalizer.group" = "SourceNormalizer";
 "example.plugins.frame_processor.group" = "FrameProcessor Debug";
+"example.plugins.native_frame.group" = "SDK-managed Native Frame";
+"example.plugins.native_frame.disabled" = "Native frame 关闭";
+"example.plugins.native_frame.disabled_subtitle" = "使用 AVPlayer，并关闭 SDK-managed packet、硬件解码、processor 和 presenter 路线。";
+"example.plugins.native_frame.diagnostics" = "Native diagnostics";
+"example.plugins.native_frame.diagnostics_subtitle" = "只上报 native-frame 能力诊断，不替换 AVPlayer 播放。";
+"example.plugins.native_frame.prefer" = "Prefer native frame";
+"example.plugins.native_frame.prefer_subtitle" = "优先尝试 SourceNormalizer packet 输入、VideoToolbox 硬件解码、FrameProcessor 和 MetalLayer；失败时回退 AVPlayer。";
+"example.plugins.native_frame.require" = "Require native frame";
+"example.plugins.native_frame.require_subtitle" = "要求使用 SourceNormalizer packet、VideoToolbox 硬件解码、FrameProcessor 和 MetalLayer 路线；失败时展示错误。";
 "example.plugins.source_path" = "source";
+"example.plugins.decoder_path" = "decoder";
 "example.plugins.frame_path" = "frame";
 "example.plugins.missing" = "缺失";
 "example.plugins.no_source_normalizer_diagnostics" = "暂无 SourceNormalizer 诊断。";
 "example.plugins.no_frame_processor_diagnostics" = "暂无 FrameProcessor debug 诊断。";
+"example.plugins.no_native_frame_diagnostics" = "暂无 Native Frame Pipeline 诊断。";
 "example.plugins.unknown_record" = "插件诊断";
 "example.plugins.participation" = "participation：%@";
 "example.plugins.profiles" = "profiles：%@";
 "example.plugins.route" = "route：%@";
 "example.plugins.cache" = "cache：%@";
 "example.plugins.resource" = "resource：%@";
+"example.plugins.native_frame_details" = "native-frame：%@";
 
 "example.message.preparing_selected_video" = "正在准备所选视频...";
 "example.message.preparing_video_from_photos" = "正在准备来自相册的视频...";

@@ -138,7 +138,17 @@ impl LoadedDynamicPlugin {
             VesperPluginKind::PipelineEventHook | VesperPluginKind::BenchmarkSink => {
                 VESPER_PLUGIN_ABI_VERSION_V2
             }
-            VesperPluginKind::Decoder => VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+            VesperPluginKind::Decoder => {
+                if descriptor.abi_version != VESPER_DECODER_PLUGIN_ABI_VERSION_V3
+                    && descriptor.abi_version != VESPER_DECODER_PLUGIN_ABI_VERSION_V4
+                {
+                    return Err(PluginLoadError::AbiVersionMismatch {
+                        expected: VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
+                        actual: descriptor.abi_version,
+                    });
+                }
+                descriptor.abi_version
+            }
             VesperPluginKind::FrameProcessor => VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
             VesperPluginKind::SourceNormalizer => {
                 if descriptor.abi_version != VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2
@@ -152,7 +162,8 @@ impl LoadedDynamicPlugin {
                 descriptor.abi_version
             }
         };
-        if descriptor.plugin_kind != VesperPluginKind::SourceNormalizer
+        if descriptor.plugin_kind != VesperPluginKind::Decoder
+            && descriptor.plugin_kind != VesperPluginKind::SourceNormalizer
             && descriptor.abi_version != expected_abi_version
         {
             return Err(PluginLoadError::AbiVersionMismatch {
@@ -242,18 +253,27 @@ impl LoadedDynamicPlugin {
                 })
             }
             VesperPluginKind::Decoder => {
-                let api_ptr = descriptor.api.cast::<VesperDecoderPluginApiV2>();
-                let api =
-                    // SAFETY: `descriptor.api` must point at the v2 decoder ABI table
-                    // when the plugin exports a valid decoder descriptor.
-                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                        field: "decoder_plugin_api_v2",
-                    })?;
-                let factory = DynamicNativeDecoderPluginFactory::new(
-                    library,
-                    descriptor_name.clone(),
-                    CheckedNativeDecoderPluginApi::try_from(*api)?,
-                )?;
+                let api = if descriptor.abi_version == VESPER_DECODER_PLUGIN_ABI_VERSION_V4 {
+                    let api_ptr = descriptor.api.cast::<VesperDecoderPluginApiV4>();
+                    let api =
+                        // SAFETY: `descriptor.api` must point at the v3 decoder ABI table
+                        // when the plugin exports a valid v4 decoder descriptor.
+                        unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                            field: "decoder_plugin_api_v4",
+                        })?;
+                    CheckedNativeDecoderPluginApi::try_from(*api)?
+                } else {
+                    let api_ptr = descriptor.api.cast::<VesperDecoderPluginApiV2>();
+                    let api =
+                        // SAFETY: `descriptor.api` must point at the v2 decoder ABI table
+                        // when the plugin exports a valid v3 decoder descriptor.
+                        unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                            field: "decoder_plugin_api_v2",
+                        })?;
+                    CheckedNativeDecoderPluginApi::try_from(*api)?
+                };
+                let factory =
+                    DynamicNativeDecoderPluginFactory::new(library, descriptor_name.clone(), api)?;
                 Ok(Self {
                     name: descriptor_name,
                     plugin_kind: descriptor.plugin_kind,
@@ -398,6 +418,11 @@ pub(crate) type DecoderReceiveNativeFrameFn =
         context: *mut c_void,
         session: *mut c_void,
     ) -> VesperDecoderReceiveNativeFrameResult;
+pub(crate) type DecoderReceivePcmFrameFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperDecoderReceivePcmFrameResult;
 pub(crate) type DecoderReleaseNativeFrameFn = unsafe extern "C" fn(
     context: *mut c_void,
     session: *mut c_void,
@@ -592,6 +617,7 @@ pub(crate) struct CheckedNativeDecoderPluginApi {
     pub(crate) open_session_json: DecoderOpenSessionJsonFn,
     pub(crate) send_packet: DecoderSendPacketFn,
     pub(crate) receive_native_frame: DecoderReceiveNativeFrameFn,
+    pub(crate) receive_pcm_frame: Option<DecoderReceivePcmFrameFn>,
     pub(crate) release_native_frame: DecoderReleaseNativeFrameFn,
     pub(crate) flush_session: DecoderSessionOperationFn,
     pub(crate) close_session: DecoderSessionOperationFn,
@@ -636,6 +662,7 @@ impl TryFrom<VesperDecoderPluginApiV2> for CheckedNativeDecoderPluginApi {
                     field: "decoder_plugin_api_v2.receive_native_frame",
                 },
             )?,
+            receive_pcm_frame: None,
             release_native_frame: api.release_native_frame.ok_or(
                 PluginLoadError::MissingField {
                     field: "decoder_plugin_api_v2.release_native_frame",
@@ -646,6 +673,52 @@ impl TryFrom<VesperDecoderPluginApiV2> for CheckedNativeDecoderPluginApi {
             })?,
             close_session: api.close_session.ok_or(PluginLoadError::MissingField {
                 field: "decoder_plugin_api_v2.close_session",
+            })?,
+        })
+    }
+}
+
+impl TryFrom<VesperDecoderPluginApiV4> for CheckedNativeDecoderPluginApi {
+    type Error = PluginLoadError;
+
+    fn try_from(api: VesperDecoderPluginApiV4) -> Result<Self, Self::Error> {
+        Ok(Self {
+            context: api.context,
+            destroy: api.destroy,
+            name: api.name,
+            capabilities_json: api.capabilities_json.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v4.capabilities_json",
+            })?,
+            native_requirements_json: api.native_requirements_json.ok_or(
+                PluginLoadError::MissingField {
+                    field: "decoder_plugin_api_v4.native_requirements_json",
+                },
+            )?,
+            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v4.free_bytes",
+            })?,
+            open_session_json: api.open_session_json.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v4.open_session_json",
+            })?,
+            send_packet: api.send_packet.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v4.send_packet",
+            })?,
+            receive_native_frame: api.receive_native_frame.ok_or(
+                PluginLoadError::MissingField {
+                    field: "decoder_plugin_api_v4.receive_native_frame",
+                },
+            )?,
+            receive_pcm_frame: api.receive_pcm_frame,
+            release_native_frame: api.release_native_frame.ok_or(
+                PluginLoadError::MissingField {
+                    field: "decoder_plugin_api_v4.release_native_frame",
+                },
+            )?,
+            flush_session: api.flush_session.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v4.flush_session",
+            })?,
+            close_session: api.close_session.ok_or(PluginLoadError::MissingField {
+                field: "decoder_plugin_api_v4.close_session",
             })?,
         })
     }

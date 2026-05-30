@@ -11,7 +11,7 @@ Groups:
   ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
   android  jni | aar | remux-plugin | source-normalizer-plugin | frame-processor-plugin | stage-release | sample-apks
-  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim
+  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim | verify-native-frame
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
   flutter  stage-pub | pub-dry-run | pub-publish | local-overrides | verify-android-plugin
@@ -106,6 +106,9 @@ case "$group:$command" in
     ;;
   ios:verify-bridge-shim)
     exec "$SCRIPT_DIR/ios/verify-vesper-player-kit-bridge-shim.sh" "$@"
+    ;;
+  ios:verify-native-frame)
+    exec "$SCRIPT_DIR/ios/verify-native-frame-pipeline.sh" "$@"
     ;;
   desktop:ensure-ffmpeg)
     exec "$SCRIPT_DIR/desktop/ensure-ffmpeg.sh" "$@"

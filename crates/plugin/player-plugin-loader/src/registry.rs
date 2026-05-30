@@ -72,13 +72,15 @@ impl PluginRegistry {
     ) -> Self {
         let records = paths
             .into_iter()
-            .map(|path| {
+            .flat_map(|path| {
                 let path = path.as_ref().to_path_buf();
                 match LoadedDynamicPlugin::load(&path) {
                     Ok(plugin) => {
-                        PluginDiagnosticRecord::from_loaded_source_normalizer_plugin(path, &plugin)
+                        PluginDiagnosticRecord::from_loaded_source_normalizer_plugin_records(
+                            path, &plugin,
+                        )
                     }
-                    Err(error) => PluginDiagnosticRecord::load_failed(path, error),
+                    Err(error) => vec![PluginDiagnosticRecord::load_failed(path, error)],
                 }
             })
             .collect();
@@ -124,12 +126,35 @@ impl PluginRegistry {
         })
     }
 
+    pub fn best_pcm_audio_decoder_for(
+        &self,
+        request: &DecoderPluginMatchRequest,
+    ) -> Option<&PluginDiagnosticRecord> {
+        if request.media_kind != DecoderMediaKind::Audio {
+            return None;
+        }
+        self.records.iter().find(|record| {
+            record.status == PluginDiagnosticStatus::DecoderSupported
+                && decoder_capability_summary(record).is_some_and(|capabilities| {
+                    capabilities.supports_pcm_frames
+                        && capabilities.typed_codecs.iter().any(|codec| {
+                            codec.media_kind == request.media_kind
+                                && codec.codec.eq_ignore_ascii_case(&request.codec)
+                        })
+                })
+        })
+    }
+
     pub fn supports_decoder(&self, request: &DecoderPluginMatchRequest) -> bool {
         self.best_decoder_for(request).is_some()
     }
 
     pub fn supports_native_decoder(&self, request: &DecoderPluginMatchRequest) -> bool {
         self.best_native_decoder_for(request).is_some()
+    }
+
+    pub fn supports_pcm_audio_decoder(&self, request: &DecoderPluginMatchRequest) -> bool {
+        self.best_pcm_audio_decoder_for(request).is_some()
     }
 
     pub fn frame_processor_supported_plugin_names(&self) -> Vec<&str> {

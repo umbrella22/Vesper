@@ -299,6 +299,86 @@ func videoVariantObservationSummary(_ observation: VesperVideoVariantObservation
     return parts.isEmpty ? nil : parts.joined(separator: " · ")
 }
 
+func nativeFrameDiagnosticDetails(_ diagnostic: [String: Any]) -> String {
+    let values = [
+        diagnosticLabel("clock", diagnostic["clockSource"]),
+        diagnosticLabel("audioDecoder", diagnostic["audioDecoder"]),
+        diagnosticLabel("audio", diagnostic["audioOutput"]),
+        diagnosticLabel("audioPipeline", diagnostic["audioPipeline"]),
+        diagnosticLabel("rateControl", diagnostic["audioRateControl"]),
+        diagnosticStream(
+            "video",
+            kind: diagnostic["selectedVideoMediaKind"],
+            index: diagnostic["selectedVideoStreamIndex"]
+        ),
+        diagnosticStream(
+            "audioTrack",
+            kind: diagnostic["audioMediaKind"],
+            index: diagnostic["audioStreamIndex"]
+        ),
+        diagnosticFlag("seekable", diagnostic["seekable"]),
+        diagnosticLabel("fallbackTarget", diagnostic["fallbackTargetRoute"]),
+        diagnosticLabel("issue", diagnostic["issueKind"] ?? diagnostic["failureKind"] ?? diagnostic["pendingKind"]),
+    ].filter { !$0.isEmpty }
+    return values.joined(separator: " · ")
+}
+
+func pluginDiagnosticCounters(_ diagnostic: [String: Any]) -> String {
+    let values = [
+        diagnosticCounter("processed", diagnostic["processedFrames"]),
+        diagnosticCounter("presented", diagnostic["presentedFrames"]),
+        diagnosticCounter("deadline", diagnostic["deadlineMisses"]),
+        diagnosticCounter("backpressure", diagnostic["backpressureCount"]),
+        diagnosticCounter("late", diagnostic["lateDropped"]),
+        diagnosticCounter("skipAudio", diagnostic["skippedAudioPackets"]),
+        diagnosticCounter("skipVideo", diagnostic["skippedVideoPackets"]),
+        diagnosticCounter("skipOther", diagnostic["skippedOtherPackets"]),
+    ].filter { !$0.isEmpty }
+    return values.joined(separator: " · ")
+}
+
+private func diagnosticLabel(_ label: String, _ rawValue: Any?) -> String {
+    guard let value = rawValue as? String, !value.isEmpty else {
+        return ""
+    }
+    return "\(label)=\(value)"
+}
+
+private func diagnosticFlag(_ label: String, _ rawValue: Any?) -> String {
+    if let value = rawValue as? Bool {
+        return "\(label)=\(value)"
+    }
+    if let value = rawValue as? NSNumber {
+        return "\(label)=\(value.boolValue)"
+    }
+    return ""
+}
+
+private func diagnosticStream(_ label: String, kind: Any?, index: Any?) -> String {
+    guard let indexValue = diagnosticInt(index) else {
+        return ""
+    }
+    let kindValue = (kind as? String).flatMap { $0.isEmpty || $0 == "pending" ? nil : $0 } ?? "unknown"
+    return "\(label)=\(kindValue)#\(indexValue)"
+}
+
+private func diagnosticInt(_ rawValue: Any?) -> Int? {
+    if let value = rawValue as? NSNumber {
+        return value.intValue
+    }
+    return rawValue as? Int
+}
+
+private func diagnosticCounter(_ label: String, _ rawValue: Any?) -> String {
+    if let value = rawValue as? NSNumber {
+        return "\(label) \(value.intValue)"
+    }
+    if let value = rawValue as? Int {
+        return "\(label) \(value)"
+    }
+    return ""
+}
+
 func audioButtonLabel(
     _ trackCatalog: VesperTrackCatalog,
     _ trackSelection: VesperTrackSelectionSnapshot
@@ -506,33 +586,46 @@ func formatStorageBytes(_ value: Int64?) -> String {
 }
 
 func bundledDownloadPluginLibraryPaths() -> [String] {
-    bundledFrameworkPluginLibraryPaths(
+    bundledPluginLibraryPaths(
+        dylibName: "libvesper_remux_ffmpeg.dylib",
         frameworkName: "VesperPlayerRemuxFfmpegPlugin",
         binaryName: "VesperPlayerRemuxFfmpegPlugin"
     )
 }
 
 func bundledSourceNormalizerPluginLibraryPaths() -> [String] {
-    bundledFrameworkPluginLibraryPaths(
+    bundledPluginLibraryPaths(
+        dylibName: "libplayer_source_normalizer_ffmpeg.dylib",
         frameworkName: "VesperPlayerSourceNormalizerFfmpegPlugin",
         binaryName: "VesperPlayerSourceNormalizerFfmpegPlugin"
     )
 }
 
+func bundledDecoderPluginLibraryPaths() -> [String] {
+    bundledPluginLibraryPaths(
+        dylibName: "libplayer_decoder_videotoolbox.dylib",
+        frameworkName: "VesperPlayerDecoderVideoToolboxPlugin",
+        binaryName: "VesperPlayerDecoderVideoToolboxPlugin"
+    )
+}
+
 func bundledFrameProcessorPluginLibraryPaths() -> [String] {
-    bundledFrameworkPluginLibraryPaths(
+    bundledPluginLibraryPaths(
+        dylibName: "libplayer_frame_processor_diagnostic.dylib",
         frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
         binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
     )
 }
 
-private func bundledFrameworkPluginLibraryPaths(
+private func bundledPluginLibraryPaths(
+    dylibName: String,
     frameworkName: String,
     binaryName: String
 ) -> [String] {
     let fileManager = FileManager.default
     let frameworksPath = Bundle.main.privateFrameworksPath ?? "\(Bundle.main.bundlePath)/Frameworks"
     let candidates = [
+        "\(frameworksPath)/\(dylibName)",
         "\(frameworksPath)/\(frameworkName).framework/\(binaryName)",
     ]
 

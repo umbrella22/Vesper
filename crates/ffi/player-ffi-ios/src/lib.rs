@@ -19,7 +19,8 @@ use player_platform_mobile::{
 use player_plugin::ProcessorProgress;
 use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_runtime::{
-    DownloadTaskSnapshot, FrameProcessorMode, PlayerError, PreloadBudget, SourceNormalizerMode,
+    DownloadTaskSnapshot, FrameProcessorMode, NativeFramePipelineMode, PlayerError, PreloadBudget,
+    SourceNormalizerMode,
     policy::{
         resolve_preload_budget as resolve_preload_budget_with_runtime,
         resolve_resilience_policy as resolve_resilience_policy_with_runtime,
@@ -29,10 +30,16 @@ use player_runtime::{
 
 mod conversions;
 mod handles;
+mod native_frame_pipeline;
 mod types;
 
 use conversions::*;
 use handles::*;
+use native_frame_pipeline::{
+    IosNativeFramePipelineOpenConfig, IosNativeFramePipelineSession,
+    native_frame_pipeline_frame_json, native_frame_pipeline_open_json,
+    native_frame_pipeline_status_json,
+};
 pub(crate) use types::ResolvedDownloadConfig;
 pub use types::*;
 
@@ -2661,6 +2668,493 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_dispose(handle: u
 
 /// # Safety
 ///
+/// String and array pointers must be valid for the duration of the call. The returned JSON string
+/// is allocated by Rust and must be released with
+/// `player_ffi_mobile_plugin_diagnostics_string_free`. The returned handle must be disposed with
+/// `player_ffi_ios_native_frame_pipeline_close`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
+    source_uri: *const c_char,
+    source_mode: u32,
+    source_plugin_library_paths: *mut *mut c_char,
+    source_plugin_library_paths_len: usize,
+    runtime_profile: *const c_char,
+    native_frame_mode: u32,
+    decoder_plugin_library_paths: *mut *mut c_char,
+    decoder_plugin_library_paths_len: usize,
+    frame_plugin_library_paths: *mut *mut c_char,
+    frame_plugin_library_paths_len: usize,
+    max_in_flight_frames: u32,
+    out_handle: *mut u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_handle.is_null() || out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::NullPointer,
+                    "out_handle or out_json was null",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_handle, 0);
+            ptr::write(out_json, ptr::null_mut());
+        }
+        let source_uri = match read_optional_c_string(source_uri, "source_uri") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::NullPointer, "source_uri was null"),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let source_plugin_library_paths = match read_string_list(
+            source_plugin_library_paths,
+            source_plugin_library_paths_len,
+            "source_plugin_library_paths",
+        ) {
+            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let decoder_plugin_library_paths = match read_string_list(
+            decoder_plugin_library_paths,
+            decoder_plugin_library_paths_len,
+            "decoder_plugin_library_paths",
+        ) {
+            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let frame_plugin_library_paths = match read_string_list(
+            frame_plugin_library_paths,
+            frame_plugin_library_paths_len,
+            "frame_plugin_library_paths",
+        ) {
+            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let runtime_profile = match read_optional_c_string(runtime_profile, "runtime_profile") {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let session = match IosNativeFramePipelineSession::open(IosNativeFramePipelineOpenConfig {
+            source_uri,
+            source_normalizer_mode: source_normalizer_mode_from_u32(source_mode),
+            source_normalizer_plugin_library_paths: source_plugin_library_paths,
+            runtime_profile,
+            native_frame_pipeline_mode: native_frame_pipeline_mode_from_u32(native_frame_mode),
+            decoder_plugin_library_paths,
+            frame_processor_plugin_library_paths: frame_plugin_library_paths,
+            max_in_flight_frames: (max_in_flight_frames > 0).then_some(max_in_flight_frames),
+        }) {
+            Ok(session) => session,
+            Err(error) => {
+                let message = error.wire_message();
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &message),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let mut sessions = match native_frame_pipeline_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "native-frame pipeline registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let handle = sessions.insert(session);
+        let Some(opened) = sessions.get(handle) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidState,
+                    "native-frame pipeline session handle could not be resolved",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        let json = match native_frame_pipeline_open_json(handle, opened) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = sessions.remove(handle);
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        unsafe {
+            ptr::write(out_handle, handle);
+            ptr::write(out_json, into_c_string_ptr(json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// The handle must have been returned by `player_ffi_ios_native_frame_pipeline_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_advance(
+    handle: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_json, ptr::null_mut());
+        }
+        let mut sessions = match native_frame_pipeline_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "native-frame pipeline registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let Some(session) = sessions.get_mut(handle) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "invalid native-frame pipeline handle",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        let frame = match session.advance() {
+            Ok(frame) => frame,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let (frame_handle, json) = match frame {
+            Some(frame) => {
+                let frame_handle = session.store_frame(frame);
+                let Some(stored) = session.pending_frame(frame_handle) else {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidState,
+                            "native-frame pending frame could not be stored",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                };
+                (
+                    Some(frame_handle),
+                    native_frame_pipeline_frame_json(
+                        Some(frame_handle),
+                        Some(stored),
+                        session.status_wire(handle, None).counters,
+                        false,
+                        None,
+                    ),
+                )
+            }
+            None => {
+                let end_of_stream = session.is_end_of_stream();
+                (
+                    None,
+                    native_frame_pipeline_frame_json(
+                        None,
+                        None,
+                        session.status_wire(handle, None).counters,
+                        end_of_stream,
+                        None,
+                    ),
+                )
+            }
+        };
+        let json = match json {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(frame_handle) = frame_handle {
+                    let _ = session.release_pending_frame(frame_handle, false);
+                }
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// The handle must have been returned by `player_ffi_ios_native_frame_pipeline_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_release_frame(
+    handle: u64,
+    frame_handle: u64,
+    presented: bool,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_json, ptr::null_mut());
+        }
+        let mut sessions = match native_frame_pipeline_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "native-frame pipeline registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let Some(session) = sessions.get_mut(handle) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "invalid native-frame pipeline handle",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        if let Err(error) = session.release_pending_frame(frame_handle, presented) {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::BackendFailure, &error),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        let json = match native_frame_pipeline_status_json(handle, session, None) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// The handle must have been returned by `player_ffi_ios_native_frame_pipeline_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_flush(
+    handle: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_json, ptr::null_mut());
+        }
+        let mut sessions = match native_frame_pipeline_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "native-frame pipeline registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let Some(session) = sessions.get_mut(handle) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "invalid native-frame pipeline handle",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        if let Err(error) = session.flush() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::BackendFailure, &error),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        let json =
+            match native_frame_pipeline_status_json(handle, session, Some("flushed".to_owned())) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// The handle must have been returned by `player_ffi_ios_native_frame_pipeline_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
+    handle: u64,
+    position_millis: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_json, ptr::null_mut());
+        }
+        let mut sessions = match native_frame_pipeline_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "native-frame pipeline registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let Some(session) = sessions.get_mut(handle) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "invalid native-frame pipeline handle",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        if let Err(error) = session.seek_to(position_millis) {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::SeekFailure, &error),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        let json = match native_frame_pipeline_status_json(
+            handle,
+            session,
+            Some(format!("seeked to {position_millis} ms")),
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(json));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// The handle must have been returned by `player_ffi_ios_native_frame_pipeline_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_close(handle: u64) {
+    ffi_void(|| {
+        if let Ok(mut sessions) = native_frame_pipeline_sessions().lock() {
+            sessions.remove(handle);
+        }
+    });
+}
+
+/// # Safety
+///
 /// Raw pointers and opaque handles passed to this FFI entry point must either be null when
 /// the parameter is documented as optional or point to valid objects allocated by the
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
@@ -2733,6 +3227,15 @@ fn frame_processor_mode_from_u32(value: u32) -> FrameProcessorMode {
     match value {
         1 => FrameProcessorMode::DiagnosticsOnly,
         _ => FrameProcessorMode::Disabled,
+    }
+}
+
+fn native_frame_pipeline_mode_from_u32(value: u32) -> NativeFramePipelineMode {
+    match value {
+        1 => NativeFramePipelineMode::DiagnosticsOnly,
+        2 => NativeFramePipelineMode::PreferNativeFrame,
+        3 => NativeFramePipelineMode::RequireNativeFrame,
+        _ => NativeFramePipelineMode::Disabled,
     }
 }
 

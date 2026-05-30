@@ -21,6 +21,8 @@ import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadStreamKind
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorConfiguration
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorMode
+import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineConfiguration
+import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineMode
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
@@ -89,6 +91,31 @@ internal fun Map<String, Any?>?.toFrameProcessorConfiguration():
             (this["pluginLibraryPaths"] as? List<*>)
                 ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
                 ?: emptyList(),
+    )
+}
+
+internal fun Map<String, Any?>?.toNativeFramePipelineConfiguration():
+    VesperNativeFramePipelineConfiguration {
+    if (this == null) {
+        return VesperNativeFramePipelineConfiguration()
+    }
+    return VesperNativeFramePipelineConfiguration(
+        mode =
+            when (this["mode"] as? String) {
+                "diagnosticsOnly" -> VesperNativeFramePipelineMode.DiagnosticsOnly
+                "preferNativeFrame" -> VesperNativeFramePipelineMode.PreferNativeFrame
+                "requireNativeFrame" -> VesperNativeFramePipelineMode.RequireNativeFrame
+                else -> VesperNativeFramePipelineMode.Disabled
+            },
+        decoderPluginLibraryPaths =
+            (this["decoderPluginLibraryPaths"] as? List<*>)
+                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
+                ?: emptyList(),
+        frameProcessorPluginLibraryPaths =
+            (this["frameProcessorPluginLibraryPaths"] as? List<*>)
+                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
+                ?: emptyList(),
+        maxInFlightFrames = (this["maxInFlightFrames"] as? Number)?.toInt(),
     )
 }
 

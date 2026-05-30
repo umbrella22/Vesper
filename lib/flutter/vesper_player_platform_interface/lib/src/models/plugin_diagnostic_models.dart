@@ -20,6 +20,7 @@ enum VesperPluginParticipation {
   selected,
   participated,
   bypassed,
+  fallback,
 }
 
 final class VesperPluginCodecCapability {
@@ -115,6 +116,8 @@ final class VesperPluginFrameProcessorCapabilitySummary {
   const VesperPluginFrameProcessorCapabilitySummary({
     this.acceptedInputHandleKinds = const <String>[],
     this.outputHandleKinds = const <String>[],
+    this.acceptedInputPipelineProfiles = const <String>[],
+    this.outputPipelineProfiles = const <String>[],
     this.supportsVideoFrames = false,
     this.supportsInPlacePassthrough = false,
     this.preservesDimensions = false,
@@ -133,6 +136,9 @@ final class VesperPluginFrameProcessorCapabilitySummary {
       acceptedInputHandleKinds:
           _decodeStringList(map['acceptedInputHandleKinds']),
       outputHandleKinds: _decodeStringList(map['outputHandleKinds']),
+      acceptedInputPipelineProfiles:
+          _decodeStringList(map['acceptedInputPipelineProfiles']),
+      outputPipelineProfiles: _decodeStringList(map['outputPipelineProfiles']),
       supportsVideoFrames: _decodeBool(map, 'supportsVideoFrames'),
       supportsInPlacePassthrough:
           _decodeBool(map, 'supportsInPlacePassthrough'),
@@ -148,6 +154,8 @@ final class VesperPluginFrameProcessorCapabilitySummary {
 
   final List<String> acceptedInputHandleKinds;
   final List<String> outputHandleKinds;
+  final List<String> acceptedInputPipelineProfiles;
+  final List<String> outputPipelineProfiles;
   final bool supportsVideoFrames;
   final bool supportsInPlacePassthrough;
   final bool preservesDimensions;
@@ -162,6 +170,8 @@ final class VesperPluginFrameProcessorCapabilitySummary {
     return <String, Object?>{
       'acceptedInputHandleKinds': acceptedInputHandleKinds,
       'outputHandleKinds': outputHandleKinds,
+      'acceptedInputPipelineProfiles': acceptedInputPipelineProfiles,
+      'outputPipelineProfiles': outputPipelineProfiles,
       'supportsVideoFrames': supportsVideoFrames,
       'supportsInPlacePassthrough': supportsInPlacePassthrough,
       'preservesDimensions': preservesDimensions,

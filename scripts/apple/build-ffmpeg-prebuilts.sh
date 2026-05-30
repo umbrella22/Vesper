@@ -28,6 +28,29 @@ apple_pkg_config_path() {
   fi
 }
 
+apple_pkg_config_command() {
+  local candidate
+
+  if [[ -n "${PKG_CONFIG:-}" ]]; then
+    printf '%s\n' "$PKG_CONFIG"
+    return 0
+  fi
+
+  if candidate="$(command -v pkg-config 2>/dev/null)"; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  for candidate in /opt/homebrew/bin/pkg-config /usr/local/bin/pkg-config; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 selected_slices=()
 while IFS= read -r slice; do
   selected_slices+=("$slice")
@@ -62,11 +85,17 @@ for slice in "${selected_slices[@]}"; do
   metadata_path="$output_root/vesper-ffmpeg-build-metadata.txt"
   metadata_expected="$WORK_DIR/metadata-$slice.txt"
   local_pkg_config_paths=()
+  pkg_config_command=""
 
   rm -rf "$pkgconfig_dir"
   mkdir -p "$pkgconfig_dir"
 
-  if [[ "$VESPER_FFMPEG_USE_LIBXML2" == "1" ]]; then
+  if vesper_ffmpeg_has_flag --enable-libxml2 ${VESPER_FFMPEG_CONFIGURE_ARGS[@]+"${VESPER_FFMPEG_CONFIGURE_ARGS[@]}"}; then
+    if ! pkg_config_command="$(apple_pkg_config_command)"; then
+      echo "pkg-config is required to configure Apple FFmpeg with libxml2." >&2
+      echo "Install pkg-config/pkgconf, or set PKG_CONFIG to its executable path." >&2
+      exit 1
+    fi
     libxml2_version="$(vesper_apple_extract_libxml2_version "$sdk_path")"
     cat >"$pkgconfig_dir/libxml-2.0.pc" <<EOF
 prefix=$sdk_path/usr
@@ -115,6 +144,10 @@ EOF
     ${VESPER_FFMPEG_CONFIGURE_ARGS[@]+"${VESPER_FFMPEG_CONFIGURE_ARGS[@]}"}
   )
 
+  if [[ -n "$pkg_config_command" ]]; then
+    configure_args+=("--pkg-config=$pkg_config_command")
+  fi
+
   if [[ "$arch" == "x86_64" ]]; then
     # iOS simulator x86_64 is more likely to hit inline assembly issues on Apple Silicon hosts.
     configure_args+=("--disable-asm")
@@ -151,6 +184,7 @@ EOF
     fi
     env \
       PKG_CONFIG_ALLOW_CROSS=1 \
+      ${pkg_config_command:+"PKG_CONFIG=$pkg_config_command"} \
       PKG_CONFIG_PATH="$(apple_pkg_config_path "$pkg_config_path_value")" \
       PKG_CONFIG_LIBDIR="$(apple_pkg_config_path "$pkg_config_path_value")" \
       ./configure "${configure_args[@]}"

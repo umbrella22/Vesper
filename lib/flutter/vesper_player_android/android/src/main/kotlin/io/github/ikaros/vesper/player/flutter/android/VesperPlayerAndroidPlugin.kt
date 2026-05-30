@@ -516,6 +516,10 @@ class VesperPlayerAndroidPlugin :
                 (arguments["frameProcessor"] as? Map<*, *>)
                     ?.stringMap()
                     .toFrameProcessorConfiguration()
+            val nativeFramePipelineConfiguration =
+                (arguments["nativeFramePipeline"] as? Map<*, *>)
+                    ?.stringMap()
+                    .toNativeFramePipelineConfiguration()
             val benchmarkConfiguration =
                 (arguments["benchmarkConfiguration"] as? Map<*, *>)
                     ?.stringMap()
@@ -543,6 +547,7 @@ class VesperPlayerAndroidPlugin :
                     surfaceKind = surfaceKind,
                     sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                     frameProcessorConfiguration = frameProcessorConfiguration,
+                    nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
                 ),
                 benchmarkConsoleLogging = benchmarkConfiguration.consoleLogging,
             )

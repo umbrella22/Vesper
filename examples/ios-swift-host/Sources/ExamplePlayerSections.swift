@@ -270,15 +270,24 @@ struct ExampleResilienceSection: View {
 struct ExamplePluginDiagnosticsSection: View {
     let palette: ExampleHostPalette
     let sourceNormalizerSetting: ExampleSourceNormalizerSetting
+    let nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
     let sourceNormalizerPluginLibraryPaths: [String]
+    let decoderPluginLibraryPaths: [String]
     let frameProcessorPluginLibraryPaths: [String]
     let pluginDiagnostics: [[String: Any]]
     let onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Void
+    let onNativeFramePipelineSettingChange: (ExampleNativeFramePipelineSetting) -> Void
 
     private var sourceNormalizerDiagnostics: [[String: Any]] {
         pluginDiagnostics.filter { diagnostic in
             diagnostic["pluginKind"] as? String == "source_normalizer" ||
                 (diagnostic["status"] as? String)?.hasPrefix("sourceNormalizer") == true
+        }
+    }
+
+    private var nativeFramePipelineDiagnostics: [[String: Any]] {
+        pluginDiagnostics.filter { diagnostic in
+            diagnostic["pluginKind"] as? String == "native_frame_pipeline"
         }
     }
 
@@ -322,9 +331,40 @@ struct ExamplePluginDiagnosticsSection: View {
                     .foregroundStyle(palette.body)
                     .lineSpacing(4)
 
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(ExampleNativeFramePipelineSetting.allCases) { setting in
+                            Button(setting.title) {
+                                onNativeFramePipelineSettingChange(setting)
+                            }
+                            .buttonStyle(.plain)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(
+                                setting == nativeFramePipelineSetting
+                                    ? palette.primaryAction
+                                    : Color.white.opacity(0.08),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(setting == nativeFramePipelineSetting ? .white : palette.title)
+                        }
+                    }
+                }
+
+                Text(nativeFramePipelineSetting.subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(palette.body)
+                    .lineSpacing(4)
+
                 ExampleFactRow(
                     label: ExampleI18n.pluginSourcePath,
                     value: pluginDisplayValue(sourceNormalizerPluginLibraryPaths),
+                    palette: palette
+                )
+                ExampleFactRow(
+                    label: ExampleI18n.pluginDecoderPath,
+                    value: pluginDisplayValue(decoderPluginLibraryPaths),
                     palette: palette
                 )
                 ExampleFactRow(
@@ -337,6 +377,12 @@ struct ExamplePluginDiagnosticsSection: View {
                     title: ExampleI18n.pluginSourceNormalizerGroup,
                     emptyLabel: ExampleI18n.pluginNoSourceNormalizerDiagnostics,
                     diagnostics: sourceNormalizerDiagnostics,
+                    palette: palette
+                )
+                PluginDiagnosticGroup(
+                    title: ExampleI18n.pluginNativeFrameGroup,
+                    emptyLabel: ExampleI18n.pluginNoNativeFrameDiagnostics,
+                    diagnostics: nativeFramePipelineDiagnostics,
                     palette: palette
                 )
                 PluginDiagnosticGroup(
@@ -403,6 +449,10 @@ private struct PluginDiagnosticRow: View {
         return values.joined(separator: " · ")
     }
 
+    private var nativeFrameDetails: String {
+        nativeFrameDiagnosticDetails(diagnostic)
+    }
+
     private var cache: String {
         let diskBytes = diagnostic["diskBytesUsed"] as? NSNumber
         let cachePolicy = diagnostic["cachePolicy"] as? [String: Any]
@@ -420,6 +470,20 @@ private struct PluginDiagnosticRow: View {
 
     private var fallbackReason: String {
         diagnostic["fallbackReason"] as? String ?? ""
+    }
+
+    private var pipeline: String {
+        let values = [
+            diagnostic["sourceInput"] as? String ?? "",
+            diagnostic["decoderAdapter"] as? String ?? "",
+            diagnostic["pipelineProfile"] as? String ?? "",
+            diagnostic["presenterProfile"] as? String ?? "",
+        ].filter { !$0.isEmpty }
+        return values.joined(separator: " -> ")
+    }
+
+    private var counters: String {
+        pluginDiagnosticCounters(diagnostic)
     }
 
     private var path: String {
@@ -450,6 +514,24 @@ private struct PluginDiagnosticRow: View {
                 Text(ExampleI18n.pluginRoute(route))
                     .font(.footnote)
                     .lineLimit(1)
+                    .foregroundStyle(palette.body)
+            }
+            if !pipeline.isEmpty {
+                Text(pipeline)
+                    .font(.footnote)
+                    .lineLimit(2)
+                    .foregroundStyle(palette.body)
+            }
+            if !nativeFrameDetails.isEmpty {
+                Text(ExampleI18n.pluginNativeFrameDetails(nativeFrameDetails))
+                    .font(.footnote)
+                    .lineLimit(2)
+                    .foregroundStyle(palette.body)
+            }
+            if !counters.isEmpty {
+                Text(counters)
+                    .font(.footnote)
+                    .lineLimit(2)
                     .foregroundStyle(palette.body)
             }
             if !cache.isEmpty {

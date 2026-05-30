@@ -31,6 +31,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var endObserver: NSObjectProtocol?
     private var playbackStalledObserver: NSObjectProtocol?
     private var pendingAutoPlay = false
+    private var pendingNativeFrameSurfaceLoad = false
+    private var pendingNativeFrameSeek: PendingNativeFrameSeek?
     private var playbackEpoch: UInt64 = 0
     private var firstFrameRenderedPlaybackEpoch: UInt64?
     private var readyForDisplayCountByEpoch: [UInt64: Int] = [:]
@@ -63,7 +65,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private let benchmarkRecorder: VesperBenchmarkRecorder
     private let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
     private let frameProcessorConfiguration: VesperFrameProcessorConfiguration
+    private let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
     private var currentPluginDiagnostics: [[String: Any]]
+    private let nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator
+    private var nativeFramePipelineFallbackIssue: VesperNativeFramePipelineIssue?
     private var fixedTrackConvergenceState: FixedTrackConvergenceState?
     private var fixedTrackIssueActive = false
     private var audioSessionActive = false
@@ -128,7 +133,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
             VesperSourceNormalizerConfiguration(),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
-            VesperFrameProcessorConfiguration()
+            VesperFrameProcessorConfiguration(),
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
+            VesperNativeFramePipelineConfiguration(),
+        nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator? = nil
     ) {
         currentSource = initialSource
         currentResiliencePolicy = resiliencePolicy
@@ -136,13 +144,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
         self.sourceNormalizerConfiguration = sourceNormalizerConfiguration
         self.frameProcessorConfiguration = frameProcessorConfiguration
-        currentPluginDiagnostics = initialSource.map {
-            VesperMobilePluginDiagnosticsProbe.run(
-                source: $0,
-                sourceNormalizer: sourceNormalizerConfiguration,
-                frameProcessor: frameProcessorConfiguration
-            )
-        } ?? []
+        self.nativeFramePipelineConfiguration = nativeFramePipelineConfiguration
+        self.nativeFramePipelineCoordinator = nativeFramePipelineCoordinator ?? VesperNativeFramePipelineCoordinator()
+        currentPluginDiagnostics = []
         benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
         preloadCoordinator = VesperNativePreloadCoordinator(
             budgetPolicy: preloadBudgetPolicy.resolvedForRuntime()
@@ -171,6 +175,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedFixedTrackStatus = nil
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
+        currentPluginDiagnostics = initialSource.map { probePlugins(for: $0) }
+            ?? nativeFramePipelineDiagnostics()
     }
 
     func initialize() {
@@ -199,6 +205,29 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             }
             return
         }
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart,
+           nativeSession.source == currentSource {
+            iosHostLog("initialize ignored: native-frame pipeline already configured source=\(currentSource.uri)")
+            recordBenchmark("initialize_native_frame_already_active")
+            if pendingAutoPlay {
+                pendingAutoPlay = false
+                nativeSession.play(rate: desiredPlaybackRate)
+                updateState {
+                    PlayerHostUiState(
+                        title: $0.title,
+                        subtitle: $0.subtitle,
+                        sourceLabel: $0.sourceLabel,
+                        playbackState: .playing,
+                        playbackRate: $0.playbackRate,
+                        isBuffering: false,
+                        isInterrupted: $0.isInterrupted,
+                        timeline: $0.timeline
+                    )
+                }
+            }
+            return
+        }
         let shouldAutoPlay = pendingAutoPlay || player == nil
         iosHostLog(
             "initialize source=\(currentSource.uri) label=\(currentSource.label) kind=\(currentSource.kind.rawValue) protocol=\(currentSource.protocol.rawValue) autoPlay=\(shouldAutoPlay)"
@@ -206,8 +235,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         currentPluginDiagnostics = probePlugins(for: currentSource)
         do {
             configureAudioSessionIfNeeded()
+            pendingAutoPlay = shouldAutoPlay
             try loadCurrentSource()
             pendingAutoPlay = false
+            pendingNativeFrameSurfaceLoad = false
             if shouldAutoPlay {
                 iosHostLog("auto-playing source=\(currentSource.uri)")
                 startPlayback()
@@ -215,7 +246,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             refreshPlaybackState()
             recordBenchmark("initialize_completed")
         } catch {
-            pendingAutoPlay = false
+            if !pendingNativeFrameSurfaceLoad {
+                pendingAutoPlay = false
+            }
+            if pendingNativeFrameSurfaceLoad {
+                iosHostLog("initialize deferred: \(error.localizedDescription)")
+                recordBenchmark(
+                    "initialize_deferred",
+                    attributes: ["reason": error.localizedDescription]
+                )
+                return
+            }
             iosHostLog("initialize failed: \(error.localizedDescription)")
             closeCurrentSourceNormalizerResource()
             recordBenchmark(
@@ -236,6 +277,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         currentSource = nil
         hasAppliedDefaultTrackPreferences = false
         pendingAutoPlay = false
+        pendingNativeFrameSurfaceLoad = false
+        pendingNativeFrameSeek = nil
         tearDownActivePlayback()
         deactivateAudioSessionIfNeeded()
         benchmarkRecorder.dispose()
@@ -258,6 +301,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         cancelPendingRetry(resetAttempts: true)
         pendingResilienceRestore = nil
         pendingAutoPlay = true
+        pendingNativeFrameSeek = nil
         tearDownActivePlayback()
         updateState {
             PlayerHostUiState(
@@ -286,7 +330,48 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             source: source,
             sourceNormalizer: sourceNormalizerConfiguration,
             frameProcessor: frameProcessorConfiguration
+        ) + nativeFramePipelineDiagnostics(fallbackIssue: nativeFramePipelineFallbackIssue)
+    }
+
+    private func nativeFramePipelineDiagnostics(
+        fallbackIssue: VesperNativeFramePipelineIssue? = nil
+    ) -> [[String: Any]] {
+        nativeFramePipelineCoordinator.makeDiagnostics(
+            configuration: nativeFramePipelineConfiguration,
+            fallbackIssue: fallbackIssue
         )
+    }
+
+    private func evaluateNativeFramePipelineRoute(for source: VesperPlayerSource) -> VesperNativeFramePipelineRouteDecision {
+        let decision = nativeFramePipelineCoordinator.evaluateRoute(
+            for: source,
+            configuration: nativeFramePipelineConfiguration,
+            sourceNormalizer: sourceNormalizerConfiguration,
+            surfaceHost: surfaceHost
+        )
+        switch decision {
+        case .systemPlayer, .nativeFrame:
+            nativeFramePipelineFallbackIssue = nil
+        case .fallback(let issue):
+            nativeFramePipelineFallbackIssue = issue
+        case .fail(let issue):
+            nativeFramePipelineFallbackIssue = nil
+            if case .fail = decision {
+                reportCommandError(
+                    code: .unsupported,
+                    category: .capability,
+                    message: issue.message
+                )
+            }
+        case .waitForSurface(let issue):
+            nativeFramePipelineFallbackIssue = nil
+            iosHostLog("native-frame pipeline waiting: \(issue.message)")
+        }
+        currentPluginDiagnostics = probePlugins(for: source)
+        if case .fallback(let issue) = decision {
+            iosHostLog("native-frame pipeline fallback: \(issue.message)")
+        }
+        return decision
     }
 
     private func tearDownActivePlayback() {
@@ -296,11 +381,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         preloadCoordinator.cancelAll()
         VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
         pendingPlaybackStart = false
+        pendingNativeFrameSurfaceLoad = false
+        pendingNativeFrameSeek = nil
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = false
         removeObservers()
         player?.pause()
         surfaceHost?.attach(player: nil)
+        nativeFramePipelineCoordinator.closeActiveSession()
         player = nil
         currentDashSession = nil
         dashResourceLoaderDelegate = nil
@@ -317,19 +405,43 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             iosHostLog("attachSurfaceHost")
             surfaceHost?.onReadyForDisplay = nil
         }
+        let activeNativeSession = nativeFramePipelineCoordinator.activeSession
+        let shouldReloadNativeSession =
+            activeNativeSession?.didStart == true &&
+            activeNativeSession?.surfaceHost !== host
+        if shouldReloadNativeSession {
+            iosHostLog("native-frame pipeline reloading after surface host change")
+            pendingAutoPlay = pendingAutoPlay || publishedUiState.playbackState == .playing
+            nativeFramePipelineCoordinator.closeActiveSession()
+        }
         surfaceHost = host
         host.onReadyForDisplay = { [weak self] in
             Task { @MainActor in
                 self?.handleSurfaceReadyForDisplay()
             }
         }
-        host.attach(player: player)
+        if activeNativeSession?.didStart == true, !shouldReloadNativeSession, player == nil {
+            host.attachNativeFramePresenter()
+        } else {
+            host.attach(player: player)
+        }
+        if (pendingNativeFrameSurfaceLoad || shouldReloadNativeSession), player == nil, currentSource != nil {
+            pendingNativeFrameSurfaceLoad = false
+            initialize()
+        }
         attemptPendingPlaybackStart(reason: "attachSurfaceHost")
     }
 
     func detachSurfaceHost() {
         iosHostLog("detachSurfaceHost")
         recordBenchmark("detach_surface_host")
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            iosHostLog("native-frame pipeline suspending until surface host reattaches")
+            pendingAutoPlay = pendingAutoPlay || publishedUiState.playbackState == .playing
+            pendingNativeFrameSurfaceLoad = currentSource != nil
+            nativeFramePipelineCoordinator.closeActiveSession()
+        }
         surfaceHost?.onReadyForDisplay = nil
         surfaceHost?.attach(player: nil)
         surfaceHost = nil
@@ -338,6 +450,29 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func play() {
         clearLastError()
         recordBenchmark("play_command")
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            pendingAutoPlay = false
+            nativeSession.play(rate: desiredPlaybackRate)
+            updateState {
+                PlayerHostUiState(
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    sourceLabel: $0.sourceLabel,
+                    playbackState: .playing,
+                    playbackRate: $0.playbackRate,
+                    isBuffering: false,
+                    isInterrupted: $0.isInterrupted,
+                    timeline: $0.timeline
+                )
+            }
+            return
+        }
+        if pendingNativeFrameSurfaceLoad, player == nil {
+            iosHostLog("play deferred until native-frame surface attaches")
+            pendingAutoPlay = true
+            return
+        }
         if player == nil {
             pendingAutoPlay = true
             initialize()
@@ -383,6 +518,24 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func pause() {
         clearLastError()
         recordBenchmark("pause_command")
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            iosHostLog("pause native-frame")
+            nativeSession.pause()
+            updateState {
+                PlayerHostUiState(
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    sourceLabel: $0.sourceLabel,
+                    playbackState: .paused,
+                    playbackRate: $0.playbackRate,
+                    isBuffering: false,
+                    isInterrupted: $0.isInterrupted,
+                    timeline: $0.timeline
+                )
+            }
+            return
+        }
         iosHostLog("pause")
         player?.pause()
         refreshPlaybackState()
@@ -400,6 +553,25 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func stop() {
         clearLastError()
         recordBenchmark("stop_command")
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            iosHostLog("stop native-frame")
+            nativeSession.stop()
+            let durationMs = nativeSession.durationMs ?? publishedUiState.timeline.durationMs
+            updateState {
+                PlayerHostUiState(
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    sourceLabel: $0.sourceLabel,
+                    playbackState: .ready,
+                    playbackRate: $0.playbackRate,
+                    isBuffering: false,
+                    isInterrupted: $0.isInterrupted,
+                    timeline: nativeFrameTimelineState(positionMs: 0, durationMs: durationMs)
+                )
+            }
+            return
+        }
         iosHostLog("stop")
         releaseDashStartupAbrLimitIfNeeded(reason: "stop", item: player?.currentItem)
         pendingPlayAfterStopSeek = false
@@ -429,6 +601,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func seek(by deltaMs: Int64) {
         clearLastError()
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            let timeline = publishedUiState.timeline
+            let target = timeline.clampedPosition(timeline.positionMs + deltaMs)
+            iosHostLog("seek(by:) native-frame deltaMs=\(deltaMs) targetMs=\(target)")
+            _ = nativeSession.seek(toMs: target)
+            return
+        }
+        if pendingNativeFrameSurfaceLoad, player == nil {
+            let target = nativeFramePendingRelativeSeekTarget(deltaMs: deltaMs)
+            pendingNativeFrameSeek = .position(target)
+            updateNativeFramePendingSeekTimeline(positionMs: target)
+            iosHostLog("seek(by:) deferred until native-frame surface attaches deltaMs=\(deltaMs) targetMs=\(target)")
+            return
+        }
         iosHostLog("seek(by:) deltaMs=\(deltaMs)")
         let timeline = publishedUiState.timeline
         let target = timeline.clampedPosition(timeline.positionMs + deltaMs)
@@ -437,6 +624,21 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func seek(toRatio ratio: Double) {
         clearLastError()
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            let timeline = publishedUiState.timeline
+            let target = timeline.position(forRatio: ratio)
+            iosHostLog("seek(toRatio:) native-frame ratio=\(ratio) targetMs=\(target)")
+            _ = nativeSession.seek(toMs: target)
+            return
+        }
+        if pendingNativeFrameSurfaceLoad, player == nil {
+            pendingNativeFrameSeek = .ratio(ratio)
+            let target = publishedUiState.timeline.position(forRatio: ratio)
+            updateNativeFramePendingSeekTimeline(positionMs: target)
+            iosHostLog("seek(toRatio:) deferred until native-frame surface attaches ratio=\(ratio) targetMs=\(target)")
+            return
+        }
         iosHostLog("seek(toRatio:) ratio=\(ratio)")
         let timeline = publishedUiState.timeline
         let target = timeline.position(forRatio: ratio)
@@ -445,6 +647,19 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func seekToLiveEdge() {
         clearLastError()
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            reportCommandError(
+                code: .unsupported,
+                category: .capability,
+                message: "seekToLiveEdge is not implemented for iOS native-frame pipeline yet"
+            )
+            return
+        }
+        if pendingNativeFrameSurfaceLoad, player == nil {
+            iosHostLog("seekToLiveEdge ignored while native-frame pipeline waits for surface")
+            return
+        }
         let timeline = publishedUiState.timeline
         guard let target = timeline.goLivePositionMs else {
             return
@@ -458,6 +673,23 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         let clampedRate = min(max(rate, 0.5), 3.0)
         iosHostLog("setPlaybackRate rate=\(clampedRate)")
         desiredPlaybackRate = clampedRate
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
+           nativeSession.didStart {
+            nativeSession.setPlaybackRate(clampedRate)
+            updateState {
+                PlayerHostUiState(
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    sourceLabel: $0.sourceLabel,
+                    playbackState: $0.playbackState,
+                    playbackRate: clampedRate,
+                    isBuffering: $0.isBuffering,
+                    isInterrupted: $0.isInterrupted,
+                    timeline: $0.timeline
+                )
+            }
+            return
+        }
         if let player {
             applyDefaultPlaybackRate(clampedRate, to: player)
         }
@@ -760,6 +992,46 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
 
         recordBenchmark("source_load_start")
+        switch evaluateNativeFramePipelineRoute(for: currentSource) {
+        case .systemPlayer, .fallback:
+            break
+        case .waitForSurface(let issue):
+            pendingNativeFrameSurfaceLoad = true
+            pendingAutoPlay = pendingAutoPlay || player == nil
+            currentPluginDiagnostics = probePlugins(for: currentSource)
+            throw NSError(
+                domain: "io.github.ikaros.vesper.host.ios",
+                code: -5,
+                userInfo: [NSLocalizedDescriptionKey: issue.message]
+            )
+        case .nativeFrame:
+            switch nativeFramePipelineCoordinator.startActiveSession() {
+            case .success(let session):
+                configureNativeFramePlayback(source: currentSource, session: session)
+                return
+            case .failure(let error):
+                if nativeFramePipelineConfiguration.mode == .preferNativeFrame {
+                    nativeFramePipelineFallbackIssue = error.issue
+                    currentPluginDiagnostics = probePlugins(for: currentSource)
+                    nativeFramePipelineCoordinator.closeActiveSession()
+                    iosHostLog("native-frame pipeline fallback: \(error.message)")
+                    break
+                }
+                currentPluginDiagnostics = probePlugins(for: currentSource)
+                nativeFramePipelineCoordinator.closeActiveSession()
+                throw NSError(
+                    domain: "io.github.ikaros.vesper.host.ios",
+                    code: -3,
+                    userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
+                )
+            }
+        case .fail(let issue):
+            throw NSError(
+                domain: "io.github.ikaros.vesper.host.ios",
+                code: -4,
+                userInfo: [NSLocalizedDescriptionKey: issue.message]
+            )
+        }
         let normalizedResource = openSourceNormalizerResourceIfNeeded(for: currentSource)
         let normalizedSession = makeSourceNormalizerResourceSession(for: normalizedResource)
         let playbackSource = normalizedPlaybackSource(
@@ -834,6 +1106,143 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 )
             )
         }
+    }
+
+    private func configureNativeFramePlayback(
+        source: VesperPlayerSource,
+        session: VesperNativeFramePipelineSession
+    ) {
+        iosHostLog("configured iOS native-frame pipeline source=\(source.uri)")
+        recordBenchmark("native_frame_pipeline_configured")
+        releaseDashStartupAbrLimitIfNeeded(reason: "nativeFrameSourceReload", item: player?.currentItem)
+        removeObservers()
+        player?.pause()
+        player = nil
+        surfaceHost?.attachNativeFramePresenter()
+        pendingPlaybackStart = false
+        hasAppliedDefaultTrackPreferences = false
+        resetTrackState()
+        _ = advancePlaybackEpoch()
+        currentPluginDiagnostics = probePlugins(for: source)
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: "Native Frame Pipeline (SDK video and native audio)",
+                sourceLabel: source.label,
+                playbackState: .ready,
+                playbackRate: $0.playbackRate,
+                isBuffering: false,
+                isInterrupted: false,
+                timeline: nativeFrameTimelineState(positionMs: 0, durationMs: session.durationMs)
+            )
+        }
+        session.onFramePresented = { [weak self] timeline in
+            guard let self else { return }
+            self.updateNativeFrameTimeline(timeline)
+        }
+        session.onPlaybackEnded = { [weak self] in
+            guard let self else { return }
+            self.handlePlaybackEnded()
+        }
+        applyPendingNativeFrameSeekIfNeeded(session: session)
+        if pendingAutoPlay {
+            session.play(rate: desiredPlaybackRate)
+            updateState {
+                PlayerHostUiState(
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    sourceLabel: $0.sourceLabel,
+                    playbackState: .playing,
+                    playbackRate: $0.playbackRate,
+                    isBuffering: false,
+                    isInterrupted: $0.isInterrupted,
+                    timeline: $0.timeline
+                )
+            }
+        }
+    }
+
+    private func updateNativeFramePendingSeekTimeline(positionMs: Int64) {
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: $0.subtitle,
+                sourceLabel: $0.sourceLabel,
+                playbackState: $0.playbackState,
+                playbackRate: $0.playbackRate,
+                isBuffering: $0.isBuffering,
+                isInterrupted: $0.isInterrupted,
+                timeline: nativeFrameTimelineState(
+                    positionMs: positionMs,
+                    durationMs: $0.timeline.durationMs
+                )
+            )
+        }
+    }
+
+    private func nativeFramePendingRelativeSeekTarget(deltaMs: Int64) -> Int64 {
+        let timeline = publishedUiState.timeline
+        let proposed = timeline.positionMs + deltaMs
+        let hasResolvedWindow =
+            timeline.seekableRange.map { $0.endMs > $0.startMs } == true ||
+            (timeline.durationMs ?? 0) > 0
+        if hasResolvedWindow {
+            return timeline.clampedPosition(proposed)
+        }
+        return max(proposed, 0)
+    }
+
+    private func applyPendingNativeFrameSeekIfNeeded(session: VesperNativeFramePipelineSession) {
+        guard let pendingSeek = pendingNativeFrameSeek else { return }
+        pendingNativeFrameSeek = nil
+        let timeline = nativeFrameTimelineState(
+            positionMs: publishedUiState.timeline.positionMs,
+            durationMs: session.durationMs ?? publishedUiState.timeline.durationMs
+        )
+        let target = pendingSeek.resolve(using: timeline)
+        iosHostLog("applying pending native-frame seek targetMs=\(target)")
+        _ = session.seek(toMs: target)
+    }
+
+    private func updateNativeFrameTimeline(_ timeline: VesperNativeFramePipelineTimeline) {
+        let durationMs = timeline.durationMs ?? publishedUiState.timeline.durationMs
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: $0.subtitle,
+                sourceLabel: $0.sourceLabel,
+                playbackState: $0.playbackState,
+                playbackRate: $0.playbackRate,
+                isBuffering: false,
+                isInterrupted: $0.isInterrupted,
+                timeline: nativeFrameTimelineState(
+                    positionMs: timeline.positionMs,
+                    durationMs: durationMs
+                )
+            )
+        }
+        if let durationMs,
+           durationMs > 0,
+           timeline.positionMs >= durationMs {
+            handlePlaybackEnded()
+        }
+    }
+
+    private func nativeFrameTimelineState(positionMs: Int64, durationMs: Int64?) -> TimelineUiState {
+        let clampedDuration = durationMs.flatMap { $0 > 0 ? $0 : nil }
+        let clampedPosition = if let clampedDuration {
+            min(max(positionMs, 0), clampedDuration)
+        } else {
+            max(positionMs, 0)
+        }
+        return TimelineUiState(
+            kind: .vod,
+            isSeekable: clampedDuration != nil,
+            seekableRange: clampedDuration.map { SeekableRangeUi(startMs: 0, endMs: $0) },
+            liveEdgeMs: nil,
+            positionMs: clampedPosition,
+            durationMs: clampedDuration
+        )
     }
 
     private func makePlayerItem(for source: VesperPlayerSource, url: URL) -> AVPlayerItem {
@@ -2447,7 +2856,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
 
         let nsError = error as NSError
-        if nsError.domain == "io.github.ikaros.vesper.host.ios", nsError.code == -3 {
+        if nsError.domain == "io.github.ikaros.vesper.host.ios",
+           nsError.code == -3 || nsError.code == -4 {
             return ResolvedBridgeError(
                 code: .unsupported,
                 category: .capability,
@@ -3432,6 +3842,20 @@ private func minimumOptional<T: Comparable>(_ lhs: T?, _ rhs: T?) -> T? {
 
 private func clampToInt64(_ value: Int64) -> Int64 {
     max(value, 0)
+}
+
+private enum PendingNativeFrameSeek {
+    case position(Int64)
+    case ratio(Double)
+
+    func resolve(using timeline: TimelineUiState) -> Int64 {
+        switch self {
+        case .position(let positionMs):
+            return timeline.clampedPosition(positionMs)
+        case .ratio(let ratio):
+            return timeline.position(forRatio: ratio)
+        }
+    }
 }
 
 private func timeControlStatusName(_ status: AVPlayer.TimeControlStatus) -> String {

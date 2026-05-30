@@ -16,24 +16,28 @@ use super::{
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
     MacosFrameProcessorChain, MacosFrameProcessorNode, MacosHostPlayerRuntimeAdapterFactory,
     MacosNativeFrameDecoderState, MacosNativeFramePacketSendStatus, MacosNativeFramePacketSource,
-    MacosNativeFramePrefetchWakeup, MacosNativeFrameVideoSource, MacosRuntimeActiveFallback,
-    MacosRuntimeAdapter, MacosRuntimeAdapterFallback, MacosRuntimeAdapterInitializer,
-    MacosRuntimeDiagnostics, MacosSoftwarePlayerRuntimeAdapterFactory,
-    MacosSourceNormalizationOutcome, apply_decoder_plugin_diagnostics,
-    apply_decoder_plugin_diagnostics_to_video_decode,
+    MacosNativeFramePrefetchWakeup, MacosNativeFrameVideoSource, MacosNativeFrameWorkerEvent,
+    MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
+    MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
+    MacosSoftwarePlayerRuntimeAdapterFactory, MacosSourceNormalizationOutcome,
+    apply_decoder_plugin_diagnostics, apply_decoder_plugin_diagnostics_to_video_decode,
     apply_decoder_plugin_registry_to_video_decode, apply_source_normalizer_open_diagnostics,
-    attach_source_normalizer_to_runtime, macos_native_frame_decoder_video_decode_info,
-    macos_runtime_diagnostics, macos_video_decode_info,
+    attach_source_normalizer_to_runtime, flush_and_seek_macos_native_frame_source,
+    macos_native_frame_decoder_video_decode_info, macos_runtime_diagnostics,
+    macos_video_decode_info, mark_source_normalizer_packet_stream_participated,
     open_macos_host_runtime_source_with_options,
     open_macos_software_runtime_source_with_options_and_interrupt,
     prepare_source_normalizer_for_open, present_and_release_native_frame_with_presenter,
     present_if_current_epoch_and_release, probe_macos_host_runtime_initializer_with_factories,
     probe_macos_host_runtime_source_with_options, process_macos_native_frame,
-    release_native_frame_with_counter, send_macos_native_frame_packet,
+    release_native_frame_with_counter, runtime_status_from_loader, send_macos_native_frame_packet,
     should_forward_strict_frame_processor_fallback_error,
     should_trigger_runtime_fallback_for_advance, should_trigger_runtime_fallback_for_command,
-    source_normalizer_packet_decoder_unavailable_message, spawn_macos_native_frame_prefetch_worker,
-    strict_frame_processor_fallback_enabled, without_source_normalizer_options,
+    source_normalizer_packet_decoder_unavailable_message, source_normalizer_packet_stream_details,
+    source_normalizer_packet_stream_summary,
+    source_normalizer_packet_stream_summary_with_audio_decoder_readiness,
+    spawn_macos_native_frame_prefetch_worker, strict_frame_processor_fallback_enabled,
+    without_source_normalizer_options,
 };
 use player_backend_ffmpeg::{
     CompressedVideoPacket, FfmpegBackend, VideoPacketSource, VideoPacketStreamInfo,
@@ -59,7 +63,7 @@ use player_plugin_loader::{
 };
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
-    FrameProcessorWarningKind, PlaybackProgress, PlayerError, PlayerErrorCode,
+    FrameProcessorWarningKind, PlaybackProgress, PlayerAudioInfo, PlayerError, PlayerErrorCode,
     PlayerFrameProcessingMetrics, PlayerMediaInfo, PlayerPluginCapabilitySummary,
     PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResult,
     PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
@@ -304,7 +308,7 @@ fn macos_host_strategy_routes_explicit_native_frame_request_to_plugin_path() {
             .as_ref()
             .and_then(|info| info.fallback_reason.as_deref())
             .unwrap_or_default()
-            .contains("selected desktop decoder plugin path")
+            .contains("selected sdkManagedNativeFrame route")
     );
 }
 
@@ -510,7 +514,7 @@ fn software_runtime_initializer_falls_back_when_native_frame_initialize_fails() 
             inner: fallback_inner,
             diagnostics: fallback_diagnostics,
             fallback_reason:
-                "native-frame decoder plugin initialization failed; selected FFmpeg software path"
+                "native-frame decoder plugin initialization failed; selected softwareDecoder route"
                     .to_owned(),
         }),
         runtime_fallback: None,
@@ -650,7 +654,7 @@ fn runtime_advance_backend_failure_falls_back_to_software_runtime() {
             source: fallback_source.clone(),
             options: fallback_options.clone(),
             fallback_reason:
-                "native-frame runtime failed during playback; selected FFmpeg software path"
+                "native-frame runtime failed during playback; selected softwareDecoder route"
                     .to_owned(),
         }),
         pending_runtime_fallback_events: VecDeque::new(),
@@ -693,6 +697,104 @@ fn runtime_advance_backend_failure_falls_back_to_software_runtime() {
             .unwrap_or_default()
             .contains("forced presenter failure")
     );
+}
+
+#[test]
+fn runtime_fallback_marks_selected_plugin_diagnostics_as_fallback() {
+    let native_runtime = Box::new(FakeStrategyRuntime {
+        capabilities: PlayerRuntimeAdapterCapabilities {
+            adapter_id: MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+            backend_family: PlayerRuntimeAdapterBackendFamily::SoftwareDesktop,
+            supports_audio_output: true,
+            supports_frame_output: false,
+            supports_external_video_surface: true,
+            supports_seek: true,
+            supports_stop: true,
+            supports_playback_rate: true,
+            playback_rate_min: Some(0.5),
+            playback_rate_max: Some(3.0),
+            natural_playback_rate_max: Some(2.0),
+            supports_hardware_decode: true,
+            supports_streaming: true,
+            supports_hdr: true,
+        },
+        media_info: media_info_with_codec("H264"),
+        playback_rate: 1.0,
+        progress: PlaybackProgress::new(Duration::ZERO, Some(Duration::from_secs(30))),
+        state: PresentationState::Paused,
+        events: VecDeque::new(),
+        advance_error: None,
+        dispatch_error: None,
+    });
+    let mut adapter = MacosRuntimeAdapter {
+        inner: native_runtime,
+        video_decode: PlayerVideoDecodeInfo {
+            selected_mode: PlayerVideoDecodeMode::Hardware,
+            hardware_available: true,
+            hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
+            fallback_reason: None,
+        },
+        plugin_diagnostics: Vec::new(),
+        has_video_surface: true,
+        runtime_fallback: Some(MacosRuntimeActiveFallback {
+            source: MediaSource::new("fixture.mp4"),
+            options: PlayerRuntimeOptions::default(),
+            fallback_reason:
+                "native-frame runtime failed during playback; selected softwareDecoder route"
+                    .to_owned(),
+        }),
+        pending_runtime_fallback_events: VecDeque::new(),
+        source_normalizer_packet_session: None,
+    };
+    let fallback = adapter
+        .runtime_fallback
+        .take()
+        .expect("runtime fallback config should exist");
+
+    adapter
+        .activate_runtime_fallback_with(
+            "forced presenter failure",
+            fallback,
+            |_source, _options| Ok(test_fallback_bootstrap_with_plugin_diagnostic()),
+        )
+        .expect("runtime fallback should succeed");
+
+    let diagnostic = adapter
+        .plugin_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.plugin_name.as_deref() == Some("fixture-decoder"))
+        .expect("fallback diagnostic should be preserved");
+    assert_eq!(
+        diagnostic.participation,
+        PlayerPluginParticipation::Fallback
+    );
+    assert!(
+        diagnostic
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("forced presenter failure")
+    );
+    assert!(diagnostic.details.iter().any(|detail| {
+        detail.key == "fallbackReason" && detail.value.contains("forced presenter failure")
+    }));
+
+    let initialized = adapter.drain_events().into_iter().find_map(|event| {
+        if let PlayerRuntimeEvent::Initialized(startup) = event {
+            Some(startup)
+        } else {
+            None
+        }
+    });
+    let startup = initialized.expect("fallback runtime should emit initialized diagnostics");
+    assert!(startup.plugin_diagnostics.iter().any(|diagnostic| {
+        diagnostic.plugin_name.as_deref() == Some("fixture-decoder")
+            && diagnostic.participation == PlayerPluginParticipation::Fallback
+            && diagnostic
+                .details
+                .iter()
+                .any(|detail| detail.key == "fallbackReason")
+    }));
 }
 
 #[test]
@@ -739,7 +841,7 @@ fn runtime_dispatch_seek_backend_failure_falls_back_to_software_runtime() {
             source: MediaSource::new("fixture.mp4"),
             options: PlayerRuntimeOptions::default(),
             fallback_reason:
-                "native-frame runtime failed during playback; selected FFmpeg software path"
+                "native-frame runtime failed during playback; selected softwareDecoder route"
                     .to_owned(),
         }),
         pending_runtime_fallback_events: VecDeque::new(),
@@ -822,7 +924,7 @@ fn runtime_dispatch_play_and_rate_backend_failure_fall_back_to_software_runtime(
                 source: MediaSource::new("fixture.mp4"),
                 options: PlayerRuntimeOptions::default(),
                 fallback_reason:
-                    "native-frame runtime failed during playback; selected FFmpeg software path"
+                    "native-frame runtime failed during playback; selected softwareDecoder route"
                         .to_owned(),
             }),
             pending_runtime_fallback_events: VecDeque::new(),
@@ -959,7 +1061,7 @@ fn runtime_dispatch_pause_and_stop_do_not_trigger_fallback() {
                 source: MediaSource::new("fixture.mp4"),
                 options: PlayerRuntimeOptions::default(),
                 fallback_reason:
-                    "native-frame runtime failed during playback; selected FFmpeg software path"
+                    "native-frame runtime failed during playback; selected softwareDecoder route"
                         .to_owned(),
             }),
             pending_runtime_fallback_events: VecDeque::new(),
@@ -1043,6 +1145,37 @@ fn macos_video_decode_info_records_configured_decoder_plugin_paths() {
     assert!(fallback.contains("/tmp/missing-decoder-plugin"));
     assert!(!fallback.contains("failed to open plugin library"));
     assert!(!fallback.contains("dlopen"));
+}
+
+#[test]
+fn macos_native_frame_preference_without_plugin_paths_reports_software_route() {
+    let media_info = media_info_with_codec("H264");
+    let info = super::apply_native_frame_plugin_preference_to_video_decode(
+        macos_video_decode_info(&media_info),
+        &media_info,
+        &PlayerRuntimeOptions::default()
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame),
+    );
+
+    let fallback = info.fallback_reason.as_deref().unwrap_or_default();
+    assert!(fallback.contains("selected softwareDecoder route"));
+    assert!(fallback.contains("no decoder plugin paths are configured"));
+}
+
+#[test]
+fn macos_native_frame_preference_without_surface_reports_software_route() {
+    let media_info = media_info_with_codec("H264");
+    let info = super::apply_native_frame_plugin_preference_to_video_decode(
+        macos_video_decode_info(&media_info),
+        &media_info,
+        &PlayerRuntimeOptions::default()
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+            .with_decoder_plugin_library_paths([PathBuf::from("fixture-decoder")]),
+    );
+
+    let fallback = info.fallback_reason.as_deref().unwrap_or_default();
+    assert!(fallback.contains("selected softwareDecoder route"));
+    assert!(fallback.contains("no macOS video surface is available"));
 }
 
 #[test]
@@ -1141,6 +1274,13 @@ fn macos_source_normalizer_skips_native_adaptive_sources() {
             .unwrap_or_default()
             .contains("skipped for HLS adaptive source")
     );
+    assert!(
+        outcome.diagnostics[0]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("selected systemPlayer route")
+    );
 }
 
 #[test]
@@ -1180,6 +1320,7 @@ fn macos_source_normalizer_diagnostics_are_attached_once_opened() {
             message: Some("source normalizer selected profile fixture".to_owned()),
             capability: None,
             participation: PlayerPluginParticipation::Participated,
+            details: Vec::new(),
         }],
         selected_profile: Some("fixture".to_owned()),
         normalized_endpoint: Some("/tmp/normalized.mp4".to_owned()),
@@ -1198,6 +1339,148 @@ fn macos_source_normalizer_diagnostics_are_attached_once_opened() {
                 .unwrap_or_default()
                 .contains("selected profile")
     }));
+}
+
+#[test]
+fn macos_source_normalizer_packet_stream_is_participated_after_decoder_handoff() {
+    let stream_info = fake_source_normalizer_packet_stream_info_with_audio("H264", "aac");
+    let packet_summary = source_normalizer_packet_stream_summary(&stream_info);
+    assert!(packet_summary.contains("tracks video=1 audio=1"));
+    assert!(packet_summary.contains("selectedVideoStreamIndex=0"));
+    assert!(packet_summary.contains("selectedVideoMediaKind=video"));
+    assert!(packet_summary.contains("selectedVideoCodec=H264"));
+    assert!(packet_summary.contains("audioStreamIndex=1"));
+    assert!(packet_summary.contains("audioMediaKind=audio"));
+    assert!(packet_summary.contains("audioTrackCodec=aac"));
+    assert!(packet_summary.contains("seekable=true"));
+    assert!(packet_summary.contains("durationMs=1000"));
+    assert!(packet_summary.contains("route=sdkManagedNativeFrame"));
+    let packet_details = source_normalizer_packet_stream_details(&stream_info);
+    assert!(
+        packet_details
+            .iter()
+            .any(|detail| { detail.key == "selectedVideoStreamIndex" && detail.value == "0" })
+    );
+    assert!(
+        packet_details
+            .iter()
+            .any(|detail| { detail.key == "selectedVideoMediaKind" && detail.value == "video" })
+    );
+    assert!(
+        packet_details
+            .iter()
+            .any(|detail| { detail.key == "audioStreamIndex" && detail.value == "1" })
+    );
+    assert!(
+        packet_details
+            .iter()
+            .any(|detail| { detail.key == "audioMediaKind" && detail.value == "audio" })
+    );
+    assert!(
+        packet_details
+            .iter()
+            .any(|detail| { detail.key == "route" && detail.value == "sdkManagedNativeFrame" })
+    );
+    let packet_summary_without_audio_decoder =
+        source_normalizer_packet_stream_summary_with_audio_decoder_readiness(&stream_info, None);
+    assert!(packet_summary_without_audio_decoder.contains("audioDecoderPlugin=none"));
+    assert!(packet_summary_without_audio_decoder.contains("audioDecoderPluginReady=false"));
+    assert!(packet_summary_without_audio_decoder.contains("audioDecoder=none"));
+    let audio_decoder_registry =
+        PluginRegistry::from_records(vec![decoder_audio_pcm_plugin_record(
+            "aac",
+            "pcm-audio-decoder",
+        )]);
+    let packet_summary_with_audio_decoder =
+        source_normalizer_packet_stream_summary_with_audio_decoder_readiness(
+            &stream_info,
+            Some(&audio_decoder_registry),
+        );
+    assert!(packet_summary_with_audio_decoder.contains("audioDecoderPlugin=pcm-audio-decoder"));
+    assert!(packet_summary_with_audio_decoder.contains("audioDecoderPluginReady=true"));
+    assert!(packet_summary_with_audio_decoder.contains("audioDecoder=none"));
+    let no_audio_summary = source_normalizer_packet_stream_summary_with_audio_decoder_readiness(
+        &fake_source_normalizer_packet_stream_info("H264"),
+        Some(&audio_decoder_registry),
+    );
+    assert!(no_audio_summary.contains("audioTrackCodec=none"));
+    assert!(no_audio_summary.contains("audioDecoderPlugin=none"));
+    assert!(no_audio_summary.contains("audioDecoderPluginReady=false"));
+    let mut normalization = MacosSourceNormalizationOutcome {
+        source: MediaSource::new("/tmp/normalized.mp4"),
+        packet_session: Some(Arc::new(Mutex::new(Some(Box::new(
+            FakeSourceNormalizerPacketSession::new(stream_info.clone()),
+        ))))),
+        packet_stream_info: Some(stream_info.clone()),
+        diagnostics: vec![PlayerPluginDiagnostic {
+            path: String::new(),
+            plugin_name: Some("fixture-normalizer".to_owned()),
+            plugin_kind: Some("source_normalizer".to_owned()),
+            status: PlayerPluginDiagnosticStatus::Loaded,
+            message: Some(
+                format!(
+                    "source normalizer selected profile fixture via fixture-normalizer; ready in 1 ms; output packet_stream; {packet_summary}; waiting for sdkManagedNativeFrame decoder handoff"
+                )
+                    .to_owned(),
+            ),
+            capability: None,
+            participation: PlayerPluginParticipation::Selected,
+            details: source_normalizer_packet_stream_details(&stream_info),
+        }],
+        selected_profile: Some("fixture".to_owned()),
+        normalized_endpoint: Some("vesper-source-normalizer-packet://fixture".to_owned()),
+        ready_latency: Some(Duration::from_millis(1)),
+    };
+
+    mark_source_normalizer_packet_stream_participated(
+        &mut normalization,
+        Some("fixture-videotoolbox"),
+    );
+
+    let diagnostic = normalization
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.plugin_kind.as_deref() == Some("source_normalizer"))
+        .expect("source normalizer diagnostic");
+    assert_eq!(
+        diagnostic.participation,
+        PlayerPluginParticipation::Participated
+    );
+    assert!(
+        diagnostic
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("tracks video=1 audio=1")
+    );
+    assert!(
+        diagnostic
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("audioTrackCodec=aac")
+    );
+    assert!(
+        diagnostic
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("selectedVideoStreamIndex=0")
+    );
+    assert!(
+        diagnostic
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("handed to fixture-videotoolbox")
+    );
+    assert!(
+        diagnostic
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("macOS sdkManagedNativeFrame presenter")
+    );
 }
 
 #[test]
@@ -1461,6 +1744,7 @@ fn macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless() {
                     dts_us: packet.dts_us,
                     duration_us: packet.duration_us,
                     stream_index: packet.stream_index,
+                    media_kind: DecoderMediaKind::Video,
                     key_frame: packet.key_frame,
                     discontinuity: packet.discontinuity,
                     end_of_stream: false,
@@ -1709,7 +1993,7 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
             .as_ref()
             .and_then(|info| info.fallback_reason.as_deref())
             .unwrap_or_default()
-            .contains("selected for native-frame VideoToolbox playback"),
+            .contains("selected sdkManagedNativeFrame route for VideoToolbox playback"),
         "expected native-frame decoder selection diagnostic, got {:?}",
         bootstrap.startup.video_decode
     );
@@ -2061,6 +2345,7 @@ fn macos_decoder_plugin_registry_reports_supported_candidate_as_diagnostic_only(
         macos_video_decode_info(&media_info),
         &media_info,
         &registry,
+        None,
     );
 
     assert_eq!(info.selected_mode, PlayerVideoDecodeMode::Software);
@@ -2076,6 +2361,12 @@ fn macos_decoder_plugin_registry_reports_supported_candidate_as_diagnostic_only(
             .unwrap_or_default()
             .contains("fixture-decoder")
     );
+    assert!(
+        info.fallback_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("available for sdkManagedNativeFrame route")
+    );
 }
 
 #[test]
@@ -2090,13 +2381,72 @@ fn macos_decoder_plugin_registry_labels_native_frame_candidates() {
         macos_video_decode_info(&media_info),
         &media_info,
         &registry,
+        Some("fixture-decoder"),
     );
 
     assert_eq!(info.selected_mode, PlayerVideoDecodeMode::Software);
     let fallback = info.fallback_reason.as_deref().unwrap_or_default();
     assert!(fallback.contains("decoder plugin found 1/1 candidate(s)"));
     assert!(fallback.contains("fixture-decoder native-frame"));
-    assert!(fallback.contains("diagnostic-only"));
+    assert!(fallback.contains("selected sdkManagedNativeFrame route via fixture-decoder"));
+    assert!(fallback.contains("audioTrack=none"));
+    assert!(fallback.contains("audioDecoderPlugin=none"));
+    assert!(fallback.contains("audioDecoderPluginReady=false"));
+    assert!(fallback.contains("audioDecoder=none"));
+    assert!(fallback.contains("audioOutput=none"));
+    assert!(fallback.contains("clockSource=video"));
+    assert!(fallback.contains("presenter=macOS MetalLayer"));
+}
+
+#[test]
+fn macos_decoder_plugin_registry_reports_audio_decoder_readiness_when_pcm_plugin_exists() {
+    let media_info = media_info_with_audio_codec("fixture-video", "aac");
+    let registry = PluginRegistry::from_records(vec![
+        decoder_native_plugin_record(
+            PluginDiagnosticStatus::DecoderSupported,
+            "fixture-video",
+            "fixture-decoder advertises Video fixture-video support with native-frame output",
+        ),
+        decoder_audio_pcm_plugin_record("aac", "pcm-audio-decoder"),
+    ]);
+    let info = apply_decoder_plugin_registry_to_video_decode(
+        macos_video_decode_info(&media_info),
+        &media_info,
+        &registry,
+        Some("fixture-decoder"),
+    );
+
+    let fallback = info.fallback_reason.as_deref().unwrap_or_default();
+    assert!(fallback.contains("selected sdkManagedNativeFrame route via fixture-decoder"));
+    assert!(fallback.contains("audioTrackCodec=aac"));
+    assert!(fallback.contains("audioDecoderPlugin=pcm-audio-decoder"));
+    assert!(fallback.contains("audioDecoderPluginReady=true"));
+    assert!(fallback.contains("audioDecoder=none"));
+    assert!(fallback.contains("audioOutput=none"));
+    assert!(fallback.contains("clockSource=video"));
+}
+
+#[test]
+fn macos_decoder_plugin_registry_reports_missing_audio_pcm_plugin_for_audio_track() {
+    let media_info = media_info_with_audio_codec("fixture-video", "aac");
+    let registry = PluginRegistry::from_records(vec![decoder_native_plugin_record(
+        PluginDiagnosticStatus::DecoderSupported,
+        "fixture-video",
+        "fixture-decoder advertises Video fixture-video support with native-frame output",
+    )]);
+    let info = apply_decoder_plugin_registry_to_video_decode(
+        macos_video_decode_info(&media_info),
+        &media_info,
+        &registry,
+        Some("fixture-decoder"),
+    );
+
+    let fallback = info.fallback_reason.as_deref().unwrap_or_default();
+    assert!(fallback.contains("audioTrackCodec=aac"));
+    assert!(fallback.contains("audioDecoderPlugin=none"));
+    assert!(fallback.contains("audioDecoderPluginReady=false"));
+    assert!(fallback.contains("audioDecoder=none"));
+    assert!(fallback.contains("clockSource=video"));
 }
 
 #[test]
@@ -2108,8 +2458,12 @@ fn macos_decoder_plugin_registry_mismatch_does_not_change_decode_mode() {
         "other-video",
         "fixture-decoder does not advertise Video fixture-video support",
     )]);
-    let info =
-        apply_decoder_plugin_registry_to_video_decode(original.clone(), &media_info, &registry);
+    let info = apply_decoder_plugin_registry_to_video_decode(
+        original.clone(),
+        &media_info,
+        &registry,
+        None,
+    );
 
     assert_eq!(info.selected_mode, original.selected_mode);
     assert!(
@@ -2117,6 +2471,46 @@ fn macos_decoder_plugin_registry_mismatch_does_not_change_decode_mode() {
             .as_deref()
             .unwrap_or_default()
             .contains("0/1 supported")
+    );
+}
+
+#[test]
+fn macos_loader_statuses_convert_through_shared_wire_contract() {
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::Loaded),
+        PlayerPluginDiagnosticStatus::Loaded
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::LoadFailed),
+        PlayerPluginDiagnosticStatus::LoadFailed
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::UnsupportedKind),
+        PlayerPluginDiagnosticStatus::UnsupportedKind
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::DecoderSupported),
+        PlayerPluginDiagnosticStatus::DecoderSupported
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::DecoderUnsupported),
+        PlayerPluginDiagnosticStatus::DecoderUnsupported
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::FrameProcessorSupported),
+        PlayerPluginDiagnosticStatus::FrameProcessorSupported
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::FrameProcessorUnsupported),
+        PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::SourceNormalizerSupported),
+        PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+    );
+    assert_eq!(
+        runtime_status_from_loader(PluginDiagnosticStatus::SourceNormalizerUnsupported),
+        PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
     );
 }
 
@@ -2248,6 +2642,13 @@ fn release_native_frame_tracking_decrements_outstanding_count() {
             coded_height: Some(1080),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            pipeline_profile: Some(
+                player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ),
+            color_space: None,
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
             frame_id: Some(7),
             release_tracking: None,
         },
@@ -2278,6 +2679,13 @@ fn present_failure_still_releases_native_frame() {
             coded_height: Some(720),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            pipeline_profile: Some(
+                player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ),
+            color_space: None,
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
             frame_id: Some(11),
             release_tracking: None,
         },
@@ -2315,6 +2723,13 @@ fn stale_presentation_epoch_releases_frame_without_presenting() {
             coded_height: Some(360),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            pipeline_profile: Some(
+                player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ),
+            color_space: None,
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
             frame_id: Some(13),
             release_tracking: None,
         },
@@ -2386,6 +2801,277 @@ fn native_frame_source_seek_flushes_before_packet_seek_and_resets_eof() {
 }
 
 #[test]
+fn native_frame_source_seek_flushes_processor_before_decoder_and_packet_session() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let processor_state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+        events: Some(events.clone()),
+        ..RecordingFrameProcessorState::default()
+    }));
+    let shared = Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
+        frame_processor_chain: Some(frame_processor_chain_for_test(
+            FrameProcessorMode::DiagnosticsOnly,
+            vec![RecordingFrameProcessorSession::new(processor_state.clone())],
+        )),
+        presenter: None,
+        presentation_epoch: 0,
+    }));
+    let session_state = RecordingNativeDecoderState::shared(events.clone());
+    let session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state.clone(),
+        })));
+    let mut packet_source =
+        FakeNativeFramePacketSource::with_seek_packets(Vec::new(), Vec::new(), events.clone());
+
+    flush_and_seek_macos_native_frame_source(
+        &session,
+        &shared,
+        &mut packet_source,
+        Duration::from_millis(250),
+    )
+    .expect("flush and seek should succeed");
+
+    let events = events
+        .lock()
+        .map(|events| events.clone())
+        .unwrap_or_default();
+    assert!(
+        contains_ordered_events(&events, &["processor_flush", "flush", "packet_seek"]),
+        "seek should flush processor before decoder and packet session: {events:?}"
+    );
+    assert_eq!(
+        processor_state
+            .lock()
+            .map(|state| state.flush_count)
+            .unwrap_or_default(),
+        1
+    );
+    assert_eq!(
+        session_state
+            .lock()
+            .map(|state| state.flush_count)
+            .unwrap_or_default(),
+        1
+    );
+}
+
+#[test]
+fn native_frame_source_seek_releases_queued_prefetched_frame() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let session_state = RecordingNativeDecoderState::shared(events.clone());
+    let packet_source = FakeNativeFramePacketSource::with_seek_packets(
+        vec![test_compressed_packet(100_000)],
+        vec![test_compressed_packet(250_000)],
+        events,
+    );
+    let outstanding_frames = Arc::new(AtomicUsize::new(0));
+    let mut source = native_frame_source_for_test(
+        packet_source,
+        session_state.clone(),
+        outstanding_frames.clone(),
+        false,
+        false,
+    );
+
+    wait_for_buffered_native_frame(&source, 1);
+    assert_eq!(source.buffered_frame_count(), 1);
+    assert_eq!(outstanding_frames.load(Ordering::SeqCst), 1);
+
+    let frame = source
+        .seek_to(Duration::from_millis(250))
+        .expect("seek should succeed")
+        .expect("seek should decode a replacement frame");
+
+    assert_eq!(frame.presentation_time, Duration::from_micros(250_000));
+    assert_eq!(
+        session_state
+            .lock()
+            .map(|state| state.released_handles)
+            .unwrap_or_default(),
+        1,
+        "seek should release the queued pre-seek native frame"
+    );
+    assert_eq!(outstanding_frames.load(Ordering::SeqCst), 1);
+    drop(frame);
+    assert_eq!(outstanding_frames.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        session_state
+            .lock()
+            .map(|state| state.released_handles)
+            .unwrap_or_default(),
+        2
+    );
+}
+
+#[test]
+fn stale_prefetch_frame_release_does_not_decrement_current_generation_buffer_count() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let session_state = RecordingNativeDecoderState::shared(events.clone());
+    let packet_source =
+        FakeNativeFramePacketSource::with_seek_packets(Vec::new(), Vec::new(), events);
+    let outstanding_frames = Arc::new(AtomicUsize::new(1));
+    let mut source = native_frame_source_for_test(
+        packet_source,
+        session_state.clone(),
+        outstanding_frames.clone(),
+        false,
+        true,
+    );
+    source.generation = 1;
+    source.current_generation.store(1, Ordering::SeqCst);
+    source.buffered_frame_count.store(1, Ordering::SeqCst);
+
+    source
+        .handle_prefetch_event(MacosNativeFrameWorkerEvent::Frame {
+            generation: 0,
+            frame: macos_frame_processor_frame_for_test(9, Some(100_000)),
+        })
+        .expect("stale prefetch event should be released");
+
+    assert_eq!(
+        source.buffered_frame_count(),
+        1,
+        "stale frames were not counted for the current generation"
+    );
+    assert_eq!(outstanding_frames.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        session_state
+            .lock()
+            .map(|state| state.released_handles)
+            .unwrap_or_default(),
+        1
+    );
+}
+
+#[test]
+fn dropping_native_frame_source_releases_queued_processor_output() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let processor_state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+        output_handle_offset: 1_000,
+        ..RecordingFrameProcessorState::default()
+    }));
+    let session_state = RecordingNativeDecoderState::shared(events.clone());
+    let outstanding_frames = Arc::new(AtomicUsize::new(1));
+    let session: Arc<std::sync::Mutex<Box<dyn NativeDecoderSession>>> = Arc::new(
+        std::sync::Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state.clone(),
+        })),
+    );
+    let shared = Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
+        frame_processor_chain: Some(frame_processor_chain_for_test(
+            FrameProcessorMode::DiagnosticsOnly,
+            vec![RecordingFrameProcessorSession::new(processor_state.clone())],
+        )),
+        presenter: None,
+        presentation_epoch: 0,
+    }));
+    let (command_tx, _command_rx) = mpsc::channel();
+    let (frame_tx, frame_rx) = mpsc::channel();
+    let current_generation = Arc::new(AtomicU64::new(0));
+    let buffered_frame_count = Arc::new(AtomicUsize::new(1));
+    let prefetch_wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+    frame_tx
+        .send(MacosNativeFrameWorkerEvent::Frame {
+            generation: 0,
+            frame: macos_frame_processor_frame_for_test_with_processor_output(
+                9,
+                Some(100_000),
+                1_009,
+            ),
+        })
+        .expect("queued frame event should be sent");
+    let source = MacosNativeFrameVideoSource {
+        stream_info: test_video_packet_stream_info(),
+        session,
+        shared,
+        outstanding_frames: outstanding_frames.clone(),
+        command_tx,
+        frame_rx,
+        generation: 0,
+        current_generation,
+        buffered_frame_count,
+        prefetch_limit: Arc::new(AtomicUsize::new(1)),
+        prefetch_wakeup,
+        end_of_input_sent: false,
+        end_of_stream_received: false,
+        worker: None,
+    };
+
+    drop(source);
+
+    assert_eq!(outstanding_frames.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        session_state
+            .lock()
+            .map(|state| state.released_handles)
+            .unwrap_or_default(),
+        1
+    );
+    assert_eq!(
+        processor_state
+            .lock()
+            .map(|state| state.released_handles.clone())
+            .unwrap_or_default(),
+        vec![1_009]
+    );
+}
+
+#[test]
+fn dropping_native_frame_source_closes_processor_and_decoder_sessions() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let processor_state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+        events: Some(events.clone()),
+        ..RecordingFrameProcessorState::default()
+    }));
+    let session_state = RecordingNativeDecoderState::shared(events.clone());
+    let packet_source =
+        FakeNativeFramePacketSource::with_seek_packets(Vec::new(), Vec::new(), events.clone());
+    let outstanding_frames = Arc::new(AtomicUsize::new(0));
+    let source = native_frame_source_for_test(
+        packet_source,
+        session_state.clone(),
+        outstanding_frames,
+        false,
+        false,
+    );
+    {
+        let mut shared = source
+            .shared
+            .lock()
+            .expect("shared native-frame state should not be poisoned");
+        shared.frame_processor_chain = Some(frame_processor_chain_for_test(
+            FrameProcessorMode::DiagnosticsOnly,
+            vec![RecordingFrameProcessorSession::new(processor_state.clone())],
+        ));
+    }
+
+    drop(source);
+
+    assert_eq!(
+        processor_state
+            .lock()
+            .map(|state| state.close_count)
+            .unwrap_or_default(),
+        1
+    );
+    assert_eq!(
+        session_state
+            .lock()
+            .map(|state| state.close_count)
+            .unwrap_or_default(),
+        1
+    );
+    let events = events
+        .lock()
+        .map(|events| events.clone())
+        .unwrap_or_default();
+    assert!(
+        contains_ordered_events(&events, &["processor_flush", "processor_close", "close"]),
+        "drop should flush/close processor before decoder close: {events:?}"
+    );
+}
+
+#[test]
 fn native_frame_source_sends_eof_once_and_keeps_terminal_eof() {
     let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let session_state = RecordingNativeDecoderState::shared(events.clone());
@@ -2423,6 +3109,263 @@ fn native_frame_source_sends_eof_once_and_keeps_terminal_eof() {
             .count(),
         1
     );
+}
+
+#[test]
+fn source_normalizer_packet_source_preserves_metadata_and_releases_packet() {
+    let stream_info = fake_source_normalizer_packet_stream_info("H264");
+    let session = Arc::new(Mutex::new(Some(
+        Box::new(FakeSourceNormalizerPacketSession::new(stream_info))
+            as Box<dyn SourceNormalizerPacketSession>,
+    )));
+    let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
+    let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
+    let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state.clone(),
+        })));
+
+    let send_status = packet_source
+        .send_next_packet(&decoder_session)
+        .expect("source normalizer packet should send");
+
+    assert_eq!(send_status, MacosNativeFramePacketSendStatus::Sent);
+    let sent_packets = session_state
+        .lock()
+        .map(|state| state.sent_packets.clone())
+        .unwrap_or_default();
+    assert_eq!(sent_packets.len(), 1);
+    assert_eq!(sent_packets[0].pts_us, Some(0));
+    assert_eq!(sent_packets[0].dts_us, Some(0));
+    assert_eq!(sent_packets[0].duration_us, Some(41_667));
+    assert!(sent_packets[0].key_frame);
+    assert_eq!(sent_packets[0].stream_index, 0);
+    assert_eq!(
+        packet_source
+            .send_next_packet(&decoder_session)
+            .expect("second source normalizer packet read should see EOS"),
+        MacosNativeFramePacketSendStatus::EndOfStream
+    );
+}
+
+#[test]
+fn source_normalizer_packet_source_skips_non_video_packets() {
+    let mut stream_info = fake_source_normalizer_packet_stream_info("H264");
+    stream_info.tracks.push(SourceNormalizerPacketTrackInfo {
+        stream_index: 1,
+        media_kind: SourceNormalizerPacketMediaKind::Audio,
+        codec: "AAC".to_owned(),
+        extradata: Vec::new(),
+        bitstream_format: None,
+        width: None,
+        height: None,
+        coded_width: None,
+        coded_height: None,
+        sample_rate: Some(48_000),
+        channels: Some(2),
+        channel_layout: Some("stereo".to_owned()),
+        codec_delay_samples: None,
+        priming_samples: Some(2_112),
+        trailing_padding_samples: None,
+        seek_preroll_samples: Some(1_024),
+        frame_rate: None,
+        time_base_num: Some(1),
+        time_base_den: Some(48_000),
+    });
+    let released_handles = Arc::new(Mutex::new(Vec::new()));
+    let session = Arc::new(Mutex::new(Some(Box::new(
+        FakeSourceNormalizerPacketSession::with_release_log(
+            stream_info,
+            vec![
+                fake_source_normalizer_audio_packet(),
+                fake_source_normalizer_video_packet(),
+            ],
+            released_handles.clone(),
+        ),
+    )
+        as Box<dyn SourceNormalizerPacketSession>)));
+    let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
+    let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
+    let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state.clone(),
+        })));
+
+    let send_status = packet_source
+        .send_next_packet(&decoder_session)
+        .expect("source normalizer video packet should send after skipping audio");
+
+    assert_eq!(send_status, MacosNativeFramePacketSendStatus::Sent);
+    let sent_packets = session_state
+        .lock()
+        .map(|state| state.sent_packets.clone())
+        .unwrap_or_default();
+    assert_eq!(sent_packets.len(), 1);
+    assert_eq!(sent_packets[0].stream_index, 0);
+    let released_handles = released_handles
+        .lock()
+        .expect("source normalizer release log mutex should not be poisoned")
+        .clone();
+    assert_eq!(released_handles, vec![1, 2]);
+}
+
+#[test]
+fn source_normalizer_packet_source_skips_unselected_video_stream() {
+    let mut stream_info = fake_source_normalizer_packet_stream_info("H264");
+    stream_info.tracks.push(SourceNormalizerPacketTrackInfo {
+        stream_index: 2,
+        media_kind: SourceNormalizerPacketMediaKind::Video,
+        codec: "H264".to_owned(),
+        extradata: Vec::new(),
+        bitstream_format: Some(DecoderBitstreamFormat::Avcc),
+        width: Some(640),
+        height: Some(360),
+        coded_width: Some(640),
+        coded_height: Some(360),
+        sample_rate: None,
+        channels: None,
+        channel_layout: None,
+        codec_delay_samples: None,
+        priming_samples: None,
+        trailing_padding_samples: None,
+        seek_preroll_samples: None,
+        frame_rate: Some(30.0),
+        time_base_num: Some(1),
+        time_base_den: Some(30_000),
+    });
+    let mut unselected_packet = fake_source_normalizer_video_packet();
+    unselected_packet.stream_index = 2;
+    unselected_packet.pts_us = Some(41_667);
+    let selected_packet = fake_source_normalizer_video_packet();
+    let released_handles = Arc::new(Mutex::new(Vec::new()));
+    let session = Arc::new(Mutex::new(Some(Box::new(
+        FakeSourceNormalizerPacketSession::with_release_log(
+            stream_info,
+            vec![unselected_packet, selected_packet],
+            released_handles.clone(),
+        ),
+    )
+        as Box<dyn SourceNormalizerPacketSession>)));
+    let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
+    let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
+    let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state.clone(),
+        })));
+
+    let send_status = packet_source
+        .send_next_packet(&decoder_session)
+        .expect("source normalizer selected video packet should send");
+
+    assert_eq!(send_status, MacosNativeFramePacketSendStatus::Sent);
+    let sent_packets = session_state
+        .lock()
+        .map(|state| state.sent_packets.clone())
+        .unwrap_or_default();
+    assert_eq!(sent_packets.len(), 1);
+    assert_eq!(sent_packets[0].stream_index, 0);
+    assert_eq!(sent_packets[0].pts_us, Some(0));
+    let released_handles = released_handles
+        .lock()
+        .expect("source normalizer release log mutex should not be poisoned")
+        .clone();
+    assert_eq!(released_handles, vec![1, 2]);
+}
+
+#[test]
+fn source_normalizer_packet_source_seek_flushes_packet_session() {
+    let stream_info = fake_source_normalizer_packet_stream_info("H264");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let seek_positions = Arc::new(Mutex::new(Vec::new()));
+    let session = Arc::new(Mutex::new(Some(Box::new(
+        FakeSourceNormalizerPacketSession::with_seek_log(
+            stream_info,
+            events.clone(),
+            seek_positions.clone(),
+        ),
+    )
+        as Box<dyn SourceNormalizerPacketSession>)));
+    let mut packet_source = super::SourceNormalizerPacketSource::new(session);
+
+    packet_source
+        .seek_to(Duration::from_millis(250))
+        .expect("source normalizer packet seek should succeed");
+
+    assert_eq!(
+        events
+            .lock()
+            .expect("source normalizer event log mutex should not be poisoned")
+            .clone(),
+        vec!["source_normalizer_flush", "source_normalizer_seek"]
+    );
+    assert_eq!(
+        seek_positions
+            .lock()
+            .expect("source normalizer seek log mutex should not be poisoned")
+            .clone(),
+        vec![250]
+    );
+}
+
+#[test]
+fn source_normalizer_packet_source_seek_drops_pending_packet_before_resume() {
+    let stream_info = fake_source_normalizer_packet_stream_info("H264");
+    let released_handles = Arc::new(Mutex::new(Vec::new()));
+    let mut first_packet = fake_source_normalizer_video_packet();
+    first_packet.pts_us = Some(100_000);
+    let mut second_packet = fake_source_normalizer_video_packet();
+    second_packet.pts_us = Some(500_000);
+    let session = Arc::new(Mutex::new(Some(Box::new(
+        FakeSourceNormalizerPacketSession::with_release_log(
+            stream_info,
+            vec![first_packet, second_packet],
+            released_handles.clone(),
+        ),
+    )
+        as Box<dyn SourceNormalizerPacketSession>)));
+    let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
+    let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
+    if let Ok(mut state) = session_state.lock() {
+        state.reject_next_packet = true;
+    }
+    let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state.clone(),
+        })));
+
+    let first_status = packet_source
+        .send_next_packet(&decoder_session)
+        .expect("first source normalizer packet should be retained as pending");
+    assert_eq!(first_status, MacosNativeFramePacketSendStatus::NeedMoreData);
+    assert!(
+        packet_source.pending.is_some(),
+        "decoder backpressure should keep the first packet pending"
+    );
+
+    packet_source
+        .seek_to(Duration::from_millis(500))
+        .expect("source normalizer packet seek should flush stale pending packet");
+    assert!(
+        packet_source.pending.is_none(),
+        "seek must drop stale pending packet before resuming"
+    );
+
+    let second_status = packet_source
+        .send_next_packet(&decoder_session)
+        .expect("post-seek source normalizer packet should send");
+    assert_eq!(second_status, MacosNativeFramePacketSendStatus::Sent);
+    let sent_packets = session_state
+        .lock()
+        .map(|state| state.sent_packets.clone())
+        .unwrap_or_default();
+    assert_eq!(sent_packets.len(), 2);
+    assert_eq!(sent_packets[0].pts_us, Some(100_000));
+    assert_eq!(sent_packets[1].pts_us, Some(500_000));
+    let released_handles = released_handles
+        .lock()
+        .expect("source normalizer release log mutex should not be poisoned")
+        .clone();
+    assert_eq!(released_handles, vec![1, 2]);
 }
 
 #[test]
@@ -2775,6 +3718,17 @@ fn media_info_with_codec(codec: &str) -> PlayerMediaInfo {
     media_info_with_source_uri("fixture.mp4", codec)
 }
 
+fn media_info_with_audio_codec(video_codec: &str, audio_codec: &str) -> PlayerMediaInfo {
+    PlayerMediaInfo {
+        best_audio: Some(PlayerAudioInfo {
+            codec: audio_codec.to_owned(),
+            sample_rate: 48_000,
+            channels: 2,
+        }),
+        ..media_info_with_codec(video_codec)
+    }
+}
+
 fn media_info_with_source_uri(source_uri: &str, codec: &str) -> PlayerMediaInfo {
     PlayerMediaInfo {
         source_uri: source_uri.to_owned(),
@@ -2865,7 +3819,9 @@ fn decoder_plugin_record_with_native_frame_output(
         native_requirements: None,
         supports_hardware_decode: false,
         supports_cpu_video_frames: !supports_native_frame_output,
+        supports_audio_packets: false,
         supports_audio_frames: false,
+        supports_pcm_frames: false,
         supports_gpu_handles: supports_native_frame_output,
         supports_flush: true,
         supports_drain: true,
@@ -2878,6 +3834,37 @@ fn decoder_plugin_record_with_native_frame_output(
         plugin_kind: Some(VesperPluginKind::Decoder),
         capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
         message: Some(message.to_owned()),
+    }
+}
+
+fn decoder_audio_pcm_plugin_record(codec: &str, plugin_name: &str) -> PluginDiagnosticRecord {
+    let decoder_capabilities = DecoderPluginCapabilitySummary {
+        typed_codecs: vec![DecoderPluginCodecSummary {
+            codec: codec.to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+        }],
+        codecs: vec![format!("Audio:{codec}")],
+        supports_native_frame_output: false,
+        native_requirements: None,
+        supports_hardware_decode: false,
+        supports_cpu_video_frames: false,
+        supports_audio_packets: true,
+        supports_audio_frames: true,
+        supports_pcm_frames: true,
+        supports_gpu_handles: false,
+        supports_flush: true,
+        supports_drain: true,
+        max_sessions: Some(1),
+    };
+    PluginDiagnosticRecord {
+        path: PathBuf::from(plugin_name),
+        status: PluginDiagnosticStatus::DecoderSupported,
+        plugin_name: Some(plugin_name.to_owned()),
+        plugin_kind: Some(VesperPluginKind::Decoder),
+        capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
+        message: Some(format!(
+            "{plugin_name} advertises Audio {codec} PCM support"
+        )),
     }
 }
 
@@ -3015,6 +4002,7 @@ fn send_videotoolbox_packet(
             dts_us: packet.dts_us,
             duration_us: packet.duration_us,
             stream_index: packet.stream_index,
+            media_kind: DecoderMediaKind::Video,
             key_frame: packet.key_frame,
             discontinuity: packet.discontinuity,
             end_of_stream: false,
@@ -3086,6 +4074,24 @@ fn test_fallback_bootstrap() -> PlayerRuntimeAdapterBootstrap {
             fallback_reason: Some("software fallback ready".to_owned()),
         }),
     }
+}
+
+fn test_fallback_bootstrap_with_plugin_diagnostic() -> PlayerRuntimeAdapterBootstrap {
+    let mut bootstrap = test_fallback_bootstrap();
+    bootstrap
+        .startup
+        .plugin_diagnostics
+        .push(PlayerPluginDiagnostic {
+            path: "/tmp/player-decoder-videotoolbox.dylib".to_owned(),
+            plugin_name: Some("fixture-decoder".to_owned()),
+            plugin_kind: Some("decoder".to_owned()),
+            status: PlayerPluginDiagnosticStatus::DecoderSupported,
+            message: Some("fixture decoder participated".to_owned()),
+            capability: None,
+            participation: PlayerPluginParticipation::Participated,
+            details: Vec::new(),
+        });
+    bootstrap
 }
 
 #[derive(Clone)]
@@ -3191,9 +4197,11 @@ struct FakeStrategyRuntime {
 
 struct FakeSourceNormalizerPacketSession {
     stream_info: SourceNormalizerPacketStreamInfo,
-    packet_data: Vec<u8>,
-    emitted_packet: bool,
+    packets: VecDeque<SourceNormalizerPacket>,
     outstanding_handle: Option<usize>,
+    released_handles: Arc<Mutex<Vec<usize>>>,
+    events: Option<Arc<Mutex<Vec<&'static str>>>>,
+    seek_positions: Arc<Mutex<Vec<u64>>>,
     closed: bool,
 }
 
@@ -3201,9 +4209,43 @@ impl FakeSourceNormalizerPacketSession {
     fn new(stream_info: SourceNormalizerPacketStreamInfo) -> Self {
         Self {
             stream_info,
-            packet_data: vec![0, 0, 1, 9],
-            emitted_packet: false,
+            packets: VecDeque::from([fake_source_normalizer_video_packet()]),
             outstanding_handle: None,
+            released_handles: Arc::new(Mutex::new(Vec::new())),
+            events: None,
+            seek_positions: Arc::new(Mutex::new(Vec::new())),
+            closed: false,
+        }
+    }
+
+    fn with_release_log(
+        stream_info: SourceNormalizerPacketStreamInfo,
+        packets: Vec<SourceNormalizerPacket>,
+        released_handles: Arc<Mutex<Vec<usize>>>,
+    ) -> Self {
+        Self {
+            stream_info,
+            packets: VecDeque::from(packets),
+            outstanding_handle: None,
+            released_handles,
+            events: None,
+            seek_positions: Arc::new(Mutex::new(Vec::new())),
+            closed: false,
+        }
+    }
+
+    fn with_seek_log(
+        stream_info: SourceNormalizerPacketStreamInfo,
+        events: Arc<Mutex<Vec<&'static str>>>,
+        seek_positions: Arc<Mutex<Vec<u64>>>,
+    ) -> Self {
+        Self {
+            stream_info,
+            packets: VecDeque::from([fake_source_normalizer_video_packet()]),
+            outstanding_handle: None,
+            released_handles: Arc::new(Mutex::new(Vec::new())),
+            events: Some(events),
+            seek_positions,
             closed: false,
         }
     }
@@ -3223,33 +4265,32 @@ impl SourceNormalizerPacketSession for FakeSourceNormalizerPacketSession {
                 "fake packet still needs release",
             ));
         }
-        if self.emitted_packet {
+        let Some(packet) = self.packets.pop_front() else {
             return Ok(SourceNormalizerPacketLease {
                 metadata: SourceNormalizerReadPacketMetadata::end_of_stream(),
                 data: &[],
                 handle: 0,
             });
-        }
-        self.emitted_packet = true;
-        self.outstanding_handle = Some(1);
+        };
+        let handle = self
+            .released_handles
+            .lock()
+            .map(|handles| handles.len() + 1)
+            .unwrap_or(1);
+        self.outstanding_handle = Some(handle);
         Ok(SourceNormalizerPacketLease {
-            metadata: SourceNormalizerReadPacketMetadata::packet(SourceNormalizerPacket {
-                pts_us: Some(0),
-                dts_us: Some(0),
-                duration_us: Some(41_667),
-                stream_index: 0,
-                key_frame: true,
-                discontinuity: false,
-                end_of_stream: false,
-            }),
-            data: &self.packet_data,
-            handle: 1,
+            metadata: SourceNormalizerReadPacketMetadata::packet(packet),
+            data: &[0, 0, 1, 9],
+            handle,
         })
     }
 
     fn release_packet(&mut self, packet_handle: usize) -> Result<(), SourceNormalizerError> {
         if self.outstanding_handle == Some(packet_handle) {
             self.outstanding_handle = None;
+            if let Ok(mut released_handles) = self.released_handles.lock() {
+                released_handles.push(packet_handle);
+            }
             Ok(())
         } else {
             Err(SourceNormalizerError::abi_violation(
@@ -3260,9 +4301,16 @@ impl SourceNormalizerPacketSession for FakeSourceNormalizerPacketSession {
 
     fn seek(
         &mut self,
-        _seek: &SourceNormalizerPacketSeek,
+        seek: &SourceNormalizerPacketSeek,
     ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
-        self.emitted_packet = false;
+        if let Some(events) = &self.events
+            && let Ok(mut events) = events.lock()
+        {
+            events.push("source_normalizer_seek");
+        }
+        if let Ok(mut seek_positions) = self.seek_positions.lock() {
+            seek_positions.push(seek.position_millis);
+        }
         self.outstanding_handle = None;
         Ok(SourceNormalizerOperationStatus {
             completed: true,
@@ -3271,6 +4319,11 @@ impl SourceNormalizerPacketSession for FakeSourceNormalizerPacketSession {
     }
 
     fn flush(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        if let Some(events) = &self.events
+            && let Ok(mut events) = events.lock()
+        {
+            events.push("source_normalizer_flush");
+        }
         self.outstanding_handle = None;
         Ok(SourceNormalizerOperationStatus {
             completed: true,
@@ -3401,9 +4454,11 @@ struct RecordingNativeDecoderState {
     events: Arc<std::sync::Mutex<Vec<&'static str>>>,
     sent_packets: Vec<DecoderPacket>,
     queued_frames: VecDeque<DecoderReceiveNativeFrameOutput>,
+    reject_next_packet: bool,
     next_handle: usize,
     released_handles: usize,
     flush_count: usize,
+    close_count: usize,
 }
 
 impl RecordingNativeDecoderState {
@@ -3446,6 +4501,10 @@ impl NativeDecoderSession for RecordingNativeDecoderSession {
             });
         }
         state.sent_packets.push(packet.clone());
+        if state.reject_next_packet {
+            state.reject_next_packet = false;
+            return Ok(DecoderPacketResult { accepted: false });
+        }
         if packet.end_of_stream {
             state
                 .queued_frames
@@ -3498,6 +4557,14 @@ impl NativeDecoderSession for RecordingNativeDecoderSession {
     }
 
     fn close(&mut self) -> Result<(), DecoderError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| DecoderError::internal("recording session state is poisoned"))?;
+        if let Ok(mut events) = state.events.lock() {
+            events.push("close");
+        }
+        state.close_count = state.close_count.saturating_add(1);
         Ok(())
     }
 }
@@ -3573,6 +4640,16 @@ fn contains_ordered_events(events: &[&'static str], expected: &[&'static str]) -
     expected.is_empty()
 }
 
+fn wait_for_buffered_native_frame(source: &MacosNativeFrameVideoSource, expected: usize) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while source.buffered_frame_count() < expected {
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn test_video_packet_stream_info() -> VideoPacketStreamInfo {
     VideoPacketStreamInfo {
         stream_index: 0,
@@ -3602,6 +4679,11 @@ fn fake_source_normalizer_packet_stream_info(codec: &str) -> SourceNormalizerPac
             coded_height: Some(180),
             sample_rate: None,
             channels: None,
+            channel_layout: None,
+            codec_delay_samples: None,
+            priming_samples: None,
+            trailing_padding_samples: None,
+            seek_preroll_samples: None,
             frame_rate: Some(24.0),
             time_base_num: Some(1),
             time_base_den: Some(24_000),
@@ -3609,6 +4691,71 @@ fn fake_source_normalizer_packet_stream_info(codec: &str) -> SourceNormalizerPac
         selected_track_index: Some(0),
         duration_millis: Some(1_000),
         seekable: true,
+    }
+}
+
+fn fake_source_normalizer_packet_stream_info_with_audio(
+    video_codec: &str,
+    audio_codec: &str,
+) -> SourceNormalizerPacketStreamInfo {
+    let mut stream_info = fake_source_normalizer_packet_stream_info(video_codec);
+    stream_info.tracks.push(SourceNormalizerPacketTrackInfo {
+        stream_index: 1,
+        media_kind: SourceNormalizerPacketMediaKind::Audio,
+        codec: audio_codec.to_owned(),
+        extradata: Vec::new(),
+        bitstream_format: None,
+        width: None,
+        height: None,
+        coded_width: None,
+        coded_height: None,
+        sample_rate: Some(48_000),
+        channels: Some(2),
+        channel_layout: Some("stereo".to_owned()),
+        codec_delay_samples: None,
+        priming_samples: None,
+        trailing_padding_samples: None,
+        seek_preroll_samples: Some(1_024),
+        frame_rate: None,
+        time_base_num: Some(1),
+        time_base_den: Some(48_000),
+    });
+    stream_info
+}
+
+fn fake_source_normalizer_video_packet() -> SourceNormalizerPacket {
+    SourceNormalizerPacket {
+        pts_us: Some(0),
+        dts_us: Some(0),
+        duration_us: Some(41_667),
+        stream_index: 0,
+        media_kind: SourceNormalizerPacketMediaKind::Video,
+        key_frame: true,
+        discontinuity: false,
+        sample_rate: None,
+        channels: None,
+        channel_layout: None,
+        sample_format: None,
+        frame_count: None,
+        end_of_stream: false,
+    }
+}
+
+fn fake_source_normalizer_audio_packet() -> SourceNormalizerPacket {
+    SourceNormalizerPacket {
+        pts_us: Some(0),
+        dts_us: Some(0),
+        duration_us: Some(21_333),
+        stream_index: 1,
+        media_kind: SourceNormalizerPacketMediaKind::Audio,
+        key_frame: true,
+        discontinuity: false,
+        sample_rate: Some(48_000),
+        channels: Some(2),
+        channel_layout: Some("stereo".to_owned()),
+        sample_format: Some("fltp".to_owned()),
+        frame_count: Some(1024),
+        end_of_stream: false,
     }
 }
 
@@ -3638,10 +4785,51 @@ fn test_native_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {
             coded_height: Some(180),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            pipeline_profile: Some(
+                player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ),
+            color_space: None,
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
             frame_id: Some(handle as u64),
             release_tracking: None,
         },
         handle,
+    }
+}
+
+fn macos_frame_processor_frame_for_test(
+    handle: usize,
+    pts_us: Option<i64>,
+) -> super::MacosFrameProcessorFrame {
+    let frame = test_native_frame(handle, pts_us);
+    super::MacosFrameProcessorFrame {
+        decoder_frame: frame.clone(),
+        presentation_frame: frame,
+        processor_outputs: Vec::new(),
+    }
+}
+
+fn macos_frame_processor_frame_for_test_with_processor_output(
+    handle: usize,
+    pts_us: Option<i64>,
+    processor_handle: usize,
+) -> super::MacosFrameProcessorFrame {
+    let frame = test_native_frame(handle, pts_us);
+    let mut processor_frame = frame.clone();
+    processor_frame.handle = processor_handle;
+    processor_frame.metadata.frame_id = Some(processor_handle as u64);
+    super::MacosFrameProcessorFrame {
+        decoder_frame: frame.clone(),
+        presentation_frame: frame,
+        processor_outputs: vec![super::ProcessorOwnedNativeFrame {
+            processor_index: 0,
+            frame: NativeFrame {
+                metadata: processor_frame.metadata.into(),
+                handle: processor_frame.handle,
+            },
+        }],
     }
 }
 
@@ -3687,6 +4875,7 @@ impl NativeDecoderSession for FakeNativeDecoderSession {
 
 #[derive(Debug, Default)]
 struct RecordingFrameProcessorState {
+    events: Option<Arc<std::sync::Mutex<Vec<&'static str>>>>,
     submit_status: Option<FrameProcessorSubmitStatus>,
     receive_pending: bool,
     output_handle_offset: usize,
@@ -3720,6 +4909,9 @@ impl FrameProcessorSession for RecordingFrameProcessorSession {
             processor_name: Some("recording-frame-processor".to_owned()),
             selected_backend: Some("fixture".to_owned()),
             output_handle_kind: Some(player_plugin::NativeHandleKind::CvPixelBuffer),
+            output_pipeline_profile: Some(
+                player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ),
             max_in_flight_frames: Some(1),
         }
     }
@@ -3801,6 +4993,11 @@ impl FrameProcessorSession for RecordingFrameProcessorSession {
             .state
             .lock()
             .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?;
+        if let Some(events) = state.events.as_ref()
+            && let Ok(mut events) = events.lock()
+        {
+            events.push("processor_flush");
+        }
         state.flush_count = state.flush_count.saturating_add(1);
         Ok(())
     }
@@ -3810,6 +5007,11 @@ impl FrameProcessorSession for RecordingFrameProcessorSession {
             .state
             .lock()
             .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?;
+        if let Some(events) = state.events.as_ref()
+            && let Ok(mut events) = events.lock()
+        {
+            events.push("processor_close");
+        }
         state.close_count = state.close_count.saturating_add(1);
         Ok(())
     }

@@ -18,7 +18,9 @@ enum PlayerBridgeFactory {
         sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
             VesperSourceNormalizerConfiguration(),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
-            VesperFrameProcessorConfiguration()
+            VesperFrameProcessorConfiguration(),
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
+            VesperNativeFramePipelineConfiguration()
     ) -> VesperPlayerController {
         switch defaultBackend {
         case .fakeDemo:
@@ -41,7 +43,8 @@ enum PlayerBridgeFactory {
                     preloadBudgetPolicy: preloadBudgetPolicy,
                     benchmarkConfiguration: benchmarkConfiguration,
                     sourceNormalizerConfiguration: sourceNormalizerConfiguration,
-                    frameProcessorConfiguration: frameProcessorConfiguration
+                    frameProcessorConfiguration: frameProcessorConfiguration,
+                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
                 ),
                 keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
@@ -65,7 +68,9 @@ public enum VesperPlayerControllerFactory {
         sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
             VesperSourceNormalizerConfiguration(),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
-            VesperFrameProcessorConfiguration()
+            VesperFrameProcessorConfiguration(),
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
+            VesperNativeFramePipelineConfiguration()
     ) -> VesperPlayerController {
         PlayerBridgeFactory.makeDefaultBridge(
             initialSource: initialSource,
@@ -75,7 +80,8 @@ public enum VesperPlayerControllerFactory {
             keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
             benchmarkConfiguration: benchmarkConfiguration,
             sourceNormalizerConfiguration: sourceNormalizerConfiguration,
-            frameProcessorConfiguration: frameProcessorConfiguration
+            frameProcessorConfiguration: frameProcessorConfiguration,
+            nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
         )
     }
 }

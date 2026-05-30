@@ -56,8 +56,9 @@ struct PluginBundle {
 
 struct PacketNormalizerSession {
     input: ffmpeg::format::context::Input,
-    selected_stream_index: usize,
-    time_base: ffmpeg::Rational,
+    selected_video_stream_index: usize,
+    selected_audio_stream_index: Option<usize>,
+    tracks: Vec<SourceNormalizerPacketTrackInfo>,
     next_packet_handle: usize,
     leased_packet: Option<LeasedPacket>,
     closed: bool,
@@ -193,12 +194,23 @@ unsafe extern "C" fn normalizer_open_packet_session_json(
                 "input does not contain a video stream",
             ));
         };
-        let stream_index = stream.index();
-        let time_base = stream.time_base();
-        let track = match packet_track_info(&stream) {
+        let video_stream_index = stream.index();
+        let video_track = match packet_track_info(&stream) {
             Ok(track) => track,
             Err(error) => return packet_open_error(error),
         };
+        let mut tracks = vec![video_track];
+        let selected_audio_stream_index =
+            if let Some(audio_stream) = input.streams().best(ffmpeg::media::Type::Audio) {
+                let audio_stream_index = audio_stream.index();
+                match audio_track_info(&audio_stream) {
+                    Ok(track) => tracks.push(track),
+                    Err(error) => return packet_open_error(error),
+                }
+                Some(audio_stream_index)
+            } else {
+                None
+            };
         let duration_millis = duration_millis_from_av_duration(input.duration());
         let seekable = input.duration() > 0;
         let stream_info = SourceNormalizerPacketStreamInfo {
@@ -206,15 +218,16 @@ unsafe extern "C" fn normalizer_open_packet_session_json(
             normalizer_name: Some("player-source-normalizer-ffmpeg".to_owned()),
             runtime_profile: Some(profile_name),
             selected_backend: Some("ffmpeg-next".to_owned()),
-            tracks: vec![track],
-            selected_track_index: Some(u32::try_from(stream_index).unwrap_or(u32::MAX)),
+            tracks: tracks.clone(),
+            selected_track_index: Some(u32::try_from(video_stream_index).unwrap_or(u32::MAX)),
             duration_millis,
             seekable,
         };
         let session = Box::into_raw(Box::new(PacketNormalizerSession {
             input,
-            selected_stream_index: stream_index,
-            time_base,
+            selected_video_stream_index: video_stream_index,
+            selected_audio_stream_index,
+            tracks,
             next_packet_handle: 1,
             leased_packet: None,
             closed: false,
@@ -245,27 +258,56 @@ unsafe extern "C" fn normalizer_read_packet(
             ));
         }
 
+        let selected_video_stream_index = session.selected_video_stream_index;
+        let selected_audio_stream_index = session.selected_audio_stream_index;
+        let tracks = session.tracks.clone();
         loop {
             match session.input.packets().next() {
-                Some((stream, packet)) if stream.index() == session.selected_stream_index => {
+                Some((stream, packet))
+                    if stream.index() == selected_video_stream_index
+                        || selected_audio_stream_index == Some(stream.index()) =>
+                {
+                    let stream_index = stream.index();
+                    let track = u32::try_from(stream_index).ok().and_then(|stream_index| {
+                        tracks
+                            .iter()
+                            .find(|track| track.stream_index == stream_index)
+                            .cloned()
+                    });
+                    let media_kind = track
+                        .as_ref()
+                        .map(|track| track.media_kind)
+                        .unwrap_or(SourceNormalizerPacketMediaKind::Video);
+                    let time_base = stream.time_base();
                     let data = packet.data().map(<[u8]>::to_vec).unwrap_or_default();
                     let handle = session.next_packet_handle;
                     session.next_packet_handle =
                         session.next_packet_handle.saturating_add(1).max(1);
                     let metadata = SourceNormalizerReadPacketMetadata::packet(
                         player_plugin::SourceNormalizerPacket {
-                            pts_us: packet.pts().and_then(|timestamp| {
-                                timestamp_to_micros(timestamp, session.time_base)
-                            }),
-                            dts_us: packet.dts().and_then(|timestamp| {
-                                timestamp_to_micros(timestamp, session.time_base)
-                            }),
-                            duration_us: timestamp_to_micros(packet.duration(), session.time_base)
+                            pts_us: packet
+                                .pts()
+                                .and_then(|timestamp| timestamp_to_micros(timestamp, time_base)),
+                            dts_us: packet
+                                .dts()
+                                .and_then(|timestamp| timestamp_to_micros(timestamp, time_base)),
+                            duration_us: timestamp_to_micros(packet.duration(), time_base)
                                 .filter(|duration| *duration > 0),
-                            stream_index: u32::try_from(session.selected_stream_index)
-                                .unwrap_or(u32::MAX),
+                            stream_index: u32::try_from(stream_index).unwrap_or(u32::MAX),
+                            media_kind,
                             key_frame: packet.is_key(),
                             discontinuity: false,
+                            sample_rate: track.as_ref().and_then(|track| track.sample_rate),
+                            channels: track.as_ref().and_then(|track| track.channels),
+                            channel_layout: track.and_then(|track| track.channel_layout),
+                            sample_format: None,
+                            frame_count: packet.duration().checked_abs().and_then(|duration| {
+                                if media_kind == SourceNormalizerPacketMediaKind::Audio {
+                                    u32::try_from(duration).ok()
+                                } else {
+                                    None
+                                }
+                            }),
                             end_of_stream: false,
                         },
                     );
@@ -656,7 +698,10 @@ fn packet_capabilities_from_profiles(
     SourceNormalizerPacketCapabilities {
         supported_runtime_profiles: profiles,
         max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
-        media_kinds: vec![SourceNormalizerPacketMediaKind::Video],
+        media_kinds: vec![
+            SourceNormalizerPacketMediaKind::Video,
+            SourceNormalizerPacketMediaKind::Audio,
+        ],
         codecs: vec!["H264".to_owned(), "HEVC".to_owned(), "AV1".to_owned()],
         bitstream_formats: vec![
             DecoderBitstreamFormat::Avcc,
@@ -1251,11 +1296,8 @@ fn audio_track_info(
     stream: &ffmpeg::Stream<'_>,
 ) -> Result<SourceNormalizerPacketTrackInfo, SourceNormalizerError> {
     let parameters = stream.parameters();
-    let codec =
-        ffmpeg::codec::context::Context::from_parameters(parameters.clone()).map_err(|error| {
-            SourceNormalizerError::internal(format!("failed to inspect stream: {error}"))
-        })?;
-    let codec_name = format!("{:?}", codec.id());
+    let codec_name = format!("{:?}", parameters.id());
+    let audio_parameters = audio_parameters_from_codec_parameters(&parameters);
     Ok(SourceNormalizerPacketTrackInfo {
         stream_index: u32::try_from(stream.index()).unwrap_or(u32::MAX),
         media_kind: SourceNormalizerPacketMediaKind::Audio,
@@ -1266,8 +1308,13 @@ fn audio_track_info(
         height: None,
         coded_width: None,
         coded_height: None,
-        sample_rate: None,
-        channels: None,
+        sample_rate: audio_parameters.sample_rate,
+        channels: audio_parameters.channels,
+        channel_layout: audio_parameters.channel_layout,
+        codec_delay_samples: audio_parameters.codec_delay_samples,
+        priming_samples: audio_parameters.priming_samples,
+        trailing_padding_samples: audio_parameters.trailing_padding_samples,
+        seek_preroll_samples: audio_parameters.seek_preroll_samples,
         frame_rate: None,
         time_base_num: Some(stream.time_base().numerator()),
         time_base_den: Some(stream.time_base().denominator()),
@@ -1331,31 +1378,130 @@ fn packet_track_info(
     stream: &ffmpeg::Stream<'_>,
 ) -> Result<SourceNormalizerPacketTrackInfo, SourceNormalizerError> {
     let parameters = stream.parameters();
-    let codec =
-        ffmpeg::codec::context::Context::from_parameters(parameters.clone()).map_err(|error| {
-            SourceNormalizerError::internal(format!("failed to inspect stream: {error}"))
-        })?;
-    let codec_name = format!("{:?}", codec.id());
-    let decoder = codec.decoder().video().map_err(|error| {
-        SourceNormalizerError::internal(format!("failed to inspect video stream: {error}"))
-    })?;
+    let codec_name = format!("{:?}", parameters.id());
+    let (width, height) = video_dimensions_from_parameters(&parameters);
     Ok(SourceNormalizerPacketTrackInfo {
         stream_index: u32::try_from(stream.index()).unwrap_or(u32::MAX),
         media_kind: SourceNormalizerPacketMediaKind::Video,
         codec: codec_name.clone(),
         extradata: codec_parameters_extradata(&parameters),
         bitstream_format: Some(bitstream_format_for_codec_name(&codec_name)),
-        width: Some(decoder.width()).filter(|width| *width > 0),
-        height: Some(decoder.height()).filter(|height| *height > 0),
-        coded_width: Some(decoder.width()).filter(|width| *width > 0),
-        coded_height: Some(decoder.height()).filter(|height| *height > 0),
+        width,
+        height,
+        coded_width: width,
+        coded_height: height,
         sample_rate: None,
         channels: None,
+        channel_layout: None,
+        codec_delay_samples: None,
+        priming_samples: None,
+        trailing_padding_samples: None,
+        seek_preroll_samples: None,
         frame_rate: rational_to_f64(stream.avg_frame_rate())
             .or_else(|| rational_to_f64(stream.rate())),
         time_base_num: Some(stream.time_base().numerator()),
         time_base_den: Some(stream.time_base().denominator()),
     })
+}
+
+fn video_dimensions_from_parameters(
+    parameters: &ffmpeg::codec::Parameters,
+) -> (Option<u32>, Option<u32>) {
+    // SAFETY: `parameters` points to a live AVCodecParameters owned by the input
+    // stream. The width and height fields are plain values copied synchronously.
+    unsafe {
+        let parameters = parameters.as_ptr();
+        if parameters.is_null() {
+            return (None, None);
+        }
+        (
+            u32::try_from((*parameters).width)
+                .ok()
+                .filter(|width| *width > 0),
+            u32::try_from((*parameters).height)
+                .ok()
+                .filter(|height| *height > 0),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AudioCodecParameters {
+    sample_rate: Option<u32>,
+    channels: Option<u16>,
+    channel_layout: Option<String>,
+    codec_delay_samples: Option<u32>,
+    priming_samples: Option<u32>,
+    trailing_padding_samples: Option<u32>,
+    seek_preroll_samples: Option<u32>,
+}
+
+fn audio_parameters_from_codec_parameters(
+    parameters: &ffmpeg::codec::Parameters,
+) -> AudioCodecParameters {
+    // SAFETY: `parameters` points to a live AVCodecParameters owned by FFmpeg.
+    // The code copies scalar audio metadata and writes FFmpeg's layout
+    // description into an owned Rust buffer before returning.
+    unsafe {
+        let raw = parameters.as_ptr();
+        if raw.is_null() {
+            return AudioCodecParameters {
+                sample_rate: None,
+                channels: None,
+                channel_layout: None,
+                codec_delay_samples: None,
+                priming_samples: None,
+                trailing_padding_samples: None,
+                seek_preroll_samples: None,
+            };
+        }
+        let layout = (*raw).ch_layout;
+        AudioCodecParameters {
+            sample_rate: u32::try_from((*raw).sample_rate)
+                .ok()
+                .filter(|sample_rate| *sample_rate > 0),
+            channels: u16::try_from(layout.nb_channels)
+                .ok()
+                .filter(|channels| *channels > 0),
+            channel_layout: describe_channel_layout(&layout),
+            codec_delay_samples: None,
+            priming_samples: u32::try_from((*raw).initial_padding)
+                .ok()
+                .filter(|samples| *samples > 0),
+            trailing_padding_samples: u32::try_from((*raw).trailing_padding)
+                .ok()
+                .filter(|samples| *samples > 0),
+            seek_preroll_samples: u32::try_from((*raw).seek_preroll)
+                .ok()
+                .filter(|samples| *samples > 0),
+        }
+    }
+}
+
+fn describe_channel_layout(layout: &ffmpeg::ffi::AVChannelLayout) -> Option<String> {
+    if layout.nb_channels <= 0 {
+        return None;
+    }
+    let mut buffer = [0i8; 128];
+    // SAFETY: `layout` is a valid borrowed AVChannelLayout. FFmpeg writes at
+    // most `buffer.len()` bytes including the trailing nul, and the buffer is
+    // converted into an owned Rust string before returning.
+    let written = unsafe {
+        ffmpeg::ffi::av_channel_layout_describe(layout, buffer.as_mut_ptr(), buffer.len())
+    };
+    if written < 0 {
+        return Some(format!("{}c", layout.nb_channels));
+    }
+    // SAFETY: FFmpeg guarantees a nul-terminated C string in `buffer` on
+    // success for a non-zero buffer length.
+    let description = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    if description.is_empty() {
+        None
+    } else {
+        Some(description)
+    }
 }
 
 fn codec_parameters_extradata(parameters: &ffmpeg::codec::Parameters) -> Vec<u8> {
@@ -1560,14 +1706,15 @@ mod tests {
     use super::{
         detect_profile_name, free_plugin_bytes, load_profile_set, normalizer_close_packet_session,
         normalizer_open_packet_session_json, normalizer_packet_capabilities_json,
-        normalizer_read_packet, normalizer_release_packet, packet_capabilities_from_profiles,
-        unique_session_suffix, validate_packet_profile,
+        normalizer_read_packet, normalizer_release_packet, normalizer_seek_packet_session_json,
+        packet_capabilities_from_profiles, unique_session_suffix, validate_packet_profile,
+        video_dimensions_from_parameters,
     };
     use player_plugin::{
         SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerPacketCapabilities,
-        SourceNormalizerPacketMediaKind, SourceNormalizerPacketSessionConfig,
-        SourceNormalizerPacketStreamInfo, SourceNormalizerReadPacketMetadata,
-        SourceNormalizerReadPacketStatus, VesperPluginBytes, VesperPluginResultStatus,
+        SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
+        SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
+        SourceNormalizerReadPacketMetadata, VesperPluginBytes, VesperPluginResultStatus,
     };
     use std::path::PathBuf;
 
@@ -1582,11 +1729,16 @@ mod tests {
         );
         assert_eq!(
             capabilities.media_kinds,
-            vec![SourceNormalizerPacketMediaKind::Video]
+            vec![
+                SourceNormalizerPacketMediaKind::Video,
+                SourceNormalizerPacketMediaKind::Audio
+            ]
         );
         assert!(capabilities.supports_codec("h264"));
         assert!(capabilities.supports_codec("hevc"));
         assert!(capabilities.supports_codec("av1"));
+        assert!(capabilities.supports_seek);
+        assert!(capabilities.supports_flush);
 
         // SAFETY: the callback ignores context and returns a plugin-owned payload.
         let payload = unsafe { normalizer_packet_capabilities_json(std::ptr::null_mut()) };
@@ -1647,6 +1799,23 @@ mod tests {
     }
 
     #[test]
+    fn packet_track_dimensions_read_codec_parameters_without_decoder() {
+        let mut parameters = ffmpeg_next::codec::Parameters::new();
+        // SAFETY: the test owns the allocated AVCodecParameters and writes plain
+        // metadata fields before passing the wrapper to the helper under test.
+        unsafe {
+            let raw = parameters.as_mut_ptr();
+            (*raw).width = 1920;
+            (*raw).height = 1080;
+        }
+
+        assert_eq!(
+            video_dimensions_from_parameters(&parameters),
+            (Some(1920), Some(1080))
+        );
+    }
+
+    #[test]
     fn hls_input_detects_hls_profile() {
         let profile_set = load_profile_set().expect("load default source normalizer profiles");
 
@@ -1682,31 +1851,171 @@ mod tests {
             stream_info.normalizer_name.as_deref(),
             Some("player-source-normalizer-ffmpeg")
         );
-        assert!(!stream_info.tracks.is_empty());
+        assert!(stream_info.seekable);
+        assert!(stream_info.duration_millis.is_some());
+        assert!(
+            stream_info
+                .tracks
+                .iter()
+                .any(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)
+        );
+        let audio_track = stream_info
+            .tracks
+            .iter()
+            .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Audio)
+            .expect("fixture exposes audio track");
+        assert!(audio_track.sample_rate.is_some());
+        assert!(audio_track.channels.is_some());
+        assert!(audio_track.channel_layout.is_some());
+        assert_eq!(
+            stream_info
+                .selected_track_index
+                .and_then(|selected| stream_info
+                    .tracks
+                    .iter()
+                    .find(|track| track.stream_index == selected)
+                    .map(|track| track.media_kind)),
+            Some(SourceNormalizerPacketMediaKind::Video)
+        );
 
-        // SAFETY: the session pointer was returned by this plugin's open call.
-        let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(packet.status, VesperPluginResultStatus::Success);
-        assert_eq!(packet.packet_handle, 1);
-        assert!(!packet.data.is_null());
-        assert!(packet.data_len > 0);
-        let metadata: SourceNormalizerReadPacketMetadata = take_plugin_bytes(packet.metadata);
-        assert_eq!(metadata.status, SourceNormalizerReadPacketStatus::Packet);
-        assert!(metadata.packet.is_some());
-
-        // SAFETY: the handle was returned by the preceding read.
-        let release = unsafe {
-            normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
-        };
-        assert_eq!(release.status, VesperPluginResultStatus::Success);
-        let release_status: SourceNormalizerOperationStatus = take_plugin_bytes(release.payload);
-        assert!(release_status.completed);
+        let mut saw_audio_packet = false;
+        let mut saw_video_packet = false;
+        for _ in 0..32 {
+            // SAFETY: the session pointer is valid and the previous packet lease
+            // has been released.
+            let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
+            assert_eq!(packet.status, VesperPluginResultStatus::Success);
+            if packet.packet_handle == 0 {
+                break;
+            }
+            let metadata: SourceNormalizerReadPacketMetadata = take_plugin_bytes(packet.metadata);
+            let metadata_packet = metadata.packet.expect("packet metadata");
+            match metadata_packet.media_kind {
+                SourceNormalizerPacketMediaKind::Audio => {
+                    saw_audio_packet = true;
+                    assert_eq!(metadata_packet.stream_index, audio_track.stream_index);
+                    assert_eq!(metadata_packet.sample_rate, audio_track.sample_rate);
+                    assert_eq!(metadata_packet.channels, audio_track.channels);
+                    assert_eq!(metadata_packet.channel_layout, audio_track.channel_layout);
+                }
+                SourceNormalizerPacketMediaKind::Video => {
+                    saw_video_packet = true;
+                    assert_eq!(
+                        Some(metadata_packet.stream_index),
+                        stream_info.selected_track_index
+                    );
+                }
+                SourceNormalizerPacketMediaKind::Subtitle => {}
+            }
+            // SAFETY: the handle was returned by the preceding read.
+            let release = unsafe {
+                normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
+            };
+            assert_eq!(release.status, VesperPluginResultStatus::Success);
+            let release_status: SourceNormalizerOperationStatus =
+                take_plugin_bytes(release.payload);
+            assert!(release_status.completed);
+            if saw_audio_packet && saw_video_packet {
+                break;
+            }
+        }
+        assert!(saw_audio_packet);
+        assert!(saw_video_packet);
 
         // SAFETY: the session pointer was returned by open and is closed once.
         let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };
         assert_eq!(close.status, VesperPluginResultStatus::Success);
         let close_status: SourceNormalizerOperationStatus = take_plugin_bytes(close.payload);
         assert!(close_status.completed);
+    }
+
+    #[test]
+    fn fixture_packet_session_flush_and_seek_clear_outstanding_lease() {
+        let fixture = fixture_path();
+        if !fixture.is_file() {
+            eprintln!(
+                "skipping FFmpeg source normalizer lease test: {} is unavailable",
+                fixture.display()
+            );
+            return;
+        }
+
+        let open = open_packet_session(SourceNormalizerPacketSessionConfig {
+            runtime_profile: "generic-fallback".to_owned(),
+            input: fixture.to_string_lossy().into_owned(),
+            headers: Vec::new(),
+            startup_timeout_ms: None,
+            session_timeout_ms: None,
+            preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+        });
+        assert_eq!(open.status, VesperPluginResultStatus::Success);
+        assert!(!open.session.is_null());
+
+        // SAFETY: the session pointer was returned by this plugin's open call.
+        let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
+        assert_eq!(packet.status, VesperPluginResultStatus::Success);
+        assert!(packet.packet_handle > 0);
+
+        // SAFETY: the session pointer is valid and intentionally still has an
+        // outstanding packet lease.
+        let flush =
+            unsafe { super::normalizer_flush_packet_session(std::ptr::null_mut(), open.session) };
+        assert_eq!(flush.status, VesperPluginResultStatus::Success);
+        let flush_status: SourceNormalizerOperationStatus = take_plugin_bytes(flush.payload);
+        assert!(flush_status.completed);
+
+        // SAFETY: the stale handle was invalidated by the preceding flush.
+        let stale_release = unsafe {
+            normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
+        };
+        assert_eq!(stale_release.status, VesperPluginResultStatus::Failure);
+        let stale_error: SourceNormalizerError = take_plugin_bytes(stale_release.payload);
+        assert!(format!("{stale_error}").contains("no packet lease is outstanding"));
+
+        // SAFETY: the flush cleared the lease and the session can read again.
+        let packet_after_flush =
+            unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
+        assert_eq!(packet_after_flush.status, VesperPluginResultStatus::Success);
+        assert!(packet_after_flush.packet_handle > 0);
+
+        let seek = SourceNormalizerPacketSeek {
+            position_millis: 0,
+            exact: false,
+        };
+        let seek_json = serde_json::to_vec(&seek).expect("serialize seek");
+        // SAFETY: the session pointer is valid and intentionally still has an
+        // outstanding packet lease.
+        let seek_result = unsafe {
+            normalizer_seek_packet_session_json(
+                std::ptr::null_mut(),
+                open.session,
+                seek_json.as_ptr(),
+                seek_json.len(),
+            )
+        };
+        assert_eq!(seek_result.status, VesperPluginResultStatus::Success);
+        let seek_status: SourceNormalizerOperationStatus = take_plugin_bytes(seek_result.payload);
+        assert!(seek_status.completed);
+
+        // SAFETY: the stale handle was invalidated by the preceding seek.
+        let stale_release_after_seek = unsafe {
+            normalizer_release_packet(
+                std::ptr::null_mut(),
+                open.session,
+                packet_after_flush.packet_handle,
+            )
+        };
+        assert_eq!(
+            stale_release_after_seek.status,
+            VesperPluginResultStatus::Failure
+        );
+        let stale_seek_error: SourceNormalizerError =
+            take_plugin_bytes(stale_release_after_seek.payload);
+        assert!(format!("{stale_seek_error}").contains("no packet lease is outstanding"));
+
+        // SAFETY: the session pointer was returned by open and is closed once.
+        let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };
+        assert_eq!(close.status, VesperPluginResultStatus::Success);
     }
 
     #[test]

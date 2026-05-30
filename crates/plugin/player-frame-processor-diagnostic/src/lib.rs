@@ -11,10 +11,10 @@ use player_plugin::{
     FrameProcessorFrameTimings, FrameProcessorOperationStatus, FrameProcessorReceiveFrameMetadata,
     FrameProcessorSessionConfig, FrameProcessorSessionInfo, FrameProcessorSubmitFrame,
     FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeFrame, NativeFrameMetadata,
-    NativeFrameReleaseTracking, NativeHandleKind, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
-    VesperFrameProcessorOpenSessionResult, VesperFrameProcessorPluginApiV1,
-    VesperFrameProcessorReceiveFrameResult, VesperPluginBytes, VesperPluginDescriptor,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    NativeFramePipelineProfile, NativeFrameReleaseTracking, NativeHandleKind,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VesperFrameProcessorOpenSessionResult,
+    VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult, VesperPluginBytes,
+    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-frame-processor-diagnostic\0";
@@ -32,6 +32,7 @@ enum DiagnosticMode {
     Slow,
     UnsupportedHandle,
     LateOutput,
+    Marker,
 }
 
 impl DiagnosticMode {
@@ -44,6 +45,7 @@ impl DiagnosticMode {
             "slow" => Self::Slow,
             "unsupported-handle" | "unsupported" => Self::UnsupportedHandle,
             "late-output" | "late" => Self::LateOutput,
+            "marker" | "debug-marker" => Self::Marker,
             _ => Self::Noop,
         }
     }
@@ -54,6 +56,47 @@ struct DiagnosticSession {
     mode: DiagnosticMode,
     pending_outputs: VecDeque<NativeFrame>,
     source_frame_ids: VecDeque<Option<u64>>,
+    counters: DiagnosticCounters,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DiagnosticCounters {
+    submitted: u64,
+    processed: u64,
+    bypassed: u64,
+    rejected: u64,
+    backpressure: u64,
+    late_dropped: u64,
+    released: u64,
+    total_process_time_us: u64,
+    max_process_time_us: u64,
+}
+
+impl DiagnosticCounters {
+    fn record_process_time(&mut self, process_time_us: u64) {
+        self.processed = self.processed.saturating_add(1);
+        self.total_process_time_us = self.total_process_time_us.saturating_add(process_time_us);
+        self.max_process_time_us = self.max_process_time_us.max(process_time_us);
+    }
+
+    fn summary(&self) -> String {
+        let average_process_time_us = if self.processed == 0 {
+            0
+        } else {
+            self.total_process_time_us / self.processed
+        };
+        format!(
+            "processed={} bypassed={} rejected={} backpressure={} lateDropped={} released={} avgProcessUs={} maxProcessUs={}",
+            self.processed,
+            self.bypassed,
+            self.rejected,
+            self.backpressure,
+            self.late_dropped,
+            self.released,
+            average_process_time_us,
+            self.max_process_time_us
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -97,30 +140,7 @@ unsafe extern "C" fn processor_name(_context: *mut c_void) -> *const c_char {
 unsafe extern "C" fn processor_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
     catch_processor_bytes(|| {
         let mode = DiagnosticMode::from_env();
-        serialize_payload(&FrameProcessorCapabilities {
-            accepted_input_handle_kinds: match mode {
-                DiagnosticMode::UnsupportedHandle => vec![NativeHandleKind::D3D11Texture2D],
-                _ => vec![
-                    NativeHandleKind::CvPixelBuffer,
-                    NativeHandleKind::IoSurface,
-                    NativeHandleKind::D3D11Texture2D,
-                ],
-            },
-            output_handle_kinds: vec![
-                NativeHandleKind::CvPixelBuffer,
-                NativeHandleKind::IoSurface,
-                NativeHandleKind::D3D11Texture2D,
-            ],
-            supports_video_frames: true,
-            supports_in_place_passthrough: true,
-            preserves_dimensions: true,
-            may_change_dimensions: false,
-            preserves_color_metadata: true,
-            preserves_hdr_metadata: true,
-            supports_flush: true,
-            max_sessions: Some(1),
-            max_in_flight_frames: Some(1),
-        })
+        serialize_payload(&diagnostic_capabilities(mode))
     })
 }
 
@@ -137,10 +157,10 @@ unsafe extern "C" fn processor_open_session_json(
         };
         let mode = DiagnosticMode::from_env();
         let capabilities = diagnostic_capabilities(mode);
-        if !capabilities.supports_input_handle_kind(&config.input_metadata.handle_kind) {
+        if !capabilities.supports_input_metadata(&config.input_metadata) {
             return open_error(FrameProcessorError::unsupported_handle(format!(
                 "{:?}",
-                config.input_metadata.handle_kind
+                config.input_metadata.effective_pipeline_profile()
             )));
         }
 
@@ -148,11 +168,13 @@ unsafe extern "C" fn processor_open_session_json(
             mode,
             pending_outputs: VecDeque::new(),
             source_frame_ids: VecDeque::new(),
+            counters: DiagnosticCounters::default(),
         }));
         let info = FrameProcessorSessionInfo {
             processor_name: Some("player-frame-processor-diagnostic".to_owned()),
             selected_backend: Some(format!("{mode:?}")),
-            output_handle_kind: Some(config.input_metadata.handle_kind),
+            output_handle_kind: Some(config.input_metadata.handle_kind.clone()),
+            output_pipeline_profile: Some(config.input_metadata.effective_pipeline_profile()),
             max_in_flight_frames: Some(1),
         };
         VesperFrameProcessorOpenSessionResult {
@@ -185,9 +207,8 @@ unsafe extern "C" fn processor_submit_frame_json(
                 "input frame handle must not be null",
             ));
         }
-        if !diagnostic_capabilities(session.mode)
-            .supports_input_handle_kind(&submit.metadata.handle_kind)
-        {
+        if !diagnostic_capabilities(session.mode).supports_input_metadata(&submit.metadata) {
+            session.counters.rejected = session.counters.rejected.saturating_add(1);
             return process_success(&FrameProcessorSubmitResult {
                 status: FrameProcessorSubmitStatus::Rejected,
                 queue_depth: Some(session.pending_outputs.len() as u32),
@@ -196,6 +217,7 @@ unsafe extern "C" fn processor_submit_frame_json(
             });
         }
         if session.pending_outputs.len() >= 1 {
+            session.counters.backpressure = session.counters.backpressure.saturating_add(1);
             return process_success(&FrameProcessorSubmitResult {
                 status: FrameProcessorSubmitStatus::Backpressure,
                 queue_depth: Some(session.pending_outputs.len() as u32),
@@ -208,10 +230,12 @@ unsafe extern "C" fn processor_submit_frame_json(
             DiagnosticMode::Slow => thread::sleep(Duration::from_millis(slow_delay_ms())),
             DiagnosticMode::Noop
             | DiagnosticMode::UnsupportedHandle
-            | DiagnosticMode::LateOutput => {}
+            | DiagnosticMode::LateOutput
+            | DiagnosticMode::Marker => {}
         }
 
         let output = allocate_output_frame(&submit.metadata, handle);
+        session.counters.submitted = session.counters.submitted.saturating_add(1);
         session.source_frame_ids.push_back(submit.metadata.frame_id);
         session.pending_outputs.push_back(output);
 
@@ -241,8 +265,11 @@ unsafe extern "C" fn processor_receive_frame(
         let process_time_us = match session.mode {
             DiagnosticMode::Slow => slow_delay_ms().saturating_mul(1_000),
             DiagnosticMode::LateOutput => 1_000_000,
-            DiagnosticMode::Noop | DiagnosticMode::UnsupportedHandle => 100,
+            DiagnosticMode::Noop | DiagnosticMode::UnsupportedHandle | DiagnosticMode::Marker => {
+                100
+            }
         };
+        session.counters.record_process_time(process_time_us);
         let mut metadata = FrameProcessorReceiveFrameMetadata::frame(output.metadata);
         metadata.source_frame_id = source_frame_id;
         metadata.timings = FrameProcessorFrameTimings {
@@ -253,6 +280,13 @@ unsafe extern "C" fn processor_receive_frame(
         if session.mode == DiagnosticMode::LateOutput {
             metadata.message =
                 Some("diagnostic output intentionally reports late timing".to_owned());
+        } else if session.mode == DiagnosticMode::Marker {
+            metadata.message = Some(format!(
+                "debug marker metadata-only; {}",
+                session.counters.summary()
+            ));
+        } else {
+            metadata.message = Some(session.counters.summary());
         }
 
         receive_success(&metadata, output.handle)
@@ -261,7 +295,7 @@ unsafe extern "C" fn processor_receive_frame(
 
 unsafe extern "C" fn processor_release_frame(
     _context: *mut c_void,
-    _session: *mut c_void,
+    session: *mut c_void,
     _handle_kind: u32,
     handle: usize,
 ) -> VesperPluginProcessResult {
@@ -274,6 +308,11 @@ unsafe extern "C" fn processor_release_frame(
         // SAFETY: output handles are allocated with `Box::into_raw` by this
         // diagnostic plugin and released exactly once through this callback.
         let _ = unsafe { Box::from_raw(handle as *mut Vec<u8>) };
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
+        if let Some(session) = unsafe { session.cast::<DiagnosticSession>().as_mut() } {
+            session.counters.released = session.counters.released.saturating_add(1);
+        }
         process_success(&FrameProcessorOperationStatus { completed: true })
     })
 }
@@ -323,6 +362,19 @@ fn diagnostic_capabilities(mode: DiagnosticMode) -> FrameProcessorCapabilities {
             NativeHandleKind::CvPixelBuffer,
             NativeHandleKind::IoSurface,
             NativeHandleKind::D3D11Texture2D,
+        ],
+        accepted_input_pipeline_profiles: match mode {
+            DiagnosticMode::UnsupportedHandle => vec![NativeFramePipelineProfile::D3D11Texture2D],
+            _ => vec![
+                NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+                NativeFramePipelineProfile::Unknown("io_surface".to_owned()),
+                NativeFramePipelineProfile::D3D11Texture2D,
+            ],
+        },
+        output_pipeline_profiles: vec![
+            NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            NativeFramePipelineProfile::Unknown("io_surface".to_owned()),
+            NativeFramePipelineProfile::D3D11Texture2D,
         ],
         supports_video_frames: true,
         supports_in_place_passthrough: true,
@@ -492,6 +544,11 @@ fn sample_metadata() -> NativeFrameMetadata {
         coded_height: Some(2),
         visible_rect: None,
         handle_kind: NativeHandleKind::IoSurface,
+        pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
+        color_space: Some("bt709".to_owned()),
+        hdr_metadata: None,
+        sync_info: None,
+        transform: None,
         frame_id: Some(1),
         release_tracking: Some(NativeFrameReleaseTracking {
             frame_id: Some(1),
@@ -503,12 +560,12 @@ fn sample_metadata() -> NativeFrameMetadata {
 #[cfg(test)]
 mod tests {
     use super::{
-        DiagnosticMode, DiagnosticSession, allocate_output_frame, diagnostic_capabilities,
-        release_pending_outputs, sample_metadata, slow_delay_ms,
+        DiagnosticCounters, DiagnosticMode, DiagnosticSession, allocate_output_frame,
+        diagnostic_capabilities, release_pending_outputs, sample_metadata, slow_delay_ms,
     };
     use player_plugin::{
         FrameProcessorReceiveFrameMetadata, FrameProcessorReceiveStatus, FrameProcessorSubmitFrame,
-        NativeHandleKind,
+        NativeFramePipelineProfile, NativeHandleKind,
     };
 
     #[test]
@@ -542,6 +599,7 @@ mod tests {
             mode: DiagnosticMode::Noop,
             pending_outputs: std::collections::VecDeque::new(),
             source_frame_ids: std::collections::VecDeque::new(),
+            counters: DiagnosticCounters::default(),
         };
 
         assert!(session.pending_outputs.is_empty());
@@ -573,6 +631,7 @@ mod tests {
             mode: DiagnosticMode::Noop,
             pending_outputs: std::collections::VecDeque::new(),
             source_frame_ids: std::collections::VecDeque::new(),
+            counters: DiagnosticCounters::default(),
         };
         session
             .pending_outputs
@@ -595,5 +654,30 @@ mod tests {
         assert_eq!(metadata.status, FrameProcessorReceiveStatus::Frame);
         assert_eq!(metadata.timings.submit_to_ready_us, Some(1_000_000));
         assert_eq!(metadata.source_frame_id, Some(1));
+    }
+
+    #[test]
+    fn marker_mode_uses_metadata_only_debug_capability_profile() {
+        let capabilities = diagnostic_capabilities(DiagnosticMode::Marker);
+
+        assert!(capabilities.supports_input_pipeline_profile(
+            &NativeFramePipelineProfile::Unknown("io_surface".to_owned())
+        ));
+        assert!(capabilities.supports_input_metadata(&sample_metadata()));
+    }
+
+    #[test]
+    fn diagnostic_counter_summary_reports_processing_state() {
+        let mut counters = DiagnosticCounters::default();
+        counters.record_process_time(100);
+        counters.record_process_time(300);
+        counters.backpressure = 1;
+
+        let summary = counters.summary();
+
+        assert!(summary.contains("processed=2"));
+        assert!(summary.contains("backpressure=1"));
+        assert!(summary.contains("avgProcessUs=200"));
+        assert!(summary.contains("maxProcessUs=300"));
     }
 }

@@ -104,7 +104,7 @@
 "example.resilience.cache_value" = "%@ · memory %@ / disk %@";
 
 "example.plugins.title" = "Plugin Diagnostics";
-"example.plugins.subtitle" = "SourceNormalizer can be switched from diagnostics/preflight into normalized playback routes. FrameProcessor is logged only as diagnostic capability.";
+"example.plugins.subtitle" = "Default playback remains AVPlayer. The SDK-managed Native Frame Pipeline is an explicit, hardware-first route through SourceNormalizer packets, VideoToolbox, optional FrameProcessor work, and Metal presentation.";
 "example.plugins.source_normalizer.disabled" = "SourceNormalizer Off";
 "example.plugins.source_normalizer.disabled_subtitle" = "The SourceNormalizer plugin is not loaded for playback probes.";
 "example.plugins.source_normalizer.diagnostics" = "Diagnostics";
@@ -117,17 +117,29 @@
 "example.plugins.source_normalizer.require_subtitle" = "Require disk-backed normalized playback and surface an error instead of falling back.";
 "example.plugins.source_normalizer.group" = "SourceNormalizer";
 "example.plugins.frame_processor.group" = "FrameProcessor Debug";
+"example.plugins.native_frame.group" = "SDK-managed Native Frame";
+"example.plugins.native_frame.disabled" = "Native frame off";
+"example.plugins.native_frame.disabled_subtitle" = "Use AVPlayer and keep the SDK-managed packet, hardware decode, processor, and presenter lane disabled.";
+"example.plugins.native_frame.diagnostics" = "Native diagnostics";
+"example.plugins.native_frame.diagnostics_subtitle" = "Report native-frame capability diagnostics without replacing AVPlayer playback.";
+"example.plugins.native_frame.prefer" = "Prefer native frame";
+"example.plugins.native_frame.prefer_subtitle" = "Try SourceNormalizer packet input, VideoToolbox hardware decode, FrameProcessor, and MetalLayer first; fall back to AVPlayer on failure.";
+"example.plugins.native_frame.require" = "Require native frame";
+"example.plugins.native_frame.require_subtitle" = "Require the SourceNormalizer packet, VideoToolbox hardware decode, FrameProcessor, and MetalLayer path; surface an error on failure.";
 "example.plugins.source_path" = "source";
+"example.plugins.decoder_path" = "decoder";
 "example.plugins.frame_path" = "frame";
 "example.plugins.missing" = "missing";
 "example.plugins.no_source_normalizer_diagnostics" = "No SourceNormalizer diagnostics yet.";
 "example.plugins.no_frame_processor_diagnostics" = "No FrameProcessor debug diagnostics yet.";
+"example.plugins.no_native_frame_diagnostics" = "No Native Frame Pipeline diagnostics yet.";
 "example.plugins.unknown_record" = "Plugin diagnostic";
 "example.plugins.participation" = "participation: %@";
 "example.plugins.profiles" = "profiles: %@";
 "example.plugins.route" = "route: %@";
 "example.plugins.cache" = "cache: %@";
 "example.plugins.resource" = "resource: %@";
+"example.plugins.native_frame_details" = "native-frame: %@";
 
 "example.message.preparing_selected_video" = "Preparing selected video...";
 "example.message.preparing_video_from_photos" = "Preparing video from Photos...";

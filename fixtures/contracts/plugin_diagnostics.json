@@ -6,6 +6,11 @@
     "status": "decoderSupported",
     "participation": "participated",
     "message": "fixture decoder loaded",
+    "details": {
+      "route": "sdkManagedNativeFrame",
+      "selectedVideoStreamIndex": "0",
+      "selectedVideoMediaKind": "video"
+    },
     "capability": {
       "kind": "decoder",
       "decoder": {
@@ -64,6 +69,22 @@
     "status": "sourceNormalizerSupported",
     "participation": "bypassed",
     "message": "fixture source normalizer preflight completed",
+    "details": {
+      "route": "sdkManagedNativeFrame",
+      "videoTracks": "1",
+      "audioTracks": "1",
+      "selectedVideoStreamIndex": "0",
+      "selectedVideoMediaKind": "video",
+      "selectedVideoCodec": "h264",
+      "audioStreamIndex": "1",
+      "audioMediaKind": "audio",
+      "audioTrackCodec": "aac",
+      "seekable": "true",
+      "durationMs": "1000",
+      "audioDecoderPlugin": "none",
+      "audioDecoderPluginReady": "false",
+      "audioDecoder": "none"
+    },
     "capability": {
       "kind": "sourceNormalizer",
       "sourceNormalizer": {

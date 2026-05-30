@@ -160,6 +160,23 @@ VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
 cargo run -p basic-player
 ```
 
+推荐的 macOS native-frame closed-loop smoke command：
+
+```sh
+VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libplayer_source_normalizer_ffmpeg.dylib \
+VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
+VESPER_DECODER_PLUGIN_PATHS=target/debug/libplayer_decoder_videotoolbox.dylib \
+VESPER_DECODER_PLUGIN_VIDEO_MODE=native-frame \
+VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagnostic.dylib \
+VESPER_FRAME_PROCESSOR_MODE=prefer-processed \
+VESPER_FRAME_PROCESSOR_DEBUG=1 \
+cargo run -p basic-player
+```
+
+这条路径中 SourceNormalizer 在 packet stream 交给 VideoToolbox native-frame
+decoder 和 presenter 之前应显示为 `selected`；真正交接成功后才应在
+diagnostics 中标记为 `participated`。
+
 FrameProcessor 默认仍建议作为 diagnostics / debug 路径使用，除非你在桌面端显式选择
 更严格的处理模式：
 
@@ -365,10 +382,13 @@ plugins 与 shared runtime 必须来自同一个 FFmpeg profile，保证
 移动端 SourceNormalizer artifact 可以做 diagnostics / preflight，并在
 `preferNormalized` 或 `requireNormalized` 下把 disk-backed fMP4 或
 short-window HLS 输出通过本地资源层交给 Android ExoPlayer 与 iOS AVPlayer。
-packet-stream 输出仍保留给后续 native frame pipeline。移动端 FrameProcessor
-artifact 仅是 diagnostics shell：可以打包、加载、上报 capability，但不会打开
-frame session、不会处理真实帧，也不会参与默认移动端播放。移动端 Decoder
-artifact 与配置继续暂停。
+packet-stream 输出用于显式开启的 native frame pipeline。当前
+`nativeFramePipelineConfiguration` 已经能在 iOS/Android 上暴露 route decision、
+decoder/presenter profile、fallback reason 与 counters；iOS 本地/VOD 已可显式走
+VideoToolbox、MetalLayer presentation 和 Swift native audio bridge。Android
+仍上报计划中的 MediaCodec/SurfaceView route，并在 packet lane 接线完成前回退系统
+播放器。`requireNativeFrame` 在目标 native-frame lane 不可用时会返回 capability
+error，不会静默改走默认播放。
 
 Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载物的 host app
 在其自身 Gradle / Xcode 构建中不会运行本仓库的 JNI 或 FFmpeg 生成任务。

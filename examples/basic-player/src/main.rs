@@ -46,11 +46,12 @@ use player_render_wgpu::{
 use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, FrameProcessorMode, MediaTrackCatalog,
     MediaTrackSelectionSnapshot, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo,
-    PlayerPluginCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot, PlayerTimelineKind,
-    PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState,
-    SourceNormalizerMode, VideoPixelFormat,
+    PlayerPlaybackRoute, PlayerPluginCapabilitySummary, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResilienceMetrics,
+    PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent,
+    PlayerRuntimeOptions, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
+    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState, SourceNormalizerMode,
+    VideoPixelFormat,
 };
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -80,6 +81,7 @@ const FRAME_PROCESSOR_MODE_ENV: &str = "VESPER_FRAME_PROCESSOR_MODE";
 const PLAYBACK_DEBUG_ENV: &str = "VESPER_PLAYBACK_DEBUG";
 const PLAYBACK_DEBUG_TRACE_ENV: &str = "VESPER_PLAYBACK_DEBUG_TRACE";
 const PLAYBACK_DEBUG_WINDOW_ENV: &str = "VESPER_PLAYBACK_DEBUG_WINDOW";
+const BASIC_PLAYER_SMOKE_SCRIPT_ENV: &str = "VESPER_BASIC_PLAYER_SMOKE_SCRIPT";
 const DEFAULT_PLAYBACK_DEBUG_WINDOW: u64 = 120;
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
@@ -219,6 +221,7 @@ struct DesktopPlayerApp {
     last_uploaded_frame_sequence: Option<u64>,
     playback_debug: PlaybackDebugState,
     last_pointer_overlay_refresh_at: Option<Instant>,
+    smoke_script: BasicPlayerSmokeScript,
 }
 
 #[derive(Debug)]
@@ -406,6 +409,51 @@ struct PlaybackDebugTickSample {
     external_surface: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BasicPlayerSmokeScriptStep {
+    WaitForPlayback,
+    ShowOverlay,
+    Pause,
+    Resume,
+    SeekMiddle,
+    RateUp,
+    Done,
+}
+
+#[derive(Debug)]
+struct BasicPlayerSmokeScript {
+    enabled: bool,
+    step: BasicPlayerSmokeScriptStep,
+    next_action_at: Option<Instant>,
+    started_at: Instant,
+}
+
+impl BasicPlayerSmokeScript {
+    fn from_env() -> Self {
+        Self {
+            enabled: env_flag(BASIC_PLAYER_SMOKE_SCRIPT_ENV),
+            step: BasicPlayerSmokeScriptStep::WaitForPlayback,
+            next_action_at: None,
+            started_at: Instant::now(),
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::from_env();
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        if self.enabled && self.step != BasicPlayerSmokeScriptStep::Done {
+            Some(
+                self.next_action_at
+                    .unwrap_or_else(|| Instant::now() + Duration::from_millis(100)),
+            )
+        } else {
+            None
+        }
+    }
+}
+
 impl DesktopPlayerApp {
     fn new(source: Option<String>) -> Self {
         let playlist_entries = source
@@ -471,6 +519,7 @@ impl DesktopPlayerApp {
             last_uploaded_frame_sequence: None,
             playback_debug: PlaybackDebugState::from_env(),
             last_pointer_overlay_refresh_at: None,
+            smoke_script: BasicPlayerSmokeScript::from_env(),
         }
     }
 
@@ -677,6 +726,7 @@ impl DesktopPlayerApp {
         self.playback_debug = PlaybackDebugState::from_env();
         self.last_pointer_overlay_refresh_at = None;
         self.pending_post_launch_play_paint_deadline = None;
+        self.smoke_script.reset();
     }
 
     fn replace_active_launch_cancel_flag(&mut self) -> Arc<AtomicBool> {
@@ -1775,6 +1825,106 @@ impl DesktopPlayerApp {
         Ok(true)
     }
 
+    fn run_smoke_script_if_due(&mut self) -> Result<bool> {
+        if !self.smoke_script.enabled {
+            return Ok(false);
+        }
+        let Some(runtime) = self.runtime.as_ref() else {
+            return Ok(false);
+        };
+        let snapshot = runtime.snapshot();
+        if snapshot.state == PresentationState::Finished {
+            self.smoke_script.step = BasicPlayerSmokeScriptStep::Done;
+            return Ok(false);
+        }
+        if self.smoke_script.step == BasicPlayerSmokeScriptStep::WaitForPlayback {
+            if snapshot.state == PresentationState::Playing
+                && snapshot.progress.position() > Duration::from_millis(100)
+            {
+                info!(
+                    position_secs = snapshot.progress.position().as_secs_f64(),
+                    external_surface = self.uses_external_video_surface,
+                    "basic-player smoke script observed playback"
+                );
+                self.smoke_script.step = BasicPlayerSmokeScriptStep::ShowOverlay;
+                self.smoke_script.next_action_at =
+                    Some(Instant::now() + Duration::from_millis(150));
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        if let Some(next_action_at) = self.smoke_script.next_action_at
+            && Instant::now() < next_action_at
+        {
+            return Ok(false);
+        }
+
+        match self.smoke_script.step {
+            BasicPlayerSmokeScriptStep::ShowOverlay => {
+                self.show_controls();
+                self.overlay_dirty = true;
+                self.refresh_overlay_ui_only()?;
+                info!(
+                    elapsed_ms = self.smoke_script.started_at.elapsed().as_millis(),
+                    "basic-player smoke script showed overlay"
+                );
+                self.smoke_script.step = BasicPlayerSmokeScriptStep::Pause;
+                self.smoke_script.next_action_at =
+                    Some(Instant::now() + Duration::from_millis(150));
+                Ok(true)
+            }
+            BasicPlayerSmokeScriptStep::Pause => {
+                self.perform_control_action_logged("smoke_script", ControlAction::TogglePause)?;
+                info!(
+                    elapsed_ms = self.smoke_script.started_at.elapsed().as_millis(),
+                    "basic-player smoke script paused playback"
+                );
+                self.smoke_script.step = BasicPlayerSmokeScriptStep::Resume;
+                self.smoke_script.next_action_at =
+                    Some(Instant::now() + Duration::from_millis(200));
+                Ok(true)
+            }
+            BasicPlayerSmokeScriptStep::Resume => {
+                self.perform_control_action_logged("smoke_script", ControlAction::TogglePause)?;
+                info!(
+                    elapsed_ms = self.smoke_script.started_at.elapsed().as_millis(),
+                    "basic-player smoke script resumed playback"
+                );
+                self.smoke_script.step = BasicPlayerSmokeScriptStep::SeekMiddle;
+                self.smoke_script.next_action_at =
+                    Some(Instant::now() + Duration::from_millis(200));
+                Ok(true)
+            }
+            BasicPlayerSmokeScriptStep::SeekMiddle => {
+                self.perform_control_action_logged(
+                    "smoke_script",
+                    ControlAction::SeekToRatio(0.5),
+                )?;
+                info!(
+                    elapsed_ms = self.smoke_script.started_at.elapsed().as_millis(),
+                    "basic-player smoke script seeked to midpoint"
+                );
+                self.smoke_script.step = BasicPlayerSmokeScriptStep::RateUp;
+                self.smoke_script.next_action_at =
+                    Some(Instant::now() + Duration::from_millis(150));
+                Ok(true)
+            }
+            BasicPlayerSmokeScriptStep::RateUp => {
+                self.perform_control_action_logged("smoke_script", ControlAction::SetRate(1.5))?;
+                info!(
+                    elapsed_ms = self.smoke_script.started_at.elapsed().as_millis(),
+                    "basic-player smoke script changed rate"
+                );
+                self.smoke_script.step = BasicPlayerSmokeScriptStep::Done;
+                self.smoke_script.next_action_at = None;
+                Ok(true)
+            }
+            BasicPlayerSmokeScriptStep::WaitForPlayback | BasicPlayerSmokeScriptStep::Done => {
+                Ok(false)
+            }
+        }
+    }
+
     fn open_media_source_with_label(
         &mut self,
         source: String,
@@ -2672,6 +2822,18 @@ impl ApplicationHandler for DesktopPlayerApp {
         let advance_elapsed_ms = advance_started_at.elapsed().as_millis();
 
         self.log_runtime_events();
+        match self.run_smoke_script_if_due() {
+            Ok(changed) => {
+                if changed {
+                    self.sync_ui_presenter();
+                }
+            }
+            Err(error) => {
+                error!(?error, "failed to run basic-player smoke script");
+                event_loop.exit();
+                return;
+            }
+        }
         self.update_window_title();
         if let Err(error) = self.refresh_ui_overlay_if_due() {
             error!(?error, "failed to refresh dirty overlay");
@@ -2681,6 +2843,7 @@ impl ApplicationHandler for DesktopPlayerApp {
         let controls_animation_deadline = self.controls_animation_deadline();
         let ui_overlay_deadline = self.ui_overlay_deadline();
         let runtime_next_deadline = self.runtime.as_ref().and_then(PlayerRuntime::next_deadline);
+        let smoke_script_deadline = self.smoke_script.next_deadline();
         self.observe_playback_debug_tick(frame_advanced, advance_elapsed_ms, runtime_next_deadline);
         if self.pending_launch_activation.is_some() || self.pending_post_launch_play {
             event_loop.set_control_flow(ControlFlow::Poll);
@@ -2696,6 +2859,9 @@ impl ApplicationHandler for DesktopPlayerApp {
                 if let Some(ui_overlay_deadline) = ui_overlay_deadline {
                     next_deadline = next_deadline.min(ui_overlay_deadline);
                 }
+                if let Some(smoke_script_deadline) = smoke_script_deadline {
+                    next_deadline = next_deadline.min(smoke_script_deadline);
+                }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if self.uses_external_video_surface {
                 let mut next_deadline = Instant::now() + NATIVE_SURFACE_POLL_INTERVAL;
@@ -2708,6 +2874,9 @@ impl ApplicationHandler for DesktopPlayerApp {
                 if let Some(ui_overlay_deadline) = ui_overlay_deadline {
                     next_deadline = next_deadline.min(ui_overlay_deadline);
                 }
+                if let Some(smoke_script_deadline) = smoke_script_deadline {
+                    next_deadline = next_deadline.min(smoke_script_deadline);
+                }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if let Some(hide_deadline) = self.controls_hide_deadline {
                 let mut next_deadline = controls_animation_deadline
@@ -2716,14 +2885,25 @@ impl ApplicationHandler for DesktopPlayerApp {
                 if let Some(ui_overlay_deadline) = ui_overlay_deadline {
                     next_deadline = next_deadline.min(ui_overlay_deadline);
                 }
+                if let Some(smoke_script_deadline) = smoke_script_deadline {
+                    next_deadline = next_deadline.min(smoke_script_deadline);
+                }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if let Some(animation_deadline) = controls_animation_deadline {
-                let next_deadline = ui_overlay_deadline
+                let mut next_deadline = ui_overlay_deadline
                     .map(|ui_overlay_deadline| animation_deadline.min(ui_overlay_deadline))
                     .unwrap_or(animation_deadline);
+                if let Some(smoke_script_deadline) = smoke_script_deadline {
+                    next_deadline = next_deadline.min(smoke_script_deadline);
+                }
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
             } else if let Some(ui_overlay_deadline) = ui_overlay_deadline {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(ui_overlay_deadline));
+                let next_deadline = smoke_script_deadline
+                    .map(|smoke_script_deadline| ui_overlay_deadline.min(smoke_script_deadline))
+                    .unwrap_or(ui_overlay_deadline);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
+            } else if let Some(smoke_script_deadline) = smoke_script_deadline {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(smoke_script_deadline));
             } else {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
@@ -2822,11 +3002,7 @@ fn plugin_diagnostics_summary(
         .iter()
         .filter(|record| {
             record.plugin_kind.as_deref() == Some("source_normalizer")
-                && record.status == PlayerPluginDiagnosticStatus::Loaded
-                && record
-                    .message
-                    .as_deref()
-                    .is_some_and(|message| message.contains("selected profile"))
+                && record.participation == PlayerPluginParticipation::Participated
         })
         .map(|record| {
             let name = record
@@ -2837,12 +3013,40 @@ fn plugin_diagnostics_summary(
             format!("{name}: {detail}")
         })
         .collect::<Vec<_>>();
-    if !supported_source_normalizers.is_empty() {
-        sections.push(format!(
-            "source normalizer: {}/{} participated ({})",
-            supported_source_normalizers.len(),
-            source_normalizer_total.max(supported_source_normalizers.len()),
+    let selected_source_normalizers = records
+        .iter()
+        .filter(|record| {
+            record.plugin_kind.as_deref() == Some("source_normalizer")
+                && record.participation == PlayerPluginParticipation::Selected
+        })
+        .map(|record| {
+            let name = record
+                .plugin_name
+                .as_deref()
+                .unwrap_or("unknown-source-normalizer");
+            let detail = record.message.as_deref().unwrap_or("selected");
+            format!("{name}: {detail}")
+        })
+        .collect::<Vec<_>>();
+    if !supported_source_normalizers.is_empty() || !selected_source_normalizers.is_empty() {
+        let state = if !supported_source_normalizers.is_empty() {
+            "participated"
+        } else {
+            "selected"
+        };
+        let details = if !supported_source_normalizers.is_empty() {
             supported_source_normalizers.join("; ")
+        } else {
+            selected_source_normalizers.join("; ")
+        };
+        sections.push(format!(
+            "source normalizer: {}/{} {state} ({details})",
+            supported_source_normalizers
+                .len()
+                .max(selected_source_normalizers.len()),
+            source_normalizer_total
+                .max(supported_source_normalizers.len())
+                .max(selected_source_normalizers.len()),
         ));
     }
 
@@ -2869,9 +3073,15 @@ fn plugin_diagnostics_summary(
         .collect::<Vec<_>>();
     if !supported_frame_processors.is_empty() {
         let participation_note = if decoder_plugin_selected_for_playback(video_decode) {
-            "available for selected native-frame route"
+            format!(
+                "available for selected {} route",
+                PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+            )
         } else {
-            "available but bypassed by the current decode route"
+            format!(
+                "available but bypassed by the selected {} route",
+                PlayerPlaybackRoute::SoftwareDecoder.wire_name()
+            )
         };
         sections.push(format!(
             "frame processor plugins: {}/{} supported ({}); {participation_note}",
@@ -2909,9 +3119,15 @@ fn plugin_diagnostics_summary(
         .collect::<Vec<_>>();
     if !supported_decoders.is_empty() {
         let playback_note = if decoder_plugin_selected_for_playback(video_decode) {
-            "selected/participated in the native-frame playback path"
+            format!(
+                "selected/participated in the {} route",
+                PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+            )
         } else {
-            "available; native-frame mode controls playback routing"
+            format!(
+                "available; {} mode controls playback routing",
+                PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+            )
         };
         sections.push(format!(
             "decoder plugins: {}/{} supported ({}); {playback_note}",
@@ -2954,7 +3170,7 @@ fn decoder_plugin_selected_for_playback(video_decode: Option<&PlayerVideoDecodeI
         .and_then(|info| info.fallback_reason.as_deref())
         .is_some_and(|reason| {
             reason.contains("decoder plugin `")
-                || reason.contains("selected desktop decoder plugin path")
+                || reason.contains("selected sdkManagedNativeFrame route")
                 || reason.contains("source normalizer packet stream selected")
         })
 }
@@ -3037,10 +3253,16 @@ mod tests {
         ControlAction, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL,
         DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus,
         decoder_plugin_video_mode_from_value, frame_processor_mode_from_value,
-        resolve_media_source_argument, source_normalizer_mode_from_value,
+        plugin_diagnostics_summary, resolve_media_source_argument,
+        source_normalizer_mode_from_value,
     };
     use player_render_wgpu::RenderFrameOutcome;
-    use player_runtime::{FrameProcessorMode, PlayerDecoderPluginVideoMode, SourceNormalizerMode};
+    use player_runtime::{
+        FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerPluginCapabilitySummary,
+        PlayerPluginCodecCapability, PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic,
+        PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerVideoDecodeInfo,
+        PlayerVideoDecodeMode, SourceNormalizerMode,
+    };
     use std::time::{Duration, Instant};
 
     #[test]
@@ -3133,6 +3355,88 @@ mod tests {
             frame_processor_mode_from_value(Some("strict".to_owned())),
             FrameProcessorMode::RequireProcessed
         );
+    }
+
+    #[test]
+    fn plugin_diagnostics_summary_uses_shared_route_labels_for_native_frame_selection() {
+        let records = vec![
+            decoder_diagnostic("fixture-decoder"),
+            PlayerPluginDiagnostic {
+                path: "/tmp/libprocessor.dylib".to_owned(),
+                plugin_name: Some("fixture-processor".to_owned()),
+                plugin_kind: Some("frame_processor".to_owned()),
+                status: PlayerPluginDiagnosticStatus::FrameProcessorSupported,
+                message: None,
+                capability: None,
+                participation: PlayerPluginParticipation::Available,
+                details: Vec::new(),
+            },
+        ];
+        let summary = plugin_diagnostics_summary(
+            &records,
+            Some(&PlayerVideoDecodeInfo {
+                selected_mode: PlayerVideoDecodeMode::Hardware,
+                hardware_available: true,
+                hardware_backend: Some("VideoToolbox".to_owned()),
+                fallback_reason: Some(
+                    "selected sdkManagedNativeFrame route via fixture-decoder".to_owned(),
+                ),
+            }),
+        )
+        .expect("plugin diagnostics summary");
+
+        assert!(summary.contains("available for selected sdkManagedNativeFrame route"));
+        assert!(summary.contains("selected/participated in the sdkManagedNativeFrame route"));
+    }
+
+    #[test]
+    fn plugin_diagnostics_summary_uses_software_decoder_route_when_native_frame_not_selected() {
+        let records = vec![decoder_diagnostic("fixture-decoder")];
+        let summary = plugin_diagnostics_summary(
+            &records,
+            Some(&PlayerVideoDecodeInfo {
+                selected_mode: PlayerVideoDecodeMode::Software,
+                hardware_available: false,
+                hardware_backend: None,
+                fallback_reason: Some("selected softwareDecoder route".to_owned()),
+            }),
+        )
+        .expect("plugin diagnostics summary");
+
+        assert!(
+            summary.contains("available; sdkManagedNativeFrame mode controls playback routing")
+        );
+    }
+
+    fn decoder_diagnostic(name: &str) -> PlayerPluginDiagnostic {
+        PlayerPluginDiagnostic {
+            path: format!("/tmp/lib{name}.dylib"),
+            plugin_name: Some(name.to_owned()),
+            plugin_kind: Some("decoder".to_owned()),
+            status: PlayerPluginDiagnosticStatus::DecoderSupported,
+            message: None,
+            capability: Some(PlayerPluginCapabilitySummary::Decoder(
+                PlayerPluginDecoderCapabilitySummary {
+                    codecs: vec![PlayerPluginCodecCapability {
+                        media_kind: "video".to_owned(),
+                        codec: "h264".to_owned(),
+                    }],
+                    legacy_codecs: vec!["h264".to_owned()],
+                    supports_native_frame_output: true,
+                    supports_hardware_decode: true,
+                    supports_cpu_video_frames: false,
+                    supports_audio_packets: false,
+                    supports_audio_frames: false,
+                    supports_pcm_frames: false,
+                    supports_gpu_handles: true,
+                    supports_flush: true,
+                    supports_drain: true,
+                    max_sessions: Some(1),
+                },
+            )),
+            participation: PlayerPluginParticipation::Available,
+            details: Vec::new(),
+        }
     }
 
     #[test]

@@ -429,6 +429,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             } else {
                 frameProcessorConfiguration = VesperFrameProcessorConfiguration()
             }
+            let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
+            if let nativeFramePipelineMap = try nestedMap(arguments["nativeFramePipeline"]) {
+                nativeFramePipelineConfiguration =
+                    nativeFramePipelineMap.toNativeFramePipelineConfiguration()
+            } else {
+                nativeFramePipelineConfiguration = VesperNativeFramePipelineConfiguration()
+            }
             let keepScreenOnDuringPlayback =
                 (arguments["keepScreenOnDuringPlayback"] as? Bool) ?? true
 
@@ -442,7 +449,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     keepScreenOnDuringPlayback: keepScreenOnDuringPlayback,
                     benchmarkConfiguration: benchmarkConfiguration,
                     sourceNormalizerConfiguration: sourceNormalizerConfiguration,
-                    frameProcessorConfiguration: frameProcessorConfiguration
+                    frameProcessorConfiguration: frameProcessorConfiguration,
+                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
                 ),
                 benchmarkConsoleLogging: benchmarkConfiguration.consoleLogging
             )

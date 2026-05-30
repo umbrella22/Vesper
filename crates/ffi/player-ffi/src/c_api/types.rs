@@ -246,6 +246,7 @@ pub enum PlayerFfiPluginParticipation {
     Selected = 2,
     Participated = 3,
     Bypassed = 4,
+    Fallback = 5,
 }
 
 /// Generation-checked initializer handle returned by `player_ffi_initializer_probe_uri`.
@@ -556,6 +557,10 @@ pub struct PlayerFfiPluginFrameProcessorCapabilitySummary {
     pub accepted_input_handle_kinds_len: usize,
     pub output_handle_kinds: *mut *mut c_char,
     pub output_handle_kinds_len: usize,
+    pub accepted_input_pipeline_profiles: *mut *mut c_char,
+    pub accepted_input_pipeline_profiles_len: usize,
+    pub output_pipeline_profiles: *mut *mut c_char,
+    pub output_pipeline_profiles_len: usize,
     pub supports_video_frames: bool,
     pub supports_in_place_passthrough: bool,
     pub preserves_dimensions: bool,

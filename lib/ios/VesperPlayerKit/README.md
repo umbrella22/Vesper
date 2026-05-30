@@ -309,11 +309,14 @@ shared `VesperPlayerFfmpegRuntime.xcframework.zip`; both artifacts must be
 built from the same FFmpeg profile so their `profile-hash.txt` values match.
 The SourceNormalizer plugin XCFramework must not contain FFmpeg dylibs.
 
-FrameProcessor mobile v1 is intentionally diagnostics-only.
-`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` can be embedded and
-probed for capabilities, but the iOS host kit does not open frame sessions,
-does not process AVPlayer frames, and never marks the plugin as participated in
-default mobile playback. Mobile decoder plugin artifacts remain deferred.
+FrameProcessor mobile remains explicit through
+`VesperNativeFramePipelineConfiguration`. The iOS host kit now exposes the
+native-frame route decision for SourceNormalizer packet input, VideoToolbox,
+MetalLayer presentation, Swift native audio bridge status, fallback reason, and
+frame counters. Local/VOD native-frame playback is explicitly opt-in:
+`preferNativeFrame` falls back to AVPlayer when the packet, decoder, surface, or
+presenter path cannot start, while `requireNativeFrame` reports a capability
+error. Default AVPlayer playback is unchanged.
 
 ## Testing The Package
 

@@ -163,6 +163,16 @@ pub(crate) fn decode_plugin_bytes<T: DeserializeOwned>(
     free_bytes: FreeBytesFn,
     context: *mut c_void,
 ) -> Result<T, PluginPayloadError> {
+    let bytes = plugin_bytes_into_vec(payload, free_bytes, context)?;
+
+    serde_json::from_slice(&bytes).map_err(Into::into)
+}
+
+pub(crate) fn plugin_bytes_into_vec(
+    payload: VesperPluginBytes,
+    free_bytes: FreeBytesFn,
+    context: *mut c_void,
+) -> Result<Vec<u8>, PluginPayloadError> {
     let payload_has_null_data = payload.data.is_null();
     let bytes = if payload_has_null_data || payload.len == 0 {
         Vec::new()
@@ -181,5 +191,5 @@ pub(crate) fn decode_plugin_bytes<T: DeserializeOwned>(
         return Err(PluginPayloadError::NullPayloadWithLength { len: payload.len });
     }
 
-    serde_json::from_slice(&bytes).map_err(Into::into)
+    Ok(bytes)
 }

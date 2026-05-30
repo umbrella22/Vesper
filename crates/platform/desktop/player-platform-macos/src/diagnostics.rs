@@ -32,8 +32,12 @@ pub(crate) fn macos_runtime_diagnostics(
 
     if let Some(registry) = decoder_plugin_registry(media_info, options) {
         let selected_decoder = selected_decoder_plugin_name(media_info, options, &registry);
-        video_decode =
-            apply_decoder_plugin_registry_to_video_decode(video_decode, media_info, &registry);
+        video_decode = apply_decoder_plugin_registry_to_video_decode(
+            video_decode,
+            media_info,
+            &registry,
+            selected_decoder.as_deref(),
+        );
         plugin_diagnostics.extend(registry.records().iter().map(|record| {
             player_plugin_diagnostic_from_record(
                 record,
@@ -85,6 +89,36 @@ pub(crate) fn append_plugin_diagnostics(
     startup
 }
 
+pub(crate) fn mark_plugin_diagnostics_fallback(
+    diagnostics: &mut [PlayerPluginDiagnostic],
+    fallback_reason: &str,
+) {
+    for diagnostic in diagnostics {
+        if matches!(
+            diagnostic.participation,
+            PlayerPluginParticipation::Selected | PlayerPluginParticipation::Participated
+        ) {
+            diagnostic.participation = PlayerPluginParticipation::Fallback;
+            diagnostic.message = Some(match diagnostic.message.take() {
+                Some(existing) if !existing.is_empty() => {
+                    format!("{existing}; fallbackReason={fallback_reason}")
+                }
+                _ => format!("fallbackReason={fallback_reason}"),
+            });
+            if !diagnostic
+                .details
+                .iter()
+                .any(|detail| detail.key == "fallbackReason")
+            {
+                diagnostic.details.push(PlayerPluginDiagnosticDetail {
+                    key: "fallbackReason".to_owned(),
+                    value: fallback_reason.to_owned(),
+                });
+            }
+        }
+    }
+}
+
 pub(crate) fn same_plugin_diagnostic(
     left: &PlayerPluginDiagnostic,
     right: &PlayerPluginDiagnostic,
@@ -94,6 +128,7 @@ pub(crate) fn same_plugin_diagnostic(
         && left.plugin_kind == right.plugin_kind
         && left.status == right.status
         && left.message == right.message
+        && left.details == right.details
 }
 
 pub(crate) fn macos_video_decode_info(media_info: &PlayerMediaInfo) -> PlayerVideoDecodeInfo {
@@ -108,10 +143,11 @@ pub(crate) fn macos_video_decode_info(media_info: &PlayerMediaInfo) -> PlayerVid
 
     let support = probe_videotoolbox_hardware_decode(&best_video.codec);
     let fallback_reason = if support.hardware_available {
-        Some(
-            "system VideoToolbox hardware decode support detected; Apple platforms should prefer the native backend, while the software desktop path remains available as fallback"
-                .to_owned(),
-        )
+        Some(format!(
+            "system VideoToolbox hardware decode support detected; Apple platforms should prefer the {} route, while the {} route remains available as fallback",
+            PlayerPlaybackRoute::SystemPlayer.wire_name(),
+            PlayerPlaybackRoute::SoftwareDecoder.wire_name()
+        ))
     } else {
         support.fallback_reason.clone()
     };
@@ -144,6 +180,7 @@ pub(crate) fn apply_decoder_plugin_diagnostics(
                 video_decode,
                 media_info,
                 &registry,
+                selected_decoder.as_deref(),
             ));
         }
     }
@@ -177,13 +214,20 @@ pub(crate) fn apply_decoder_plugin_diagnostics_to_video_decode(
     let Some(registry) = decoder_plugin_registry(media_info, options) else {
         return video_decode;
     };
-    apply_decoder_plugin_registry_to_video_decode(video_decode, media_info, &registry)
+    let selected_decoder = selected_decoder_plugin_name(media_info, options, &registry);
+    apply_decoder_plugin_registry_to_video_decode(
+        video_decode,
+        media_info,
+        &registry,
+        selected_decoder.as_deref(),
+    )
 }
 
 pub(crate) fn apply_decoder_plugin_registry_to_video_decode(
     mut video_decode: PlayerVideoDecodeInfo,
     media_info: &PlayerMediaInfo,
     registry: &PluginRegistry,
+    selected_decoder: Option<&str>,
 ) -> PlayerVideoDecodeInfo {
     if video_decode
         .fallback_reason
@@ -193,7 +237,7 @@ pub(crate) fn apply_decoder_plugin_registry_to_video_decode(
         return video_decode;
     }
 
-    if let Some(diagnostic) = decoder_plugin_diagnostic(media_info, registry) {
+    if let Some(diagnostic) = decoder_plugin_diagnostic(media_info, registry, selected_decoder) {
         video_decode.fallback_reason = Some(match video_decode.fallback_reason.take() {
             Some(existing) if !existing.is_empty() => format!("{existing}; {diagnostic}"),
             _ => diagnostic,
@@ -220,13 +264,15 @@ pub(crate) fn apply_native_frame_plugin_preference_to_video_decode(
 
     let reason = if options.decoder_plugin_library_paths.is_empty() {
         Some(format!(
-            "native-frame decoder plugin playback requested for {} video but no decoder plugin paths are configured; selected FFmpeg software path",
-            best_video.codec
+            "native-frame decoder plugin playback requested for {} video but no decoder plugin paths are configured; selected {} route",
+            best_video.codec,
+            PlayerPlaybackRoute::SoftwareDecoder.wire_name()
         ))
     } else if options.video_surface.is_none() {
         Some(format!(
-            "native-frame decoder plugin playback requested for {} video but no macOS video surface is available; selected FFmpeg software path",
-            best_video.codec
+            "native-frame decoder plugin playback requested for {} video but no macOS video surface is available; selected {} route",
+            best_video.codec,
+            PlayerPlaybackRoute::SoftwareDecoder.wire_name()
         ))
     } else {
         let request = DecoderPluginMatchRequest::video(best_video.codec.clone());
@@ -236,8 +282,9 @@ pub(crate) fn apply_native_frame_plugin_preference_to_video_decode(
         );
         (!registry.supports_native_decoder(&request)).then(|| {
             format!(
-                "native-frame decoder plugin playback requested for {} video but no matching native-frame decoder is available; selected FFmpeg software path",
-                best_video.codec
+                "native-frame decoder plugin playback requested for {} video but no matching native-frame decoder is available; selected {} route",
+                best_video.codec,
+                PlayerPlaybackRoute::SoftwareDecoder.wire_name()
             )
         })
     };
@@ -282,6 +329,7 @@ pub(crate) fn frame_processor_plugin_registry(
 pub(crate) fn decoder_plugin_diagnostic(
     media_info: &PlayerMediaInfo,
     registry: &PluginRegistry,
+    selected_decoder: Option<&str>,
 ) -> Option<String> {
     let best_video = media_info.best_video.as_ref()?;
     let request = DecoderPluginMatchRequest::video(best_video.codec.clone());
@@ -289,12 +337,28 @@ pub(crate) fn decoder_plugin_diagnostic(
     let supported_plugins = decoder_plugin_supported_labels(registry);
 
     if registry.supports_decoder(&request) {
+        let route_note = selected_decoder
+            .map(|decoder| {
+                let audio_note = macos_audio_decoder_readiness_note(media_info, registry);
+                format!(
+                    "selected {} route via {decoder}; {}; audioOutput=none; clockSource=video; presenter=macOS MetalLayer",
+                    PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
+                    audio_note
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "available for {} route; diagnostic-only until native-frame mode and surface select it",
+                    PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+                )
+            });
         return Some(format!(
-            "decoder plugin found {}/{} candidate(s) for {} video: {}; diagnostic-only, playback still uses native-first/FFmpeg fallback",
+            "decoder plugin found {}/{} candidate(s) for {} video: {}; {}",
             report.decoder_supported,
             report.total,
             best_video.codec,
-            supported_plugins.join(", ")
+            supported_plugins.join(", "),
+            route_note
         ));
     }
 
@@ -313,6 +377,27 @@ pub(crate) fn decoder_plugin_diagnostic(
             format!(" ({})", compact_notes.join("; "))
         }
     ))
+}
+
+pub(crate) fn macos_audio_decoder_readiness_note(
+    media_info: &PlayerMediaInfo,
+    registry: &PluginRegistry,
+) -> String {
+    let Some(audio) = media_info.best_audio.as_ref() else {
+        return "audioTrack=none; audioDecoderPlugin=none; audioDecoderPluginReady=false; audioDecoder=none".to_owned();
+    };
+    let request = DecoderPluginMatchRequest::audio(audio.codec.clone());
+    if let Some(record) = registry.best_pcm_audio_decoder_for(&request) {
+        let plugin = record.plugin_name.as_deref().unwrap_or("unknown-decoder");
+        return format!(
+            "audioTrackCodec={}; audioDecoderPlugin={plugin}; audioDecoderPluginReady=true; audioDecoder=none",
+            audio.codec
+        );
+    }
+    format!(
+        "audioTrackCodec={}; audioDecoderPlugin=none; audioDecoderPluginReady=false; audioDecoder=none",
+        audio.codec
+    )
 }
 
 pub(crate) fn decoder_plugin_supported_labels(registry: &PluginRegistry) -> Vec<String> {
@@ -388,38 +473,22 @@ pub(crate) fn player_plugin_diagnostic_from_record(
         path: record.path.display().to_string(),
         plugin_name: record.plugin_name.clone(),
         plugin_kind: record.plugin_kind.map(plugin_kind_label).map(str::to_owned),
-        status: match record.status {
-            PluginDiagnosticStatus::Loaded => PlayerPluginDiagnosticStatus::Loaded,
-            PluginDiagnosticStatus::LoadFailed => PlayerPluginDiagnosticStatus::LoadFailed,
-            PluginDiagnosticStatus::UnsupportedKind => {
-                PlayerPluginDiagnosticStatus::UnsupportedKind
-            }
-            PluginDiagnosticStatus::DecoderSupported => {
-                PlayerPluginDiagnosticStatus::DecoderSupported
-            }
-            PluginDiagnosticStatus::DecoderUnsupported => {
-                PlayerPluginDiagnosticStatus::DecoderUnsupported
-            }
-            PluginDiagnosticStatus::FrameProcessorSupported => {
-                PlayerPluginDiagnosticStatus::FrameProcessorSupported
-            }
-            PluginDiagnosticStatus::FrameProcessorUnsupported => {
-                PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
-            }
-            PluginDiagnosticStatus::SourceNormalizerSupported => {
-                PlayerPluginDiagnosticStatus::SourceNormalizerSupported
-            }
-            PluginDiagnosticStatus::SourceNormalizerUnsupported => {
-                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
-            }
-        },
+        status: runtime_status_from_loader(record.status),
         message: record.message.clone(),
         capability: record
             .capability_summary
             .as_ref()
             .and_then(player_plugin_capability_summary_from_loader),
         participation,
+        details: Vec::new(),
     }
+}
+
+pub(crate) fn runtime_status_from_loader(
+    status: PluginDiagnosticStatus,
+) -> PlayerPluginDiagnosticStatus {
+    PlayerPluginDiagnosticStatus::from_wire_name(status.wire_name())
+        .unwrap_or(PlayerPluginDiagnosticStatus::UnsupportedKind)
 }
 
 pub(crate) fn selected_decoder_plugin_name(
@@ -586,7 +655,9 @@ pub(crate) fn player_decoder_capability_summary_from_loader(
         supports_native_frame_output: summary.supports_native_frame_output,
         supports_hardware_decode: summary.supports_hardware_decode,
         supports_cpu_video_frames: summary.supports_cpu_video_frames,
+        supports_audio_packets: summary.supports_audio_packets,
         supports_audio_frames: summary.supports_audio_frames,
+        supports_pcm_frames: summary.supports_pcm_frames,
         supports_gpu_handles: summary.supports_gpu_handles,
         supports_flush: summary.supports_flush,
         supports_drain: summary.supports_drain,
@@ -620,6 +691,16 @@ pub(crate) fn player_frame_processor_capability_summary_from_loader(
             .output_handle_kinds
             .iter()
             .map(native_handle_kind_label)
+            .collect(),
+        accepted_input_pipeline_profiles: summary
+            .accepted_input_pipeline_profiles
+            .iter()
+            .map(|profile| profile.label())
+            .collect(),
+        output_pipeline_profiles: summary
+            .output_pipeline_profiles
+            .iter()
+            .map(|profile| profile.label())
             .collect(),
         supports_video_frames: summary.supports_video_frames,
         supports_in_place_passthrough: summary.supports_in_place_passthrough,

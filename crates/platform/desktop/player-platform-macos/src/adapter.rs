@@ -114,7 +114,8 @@ pub fn probe_macos_host_runtime_source_with_options(
             let mut startup = initializer.startup();
             if let Some(video_decode) = startup.video_decode.as_mut() {
                 video_decode.fallback_reason = Some(format!(
-                    "macos native host runtime probe failed; selected software desktop path: {}",
+                    "macos native host runtime probe failed; selected {} route: {}",
+                    PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                     native_error.message()
                 ));
             }
@@ -150,10 +151,10 @@ pub fn open_macos_host_runtime_source_with_options(
             options,
             Arc::new(AtomicBool::new(false)),
             normalization,
-            Some(
-                "source normalizer packet stream selected; routed to desktop decoder plugin path"
-                    .to_owned(),
-            ),
+            Some(format!(
+                "source normalizer packet stream selected; routed to {} route",
+                PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+            )),
         );
     }
 
@@ -185,7 +186,8 @@ pub fn open_macos_host_runtime_source_with_options(
                     source,
                     options,
                     Some(format!(
-                        "macos native host runtime failed to initialize; falling back to software desktop path: {}",
+                        "macos native host runtime failed to initialize; falling back to {} route: {}",
+                        PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                         native_error.message()
                     )),
                     normalization,
@@ -201,7 +203,8 @@ pub fn open_macos_host_runtime_source_with_options(
             source,
             options,
             Some(format!(
-                "macos native host runtime probe failed; selected software desktop path: {}",
+                "macos native host runtime probe failed; selected {} route: {}",
+                PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                 native_error.message()
             )),
             normalization,
@@ -229,10 +232,10 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
             options,
             interrupt_flag,
             normalization,
-            Some(
-                "source normalizer packet stream selected; routed to desktop decoder plugin path"
-                    .to_owned(),
-            ),
+            Some(format!(
+                "source normalizer packet stream selected; routed to {} route",
+                PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+            )),
         );
     }
 
@@ -265,7 +268,8 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
                     options,
                     interrupt_flag,
                     Some(format!(
-                        "macos native host runtime failed to initialize; falling back to software desktop path: {}",
+                        "macos native host runtime failed to initialize; falling back to {} route: {}",
+                        PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                         native_error.message()
                     )),
                     normalization,
@@ -288,7 +292,8 @@ pub fn open_macos_host_runtime_source_with_options_and_interrupt(
             options,
             interrupt_flag,
             Some(format!(
-                "macos native host runtime probe failed; selected software desktop path: {}",
+                "macos native host runtime probe failed; selected {} route: {}",
+                PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                 native_error.message()
             )),
             normalization,
@@ -344,6 +349,26 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
     let selected_plugin_name = selection
         .as_ref()
         .and_then(|selection| selection.plugin_name.clone());
+
+    if normalization.has_packet_stream() && selection.is_none() {
+        let message =
+            source_normalizer_packet_decoder_unavailable_message(&normalization, &options)
+                .unwrap_or_else(|| {
+                    "source normalizer packet stream did not find a matching native-frame decoder"
+                        .to_owned()
+                });
+        if options.source_normalizer_mode == SourceNormalizerMode::RequireNormalized {
+            return Err(PlayerError::new(PlayerErrorCode::Unsupported, message));
+        }
+        normalization
+            .diagnostics
+            .push(source_normalizer_runtime_diagnostic(
+                None,
+                message,
+                PlayerPluginParticipation::Bypassed,
+            ));
+        drop_source_normalizer_packet_session(&mut normalization);
+    }
 
     let open_result = match selection.clone() {
         Some(selection) if normalization.has_packet_stream() => {
@@ -434,7 +459,8 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
             apply_video_decode_fallback_reason(
                 &mut bootstrap.startup,
                 Some(format!(
-                    "source normalizer packet stream decoder plugin initialization failed; selected FFmpeg software path: {}",
+                    "source normalizer packet stream decoder plugin initialization failed; selected {} route: {}",
+                    PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                     native_error.message()
                 )),
             );
@@ -471,7 +497,8 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
             apply_video_decode_fallback_reason(
                 &mut bootstrap.startup,
                 Some(format!(
-                    "source normalizer packet stream did not find a matching decoder plugin; selected FFmpeg software path: {}",
+                    "source normalizer packet stream did not find a matching decoder plugin; selected {} route: {}",
+                    PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                     native_error.message()
                 )),
             );
@@ -487,7 +514,8 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
             apply_video_decode_fallback_reason(
                 &mut bootstrap.startup,
                 Some(format!(
-                    "native-frame decoder plugin initialization failed; selected FFmpeg software path: {}",
+                    "native-frame decoder plugin initialization failed; selected {} route: {}",
+                    PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                     native_error.message()
                 )),
             );
@@ -495,6 +523,12 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
         }
         (Err(error), None) => return Err(error),
     };
+    if normalization.has_packet_stream() {
+        mark_source_normalizer_packet_stream_participated(
+            &mut normalization,
+            selected_plugin_name.as_deref(),
+        );
+    }
     let mut diagnostics = macos_runtime_diagnostics(runtime.media_info(), &options);
     if runtime.capabilities().supports_hardware_decode
         && runtime.capabilities().supports_external_video_surface
@@ -508,9 +542,10 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
         .then(|| MacosRuntimeActiveFallback {
             source,
             options: options.clone(),
-            fallback_reason:
-                "native-frame runtime failed during playback; selected FFmpeg software path"
-                    .to_owned(),
+            fallback_reason: format!(
+                "native-frame runtime failed during playback; selected {} route",
+                PlayerPlaybackRoute::SoftwareDecoder.wire_name()
+            ),
         });
 
     Ok(PlayerRuntime::from_adapter_bootstrap(
@@ -711,15 +746,18 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
                     let fallback = MacosRuntimeAdapterFallback {
                         inner,
                         diagnostics: fallback_diagnostics,
-                        fallback_reason: "native-frame decoder plugin initialization failed; selected FFmpeg software path"
-                            .to_owned(),
+                        fallback_reason: format!(
+                            "native-frame decoder plugin initialization failed; selected {} route",
+                            PlayerPlaybackRoute::SoftwareDecoder.wire_name()
+                        ),
                     };
                     let runtime_fallback = MacosRuntimeActiveFallback {
                         source: source.clone(),
                         options: options.clone(),
-                        fallback_reason:
-                            "native-frame runtime failed during playback; selected FFmpeg software path"
-                                .to_owned(),
+                        fallback_reason: format!(
+                            "native-frame runtime failed during playback; selected {} route",
+                            PlayerPlaybackRoute::SoftwareDecoder.wire_name()
+                        ),
                     };
                     (Some(fallback), Some(runtime_fallback), None)
                 };
@@ -779,7 +817,8 @@ impl PlayerRuntimeAdapterInitializer for MacosHostRuntimeAdapterInitializer {
                     options,
                     software_fallback_factory.as_ref(),
                     Some(format!(
-                        "macos native host runtime failed to initialize; falling back to software desktop path: {}",
+                        "macos native host runtime failed to initialize; falling back to {} route: {}",
+                        PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
                         native_error.message()
                     )),
                 ),
@@ -1018,6 +1057,11 @@ impl MacosRuntimeAdapter {
             None,
         );
         apply_video_decode_fallback_reason(&mut bootstrap.startup, Some(fallback_reason.clone()));
+        mark_plugin_diagnostics_fallback(
+            &mut bootstrap.startup.plugin_diagnostics,
+            &fallback_reason,
+        );
+        let fallback_startup = bootstrap.startup.clone();
 
         let mut runtime = bootstrap.runtime;
         if !progress.position().is_zero() {
@@ -1042,6 +1086,8 @@ impl MacosRuntimeAdapter {
         self.has_video_surface = false;
         self.pending_runtime_fallback_events
             .extend(runtime_fallback_events(runtime_error_message));
+        self.pending_runtime_fallback_events
+            .push_back(PlayerRuntimeEvent::Initialized(fallback_startup));
 
         Ok(())
     }

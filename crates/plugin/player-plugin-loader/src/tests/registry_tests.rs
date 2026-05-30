@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn plugin_diagnostic_status_wire_names_match_runtime_contract() {
+    assert_eq!(PluginDiagnosticStatus::Loaded.wire_name(), "loaded");
+    assert_eq!(PluginDiagnosticStatus::LoadFailed.wire_name(), "loadFailed");
+    assert_eq!(
+        PluginDiagnosticStatus::UnsupportedKind.wire_name(),
+        "unsupportedKind"
+    );
+    assert_eq!(
+        PluginDiagnosticStatus::DecoderSupported.wire_name(),
+        "decoderSupported"
+    );
+    assert_eq!(
+        PluginDiagnosticStatus::DecoderUnsupported.wire_name(),
+        "decoderUnsupported"
+    );
+    assert_eq!(
+        PluginDiagnosticStatus::FrameProcessorSupported.wire_name(),
+        "frameProcessorSupported"
+    );
+    assert_eq!(
+        PluginDiagnosticStatus::FrameProcessorUnsupported.wire_name(),
+        "frameProcessorUnsupported"
+    );
+    assert_eq!(
+        PluginDiagnosticStatus::SourceNormalizerSupported.wire_name(),
+        "sourceNormalizerSupported"
+    );
+    assert_eq!(
+        PluginDiagnosticStatus::SourceNormalizerUnsupported.wire_name(),
+        "sourceNormalizerUnsupported"
+    );
+}
+
+#[test]
 fn plugin_registry_reports_missing_decoder_path() {
     let registry = PluginRegistry::inspect_decoder_support(
         [PathBuf::from("/tmp/missing-vesper-decoder-plugin")],
@@ -212,4 +246,120 @@ fn plugin_registry_prefers_native_decoder_candidates_when_requested() {
         Some(PluginCapabilitySummary::Decoder(capabilities))
             if capabilities.supports_native_frame_output
     ));
+}
+
+#[test]
+fn plugin_registry_selects_only_pcm_capable_audio_decoders() {
+    let packet_only = DecoderCapabilities {
+        codecs: vec![DecoderCodecCapability {
+            codec: "aac".to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+            profiles: Vec::new(),
+            output_formats: Vec::new(),
+        }],
+        supports_audio_frames: false,
+        ..DecoderCapabilities::default()
+    };
+    let packet_only_record = PluginDiagnosticRecord {
+        path: PathBuf::from("packet-only-audio-decoder"),
+        status: PluginDiagnosticStatus::DecoderSupported,
+        plugin_name: Some("packet-only-audio-decoder".to_owned()),
+        plugin_kind: Some(VesperPluginKind::Decoder),
+        capability_summary: Some(PluginCapabilitySummary::Decoder(
+            DecoderPluginCapabilitySummary::from(&packet_only),
+        )),
+        message: Some("packet-only-audio-decoder advertises Audio aac support".to_owned()),
+    };
+    let pcm = DecoderCapabilities {
+        codecs: vec![DecoderCodecCapability {
+            codec: "aac".to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+            profiles: Vec::new(),
+            output_formats: vec![DecoderFrameFormat::F32],
+        }],
+        supports_audio_frames: true,
+        ..DecoderCapabilities::default()
+    };
+    let pcm_record = PluginDiagnosticRecord {
+        path: PathBuf::from("pcm-audio-decoder"),
+        status: PluginDiagnosticStatus::DecoderSupported,
+        plugin_name: Some("pcm-audio-decoder".to_owned()),
+        plugin_kind: Some(VesperPluginKind::Decoder),
+        capability_summary: Some(PluginCapabilitySummary::Decoder(
+            DecoderPluginCapabilitySummary::from(&pcm),
+        )),
+        message: Some("pcm-audio-decoder advertises Audio aac support".to_owned()),
+    };
+    let registry = PluginRegistry::from_records(vec![packet_only_record, pcm_record]);
+    let request = DecoderPluginMatchRequest::audio("AAC");
+
+    assert!(registry.supports_decoder(&request));
+    assert!(registry.supports_pcm_audio_decoder(&request));
+    assert_eq!(
+        registry
+            .best_decoder_for(&request)
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("packet-only-audio-decoder")
+    );
+    assert_eq!(
+        registry
+            .best_pcm_audio_decoder_for(&request)
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("pcm-audio-decoder")
+    );
+    assert!(
+        !registry.supports_pcm_audio_decoder(&DecoderPluginMatchRequest::video("aac")),
+        "audio PCM selection must not match video requests"
+    );
+}
+
+#[test]
+fn decoder_capability_summary_distinguishes_audio_packets_from_pcm_frames() {
+    let packet_only = DecoderCapabilities {
+        codecs: vec![DecoderCodecCapability {
+            codec: "aac".to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+            profiles: Vec::new(),
+            output_formats: Vec::new(),
+        }],
+        supports_audio_frames: false,
+        ..DecoderCapabilities::default()
+    };
+    let packet_summary = DecoderPluginCapabilitySummary::from(&packet_only);
+
+    assert!(packet_summary.supports_audio_packets);
+    assert!(!packet_summary.supports_audio_frames);
+    assert!(!packet_summary.supports_pcm_frames);
+
+    let pcm = DecoderCapabilities {
+        codecs: vec![DecoderCodecCapability {
+            codec: "aac".to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+            profiles: Vec::new(),
+            output_formats: vec![DecoderFrameFormat::F32],
+        }],
+        supports_audio_frames: true,
+        ..DecoderCapabilities::default()
+    };
+    let pcm_summary = DecoderPluginCapabilitySummary::from(&pcm);
+
+    assert!(pcm_summary.supports_audio_packets);
+    assert!(pcm_summary.supports_audio_frames);
+    assert!(pcm_summary.supports_pcm_frames);
+
+    let video = DecoderCapabilities {
+        codecs: vec![DecoderCodecCapability {
+            codec: "h264".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            profiles: Vec::new(),
+            output_formats: vec![DecoderFrameFormat::Nv12],
+        }],
+        supports_audio_frames: true,
+        ..DecoderCapabilities::default()
+    };
+    let video_summary = DecoderPluginCapabilitySummary::from(&video);
+
+    assert!(!video_summary.supports_audio_packets);
+    assert!(video_summary.supports_audio_frames);
+    assert!(!video_summary.supports_pcm_frames);
 }

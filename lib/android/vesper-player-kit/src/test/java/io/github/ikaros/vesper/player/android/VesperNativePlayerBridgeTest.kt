@@ -206,6 +206,74 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun nativeFramePipelineConfigurationAddsDiagnosticsWithoutReplacingPlaybackSource() {
+        val initialSource =
+            VesperPlayerSource.remote(
+                uri = "https://example.com/video.mp4",
+                label = "MP4",
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            )
+        val bindings = FakeBindings()
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = initialSource,
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
+                        frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                        maxInFlightFrames = 2,
+                    ),
+            )
+
+        bridge.initialize()
+
+        assertEquals(initialSource, bindings.lastInitializedSource)
+        assertTrue(
+            bridge.pluginDiagnostics.any {
+                it["pluginKind"] == "native_frame_pipeline" &&
+                    it["participation"] == "fallbackOriginal" &&
+                    it["route"] == "fallbackOriginal" &&
+                    it["fallbackReason"].toString().contains("SourceNormalizer packet-stream")
+            }
+        )
+    }
+
+    @Test
+    fun requireNativeFramePipelineFailsWithoutInitializingSystemPlayback() {
+        val initialSource =
+            VesperPlayerSource.remote(
+                uri = "https://example.com/video.mp4",
+                label = "MP4",
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            )
+        val bindings = FakeBindings()
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = initialSource,
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.RequireNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
+                    ),
+            )
+
+        bridge.initialize()
+
+        assertNull(bindings.lastInitializedSource)
+        assertTrue(bridge.uiState.value.subtitle.contains("SourceNormalizer packet-stream"))
+        assertTrue(
+            bridge.pluginDiagnostics.any {
+                it["pluginKind"] == "native_frame_pipeline" &&
+                    it["participation"] == "fallbackOriginal" &&
+                    it["status"] == "unsupported"
+            }
+        )
+    }
+
+    @Test
     fun disposeClearsEffectiveVideoTrackIdImmediately() {
         val bindings =
             FakeBindings(

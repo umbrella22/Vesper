@@ -202,4 +202,92 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             ExampleI18n.qualityFixedSubtitlePending("720p")
         )
     }
+
+    func testNativeFrameDiagnosticDetailsExposeClockAudioSeekAndIssue() {
+        let summary = nativeFrameDiagnosticDetails([
+            "clockSource": "swiftNativeAudioBridge",
+            "audioDecoder": "swiftNativeAudioBridge",
+            "audioOutput": "swiftNativeAudioBridge",
+            "audioPipeline": "swiftNativeAudioBridgeV1",
+            "audioRateControl": "swiftNativeAudioBridgeTimePitch",
+            "selectedVideoStreamIndex": 0,
+            "selectedVideoMediaKind": "video",
+            "audioStreamIndex": 1,
+            "audioMediaKind": "audio",
+            "seekable": true,
+            "fallbackTargetRoute": "systemPlayer",
+            "issueKind": "missingSurface",
+        ])
+
+        XCTAssertEqual(
+            summary,
+            "clock=swiftNativeAudioBridge · audioDecoder=swiftNativeAudioBridge · audio=swiftNativeAudioBridge · audioPipeline=swiftNativeAudioBridgeV1 · rateControl=swiftNativeAudioBridgeTimePitch · video=video#0 · audioTrack=audio#1 · seekable=true · fallbackTarget=systemPlayer · issue=missingSurface"
+        )
+    }
+
+    func testPluginDiagnosticCountersExposeNativeFramePacketSkips() {
+        let counters = pluginDiagnosticCounters([
+            "processedFrames": 3,
+            "presentedFrames": 2,
+            "deadlineMisses": 1,
+            "backpressureCount": 4,
+            "lateDropped": 5,
+            "skippedAudioPackets": 6,
+            "skippedVideoPackets": 7,
+            "skippedOtherPackets": 8,
+        ])
+
+        XCTAssertEqual(
+            counters,
+            "processed 3 · presented 2 · deadline 1 · backpressure 4 · late 5 · skipAudio 6 · skipVideo 7 · skipOther 8"
+        )
+    }
+
+    func testPluginLabCopyFramesNativeFrameAsExplicitHardwareFirstRoute() {
+        let englishBundle = Bundle.main
+            .path(forResource: "en", ofType: "lproj")
+            .flatMap(Bundle.init(path:))
+        XCTAssertNotNil(englishBundle)
+        let subtitle = englishBundle?.localizedString(
+            forKey: "example.plugins.subtitle",
+            value: nil,
+            table: "Localizable"
+        ) ?? ""
+        let preferSubtitle = englishBundle?.localizedString(
+            forKey: "example.plugins.native_frame.prefer_subtitle",
+            value: nil,
+            table: "Localizable"
+        ) ?? ""
+        let requireSubtitle = englishBundle?.localizedString(
+            forKey: "example.plugins.native_frame.require_subtitle",
+            value: nil,
+            table: "Localizable"
+        ) ?? ""
+        let localizedSubtitle = ExampleI18n.pluginDiagnosticsSubtitle
+        let localizedPreferSubtitle = ExampleNativeFramePipelineSetting.preferNativeFrame.subtitle
+        let localizedRequireSubtitle = ExampleNativeFramePipelineSetting.requireNativeFrame.subtitle
+
+        XCTAssertTrue(subtitle.contains("Default playback remains AVPlayer"))
+        XCTAssertTrue(subtitle.contains("explicit"))
+        XCTAssertTrue(subtitle.contains("hardware-first"))
+        XCTAssertTrue(subtitle.contains("SourceNormalizer packets"))
+        XCTAssertTrue(subtitle.contains("VideoToolbox"))
+        XCTAssertTrue(subtitle.contains("Metal presentation"))
+        XCTAssertFalse(subtitle.localizedCaseInsensitiveContains("soft decode"))
+        XCTAssertFalse(subtitle.localizedCaseInsensitiveContains("software decoder"))
+
+        XCTAssertTrue(preferSubtitle.contains("VideoToolbox hardware decode"))
+        XCTAssertTrue(preferSubtitle.contains("fall back to AVPlayer"))
+        XCTAssertTrue(requireSubtitle.contains("surface an error on failure"))
+
+        XCTAssertTrue(localizedSubtitle.contains("AVPlayer"))
+        XCTAssertTrue(localizedSubtitle.contains("SourceNormalizer"))
+        XCTAssertTrue(localizedSubtitle.contains("VideoToolbox"))
+        XCTAssertTrue(localizedSubtitle.contains("Metal"))
+        XCTAssertFalse(localizedSubtitle.localizedCaseInsensitiveContains("soft decode"))
+        XCTAssertFalse(localizedSubtitle.localizedCaseInsensitiveContains("software decoder"))
+        XCTAssertTrue(localizedPreferSubtitle.contains("VideoToolbox"))
+        XCTAssertTrue(localizedPreferSubtitle.contains("AVPlayer"))
+        XCTAssertTrue(localizedRequireSubtitle.contains("VideoToolbox"))
+    }
 }

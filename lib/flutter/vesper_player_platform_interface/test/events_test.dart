@@ -22,6 +22,7 @@ void main() {
     expect(diagnostics[0].capability?.kind, VesperPluginCapabilityKind.decoder);
     expect(diagnostics[0].capability?.decoder?.codecs.single.codec, 'h264');
     expect(diagnostics[0].capability?.decoder?.supportsGpuHandles, isTrue);
+    expect(diagnostics[0].extra['details'], isA<Map>());
     expect(diagnostics[1].status,
         VesperPluginDiagnosticStatus.frameProcessorSupported);
     expect(diagnostics[1].capability?.kind,
@@ -47,6 +48,42 @@ void main() {
     );
     expect(
         diagnostics[2].capability?.sourceNormalizer?.requiresNetwork, isFalse);
+    final sourceNormalizerDetails =
+        Map<Object?, Object?>.from(diagnostics[2].extra['details'] as Map);
+    expect(sourceNormalizerDetails['selectedVideoStreamIndex'], '0');
+    expect(sourceNormalizerDetails['audioStreamIndex'], '1');
+    expect(sourceNormalizerDetails['route'], 'sdkManagedNativeFrame');
+  });
+
+  test('native frame pipeline diagnostic keeps unknown plugin kind extras', () {
+    final diagnostic = VesperPluginDiagnostic.fromMap(<Object?, Object?>{
+      'path': '/tmp/libdecoder.dylib:/tmp/libframe.dylib',
+      'pluginName': 'vesper-mobile-native-frame-pipeline',
+      'pluginKind': 'native_frame_pipeline',
+      'status': 'loaded',
+      'message': 'explicit native frame pipeline requested',
+      'participation': 'selected',
+      'pipelineProfile': 'VideoToolboxCvPixelBuffer',
+    });
+
+    expect(diagnostic.pluginKind, 'native_frame_pipeline');
+    expect(diagnostic.status, VesperPluginDiagnosticStatus.loaded);
+    expect(diagnostic.participation, VesperPluginParticipation.selected);
+    expect(diagnostic.extra['pipelineProfile'], 'VideoToolboxCvPixelBuffer');
+  });
+
+  test('plugin diagnostic decodes fallback participation', () {
+    final diagnostic = VesperPluginDiagnostic.fromMap(<Object?, Object?>{
+      'path': '/tmp/player-decoder-videotoolbox.dylib',
+      'pluginName': 'player-decoder-videotoolbox',
+      'pluginKind': 'decoder',
+      'status': 'decoderSupported',
+      'participation': 'fallback',
+      'message': 'native-frame runtime fell back to softwareDecoder route',
+    });
+
+    expect(diagnostic.participation, VesperPluginParticipation.fallback);
+    expect(diagnostic.message, contains('softwareDecoder'));
   });
 
   test('download task update event decodes prepared task', () {
@@ -234,6 +271,12 @@ void main() {
             'frameProcessor': <Object?, Object?>{
               'acceptedInputHandleKinds': <String>['CvPixelBuffer'],
               'outputHandleKinds': <String>['CvPixelBuffer'],
+              'acceptedInputPipelineProfiles': <String>[
+                'video_toolbox_cv_pixel_buffer',
+              ],
+              'outputPipelineProfiles': <String>[
+                'video_toolbox_cv_pixel_buffer',
+              ],
               'supportsVideoFrames': true,
               'supportsInPlacePassthrough': true,
               'preservesDimensions': true,
@@ -307,6 +350,11 @@ void main() {
       'CvPixelBuffer',
     );
     expect(
+      frameProcessor
+          .capability?.frameProcessor?.acceptedInputPipelineProfiles.single,
+      'video_toolbox_cv_pixel_buffer',
+    );
+    expect(
       frameProcessor.capability?.frameProcessor?.maxInFlightFrames,
       4,
     );
@@ -349,6 +397,14 @@ void main() {
       mode: VesperFrameProcessorMode.diagnosticsOnly,
       pluginLibraryPaths: <String>['/tmp/libplayer_frame_processor.dylib'],
     );
+    const nativeFramePipeline = VesperNativeFramePipelineConfiguration(
+      mode: VesperNativeFramePipelineMode.preferNativeFrame,
+      decoderPluginLibraryPaths: <String>['/tmp/libplayer_decoder.dylib'],
+      frameProcessorPluginLibraryPaths: <String>[
+        '/tmp/libplayer_frame_processor.dylib'
+      ],
+      maxInFlightFrames: 2,
+    );
 
     expect(
       VesperSourceNormalizerConfiguration.fromMap(sourceNormalizer.toMap())
@@ -358,6 +414,18 @@ void main() {
     expect(
       VesperFrameProcessorConfiguration.fromMap(frameProcessor.toMap()).mode,
       VesperFrameProcessorMode.diagnosticsOnly,
+    );
+    expect(
+      VesperNativeFramePipelineConfiguration.fromMap(
+        nativeFramePipeline.toMap(),
+      ).mode,
+      VesperNativeFramePipelineMode.preferNativeFrame,
+    );
+    expect(
+      VesperNativeFramePipelineConfiguration.fromMap(
+        nativeFramePipeline.toMap(),
+      ).maxInFlightFrames,
+      2,
     );
   });
 }

@@ -7,11 +7,12 @@ use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrameMetadata,
     DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderNativeRequirements,
-    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-    DecoderSessionConfig, DecoderSessionInfo, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderPcmFrameMetadata,
+    DecoderPcmSampleLayout, DecoderReceiveNativeFrameMetadata, DecoderReceivePcmFrameMetadata,
+    DecoderSessionConfig, DecoderSessionInfo, NativeFramePipelineProfile,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_V4, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV4,
+    VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult, VesperPluginBytes,
+    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-decoder-fixture\0";
@@ -19,12 +20,14 @@ const CONFIGURED_CODECS_ENV: &str = "VESPER_DECODER_FIXTURE_CODECS";
 const DEFAULT_VIDEO_CODEC: &str = "fixture-video";
 
 struct NativePluginBundle {
-    api: VesperDecoderPluginApiV2,
+    api: VesperDecoderPluginApiV4,
     descriptor: VesperPluginDescriptor,
 }
 
 #[derive(Debug, Default)]
 struct FixtureDecoderSession {
+    codec: String,
+    media_kind: DecoderMediaKind,
     last_pts_us: Option<i64>,
     pending_frame: Option<Vec<u8>>,
 }
@@ -36,7 +39,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 
 fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(NativePluginBundle {
-        api: VesperDecoderPluginApiV2 {
+        api: VesperDecoderPluginApiV4 {
             context: std::ptr::null_mut(),
             destroy: None,
             name: Some(decoder_name),
@@ -49,15 +52,16 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             release_native_frame: Some(decoder_release_native_frame),
             flush_session: Some(decoder_flush_session),
             close_session: Some(decoder_close_session),
+            receive_pcm_frame: Some(decoder_receive_pcm_frame),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
     });
-    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV2).cast::<c_void>();
+    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV4).cast::<c_void>();
     let bundle = Box::leak(bundle);
     &bundle.descriptor
 }
@@ -74,7 +78,9 @@ unsafe extern "C" fn native_decoder_capabilities_json(_context: *mut c_void) -> 
         capabilities.supports_cpu_video_frames = false;
         capabilities.supports_gpu_handles = true;
         for codec in &mut capabilities.codecs {
-            codec.output_formats = vec![DecoderFrameFormat::Nv12];
+            if codec.media_kind == DecoderMediaKind::Video {
+                codec.output_formats = vec![DecoderFrameFormat::Nv12];
+            }
         }
         serialize_payload(&capabilities)
     })
@@ -85,6 +91,9 @@ unsafe extern "C" fn native_decoder_requirements_json(_context: *mut c_void) -> 
         serialize_payload(&DecoderNativeRequirements {
             required_device_context_kinds: Vec::new(),
             output_handle_kinds: vec![DecoderNativeHandleKind::IoSurface],
+            output_pipeline_profiles: vec![NativeFramePipelineProfile::Unknown(
+                "io_surface".to_owned(),
+            )],
             requires_native_device_context: false,
             accepted_bitstream_formats: vec![DecoderBitstreamFormat::Unknown("fixture".to_owned())],
         })
@@ -107,11 +116,20 @@ unsafe extern "C" fn native_decoder_open_session_json(
             });
         }
 
-        let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
+        let output_format = match config.media_kind {
+            DecoderMediaKind::Audio => DecoderFrameFormat::F32,
+            DecoderMediaKind::Video => DecoderFrameFormat::Nv12,
+        };
+        let session = Box::into_raw(Box::new(FixtureDecoderSession {
+            codec: config.codec,
+            media_kind: config.media_kind,
+            last_pts_us: None,
+            pending_frame: None,
+        }));
         let info = DecoderSessionInfo {
             decoder_name: Some("player-decoder-fixture".to_owned()),
             selected_hardware_backend: Some("fixture-native".to_owned()),
-            output_format: Some(DecoderFrameFormat::Nv12),
+            output_format: Some(output_format),
         };
 
         VesperDecoderOpenSessionResult {
@@ -170,6 +188,11 @@ unsafe extern "C" fn decoder_receive_native_frame(
         let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
             return native_frame_error(DecoderError::NotConfigured);
         };
+        if session.media_kind != DecoderMediaKind::Video {
+            return native_frame_error(DecoderError::UnsupportedCapability {
+                capability: "video-native-frame-output".to_owned(),
+            });
+        }
         let Some(data) = session.pending_frame.take() else {
             return native_frame_success(&DecoderReceiveNativeFrameMetadata::need_more_input(), 0);
         };
@@ -177,7 +200,7 @@ unsafe extern "C" fn decoder_receive_native_frame(
         let metadata = DecoderNativeFrameMetadata {
             media_kind: DecoderMediaKind::Video,
             format: DecoderFrameFormat::Nv12,
-            codec: DEFAULT_VIDEO_CODEC.to_owned(),
+            codec: session.codec.clone(),
             pts_us: session.last_pts_us,
             duration_us: Some(33_333),
             width: 2,
@@ -186,6 +209,11 @@ unsafe extern "C" fn decoder_receive_native_frame(
             coded_height: Some(2),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::IoSurface,
+            pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
+            color_space: None,
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
             frame_id: Some(handle as u64),
             release_tracking: Some(DecoderNativeFrameReleaseTracking {
                 frame_id: Some(handle as u64),
@@ -193,6 +221,39 @@ unsafe extern "C" fn decoder_receive_native_frame(
             }),
         };
         native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), handle)
+    })
+}
+
+unsafe extern "C" fn decoder_receive_pcm_frame(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperDecoderReceivePcmFrameResult {
+    catch_decoder_pcm_frame(|| {
+        // SAFETY: `session` is the opaque pointer returned by this plugin's
+        // open callback and remains owned by the host until close.
+        let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+            return pcm_frame_error(DecoderError::NotConfigured);
+        };
+        if session.media_kind != DecoderMediaKind::Audio {
+            return pcm_frame_error(DecoderError::UnsupportedCapability {
+                capability: "audio-pcm-output".to_owned(),
+            });
+        }
+        let Some(data) = session.pending_frame.take() else {
+            return pcm_frame_success(&DecoderReceivePcmFrameMetadata::need_more_input(), None);
+        };
+        let mut metadata = DecoderPcmFrameMetadata::audio(
+            session.codec.clone(),
+            DecoderFrameFormat::F32,
+            48_000,
+            2,
+            DecoderPcmSampleLayout::Interleaved,
+            1_024,
+        );
+        metadata.pts_us = session.last_pts_us;
+        metadata.duration_us = Some(21_333);
+        metadata.channel_layout = Some("stereo".to_owned());
+        pcm_frame_success(&DecoderReceivePcmFrameMetadata::frame(metadata), Some(data))
     })
 }
 
@@ -254,11 +315,18 @@ unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPlu
 }
 
 fn decoder_capabilities() -> DecoderCapabilities {
+    let mut codecs = configured_video_codecs();
+    codecs.push(DecoderCodecCapability {
+        codec: "fixture-audio".to_owned(),
+        media_kind: DecoderMediaKind::Audio,
+        profiles: vec!["fixture".to_owned()],
+        output_formats: vec![DecoderFrameFormat::F32],
+    });
     DecoderCapabilities {
-        codecs: configured_video_codecs(),
+        codecs,
         supports_hardware_decode: false,
         supports_cpu_video_frames: true,
-        supports_audio_frames: false,
+        supports_audio_frames: true,
         supports_gpu_handles: false,
         supports_flush: true,
         supports_drain: true,
@@ -370,6 +438,27 @@ fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameRes
     }
 }
 
+fn pcm_frame_success(
+    metadata: &DecoderReceivePcmFrameMetadata,
+    data: Option<Vec<u8>>,
+) -> VesperDecoderReceivePcmFrameResult {
+    VesperDecoderReceivePcmFrameResult {
+        status: VesperPluginResultStatus::Success,
+        metadata: serialize_payload(metadata),
+        data: data
+            .map(VesperPluginBytes::from_vec)
+            .unwrap_or_else(VesperPluginBytes::null),
+    }
+}
+
+fn pcm_frame_error(error: DecoderError) -> VesperDecoderReceivePcmFrameResult {
+    VesperDecoderReceivePcmFrameResult {
+        status: VesperPluginResultStatus::Failure,
+        metadata: serialize_payload(&error),
+        data: VesperPluginBytes::null(),
+    }
+}
+
 fn catch_decoder_bytes(f: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| serialize_payload(&plugin_panic_error()))
 }
@@ -392,6 +481,12 @@ fn catch_decoder_native_frame(
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| native_frame_error(plugin_panic_error()))
 }
 
+fn catch_decoder_pcm_frame(
+    f: impl FnOnce() -> VesperDecoderReceivePcmFrameResult,
+) -> VesperDecoderReceivePcmFrameResult {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| pcm_frame_error(plugin_panic_error()))
+}
+
 fn plugin_panic_error() -> DecoderError {
     DecoderError::internal("decoder plugin callback panicked")
 }
@@ -399,12 +494,14 @@ fn plugin_panic_error() -> DecoderError {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_VIDEO_CODEC, FixtureDecoderSession, decoder_send_packet, vesper_plugin_entry,
-        video_codecs_from_configured_list,
+        DEFAULT_VIDEO_CODEC, FixtureDecoderSession, decoder_capabilities,
+        decoder_receive_pcm_frame, decoder_send_packet, native_decoder_open_session_json,
+        vesper_plugin_entry, video_codecs_from_configured_list,
     };
     use player_plugin::{
-        DecoderError, DecoderPacket, VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperPluginKind,
-        VesperPluginResultStatus,
+        DecoderError, DecoderFrameFormat, DecoderMediaKind, DecoderPacket,
+        DecoderReceiveFrameStatus, DecoderReceivePcmFrameMetadata, DecoderSessionConfig,
+        VESPER_DECODER_PLUGIN_ABI_VERSION_V4, VesperPluginKind, VesperPluginResultStatus,
     };
     use std::ffi::c_void;
 
@@ -414,7 +511,7 @@ mod tests {
         // pointer or null; this test immediately borrows it.
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
-        assert_eq!(descriptor.abi_version, VESPER_DECODER_PLUGIN_ABI_VERSION_V3);
+        assert_eq!(descriptor.abi_version, VESPER_DECODER_PLUGIN_ABI_VERSION_V4);
         assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());
@@ -437,6 +534,54 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["H264", "HEVC"]);
+    }
+
+    #[test]
+    fn decoder_capabilities_advertise_audio_pcm_contract() {
+        let capabilities = decoder_capabilities();
+
+        assert!(capabilities.supports_audio_frames);
+        assert!(capabilities.supports_codec("fixture-audio", DecoderMediaKind::Audio));
+        assert!(capabilities.codecs.iter().any(|codec| {
+            codec.codec == "fixture-audio"
+                && codec.media_kind == DecoderMediaKind::Audio
+                && codec.output_formats == vec![DecoderFrameFormat::F32]
+        }));
+        assert!(capabilities.codecs.iter().any(|codec| {
+            codec.codec == DEFAULT_VIDEO_CODEC
+                && codec.media_kind == DecoderMediaKind::Video
+                && codec.output_formats == vec![DecoderFrameFormat::Rgba8888]
+        }));
+    }
+
+    #[test]
+    fn open_session_reports_pcm_output_for_audio_config() {
+        let config = DecoderSessionConfig {
+            codec: "fixture-audio".to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+            ..DecoderSessionConfig::default()
+        };
+        let config_json = serde_json::to_vec(&config).expect("config json");
+
+        // SAFETY: all pointers passed to the callback are valid for this
+        // synchronous test call.
+        let result = unsafe {
+            native_decoder_open_session_json(
+                std::ptr::null_mut(),
+                config_json.as_ptr(),
+                config_json.len(),
+            )
+        };
+
+        assert_eq!(result.status, VesperPluginResultStatus::Success);
+        assert!(!result.session.is_null());
+        // SAFETY: the payload was produced by this fixture and is consumed once.
+        let payload = unsafe { result.payload.into_vec() };
+        let info =
+            serde_json::from_slice::<player_plugin::DecoderSessionInfo>(&payload).expect("info");
+        assert_eq!(info.output_format, Some(DecoderFrameFormat::F32));
+        // SAFETY: the session pointer was allocated by the open callback above.
+        let _ = unsafe { Box::from_raw(result.session.cast::<FixtureDecoderSession>()) };
     }
 
     #[test]
@@ -463,5 +608,56 @@ mod tests {
         let payload = unsafe { result.payload.into_vec() };
         let error = serde_json::from_slice::<DecoderError>(&payload).expect("decoder error");
         assert!(matches!(error, DecoderError::AbiViolation { .. }));
+    }
+
+    #[test]
+    fn receive_pcm_frame_round_trips_pending_audio_packet() {
+        let mut session = FixtureDecoderSession {
+            codec: "fixture-audio".to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+            last_pts_us: Some(7_000),
+            pending_frame: Some(vec![1, 2, 3, 4]),
+        };
+
+        // SAFETY: the session pointer is valid for this synchronous test call.
+        let result = unsafe {
+            decoder_receive_pcm_frame(
+                std::ptr::null_mut(),
+                (&mut session as *mut FixtureDecoderSession).cast::<c_void>(),
+            )
+        };
+
+        assert_eq!(result.status, VesperPluginResultStatus::Success);
+        // SAFETY: fixture payload ownership is transferred to this test.
+        let metadata_payload = unsafe { result.metadata.into_vec() };
+        let metadata = serde_json::from_slice::<DecoderReceivePcmFrameMetadata>(&metadata_payload)
+            .expect("pcm metadata");
+        assert_eq!(metadata.status, DecoderReceiveFrameStatus::Frame);
+        let frame = metadata.frame.expect("pcm frame metadata");
+        assert_eq!(frame.media_kind, DecoderMediaKind::Audio);
+        assert_eq!(frame.codec, "fixture-audio");
+        assert_eq!(frame.format, DecoderFrameFormat::F32);
+        assert_eq!(frame.pts_us, Some(7_000));
+        assert_eq!(frame.duration_us, Some(21_333));
+        assert_eq!(frame.sample_rate, 48_000);
+        assert_eq!(frame.channels, 2);
+        assert_eq!(frame.channel_layout.as_deref(), Some("stereo"));
+        // SAFETY: fixture payload ownership is transferred to this test.
+        let data = unsafe { result.data.into_vec() };
+        assert_eq!(data, vec![1, 2, 3, 4]);
+
+        // SAFETY: the same session remains valid for this synchronous test call.
+        let result = unsafe {
+            decoder_receive_pcm_frame(
+                std::ptr::null_mut(),
+                (&mut session as *mut FixtureDecoderSession).cast::<c_void>(),
+            )
+        };
+        assert_eq!(result.status, VesperPluginResultStatus::Success);
+        // SAFETY: fixture payload ownership is transferred to this test.
+        let metadata_payload = unsafe { result.metadata.into_vec() };
+        let metadata = serde_json::from_slice::<DecoderReceivePcmFrameMetadata>(&metadata_payload)
+            .expect("need more metadata");
+        assert_eq!(metadata.status, DecoderReceiveFrameStatus::NeedMoreInput);
     }
 }

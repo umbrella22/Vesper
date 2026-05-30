@@ -1143,6 +1143,7 @@ fn decoder_packet_from_compressed_packet(packet: &CompressedVideoPacket) -> Deco
         dts_us: packet.dts_us,
         duration_us: packet.duration_us,
         stream_index: packet.stream_index,
+        media_kind: DecoderMediaKind::Video,
         key_frame: packet.key_frame,
         discontinuity: packet.discontinuity,
         end_of_stream: false,
@@ -1610,31 +1611,7 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
         path: record.path.display().to_string(),
         plugin_name: record.plugin_name.clone(),
         plugin_kind: record.plugin_kind.map(plugin_kind_label).map(str::to_owned),
-        status: match record.status {
-            PluginDiagnosticStatus::Loaded => PlayerPluginDiagnosticStatus::Loaded,
-            PluginDiagnosticStatus::LoadFailed => PlayerPluginDiagnosticStatus::LoadFailed,
-            PluginDiagnosticStatus::UnsupportedKind => {
-                PlayerPluginDiagnosticStatus::UnsupportedKind
-            }
-            PluginDiagnosticStatus::DecoderSupported => {
-                PlayerPluginDiagnosticStatus::DecoderSupported
-            }
-            PluginDiagnosticStatus::DecoderUnsupported => {
-                PlayerPluginDiagnosticStatus::DecoderUnsupported
-            }
-            PluginDiagnosticStatus::FrameProcessorSupported => {
-                PlayerPluginDiagnosticStatus::FrameProcessorSupported
-            }
-            PluginDiagnosticStatus::FrameProcessorUnsupported => {
-                PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
-            }
-            PluginDiagnosticStatus::SourceNormalizerSupported => {
-                PlayerPluginDiagnosticStatus::SourceNormalizerSupported
-            }
-            PluginDiagnosticStatus::SourceNormalizerUnsupported => {
-                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
-            }
-        },
+        status: runtime_status_from_loader(record.status),
         message: record.message.clone(),
         capability: record
             .capability_summary
@@ -1645,7 +1622,13 @@ fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> Play
         } else {
             PlayerPluginParticipation::Unknown
         },
+        details: Vec::new(),
     }
+}
+
+fn runtime_status_from_loader(status: PluginDiagnosticStatus) -> PlayerPluginDiagnosticStatus {
+    PlayerPluginDiagnosticStatus::from_wire_name(status.wire_name())
+        .unwrap_or(PlayerPluginDiagnosticStatus::UnsupportedKind)
 }
 
 fn player_plugin_capability_summary_from_loader(
@@ -1758,7 +1741,9 @@ fn player_decoder_capability_summary_from_loader(
         supports_native_frame_output: summary.supports_native_frame_output,
         supports_hardware_decode: summary.supports_hardware_decode,
         supports_cpu_video_frames: summary.supports_cpu_video_frames,
+        supports_audio_packets: summary.supports_audio_packets,
         supports_audio_frames: summary.supports_audio_frames,
+        supports_pcm_frames: summary.supports_pcm_frames,
         supports_gpu_handles: summary.supports_gpu_handles,
         supports_flush: summary.supports_flush,
         supports_drain: summary.supports_drain,
@@ -1792,6 +1777,16 @@ fn player_frame_processor_capability_summary_from_loader(
             .output_handle_kinds
             .iter()
             .map(native_handle_kind_label)
+            .collect(),
+        accepted_input_pipeline_profiles: summary
+            .accepted_input_pipeline_profiles
+            .iter()
+            .map(|profile| profile.label())
+            .collect(),
+        output_pipeline_profiles: summary
+            .output_pipeline_profiles
+            .iter()
+            .map(|profile| profile.label())
             .collect(),
         supports_video_frames: summary.supports_video_frames,
         supports_in_place_passthrough: summary.supports_in_place_passthrough,
@@ -1924,7 +1919,7 @@ mod tests {
         WindowsNativeFrameBackendKind, WindowsNativeFramePresenter, WindowsRuntimeActiveFallback,
         WindowsRuntimeAdapter, WindowsSoftwarePlayerRuntimeAdapterFactory,
         WindowsSurfaceAttachTarget, open_windows_host_runtime_source_with_options,
-        probe_windows_host_runtime_source_with_options,
+        probe_windows_host_runtime_source_with_options, runtime_status_from_loader,
         select_windows_native_frame_candidate_from_registry, send_windows_native_packet,
         windows_native_frame_poll_with_presenter, windows_native_frame_roadmap,
         windows_runtime_diagnostics,
@@ -1942,10 +1937,11 @@ mod tests {
         PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     };
     use player_runtime::{
-        PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerResult,
-        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
-        PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+        PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerPluginDiagnosticStatus,
+        PlayerResult, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
+        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
+        PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+        PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
     };
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -2107,6 +2103,46 @@ mod tests {
         assert!(fallback.contains("selected FFmpeg software path"));
         assert!(fallback.contains("D3D11Texture2D"));
         assert!(fallback.contains("DxgiSurface"));
+    }
+
+    #[test]
+    fn windows_loader_statuses_convert_through_shared_wire_contract() {
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::Loaded),
+            PlayerPluginDiagnosticStatus::Loaded
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::LoadFailed),
+            PlayerPluginDiagnosticStatus::LoadFailed
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::UnsupportedKind),
+            PlayerPluginDiagnosticStatus::UnsupportedKind
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::DecoderSupported),
+            PlayerPluginDiagnosticStatus::DecoderSupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::DecoderUnsupported),
+            PlayerPluginDiagnosticStatus::DecoderUnsupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::FrameProcessorSupported),
+            PlayerPluginDiagnosticStatus::FrameProcessorSupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::FrameProcessorUnsupported),
+            PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::SourceNormalizerSupported),
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::SourceNormalizerUnsupported),
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
+        );
     }
 
     #[test]
@@ -2493,6 +2529,13 @@ mod tests {
                     coded_height: Some(1080),
                     visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::DxgiSurface,
+                    pipeline_profile: Some(player_plugin::NativeFramePipelineProfile::Unknown(
+                        "dxgi_surface".to_owned(),
+                    )),
+                    color_space: None,
+                    hdr_metadata: None,
+                    sync_info: None,
+                    transform: None,
                     frame_id: Some(7),
                     release_tracking: None,
                 },
@@ -2539,6 +2582,13 @@ mod tests {
                     coded_height: Some(1080),
                     visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::D3D11Texture2D,
+                    pipeline_profile: Some(
+                        player_plugin::NativeFramePipelineProfile::D3D11Texture2D,
+                    ),
+                    color_space: None,
+                    hdr_metadata: None,
+                    sync_info: None,
+                    transform: None,
                     frame_id: Some(9),
                     release_tracking: None,
                 },
@@ -2776,7 +2826,9 @@ mod tests {
             native_requirements: None,
             supports_hardware_decode: true,
             supports_cpu_video_frames: false,
+            supports_audio_packets: false,
             supports_audio_frames: false,
+            supports_pcm_frames: false,
             supports_gpu_handles: true,
             supports_flush: true,
             supports_drain: true,

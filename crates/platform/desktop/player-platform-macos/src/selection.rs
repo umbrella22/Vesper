@@ -179,7 +179,10 @@ pub(crate) fn macos_native_frame_decoder_video_decode_info(
         hardware_available: true,
         hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
         fallback_reason: plugin_name.map(|name| {
-            format!("decoder plugin `{name}` selected for native-frame VideoToolbox playback")
+            format!(
+                "decoder plugin `{name}` selected {} route for VideoToolbox playback",
+                PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+            )
         }),
     }
 }

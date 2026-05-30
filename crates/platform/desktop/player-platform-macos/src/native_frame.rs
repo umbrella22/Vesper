@@ -451,6 +451,15 @@ impl Drop for MacosNativeFrameVideoSource {
             let _ = worker.join();
         }
         self.release_queued_prefetch_events();
+        if let Ok(mut shared) = self.shared.lock()
+            && let Some(chain) = shared.frame_processor_chain.as_mut()
+        {
+            chain.flush();
+            chain.close();
+        }
+        if let Ok(mut session) = self.session.lock() {
+            let _ = session.close();
+        }
     }
 }
 
@@ -491,6 +500,7 @@ impl MacosNativeFramePacketSource for VideoPacketSource {
 pub(crate) struct SourceNormalizerPacketSource {
     pub(crate) session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
     pub(crate) pending: Option<SourceNormalizerPendingPacket>,
+    pub(crate) selected_video_stream_index: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -501,9 +511,19 @@ pub(crate) struct SourceNormalizerPendingPacket {
 
 impl SourceNormalizerPacketSource {
     pub(crate) fn new(session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>) -> Self {
+        let selected_video_stream_index = session
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard.as_ref().and_then(|session| {
+                    macos_packet_stream_info_from_source_normalizer(&session.stream_info()).ok()
+                })
+            })
+            .map(|stream_info| stream_info.stream_index);
         Self {
             session,
             pending: None,
+            selected_video_stream_index,
         }
     }
 
@@ -550,28 +570,56 @@ impl MacosNativeFramePacketSource for SourceNormalizerPacketSource {
         let session = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("source normalizer packet session is not configured"))?;
-        let lease = session
-            .read_packet()
-            .map_err(|error| anyhow::anyhow!("source normalizer read_packet failed: {error}"))?;
-        if lease.metadata.status == SourceNormalizerReadPacketStatus::EndOfStream {
-            return Ok(MacosNativeFramePacketSendStatus::EndOfStream);
+        loop {
+            let lease = session.read_packet().map_err(|error| {
+                anyhow::anyhow!("source normalizer read_packet failed: {error}")
+            })?;
+            match lease.metadata.status {
+                SourceNormalizerReadPacketStatus::EndOfStream => {
+                    return Ok(MacosNativeFramePacketSendStatus::EndOfStream);
+                }
+                SourceNormalizerReadPacketStatus::NeedMoreData => {
+                    return Ok(MacosNativeFramePacketSendStatus::NeedMoreData);
+                }
+                SourceNormalizerReadPacketStatus::Packet => {}
+            }
+            let Some(packet) = lease.metadata.packet.clone() else {
+                let handle = lease.handle;
+                drop(lease);
+                session
+                    .release_packet(handle)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                continue;
+            };
+            if packet.media_kind != SourceNormalizerPacketMediaKind::Video {
+                let handle = lease.handle;
+                drop(lease);
+                session
+                    .release_packet(handle)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                continue;
+            }
+            if self
+                .selected_video_stream_index
+                .is_some_and(|selected| packet.stream_index as usize != selected)
+            {
+                let handle = lease.handle;
+                drop(lease);
+                session
+                    .release_packet(handle)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                continue;
+            }
+            let data = lease.data.to_vec();
+            let handle = lease.handle;
+            drop(lease);
+            session
+                .release_packet(handle)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let packet = source_normalizer_packet_metadata(packet)?;
+            let pending = SourceNormalizerPendingPacket { packet, data };
+            return self.send_pending_packet(decoder_session, pending);
         }
-        if lease.metadata.status == SourceNormalizerReadPacketStatus::NeedMoreData {
-            return Ok(MacosNativeFramePacketSendStatus::NeedMoreData);
-        }
-        let metadata = source_normalizer_packet_metadata(&lease.metadata);
-        let data = lease.data.to_vec();
-        let handle = lease.handle;
-        drop(lease);
-        session
-            .release_packet(handle)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let metadata = metadata?;
-        let pending = SourceNormalizerPendingPacket {
-            packet: metadata,
-            data,
-        };
-        self.send_pending_packet(decoder_session, pending)
     }
 
     fn seek_to(&mut self, position: Duration) -> anyhow::Result<()> {
@@ -583,6 +631,9 @@ impl MacosNativeFramePacketSource for SourceNormalizerPacketSource {
         let session = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("source normalizer packet session is not configured"))?;
+        session
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         session
             .seek(&SourceNormalizerPacketSeek {
                 position_millis: position.as_millis().min(u64::MAX as u128) as u64,
@@ -862,6 +913,7 @@ impl DesktopVideoSource for MacosNativeFrameVideoSource {
     }
 
     fn seek_to(&mut self, position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>> {
+        self.release_queued_prefetch_events();
         {
             let mut shared = self
                 .shared
@@ -966,11 +1018,8 @@ impl MacosNativeFrameVideoSource {
                 );
                 self.deferred_desktop_frame(frame).map(Some)
             }
-            MacosNativeFrameWorkerEvent::Frame { frame, .. } => {
-                decrement_macos_native_frame_buffered_count(
-                    &self.buffered_frame_count,
-                    &self.prefetch_wakeup,
-                );
+            MacosNativeFrameWorkerEvent::Frame { generation, frame } => {
+                self.decrement_buffered_count_for_generation(generation);
                 if let (Ok(mut session), Ok(mut shared)) = (self.session.lock(), self.shared.lock())
                 {
                     let _ = release_macos_processor_frame_and_track(
@@ -999,11 +1048,8 @@ impl MacosNativeFrameVideoSource {
 
     pub(crate) fn release_queued_prefetch_events(&mut self) {
         while let Ok(event) = self.frame_rx.try_recv() {
-            if let MacosNativeFrameWorkerEvent::Frame { frame, .. } = event {
-                decrement_macos_native_frame_buffered_count(
-                    &self.buffered_frame_count,
-                    &self.prefetch_wakeup,
-                );
+            if let MacosNativeFrameWorkerEvent::Frame { generation, frame } = event {
+                self.decrement_buffered_count_for_generation(generation);
                 if let (Ok(mut session), Ok(mut shared)) = (self.session.lock(), self.shared.lock())
                 {
                     let _ = release_macos_processor_frame_and_track(
@@ -1014,6 +1060,15 @@ impl MacosNativeFrameVideoSource {
                     );
                 }
             }
+        }
+    }
+
+    pub(crate) fn decrement_buffered_count_for_generation(&self, generation: u64) {
+        if generation == self.current_generation.load(Ordering::SeqCst) {
+            decrement_macos_native_frame_buffered_count(
+                &self.buffered_frame_count,
+                &self.prefetch_wakeup,
+            );
         }
     }
 
@@ -1117,6 +1172,16 @@ pub(crate) fn macos_native_frame_prefetch_worker_loop(
                 generation: new_generation,
                 position,
             }) => {
+                if let Some(MacosNativeFrameWorkerEvent::Frame { frame, .. }) = pending_event.take()
+                    && let (Ok(mut session), Ok(mut shared)) = (session.lock(), shared.lock())
+                {
+                    let _ = release_macos_processor_frame_and_track(
+                        session.as_mut(),
+                        &mut shared,
+                        outstanding_frames.as_ref(),
+                        frame,
+                    );
+                }
                 generation = new_generation;
                 pending_event = None;
                 end_of_input_sent = false;
@@ -1253,20 +1318,20 @@ pub(crate) fn flush_and_seek_macos_native_frame_source(
     position: Duration,
 ) -> anyhow::Result<()> {
     {
-        let mut session = session
-            .lock()
-            .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
-        session
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    }
-    {
         let mut shared = shared
             .lock()
             .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
         if let Some(chain) = shared.frame_processor_chain.as_mut() {
             chain.flush();
         }
+    }
+    {
+        let mut session = session
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native-frame decoder session is poisoned"))?;
+        session
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     }
     packet_source.seek_to(position)
 }
@@ -1354,6 +1419,7 @@ pub(crate) fn send_macos_native_frame_packet(
             dts_us: packet.dts_us,
             duration_us: packet.duration_us,
             stream_index: packet.stream_index,
+            media_kind: player_plugin::DecoderMediaKind::Video,
             key_frame: packet.key_frame,
             discontinuity: packet.discontinuity,
             end_of_stream: false,
@@ -1364,21 +1430,9 @@ pub(crate) fn send_macos_native_frame_packet(
 }
 
 pub(crate) fn source_normalizer_packet_metadata(
-    metadata: &SourceNormalizerReadPacketMetadata,
+    packet: SourceNormalizerPacket,
 ) -> anyhow::Result<DecoderPacket> {
-    let packet = metadata
-        .packet
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("source normalizer packet metadata was missing"))?;
-    Ok(DecoderPacket {
-        pts_us: packet.pts_us,
-        dts_us: packet.dts_us,
-        duration_us: packet.duration_us,
-        stream_index: packet.stream_index,
-        key_frame: packet.key_frame,
-        discontinuity: packet.discontinuity,
-        end_of_stream: packet.end_of_stream,
-    })
+    DecoderPacket::try_from(packet).map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 pub(crate) fn send_macos_native_frame_packet_bytes(

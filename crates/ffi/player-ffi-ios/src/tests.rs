@@ -1,4 +1,12 @@
-use super::{PlayerFfiErrorCategory, PlayerFfiErrorCode, map_player_error, player_error_to_ffi};
+use std::ffi::{CString, c_char};
+use std::ptr;
+
+use super::{
+    PlayerFfiCallStatus, PlayerFfiError, PlayerFfiErrorCategory, PlayerFfiErrorCode,
+    map_player_error, player_error_to_ffi, player_ffi_ios_native_frame_pipeline_advance,
+    player_ffi_ios_native_frame_pipeline_close, player_ffi_ios_native_frame_pipeline_open,
+    player_ffi_ios_native_frame_pipeline_release_frame, player_ffi_ios_native_frame_pipeline_seek,
+};
 use crate::handles::HandleRegistry;
 use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode};
 
@@ -172,5 +180,154 @@ fn ffi_error_code_direct_mapping_preserves_legacy_and_appended_values() {
 
     for (ffi_code, code) in cases {
         assert_eq!(PlayerErrorCode::from(ffi_code), code);
+    }
+}
+
+#[test]
+fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_path() {
+    let source = test_c_string("file:///tmp/video.mp4");
+    let decoder_path = test_c_string("/tmp/libdecoder.dylib");
+    let mut decoder_paths = [decoder_path.as_ptr() as *mut c_char];
+    let mut out_handle = 99_u64;
+    let mut out_json: *mut c_char = ptr::null_mut();
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_ios_native_frame_pipeline_open(
+            source.as_ptr(),
+            2,
+            ptr::null_mut(),
+            0,
+            ptr::null(),
+            3,
+            decoder_paths.as_mut_ptr(),
+            decoder_paths.len(),
+            ptr::null_mut(),
+            0,
+            0,
+            &mut out_handle,
+            &mut out_json,
+            &mut error,
+        )
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(out_handle, 0);
+    assert!(out_json.is_null());
+    assert_eq!(error.code, PlayerFfiErrorCode::BackendFailure);
+    let message = ffi_error_message(&error);
+    assert!(message.contains("nativeFrameIssueKind=missingSourceNormalizerPacketPlugin"));
+    assert!(message.contains("SourceNormalizer packet-stream plugin path"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_path() {
+    let source = test_c_string("file:///tmp/video.mp4");
+    let source_path = test_c_string("/tmp/libsource_normalizer.dylib");
+    let mut source_paths = [source_path.as_ptr() as *mut c_char];
+    let mut out_handle = 99_u64;
+    let mut out_json: *mut c_char = ptr::null_mut();
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_ios_native_frame_pipeline_open(
+            source.as_ptr(),
+            2,
+            source_paths.as_mut_ptr(),
+            source_paths.len(),
+            ptr::null(),
+            3,
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+            0,
+            0,
+            &mut out_handle,
+            &mut out_json,
+            &mut error,
+        )
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(out_handle, 0);
+    assert!(out_json.is_null());
+    assert_eq!(error.code, PlayerFfiErrorCode::BackendFailure);
+    let message = ffi_error_message(&error);
+    assert!(message.contains("nativeFrameIssueKind=missingVideoToolboxDecoderPlugin"));
+    assert!(message.contains("VideoToolbox decoder plugin path"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn ios_native_frame_pipeline_invalid_handles_fail_and_close_is_idempotent() {
+    let mut out_json: *mut c_char = ptr::null_mut();
+    let mut error = PlayerFfiError::default();
+
+    let advance_status = unsafe {
+        player_ffi_ios_native_frame_pipeline_advance(0xDEAD_BEEF, &mut out_json, &mut error)
+    };
+    assert_eq!(advance_status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("invalid native-frame pipeline handle"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let release_status = unsafe {
+        player_ffi_ios_native_frame_pipeline_release_frame(
+            0xDEAD_BEEF,
+            1,
+            false,
+            &mut out_json,
+            &mut error,
+        )
+    };
+    assert_eq!(release_status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("invalid native-frame pipeline handle"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let seek_status = unsafe {
+        player_ffi_ios_native_frame_pipeline_seek(0xDEAD_BEEF, 1_000, &mut out_json, &mut error)
+    };
+    assert_eq!(seek_status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("invalid native-frame pipeline handle"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    unsafe {
+        player_ffi_ios_native_frame_pipeline_close(0xDEAD_BEEF);
+        player_ffi_ios_native_frame_pipeline_close(0xDEAD_BEEF);
+    }
+}
+
+#[test]
+fn ios_native_frame_pipeline_seek_requires_json_output_pointer() {
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_ios_native_frame_pipeline_seek(0xDEAD_BEEF, 1_000, ptr::null_mut(), &mut error)
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::NullPointer);
+    assert!(ffi_error_message(&error).contains("out_json was null"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+fn ffi_error_message(error: &PlayerFfiError) -> String {
+    if error.message.is_null() {
+        return String::new();
+    }
+    unsafe {
+        std::ffi::CStr::from_ptr(error.message)
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+fn test_c_string(value: &str) -> CString {
+    match CString::new(value) {
+        Ok(value) => value,
+        Err(error) => panic!("test string contained an unexpected NUL byte: {error}"),
     }
 }

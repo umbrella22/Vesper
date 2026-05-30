@@ -49,6 +49,13 @@ public enum VesperFrameProcessorMode: String, Equatable {
     case diagnosticsOnly
 }
 
+public enum VesperNativeFramePipelineMode: String, Equatable {
+    case disabled
+    case diagnosticsOnly
+    case preferNativeFrame
+    case requireNativeFrame
+}
+
 public struct VesperFrameProcessorConfiguration: Equatable {
     public let mode: VesperFrameProcessorMode
     public let pluginLibraryPaths: [String]
@@ -71,6 +78,45 @@ public struct VesperFrameProcessorConfiguration: Equatable {
             0
         case .diagnosticsOnly:
             1
+        }
+    }
+}
+
+public struct VesperNativeFramePipelineConfiguration: Equatable {
+    public let mode: VesperNativeFramePipelineMode
+    public let decoderPluginLibraryPaths: [String]
+    public let frameProcessorPluginLibraryPaths: [String]
+    public let maxInFlightFrames: Int?
+
+    public init(
+        mode: VesperNativeFramePipelineMode = .disabled,
+        decoderPluginLibraryPaths: [String] = [],
+        frameProcessorPluginLibraryPaths: [String] = [],
+        maxInFlightFrames: Int? = nil
+    ) {
+        self.mode = mode
+        self.decoderPluginLibraryPaths = decoderPluginLibraryPaths
+        self.frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths
+        self.maxInFlightFrames = maxInFlightFrames
+    }
+
+    var isDisabled: Bool {
+        mode == .disabled &&
+            decoderPluginLibraryPaths.isEmpty &&
+            frameProcessorPluginLibraryPaths.isEmpty &&
+            maxInFlightFrames == nil
+    }
+
+    var ffiMode: UInt32 {
+        switch mode {
+        case .disabled:
+            0
+        case .diagnosticsOnly:
+            1
+        case .preferNativeFrame:
+            2
+        case .requireNativeFrame:
+            3
         }
     }
 }
@@ -246,7 +292,7 @@ enum VesperMobileSourceNormalizerResource {
     }
 }
 
-private func withOptionalCString<R>(
+func withOptionalCString<R>(
     _ value: String?,
     _ body: (UnsafePointer<CChar>?) -> R
 ) -> R {
@@ -258,7 +304,7 @@ private func withOptionalCString<R>(
     }
 }
 
-private func withCStringArray<R>(
+func withCStringArray<R>(
     _ values: [String],
     _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?, Int) -> R
 ) -> R {

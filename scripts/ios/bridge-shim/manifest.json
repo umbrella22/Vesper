@@ -2501,6 +2501,254 @@
     {
       "kind": "function",
       "return_type": "bool",
+      "name": "vesper_source_normalizer_resource_open",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "source_mode"
+        },
+        {
+          "ty": "char **",
+          "name": "source_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "source_plugin_library_paths_len"
+        },
+        {
+          "ty": "const char *",
+          "name": "runtime_profile"
+        },
+        {
+          "ty": "const char *",
+          "name": "output_root"
+        },
+        {
+          "ty": "bool",
+          "name": "force_normalized"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_source_normalizer_resource_poll",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_source_normalizer_resource_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_ios_native_frame_pipeline_open",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "source_mode"
+        },
+        {
+          "ty": "char **",
+          "name": "source_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "source_plugin_library_paths_len"
+        },
+        {
+          "ty": "const char *",
+          "name": "runtime_profile"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "native_frame_mode"
+        },
+        {
+          "ty": "char **",
+          "name": "decoder_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "decoder_plugin_library_paths_len"
+        },
+        {
+          "ty": "char **",
+          "name": "frame_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "frame_plugin_library_paths_len"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "max_in_flight_frames"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_ios_native_frame_pipeline_advance",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_ios_native_frame_pipeline_release_frame",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "frame_handle"
+        },
+        {
+          "ty": "bool",
+          "name": "presented"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_ios_native_frame_pipeline_flush",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_ios_native_frame_pipeline_seek",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "position_millis"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_ios_native_frame_pipeline_close",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
       "name": "vesper_dash_bridge_execute_json",
       "parameters": [
         {
@@ -5113,6 +5361,254 @@
     {
       "kind": "function",
       "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_source_normalizer_resource_open",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "source_mode"
+        },
+        {
+          "ty": "char **",
+          "name": "source_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "source_plugin_library_paths_len"
+        },
+        {
+          "ty": "const char *",
+          "name": "runtime_profile"
+        },
+        {
+          "ty": "const char *",
+          "name": "output_root"
+        },
+        {
+          "ty": "bool",
+          "name": "force_normalized"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_source_normalizer_resource_poll",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_source_normalizer_resource_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_native_frame_pipeline_open",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "source_uri"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "source_mode"
+        },
+        {
+          "ty": "char **",
+          "name": "source_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "source_plugin_library_paths_len"
+        },
+        {
+          "ty": "const char *",
+          "name": "runtime_profile"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "native_frame_mode"
+        },
+        {
+          "ty": "char **",
+          "name": "decoder_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "decoder_plugin_library_paths_len"
+        },
+        {
+          "ty": "char **",
+          "name": "frame_plugin_library_paths"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "frame_plugin_library_paths_len"
+        },
+        {
+          "ty": "uint32_t",
+          "name": "max_in_flight_frames"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_native_frame_pipeline_advance",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_native_frame_pipeline_release_frame",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "frame_handle"
+        },
+        {
+          "ty": "bool",
+          "name": "presented"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_native_frame_pipeline_flush",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_native_frame_pipeline_seek",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "position_millis"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_ios_native_frame_pipeline_close",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
       "name": "player_ffi_dash_bridge_execute_json",
       "parameters": [
         {
@@ -5781,6 +6277,115 @@
         "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_mobile_plugin_diagnostics_string_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_source_normalizer_resource_open",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_source_normalizer_resource_open"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_source_normalizer_resource_open.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_source_normalizer_resource_poll",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_source_normalizer_resource_poll"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_source_normalizer_resource_poll.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_source_normalizer_resource_dispose",
+      "ffi_symbols": [
+        "player_ffi_source_normalizer_resource_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_source_normalizer_resource_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_ios_native_frame_pipeline_open",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_ios_native_frame_pipeline_open"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_ios_native_frame_pipeline_open.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_ios_native_frame_pipeline_advance",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_ios_native_frame_pipeline_advance"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_ios_native_frame_pipeline_advance.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_ios_native_frame_pipeline_release_frame",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_ios_native_frame_pipeline_release_frame"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_ios_native_frame_pipeline_release_frame.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_ios_native_frame_pipeline_flush",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_ios_native_frame_pipeline_flush"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_ios_native_frame_pipeline_flush.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_ios_native_frame_pipeline_seek",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_ios_native_frame_pipeline_seek"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_ios_native_frame_pipeline_seek.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_ios_native_frame_pipeline_close",
+      "ffi_symbols": [
+        "player_ffi_ios_native_frame_pipeline_close"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_ios_native_frame_pipeline_close.c.inc"
     },
     {
       "kind": "wrapper",

@@ -34,6 +34,13 @@ enum class VesperFrameProcessorMode {
     DiagnosticsOnly,
 }
 
+enum class VesperNativeFramePipelineMode {
+    Disabled,
+    DiagnosticsOnly,
+    PreferNativeFrame,
+    RequireNativeFrame,
+}
+
 data class VesperFrameProcessorConfiguration(
     val mode: VesperFrameProcessorMode = VesperFrameProcessorMode.Disabled,
     val pluginLibraryPaths: List<String> = emptyList(),
@@ -45,6 +52,28 @@ data class VesperFrameProcessorConfiguration(
         get() = when (mode) {
             VesperFrameProcessorMode.Disabled -> 0
             VesperFrameProcessorMode.DiagnosticsOnly -> 1
+        }
+}
+
+data class VesperNativeFramePipelineConfiguration(
+    val mode: VesperNativeFramePipelineMode = VesperNativeFramePipelineMode.Disabled,
+    val decoderPluginLibraryPaths: List<String> = emptyList(),
+    val frameProcessorPluginLibraryPaths: List<String> = emptyList(),
+    val maxInFlightFrames: Int? = null,
+) {
+    internal val isDisabled: Boolean
+        get() =
+            mode == VesperNativeFramePipelineMode.Disabled &&
+                decoderPluginLibraryPaths.isEmpty() &&
+                frameProcessorPluginLibraryPaths.isEmpty() &&
+                maxInFlightFrames == null
+
+    internal val modeOrdinal: Int
+        get() = when (mode) {
+            VesperNativeFramePipelineMode.Disabled -> 0
+            VesperNativeFramePipelineMode.DiagnosticsOnly -> 1
+            VesperNativeFramePipelineMode.PreferNativeFrame -> 2
+            VesperNativeFramePipelineMode.RequireNativeFrame -> 3
         }
 }
 

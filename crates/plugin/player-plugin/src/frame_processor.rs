@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{NativeFrame, NativeFrameMetadata, NativeHandleKind};
+use crate::{NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind};
 
 /// Frame metadata and scheduling hints submitted to a frame processor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +25,10 @@ impl FrameProcessorSubmitFrame {
 pub struct FrameProcessorCapabilities {
     pub accepted_input_handle_kinds: Vec<NativeHandleKind>,
     pub output_handle_kinds: Vec<NativeHandleKind>,
+    #[serde(default)]
+    pub accepted_input_pipeline_profiles: Vec<NativeFramePipelineProfile>,
+    #[serde(default)]
+    pub output_pipeline_profiles: Vec<NativeFramePipelineProfile>,
     pub supports_video_frames: bool,
     pub supports_in_place_passthrough: bool,
     pub preserves_dimensions: bool,
@@ -45,6 +49,21 @@ impl FrameProcessorCapabilities {
                 .iter()
                 .any(|candidate| candidate == handle_kind)
     }
+
+    /// Returns whether the processor accepts a native-frame pipeline profile.
+    pub fn supports_input_pipeline_profile(&self, profile: &NativeFramePipelineProfile) -> bool {
+        self.accepted_input_pipeline_profiles.is_empty()
+            || self
+                .accepted_input_pipeline_profiles
+                .iter()
+                .any(|candidate| candidate == profile)
+    }
+
+    /// Returns whether both handle kind and pipeline profile match the metadata.
+    pub fn supports_input_metadata(&self, metadata: &NativeFrameMetadata) -> bool {
+        self.supports_input_handle_kind(&metadata.handle_kind)
+            && self.supports_input_pipeline_profile(&metadata.effective_pipeline_profile())
+    }
 }
 
 /// Configuration used to open one frame processor session.
@@ -62,6 +81,8 @@ pub struct FrameProcessorSessionInfo {
     pub processor_name: Option<String>,
     pub selected_backend: Option<String>,
     pub output_handle_kind: Option<NativeHandleKind>,
+    #[serde(default)]
+    pub output_pipeline_profile: Option<NativeFramePipelineProfile>,
     pub max_in_flight_frames: Option<u32>,
 }
 
@@ -267,7 +288,8 @@ mod tests {
         FrameProcessorReceiveStatus, FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
     };
     use crate::{
-        DecoderFrameFormat, DecoderMediaKind, NativeFrameMetadata, NativeHandleKind, VisibleRect,
+        DecoderFrameFormat, DecoderMediaKind, NativeFrameMetadata, NativeFramePipelineProfile,
+        NativeHandleKind, VisibleRect,
     };
 
     fn metadata() -> NativeFrameMetadata {
@@ -288,6 +310,11 @@ mod tests {
                 height: 1_080,
             }),
             handle_kind: NativeHandleKind::CvPixelBuffer,
+            pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
+            color_space: Some("bt709".to_owned()),
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
             frame_id: Some(42),
             release_tracking: None,
         }
@@ -335,5 +362,35 @@ mod tests {
         let capabilities = FrameProcessorCapabilities::default();
 
         assert!(capabilities.supports_input_handle_kind(&NativeHandleKind::D3D11Texture2D));
+    }
+
+    #[test]
+    fn frame_processor_capabilities_accept_empty_pipeline_profile_list_as_wildcard() {
+        let capabilities = FrameProcessorCapabilities::default();
+
+        assert!(
+            capabilities
+                .supports_input_pipeline_profile(&NativeFramePipelineProfile::D3D11Texture2D)
+        );
+    }
+
+    #[test]
+    fn frame_processor_capabilities_match_input_metadata_by_handle_and_profile() {
+        let capabilities = FrameProcessorCapabilities {
+            accepted_input_handle_kinds: vec![NativeHandleKind::CvPixelBuffer],
+            output_handle_kinds: vec![NativeHandleKind::CvPixelBuffer],
+            accepted_input_pipeline_profiles: vec![
+                NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ],
+            output_pipeline_profiles: vec![NativeFramePipelineProfile::VideoToolboxCvPixelBuffer],
+            supports_video_frames: true,
+            ..Default::default()
+        };
+
+        assert!(capabilities.supports_input_metadata(&metadata()));
+
+        let mut mismatched = metadata();
+        mismatched.pipeline_profile = Some(NativeFramePipelineProfile::D3D11Texture2D);
+        assert!(!capabilities.supports_input_metadata(&mismatched));
     }
 }

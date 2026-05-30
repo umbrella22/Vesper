@@ -13,9 +13,11 @@ import VesperPlayerKitUI
 @MainActor
 private func makeExampleController(
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
     initialSource: VesperPlayerSource?,
     resiliencePolicy: VesperPlaybackResiliencePolicy
 ) -> VesperPlayerController {
+    let decoderPaths = bundledDecoderPluginLibraryPaths()
     let frameProcessorPaths = bundledFrameProcessorPluginLibraryPaths()
     return VesperPlayerControllerFactory.makeDefault(
         initialSource: initialSource,
@@ -33,6 +35,12 @@ private func makeExampleController(
         frameProcessorConfiguration: VesperFrameProcessorConfiguration(
             mode: frameProcessorPaths.isEmpty ? .disabled : .diagnosticsOnly,
             pluginLibraryPaths: frameProcessorPaths
+        ),
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+            mode: nativeFramePipelineSetting.mode,
+            decoderPluginLibraryPaths: decoderPaths,
+            frameProcessorPluginLibraryPaths: frameProcessorPaths,
+            maxInFlightFrames: 2
         )
     )
 }
@@ -92,6 +100,7 @@ struct PlayerHostView: View {
     @State private var selectedTab: ExampleHostTab = .player
     @State private var selectedResilienceProfile: ExampleResilienceProfile = .balanced
     @State private var sourceNormalizerSetting: ExampleSourceNormalizerSetting = .preflightOnly
+    @State private var nativeFramePipelineSetting: ExampleNativeFramePipelineSetting = .disabled
     @State private var isApplyingResilienceProfile = false
     @State private var hasHandledFinishedPlayback = false
     @State private var controlsHideTask: Task<Void, Never>?
@@ -113,6 +122,7 @@ struct PlayerHostView: View {
             wrappedValue: ExamplePlayerControllerStore(
                 controller: makeExampleController(
                     sourceNormalizerSetting: .preflightOnly,
+                    nativeFramePipelineSetting: .disabled,
                     initialSource: nil,
                     resiliencePolicy: ExampleResilienceProfile.balanced.policy
                 )
@@ -170,6 +180,10 @@ struct PlayerHostView: View {
 
     private var sourceNormalizerPluginLibraryPaths: [String] {
         bundledSourceNormalizerPluginLibraryPaths()
+    }
+
+    private var decoderPluginLibraryPaths: [String] {
+        bundledDecoderPluginLibraryPaths()
     }
 
     private var frameProcessorPluginLibraryPaths: [String] {
@@ -428,10 +442,13 @@ struct PlayerHostView: View {
                 ExamplePluginDiagnosticsSection(
                     palette: palette,
                     sourceNormalizerSetting: sourceNormalizerSetting,
+                    nativeFramePipelineSetting: nativeFramePipelineSetting,
                     sourceNormalizerPluginLibraryPaths: sourceNormalizerPluginLibraryPaths,
+                    decoderPluginLibraryPaths: decoderPluginLibraryPaths,
                     frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths,
                     pluginDiagnostics: controller.pluginDiagnostics,
-                    onSourceNormalizerSettingChange: applySourceNormalizerSetting
+                    onSourceNormalizerSettingChange: applySourceNormalizerSetting,
+                    onNativeFramePipelineSettingChange: applyNativeFramePipelineSetting
                 )
 
                 ExampleResilienceSection(
@@ -559,23 +576,83 @@ struct PlayerHostView: View {
         sourceNormalizerSetting = setting
         let nextController = makeExampleController(
             sourceNormalizerSetting: setting,
+            nativeFramePipelineSetting: nativeFramePipelineSetting,
             initialSource: activeSource,
             resiliencePolicy: selectedResilienceProfile.policy
         )
-        nextController.initialize()
-        if let activeSource {
-            configureSystemPlayback(for: activeSource, controller: nextController)
-            let restorePositionMs = previousUiState.timeline.positionMs
-            if restorePositionMs > 0 {
-                nextController.seek(by: restorePositionMs)
+        _ = controllerStore.replace(with: nextController)
+        previousController.dispose()
+        controlsVisible = true
+        initializeReplacementController(
+            nextController,
+            activeSource: activeSource,
+            previousUiState: previousUiState,
+            nativeFramePipelineSetting: nativeFramePipelineSetting
+        )
+    }
+
+    private func applyNativeFramePipelineSetting(_ setting: ExampleNativeFramePipelineSetting) {
+        guard setting != nativeFramePipelineSetting else {
+            return
+        }
+
+        let previousController = controller
+        let activeSource = activePlaylistSource()
+        let previousUiState = previousController.uiState
+        nativeFramePipelineSetting = setting
+        let nextController = makeExampleController(
+            sourceNormalizerSetting: sourceNormalizerSetting,
+            nativeFramePipelineSetting: setting,
+            initialSource: activeSource,
+            resiliencePolicy: selectedResilienceProfile.policy
+        )
+        _ = controllerStore.replace(with: nextController)
+        previousController.dispose()
+        controlsVisible = true
+        initializeReplacementController(
+            nextController,
+            activeSource: activeSource,
+            previousUiState: previousUiState,
+            nativeFramePipelineSetting: setting
+        )
+    }
+
+    private func initializeReplacementController(
+        _ nextController: VesperPlayerController,
+        activeSource: VesperPlayerSource?,
+        previousUiState: PlayerHostUiState,
+        nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
+    ) {
+        Task { @MainActor in
+            await Task.yield()
+            guard controller === nextController else {
+                return
+            }
+            if let activeSource {
+                configureSystemPlayback(for: activeSource, controller: nextController)
+            }
+            nextController.initialize()
+            if shouldRestorePosition(for: nativeFramePipelineSetting) {
+                let restorePositionMs = previousUiState.timeline.positionMs
+                if restorePositionMs > 0 {
+                    nextController.seek(by: restorePositionMs)
+                }
             }
             if previousUiState.playbackState == .playing {
                 nextController.play()
             }
         }
-        _ = controllerStore.replace(with: nextController)
-        previousController.dispose()
-        controlsVisible = true
+    }
+
+    private func shouldRestorePosition(
+        for nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
+    ) -> Bool {
+        switch nativeFramePipelineSetting {
+        case .disabled, .diagnosticsOnly:
+            return true
+        case .preferNativeFrame, .requireNativeFrame:
+            return false
+        }
     }
 
     private func selectSourceForPlayback(_ source: VesperPlayerSource) {

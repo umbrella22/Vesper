@@ -164,6 +164,43 @@ pub enum FrameProcessorMode {
     RequireProcessed,
 }
 
+/// Rust-internal native-frame pipeline rollout mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeFramePipelineMode {
+    #[default]
+    Disabled,
+    DiagnosticsOnly,
+    PreferNativeFrame,
+    RequireNativeFrame,
+}
+
+/// Shared playback route labels used by plugin diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerPlaybackRoute {
+    SystemPlayer,
+    SdkManagedNativeFrame,
+    SoftwareDecoder,
+}
+
+impl PlayerPlaybackRoute {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SystemPlayer => "systemPlayer",
+            Self::SdkManagedNativeFrame => "sdkManagedNativeFrame",
+            Self::SoftwareDecoder => "softwareDecoder",
+        }
+    }
+
+    pub const fn from_wire_name(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"systemPlayer" => Some(Self::SystemPlayer),
+            b"sdkManagedNativeFrame" => Some(Self::SdkManagedNativeFrame),
+            b"softwareDecoder" => Some(Self::SoftwareDecoder),
+            _ => None,
+        }
+    }
+}
+
 /// Rust-internal frame processor scheduling policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameProcessorPolicy {
@@ -412,6 +449,37 @@ pub enum PlayerPluginDiagnosticStatus {
     SourceNormalizerUnsupported,
 }
 
+impl PlayerPluginDiagnosticStatus {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Loaded => "loaded",
+            Self::LoadFailed => "loadFailed",
+            Self::UnsupportedKind => "unsupportedKind",
+            Self::DecoderSupported => "decoderSupported",
+            Self::DecoderUnsupported => "decoderUnsupported",
+            Self::FrameProcessorSupported => "frameProcessorSupported",
+            Self::FrameProcessorUnsupported => "frameProcessorUnsupported",
+            Self::SourceNormalizerSupported => "sourceNormalizerSupported",
+            Self::SourceNormalizerUnsupported => "sourceNormalizerUnsupported",
+        }
+    }
+
+    pub const fn from_wire_name(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"loaded" => Some(Self::Loaded),
+            b"loadFailed" => Some(Self::LoadFailed),
+            b"unsupportedKind" => Some(Self::UnsupportedKind),
+            b"decoderSupported" => Some(Self::DecoderSupported),
+            b"decoderUnsupported" => Some(Self::DecoderUnsupported),
+            b"frameProcessorSupported" => Some(Self::FrameProcessorSupported),
+            b"frameProcessorUnsupported" => Some(Self::FrameProcessorUnsupported),
+            b"sourceNormalizerSupported" => Some(Self::SourceNormalizerSupported),
+            b"sourceNormalizerUnsupported" => Some(Self::SourceNormalizerUnsupported),
+            _ => None,
+        }
+    }
+}
+
 /// Rust-side codec capability summary emitted by decoder plugin diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginCodecCapability {
@@ -427,7 +495,9 @@ pub struct PlayerPluginDecoderCapabilitySummary {
     pub supports_native_frame_output: bool,
     pub supports_hardware_decode: bool,
     pub supports_cpu_video_frames: bool,
+    pub supports_audio_packets: bool,
     pub supports_audio_frames: bool,
+    pub supports_pcm_frames: bool,
     pub supports_gpu_handles: bool,
     pub supports_flush: bool,
     pub supports_drain: bool,
@@ -439,6 +509,8 @@ pub struct PlayerPluginDecoderCapabilitySummary {
 pub struct PlayerPluginFrameProcessorCapabilitySummary {
     pub accepted_input_handle_kinds: Vec<String>,
     pub output_handle_kinds: Vec<String>,
+    pub accepted_input_pipeline_profiles: Vec<String>,
+    pub output_pipeline_profiles: Vec<String>,
     pub supports_video_frames: bool,
     pub supports_in_place_passthrough: bool,
     pub preserves_dimensions: bool,
@@ -497,6 +569,39 @@ pub enum PlayerPluginParticipation {
     Selected,
     Participated,
     Bypassed,
+    Fallback,
+}
+
+impl PlayerPluginParticipation {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Available => "available",
+            Self::Selected => "selected",
+            Self::Participated => "participated",
+            Self::Bypassed => "bypassed",
+            Self::Fallback => "fallback",
+        }
+    }
+
+    pub const fn from_wire_name(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"unknown" => Some(Self::Unknown),
+            b"available" => Some(Self::Available),
+            b"selected" => Some(Self::Selected),
+            b"participated" => Some(Self::Participated),
+            b"bypassed" => Some(Self::Bypassed),
+            b"fallback" => Some(Self::Fallback),
+            _ => None,
+        }
+    }
+}
+
+/// Stable key/value detail attached to a plugin diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerPluginDiagnosticDetail {
+    pub key: String,
+    pub value: String,
 }
 
 /// Rust-side plugin diagnostic record emitted by desktop runtime probes.
@@ -509,6 +614,7 @@ pub struct PlayerPluginDiagnostic {
     pub message: Option<String>,
     pub capability: Option<PlayerPluginCapabilitySummary>,
     pub participation: PlayerPluginParticipation,
+    pub details: Vec<PlayerPluginDiagnosticDetail>,
 }
 
 #[derive(Debug, Clone)]
@@ -1606,6 +1712,7 @@ mod tests {
         MediaSourceProtocol, MediaTrackSelection, MediaTrackSelectionMode, PlaybackProgress,
         PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
         PlayerErrorCategory, PlayerErrorCode, PlayerFrameProcessingMetrics, PlayerMediaInfo,
+        PlayerPlaybackRoute, PlayerPluginDiagnosticStatus, PlayerPluginParticipation,
         PlayerPreloadBudgetPolicy, PlayerResilienceMetricsTracker,
         PlayerResolvedPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy,
         PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeWarning, PlayerRuntimeWarningDomain,
@@ -1814,6 +1921,156 @@ mod tests {
         assert_eq!(
             options.track_preferences,
             PlayerTrackPreferencePolicy::default()
+        );
+    }
+
+    #[test]
+    fn playback_route_wire_names_match_apple_shared_contract() {
+        assert_eq!(
+            PlayerPlaybackRoute::SystemPlayer.wire_name(),
+            "systemPlayer"
+        );
+        assert_eq!(
+            PlayerPlaybackRoute::from_wire_name("systemPlayer"),
+            Some(PlayerPlaybackRoute::SystemPlayer)
+        );
+        assert_eq!(
+            PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
+            "sdkManagedNativeFrame"
+        );
+        assert_eq!(
+            PlayerPlaybackRoute::from_wire_name("sdkManagedNativeFrame"),
+            Some(PlayerPlaybackRoute::SdkManagedNativeFrame)
+        );
+        assert_eq!(
+            PlayerPlaybackRoute::SoftwareDecoder.wire_name(),
+            "softwareDecoder"
+        );
+        assert_eq!(
+            PlayerPlaybackRoute::from_wire_name("softwareDecoder"),
+            Some(PlayerPlaybackRoute::SoftwareDecoder)
+        );
+        assert_eq!(PlayerPlaybackRoute::from_wire_name("nativeFrame"), None);
+    }
+
+    #[test]
+    fn plugin_diagnostic_status_wire_names_match_shared_contract() {
+        assert_eq!(PlayerPluginDiagnosticStatus::Loaded.wire_name(), "loaded");
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("loaded"),
+            Some(PlayerPluginDiagnosticStatus::Loaded)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::LoadFailed.wire_name(),
+            "loadFailed"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("loadFailed"),
+            Some(PlayerPluginDiagnosticStatus::LoadFailed)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::UnsupportedKind.wire_name(),
+            "unsupportedKind"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("unsupportedKind"),
+            Some(PlayerPluginDiagnosticStatus::UnsupportedKind)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::DecoderSupported.wire_name(),
+            "decoderSupported"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("decoderSupported"),
+            Some(PlayerPluginDiagnosticStatus::DecoderSupported)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::DecoderUnsupported.wire_name(),
+            "decoderUnsupported"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("decoderUnsupported"),
+            Some(PlayerPluginDiagnosticStatus::DecoderUnsupported)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::FrameProcessorSupported.wire_name(),
+            "frameProcessorSupported"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("frameProcessorSupported"),
+            Some(PlayerPluginDiagnosticStatus::FrameProcessorSupported)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::FrameProcessorUnsupported.wire_name(),
+            "frameProcessorUnsupported"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("frameProcessorUnsupported"),
+            Some(PlayerPluginDiagnosticStatus::FrameProcessorUnsupported)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported.wire_name(),
+            "sourceNormalizerSupported"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("sourceNormalizerSupported"),
+            Some(PlayerPluginDiagnosticStatus::SourceNormalizerSupported)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported.wire_name(),
+            "sourceNormalizerUnsupported"
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("sourceNormalizerUnsupported"),
+            Some(PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported)
+        );
+        assert_eq!(
+            PlayerPluginDiagnosticStatus::from_wire_name("decoder-supported"),
+            None
+        );
+    }
+
+    #[test]
+    fn plugin_participation_wire_names_match_shared_contract() {
+        assert_eq!(PlayerPluginParticipation::Unknown.wire_name(), "unknown");
+        assert_eq!(
+            PlayerPluginParticipation::from_wire_name("unknown"),
+            Some(PlayerPluginParticipation::Unknown)
+        );
+        assert_eq!(
+            PlayerPluginParticipation::Available.wire_name(),
+            "available"
+        );
+        assert_eq!(
+            PlayerPluginParticipation::from_wire_name("available"),
+            Some(PlayerPluginParticipation::Available)
+        );
+        assert_eq!(PlayerPluginParticipation::Selected.wire_name(), "selected");
+        assert_eq!(
+            PlayerPluginParticipation::from_wire_name("selected"),
+            Some(PlayerPluginParticipation::Selected)
+        );
+        assert_eq!(
+            PlayerPluginParticipation::Participated.wire_name(),
+            "participated"
+        );
+        assert_eq!(
+            PlayerPluginParticipation::from_wire_name("participated"),
+            Some(PlayerPluginParticipation::Participated)
+        );
+        assert_eq!(PlayerPluginParticipation::Bypassed.wire_name(), "bypassed");
+        assert_eq!(
+            PlayerPluginParticipation::from_wire_name("bypassed"),
+            Some(PlayerPluginParticipation::Bypassed)
+        );
+        assert_eq!(PlayerPluginParticipation::Fallback.wire_name(), "fallback");
+        assert_eq!(
+            PlayerPluginParticipation::from_wire_name("fallback"),
+            Some(PlayerPluginParticipation::Fallback)
+        );
+        assert_eq!(
+            PlayerPluginParticipation::from_wire_name("participating"),
+            None
         );
     }
 

@@ -88,6 +88,10 @@ ditto -c -k --sequesterRsrc --keepParent \
   --profile default \
   ios-arm64 ios-simulator-arm64
 
+"$ROOT_DIR/scripts/ios/stage-player-decoder-videotoolbox-plugin-release.sh" \
+  "$OUTPUT_DIR" \
+  ios-arm64 ios-simulator-arm64
+
 "$ROOT_DIR/scripts/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" \
   "$OUTPUT_DIR" \
   ios-arm64 ios-simulator-arm64
@@ -101,6 +105,12 @@ fi
 if [[ ! -f "$OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" ]]; then
   echo "Missing staged iOS SourceNormalizer artifact:" >&2
   echo "  $OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" >&2
+  exit 1
+fi
+
+if [[ ! -f "$OUTPUT_DIR/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" ]]; then
+  echo "Missing staged iOS VideoToolbox decoder artifact:" >&2
+  echo "  $OUTPUT_DIR/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" >&2
   exit 1
 fi
 

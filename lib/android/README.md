@@ -263,11 +263,14 @@ Standard HLS and DASH stay native-first unless normalization is explicitly
 required or forced by a test profile. The repository smoke expectations live in
 `fixtures/media/source-normalizer-smoke-matrix.json`.
 
-The mobile FrameProcessor configuration is opt-in through
-`VesperFrameProcessorConfiguration`. Its v1 Android artifact is a diagnostics
-shell only: supported plugins are reported as available or failed to load, but
-they are never marked as participated, never open frame sessions, and never
-alter rendering. Mobile decoder extension artifacts remain deferred.
+The mobile FrameProcessor path is opt-in through
+`VesperNativeFramePipelineConfiguration`. The Android host kit now reports the
+native-frame route decision for SourceNormalizer packet input, MediaCodec,
+SurfaceView presentation, fallback reason, and frame counters. Until the packet
+decoder lane is wired to the host kit, `preferNativeFrame` falls back to
+ExoPlayer and `requireNativeFrame` reports a capability error. The first Android
+native-frame presenter target is `SurfaceView`; `TextureView` falls back or
+fails according to the selected mode. Default ExoPlayer playback is unchanged.
 
 Build the runtime through the root FFmpeg profile CLI:
 

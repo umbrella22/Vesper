@@ -200,6 +200,16 @@ pub struct SourceNormalizerPacketTrackInfo {
     #[serde(default)]
     pub channels: Option<u16>,
     #[serde(default)]
+    pub channel_layout: Option<String>,
+    #[serde(default)]
+    pub codec_delay_samples: Option<u32>,
+    #[serde(default)]
+    pub priming_samples: Option<u32>,
+    #[serde(default)]
+    pub trailing_padding_samples: Option<u32>,
+    #[serde(default)]
+    pub seek_preroll_samples: Option<u32>,
+    #[serde(default)]
     pub frame_rate: Option<f64>,
     #[serde(default)]
     pub time_base_num: Option<i32>,
@@ -323,8 +333,20 @@ pub struct SourceNormalizerPacket {
     pub dts_us: Option<i64>,
     pub duration_us: Option<i64>,
     pub stream_index: u32,
+    #[serde(default)]
+    pub media_kind: SourceNormalizerPacketMediaKind,
     pub key_frame: bool,
     pub discontinuity: bool,
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    #[serde(default)]
+    pub channels: Option<u16>,
+    #[serde(default)]
+    pub channel_layout: Option<String>,
+    #[serde(default)]
+    pub sample_format: Option<String>,
+    #[serde(default)]
+    pub frame_count: Option<u32>,
     #[serde(default)]
     pub end_of_stream: bool,
 }
@@ -572,8 +594,14 @@ mod tests {
             dts_us: Some(30_000),
             duration_us: Some(33_333),
             stream_index: 1,
+            media_kind: SourceNormalizerPacketMediaKind::Video,
             key_frame: true,
             discontinuity: false,
+            sample_rate: None,
+            channels: None,
+            channel_layout: None,
+            sample_format: None,
+            frame_count: None,
             end_of_stream: false,
         });
 
@@ -599,6 +627,11 @@ mod tests {
             coded_height: Some(432),
             sample_rate: None,
             channels: None,
+            channel_layout: None,
+            codec_delay_samples: None,
+            priming_samples: None,
+            trailing_padding_samples: None,
+            seek_preroll_samples: None,
             frame_rate: Some(30.0),
             time_base_num: Some(1),
             time_base_den: Some(90_000),
@@ -607,6 +640,37 @@ mod tests {
         let encoded = serde_json::to_string(&track).expect("serialize track");
         let decoded: SourceNormalizerPacketTrackInfo =
             serde_json::from_str(&encoded).expect("deserialize track");
+
+        assert_eq!(decoded, track);
+    }
+
+    #[test]
+    fn source_normalizer_audio_packet_track_info_round_trips_through_json() {
+        let track = SourceNormalizerPacketTrackInfo {
+            stream_index: 1,
+            media_kind: SourceNormalizerPacketMediaKind::Audio,
+            codec: "AAC".to_owned(),
+            extradata: vec![0x12, 0x10],
+            bitstream_format: Some(DecoderBitstreamFormat::Unknown("AAC".to_owned())),
+            width: None,
+            height: None,
+            coded_width: None,
+            coded_height: None,
+            sample_rate: Some(48_000),
+            channels: Some(2),
+            channel_layout: Some("stereo".to_owned()),
+            codec_delay_samples: Some(0),
+            priming_samples: Some(2_112),
+            trailing_padding_samples: Some(512),
+            seek_preroll_samples: Some(1_024),
+            frame_rate: None,
+            time_base_num: Some(1),
+            time_base_den: Some(48_000),
+        };
+
+        let encoded = serde_json::to_string(&track).expect("serialize audio track");
+        let decoded: SourceNormalizerPacketTrackInfo =
+            serde_json::from_str(&encoded).expect("deserialize audio track");
 
         assert_eq!(decoded, track);
     }

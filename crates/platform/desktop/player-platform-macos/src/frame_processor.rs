@@ -21,6 +21,13 @@ pub(crate) fn open_macos_frame_processor_chain(
         coded_height: stream_info.height,
         visible_rect: None,
         handle_kind: NativeHandleKind::CvPixelBuffer,
+        pipeline_profile: Some(
+            player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+        ),
+        color_space: None,
+        hdr_metadata: None,
+        sync_info: None,
+        transform: None,
         frame_id: None,
         release_tracking: None,
     };
@@ -45,6 +52,14 @@ pub(crate) fn open_macos_frame_processor_chain(
             anyhow::bail!(
                 "frame processor `{}` changes frame dimensions, which v1 does not allow",
                 factory.name()
+            );
+        }
+        if !capabilities.supports_input_metadata(&input_metadata) {
+            anyhow::bail!(
+                "frame processor `{}` does not accept {:?} input handles with {:?} pipeline profile",
+                factory.name(),
+                input_metadata.handle_kind,
+                input_metadata.effective_pipeline_profile()
             );
         }
         let session = factory
@@ -539,6 +554,12 @@ impl MacosFrameProcessorChain {
     pub(crate) fn flush(&mut self) {
         for node in &mut self.processors {
             let _ = node.session.flush();
+        }
+    }
+
+    pub(crate) fn close(&mut self) {
+        for node in &mut self.processors {
+            let _ = node.session.close();
         }
     }
 

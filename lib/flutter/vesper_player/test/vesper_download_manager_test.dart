@@ -357,6 +357,8 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
         const VesperSourceNormalizerConfiguration(),
     VesperFrameProcessorConfiguration frameProcessorConfiguration =
         const VesperFrameProcessorConfiguration(),
+    VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
+        const VesperNativeFramePipelineConfiguration(),
   }) async {
     return VesperPlatformCreateResult(
       playerId: 'test-player',

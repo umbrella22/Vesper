@@ -584,6 +584,8 @@ configurations:
 - `sourceNormalizerConfiguration` with `disabled`, `diagnosticsOnly`,
   `preflightOnly`, `preferNormalized`, and `requireNormalized` modes
 - `frameProcessorConfiguration` with `disabled` and `diagnosticsOnly` modes
+- `nativeFramePipelineConfiguration` with `disabled`, `diagnosticsOnly`,
+  `preferNativeFrame`, and `requireNativeFrame` modes
 
 Both are disabled by default. `pluginLibraryPaths` must contain plugin binary
 paths only: Android `.so` paths or iOS plugin framework binary paths. The
@@ -601,10 +603,15 @@ and DASH stay native-first by default unless normalization is explicitly
 required or forced by a test profile. The repository smoke expectations live in
 `fixtures/media/source-normalizer-smoke-matrix.json`.
 
-FrameProcessor mobile v1 is a diagnostics shell. The optional artifact can be
-packaged and probed for capabilities, but it does not open frame sessions,
-process frames, or participate in default mobile playback. Mobile Decoder
-artifacts remain deferred.
+FrameProcessor mobile remains opt-in and is only consumed by the explicit
+Native Frame Pipeline route. The host kits now report native-frame diagnostics
+for SourceNormalizer packet input, platform decoder adapter, presenter profile,
+fallback reason, and counters. iOS local/VOD native-frame playback can run
+through VideoToolbox, MetalLayer presentation, and the Swift native audio
+bridge. Android still reports the planned MediaCodec/SurfaceView route and
+falls back until that packet lane is wired. `requireNativeFrame` reports a
+capability error when the requested native-frame lane is unavailable instead of
+silently using the system player. Default mobile playback is unchanged.
 
 Download task states:
 

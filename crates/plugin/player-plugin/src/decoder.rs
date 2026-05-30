@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    NativeFrame, NativeFrameMetadata, NativeFrameReleaseTracking, NativeHandleKind, VisibleRect,
+    NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
+    NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind, SourceNormalizerPacketMediaKind,
+    SourceNormalizerPacketTrackInfo, VisibleRect,
 };
 
 /// Media kind handled by a decoder plugin.
@@ -20,9 +22,19 @@ pub enum DecoderFrameFormat {
     Bgra8888,
     Yuv420p,
     Nv12,
+    /// 32-bit floating point PCM samples.
     F32,
+    /// Signed 16-bit PCM samples.
     S16,
     Unknown(String),
+}
+
+/// PCM sample layout returned by audio decoder plugins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum DecoderPcmSampleLayout {
+    #[default]
+    Interleaved,
+    Planar,
 }
 
 /// Describes one codec a decoder plugin can open.
@@ -72,10 +84,68 @@ pub struct DecoderSessionConfig {
     pub coded_height: Option<u32>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
+    #[serde(default)]
+    pub channel_layout: Option<String>,
+    #[serde(default)]
+    pub target_pcm_format: Option<DecoderFrameFormat>,
+    #[serde(default)]
+    pub target_pcm_sample_layout: Option<DecoderPcmSampleLayout>,
+    #[serde(default)]
+    pub codec_delay_samples: Option<u32>,
+    #[serde(default)]
+    pub priming_samples: Option<u32>,
+    #[serde(default)]
+    pub trailing_padding_samples: Option<u32>,
+    #[serde(default)]
+    pub seek_preroll_samples: Option<u32>,
     pub prefer_hardware: bool,
     pub require_cpu_output: bool,
     #[serde(default)]
     pub native_device_context: Option<DecoderNativeDeviceContext>,
+}
+
+impl DecoderSessionConfig {
+    /// Builds an audio decoder session config from a SourceNormalizer audio track.
+    pub fn audio_from_source_normalizer_track(
+        track: &SourceNormalizerPacketTrackInfo,
+        target_pcm_format: DecoderFrameFormat,
+        target_pcm_sample_layout: DecoderPcmSampleLayout,
+    ) -> Result<Self, DecoderError> {
+        if track.media_kind != SourceNormalizerPacketMediaKind::Audio {
+            return Err(DecoderError::UnsupportedCapability {
+                capability: "source-normalizer-audio-track".to_owned(),
+            });
+        }
+        Ok(Self {
+            codec: track.codec.clone(),
+            media_kind: DecoderMediaKind::Audio,
+            extradata: track.extradata.clone(),
+            bitstream_format: track.bitstream_format.clone(),
+            sample_rate: track.sample_rate,
+            channels: track.channels,
+            channel_layout: track.channel_layout.clone(),
+            target_pcm_format: Some(target_pcm_format),
+            target_pcm_sample_layout: Some(target_pcm_sample_layout),
+            codec_delay_samples: track.codec_delay_samples,
+            priming_samples: track.priming_samples,
+            trailing_padding_samples: track.trailing_padding_samples,
+            seek_preroll_samples: track.seek_preroll_samples,
+            prefer_hardware: true,
+            require_cpu_output: true,
+            ..Self::default()
+        })
+    }
+
+    /// Builds the default Apple PCM output preference for native audio.
+    pub fn apple_native_audio_from_source_normalizer_track(
+        track: &SourceNormalizerPacketTrackInfo,
+    ) -> Result<Self, DecoderError> {
+        Self::audio_from_source_normalizer_track(
+            track,
+            DecoderFrameFormat::F32,
+            DecoderPcmSampleLayout::Interleaved,
+        )
+    }
 }
 
 /// Optional session metadata returned by a plugin after opening a decoder.
@@ -93,10 +163,38 @@ pub struct DecoderPacket {
     pub dts_us: Option<i64>,
     pub duration_us: Option<i64>,
     pub stream_index: u32,
+    #[serde(default)]
+    pub media_kind: DecoderMediaKind,
     pub key_frame: bool,
     pub discontinuity: bool,
     #[serde(default)]
     pub end_of_stream: bool,
+}
+
+impl TryFrom<crate::SourceNormalizerPacket> for DecoderPacket {
+    type Error = DecoderError;
+
+    fn try_from(packet: crate::SourceNormalizerPacket) -> Result<Self, Self::Error> {
+        let media_kind = match packet.media_kind {
+            SourceNormalizerPacketMediaKind::Audio => DecoderMediaKind::Audio,
+            SourceNormalizerPacketMediaKind::Video => DecoderMediaKind::Video,
+            SourceNormalizerPacketMediaKind::Subtitle => {
+                return Err(DecoderError::UnsupportedCapability {
+                    capability: "source-normalizer-subtitle-packet".to_owned(),
+                });
+            }
+        };
+        Ok(Self {
+            pts_us: packet.pts_us,
+            dts_us: packet.dts_us,
+            duration_us: packet.duration_us,
+            stream_index: packet.stream_index,
+            media_kind,
+            key_frame: packet.key_frame,
+            discontinuity: packet.discontinuity,
+            end_of_stream: packet.end_of_stream,
+        })
+    }
 }
 
 /// Result returned after sending one compressed packet.
@@ -215,6 +313,8 @@ impl DecoderNativeDeviceContext {
 pub struct DecoderNativeRequirements {
     pub required_device_context_kinds: Vec<DecoderNativeDeviceContextKind>,
     pub output_handle_kinds: Vec<DecoderNativeHandleKind>,
+    #[serde(default)]
+    pub output_pipeline_profiles: Vec<NativeFramePipelineProfile>,
     pub requires_native_device_context: bool,
     pub accepted_bitstream_formats: Vec<DecoderBitstreamFormat>,
 }
@@ -293,6 +393,16 @@ pub struct DecoderNativeFrameMetadata {
     pub visible_rect: Option<DecoderVisibleRect>,
     pub handle_kind: DecoderNativeHandleKind,
     #[serde(default)]
+    pub pipeline_profile: Option<NativeFramePipelineProfile>,
+    #[serde(default)]
+    pub color_space: Option<String>,
+    #[serde(default)]
+    pub hdr_metadata: Option<String>,
+    #[serde(default)]
+    pub sync_info: Option<NativeFrameSyncInfo>,
+    #[serde(default)]
+    pub transform: Option<NativeFrameTransform>,
+    #[serde(default)]
     pub frame_id: Option<u64>,
     #[serde(default)]
     pub release_tracking: Option<DecoderNativeFrameReleaseTracking>,
@@ -312,6 +422,11 @@ impl From<DecoderNativeFrameMetadata> for NativeFrameMetadata {
             coded_height: value.coded_height,
             visible_rect: value.visible_rect.map(Into::into),
             handle_kind: value.handle_kind.into(),
+            pipeline_profile: value.pipeline_profile,
+            color_space: value.color_space,
+            hdr_metadata: value.hdr_metadata,
+            sync_info: value.sync_info,
+            transform: value.transform,
             frame_id: value.frame_id,
             release_tracking: value.release_tracking.map(Into::into),
         }
@@ -332,6 +447,11 @@ impl From<NativeFrameMetadata> for DecoderNativeFrameMetadata {
             coded_height: value.coded_height,
             visible_rect: value.visible_rect.map(Into::into),
             handle_kind: value.handle_kind.into(),
+            pipeline_profile: value.pipeline_profile,
+            color_space: value.color_space,
+            hdr_metadata: value.hdr_metadata,
+            sync_info: value.sync_info,
+            transform: value.transform,
             frame_id: value.frame_id,
             release_tracking: value.release_tracking.map(Into::into),
         }
@@ -401,6 +521,95 @@ pub enum DecoderReceiveNativeFrameOutput {
     Eof,
 }
 
+/// Metadata for a decoded PCM audio frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderPcmFrameMetadata {
+    pub media_kind: DecoderMediaKind,
+    pub format: DecoderFrameFormat,
+    pub codec: String,
+    pub pts_us: Option<i64>,
+    pub duration_us: Option<i64>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    #[serde(default)]
+    pub channel_layout: Option<String>,
+    pub sample_layout: DecoderPcmSampleLayout,
+    pub frame_count: u32,
+    #[serde(default)]
+    pub discontinuity: bool,
+}
+
+impl DecoderPcmFrameMetadata {
+    /// Creates PCM metadata and pins `media_kind` to audio.
+    pub fn audio(
+        codec: impl Into<String>,
+        format: DecoderFrameFormat,
+        sample_rate: u32,
+        channels: u16,
+        sample_layout: DecoderPcmSampleLayout,
+        frame_count: u32,
+    ) -> Self {
+        Self {
+            media_kind: DecoderMediaKind::Audio,
+            format,
+            codec: codec.into(),
+            pts_us: None,
+            duration_us: None,
+            sample_rate,
+            channels,
+            channel_layout: None,
+            sample_layout,
+            frame_count,
+            discontinuity: false,
+        }
+    }
+}
+
+/// A decoded PCM audio frame returned by an audio decoder session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderPcmFrame {
+    pub metadata: DecoderPcmFrameMetadata,
+    pub data: Vec<u8>,
+}
+
+/// Receive state encoded in PCM frame metadata over the future audio decoder ABI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoderReceivePcmFrameMetadata {
+    pub status: DecoderReceiveFrameStatus,
+    pub frame: Option<DecoderPcmFrameMetadata>,
+}
+
+impl DecoderReceivePcmFrameMetadata {
+    pub fn frame(frame: DecoderPcmFrameMetadata) -> Self {
+        Self {
+            status: DecoderReceiveFrameStatus::Frame,
+            frame: Some(frame),
+        }
+    }
+
+    pub fn need_more_input() -> Self {
+        Self {
+            status: DecoderReceiveFrameStatus::NeedMoreInput,
+            frame: None,
+        }
+    }
+
+    pub fn eof() -> Self {
+        Self {
+            status: DecoderReceiveFrameStatus::Eof,
+            frame: None,
+        }
+    }
+}
+
+/// Rust-side receive result returned by audio decoder sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecoderReceivePcmFrameOutput {
+    Frame(DecoderPcmFrame),
+    NeedMoreInput,
+    Eof,
+}
+
 /// Empty success payload used by flush/close operations.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DecoderOperationStatus {
@@ -412,6 +621,8 @@ pub struct DecoderOperationStatus {
 pub enum DecoderError {
     #[error("unsupported codec: {codec}")]
     UnsupportedCodec { codec: String },
+    #[error("unsupported decoder capability: {capability}")]
+    UnsupportedCapability { capability: String },
     #[error("decoder payload codec error: {message}")]
     PayloadCodec { message: String },
     #[error("decoder ABI violation: {message}")]
@@ -476,6 +687,12 @@ pub trait NativeDecoderSession: Send {
 
     fn receive_native_frame(&mut self) -> Result<DecoderReceiveNativeFrameOutput, DecoderError>;
 
+    fn receive_pcm_frame(&mut self) -> Result<DecoderReceivePcmFrameOutput, DecoderError> {
+        Err(DecoderError::UnsupportedCapability {
+            capability: "audio-pcm-output".to_owned(),
+        })
+    }
+
     fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError>;
 
     fn flush(&mut self) -> Result<(), DecoderError>;
@@ -486,10 +703,17 @@ pub trait NativeDecoderSession: Send {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
-        DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderVisibleRect,
+        DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
+        DecoderNativeFrame, DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking,
+        DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult, DecoderPcmFrame,
+        DecoderPcmFrameMetadata, DecoderPcmSampleLayout, DecoderReceiveFrameStatus,
+        DecoderReceiveNativeFrameOutput, DecoderReceivePcmFrameMetadata, DecoderSessionConfig,
+        DecoderSessionInfo, DecoderVisibleRect, NativeDecoderSession,
     };
-    use crate::{NativeFrame, NativeFrameMetadata, NativeHandleKind};
+    use crate::{
+        NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameSyncInfo,
+        NativeFrameTransform, NativeHandleKind,
+    };
 
     fn decoder_native_frame() -> DecoderNativeFrame {
         DecoderNativeFrame {
@@ -510,6 +734,19 @@ mod tests {
                     height: 2_160,
                 }),
                 handle_kind: DecoderNativeHandleKind::D3D11Texture2D,
+                pipeline_profile: Some(NativeFramePipelineProfile::D3D11Texture2D),
+                color_space: Some("bt709".to_owned()),
+                hdr_metadata: Some("hdr10".to_owned()),
+                sync_info: Some(NativeFrameSyncInfo {
+                    kind: "d3d11_keyed_mutex".to_owned(),
+                    handle: None,
+                    value: Some(1),
+                }),
+                transform: Some(NativeFrameTransform {
+                    rotation_degrees: 0,
+                    mirrored_horizontal: false,
+                    mirrored_vertical: false,
+                }),
                 frame_id: Some(99),
                 release_tracking: Some(DecoderNativeFrameReleaseTracking {
                     frame_id: Some(99),
@@ -566,6 +803,11 @@ mod tests {
             decoder_metadata.handle_kind,
             DecoderNativeHandleKind::D3D11Texture2D
         );
+        assert_eq!(
+            decoder_metadata.pipeline_profile,
+            Some(NativeFramePipelineProfile::D3D11Texture2D)
+        );
+        assert_eq!(decoder_metadata.color_space.as_deref(), Some("bt709"));
         assert_eq!(decoder_metadata.frame_id, Some(99));
         assert_eq!(
             decoder_metadata
@@ -574,5 +816,294 @@ mod tests {
                 .map(|rect| rect.width),
             Some(3_840)
         );
+    }
+
+    #[test]
+    fn pcm_frame_metadata_pins_media_kind_to_audio_and_round_trips_json() {
+        let mut metadata = DecoderPcmFrameMetadata::audio(
+            "aac",
+            DecoderFrameFormat::F32,
+            48_000,
+            2,
+            DecoderPcmSampleLayout::Planar,
+            1_024,
+        );
+        metadata.pts_us = Some(1_000_000);
+        metadata.duration_us = Some(21_333);
+        metadata.channel_layout = Some("stereo".to_owned());
+        metadata.discontinuity = true;
+        let frame = DecoderPcmFrame {
+            metadata,
+            data: vec![0, 1, 2, 3],
+        };
+
+        let encoded = serde_json::to_vec(&frame).expect("pcm frame json encode");
+        let decoded: DecoderPcmFrame =
+            serde_json::from_slice(&encoded).expect("pcm frame json decode");
+
+        assert_eq!(decoded.metadata.media_kind, DecoderMediaKind::Audio);
+        assert_eq!(decoded.metadata.codec, "aac");
+        assert_eq!(decoded.metadata.format, DecoderFrameFormat::F32);
+        assert_eq!(
+            decoded.metadata.sample_layout,
+            DecoderPcmSampleLayout::Planar
+        );
+        assert_eq!(decoded.metadata.frame_count, 1_024);
+        assert_eq!(decoded.metadata.channel_layout.as_deref(), Some("stereo"));
+        assert!(decoded.metadata.discontinuity);
+        assert_eq!(decoded.data, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn pcm_receive_metadata_uses_shared_receive_statuses() {
+        let frame = DecoderPcmFrameMetadata::audio(
+            "aac",
+            DecoderFrameFormat::F32,
+            48_000,
+            2,
+            DecoderPcmSampleLayout::Interleaved,
+            512,
+        );
+
+        assert_eq!(
+            DecoderReceivePcmFrameMetadata::frame(frame.clone()).status,
+            DecoderReceiveFrameStatus::Frame
+        );
+        assert_eq!(
+            DecoderReceivePcmFrameMetadata::frame(frame)
+                .frame
+                .map(|metadata| metadata.media_kind),
+            Some(DecoderMediaKind::Audio)
+        );
+        assert_eq!(
+            DecoderReceivePcmFrameMetadata::need_more_input().status,
+            DecoderReceiveFrameStatus::NeedMoreInput
+        );
+        assert_eq!(
+            DecoderReceivePcmFrameMetadata::eof().status,
+            DecoderReceiveFrameStatus::Eof
+        );
+    }
+
+    #[test]
+    fn decoder_packet_preserves_source_normalizer_media_kind() {
+        let video = crate::SourceNormalizerPacket {
+            pts_us: Some(1_000),
+            dts_us: Some(900),
+            duration_us: Some(33_333),
+            stream_index: 0,
+            media_kind: crate::SourceNormalizerPacketMediaKind::Video,
+            key_frame: true,
+            discontinuity: true,
+            ..crate::SourceNormalizerPacket::default()
+        };
+        let video_packet = DecoderPacket::try_from(video).expect("video packet maps");
+        assert_eq!(video_packet.media_kind, DecoderMediaKind::Video);
+        assert_eq!(video_packet.stream_index, 0);
+        assert!(video_packet.key_frame);
+        assert!(video_packet.discontinuity);
+
+        let audio = crate::SourceNormalizerPacket {
+            pts_us: Some(2_000),
+            dts_us: Some(2_000),
+            duration_us: Some(21_333),
+            stream_index: 1,
+            media_kind: crate::SourceNormalizerPacketMediaKind::Audio,
+            sample_rate: Some(48_000),
+            channels: Some(2),
+            ..crate::SourceNormalizerPacket::default()
+        };
+        let audio_packet = DecoderPacket::try_from(audio).expect("audio packet maps");
+        assert_eq!(audio_packet.media_kind, DecoderMediaKind::Audio);
+        assert_eq!(audio_packet.stream_index, 1);
+        assert_eq!(audio_packet.duration_us, Some(21_333));
+    }
+
+    #[test]
+    fn decoder_packet_rejects_source_normalizer_subtitle_packet() {
+        let subtitle = crate::SourceNormalizerPacket {
+            stream_index: 2,
+            media_kind: crate::SourceNormalizerPacketMediaKind::Subtitle,
+            ..crate::SourceNormalizerPacket::default()
+        };
+
+        let error = DecoderPacket::try_from(subtitle)
+            .expect_err("subtitle packets are not decoder packet input");
+
+        assert!(matches!(
+            error,
+            DecoderError::UnsupportedCapability { capability }
+                if capability == "source-normalizer-subtitle-packet"
+        ));
+    }
+
+    #[test]
+    fn audio_decoder_session_config_round_trips_pcm_output_preferences() {
+        let config = DecoderSessionConfig {
+            codec: "aac".to_owned(),
+            media_kind: DecoderMediaKind::Audio,
+            extradata: vec![0x12, 0x10],
+            bitstream_format: Some(DecoderBitstreamFormat::Unknown("adts".to_owned())),
+            sample_rate: Some(48_000),
+            channels: Some(2),
+            channel_layout: Some("stereo".to_owned()),
+            target_pcm_format: Some(DecoderFrameFormat::F32),
+            target_pcm_sample_layout: Some(DecoderPcmSampleLayout::Interleaved),
+            codec_delay_samples: Some(0),
+            priming_samples: Some(2_112),
+            trailing_padding_samples: Some(512),
+            seek_preroll_samples: Some(1_024),
+            ..DecoderSessionConfig::default()
+        };
+
+        let encoded = serde_json::to_vec(&config).expect("audio config json encode");
+        let decoded: DecoderSessionConfig =
+            serde_json::from_slice(&encoded).expect("audio config json decode");
+
+        assert_eq!(decoded.media_kind, DecoderMediaKind::Audio);
+        assert_eq!(decoded.sample_rate, Some(48_000));
+        assert_eq!(decoded.channels, Some(2));
+        assert_eq!(decoded.channel_layout.as_deref(), Some("stereo"));
+        assert_eq!(decoded.target_pcm_format, Some(DecoderFrameFormat::F32));
+        assert_eq!(
+            decoded.target_pcm_sample_layout,
+            Some(DecoderPcmSampleLayout::Interleaved)
+        );
+        assert_eq!(decoded.codec_delay_samples, Some(0));
+        assert_eq!(decoded.priming_samples, Some(2_112));
+        assert_eq!(decoded.trailing_padding_samples, Some(512));
+        assert_eq!(decoded.seek_preroll_samples, Some(1_024));
+    }
+
+    #[test]
+    fn audio_decoder_session_config_maps_source_normalizer_audio_track() {
+        let track = crate::SourceNormalizerPacketTrackInfo {
+            stream_index: 1,
+            media_kind: crate::SourceNormalizerPacketMediaKind::Audio,
+            codec: "AAC".to_owned(),
+            extradata: vec![0x12, 0x10],
+            bitstream_format: Some(DecoderBitstreamFormat::Unknown("adts".to_owned())),
+            width: None,
+            height: None,
+            coded_width: None,
+            coded_height: None,
+            sample_rate: Some(48_000),
+            channels: Some(2),
+            channel_layout: Some("stereo".to_owned()),
+            codec_delay_samples: Some(0),
+            priming_samples: Some(2_112),
+            trailing_padding_samples: Some(512),
+            seek_preroll_samples: Some(1_024),
+            frame_rate: None,
+            time_base_num: Some(1),
+            time_base_den: Some(48_000),
+        };
+
+        let config = DecoderSessionConfig::apple_native_audio_from_source_normalizer_track(&track)
+            .expect("audio track maps to decoder config");
+
+        assert_eq!(config.codec, "AAC");
+        assert_eq!(config.media_kind, DecoderMediaKind::Audio);
+        assert_eq!(config.extradata, vec![0x12, 0x10]);
+        assert_eq!(
+            config.bitstream_format,
+            Some(DecoderBitstreamFormat::Unknown("adts".to_owned()))
+        );
+        assert_eq!(config.sample_rate, Some(48_000));
+        assert_eq!(config.channels, Some(2));
+        assert_eq!(config.channel_layout.as_deref(), Some("stereo"));
+        assert_eq!(config.target_pcm_format, Some(DecoderFrameFormat::F32));
+        assert_eq!(
+            config.target_pcm_sample_layout,
+            Some(DecoderPcmSampleLayout::Interleaved)
+        );
+        assert_eq!(config.codec_delay_samples, Some(0));
+        assert_eq!(config.priming_samples, Some(2_112));
+        assert_eq!(config.trailing_padding_samples, Some(512));
+        assert_eq!(config.seek_preroll_samples, Some(1_024));
+        assert!(config.prefer_hardware);
+        assert!(config.require_cpu_output);
+    }
+
+    #[test]
+    fn audio_decoder_session_config_rejects_source_normalizer_video_track() {
+        let track = crate::SourceNormalizerPacketTrackInfo {
+            stream_index: 0,
+            media_kind: crate::SourceNormalizerPacketMediaKind::Video,
+            codec: "H264".to_owned(),
+            extradata: Vec::new(),
+            bitstream_format: Some(DecoderBitstreamFormat::Avcc),
+            width: Some(1_920),
+            height: Some(1_080),
+            coded_width: Some(1_920),
+            coded_height: Some(1_080),
+            sample_rate: None,
+            channels: None,
+            channel_layout: None,
+            codec_delay_samples: None,
+            priming_samples: None,
+            trailing_padding_samples: None,
+            seek_preroll_samples: None,
+            frame_rate: Some(30.0),
+            time_base_num: Some(1),
+            time_base_den: Some(90_000),
+        };
+
+        let error = DecoderSessionConfig::apple_native_audio_from_source_normalizer_track(&track)
+            .expect_err("video track is not an audio decoder input");
+
+        assert!(matches!(
+            error,
+            DecoderError::UnsupportedCapability { capability }
+                if capability == "source-normalizer-audio-track"
+        ));
+    }
+
+    #[test]
+    fn native_decoder_session_defaults_pcm_receive_to_capability_error() {
+        let mut session = PcmUnsupportedDecoderSession;
+        let error = session
+            .receive_pcm_frame()
+            .expect_err("default PCM receive should be unsupported");
+
+        assert!(matches!(
+            error,
+            DecoderError::UnsupportedCapability { capability }
+                if capability == "audio-pcm-output"
+        ));
+    }
+
+    struct PcmUnsupportedDecoderSession;
+
+    impl NativeDecoderSession for PcmUnsupportedDecoderSession {
+        fn session_info(&self) -> DecoderSessionInfo {
+            DecoderSessionInfo::default()
+        }
+
+        fn send_packet(
+            &mut self,
+            _packet: &DecoderPacket,
+            _data: &[u8],
+        ) -> Result<DecoderPacketResult, DecoderError> {
+            Ok(DecoderPacketResult::default())
+        }
+
+        fn receive_native_frame(
+            &mut self,
+        ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+            Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
+        }
+
+        fn release_native_frame(&mut self, _frame: DecoderNativeFrame) -> Result<(), DecoderError> {
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), DecoderError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DecoderError> {
+            Ok(())
+        }
     }
 }

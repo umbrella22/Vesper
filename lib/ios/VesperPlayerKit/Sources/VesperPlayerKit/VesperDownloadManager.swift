@@ -573,7 +573,7 @@ public final class VesperDownloadManager: ObservableObject {
     public init(
         configuration: VesperDownloadConfiguration = VesperDownloadConfiguration(),
         executor: (any VesperDownloadExecutor)? = nil,
-        staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler? = nil,
+        staleResourceRecoveryHandler: (@Sendable (VesperDownloadTaskSnapshot, VesperDownloadStaleResource) async -> VesperDownloadSource?)? = nil,
         staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler? = nil
     ) {
         self.configuration = configuration

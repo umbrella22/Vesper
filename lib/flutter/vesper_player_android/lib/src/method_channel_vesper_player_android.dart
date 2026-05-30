@@ -56,6 +56,8 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
         const VesperSourceNormalizerConfiguration(),
     VesperFrameProcessorConfiguration frameProcessorConfiguration =
         const VesperFrameProcessorConfiguration(),
+    VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
+        const VesperNativeFramePipelineConfiguration(),
   }) async {
     final trackPreferenceMap = trackPreferencePolicy.toMap();
     final preloadBudgetMap = preloadBudgetPolicy.toMap();
@@ -75,6 +77,8 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
         'sourceNormalizer': sourceNormalizerConfiguration.toMap(),
       if (frameProcessorConfiguration.hasOverrides)
         'frameProcessor': frameProcessorConfiguration.toMap(),
+      if (nativeFramePipelineConfiguration.hasOverrides)
+        'nativeFramePipeline': nativeFramePipelineConfiguration.toMap(),
     });
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)

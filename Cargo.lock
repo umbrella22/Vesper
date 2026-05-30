@@ -1648,6 +1648,7 @@ dependencies = [
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
+ "serde",
  "serde_json",
 ]
 

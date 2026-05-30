@@ -15,7 +15,8 @@ use player_plugin::{
     DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
     DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
     DecoderReceiveNativeFrameMetadata, DecoderSessionConfig, DecoderSessionInfo,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
+    NativeFramePipelineProfile, VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
     VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
     VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
@@ -96,6 +97,11 @@ impl D3D11DecoderSession {
                     coded_height: Some(frame.coded_height),
                     visible_rect: None,
                     handle_kind: frame.handle_kind,
+                    pipeline_profile: Some(NativeFramePipelineProfile::D3D11Texture2D),
+                    color_space: None,
+                    hdr_metadata: None,
+                    sync_info: None,
+                    transform: None,
                     frame_id: Some(frame.frame_id),
                     release_tracking: Some(DecoderNativeFrameReleaseTracking {
                         frame_id: Some(frame.frame_id),
@@ -360,6 +366,7 @@ fn decoder_native_requirements() -> DecoderNativeRequirements {
     DecoderNativeRequirements {
         required_device_context_kinds: vec![DecoderNativeDeviceContextKind::D3D11Device],
         output_handle_kinds: vec![DecoderNativeHandleKind::D3D11Texture2D],
+        output_pipeline_profiles: vec![NativeFramePipelineProfile::D3D11Texture2D],
         requires_native_device_context: true,
         accepted_bitstream_formats: vec![
             DecoderBitstreamFormat::AnnexB,
@@ -1039,8 +1046,8 @@ mod tests {
         DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeDeviceContext,
         DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderNativeRequirements,
         DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
-        VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperDecoderPluginApiV2, VesperPluginKind,
-        VesperPluginResultStatus,
+        NativeFramePipelineProfile, VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperDecoderPluginApiV2,
+        VesperPluginKind, VesperPluginResultStatus,
     };
 
     #[test]
@@ -1085,6 +1092,10 @@ mod tests {
             requirements.output_handle_kinds,
             vec![DecoderNativeHandleKind::D3D11Texture2D]
         );
+        assert_eq!(
+            requirements.output_pipeline_profiles,
+            vec![NativeFramePipelineProfile::D3D11Texture2D]
+        );
         assert!(
             requirements
                 .accepted_bitstream_formats
@@ -1119,6 +1130,10 @@ mod tests {
         assert_eq!(
             requirements.output_handle_kinds,
             vec![DecoderNativeHandleKind::D3D11Texture2D]
+        );
+        assert_eq!(
+            requirements.output_pipeline_profiles,
+            vec![NativeFramePipelineProfile::D3D11Texture2D]
         );
         // SAFETY: `payload` was allocated by this plugin and has not been freed.
         unsafe { super::free_plugin_bytes(api.context, payload) };

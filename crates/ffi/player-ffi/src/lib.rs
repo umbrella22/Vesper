@@ -337,6 +337,8 @@ pub struct FfiPluginDecoderCapabilitySummary {
 pub struct FfiPluginFrameProcessorCapabilitySummary {
     pub accepted_input_handle_kinds: Vec<String>,
     pub output_handle_kinds: Vec<String>,
+    pub accepted_input_pipeline_profiles: Vec<String>,
+    pub output_pipeline_profiles: Vec<String>,
     pub supports_video_frames: bool,
     pub supports_in_place_passthrough: bool,
     pub preserves_dimensions: bool,
@@ -392,6 +394,7 @@ pub enum FfiPluginParticipation {
     Selected,
     Participated,
     Bypassed,
+    Fallback,
 }
 
 #[derive(Debug, Clone)]
@@ -1298,6 +1301,8 @@ impl From<PlayerPluginFrameProcessorCapabilitySummary>
         Self {
             accepted_input_handle_kinds: value.accepted_input_handle_kinds,
             output_handle_kinds: value.output_handle_kinds,
+            accepted_input_pipeline_profiles: value.accepted_input_pipeline_profiles,
+            output_pipeline_profiles: value.output_pipeline_profiles,
             supports_video_frames: value.supports_video_frames,
             supports_in_place_passthrough: value.supports_in_place_passthrough,
             preserves_dimensions: value.preserves_dimensions,
@@ -1369,6 +1374,7 @@ impl From<PlayerPluginParticipation> for FfiPluginParticipation {
             PlayerPluginParticipation::Selected => Self::Selected,
             PlayerPluginParticipation::Participated => Self::Participated,
             PlayerPluginParticipation::Bypassed => Self::Bypassed,
+            PlayerPluginParticipation::Fallback => Self::Fallback,
         }
     }
 }

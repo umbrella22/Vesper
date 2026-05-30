@@ -17,12 +17,14 @@ use player_plugin_loader::{
     SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_runtime::{
-    FrameProcessorMode, PlayerPluginCapabilitySummary, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerPluginFrameProcessorCapabilitySummary,
-    PlayerPluginParticipation, PlayerPluginSourceNormalizerCapabilitySummary, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, SourceNormalizerMode,
+    FrameProcessorMode, NativeFramePipelineMode, PlayerPlaybackRoute,
+    PlayerPluginCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation,
+    PlayerPluginSourceNormalizerCapabilitySummary, PlayerRuntimeOptions, PlayerRuntimeStartup,
+    SourceNormalizerMode,
 };
 use serde::Serialize;
+use serde::ser::{SerializeMap, Serializer};
 
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,10 +63,30 @@ impl Default for MobileFrameProcessorConfiguration {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileNativeFramePipelineConfiguration {
+    pub mode: NativeFramePipelineMode,
+    pub decoder_plugin_library_paths: Vec<PathBuf>,
+    pub frame_processor_plugin_library_paths: Vec<PathBuf>,
+    pub max_in_flight_frames: Option<u32>,
+}
+
+impl Default for MobileNativeFramePipelineConfiguration {
+    fn default() -> Self {
+        Self {
+            mode: NativeFramePipelineMode::Disabled,
+            decoder_plugin_library_paths: Vec::new(),
+            frame_processor_plugin_library_paths: Vec::new(),
+            max_in_flight_frames: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MobilePluginConfiguration {
     pub source_normalizer: MobileSourceNormalizerConfiguration,
     pub frame_processor: MobileFrameProcessorConfiguration,
+    pub native_frame_pipeline: MobileNativeFramePipelineConfiguration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +184,16 @@ impl MobilePluginConfiguration {
                 mode: options.frame_processor_mode,
                 plugin_library_paths: options.frame_processor_library_paths.clone(),
             },
+            native_frame_pipeline: MobileNativeFramePipelineConfiguration {
+                mode: NativeFramePipelineMode::Disabled,
+                decoder_plugin_library_paths: options.decoder_plugin_library_paths.clone(),
+                frame_processor_plugin_library_paths: options.frame_processor_library_paths.clone(),
+                max_in_flight_frames: Some(
+                    options
+                        .frame_processor_policy
+                        .max_in_flight_frames_per_processor,
+                ),
+            },
         }
     }
 
@@ -171,6 +203,40 @@ impl MobilePluginConfiguration {
             self.source_normalizer.plugin_library_paths.clone();
         options.frame_processor_mode = self.frame_processor.mode;
         options.frame_processor_library_paths = self.frame_processor.plugin_library_paths.clone();
+        options.decoder_plugin_video_mode = match self.native_frame_pipeline.mode {
+            NativeFramePipelineMode::PreferNativeFrame
+            | NativeFramePipelineMode::RequireNativeFrame => {
+                player_runtime::PlayerDecoderPluginVideoMode::PreferNativeFrame
+            }
+            NativeFramePipelineMode::Disabled | NativeFramePipelineMode::DiagnosticsOnly => {
+                player_runtime::PlayerDecoderPluginVideoMode::DiagnosticsOnly
+            }
+        };
+        if !self
+            .native_frame_pipeline
+            .decoder_plugin_library_paths
+            .is_empty()
+        {
+            options.decoder_plugin_library_paths = self
+                .native_frame_pipeline
+                .decoder_plugin_library_paths
+                .clone();
+        }
+        if !self
+            .native_frame_pipeline
+            .frame_processor_plugin_library_paths
+            .is_empty()
+        {
+            options.frame_processor_library_paths = self
+                .native_frame_pipeline
+                .frame_processor_plugin_library_paths
+                .clone();
+        }
+        if let Some(max_in_flight_frames) = self.native_frame_pipeline.max_in_flight_frames {
+            options
+                .frame_processor_policy
+                .max_in_flight_frames_per_processor = max_in_flight_frames.max(1);
+        }
     }
 }
 
@@ -188,6 +254,11 @@ pub fn apply_mobile_plugin_diagnostics(
     startup
         .plugin_diagnostics
         .extend(frame_processor_diagnostics(&configuration.frame_processor));
+    startup
+        .plugin_diagnostics
+        .extend(native_frame_pipeline_diagnostics(
+            &configuration.native_frame_pipeline,
+        ));
     startup
 }
 
@@ -261,7 +332,8 @@ pub fn open_mobile_source_normalizer_resource(
                 record.plugin_name.clone(),
                 PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
                 format!(
-                    "source normalizer normalized-resource open failed; route=fallbackOriginal; error={error}"
+                    "source normalizer normalized-resource open failed; route={}; error={error}",
+                    PlayerPlaybackRoute::SystemPlayer.wire_name()
                 ),
                 PlayerPluginParticipation::Bypassed,
             ));
@@ -370,7 +442,8 @@ pub fn source_normalizer_diagnostics(
                 None,
                 PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
                 format!(
-                    "source normalizer normalized-resource probe bypassed; route=native; fallbackReason={}",
+                    "source normalizer normalized-resource probe bypassed; route={}; fallbackReason={}",
+                    PlayerPlaybackRoute::SystemPlayer.wire_name(),
                     decision.reason
                 ),
                 PlayerPluginParticipation::Bypassed,
@@ -443,6 +516,95 @@ pub fn frame_processor_diagnostics(
         .iter()
         .map(|record| diagnostic_from_record(record, frame_processor_participation(record)))
         .collect()
+}
+
+pub fn native_frame_pipeline_diagnostics(
+    configuration: &MobileNativeFramePipelineConfiguration,
+) -> Vec<PlayerPluginDiagnostic> {
+    if configuration.mode == NativeFramePipelineMode::Disabled
+        && configuration.decoder_plugin_library_paths.is_empty()
+        && configuration
+            .frame_processor_plugin_library_paths
+            .is_empty()
+    {
+        return Vec::new();
+    }
+
+    let participation = match configuration.mode {
+        NativeFramePipelineMode::PreferNativeFrame
+        | NativeFramePipelineMode::RequireNativeFrame => PlayerPluginParticipation::Selected,
+        NativeFramePipelineMode::DiagnosticsOnly => PlayerPluginParticipation::Available,
+        NativeFramePipelineMode::Disabled => PlayerPluginParticipation::Available,
+    };
+    let message = match configuration.mode {
+        NativeFramePipelineMode::Disabled => {
+            "mobile native-frame pipeline is disabled; system player remains selected"
+        }
+        NativeFramePipelineMode::DiagnosticsOnly => {
+            "mobile native-frame pipeline diagnostics are enabled; playback still uses the system player"
+        }
+        NativeFramePipelineMode::PreferNativeFrame => {
+            "mobile native-frame pipeline is explicitly preferred; selected sdkManagedNativeFrame route when platform requirements are available"
+        }
+        NativeFramePipelineMode::RequireNativeFrame => {
+            "mobile native-frame pipeline is explicitly required; sdkManagedNativeFrame route must fail visibly when unavailable"
+        }
+    };
+    let route = match configuration.mode {
+        NativeFramePipelineMode::PreferNativeFrame
+        | NativeFramePipelineMode::RequireNativeFrame => {
+            PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name()
+        }
+        NativeFramePipelineMode::Disabled | NativeFramePipelineMode::DiagnosticsOnly => {
+            PlayerPlaybackRoute::SystemPlayer.wire_name()
+        }
+    };
+
+    let path = configuration
+        .decoder_plugin_library_paths
+        .iter()
+        .chain(configuration.frame_processor_plugin_library_paths.iter())
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(std::path::MAIN_SEPARATOR_STR);
+    vec![PlayerPluginDiagnostic {
+        path,
+        plugin_name: Some("vesper-mobile-native-frame-pipeline".to_owned()),
+        plugin_kind: Some("native_frame_pipeline".to_owned()),
+        status: PlayerPluginDiagnosticStatus::Loaded,
+        message: Some(format!(
+            "{message}; route={route}; decoder_plugins={}; frame_processors={}; max_in_flight_frames={}",
+            configuration.decoder_plugin_library_paths.len(),
+            configuration.frame_processor_plugin_library_paths.len(),
+            configuration
+                .max_in_flight_frames
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "default".to_owned())
+        )),
+        capability: None,
+        participation,
+        details: vec![
+            player_plugin_detail("route", route),
+            player_plugin_detail(
+                "decoderPlugins",
+                configuration.decoder_plugin_library_paths.len().to_string(),
+            ),
+            player_plugin_detail(
+                "frameProcessors",
+                configuration
+                    .frame_processor_plugin_library_paths
+                    .len()
+                    .to_string(),
+            ),
+            player_plugin_detail(
+                "maxInFlightFrames",
+                configuration
+                    .max_in_flight_frames
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "default".to_owned()),
+            ),
+        ],
+    }]
 }
 
 fn preflight_source_normalizer(
@@ -587,7 +749,8 @@ fn probe_source_normalizer_resource(
                 Some(factory.name().to_owned()),
                 PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
                 format!(
-                    "source normalizer resource probe open failed; route=fallbackOriginal; error={error}"
+                    "source normalizer resource probe open failed; route={}; error={error}",
+                    PlayerPlaybackRoute::SystemPlayer.wire_name()
                 ),
                 PlayerPluginParticipation::Bypassed,
             );
@@ -868,38 +1031,20 @@ fn diagnostic_from_record(
         path: record.path.display().to_string(),
         plugin_name: record.plugin_name.clone(),
         plugin_kind: record.plugin_kind.map(plugin_kind_label).map(str::to_owned),
-        status: match record.status {
-            PluginDiagnosticStatus::Loaded => PlayerPluginDiagnosticStatus::Loaded,
-            PluginDiagnosticStatus::LoadFailed => PlayerPluginDiagnosticStatus::LoadFailed,
-            PluginDiagnosticStatus::UnsupportedKind => {
-                PlayerPluginDiagnosticStatus::UnsupportedKind
-            }
-            PluginDiagnosticStatus::DecoderSupported => {
-                PlayerPluginDiagnosticStatus::DecoderSupported
-            }
-            PluginDiagnosticStatus::DecoderUnsupported => {
-                PlayerPluginDiagnosticStatus::DecoderUnsupported
-            }
-            PluginDiagnosticStatus::FrameProcessorSupported => {
-                PlayerPluginDiagnosticStatus::FrameProcessorSupported
-            }
-            PluginDiagnosticStatus::FrameProcessorUnsupported => {
-                PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
-            }
-            PluginDiagnosticStatus::SourceNormalizerSupported => {
-                PlayerPluginDiagnosticStatus::SourceNormalizerSupported
-            }
-            PluginDiagnosticStatus::SourceNormalizerUnsupported => {
-                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
-            }
-        },
+        status: runtime_status_from_loader(record.status),
         message: record.message.clone(),
         capability: record
             .capability_summary
             .as_ref()
             .map(capability_summary_from_loader),
         participation,
+        details: Vec::new(),
     }
+}
+
+fn runtime_status_from_loader(status: PluginDiagnosticStatus) -> PlayerPluginDiagnosticStatus {
+    PlayerPluginDiagnosticStatus::from_wire_name(status.wire_name())
+        .unwrap_or(PlayerPluginDiagnosticStatus::UnsupportedKind)
 }
 
 fn capability_summary_from_loader(
@@ -924,7 +1069,9 @@ fn capability_summary_from_loader(
                 supports_native_frame_output: summary.supports_native_frame_output,
                 supports_hardware_decode: summary.supports_hardware_decode,
                 supports_cpu_video_frames: summary.supports_cpu_video_frames,
+                supports_audio_packets: summary.supports_audio_packets,
                 supports_audio_frames: summary.supports_audio_frames,
+                supports_pcm_frames: summary.supports_pcm_frames,
                 supports_gpu_handles: summary.supports_gpu_handles,
                 supports_flush: summary.supports_flush,
                 supports_drain: summary.supports_drain,
@@ -962,6 +1109,16 @@ fn frame_processor_summary_from_loader(
             .output_handle_kinds
             .iter()
             .map(|kind| format!("{kind:?}"))
+            .collect(),
+        accepted_input_pipeline_profiles: summary
+            .accepted_input_pipeline_profiles
+            .iter()
+            .map(|profile| profile.label())
+            .collect(),
+        output_pipeline_profiles: summary
+            .output_pipeline_profiles
+            .iter()
+            .map(|profile| profile.label())
             .collect(),
         supports_video_frames: summary.supports_video_frames,
         supports_in_place_passthrough: summary.supports_in_place_passthrough,
@@ -1082,6 +1239,7 @@ fn runtime_source_normalizer_diagnostic(
         message: Some(message.into()),
         capability: None,
         participation,
+        details: Vec::new(),
     }
 }
 
@@ -1099,6 +1257,17 @@ fn runtime_frame_processor_diagnostic(
         message: Some(message.into()),
         capability: None,
         participation,
+        details: Vec::new(),
+    }
+}
+
+fn player_plugin_detail(
+    key: impl Into<String>,
+    value: impl Into<String>,
+) -> player_runtime::PlayerPluginDiagnosticDetail {
+    player_runtime::PlayerPluginDiagnosticDetail {
+        key: key.into(),
+        value: value.into(),
     }
 }
 
@@ -1282,6 +1451,8 @@ pub struct MobilePluginDiagnosticWire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     capability: Option<WirePluginCapability<'a>>,
     participation: &'static str,
+    #[serde(skip_serializing_if = "PluginDiagnosticDetailsWire::is_empty")]
+    details: PluginDiagnosticDetailsWire<'a>,
 }
 
 impl MobileSourceNormalizerResourceWire {
@@ -1359,6 +1530,8 @@ pub struct MobilePluginDiagnosticOwnedWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     participation: &'static str,
+    #[serde(skip_serializing_if = "OwnedPluginDiagnosticDetailsWire::is_empty")]
+    details: OwnedPluginDiagnosticDetailsWire,
 }
 
 impl From<&PlayerPluginDiagnostic> for MobilePluginDiagnosticOwnedWire {
@@ -1370,6 +1543,7 @@ impl From<&PlayerPluginDiagnostic> for MobilePluginDiagnosticOwnedWire {
             status: status_wire_name(value.status),
             message: value.message.clone(),
             participation: participation_wire_name(value.participation),
+            details: OwnedPluginDiagnosticDetailsWire::from(value.details.as_slice()),
         }
     }
 }
@@ -1384,7 +1558,68 @@ impl<'a> From<&'a PlayerPluginDiagnostic> for MobilePluginDiagnosticWire<'a> {
             message: value.message.as_deref(),
             capability: value.capability.as_ref().map(WirePluginCapability::from),
             participation: participation_wire_name(value.participation),
+            details: PluginDiagnosticDetailsWire::from(value.details.as_slice()),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct PluginDiagnosticDetailsWire<'a> {
+    details: &'a [player_runtime::PlayerPluginDiagnosticDetail],
+}
+
+impl<'a> PluginDiagnosticDetailsWire<'a> {
+    fn is_empty(&self) -> bool {
+        self.details.is_empty()
+    }
+}
+
+impl<'a> From<&'a [player_runtime::PlayerPluginDiagnosticDetail]>
+    for PluginDiagnosticDetailsWire<'a>
+{
+    fn from(details: &'a [player_runtime::PlayerPluginDiagnosticDetail]) -> Self {
+        Self { details }
+    }
+}
+
+impl Serialize for PluginDiagnosticDetailsWire<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.details.len()))?;
+        for detail in self.details {
+            map.serialize_entry(detail.key.as_str(), detail.value.as_str())?;
+        }
+        map.end()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OwnedPluginDiagnosticDetailsWire {
+    details: Vec<player_runtime::PlayerPluginDiagnosticDetail>,
+}
+
+impl OwnedPluginDiagnosticDetailsWire {
+    fn is_empty(&self) -> bool {
+        self.details.is_empty()
+    }
+}
+
+impl From<&[player_runtime::PlayerPluginDiagnosticDetail]> for OwnedPluginDiagnosticDetailsWire {
+    fn from(details: &[player_runtime::PlayerPluginDiagnosticDetail]) -> Self {
+        Self {
+            details: details.to_vec(),
+        }
+    }
+}
+
+impl Serialize for OwnedPluginDiagnosticDetailsWire {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        PluginDiagnosticDetailsWire::from(self.details.as_slice()).serialize(serializer)
     }
 }
 
@@ -1490,6 +1725,8 @@ impl<'a> From<&'a player_runtime::PlayerPluginDecoderCapabilitySummary>
 struct WireFrameProcessorCapability<'a> {
     accepted_input_handle_kinds: &'a [String],
     output_handle_kinds: &'a [String],
+    accepted_input_pipeline_profiles: &'a [String],
+    output_pipeline_profiles: &'a [String],
     supports_video_frames: bool,
     supports_in_place_passthrough: bool,
     preserves_dimensions: bool,
@@ -1510,6 +1747,8 @@ impl<'a> From<&'a PlayerPluginFrameProcessorCapabilitySummary>
         Self {
             accepted_input_handle_kinds: &value.accepted_input_handle_kinds,
             output_handle_kinds: &value.output_handle_kinds,
+            accepted_input_pipeline_profiles: &value.accepted_input_pipeline_profiles,
+            output_pipeline_profiles: &value.output_pipeline_profiles,
             supports_video_frames: value.supports_video_frames,
             supports_in_place_passthrough: value.supports_in_place_passthrough,
             preserves_dimensions: value.preserves_dimensions,
@@ -1594,27 +1833,11 @@ impl<'a> From<&'a PlayerPluginSourceNormalizerCapabilitySummary>
 }
 
 fn status_wire_name(status: PlayerPluginDiagnosticStatus) -> &'static str {
-    match status {
-        PlayerPluginDiagnosticStatus::Loaded => "loaded",
-        PlayerPluginDiagnosticStatus::LoadFailed => "loadFailed",
-        PlayerPluginDiagnosticStatus::UnsupportedKind => "unsupportedKind",
-        PlayerPluginDiagnosticStatus::DecoderSupported => "decoderSupported",
-        PlayerPluginDiagnosticStatus::DecoderUnsupported => "decoderUnsupported",
-        PlayerPluginDiagnosticStatus::FrameProcessorSupported => "frameProcessorSupported",
-        PlayerPluginDiagnosticStatus::FrameProcessorUnsupported => "frameProcessorUnsupported",
-        PlayerPluginDiagnosticStatus::SourceNormalizerSupported => "sourceNormalizerSupported",
-        PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported => "sourceNormalizerUnsupported",
-    }
+    status.wire_name()
 }
 
 fn participation_wire_name(participation: PlayerPluginParticipation) -> &'static str {
-    match participation {
-        PlayerPluginParticipation::Unknown => "unknown",
-        PlayerPluginParticipation::Available => "available",
-        PlayerPluginParticipation::Selected => "selected",
-        PlayerPluginParticipation::Participated => "participated",
-        PlayerPluginParticipation::Bypassed => "bypassed",
-    }
+    participation.wire_name()
 }
 
 #[cfg(test)]
@@ -1639,6 +1862,40 @@ mod tests {
         .plugin_diagnostics;
 
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn native_frame_pipeline_configuration_applies_to_runtime_options() {
+        let mut options = PlayerRuntimeOptions::default();
+        MobilePluginConfiguration {
+            native_frame_pipeline: MobileNativeFramePipelineConfiguration {
+                mode: NativeFramePipelineMode::RequireNativeFrame,
+                decoder_plugin_library_paths: vec![PathBuf::from("/tmp/libdecoder.dylib")],
+                frame_processor_plugin_library_paths: vec![PathBuf::from("/tmp/libframe.dylib")],
+                max_in_flight_frames: Some(3),
+            },
+            ..MobilePluginConfiguration::default()
+        }
+        .apply_to_runtime_options(&mut options);
+
+        assert_eq!(
+            options.decoder_plugin_video_mode,
+            player_runtime::PlayerDecoderPluginVideoMode::PreferNativeFrame
+        );
+        assert_eq!(
+            options.decoder_plugin_library_paths,
+            vec![PathBuf::from("/tmp/libdecoder.dylib")]
+        );
+        assert_eq!(
+            options.frame_processor_library_paths,
+            vec![PathBuf::from("/tmp/libframe.dylib")]
+        );
+        assert_eq!(
+            options
+                .frame_processor_policy
+                .max_in_flight_frames_per_processor,
+            3
+        );
     }
 
     #[test]
@@ -1681,6 +1938,65 @@ mod tests {
     }
 
     #[test]
+    fn native_frame_pipeline_diagnostics_are_explicit_opt_in() {
+        let diagnostics =
+            native_frame_pipeline_diagnostics(&MobileNativeFramePipelineConfiguration {
+                mode: NativeFramePipelineMode::PreferNativeFrame,
+                decoder_plugin_library_paths: vec![PathBuf::from("/tmp/libdecoder.dylib")],
+                frame_processor_plugin_library_paths: vec![PathBuf::from("/tmp/libframe.dylib")],
+                max_in_flight_frames: Some(2),
+            });
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].plugin_kind.as_deref(),
+            Some("native_frame_pipeline")
+        );
+        assert_eq!(
+            diagnostics[0].participation,
+            PlayerPluginParticipation::Selected
+        );
+        assert!(
+            diagnostics[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("explicitly preferred")
+        );
+        assert!(
+            diagnostics[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("route=sdkManagedNativeFrame")
+        );
+    }
+
+    #[test]
+    fn native_frame_pipeline_diagnostics_only_keeps_system_player_route() {
+        let diagnostics =
+            native_frame_pipeline_diagnostics(&MobileNativeFramePipelineConfiguration {
+                mode: NativeFramePipelineMode::DiagnosticsOnly,
+                decoder_plugin_library_paths: vec![PathBuf::from("/tmp/libdecoder.dylib")],
+                frame_processor_plugin_library_paths: Vec::new(),
+                max_in_flight_frames: None,
+            });
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].participation,
+            PlayerPluginParticipation::Available
+        );
+        assert!(
+            diagnostics[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("route=systemPlayer")
+        );
+    }
+
+    #[test]
     fn diagnostics_json_uses_shared_flutter_wire_names() {
         let json = mobile_plugin_diagnostics_json(
             &MediaSource::new("placeholder.mp4"),
@@ -1698,6 +2014,74 @@ mod tests {
         assert!(json.contains("sourceNormalizerUnsupported"));
         assert!(json.contains("frameProcessorUnsupported"));
         assert!(json.contains("participation"));
+    }
+
+    #[test]
+    fn loader_statuses_convert_through_shared_wire_contract() {
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::Loaded),
+            PlayerPluginDiagnosticStatus::Loaded
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::LoadFailed),
+            PlayerPluginDiagnosticStatus::LoadFailed
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::UnsupportedKind),
+            PlayerPluginDiagnosticStatus::UnsupportedKind
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::DecoderSupported),
+            PlayerPluginDiagnosticStatus::DecoderSupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::DecoderUnsupported),
+            PlayerPluginDiagnosticStatus::DecoderUnsupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::FrameProcessorSupported),
+            PlayerPluginDiagnosticStatus::FrameProcessorSupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::FrameProcessorUnsupported),
+            PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::SourceNormalizerSupported),
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+        );
+        assert_eq!(
+            runtime_status_from_loader(PluginDiagnosticStatus::SourceNormalizerUnsupported),
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
+        );
+    }
+
+    #[test]
+    fn participation_wire_names_match_shared_diagnostics_contract() {
+        assert_eq!(
+            participation_wire_name(PlayerPluginParticipation::Unknown),
+            "unknown"
+        );
+        assert_eq!(
+            participation_wire_name(PlayerPluginParticipation::Available),
+            "available"
+        );
+        assert_eq!(
+            participation_wire_name(PlayerPluginParticipation::Selected),
+            "selected"
+        );
+        assert_eq!(
+            participation_wire_name(PlayerPluginParticipation::Participated),
+            "participated"
+        );
+        assert_eq!(
+            participation_wire_name(PlayerPluginParticipation::Bypassed),
+            "bypassed"
+        );
+        assert_eq!(
+            participation_wire_name(PlayerPluginParticipation::Fallback),
+            "fallback"
+        );
     }
 
     #[test]
@@ -1816,7 +2200,7 @@ mod tests {
                         .message
                         .as_deref()
                         .map(|message| {
-                            message.contains("route=native")
+                            message.contains("route=systemPlayer")
                                 && message.contains("standard source stays native-first")
                         })
                         .unwrap_or(false)

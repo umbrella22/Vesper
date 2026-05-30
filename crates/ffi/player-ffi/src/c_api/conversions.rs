@@ -606,11 +606,19 @@ impl From<BridgePluginFrameProcessorCapabilitySummary>
             into_owned_c_string_array(value.accepted_input_handle_kinds);
         let (output_handle_kinds, output_handle_kinds_len) =
             into_owned_c_string_array(value.output_handle_kinds);
+        let (accepted_input_pipeline_profiles, accepted_input_pipeline_profiles_len) =
+            into_owned_c_string_array(value.accepted_input_pipeline_profiles);
+        let (output_pipeline_profiles, output_pipeline_profiles_len) =
+            into_owned_c_string_array(value.output_pipeline_profiles);
         Self {
             accepted_input_handle_kinds,
             accepted_input_handle_kinds_len,
             output_handle_kinds,
             output_handle_kinds_len,
+            accepted_input_pipeline_profiles,
+            accepted_input_pipeline_profiles_len,
+            output_pipeline_profiles,
+            output_pipeline_profiles_len,
             supports_video_frames: value.supports_video_frames,
             supports_in_place_passthrough: value.supports_in_place_passthrough,
             preserves_dimensions: value.preserves_dimensions,
@@ -734,6 +742,7 @@ impl From<BridgePluginParticipation> for PlayerFfiPluginParticipation {
             BridgePluginParticipation::Selected => Self::Selected,
             BridgePluginParticipation::Participated => Self::Participated,
             BridgePluginParticipation::Bypassed => Self::Bypassed,
+            BridgePluginParticipation::Fallback => Self::Fallback,
         }
     }
 }

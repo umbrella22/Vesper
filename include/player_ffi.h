@@ -88,6 +88,7 @@ typedef enum PlayerFfiPluginParticipation {
   PLAYER_FFI_PLUGIN_PARTICIPATION_SELECTED = 2,
   PLAYER_FFI_PLUGIN_PARTICIPATION_PARTICIPATED = 3,
   PLAYER_FFI_PLUGIN_PARTICIPATION_BYPASSED = 4,
+  PLAYER_FFI_PLUGIN_PARTICIPATION_FALLBACK = 5,
 } PlayerFfiPluginParticipation;
 
 typedef enum PlayerFfiMediaSourceKind {
@@ -261,6 +262,10 @@ typedef struct PlayerFfiPluginFrameProcessorCapabilitySummary {
   size_t accepted_input_handle_kinds_len;
   char **output_handle_kinds;
   size_t output_handle_kinds_len;
+  char **accepted_input_pipeline_profiles;
+  size_t accepted_input_pipeline_profiles_len;
+  char **output_pipeline_profiles;
+  size_t output_pipeline_profiles_len;
   bool supports_video_frames;
   bool supports_in_place_passthrough;
   bool preserves_dimensions;

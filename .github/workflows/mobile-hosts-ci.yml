@@ -182,8 +182,8 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install iOS build tools
+        run: brew install xcodegen pkg-config
 
       - name: Select Xcode 26.3
         run: xcodebuild -version

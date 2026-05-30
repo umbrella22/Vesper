@@ -163,6 +163,7 @@ framework_info_plist() {
   /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms:0 string $platform_name" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VESPER_RELEASE_BUILD" "$output_path"
   /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string $minimum_os_version" "$output_path"
+  vesper_apple_add_framework_install_metadata "$output_path" "$platform_name"
 }
 
 ensure_rpath() {

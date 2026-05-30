@@ -11,7 +11,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
     private let minProgressBytes: UInt64
     private let minProgressIntervalMs: UInt64
     private let stalledTransferTimeoutMs: UInt64
-    private let staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler?
+    private let staleResourceRecoveryHandler: (@Sendable (VesperDownloadTaskSnapshot, VesperDownloadStaleResource) async -> VesperDownloadSource?)?
     private let staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler?
 
     public init(
@@ -21,7 +21,7 @@ public final class VesperForegroundDownloadExecutor: VesperDownloadExecutor {
         minProgressBytes: UInt64 = vesperDownloadDefaultMinProgressBytes,
         minProgressIntervalMs: UInt64 = vesperDownloadDefaultMinProgressIntervalMs,
         stalledTransferTimeoutMs: UInt64 = vesperDownloadDefaultStalledTransferTimeoutMs,
-        staleResourceRecoveryHandler: VesperDownloadStaleResourceRecoveryHandler? = nil,
+        staleResourceRecoveryHandler: (@Sendable (VesperDownloadTaskSnapshot, VesperDownloadStaleResource) async -> VesperDownloadSource?)? = nil,
         staleResourcePlanRecoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler? = nil
     ) {
         self.baseDirectory = baseDirectory

@@ -300,6 +300,30 @@ impl Default for VesperDecoderReceiveNativeFrameResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+/// Result returned by `VesperDecoderPluginApiV4::receive_pcm_frame`.
+///
+/// On success, `metadata` must encode a `DecoderReceivePcmFrameMetadata`
+/// JSON document. When that metadata reports a frame, `data` owns the decoded
+/// PCM bytes and must be reclaimed with `free_bytes`. On failure, `metadata`
+/// must encode a `DecoderError` JSON document and `data` must be null.
+pub struct VesperDecoderReceivePcmFrameResult {
+    pub status: VesperPluginResultStatus,
+    pub metadata: VesperPluginBytes,
+    pub data: VesperPluginBytes,
+}
+
+impl Default for VesperDecoderReceivePcmFrameResult {
+    fn default() -> Self {
+        Self {
+            status: VesperPluginResultStatus::Success,
+            metadata: VesperPluginBytes::null(),
+            data: VesperPluginBytes::null(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 /// C ABI exposed by a decoder plugin that returns native frame handles.
 ///
 /// The v2 decoder ABI keeps the v1 packet/session lifecycle but returns a
@@ -365,6 +389,81 @@ unsafe impl Send for VesperDecoderPluginApiV2 {}
 // SAFETY: same reasoning as above; the plugin context is required to be safe for
 // concurrent shared access when exposed as a decoder plugin.
 unsafe impl Sync for VesperDecoderPluginApiV2 {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// Decoder ABI table with optional decoded PCM audio output.
+///
+/// This table preserves the v2 field order and appends the PCM callback at the
+/// tail. Plugins exporting it must use `VESPER_DECODER_PLUGIN_ABI_VERSION_V4`;
+/// v3 decoder plugins continue to load through `VesperDecoderPluginApiV2` and
+/// report audio PCM output as unsupported.
+pub struct VesperDecoderPluginApiV4 {
+    pub context: *mut c_void,
+    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
+    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
+    pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub native_requirements_json:
+        Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub open_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            config_json: *const u8,
+            config_json_len: usize,
+        ) -> VesperDecoderOpenSessionResult,
+    >,
+    pub send_packet: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            packet_json: *const u8,
+            packet_json_len: usize,
+            packet_data: *const u8,
+            packet_data_len: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub receive_native_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperDecoderReceiveNativeFrameResult,
+    >,
+    pub release_native_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            handle_kind: u32,
+            handle: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub flush_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub close_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
+    pub receive_pcm_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperDecoderReceivePcmFrameResult,
+    >,
+}
+
+// SAFETY: host-side wrappers only expose this API behind
+// `NativeDecoderPluginFactory`, and plugin authors must uphold the declared
+// `Send + Sync` contract for the underlying context pointer and callbacks.
+unsafe impl Send for VesperDecoderPluginApiV4 {}
+// SAFETY: same reasoning as above; the plugin context is required to be safe for
+// concurrent shared access when exposed as a decoder plugin.
+unsafe impl Sync for VesperDecoderPluginApiV4 {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -735,6 +834,8 @@ pub const VESPER_PLUGIN_ABI_VERSION_V2: u32 = 2;
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = VESPER_PLUGIN_ABI_VERSION_V2;
 /// Native-frame decoder ABI with typed native context payloads.
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V3: u32 = 3;
+/// Native-frame decoder ABI with optional decoded PCM audio output.
+pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V4: u32 = 4;
 /// ABI version used by post-download processors with assembly support.
 pub const VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3: u32 = 3;
 /// Initial ABI version used by native-frame processor plugins.

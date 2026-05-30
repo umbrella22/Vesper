@@ -52,6 +52,13 @@ enum VesperFrameProcessorMode {
   diagnosticsOnly,
 }
 
+enum VesperNativeFramePipelineMode {
+  disabled,
+  diagnosticsOnly,
+  preferNativeFrame,
+  requireNativeFrame,
+}
+
 final class VesperFrameProcessorConfiguration {
   const VesperFrameProcessorConfiguration({
     this.mode = VesperFrameProcessorMode.disabled,
@@ -82,6 +89,52 @@ final class VesperFrameProcessorConfiguration {
     return <String, Object?>{
       'mode': mode.name,
       'pluginLibraryPaths': pluginLibraryPaths,
+    };
+  }
+}
+
+final class VesperNativeFramePipelineConfiguration {
+  const VesperNativeFramePipelineConfiguration({
+    this.mode = VesperNativeFramePipelineMode.disabled,
+    this.decoderPluginLibraryPaths = const <String>[],
+    this.frameProcessorPluginLibraryPaths = const <String>[],
+    this.maxInFlightFrames,
+  });
+
+  factory VesperNativeFramePipelineConfiguration.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    return VesperNativeFramePipelineConfiguration(
+      mode: _decodeEnum(
+        VesperNativeFramePipelineMode.values,
+        map['mode'],
+        VesperNativeFramePipelineMode.disabled,
+      ),
+      decoderPluginLibraryPaths:
+          _decodeStringList(map['decoderPluginLibraryPaths']),
+      frameProcessorPluginLibraryPaths:
+          _decodeStringList(map['frameProcessorPluginLibraryPaths']),
+      maxInFlightFrames: (map['maxInFlightFrames'] as num?)?.toInt(),
+    );
+  }
+
+  final VesperNativeFramePipelineMode mode;
+  final List<String> decoderPluginLibraryPaths;
+  final List<String> frameProcessorPluginLibraryPaths;
+  final int? maxInFlightFrames;
+
+  bool get hasOverrides =>
+      mode != VesperNativeFramePipelineMode.disabled ||
+      decoderPluginLibraryPaths.isNotEmpty ||
+      frameProcessorPluginLibraryPaths.isNotEmpty ||
+      maxInFlightFrames != null;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'mode': mode.name,
+      'decoderPluginLibraryPaths': decoderPluginLibraryPaths,
+      'frameProcessorPluginLibraryPaths': frameProcessorPluginLibraryPaths,
+      if (maxInFlightFrames != null) 'maxInFlightFrames': maxInFlightFrames,
     };
   }
 }

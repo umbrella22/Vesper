@@ -53,6 +53,13 @@ impl DynamicNativeDecoderPluginFactory {
             api.context,
         )
         .map_err(map_capabilities_payload_error)?;
+        if decoder_capabilities_advertise_pcm_frames(&capabilities)
+            && api.receive_pcm_frame.is_none()
+        {
+            return Err(PluginLoadError::CapabilitiesAbiViolation(format!(
+                "decoder plugin `{name}` advertises PCM frame output but does not export receive_pcm_frame"
+            )));
+        }
         let native_requirements = decode_plugin_bytes::<DecoderNativeRequirements>(
             // SAFETY: the validated API guarantees `native_requirements_json`
             // and `free_bytes` are present and use the shared bytes ownership
@@ -73,6 +80,16 @@ impl DynamicNativeDecoderPluginFactory {
             }),
         })
     }
+}
+
+fn decoder_capabilities_advertise_pcm_frames(capabilities: &DecoderCapabilities) -> bool {
+    capabilities.supports_audio_frames
+        && capabilities.codecs.iter().any(|codec| {
+            codec.media_kind == DecoderMediaKind::Audio
+                && codec.output_formats.iter().any(|format| {
+                    matches!(format, DecoderFrameFormat::F32 | DecoderFrameFormat::S16)
+                })
+        })
 }
 
 impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
@@ -370,6 +387,108 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                 &self.factory.name,
                 "receive_native_frame",
             )),
+        }
+    }
+
+    fn receive_pcm_frame(&mut self) -> Result<DecoderReceivePcmFrameOutput, DecoderError> {
+        self.ensure_open()?;
+        let Some(receive_pcm_frame) = self.factory.api.receive_pcm_frame else {
+            return Err(DecoderError::UnsupportedCapability {
+                capability: "audio-pcm-output".to_owned(),
+            });
+        };
+        // SAFETY: when present, the optional decoder PCM callback follows the
+        // same synchronous ownership contract as `receive_native_frame`.
+        let result = unsafe { receive_pcm_frame(self.factory.api.context, self.session) };
+
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                let metadata = match decode_plugin_bytes::<DecoderReceivePcmFrameMetadata>(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        // Reclaim the plugin-owned PCM buffer before surfacing the
+                        // metadata decode failure, mirroring the success paths.
+                        reclaim_plugin_payload(
+                            result.data,
+                            self.factory.api.free_bytes,
+                            self.factory.api.context,
+                        );
+                        return Err(map_decoder_payload_error(
+                            &self.factory.name,
+                            "receive_pcm_frame",
+                            error,
+                        ));
+                    }
+                };
+                match metadata.status {
+                    DecoderReceiveFrameStatus::Frame => {
+                        let frame_metadata = match metadata.frame {
+                            Some(frame_metadata) => frame_metadata,
+                            None => {
+                                reclaim_plugin_payload(
+                                    result.data,
+                                    self.factory.api.free_bytes,
+                                    self.factory.api.context,
+                                );
+                                return Err(DecoderError::abi_violation(format!(
+                                    "native decoder plugin `{}` returned PCM frame status without frame metadata",
+                                    self.factory.name
+                                )));
+                            }
+                        };
+                        let data = plugin_bytes_into_vec(
+                            result.data,
+                            self.factory.api.free_bytes,
+                            self.factory.api.context,
+                        )
+                        .map_err(|error| {
+                            map_decoder_payload_error(
+                                &self.factory.name,
+                                "receive_pcm_frame_data",
+                                error,
+                            )
+                        })?;
+                        Ok(DecoderReceivePcmFrameOutput::Frame(DecoderPcmFrame {
+                            metadata: frame_metadata,
+                            data,
+                        }))
+                    }
+                    DecoderReceiveFrameStatus::NeedMoreInput => {
+                        reclaim_plugin_payload(
+                            result.data,
+                            self.factory.api.free_bytes,
+                            self.factory.api.context,
+                        );
+                        Ok(DecoderReceivePcmFrameOutput::NeedMoreInput)
+                    }
+                    DecoderReceiveFrameStatus::Eof => {
+                        reclaim_plugin_payload(
+                            result.data,
+                            self.factory.api.free_bytes,
+                            self.factory.api.context,
+                        );
+                        Ok(DecoderReceivePcmFrameOutput::Eof)
+                    }
+                }
+            }
+            VesperPluginResultStatus::Failure => {
+                reclaim_plugin_payload(
+                    result.data,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                Err(decode_decoder_error_payload(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                    &self.factory.name,
+                    "receive_pcm_frame",
+                ))
+            }
         }
     }
 

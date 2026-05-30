@@ -20,11 +20,13 @@ internal class VesperNativePlayerBridge(
     private val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
     private var keepScreenOnDuringPlayback: Boolean = true,
     appContext: Context? = null,
-    surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+    private val surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
     private val sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
         VesperSourceNormalizerConfiguration(),
     private val frameProcessorConfiguration: VesperFrameProcessorConfiguration =
         VesperFrameProcessorConfiguration(),
+    private val nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
+        VesperNativeFramePipelineConfiguration(),
 ) : PlayerBridge {
     private var currentSource: VesperPlayerSource? = initialSource
     private var hasInitializedSource = false
@@ -58,8 +60,10 @@ internal class VesperNativePlayerBridge(
     private val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     private val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
     private val surfaceHost = VesperNativeSurfaceHost(bindings, surfaceKind)
+    private var nativeFramePipelineFallbackReason: String? = null
     private var currentPluginDiagnostics: List<Map<String, Any?>> =
-        initialSource?.let(::probePluginsForSource) ?: emptyList()
+        initialSource?.let(::probePluginsForSource)
+            ?: nativeFramePipelineDiagnostics()
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.VesperNativeStub
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
@@ -99,6 +103,28 @@ internal class VesperNativePlayerBridge(
         }
 
         currentPluginDiagnostics = probePluginsForSource(source)
+        when (val decision = evaluateNativeFramePipelineRoute()) {
+            NativeFramePipelineRoute.SystemPlayer -> Unit
+            is NativeFramePipelineRoute.Fallback -> {
+                Log.i(TAG, "native-frame pipeline fallback: ${decision.reason}")
+            }
+            is NativeFramePipelineRoute.Fail -> {
+                recordBenchmark("native_frame_pipeline_failed", mapOf("reason" to decision.reason))
+                hasInitializedSource = false
+                pendingAutoPlay = false
+                clearTrackState()
+                updateState {
+                    copy(
+                        subtitle = i18n.stubError(decision.reason),
+                        sourceLabel = source.label,
+                    )
+                }
+                return
+            }
+            NativeFramePipelineRoute.NativeFrame -> {
+                recordBenchmark("native_frame_pipeline_selected")
+            }
+        }
         advanceNativeUpdateEpoch()
         runCatching { bindings.initialize(source, currentResiliencePolicy, trackPreferencePolicy) }
             .onSuccess {
@@ -196,10 +222,14 @@ internal class VesperNativePlayerBridge(
     }
 
     private fun probePluginsForSource(source: VesperPlayerSource): List<Map<String, Any?>> {
-        if (sourceNormalizerConfiguration.isDisabled && frameProcessorConfiguration.isDisabled) {
+        if (
+            sourceNormalizerConfiguration.isDisabled &&
+                frameProcessorConfiguration.isDisabled &&
+                nativeFramePipelineConfiguration.isDisabled
+        ) {
             return emptyList()
         }
-        return runCatching {
+        val pluginDiagnostics = runCatching {
             bindings.probeMobilePlugins(
                 source = source,
                 sourceNormalizerConfiguration = sourceNormalizerConfiguration,
@@ -208,6 +238,121 @@ internal class VesperNativePlayerBridge(
         }.onFailure { error ->
             Log.w(TAG, "mobile plugin diagnostics failed for source=${source.uri}", error)
         }.getOrDefault(emptyList())
+        return pluginDiagnostics + nativeFramePipelineDiagnostics()
+    }
+
+    private fun nativeFramePipelineDiagnostics(): List<Map<String, Any?>> {
+        if (nativeFramePipelineConfiguration.isDisabled) {
+            return emptyList()
+        }
+        val participation =
+            if (nativeFramePipelineFallbackReason != null) {
+                "fallbackOriginal"
+            } else {
+                when (nativeFramePipelineConfiguration.mode) {
+                    VesperNativeFramePipelineMode.PreferNativeFrame,
+                    VesperNativeFramePipelineMode.RequireNativeFrame -> "selected"
+                    VesperNativeFramePipelineMode.Disabled,
+                    VesperNativeFramePipelineMode.DiagnosticsOnly -> "available"
+                }
+            }
+        val route =
+            when (nativeFramePipelineConfiguration.mode) {
+                VesperNativeFramePipelineMode.Disabled,
+                VesperNativeFramePipelineMode.DiagnosticsOnly -> "bypassed"
+                VesperNativeFramePipelineMode.PreferNativeFrame,
+                VesperNativeFramePipelineMode.RequireNativeFrame ->
+                    if (nativeFramePipelineFallbackReason == null) "nativeFramePending" else "fallbackOriginal"
+            }
+        val status = if (nativeFramePipelineFallbackReason == null) "loaded" else "unsupported"
+        val message =
+            when (nativeFramePipelineConfiguration.mode) {
+                VesperNativeFramePipelineMode.Disabled ->
+                    "Mobile native-frame pipeline is disabled; system player remains selected."
+                VesperNativeFramePipelineMode.DiagnosticsOnly ->
+                    "Mobile native-frame pipeline diagnostics are enabled; playback still uses the system player."
+                VesperNativeFramePipelineMode.PreferNativeFrame ->
+                    "Mobile native-frame pipeline is explicitly preferred; Android MediaCodec HardwareBuffer lane is selected when available."
+                VesperNativeFramePipelineMode.RequireNativeFrame ->
+                    "Mobile native-frame pipeline is explicitly required; Android MediaCodec HardwareBuffer lane must be available."
+            }
+        val resolvedMessage =
+            nativeFramePipelineFallbackReason?.let { "$message Fallback reason: $it" } ?: message
+        return listOf(
+            mutableMapOf<String, Any?>(
+                "path" to
+                    (
+                        nativeFramePipelineConfiguration.decoderPluginLibraryPaths +
+                            nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths
+                    ).joinToString(separator = java.io.File.pathSeparator),
+                "pluginName" to "vesper-android-native-frame-pipeline",
+                "pluginKind" to "native_frame_pipeline",
+                "status" to status,
+                "message" to
+                    "$resolvedMessage decoderPlugins=${nativeFramePipelineConfiguration.decoderPluginLibraryPaths.size}; " +
+                        "frameProcessors=${nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.size}; " +
+                        "maxInFlightFrames=${nativeFramePipelineConfiguration.maxInFlightFrames ?: "default"}",
+                "participation" to participation,
+                "route" to route,
+                "sourceInput" to "sourceNormalizerPacket",
+                "decoderAdapter" to "MediaCodec",
+                "presenterProfile" to "SurfaceView",
+                "pipelineProfile" to "MediaCodecHardwareBuffer",
+                "processedFrames" to 0,
+                "presentedFrames" to 0,
+                "deadlineMisses" to 0,
+                "backpressureCount" to 0,
+                "lateDropped" to 0,
+                "fallbackReason" to nativeFramePipelineFallbackReason,
+            )
+        )
+    }
+
+    private fun evaluateNativeFramePipelineRoute(): NativeFramePipelineRoute {
+        return when (nativeFramePipelineConfiguration.mode) {
+            VesperNativeFramePipelineMode.Disabled,
+            VesperNativeFramePipelineMode.DiagnosticsOnly -> {
+                nativeFramePipelineFallbackReason = null
+                NativeFramePipelineRoute.SystemPlayer
+            }
+            VesperNativeFramePipelineMode.PreferNativeFrame,
+            VesperNativeFramePipelineMode.RequireNativeFrame -> {
+                val reason = nativeFramePipelineUnavailableReason()
+                if (reason == null) {
+                    nativeFramePipelineFallbackReason = null
+                    currentPluginDiagnostics = probePluginsForSource(currentSource ?: return NativeFramePipelineRoute.SystemPlayer)
+                    NativeFramePipelineRoute.NativeFrame
+                } else {
+                    nativeFramePipelineFallbackReason = reason
+                    currentSource?.let { currentPluginDiagnostics = probePluginsForSource(it) }
+                    if (nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame) {
+                        NativeFramePipelineRoute.Fail(reason)
+                    } else {
+                        NativeFramePipelineRoute.Fallback(reason)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun nativeFramePipelineUnavailableReason(): String? {
+        if (nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty()) {
+            return "Android native-frame pipeline requires a MediaCodec decoder plugin path."
+        }
+        if (sourceNormalizerConfiguration.pluginLibraryPaths.isEmpty()) {
+            return "Android native-frame pipeline requires a SourceNormalizer packet-stream plugin path."
+        }
+        if (surfaceKind != NativeVideoSurfaceKind.SurfaceView) {
+            return "Android native-frame pipeline currently supports SurfaceView only; TextureView falls back to system playback."
+        }
+        return "Android native-frame packet decoder lane is not wired to the host kit yet."
+    }
+
+    private sealed interface NativeFramePipelineRoute {
+        data object SystemPlayer : NativeFramePipelineRoute
+        data class Fallback(val reason: String) : NativeFramePipelineRoute
+        data class Fail(val reason: String) : NativeFramePipelineRoute
+        data object NativeFrame : NativeFramePipelineRoute
     }
 
     override fun attachSurfaceHost(host: ViewGroup) {

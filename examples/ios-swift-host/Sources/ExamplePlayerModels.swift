@@ -161,6 +161,54 @@ enum ExampleSourceNormalizerSetting: String, CaseIterable, Identifiable {
     }
 }
 
+enum ExampleNativeFramePipelineSetting: String, CaseIterable, Identifiable {
+    case disabled
+    case diagnosticsOnly
+    case preferNativeFrame
+    case requireNativeFrame
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .disabled:
+            return ExampleI18n.pluginNativeFrameDisabled
+        case .diagnosticsOnly:
+            return ExampleI18n.pluginNativeFrameDiagnostics
+        case .preferNativeFrame:
+            return ExampleI18n.pluginNativeFramePrefer
+        case .requireNativeFrame:
+            return ExampleI18n.pluginNativeFrameRequire
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .disabled:
+            return ExampleI18n.pluginNativeFrameDisabledSubtitle
+        case .diagnosticsOnly:
+            return ExampleI18n.pluginNativeFrameDiagnosticsSubtitle
+        case .preferNativeFrame:
+            return ExampleI18n.pluginNativeFramePreferSubtitle
+        case .requireNativeFrame:
+            return ExampleI18n.pluginNativeFrameRequireSubtitle
+        }
+    }
+
+    var mode: VesperNativeFramePipelineMode {
+        switch self {
+        case .disabled:
+            return .disabled
+        case .diagnosticsOnly:
+            return .diagnosticsOnly
+        case .preferNativeFrame:
+            return .preferNativeFrame
+        case .requireNativeFrame:
+            return .requireNativeFrame
+        }
+    }
+}
+
 struct ExampleHostPalette {
     let pageTop: Color
     let pageBottom: Color

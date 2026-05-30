@@ -729,6 +729,47 @@ extern PlayerFfiCallStatus player_ffi_source_normalizer_resource_poll(
 
 extern void player_ffi_source_normalizer_resource_dispose(uint64_t handle);
 
+extern PlayerFfiCallStatus player_ffi_ios_native_frame_pipeline_open(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    uint32_t native_frame_mode,
+    char **decoder_plugin_library_paths,
+    uintptr_t decoder_plugin_library_paths_len,
+    char **frame_plugin_library_paths,
+    uintptr_t frame_plugin_library_paths_len,
+    uint32_t max_in_flight_frames,
+    uint64_t *out_handle,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_ios_native_frame_pipeline_advance(
+    uint64_t handle,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_ios_native_frame_pipeline_release_frame(
+    uint64_t handle,
+    uint64_t frame_handle,
+    bool presented,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_ios_native_frame_pipeline_flush(
+    uint64_t handle,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern PlayerFfiCallStatus player_ffi_ios_native_frame_pipeline_seek(
+    uint64_t handle,
+    uint64_t position_millis,
+    char **out_json,
+    PlayerFfiError *out_error);
+
+extern void player_ffi_ios_native_frame_pipeline_close(uint64_t handle);
+
 extern PlayerFfiCallStatus player_ffi_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,
@@ -3078,6 +3119,189 @@ bool vesper_source_normalizer_resource_poll(
 
 void vesper_source_normalizer_resource_dispose(uint64_t handle) {
   player_ffi_source_normalizer_resource_dispose(handle);
+}
+
+bool vesper_ios_native_frame_pipeline_open(
+    const char *source_uri,
+    uint32_t source_mode,
+    char **source_plugin_library_paths,
+    uintptr_t source_plugin_library_paths_len,
+    const char *runtime_profile,
+    uint32_t native_frame_mode,
+    char **decoder_plugin_library_paths,
+    uintptr_t decoder_plugin_library_paths_len,
+    char **frame_plugin_library_paths,
+    uintptr_t frame_plugin_library_paths_len,
+    uint32_t max_in_flight_frames,
+    uint64_t *out_handle,
+    char **out_json,
+    char **out_error_message) {
+  if (source_uri == NULL || out_handle == NULL || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_handle = 0;
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_ios_native_frame_pipeline_open(
+      source_uri,
+      source_mode,
+      source_plugin_library_paths,
+      source_plugin_library_paths_len,
+      runtime_profile,
+      native_frame_mode,
+      decoder_plugin_library_paths,
+      decoder_plugin_library_paths_len,
+      frame_plugin_library_paths,
+      frame_plugin_library_paths_len,
+      max_in_flight_frames,
+      out_handle,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_handle != 0 && *out_json != NULL;
+}
+
+bool vesper_ios_native_frame_pipeline_advance(
+    uint64_t handle,
+    char **out_json,
+    char **out_error_message) {
+  if (handle == 0 || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_ios_native_frame_pipeline_advance(
+      handle,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_json != NULL;
+}
+
+bool vesper_ios_native_frame_pipeline_release_frame(
+    uint64_t handle,
+    uint64_t frame_handle,
+    bool presented,
+    char **out_json,
+    char **out_error_message) {
+  if (handle == 0 || frame_handle == 0 || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_ios_native_frame_pipeline_release_frame(
+      handle,
+      frame_handle,
+      presented,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_json != NULL;
+}
+
+bool vesper_ios_native_frame_pipeline_flush(
+    uint64_t handle,
+    char **out_json,
+    char **out_error_message) {
+  if (handle == 0 || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_ios_native_frame_pipeline_flush(
+      handle,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_json != NULL;
+}
+
+bool vesper_ios_native_frame_pipeline_seek(
+    uint64_t handle,
+    uint64_t position_millis,
+    char **out_json,
+    char **out_error_message) {
+  if (handle == 0 || out_json == NULL) {
+    return false;
+  }
+  if (out_error_message != NULL) {
+    *out_error_message = NULL;
+  }
+  *out_json = NULL;
+
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+
+  PlayerFfiCallStatus status = player_ffi_ios_native_frame_pipeline_seek(
+      handle,
+      position_millis,
+      out_json,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    if (out_error_message != NULL) {
+      *out_error_message = ffi_error.message;
+      ffi_error.message = NULL;
+    }
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return *out_json != NULL;
+}
+
+void vesper_ios_native_frame_pipeline_close(uint64_t handle) {
+  player_ffi_ios_native_frame_pipeline_close(handle);
 }
 
 bool vesper_dash_bridge_execute_json(

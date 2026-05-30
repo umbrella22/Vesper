@@ -205,6 +205,76 @@ fn plugin_registry_reports_source_normalizer_packet_v2_support() {
 }
 
 #[test]
+fn plugin_registry_reports_v3_source_normalizer_packet_and_resource_support() {
+    let api = fixture_source_normalizer_dual_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load source normalizer v3 plugin");
+    let registry = PluginRegistry::from_records(
+        PluginDiagnosticRecord::from_loaded_source_normalizer_plugin_records(
+            PathBuf::from("test-source-normalizer-dual"),
+            &plugin,
+        ),
+    );
+
+    assert_eq!(registry.records().len(), 2);
+    assert_eq!(
+        registry
+            .best_source_normalizer_packet()
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("test-source-normalizer-packet")
+    );
+    assert_eq!(
+        registry
+            .best_source_normalizer_resource()
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("test-source-normalizer-packet")
+    );
+    assert_eq!(
+        registry
+            .best_source_normalizer_for_profile("fixture-packet")
+            .and_then(|record| record.capability_summary.as_ref()),
+        Some(&PluginCapabilitySummary::SourceNormalizerPacket(
+            SourceNormalizerPacketPluginCapabilitySummary {
+                supported_runtime_profiles: vec!["fixture-packet".to_owned()],
+                max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+                media_kinds: vec![SourceNormalizerPacketMediaKind::Video],
+                codecs: vec!["H264".to_owned()],
+                bitstream_formats: vec![DecoderBitstreamFormat::Avcc],
+                supports_seek: true,
+                supports_flush: true,
+                required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+                max_sessions: Some(1),
+            }
+        ))
+    );
+    assert_eq!(
+        registry
+            .best_source_normalizer_resource_for_profile("fixture-resource")
+            .and_then(|record| record.capability_summary.as_ref()),
+        Some(&PluginCapabilitySummary::SourceNormalizerResource(
+            SourceNormalizerResourcePluginCapabilitySummary {
+                supported_runtime_profiles: vec!["fixture-resource".to_owned()],
+                supported_output_routes: vec!["fmp4LocalStream".to_owned()],
+                max_level: SourceNormalizerNormalizeLevel::RemuxOnly,
+                content_types: vec!["video/mp4".to_owned()],
+                supports_growing_resources: true,
+                supports_range_reads: true,
+                supports_cancel: true,
+                required_capabilities: SourceNormalizerRequiredCapabilities::default(),
+                cache_policy: SourceNormalizerResourceCachePolicy::default(),
+                max_sessions: Some(1),
+            }
+        ))
+    );
+}
+
+#[test]
 fn plugin_registry_selects_resource_source_normalizer_by_profile() {
     let registry = PluginRegistry::from_records(vec![
         resource_source_normalizer_record("generic-resource", &["generic-fallback"]),

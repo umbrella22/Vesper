@@ -111,6 +111,8 @@ object VesperPlayerControllerFactory {
             VesperSourceNormalizerConfiguration(),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
             VesperFrameProcessorConfiguration(),
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
+            VesperNativeFramePipelineConfiguration(),
     ): VesperPlayerController =
         VesperPlayerController(
             PlayerBridgeFactory.createDefault(
@@ -125,6 +127,7 @@ object VesperPlayerControllerFactory {
                 benchmarkConfiguration = benchmarkConfiguration,
                 sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                 frameProcessorConfiguration = frameProcessorConfiguration,
+                nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
             )
         )
 

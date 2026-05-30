@@ -152,11 +152,22 @@ enum ExampleI18n {
     static var pluginSourceNormalizerRequireSubtitle: String { string("example.plugins.source_normalizer.require_subtitle") }
     static var pluginSourceNormalizerGroup: String { string("example.plugins.source_normalizer.group") }
     static var pluginFrameProcessorGroup: String { string("example.plugins.frame_processor.group") }
+    static var pluginNativeFrameGroup: String { string("example.plugins.native_frame.group") }
+    static var pluginNativeFrameDisabled: String { string("example.plugins.native_frame.disabled") }
+    static var pluginNativeFrameDisabledSubtitle: String { string("example.plugins.native_frame.disabled_subtitle") }
+    static var pluginNativeFrameDiagnostics: String { string("example.plugins.native_frame.diagnostics") }
+    static var pluginNativeFrameDiagnosticsSubtitle: String { string("example.plugins.native_frame.diagnostics_subtitle") }
+    static var pluginNativeFramePrefer: String { string("example.plugins.native_frame.prefer") }
+    static var pluginNativeFramePreferSubtitle: String { string("example.plugins.native_frame.prefer_subtitle") }
+    static var pluginNativeFrameRequire: String { string("example.plugins.native_frame.require") }
+    static var pluginNativeFrameRequireSubtitle: String { string("example.plugins.native_frame.require_subtitle") }
     static var pluginSourcePath: String { string("example.plugins.source_path") }
+    static var pluginDecoderPath: String { string("example.plugins.decoder_path") }
     static var pluginFramePath: String { string("example.plugins.frame_path") }
     static var pluginMissing: String { string("example.plugins.missing") }
     static var pluginNoSourceNormalizerDiagnostics: String { string("example.plugins.no_source_normalizer_diagnostics") }
     static var pluginNoFrameProcessorDiagnostics: String { string("example.plugins.no_frame_processor_diagnostics") }
+    static var pluginNoNativeFrameDiagnostics: String { string("example.plugins.no_native_frame_diagnostics") }
     static var pluginUnknownRecord: String { string("example.plugins.unknown_record") }
     static func pluginParticipation(_ value: String) -> String {
         string("example.plugins.participation", value)
@@ -172,6 +183,9 @@ enum ExampleI18n {
     }
     static func pluginResource(_ value: String) -> String {
         string("example.plugins.resource", value)
+    }
+    static func pluginNativeFrameDetails(_ value: String) -> String {
+        string("example.plugins.native_frame_details", value)
     }
 
     static var preparingSelectedVideo: String { string("example.message.preparing_selected_video") }

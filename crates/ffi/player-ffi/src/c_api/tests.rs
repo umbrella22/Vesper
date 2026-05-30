@@ -12,7 +12,7 @@ use super::{
     player_ffi_player_set_playback_rate, player_ffi_snapshot_free, player_ffi_startup_free,
     player_ffi_video_frame_free,
 };
-use crate::FfiErrorCode;
+use crate::{FfiErrorCode, FfiPluginParticipation};
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorPolicyAction, FrameProcessorWarning,
     FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
@@ -476,6 +476,22 @@ fn initializer_media_info_and_startup_round_trip_fake_runtime_payload() {
             diagnostics[1]
                 .capability
                 .frame_processor
+                .accepted_input_pipeline_profiles_len,
+            1
+        );
+        assert_eq!(
+            copy_c_string(
+                *diagnostics[1]
+                    .capability
+                    .frame_processor
+                    .accepted_input_pipeline_profiles
+            ),
+            "video_toolbox_cv_pixel_buffer"
+        );
+        assert_eq!(
+            diagnostics[1]
+                .capability
+                .frame_processor
                 .max_in_flight_frames,
             4
         );
@@ -486,6 +502,10 @@ fn initializer_media_info_and_startup_round_trip_fake_runtime_payload() {
         assert_eq!(
             diagnostics[1].participation,
             PlayerFfiPluginParticipation::Available
+        );
+        assert_eq!(
+            PlayerFfiPluginParticipation::from(FfiPluginParticipation::Fallback),
+            PlayerFfiPluginParticipation::Fallback
         );
         let fixture = include_str!("../../../../../fixtures/contracts/plugin_diagnostics.json");
         assert!(fixture.contains("\"status\": \"decoderSupported\""));
@@ -747,13 +767,19 @@ impl FakeRuntimeAdapterInitializer {
                             supports_native_frame_output: true,
                             supports_hardware_decode: true,
                             supports_cpu_video_frames: false,
+                            supports_audio_packets: false,
                             supports_audio_frames: false,
+                            supports_pcm_frames: false,
                             supports_gpu_handles: true,
                             supports_flush: true,
                             supports_drain: true,
                             max_sessions: Some(1),
                         },
                     )),
+                    details: vec![player_runtime::PlayerPluginDiagnosticDetail {
+                        key: "route".to_owned(),
+                        value: "sdkManagedNativeFrame".to_owned(),
+                    }],
                 },
                 PlayerPluginDiagnostic {
                     path: "/tmp/player-frame-processor-fixture.dylib".to_owned(),
@@ -766,6 +792,12 @@ impl FakeRuntimeAdapterInitializer {
                         PlayerPluginFrameProcessorCapabilitySummary {
                             accepted_input_handle_kinds: vec!["CvPixelBuffer".to_owned()],
                             output_handle_kinds: vec!["CvPixelBuffer".to_owned()],
+                            accepted_input_pipeline_profiles: vec![
+                                "video_toolbox_cv_pixel_buffer".to_owned(),
+                            ],
+                            output_pipeline_profiles: vec![
+                                "video_toolbox_cv_pixel_buffer".to_owned(),
+                            ],
                             supports_video_frames: true,
                             supports_in_place_passthrough: true,
                             preserves_dimensions: true,
@@ -777,6 +809,7 @@ impl FakeRuntimeAdapterInitializer {
                             max_in_flight_frames: Some(4),
                         },
                     )),
+                    details: Vec::new(),
                 },
             ],
         };

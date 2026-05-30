@@ -14,6 +14,13 @@ impl DecoderPluginMatchRequest {
             media_kind: DecoderMediaKind::Video,
         }
     }
+
+    pub fn audio(codec: impl Into<String>) -> Self {
+        Self {
+            codec: codec.into(),
+            media_kind: DecoderMediaKind::Audio,
+        }
+    }
 }
 
 /// Structured codec entry reported by one decoder plugin.
@@ -41,7 +48,9 @@ pub struct DecoderPluginCapabilitySummary {
     pub native_requirements: Option<DecoderNativeRequirements>,
     pub supports_hardware_decode: bool,
     pub supports_cpu_video_frames: bool,
+    pub supports_audio_packets: bool,
     pub supports_audio_frames: bool,
+    pub supports_pcm_frames: bool,
     pub supports_gpu_handles: bool,
     pub supports_flush: bool,
     pub supports_drain: bool,
@@ -59,6 +68,8 @@ impl From<&DecoderCapabilities> for DecoderPluginCapabilitySummary {
 pub struct FrameProcessorPluginCapabilitySummary {
     pub accepted_input_handle_kinds: Vec<NativeHandleKind>,
     pub output_handle_kinds: Vec<NativeHandleKind>,
+    pub accepted_input_pipeline_profiles: Vec<NativeFramePipelineProfile>,
+    pub output_pipeline_profiles: Vec<NativeFramePipelineProfile>,
     pub supports_video_frames: bool,
     pub supports_in_place_passthrough: bool,
     pub preserves_dimensions: bool,
@@ -75,6 +86,8 @@ impl From<&FrameProcessorCapabilities> for FrameProcessorPluginCapabilitySummary
         Self {
             accepted_input_handle_kinds: capabilities.accepted_input_handle_kinds.clone(),
             output_handle_kinds: capabilities.output_handle_kinds.clone(),
+            accepted_input_pipeline_profiles: capabilities.accepted_input_pipeline_profiles.clone(),
+            output_pipeline_profiles: capabilities.output_pipeline_profiles.clone(),
             supports_video_frames: capabilities.supports_video_frames,
             supports_in_place_passthrough: capabilities.supports_in_place_passthrough,
             preserves_dimensions: capabilities.preserves_dimensions,
@@ -188,7 +201,18 @@ impl DecoderPluginCapabilitySummary {
             native_requirements,
             supports_hardware_decode: capabilities.supports_hardware_decode,
             supports_cpu_video_frames: capabilities.supports_cpu_video_frames,
+            supports_audio_packets: capabilities
+                .codecs
+                .iter()
+                .any(|codec| codec.media_kind == DecoderMediaKind::Audio),
             supports_audio_frames: capabilities.supports_audio_frames,
+            supports_pcm_frames: capabilities.supports_audio_frames
+                && capabilities.codecs.iter().any(|codec| {
+                    codec.media_kind == DecoderMediaKind::Audio
+                        && codec.output_formats.iter().any(|format| {
+                            matches!(format, DecoderFrameFormat::F32 | DecoderFrameFormat::S16)
+                        })
+                }),
             supports_gpu_handles: capabilities.supports_gpu_handles,
             supports_flush: capabilities.supports_flush,
             supports_drain: capabilities.supports_drain,
@@ -209,6 +233,22 @@ pub enum PluginDiagnosticStatus {
     FrameProcessorUnsupported,
     SourceNormalizerSupported,
     SourceNormalizerUnsupported,
+}
+
+impl PluginDiagnosticStatus {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Loaded => "loaded",
+            Self::LoadFailed => "loadFailed",
+            Self::UnsupportedKind => "unsupportedKind",
+            Self::DecoderSupported => "decoderSupported",
+            Self::DecoderUnsupported => "decoderUnsupported",
+            Self::FrameProcessorSupported => "frameProcessorSupported",
+            Self::FrameProcessorUnsupported => "frameProcessorUnsupported",
+            Self::SourceNormalizerSupported => "sourceNormalizerSupported",
+            Self::SourceNormalizerUnsupported => "sourceNormalizerUnsupported",
+        }
+    }
 }
 
 /// Structured diagnostic record for one dynamic plugin path.
@@ -399,7 +439,18 @@ impl PluginDiagnosticRecord {
         path: impl Into<PathBuf>,
         plugin: &LoadedDynamicPlugin,
     ) -> Self {
+        Self::from_loaded_source_normalizer_plugin_records(path, plugin)
+            .into_iter()
+            .next()
+            .expect("source normalizer diagnostics returns one or more records")
+    }
+
+    pub(crate) fn from_loaded_source_normalizer_plugin_records(
+        path: impl Into<PathBuf>,
+        plugin: &LoadedDynamicPlugin,
+    ) -> Vec<Self> {
         let path = path.into();
+        let mut records = Vec::new();
         if let Some((name, capabilities)) = source_normalizer_resource_summary(plugin) {
             let capability_summary =
                 SourceNormalizerResourcePluginCapabilitySummary::from(&capabilities);
@@ -417,8 +468,8 @@ impl PluginDiagnosticRecord {
             } else {
                 format!("{name} does not advertise resource source normalizer output routes")
             };
-            return Self {
-                path,
+            records.push(Self {
+                path: path.clone(),
                 status,
                 plugin_name: Some(name),
                 plugin_kind: Some(plugin.plugin_kind()),
@@ -426,7 +477,7 @@ impl PluginDiagnosticRecord {
                     capability_summary,
                 )),
                 message: Some(message),
-            };
+            });
         }
 
         if let Some((name, capabilities)) = source_normalizer_packet_summary(plugin) {
@@ -446,8 +497,8 @@ impl PluginDiagnosticRecord {
             } else {
                 format!("{name} does not advertise packet source normalizer media kinds")
             };
-            return Self {
-                path,
+            records.push(Self {
+                path: path.clone(),
                 status,
                 plugin_name: Some(name),
                 plugin_kind: Some(plugin.plugin_kind()),
@@ -455,7 +506,11 @@ impl PluginDiagnosticRecord {
                     capability_summary,
                 )),
                 message: Some(message),
-            };
+            });
+        }
+
+        if !records.is_empty() {
+            return records;
         }
 
         let capability_summary = decoder_factory_summary(plugin)
@@ -479,7 +534,7 @@ impl PluginDiagnosticRecord {
             })
             .or_else(|| source_normalizer_capability_summary(plugin));
 
-        Self {
+        vec![Self {
             path,
             status: PluginDiagnosticStatus::UnsupportedKind,
             plugin_name: Some(plugin.plugin_name().to_owned()),
@@ -489,7 +544,7 @@ impl PluginDiagnosticRecord {
                 "{} is not a source normalizer plugin",
                 plugin.plugin_name()
             )),
-        }
+        }]
     }
 
     pub fn load_failed(path: impl Into<PathBuf>, error: PluginLoadError) -> Self {
