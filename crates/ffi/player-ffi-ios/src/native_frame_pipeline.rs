@@ -1025,7 +1025,11 @@ pub fn native_frame_pipeline_frame_json(
             counters,
         },
         None => IosNativeFramePipelineFrameWire {
-            status: if end_of_stream { "endOfStream" } else { "pending" },
+            status: if end_of_stream {
+                "endOfStream"
+            } else {
+                "pending"
+            },
             message,
             handle: None,
             pixel_buffer: None,

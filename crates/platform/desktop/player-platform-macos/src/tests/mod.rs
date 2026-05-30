@@ -55,7 +55,8 @@ use player_plugin::{
     SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerPacket,
     SourceNormalizerPacketLease, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
     SourceNormalizerPacketSession, SourceNormalizerPacketStreamInfo,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata, VesperPluginKind,
+    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
+    SourceNormalizerReadPacketStatus, VesperPluginKind,
 };
 use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, LoadedDynamicPlugin,
@@ -3072,6 +3073,133 @@ fn dropping_native_frame_source_closes_processor_and_decoder_sessions() {
 }
 
 #[test]
+fn macos_native_frame_source_switch_releases_old_source_and_decodes_new_source() {
+    let old_events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let old_processor_state = Arc::new(std::sync::Mutex::new(RecordingFrameProcessorState {
+        events: Some(old_events.clone()),
+        output_handle_offset: 1_000,
+        ..RecordingFrameProcessorState::default()
+    }));
+    let old_session_state = RecordingNativeDecoderState::shared(old_events.clone());
+    let old_session: Arc<std::sync::Mutex<Box<dyn NativeDecoderSession>>> = Arc::new(
+        std::sync::Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: old_session_state.clone(),
+        })),
+    );
+    let old_shared = Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
+        frame_processor_chain: Some(frame_processor_chain_for_test(
+            FrameProcessorMode::DiagnosticsOnly,
+            vec![RecordingFrameProcessorSession::new(
+                old_processor_state.clone(),
+            )],
+        )),
+        presenter: None,
+        presentation_epoch: 0,
+    }));
+    let (old_command_tx, _old_command_rx) = mpsc::channel();
+    let (old_frame_tx, old_frame_rx) = mpsc::channel();
+    let old_outstanding_frames = Arc::new(AtomicUsize::new(1));
+    old_frame_tx
+        .send(MacosNativeFrameWorkerEvent::Frame {
+            generation: 0,
+            frame: macos_frame_processor_frame_for_test_with_processor_output(
+                9,
+                Some(100_000),
+                1_009,
+            ),
+        })
+        .expect("queued old-source frame event should be sent");
+    let old_source = MacosNativeFrameVideoSource {
+        stream_info: test_video_packet_stream_info(),
+        session: old_session,
+        shared: old_shared,
+        outstanding_frames: old_outstanding_frames.clone(),
+        command_tx: old_command_tx,
+        frame_rx: old_frame_rx,
+        generation: 0,
+        current_generation: Arc::new(AtomicU64::new(0)),
+        buffered_frame_count: Arc::new(AtomicUsize::new(1)),
+        prefetch_limit: Arc::new(AtomicUsize::new(1)),
+        prefetch_wakeup: Arc::new(MacosNativeFramePrefetchWakeup::default()),
+        end_of_input_sent: false,
+        end_of_stream_received: false,
+        worker: None,
+    };
+
+    drop(old_source);
+
+    assert_eq!(old_outstanding_frames.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        old_session_state
+            .lock()
+            .map(|state| (state.released_handles, state.close_count))
+            .unwrap_or_default(),
+        (1, 1),
+        "source switch should release queued old-source native frames and close the decoder"
+    );
+    assert_eq!(
+        old_processor_state
+            .lock()
+            .map(|state| {
+                (
+                    state.released_handles.clone(),
+                    state.flush_count,
+                    state.close_count,
+                )
+            })
+            .unwrap_or_default(),
+        (vec![1_009], 1, 1),
+        "source switch should release queued processor outputs and close the processor"
+    );
+    let old_events = old_events
+        .lock()
+        .map(|events| events.clone())
+        .unwrap_or_default();
+    assert!(
+        contains_ordered_events(
+            &old_events,
+            &["processor_flush", "processor_close", "close"]
+        ),
+        "source switch should flush/close old processor before decoder close: {old_events:?}"
+    );
+
+    let new_events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let new_session_state = RecordingNativeDecoderState::shared(new_events);
+    let new_outstanding_frames = Arc::new(AtomicUsize::new(0));
+    let new_packet_source = FakeNativeFramePacketSource::with_seek_packets(
+        vec![test_compressed_packet(500_000)],
+        Vec::new(),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+    );
+    let mut new_source = native_frame_source_for_test(
+        new_packet_source,
+        new_session_state.clone(),
+        new_outstanding_frames.clone(),
+        false,
+        false,
+    );
+
+    let new_frame = new_source
+        .recv_frame()
+        .expect("new source should receive after source switch")
+        .expect("new source should decode a native frame");
+
+    assert_eq!(new_frame.presentation_time, Duration::from_micros(500_000));
+    assert_eq!(new_outstanding_frames.load(Ordering::SeqCst), 1);
+    drop(new_frame);
+    assert_eq!(new_outstanding_frames.load(Ordering::SeqCst), 0);
+    drop(new_source);
+    assert_eq!(
+        new_session_state
+            .lock()
+            .map(|state| state.close_count)
+            .unwrap_or_default(),
+        1,
+        "new source should own and close its decoder independently"
+    );
+}
+
+#[test]
 fn native_frame_source_sends_eof_once_and_keeps_terminal_eof() {
     let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let session_state = RecordingNativeDecoderState::shared(events.clone());
@@ -3366,6 +3494,62 @@ fn source_normalizer_packet_source_seek_drops_pending_packet_before_resume() {
         .expect("source normalizer release log mutex should not be poisoned")
         .clone();
     assert_eq!(released_handles, vec![1, 2]);
+}
+
+#[test]
+fn source_normalizer_packet_source_drop_after_backpressure_has_no_outstanding_lease() {
+    let stream_info = fake_source_normalizer_packet_stream_info("H264");
+    let released_handles = Arc::new(Mutex::new(Vec::new()));
+    let session = Arc::new(Mutex::new(Some(Box::new(
+        FakeSourceNormalizerPacketSession::with_release_log(
+            stream_info,
+            vec![fake_source_normalizer_video_packet()],
+            released_handles.clone(),
+        ),
+    )
+        as Box<dyn SourceNormalizerPacketSession>)));
+    let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
+    let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
+    if let Ok(mut state) = session_state.lock() {
+        state.reject_next_packet = true;
+    }
+    let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state,
+        })));
+
+    let send_status = packet_source
+        .send_next_packet(&decoder_session)
+        .expect("source normalizer packet should become pending under decoder backpressure");
+    assert_eq!(send_status, MacosNativeFramePacketSendStatus::NeedMoreData);
+    assert!(
+        packet_source.pending.is_some(),
+        "decoder backpressure should keep copied packet data pending"
+    );
+
+    drop(packet_source);
+
+    assert_eq!(
+        released_handles
+            .lock()
+            .expect("source normalizer release log mutex should not be poisoned")
+            .clone(),
+        vec![1],
+        "packet lease should already be released before pending copied packet data is dropped"
+    );
+    let mut guard = session
+        .lock()
+        .expect("source normalizer session mutex should not be poisoned");
+    let session = guard
+        .as_mut()
+        .expect("source normalizer session should remain available");
+    let eof = session
+        .read_packet()
+        .expect("drop after backpressure should leave no outstanding packet lease");
+    assert_eq!(
+        eof.metadata.status,
+        SourceNormalizerReadPacketStatus::EndOfStream
+    );
 }
 
 #[test]

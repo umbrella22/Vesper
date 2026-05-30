@@ -141,6 +141,22 @@ run_headless_lifecycle_test() {
     --exact
 }
 
+run_source_switch_cleanup_test() {
+  cargo test \
+    -p player-platform-macos \
+    tests::macos_native_frame_source_switch_releases_old_source_and_decodes_new_source \
+    -- \
+    --exact
+}
+
+run_source_normalizer_lease_cleanup_test() {
+  cargo test \
+    -p player-platform-macos \
+    tests::source_normalizer_packet_source_drop_after_backpressure_has_no_outstanding_lease \
+    -- \
+    --exact
+}
+
 run_playback_test() {
   cargo test \
     -p player-platform-macos \
@@ -353,6 +369,8 @@ main() {
       run_macos_runtime_test
       run_headless_decode_test
       run_headless_lifecycle_test
+      run_source_switch_cleanup_test
+      run_source_normalizer_lease_cleanup_test
       ;;
     playback)
       run_playback_test
@@ -369,6 +387,8 @@ main() {
       run_macos_runtime_test
       run_headless_decode_test
       run_headless_lifecycle_test
+      run_source_switch_cleanup_test
+      run_source_normalizer_lease_cleanup_test
       run_playback_test
       run_playback_fallback_test
       run_frame_processor_test
