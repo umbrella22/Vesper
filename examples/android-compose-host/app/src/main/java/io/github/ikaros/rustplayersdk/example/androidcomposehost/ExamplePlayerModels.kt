@@ -3,6 +3,8 @@ package io.github.ikaros.vesper.example.androidcomposehost
 import android.content.Context
 import androidx.annotation.StringRes
 import androidx.compose.ui.graphics.Color
+import io.github.ikaros.vesper.player.android.PlaybackStateUi
+import io.github.ikaros.vesper.player.android.PlayerHostUiState
 import io.github.ikaros.vesper.player.android.VesperPlaylistFailureStrategy
 import io.github.ikaros.vesper.player.android.VesperPlaylistItemPreloadProfile
 import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItem
@@ -11,8 +13,10 @@ import io.github.ikaros.vesper.player.android.VesperPlaylistSwitchPolicy
 import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHint
 import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHintKind
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
-import io.github.ikaros.vesper.player.android.VesperSourceNormalizerMode
+import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineMode
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperSourceNormalizerMode
+import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import kotlin.math.abs
 
 internal enum class ExamplePlayerSheet {
@@ -94,6 +98,79 @@ internal enum class ExampleSourceNormalizerSetting(
         VesperSourceNormalizerMode.RequireNormalized,
     ),
 }
+
+internal enum class ExampleNativeFramePipelineSetting(
+    @get:StringRes val titleRes: Int,
+    @get:StringRes val subtitleRes: Int,
+    val mode: VesperNativeFramePipelineMode,
+) {
+    Disabled(
+        R.string.example_plugins_native_frame_disabled,
+        R.string.example_plugins_native_frame_disabled_subtitle,
+        VesperNativeFramePipelineMode.Disabled,
+    ),
+    DiagnosticsOnly(
+        R.string.example_plugins_native_frame_diagnostics,
+        R.string.example_plugins_native_frame_diagnostics_subtitle,
+        VesperNativeFramePipelineMode.DiagnosticsOnly,
+    ),
+    PreferNativeFrame(
+        R.string.example_plugins_native_frame_prefer,
+        R.string.example_plugins_native_frame_prefer_subtitle,
+        VesperNativeFramePipelineMode.PreferNativeFrame,
+    ),
+    RequireNativeFrame(
+        R.string.example_plugins_native_frame_require,
+        R.string.example_plugins_native_frame_require_subtitle,
+        VesperNativeFramePipelineMode.RequireNativeFrame,
+    ),
+}
+
+internal fun exampleSurfaceKindForNativeFrameSetting(
+    setting: ExampleNativeFramePipelineSetting,
+): VesperVideoSurfaceKind =
+    when (setting.mode) {
+        VesperNativeFramePipelineMode.PreferNativeFrame,
+        VesperNativeFramePipelineMode.RequireNativeFrame -> VesperVideoSurfaceKind.SurfaceView
+        VesperNativeFramePipelineMode.Disabled,
+        VesperNativeFramePipelineMode.DiagnosticsOnly -> VesperVideoSurfaceKind.TextureView
+    }
+
+internal fun exampleNativeFrameSettingRequiresControllerRebuild(
+    previous: ExampleNativeFramePipelineSetting,
+    next: ExampleNativeFramePipelineSetting,
+): Boolean {
+    if (previous == next) {
+        return false
+    }
+    val previousUsesNativeFrame =
+        previous.mode == VesperNativeFramePipelineMode.PreferNativeFrame ||
+            previous.mode == VesperNativeFramePipelineMode.RequireNativeFrame
+    val nextUsesNativeFrame =
+        next.mode == VesperNativeFramePipelineMode.PreferNativeFrame ||
+            next.mode == VesperNativeFramePipelineMode.RequireNativeFrame
+    return previousUsesNativeFrame || nextUsesNativeFrame
+}
+
+internal data class ExampleControllerRebuildSnapshot(
+    val shouldResumePlayback: Boolean,
+    val restorePositionMs: Long,
+    val restorePlaybackRate: Float,
+)
+
+internal fun exampleControllerRebuildSnapshot(
+    uiState: PlayerHostUiState,
+): ExampleControllerRebuildSnapshot =
+    ExampleControllerRebuildSnapshot(
+        shouldResumePlayback = uiState.playbackState == PlaybackStateUi.Playing,
+        restorePositionMs = uiState.timeline.positionMs,
+        restorePlaybackRate = uiState.playbackRate,
+    )
+
+internal fun exampleControllerRebuildSource(
+    activePlaybackSource: VesperPlayerSource?,
+    activePlaylistSource: VesperPlayerSource?,
+): VesperPlayerSource? = activePlaybackSource ?: activePlaylistSource
 
 internal data class ExampleHostPalette(
     val pageTop: Color,

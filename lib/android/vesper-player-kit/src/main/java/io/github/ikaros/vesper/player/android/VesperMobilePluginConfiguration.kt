@@ -75,6 +75,14 @@ data class VesperNativeFramePipelineConfiguration(
             VesperNativeFramePipelineMode.PreferNativeFrame -> 2
             VesperNativeFramePipelineMode.RequireNativeFrame -> 3
         }
+
+    internal val modeWireName: String
+        get() = when (mode) {
+            VesperNativeFramePipelineMode.Disabled -> "disabled"
+            VesperNativeFramePipelineMode.DiagnosticsOnly -> "diagnosticsOnly"
+            VesperNativeFramePipelineMode.PreferNativeFrame -> "preferNativeFrame"
+            VesperNativeFramePipelineMode.RequireNativeFrame -> "requireNativeFrame"
+        }
 }
 
 internal fun parsePluginDiagnosticsJson(json: String?): List<Map<String, Any?>> {

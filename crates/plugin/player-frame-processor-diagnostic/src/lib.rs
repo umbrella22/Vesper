@@ -12,7 +12,7 @@ use player_plugin::{
     FrameProcessorSessionConfig, FrameProcessorSessionInfo, FrameProcessorSubmitFrame,
     FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeFrame, NativeFrameMetadata,
     NativeFramePipelineProfile, NativeFrameReleaseTracking, NativeHandleKind,
-    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VesperFrameProcessorOpenSessionResult,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT, VesperFrameProcessorOpenSessionResult,
     VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult, VesperPluginBytes,
     VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
@@ -120,7 +120,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             free_bytes: Some(free_plugin_bytes),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
             plugin_kind: VesperPluginKind::FrameProcessor,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
@@ -356,12 +356,16 @@ fn diagnostic_capabilities(mode: DiagnosticMode) -> FrameProcessorCapabilities {
                 NativeHandleKind::CvPixelBuffer,
                 NativeHandleKind::IoSurface,
                 NativeHandleKind::D3D11Texture2D,
+                NativeHandleKind::MediaCodecHardwareBuffer,
+                NativeHandleKind::MediaCodecSurfaceTexture,
             ],
         },
         output_handle_kinds: vec![
             NativeHandleKind::CvPixelBuffer,
             NativeHandleKind::IoSurface,
             NativeHandleKind::D3D11Texture2D,
+            NativeHandleKind::MediaCodecHardwareBuffer,
+            NativeHandleKind::MediaCodecSurfaceTexture,
         ],
         accepted_input_pipeline_profiles: match mode {
             DiagnosticMode::UnsupportedHandle => vec![NativeFramePipelineProfile::D3D11Texture2D],
@@ -369,12 +373,16 @@ fn diagnostic_capabilities(mode: DiagnosticMode) -> FrameProcessorCapabilities {
                 NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
                 NativeFramePipelineProfile::Unknown("io_surface".to_owned()),
                 NativeFramePipelineProfile::D3D11Texture2D,
+                NativeFramePipelineProfile::MediaCodecHardwareBuffer,
+                NativeFramePipelineProfile::MediaCodecSurfaceTexture,
             ],
         },
         output_pipeline_profiles: vec![
             NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
             NativeFramePipelineProfile::Unknown("io_surface".to_owned()),
             NativeFramePipelineProfile::D3D11Texture2D,
+            NativeFramePipelineProfile::MediaCodecHardwareBuffer,
+            NativeFramePipelineProfile::MediaCodecSurfaceTexture,
         ],
         supports_video_frames: true,
         supports_in_place_passthrough: true,
@@ -584,6 +592,24 @@ mod tests {
 
         assert!(!capabilities.supports_input_handle_kind(&NativeHandleKind::IoSurface));
         assert!(capabilities.supports_input_handle_kind(&NativeHandleKind::D3D11Texture2D));
+    }
+
+    #[test]
+    fn default_mode_accepts_android_mediacodec_native_frame_handles() {
+        let capabilities = diagnostic_capabilities(DiagnosticMode::Noop);
+
+        assert!(
+            capabilities.supports_input_handle_kind(&NativeHandleKind::MediaCodecHardwareBuffer)
+        );
+        assert!(
+            capabilities.supports_input_handle_kind(&NativeHandleKind::MediaCodecSurfaceTexture)
+        );
+        assert!(capabilities.supports_input_pipeline_profile(
+            &NativeFramePipelineProfile::MediaCodecHardwareBuffer
+        ));
+        assert!(capabilities.supports_input_pipeline_profile(
+            &NativeFramePipelineProfile::MediaCodecSurfaceTexture
+        ));
     }
 
     #[test]

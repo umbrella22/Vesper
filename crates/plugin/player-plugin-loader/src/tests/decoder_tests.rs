@@ -7,29 +7,32 @@ fn dynamic_decoder_plugin_rejects_legacy_descriptor_abi() {
         abi_version: 1,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
         .expect_err("legacy ABI descriptors should be rejected");
 
-    assert!(matches!(
-        error,
-        PluginLoadError::AbiVersionMismatch {
-            expected: 4,
-            actual: 1
+    match error {
+        PluginLoadError::AbiVersionMismatch { expected, actual } => {
+            assert_eq!(
+                expected,
+                VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT.to_string()
+            );
+            assert_eq!(actual, 1);
         }
-    ));
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
 fn dynamic_decoder_plugin_surfaces_error_payloads() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
     let plugin =
         LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load decoder plugin");
@@ -53,10 +56,10 @@ fn dynamic_decoder_plugin_surfaces_error_payloads() {
 fn dynamic_native_decoder_plugin_adapter_round_trips_native_frame() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -118,13 +121,154 @@ fn dynamic_native_decoder_plugin_adapter_round_trips_native_frame() {
 }
 
 #[test]
-fn dynamic_native_decoder_plugin_v3_reports_pcm_receive_unsupported() {
-    let api = fixture_native_decoder_api();
+fn dynamic_native_decoder_plugin_v5_forwards_presented_flag_on_release() {
+    if let Ok(mut releases) = NATIVE_FRAME_PRESENTATION_RELEASES.lock() {
+        releases.clear();
+    }
+    let api = fixture_native_decoder_presentation_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load v5 native decoder plugin");
+    let factory = plugin
+        .native_decoder_plugin_factory()
+        .expect("native decoder factory should be available");
+    assert!(factory.supports_native_frame_presentation_release());
+    let mut session = factory
+        .open_native_session(&DecoderSessionConfig {
+            codec: "fixture-video".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            prefer_hardware: true,
+            require_cpu_output: false,
+            ..DecoderSessionConfig::default()
+        })
+        .expect("open native decoder session");
+
+    session
+        .send_packet(
+            &DecoderPacket {
+                pts_us: Some(3_000),
+                key_frame: true,
+                ..DecoderPacket::default()
+            },
+            &[1, 2, 3, 4],
+        )
+        .expect("send native packet");
+    let frame = match session
+        .receive_native_frame()
+        .expect("receive native frame")
+    {
+        DecoderReceiveNativeFrameOutput::Frame(frame) => frame,
+        other => panic!("expected native frame, got {other:?}"),
+    };
+    let handle = frame.handle;
+
+    session
+        .release_native_frame_with_presentation(frame, true)
+        .expect("release native frame with presented flag");
+
+    assert_eq!(native_frame_presentation_releases(), vec![(handle, true)]);
+}
+
+#[test]
+fn dynamic_native_decoder_plugin_without_presentation_capability_uses_legacy_release() {
+    if let Ok(mut releases) = NATIVE_FRAME_RELEASES.lock() {
+        releases.clear();
+    }
+    if let Ok(mut releases) = NATIVE_FRAME_PRESENTATION_RELEASES.lock() {
+        releases.clear();
+    }
+    let api = fixture_native_decoder_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load native decoder plugin");
+    let factory = plugin
+        .native_decoder_plugin_factory()
+        .expect("native decoder factory should be available");
+    assert!(!factory.supports_native_frame_presentation_release());
+    let mut session = factory
+        .open_native_session(&DecoderSessionConfig {
+            codec: "fixture-video".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            prefer_hardware: true,
+            require_cpu_output: false,
+            ..DecoderSessionConfig::default()
+        })
+        .expect("open native decoder session");
+
+    session
+        .send_packet(
+            &DecoderPacket {
+                pts_us: Some(4_000),
+                key_frame: true,
+                ..DecoderPacket::default()
+            },
+            &[1, 2, 3, 4],
+        )
+        .expect("send native packet");
+    let frame = match session
+        .receive_native_frame()
+        .expect("receive native frame")
+    {
+        DecoderReceiveNativeFrameOutput::Frame(frame) => frame,
+        other => panic!("expected native frame, got {other:?}"),
+    };
+    let handle = frame.handle;
+
+    session
+        .release_native_frame_with_presentation(frame, true)
+        .expect("legacy release handles presented=true when capability is absent");
+
+    assert!(native_frame_releases().contains(&handle));
+    assert!(
+        native_frame_presentation_releases()
+            .iter()
+            .all(|(released, _)| *released != handle)
+    );
+    assert_eq!(
+        session.receive_native_frame().expect("need more input"),
+        DecoderReceiveNativeFrameOutput::NeedMoreInput
+    );
+}
+
+#[test]
+fn dynamic_native_decoder_plugin_without_capability_does_not_advertise_presentation_release() {
+    let api = fixture_native_decoder_pcm_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+
+    let plugin =
+        LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load decoder plugin");
+    let factory = plugin
+        .native_decoder_plugin_factory()
+        .expect("native decoder factory should be available");
+
+    assert!(!factory.supports_native_frame_presentation_release());
+}
+
+#[test]
+fn dynamic_native_decoder_plugin_without_pcm_capability_reports_pcm_receive_unsupported() {
+    let api = fixture_native_decoder_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -142,7 +286,7 @@ fn dynamic_native_decoder_plugin_v3_reports_pcm_receive_unsupported() {
 
     let error = session
         .receive_pcm_frame()
-        .expect_err("v3 decoder table should not expose PCM receive");
+        .expect_err("decoder capability should not expose PCM receive");
     assert!(matches!(
         error,
         DecoderError::UnsupportedCapability { capability }
@@ -152,15 +296,15 @@ fn dynamic_native_decoder_plugin_v3_reports_pcm_receive_unsupported() {
 
 #[test]
 fn dynamic_native_decoder_plugin_rejects_pcm_capabilities_without_pcm_callback() {
-    let api = VesperDecoderPluginApiV2 {
+    let api = VesperDecoderPluginApiV5 {
         capabilities_json: Some(fixture_native_decoder_pcm_capabilities_json),
         ..fixture_native_decoder_api()
     };
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -175,13 +319,37 @@ fn dynamic_native_decoder_plugin_rejects_pcm_capabilities_without_pcm_callback()
 }
 
 #[test]
-fn dynamic_native_decoder_plugin_v4_round_trips_pcm_frame_bytes() {
-    let api = fixture_native_decoder_pcm_api();
+fn dynamic_native_decoder_plugin_rejects_legacy_audio_pcm_capabilities_without_pcm_callback() {
+    let api = VesperDecoderPluginApiV5 {
+        capabilities_json: Some(fixture_native_decoder_legacy_audio_capabilities_json),
+        ..fixture_native_decoder_api()
+    };
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV4).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+
+    let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect_err("legacy audio PCM capability without receive_pcm_frame should fail");
+
+    assert!(matches!(
+        error,
+        PluginLoadError::CapabilitiesAbiViolation(message)
+            if message.contains("advertises PCM frame output")
+                && message.contains("receive_pcm_frame")
+    ));
+}
+
+#[test]
+fn dynamic_native_decoder_plugin_current_round_trips_pcm_frame_bytes() {
+    let api = fixture_native_decoder_pcm_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -234,7 +402,7 @@ fn dynamic_native_decoder_plugin_v4_round_trips_pcm_frame_bytes() {
 #[test]
 fn dynamic_native_decoder_plugin_receives_audio_pcm_session_preferences() {
     let context = FixtureDecoderRecordingContext::default();
-    let api = VesperDecoderPluginApiV4 {
+    let api = VesperDecoderPluginApiV5 {
         context: (&context as *const FixtureDecoderRecordingContext)
             .cast_mut()
             .cast::<c_void>(),
@@ -242,10 +410,10 @@ fn dynamic_native_decoder_plugin_receives_audio_pcm_session_preferences() {
         ..fixture_native_decoder_pcm_api()
     };
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV4).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
         .expect("load native decoder plugin");
@@ -283,9 +451,9 @@ fn dynamic_native_decoder_plugin_receives_audio_pcm_session_preferences() {
 }
 
 #[test]
-fn dynamic_native_decoder_plugin_v4_reclaims_pcm_data_on_malformed_metadata() {
+fn dynamic_native_decoder_plugin_current_reclaims_pcm_data_on_malformed_metadata() {
     let recorder = FixtureFreeBytesRecorder::default();
-    let api = VesperDecoderPluginApiV4 {
+    let api = VesperDecoderPluginApiV5 {
         context: (&recorder as *const FixtureFreeBytesRecorder)
             .cast_mut()
             .cast::<c_void>(),
@@ -294,10 +462,10 @@ fn dynamic_native_decoder_plugin_v4_reclaims_pcm_data_on_malformed_metadata() {
         ..fixture_native_decoder_pcm_api()
     };
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV4).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -334,10 +502,10 @@ fn dynamic_native_decoder_plugin_v4_reclaims_pcm_data_on_malformed_metadata() {
 fn dynamic_native_decoder_plugin_close_releases_unreturned_native_frames() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -385,10 +553,10 @@ fn dynamic_native_decoder_plugin_close_releases_unreturned_native_frames() {
 fn dynamic_native_decoder_plugin_rejects_duplicate_native_frame_release() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -439,10 +607,10 @@ fn dynamic_native_decoder_plugin_rejects_duplicate_native_frame_release() {
 fn dynamic_native_decoder_plugin_exposes_native_requirements() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -464,10 +632,10 @@ fn dynamic_native_decoder_plugin_exposes_native_requirements() {
 fn dynamic_native_decoder_plugin_receives_native_device_context() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -495,15 +663,15 @@ fn dynamic_native_decoder_plugin_receives_native_device_context() {
 
 #[test]
 fn dynamic_native_decoder_plugin_rejects_null_native_frame_handles() {
-    let api = VesperDecoderPluginApiV2 {
+    let api = VesperDecoderPluginApiV5 {
         receive_native_frame: Some(fixture_decoder_receive_null_native_frame),
         ..fixture_native_decoder_api()
     };
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
         .expect("load native decoder plugin");
@@ -534,7 +702,7 @@ fn dynamic_native_decoder_plugin_rejects_old_v2_abi_revision() {
         abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
         plugin_kind: VesperPluginKind::Decoder,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperDecoderPluginApiV2).cast(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
 
     let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)

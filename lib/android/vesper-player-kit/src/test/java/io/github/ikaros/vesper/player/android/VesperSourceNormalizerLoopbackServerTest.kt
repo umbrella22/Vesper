@@ -35,6 +35,7 @@ class VesperSourceNormalizerLoopbackServerTest {
                         sessionReadBufferBytes = 4096,
                     )
                 )
+            assertTrue(handle.playbackUri.startsWith("http://127.0.0.1:"))
             val connection = URL(handle.playbackUri).openConnection() as HttpURLConnection
             connection.setRequestProperty("Range", "bytes=4-7")
 

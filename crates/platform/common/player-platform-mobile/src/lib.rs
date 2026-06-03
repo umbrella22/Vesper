@@ -6,9 +6,11 @@ use std::time::{Duration, Instant};
 use player_model::MediaSource;
 use player_plugin::{
     DecoderBitstreamFormat, SourceNormalizerNormalizeLevel, SourceNormalizerOutputRoute,
-    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSessionConfig,
-    SourceNormalizerResourceCachePolicy, SourceNormalizerResourceSession,
-    SourceNormalizerResourceSessionConfig, SourceNormalizerResourceSessionInfo,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSession,
+    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
+    SourceNormalizerPacketStreamInfo, SourceNormalizerResourceCachePolicy,
+    SourceNormalizerResourceSession, SourceNormalizerResourceSessionConfig,
+    SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionRequirements,
     SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
 };
 use player_plugin_loader::{
@@ -105,6 +107,14 @@ pub struct MobileSourceNormalizerResourceOpen {
     pub diagnostics: Vec<PlayerPluginDiagnostic>,
 }
 
+pub struct MobileSourceNormalizerPacketOpen {
+    pub plugin_name: Option<String>,
+    pub plugin_path: String,
+    pub session: Box<dyn SourceNormalizerPacketSession>,
+    pub info: SourceNormalizerPacketStreamInfo,
+    pub diagnostics: Vec<PlayerPluginDiagnostic>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileSourceNormalizerPlaybackDecision {
     pub action: MobileSourceNormalizerPlaybackAction,
@@ -185,7 +195,20 @@ impl MobilePluginConfiguration {
                 plugin_library_paths: options.frame_processor_library_paths.clone(),
             },
             native_frame_pipeline: MobileNativeFramePipelineConfiguration {
-                mode: NativeFramePipelineMode::Disabled,
+                mode: match options.decoder_plugin_video_mode {
+                    player_runtime::PlayerDecoderPluginVideoMode::PreferNativeFrame => {
+                        NativeFramePipelineMode::PreferNativeFrame
+                    }
+                    player_runtime::PlayerDecoderPluginVideoMode::DiagnosticsOnly => {
+                        if options.decoder_plugin_library_paths.is_empty()
+                            && options.frame_processor_library_paths.is_empty()
+                        {
+                            NativeFramePipelineMode::Disabled
+                        } else {
+                            NativeFramePipelineMode::DiagnosticsOnly
+                        }
+                    }
+                },
                 decoder_plugin_library_paths: options.decoder_plugin_library_paths.clone(),
                 frame_processor_plugin_library_paths: options.frame_processor_library_paths.clone(),
                 max_in_flight_frames: Some(
@@ -343,6 +366,21 @@ pub fn open_mobile_source_normalizer_resource(
             }
         }
     }
+}
+
+pub fn open_mobile_source_normalizer_packet_session(
+    source: &MediaSource,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Result<MobileSourceNormalizerPacketOpen, String> {
+    let registry =
+        PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
+    let Some(record) = registry.best_source_normalizer_packet() else {
+        return Err(format!(
+            "no packet-stream source normalizer plugin is available{}",
+            mobile_source_normalizer_registry_notes(&registry)
+        ));
+    };
+    open_source_normalizer_packet_session(source, configuration, record)
 }
 
 pub fn mobile_source_normalizer_playback_decision(
@@ -613,54 +651,25 @@ fn preflight_source_normalizer(
     record: &PluginDiagnosticRecord,
 ) -> PlayerPluginDiagnostic {
     let started = Instant::now();
-    let path = record.path.display().to_string();
-    let plugin = match LoadedDynamicPlugin::load(&record.path) {
-        Ok(plugin) => plugin,
+    let mut opened = match open_source_normalizer_packet_session(source, configuration, record) {
+        Ok(opened) => opened,
         Err(error) => {
+            let status = if error.contains("load failed") {
+                PlayerPluginDiagnosticStatus::LoadFailed
+            } else {
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
+            };
             return runtime_source_normalizer_diagnostic(
-                path,
+                record.path.display().to_string(),
                 record.plugin_name.clone(),
-                PlayerPluginDiagnosticStatus::LoadFailed,
-                format!("source normalizer preflight load failed: {error}"),
-                PlayerPluginParticipation::Bypassed,
-            );
-        }
-    };
-    let Some(factory) = plugin.source_normalizer_packet_plugin_factory() else {
-        return runtime_source_normalizer_diagnostic(
-            path,
-            Some(plugin.plugin_name().to_owned()),
-            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
-            format!(
-                "{} is not a packet-stream source normalizer plugin",
-                plugin.plugin_name()
-            ),
-            PlayerPluginParticipation::Bypassed,
-        );
-    };
-    let runtime_profile = configuration.runtime_profile.clone().unwrap_or_default();
-    let config = SourceNormalizerPacketSessionConfig {
-        runtime_profile,
-        input: source.uri().to_owned(),
-        headers: Vec::new(),
-        startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT.as_millis() as u64),
-        session_timeout_ms: Some(SOURCE_NORMALIZER_SESSION_TIMEOUT.as_millis() as u64),
-        preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
-    };
-    let mut session = match factory.open_packet_session(&config) {
-        Ok(session) => session,
-        Err(error) => {
-            return runtime_source_normalizer_diagnostic(
-                path,
-                Some(factory.name().to_owned()),
-                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                status,
                 format!("source normalizer preflight open failed: {error}"),
                 PlayerPluginParticipation::Bypassed,
             );
         }
     };
-    let stream_info = session.stream_info();
-    let close_message = match session.close() {
+    let stream_info = opened.info.clone();
+    let close_message = match opened.session.close() {
         Ok(()) => None,
         Err(error) => Some(format!("; close failed: {error}")),
     };
@@ -670,11 +679,11 @@ fn preflight_source_normalizer(
         .map(|track| format!("{}:{}", media_kind_label(track.media_kind), track.codec))
         .collect::<Vec<_>>();
     runtime_source_normalizer_diagnostic(
-        path,
+        opened.plugin_path.clone(),
         stream_info
             .normalizer_name
             .clone()
-            .or_else(|| Some(factory.name().to_owned())),
+            .or_else(|| opened.plugin_name.clone()),
         PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
         format!(
             "source normalizer preflight opened and closed packet session; profile={}; tracks={}; ready_ms={}{}",
@@ -692,6 +701,85 @@ fn preflight_source_normalizer(
         ),
         PlayerPluginParticipation::Bypassed,
     )
+}
+
+fn open_source_normalizer_packet_session(
+    source: &MediaSource,
+    configuration: &MobileSourceNormalizerConfiguration,
+    record: &PluginDiagnosticRecord,
+) -> Result<MobileSourceNormalizerPacketOpen, String> {
+    let path = record.path.display().to_string();
+    let plugin = LoadedDynamicPlugin::load(&record.path)
+        .map_err(|error| format!("source normalizer packet load failed: {error}"))?;
+    let factory = plugin
+        .source_normalizer_packet_plugin_factory()
+        .ok_or_else(|| {
+            format!(
+                "{} is not a packet-stream source normalizer plugin",
+                plugin.plugin_name()
+            )
+        })?;
+    let runtime_profile = configuration.runtime_profile.clone().unwrap_or_default();
+    let requirements = SourceNormalizerPacketSessionRequirements {
+        runtime_profile: runtime_profile.clone(),
+        media_kind: Some(SourceNormalizerPacketMediaKind::Video),
+        codec: None,
+        bitstream_format: None,
+        require_seek: false,
+        require_flush: true,
+        require_lease_cleanup: true,
+    };
+    let missing_capabilities = requirements.missing_capabilities(&factory.packet_capabilities());
+    if !missing_capabilities.is_empty() {
+        return Err(format!(
+            "source normalizer packet plugin `{}` does not satisfy session requirements: missing {}",
+            factory.name(),
+            missing_capabilities.join(", ")
+        ));
+    }
+    let config = SourceNormalizerPacketSessionConfig {
+        runtime_profile,
+        input: source.uri().to_owned(),
+        headers: Vec::new(),
+        startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT.as_millis() as u64),
+        session_timeout_ms: Some(SOURCE_NORMALIZER_SESSION_TIMEOUT.as_millis() as u64),
+        preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+    };
+    let session = factory
+        .open_packet_session(&config)
+        .map_err(|error| format!("open_packet_session failed: {error}"))?;
+    let info = session.stream_info();
+    let diagnostic = runtime_source_normalizer_diagnostic(
+        path.clone(),
+        info.normalizer_name
+            .clone()
+            .or_else(|| Some(factory.name().to_owned())),
+        PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+        format!(
+            "source normalizer packet session opened; profile={}; tracks={}",
+            info.runtime_profile.as_deref().unwrap_or("auto-detected"),
+            if info.tracks.is_empty() {
+                "none".to_owned()
+            } else {
+                info.tracks
+                    .iter()
+                    .map(|track| format!("{}:{}", media_kind_label(track.media_kind), track.codec))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+        ),
+        PlayerPluginParticipation::Selected,
+    );
+    Ok(MobileSourceNormalizerPacketOpen {
+        plugin_name: info
+            .normalizer_name
+            .clone()
+            .or_else(|| Some(factory.name().to_owned())),
+        plugin_path: path,
+        session,
+        info,
+        diagnostics: vec![diagnostic],
+    })
 }
 
 fn probe_source_normalizer_resource(
@@ -727,6 +815,28 @@ fn probe_source_normalizer_resource(
     };
 
     let runtime_profile = configuration.runtime_profile.clone().unwrap_or_default();
+    let preferred_route = preferred_resource_route_for_source(source);
+    let requirements = SourceNormalizerResourceSessionRequirements {
+        runtime_profile: runtime_profile.clone(),
+        output_route: preferred_route.unwrap_or(SourceNormalizerOutputRoute::Fmp4LocalStream),
+        content_type: None,
+        require_growing_resources: false,
+        require_range_reads: true,
+        require_cancel: true,
+    };
+    let missing_capabilities = requirements.missing_capabilities(&factory.resource_capabilities());
+    if !missing_capabilities.is_empty() {
+        return runtime_source_normalizer_diagnostic(
+            path,
+            Some(factory.name().to_owned()),
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+            format!(
+                "source normalizer resource probe requirements failed: missing {}",
+                missing_capabilities.join(", ")
+            ),
+            PlayerPluginParticipation::Bypassed,
+        );
+    }
     let output_root = std::env::temp_dir()
         .join("vesper-source-normalizer-probe")
         .display()
@@ -737,7 +847,7 @@ fn probe_source_normalizer_resource(
         headers: Vec::new(),
         output_root,
         cache_policy: SourceNormalizerResourceCachePolicy::default(),
-        preferred_route: preferred_resource_route_for_source(source),
+        preferred_route,
         startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT.as_millis() as u64),
         read_idle_timeout_ms: Some(SOURCE_NORMALIZER_SESSION_TIMEOUT.as_millis() as u64),
     };
@@ -830,13 +940,30 @@ fn open_source_normalizer_resource_session(
             )
         })?;
     let runtime_profile = configuration.runtime_profile.clone().unwrap_or_default();
+    let preferred_route = preferred_resource_route_for_source(source);
+    let requirements = SourceNormalizerResourceSessionRequirements {
+        runtime_profile: runtime_profile.clone(),
+        output_route: preferred_route.unwrap_or(SourceNormalizerOutputRoute::Fmp4LocalStream),
+        content_type: None,
+        require_growing_resources: false,
+        require_range_reads: true,
+        require_cancel: true,
+    };
+    let missing_capabilities = requirements.missing_capabilities(&factory.resource_capabilities());
+    if !missing_capabilities.is_empty() {
+        return Err(format!(
+            "source normalizer resource plugin `{}` does not satisfy session requirements: missing {}",
+            factory.name(),
+            missing_capabilities.join(", ")
+        ));
+    }
     let config = SourceNormalizerResourceSessionConfig {
         runtime_profile,
         input: source.uri().to_owned(),
         headers: Vec::new(),
         output_root,
         cache_policy: SourceNormalizerResourceCachePolicy::default(),
-        preferred_route: preferred_resource_route_for_source(source),
+        preferred_route,
         startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT.as_millis() as u64),
         read_idle_timeout_ms: Some(SOURCE_NORMALIZER_SESSION_TIMEOUT.as_millis() as u64),
     };
@@ -1899,6 +2026,57 @@ mod tests {
     }
 
     #[test]
+    fn runtime_options_preserve_native_frame_pipeline_diagnostic_intent() {
+        let options = PlayerRuntimeOptions::default()
+            .with_decoder_plugin_video_mode(
+                player_runtime::PlayerDecoderPluginVideoMode::PreferNativeFrame,
+            )
+            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/libmediacodec.so")])
+            .with_frame_processor_library_paths([PathBuf::from("/tmp/libframe.so")]);
+
+        let configuration = MobilePluginConfiguration::from_runtime_options(&options);
+
+        assert_eq!(
+            configuration.native_frame_pipeline.mode,
+            NativeFramePipelineMode::PreferNativeFrame
+        );
+        assert_eq!(
+            configuration
+                .native_frame_pipeline
+                .decoder_plugin_library_paths,
+            vec![PathBuf::from("/tmp/libmediacodec.so")]
+        );
+        assert_eq!(
+            configuration
+                .native_frame_pipeline
+                .frame_processor_plugin_library_paths,
+            vec![PathBuf::from("/tmp/libframe.so")]
+        );
+    }
+
+    #[test]
+    fn runtime_options_with_decoder_paths_remain_diagnostics_only_until_opted_in() {
+        let options = PlayerRuntimeOptions::default()
+            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/libmediacodec.so")]);
+
+        let configuration = MobilePluginConfiguration::from_runtime_options(&options);
+
+        assert_eq!(
+            configuration.native_frame_pipeline.mode,
+            NativeFramePipelineMode::DiagnosticsOnly
+        );
+        let diagnostics = native_frame_pipeline_diagnostics(&configuration.native_frame_pipeline);
+        assert_eq!(
+            diagnostics[0]
+                .details
+                .iter()
+                .find(|detail| detail.key == "route")
+                .map(|detail| detail.value.as_str()),
+            Some("systemPlayer")
+        );
+    }
+
+    #[test]
     fn source_normalizer_missing_paths_are_non_blocking() {
         let diagnostics = source_normalizer_diagnostics(
             &MediaSource::new("placeholder.mp4"),
@@ -2455,7 +2633,7 @@ mod tests {
                     max_sessions: Some(1),
                 },
             )),
-            message: Some("source_normalizer_resource_v3".to_owned()),
+            message: Some("source normalizer resource route".to_owned()),
         }
     }
 
@@ -2481,7 +2659,7 @@ mod tests {
                     max_sessions: Some(1),
                 },
             )),
-            message: Some("source_normalizer_packet_v2".to_owned()),
+            message: Some("source normalizer packet route".to_owned()),
         }
     }
 

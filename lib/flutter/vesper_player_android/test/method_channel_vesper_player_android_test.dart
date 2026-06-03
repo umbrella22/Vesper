@@ -176,6 +176,17 @@ void main() {
     );
   });
 
+  test('createPlayer does not add a public surface lifecycle policy', () async {
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    await platform.createPlayer();
+
+    final arguments = Map<Object?, Object?>.from(calls.single.arguments as Map);
+    expect(arguments, containsPair('renderSurfaceKind', 'auto'));
+    expect(arguments, isNot(contains('surfacePolicy')));
+    expect(arguments, isNot(contains('viewLifecycleMode')));
+  });
+
   test('createPlayer forwards disabled keep-screen-on policy', () async {
     final platform = MethodChannelVesperPlayerAndroid();
 

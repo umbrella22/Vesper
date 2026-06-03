@@ -1609,6 +1609,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-decoder-mediacodec"
+version = "0.3.0"
+dependencies = [
+ "player-plugin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "player-decoder-videotoolbox"
 version = "0.3.0"
 dependencies = [
@@ -1712,9 +1721,12 @@ version = "0.3.0"
 dependencies = [
  "player-model",
  "player-platform-mobile",
+ "player-platform-native-frame",
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 
@@ -1768,6 +1780,7 @@ dependencies = [
  "player-model",
  "player-platform-apple",
  "player-platform-desktop",
+ "player-platform-native-frame",
  "player-plugin",
  "player-plugin-loader",
  "player-runtime",
@@ -1784,6 +1797,15 @@ dependencies = [
  "player-runtime",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "player-platform-native-frame"
+version = "0.3.0"
+dependencies = [
+ "player-plugin",
+ "player-runtime",
+ "serde",
 ]
 
 [[package]]

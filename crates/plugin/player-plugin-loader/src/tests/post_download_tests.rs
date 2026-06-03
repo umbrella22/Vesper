@@ -110,9 +110,9 @@ fn dynamic_post_download_processor_rejects_v2_descriptor() {
     assert!(matches!(
         error,
         PluginLoadError::AbiVersionMismatch {
-            expected: 3,
+            ref expected,
             actual: 2
-        }
+        } if expected == "3"
     ));
 }
 

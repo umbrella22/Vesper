@@ -1,23 +1,108 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
-use player_platform_mobile::{MobilePluginConfiguration, apply_mobile_plugin_diagnostics};
+use player_platform_mobile::{
+    MobileNativeFramePipelineConfiguration, MobilePluginConfiguration,
+    MobileSourceNormalizerConfiguration, apply_mobile_plugin_diagnostics,
+    open_mobile_source_normalizer_packet_session,
+};
+use player_platform_native_frame::{
+    NativeFrameDecoderAdapter, NativeFramePacketRead, NativeFramePacketSourceAdapter,
+    NativeFramePipelineCore, NativeFramePipelineCoreConfig, NativeFramePipelineCounters,
+    NativeFramePipelineError, NativeFramePipelineFrame, NativeFramePipelineFrameResult,
+    NativeFramePipelineFrameStatus, NativeFramePipelineLifecycleState, NativeFramePresenterAdapter,
+    NativeFramePresenterFrame, NativeFramePresenterSubmitResult, NativeFrameProcessorChainCore,
+    NativeFrameProcessorError, NativeFrameProcessorMetricsDelta, NativeFrameProcessorNode,
+    NativeFrameProcessorOwnedFrame, NativeFrameProcessorPipelineAdapter,
+    NativeFrameProcessorProcessedFrame, NativeFrameProcessorReleaseError,
+    NativeFrameProcessorReleaseResult, NoopNativeFrameProcessorObserver,
+};
+use player_plugin::{
+    DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeDeviceContextKind,
+    DecoderNativeFrame, DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
+    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionRequirements,
+    FrameProcessorCapabilities, FrameProcessorSessionConfig, FrameProcessorSessionRequirements,
+    NativeDecoderPluginFactory, NativeDecoderSession, NativeFrameMetadata,
+    NativeFramePipelineProfile, NativeHandleKind, SourceNormalizerPacket,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
+    SourceNormalizerReadPacketStatus,
+};
+use player_plugin_loader::{
+    DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginCapabilitySummary, PluginRegistry,
+};
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
-    MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
-    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError,
-    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetrics,
-    PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy,
+    MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
+    MediaSourceProtocol, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
+    MediaTrackSelectionMode, MediaTrackSelectionSnapshot, NativeFramePipelineMode,
+    PlaybackProgress, PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo,
+    PlayerPlaybackRoute, PlayerResilienceMetrics, PlayerResilienceMetricsTracker, PlayerResult,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
     PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind,
-    PlayerTimelineSnapshot, PresentationState,
+    PlayerTimelineSnapshot, PresentationState, SourceNormalizerMode,
 };
+use serde::Serialize;
 
 pub const ANDROID_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "android_native";
+const ANDROID_NATIVE_FRAME_ADVANCE_PACKET_BUDGET: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AndroidNativeFramePipelineProfile {
+    HostTimedSurface,
+    #[allow(dead_code)]
+    SdkOwnedHardwareBuffer,
+}
+
+impl AndroidNativeFramePipelineProfile {
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::HostTimedSurface => "hostTimedSurface",
+            Self::SdkOwnedHardwareBuffer => "sdkOwnedHardwareBuffer",
+        }
+    }
+
+    fn pipeline_profile(self) -> NativeFramePipelineProfile {
+        match self {
+            Self::HostTimedSurface => NativeFramePipelineProfile::MediaCodecSurfaceTexture,
+            Self::SdkOwnedHardwareBuffer => NativeFramePipelineProfile::MediaCodecHardwareBuffer,
+        }
+    }
+
+    fn pipeline_profile_label(self) -> String {
+        self.pipeline_profile().label()
+    }
+
+    fn decoder_requirements(self, codec: impl Into<String>) -> DecoderSessionRequirements {
+        match self {
+            Self::HostTimedSurface => DecoderSessionRequirements {
+                native_device_context_kind: Some(
+                    DecoderNativeDeviceContextKind::AndroidNativeWindow,
+                ),
+                require_presentation_release: true,
+                ..DecoderSessionRequirements::native_video(
+                    codec,
+                    DecoderNativeHandleKind::MediaCodecSurfaceTexture,
+                    NativeFramePipelineProfile::MediaCodecSurfaceTexture,
+                )
+            },
+            Self::SdkOwnedHardwareBuffer => DecoderSessionRequirements {
+                native_device_context_kind: None,
+                require_presentation_release: false,
+                ..DecoderSessionRequirements::native_video(
+                    codec,
+                    DecoderNativeHandleKind::MediaCodecHardwareBuffer,
+                    NativeFramePipelineProfile::MediaCodecHardwareBuffer,
+                )
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AndroidHostTimelineKind {
@@ -326,6 +411,222 @@ pub struct AndroidNativePlayerRuntime {
     inner: Box<dyn AndroidNativePlayerSession>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AndroidNativeFramePipelineOpenConfig {
+    pub source_uri: String,
+    pub source_normalizer: MobileSourceNormalizerConfiguration,
+    pub native_frame_pipeline: MobileNativeFramePipelineConfiguration,
+    pub presenter_profile: AndroidNativeFramePresenterProfile,
+}
+
+pub struct AndroidNativeFramePipelinePacketSource {
+    plugin_name: Option<String>,
+    plugin_path: String,
+    session: Box<dyn SourceNormalizerPacketSession>,
+    stream_info: SourceNormalizerPacketStreamInfo,
+    selected_video_stream_index: Option<u32>,
+    pending_packet: Option<AndroidNativeFramePipelinePendingPacket>,
+    closed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AndroidNativeFramePipelinePendingPacket {
+    packet: SourceNormalizerPacket,
+    data: Vec<u8>,
+}
+
+pub(crate) trait AndroidNativeFrameDecoderSink: Send {
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> PlayerResult<DecoderPacketResult>;
+
+    fn receive_native_frame(&mut self) -> PlayerResult<DecoderReceiveNativeFrameOutput>;
+
+    fn release_native_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+        presented: bool,
+    ) -> PlayerResult<()>;
+
+    fn flush(&mut self) -> PlayerResult<()>;
+
+    fn close(&mut self) -> PlayerResult<()>;
+}
+
+struct AndroidNativeFrameDecoderSessionSink {
+    plugin_name: Option<String>,
+    plugin_path: String,
+    session: Box<dyn NativeDecoderSession>,
+    closed: bool,
+}
+
+#[derive(Clone)]
+struct AndroidNativeFrameDecoderOpenPlan {
+    plugin_name: Option<String>,
+    plugin_path: PathBuf,
+    factory: Arc<dyn NativeDecoderPluginFactory>,
+    video_track: SourceNormalizerPacketTrackInfo,
+    selected_profile: AndroidNativeFramePipelineProfile,
+    requires_android_native_window: bool,
+}
+
+pub(crate) trait AndroidNativeFrameProcessorChain: Send {
+    fn process_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+        counters: &mut AndroidNativeFramePipelineCounters,
+    ) -> PlayerResult<AndroidNativeFramePipelineProcessedFrame>;
+
+    fn release_processor_outputs(
+        &mut self,
+        outputs: Vec<AndroidNativeFrameProcessorOwnedFrame>,
+    ) -> Result<NativeFrameProcessorReleaseResult, NativeFrameProcessorReleaseError>;
+
+    fn flush(&mut self) -> PlayerResult<()>;
+
+    fn close(&mut self) -> PlayerResult<()>;
+}
+
+type AndroidNativeFramePipelineProcessedFrame = NativeFrameProcessorProcessedFrame;
+type AndroidNativeFrameProcessorOwnedFrame = NativeFrameProcessorOwnedFrame;
+pub type AndroidNativeFramePipelineFrame = NativeFramePipelineFrame;
+pub type AndroidNativeFramePipelineFrameResult = NativeFramePipelineFrameResult;
+pub type AndroidNativeFramePipelineFrameStatus = NativeFramePipelineFrameStatus;
+pub type AndroidNativeFramePipelineCounters = NativeFramePipelineCounters;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AndroidNativeFramePresenterFrame {
+    pub frame_handle: u64,
+    pub frame: AndroidNativeFramePipelineFrame,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AndroidNativeFramePresenterSubmitResult {
+    pub accepted: bool,
+    pub requires_host_release: bool,
+    pub message: Option<String>,
+}
+
+pub trait AndroidNativeFramePresenterSink: Send {
+    fn submit_frame(
+        &mut self,
+        frame: &AndroidNativeFramePresenterFrame,
+    ) -> PlayerResult<AndroidNativeFramePresenterSubmitResult>;
+
+    fn decoder_device_context(&self) -> Option<DecoderNativeDeviceContext> {
+        None
+    }
+
+    fn flush(&mut self) -> PlayerResult<()>;
+
+    fn close(&mut self) -> PlayerResult<()>;
+}
+
+struct AndroidNativeFrameProcessorSessionChain {
+    core: NativeFrameProcessorChainCore,
+    closed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum AndroidNativeFramePresenterProfile {
+    SurfaceView,
+    Surface,
+    SurfaceTexture,
+}
+
+pub struct AndroidNativeFramePipelineSession {
+    source_uri: String,
+    source_kind: MediaSourceKind,
+    source_protocol: MediaSourceProtocol,
+    source_normalizer_mode: SourceNormalizerMode,
+    decoder_plugin_library_paths: Vec<PathBuf>,
+    frame_processor_plugin_library_paths: Vec<PathBuf>,
+    max_in_flight_frames: u32,
+    presenter_profile: AndroidNativeFramePresenterProfile,
+    selected_pipeline_profile: AndroidNativeFramePipelineProfile,
+    presenter_surface_profile: Option<AndroidNativeFramePresenterProfile>,
+    decoder_open_plan_template: Option<AndroidNativeFrameDecoderOpenPlan>,
+    decoder_open_plan: Option<AndroidNativeFrameDecoderOpenPlan>,
+    core: NativeFramePipelineCore,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidNativeFramePipelineOpenWire {
+    pub handle: u64,
+    pub route: &'static str,
+    pub participation: &'static str,
+    pub source_input: &'static str,
+    pub decoder_adapter: &'static str,
+    pub selected_profile: String,
+    pub presenter_profile: &'static str,
+    pub presenter_ready: bool,
+    pub presenter_configured: bool,
+    pub presenter_state: &'static str,
+    pub surface_attached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_profile: Option<&'static str>,
+    pub pipeline_profile: String,
+    pub source_uri: String,
+    pub source_kind: String,
+    pub source_protocol: String,
+    pub source_normalizer_mode: String,
+    pub decoder_plugin_count: usize,
+    pub frame_processor_count: usize,
+    pub max_in_flight_frames: u32,
+    pub counters: AndroidNativeFramePipelineCounters,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidNativeFramePipelineStatusWire {
+    pub handle: u64,
+    pub route: &'static str,
+    pub participation: &'static str,
+    pub source_input: &'static str,
+    pub decoder_adapter: &'static str,
+    pub selected_profile: String,
+    pub presenter_profile: &'static str,
+    pub presenter_ready: bool,
+    pub presenter_configured: bool,
+    pub presenter_state: &'static str,
+    pub surface_attached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_profile: Option<&'static str>,
+    pub pipeline_profile: String,
+    pub pending_frames: usize,
+    pub end_of_stream: bool,
+    pub counters: AndroidNativeFramePipelineCounters,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidNativeFramePipelineFrameWire {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_handle: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation_time_us: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_us: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<u64>,
+    pub requires_host_release: bool,
+    pub counters: AndroidNativeFramePipelineCounters,
+}
+
 impl<C> std::fmt::Debug for AndroidManagedNativeSession<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AndroidManagedNativeSession")
@@ -611,6 +912,1363 @@ impl AndroidHostBridgeSession {
 
     pub fn report_player_error(&mut self, error: PlayerError) {
         self.session.controller().report_player_error(error);
+    }
+}
+
+impl AndroidNativeFramePresenterProfile {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SurfaceView => "SurfaceView",
+            Self::Surface => "Surface",
+            Self::SurfaceTexture => "SurfaceTexture",
+        }
+    }
+}
+
+fn validate_native_frame_pipeline_open_config(
+    config: &AndroidNativeFramePipelineOpenConfig,
+) -> PlayerResult<()> {
+    if !matches!(
+        config.native_frame_pipeline.mode,
+        NativeFramePipelineMode::PreferNativeFrame | NativeFramePipelineMode::RequireNativeFrame
+    ) {
+        return Err(PlayerError::new(
+            PlayerErrorCode::InvalidArgument,
+            "Android native-frame pipeline must be explicitly preferred or required",
+        ));
+    }
+    if config.source_normalizer.plugin_library_paths.is_empty() {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            "Android native-frame pipeline requires a SourceNormalizer packet-stream plugin path",
+        ));
+    }
+    if config
+        .native_frame_pipeline
+        .decoder_plugin_library_paths
+        .is_empty()
+    {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            "Android native-frame pipeline requires a MediaCodec decoder plugin path",
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_android_native_frame_decoder(
+    decoder_plugin_library_paths: &[PathBuf],
+    stream_info: &SourceNormalizerPacketStreamInfo,
+) -> PlayerResult<AndroidNativeFrameDecoderOpenPlan> {
+    let video_track = selected_video_track(stream_info).ok_or_else(|| {
+        PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            "Android native-frame pipeline requires a video stream from SourceNormalizer",
+        )
+    })?;
+    if video_track.codec.trim().is_empty() {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            "Android native-frame pipeline SourceNormalizer video stream did not report a codec",
+        ));
+    }
+    let request = DecoderPluginMatchRequest::video(video_track.codec.clone());
+    let registry =
+        PluginRegistry::inspect_decoder_support(decoder_plugin_library_paths, request.clone());
+    let record = registry.best_native_decoder_for(&request).ok_or_else(|| {
+        PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android native-frame pipeline found no native decoder plugin for video codec {}{}",
+                request.codec,
+                android_decoder_registry_notes(&registry)
+            ),
+        )
+    })?;
+    validate_android_native_decoder_record(record)?;
+    let plugin = LoadedDynamicPlugin::load(&record.path).map_err(|error| {
+        PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android native-frame decoder plugin load failed at {}: {error}",
+                record.path.display()
+            ),
+        )
+    })?;
+    let factory = plugin.native_decoder_plugin_factory().ok_or_else(|| {
+        PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!("{} is not a native decoder plugin", plugin.plugin_name()),
+        )
+    })?;
+    let capabilities = factory.capabilities();
+    if !capabilities.supports_hardware_decode {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android native-frame decoder `{}` does not advertise hardware decode",
+                factory.name()
+            ),
+        ));
+    }
+    if !capabilities.supports_gpu_handles {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android native-frame decoder `{}` does not advertise native GPU handles",
+                factory.name()
+            ),
+        ));
+    }
+    let selected_profile = AndroidNativeFramePipelineProfile::HostTimedSurface;
+    let requirements_for_session = selected_profile.decoder_requirements(video_track.codec.clone());
+    let missing_capabilities = requirements_for_session
+        .missing_capabilities(&capabilities, &factory.native_requirements());
+    if !missing_capabilities.is_empty() {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android native-frame decoder `{}` does not satisfy session requirements: missing {}",
+                factory.name(),
+                missing_capabilities.join(", ")
+            ),
+        ));
+    }
+    let requirements = factory.native_requirements();
+    validate_android_native_decoder_requirements(
+        record
+            .plugin_name
+            .as_deref()
+            .unwrap_or_else(|| factory.name()),
+        &requirements,
+    )?;
+    Ok(AndroidNativeFrameDecoderOpenPlan {
+        plugin_name: record
+            .plugin_name
+            .clone()
+            .or_else(|| Some(factory.name().to_owned())),
+        plugin_path: record.path.clone(),
+        factory,
+        video_track: video_track.clone(),
+        selected_profile,
+        requires_android_native_window: requirements.requires_native_device_context
+            || requirements
+                .required_device_context_kinds
+                .contains(&DecoderNativeDeviceContextKind::AndroidNativeWindow),
+    })
+}
+
+fn open_android_native_frame_decoder_session(
+    factory: &dyn NativeDecoderPluginFactory,
+    video_track: &SourceNormalizerPacketTrackInfo,
+    native_device_context: Option<DecoderNativeDeviceContext>,
+) -> PlayerResult<Box<dyn NativeDecoderSession>> {
+    let config = DecoderSessionConfig {
+        codec: video_track.codec.clone(),
+        media_kind: DecoderMediaKind::Video,
+        extradata: video_track.extradata.clone(),
+        bitstream_format: video_track.bitstream_format.clone(),
+        width: video_track.width,
+        height: video_track.height,
+        coded_width: video_track.coded_width,
+        coded_height: video_track.coded_height,
+        prefer_hardware: true,
+        require_cpu_output: false,
+        native_device_context,
+        ..DecoderSessionConfig::default()
+    };
+    factory.open_native_session(&config).map_err(|error| {
+        PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android native-frame decoder `{}` open_native_session failed: {error}",
+                factory.name()
+            ),
+        )
+    })
+}
+
+fn open_android_native_frame_processor_chain(
+    frame_processor_plugin_library_paths: &[PathBuf],
+    stream_info: &SourceNormalizerPacketStreamInfo,
+    max_in_flight_frames: u32,
+) -> PlayerResult<Option<Box<dyn AndroidNativeFrameProcessorChain>>> {
+    if frame_processor_plugin_library_paths.is_empty() {
+        return Ok(None);
+    }
+    let video_track = selected_video_track(stream_info).ok_or_else(|| {
+        PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            "Android native-frame processor chain requires a video stream from SourceNormalizer",
+        )
+    })?;
+    let mode = FrameProcessorMode::PreferProcessed;
+    let policy = FrameProcessorPolicy {
+        max_in_flight_frames_per_processor: max_in_flight_frames.max(1),
+        ..FrameProcessorPolicy::default()
+    };
+    let input_metadata = android_frame_processor_input_metadata(video_track);
+    let mut nodes = Vec::new();
+    for (processor_index, path) in frame_processor_plugin_library_paths
+        .iter()
+        .enumerate()
+        .take(policy.max_chain_depth)
+    {
+        let plugin = LoadedDynamicPlugin::load(path).map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::Unsupported,
+                format!(
+                    "Android native-frame processor plugin load failed at {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        let factory = plugin.frame_processor_plugin_factory().ok_or_else(|| {
+            PlayerError::new(
+                PlayerErrorCode::Unsupported,
+                format!("{} is not a frame processor plugin", plugin.plugin_name()),
+            )
+        })?;
+        let capabilities = factory.capabilities();
+        validate_android_frame_processor_capabilities(factory.name(), &capabilities)?;
+        let session = factory
+            .open_session(&FrameProcessorSessionConfig {
+                processor_index,
+                input_metadata: input_metadata.clone(),
+                max_in_flight_frames: Some(policy.max_in_flight_frames_per_processor),
+            })
+            .map_err(|error| {
+                PlayerError::new(
+                    PlayerErrorCode::Unsupported,
+                    format!(
+                        "Android native-frame processor `{}` open_session failed: {error}",
+                        factory.name()
+                    ),
+                )
+            })?;
+        nodes.push(NativeFrameProcessorNode::new(
+            factory.name(),
+            processor_index,
+            session,
+        ));
+    }
+    if nodes.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(Box::new(AndroidNativeFrameProcessorSessionChain {
+            core: NativeFrameProcessorChainCore::new(nodes, mode, policy),
+            closed: false,
+        })))
+    }
+}
+
+fn android_frame_processor_input_metadata(
+    video_track: &SourceNormalizerPacketTrackInfo,
+) -> NativeFrameMetadata {
+    NativeFrameMetadata {
+        media_kind: DecoderMediaKind::Video,
+        // The Android v1 host-timed MediaCodec path outputs into a Surface, so
+        // the host cannot know a CPU-readable pixel format at session-open time.
+        // Capability gating is therefore limited to the stable native handle and
+        // pipeline profile until first-frame metadata can be validated at runtime.
+        format: player_plugin::DecoderFrameFormat::Unknown("mediacodec_surface_texture".to_owned()),
+        codec: video_track.codec.clone(),
+        pts_us: None,
+        duration_us: None,
+        width: video_track.width.unwrap_or(0),
+        height: video_track.height.unwrap_or(0),
+        coded_width: video_track.coded_width.or(video_track.width),
+        coded_height: video_track.coded_height.or(video_track.height),
+        visible_rect: None,
+        handle_kind: NativeHandleKind::MediaCodecSurfaceTexture,
+        pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
+        color_space: None,
+        hdr_metadata: None,
+        sync_info: None,
+        transform: None,
+        frame_id: None,
+        release_tracking: None,
+    }
+}
+
+fn validate_android_frame_processor_capabilities(
+    processor_name: &str,
+    capabilities: &FrameProcessorCapabilities,
+) -> PlayerResult<()> {
+    let requirements = FrameProcessorSessionRequirements {
+        output_handle_kind: Some(NativeHandleKind::MediaCodecSurfaceTexture),
+        output_pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
+        require_explicit_native_input: true,
+        require_flush: false,
+        ..FrameProcessorSessionRequirements::native_video(NativeFrameMetadata {
+            media_kind: DecoderMediaKind::Video,
+            format: player_plugin::DecoderFrameFormat::Unknown(
+                "mediacodec_surface_texture".to_owned(),
+            ),
+            codec: "android-native-frame".to_owned(),
+            pts_us: None,
+            duration_us: None,
+            width: 0,
+            height: 0,
+            coded_width: None,
+            coded_height: None,
+            visible_rect: None,
+            handle_kind: NativeHandleKind::MediaCodecSurfaceTexture,
+            pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
+            color_space: None,
+            hdr_metadata: None,
+            sync_info: None,
+            transform: None,
+            frame_id: None,
+            release_tracking: None,
+        })
+    };
+    let missing = requirements.missing_capabilities(capabilities);
+    if !missing.is_empty() {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android frame processor `{processor_name}` does not satisfy session requirements: missing {}",
+                missing.join(", ")
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_android_native_decoder_record(
+    record: &player_plugin_loader::PluginDiagnosticRecord,
+) -> PlayerResult<()> {
+    let requirements = match record.capability_summary.as_ref() {
+        Some(PluginCapabilitySummary::Decoder(summary)) => summary.native_requirements.as_ref(),
+        _ => None,
+    };
+    if let Some(requirements) = requirements {
+        validate_android_native_decoder_requirements(
+            record
+                .plugin_name
+                .as_deref()
+                .unwrap_or_else(|| record.path.to_str().unwrap_or("decoder plugin")),
+            requirements,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_android_native_decoder_requirements(
+    decoder_name: &str,
+    requirements: &player_plugin::DecoderNativeRequirements,
+) -> PlayerResult<()> {
+    let unsupported_contexts: Vec<String> = requirements
+        .required_device_context_kinds
+        .iter()
+        .filter(|kind| **kind != DecoderNativeDeviceContextKind::AndroidNativeWindow)
+        .map(|kind| format!("{kind:?}"))
+        .collect();
+    if !unsupported_contexts.is_empty() {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            format!(
+                "Android native-frame decoder plugin {decoder_name} requires unsupported native device context(s): {}",
+                unsupported_contexts.join(", ")
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn selected_video_track(
+    stream_info: &SourceNormalizerPacketStreamInfo,
+) -> Option<&SourceNormalizerPacketTrackInfo> {
+    stream_info
+        .selected_track_index
+        .and_then(|selected| {
+            stream_info.tracks.iter().find(|track| {
+                track.media_kind == SourceNormalizerPacketMediaKind::Video
+                    && track.stream_index == selected
+            })
+        })
+        .or_else(|| {
+            stream_info
+                .tracks
+                .iter()
+                .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)
+        })
+}
+
+fn android_decoder_registry_notes(registry: &PluginRegistry) -> String {
+    let notes = registry.diagnostic_notes();
+    if notes.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", notes.join("; "))
+    }
+}
+
+impl AndroidNativeFramePipelinePacketSource {
+    pub fn new(
+        plugin_name: Option<String>,
+        plugin_path: String,
+        session: Box<dyn SourceNormalizerPacketSession>,
+    ) -> Self {
+        let stream_info = session.stream_info();
+        let selected_video_stream_index =
+            selected_video_track(&stream_info).map(|track| track.stream_index);
+        Self {
+            plugin_name,
+            plugin_path,
+            session,
+            stream_info,
+            selected_video_stream_index,
+            pending_packet: None,
+            closed: false,
+        }
+    }
+
+    pub fn plugin_name(&self) -> Option<&str> {
+        self.plugin_name.as_deref()
+    }
+
+    pub fn plugin_path(&self) -> &str {
+        &self.plugin_path
+    }
+
+    pub fn has_pending_packet(&self) -> bool {
+        self.pending_packet.is_some()
+    }
+
+    pub fn pending_packet_data_len(&self) -> Option<usize> {
+        self.pending_packet
+            .as_ref()
+            .map(|pending| pending.data.len())
+    }
+
+    pub fn pending_packet_stream_index(&self) -> Option<u32> {
+        self.pending_packet
+            .as_ref()
+            .map(|pending| pending.packet.stream_index)
+    }
+
+    fn stream_info(&self) -> &SourceNormalizerPacketStreamInfo {
+        &self.stream_info
+    }
+
+    fn clear_pending_packet(&mut self) {
+        self.pending_packet = None;
+    }
+
+    fn flush(&mut self) -> PlayerResult<()> {
+        self.clear_pending_packet();
+        self.session.flush().map(|_| ()).map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                format!("source normalizer flush failed: {error}"),
+            )
+        })
+    }
+
+    fn seek(&mut self, position: Duration) -> PlayerResult<()> {
+        self.clear_pending_packet();
+        self.session
+            .seek(&SourceNormalizerPacketSeek {
+                position_millis: duration_to_millis(position),
+                exact: false,
+            })
+            .map(|_| ())
+            .map_err(|error| {
+                PlayerError::new(
+                    PlayerErrorCode::DecodeFailure,
+                    format!("source normalizer seek failed: {error}"),
+                )
+            })
+    }
+
+    fn close(&mut self) -> PlayerResult<()> {
+        if self.closed {
+            return Ok(());
+        }
+        self.clear_pending_packet();
+        self.session.close().map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                format!("source normalizer close failed: {error}"),
+            )
+        })?;
+        self.closed = true;
+        Ok(())
+    }
+
+    fn release_packet(&mut self, handle: usize) -> PlayerResult<()> {
+        self.session.release_packet(handle).map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                format!("source normalizer release_packet failed: {error}"),
+            )
+        })
+    }
+}
+
+impl std::fmt::Debug for AndroidNativeFramePipelinePacketSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidNativeFramePipelinePacketSource")
+            .field("plugin_name", &self.plugin_name)
+            .field("plugin_path", &self.plugin_path)
+            .field(
+                "selected_video_stream_index",
+                &self.selected_video_stream_index,
+            )
+            .field("has_pending_packet", &self.pending_packet.is_some())
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
+impl Drop for AndroidNativeFramePipelinePacketSource {
+    fn drop(&mut self) {
+        if let Err(error) = self.close() {
+            tracing::warn!(error = %error, "Android native-frame packet source close during drop failed");
+        }
+    }
+}
+
+impl NativeFramePacketSourceAdapter for AndroidNativeFramePipelinePacketSource {
+    fn selected_video_stream_index(&self) -> Option<u32> {
+        self.selected_video_stream_index
+    }
+
+    fn read_packet(&mut self) -> Result<NativeFramePacketRead, NativeFramePipelineError> {
+        loop {
+            let lease = self.session.read_packet().map_err(|error| {
+                NativeFramePipelineError::new(
+                    "readPacket",
+                    format!("source normalizer read_packet failed: {error}"),
+                )
+            })?;
+            match lease.metadata.status {
+                SourceNormalizerReadPacketStatus::NeedMoreData => {
+                    return Ok(NativeFramePacketRead::NeedMoreData {
+                        message: lease.metadata.message,
+                    });
+                }
+                SourceNormalizerReadPacketStatus::EndOfStream => {
+                    return Ok(NativeFramePacketRead::EndOfStream {
+                        message: lease.metadata.message,
+                    });
+                }
+                SourceNormalizerReadPacketStatus::Packet => {}
+            }
+
+            let Some(packet) = lease.metadata.packet.clone() else {
+                let handle = lease.handle;
+                drop(lease);
+                self.release_packet(handle)
+                    .map_err(player_error_to_pipeline_error)?;
+                continue;
+            };
+            let data = lease.data.to_vec();
+            let handle = lease.handle;
+            drop(lease);
+            self.release_packet(handle)
+                .map_err(player_error_to_pipeline_error)?;
+            return Ok(NativeFramePacketRead::Packet {
+                packet,
+                data,
+                message: None,
+            });
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+        AndroidNativeFramePipelinePacketSource::flush(self).map_err(player_error_to_pipeline_error)
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<(), NativeFramePipelineError> {
+        AndroidNativeFramePipelinePacketSource::seek(self, position)
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn close(&mut self) -> Result<(), NativeFramePipelineError> {
+        AndroidNativeFramePipelinePacketSource::close(self).map_err(player_error_to_pipeline_error)
+    }
+}
+
+impl AndroidNativeFrameDecoderSessionSink {
+    fn new(
+        plugin_name: Option<String>,
+        plugin_path: String,
+        session: Box<dyn NativeDecoderSession>,
+    ) -> Self {
+        Self {
+            plugin_name,
+            plugin_path,
+            session,
+            closed: false,
+        }
+    }
+}
+
+impl AndroidNativeFrameDecoderOpenPlan {
+    fn open(
+        &self,
+        native_device_context: Option<DecoderNativeDeviceContext>,
+    ) -> PlayerResult<Box<dyn AndroidNativeFrameDecoderSink>> {
+        let plugin_name = self.plugin_name.clone();
+        let plugin_path = self.plugin_path.display().to_string();
+        let session = open_android_native_frame_decoder_session(
+            &*self.factory,
+            &self.video_track,
+            native_device_context,
+        )?;
+        Ok(Box::new(AndroidNativeFrameDecoderSessionSink::new(
+            plugin_name,
+            plugin_path,
+            session,
+        )))
+    }
+}
+
+impl AndroidNativeFrameDecoderSink for AndroidNativeFrameDecoderSessionSink {
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> PlayerResult<DecoderPacketResult> {
+        self.session.send_packet(packet, data).map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                format!(
+                    "Android native-frame decoder `{}` send_packet failed: {error}",
+                    self.plugin_name.as_deref().unwrap_or(&self.plugin_path)
+                ),
+            )
+        })
+    }
+
+    fn receive_native_frame(&mut self) -> PlayerResult<DecoderReceiveNativeFrameOutput> {
+        self.session.receive_native_frame().map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                format!(
+                    "Android native-frame decoder `{}` receive_native_frame failed: {error}",
+                    self.plugin_name.as_deref().unwrap_or(&self.plugin_path)
+                ),
+            )
+        })
+    }
+
+    fn release_native_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+        presented: bool,
+    ) -> PlayerResult<()> {
+        self.session
+            .release_native_frame_with_presentation(frame, presented)
+            .map_err(|error| {
+                PlayerError::new(
+                    PlayerErrorCode::DecodeFailure,
+                    format!(
+                        "Android native-frame decoder `{}` release_native_frame failed: {error}",
+                        self.plugin_name.as_deref().unwrap_or(&self.plugin_path)
+                    ),
+                )
+            })
+    }
+
+    fn flush(&mut self) -> PlayerResult<()> {
+        self.session.flush().map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                format!(
+                    "Android native-frame decoder `{}` flush failed: {error}",
+                    self.plugin_name.as_deref().unwrap_or(&self.plugin_path)
+                ),
+            )
+        })
+    }
+
+    fn close(&mut self) -> PlayerResult<()> {
+        if self.closed {
+            return Ok(());
+        }
+        self.session.close().map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                format!(
+                    "Android native-frame decoder `{}` close failed: {error}",
+                    self.plugin_name.as_deref().unwrap_or(&self.plugin_path)
+                ),
+            )
+        })?;
+        self.closed = true;
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for AndroidNativeFrameDecoderSessionSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidNativeFrameDecoderSessionSink")
+            .field("plugin_name", &self.plugin_name)
+            .field("plugin_path", &self.plugin_path)
+            .field("session_info", &self.session.session_info())
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
+impl Drop for AndroidNativeFrameDecoderSessionSink {
+    fn drop(&mut self) {
+        if let Err(error) = AndroidNativeFrameDecoderSink::close(self) {
+            tracing::warn!(error = %error, "Android native-frame decoder close during drop failed");
+        }
+    }
+}
+
+impl NativeFrameDecoderAdapter for AndroidNativeFrameDecoderSessionSink {
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, NativeFramePipelineError> {
+        AndroidNativeFrameDecoderSink::send_packet(self, packet, data)
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn receive_native_frame(
+        &mut self,
+    ) -> Result<DecoderReceiveNativeFrameOutput, NativeFramePipelineError> {
+        AndroidNativeFrameDecoderSink::receive_native_frame(self)
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn release_native_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+        presented: bool,
+    ) -> Result<(), NativeFramePipelineError> {
+        AndroidNativeFrameDecoderSink::release_native_frame(self, frame, presented)
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+        AndroidNativeFrameDecoderSink::flush(self).map_err(player_error_to_pipeline_error)
+    }
+
+    fn close(&mut self) -> Result<(), NativeFramePipelineError> {
+        AndroidNativeFrameDecoderSink::close(self).map_err(player_error_to_pipeline_error)
+    }
+}
+
+impl AndroidNativeFrameProcessorChain for AndroidNativeFrameProcessorSessionChain {
+    fn process_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+        counters: &mut AndroidNativeFramePipelineCounters,
+    ) -> PlayerResult<AndroidNativeFramePipelineProcessedFrame> {
+        let before = self.core.metrics().clone();
+        let processed = self
+            .core
+            .process(frame, &mut NoopNativeFrameProcessorObserver)
+            .map_err(|error| android_frame_processor_error(error.error))?;
+        let after = self.core.metrics();
+        counters.processed_frames = counters.processed_frames.saturating_add(
+            after
+                .processed_frame_count
+                .saturating_sub(before.processed_frame_count),
+        );
+        counters.deadline_misses = counters.deadline_misses.saturating_add(
+            after
+                .deadline_miss_count
+                .saturating_sub(before.deadline_miss_count),
+        );
+        counters.late_dropped = counters.late_dropped.saturating_add(
+            after
+                .late_output_drop_count
+                .saturating_sub(before.late_output_drop_count),
+        );
+        counters.backpressure_count = counters.backpressure_count.saturating_add(
+            after
+                .backpressure_count
+                .saturating_sub(before.backpressure_count),
+        );
+        Ok(processed)
+    }
+
+    fn release_processor_outputs(
+        &mut self,
+        outputs: Vec<AndroidNativeFrameProcessorOwnedFrame>,
+    ) -> Result<NativeFrameProcessorReleaseResult, NativeFrameProcessorReleaseError> {
+        self.core.release_processor_outputs_tracked(outputs)
+    }
+
+    fn flush(&mut self) -> PlayerResult<()> {
+        self.core.flush().map_err(android_frame_processor_error)
+    }
+
+    fn close(&mut self) -> PlayerResult<()> {
+        if self.closed {
+            return Ok(());
+        }
+        self.core.close().map_err(android_frame_processor_error)?;
+        self.closed = true;
+        Ok(())
+    }
+}
+
+fn android_frame_processor_error(error: NativeFrameProcessorError) -> PlayerError {
+    PlayerError::new(PlayerErrorCode::DecodeFailure, error.to_string())
+}
+
+impl Drop for AndroidNativeFrameProcessorSessionChain {
+    fn drop(&mut self) {
+        if let Err(error) = self.close() {
+            tracing::warn!(error = %error, "Android native-frame processor chain close during drop failed");
+        }
+    }
+}
+
+struct AndroidDecoderAdapter {
+    inner: Box<dyn AndroidNativeFrameDecoderSink>,
+}
+
+impl NativeFrameDecoderAdapter for AndroidDecoderAdapter {
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, NativeFramePipelineError> {
+        self.inner
+            .send_packet(packet, data)
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn receive_native_frame(
+        &mut self,
+    ) -> Result<DecoderReceiveNativeFrameOutput, NativeFramePipelineError> {
+        self.inner
+            .receive_native_frame()
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn release_native_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+        presented: bool,
+    ) -> Result<(), NativeFramePipelineError> {
+        self.inner
+            .release_native_frame(frame, presented)
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.flush().map_err(player_error_to_pipeline_error)
+    }
+
+    fn close(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.close().map_err(player_error_to_pipeline_error)
+    }
+}
+
+struct AndroidPresenterAdapter {
+    inner: Box<dyn AndroidNativeFramePresenterSink>,
+}
+
+impl NativeFramePresenterAdapter for AndroidPresenterAdapter {
+    fn submit_frame(
+        &mut self,
+        frame: &NativeFramePresenterFrame,
+    ) -> Result<NativeFramePresenterSubmitResult, NativeFramePipelineError> {
+        let android_frame = AndroidNativeFramePresenterFrame {
+            frame_handle: frame.frame_handle,
+            frame: frame.frame.clone(),
+        };
+        self.inner
+            .submit_frame(&android_frame)
+            .map(|result| NativeFramePresenterSubmitResult {
+                accepted: result.accepted,
+                requires_host_release: result.requires_host_release,
+                message: result.message,
+            })
+            .map_err(player_error_to_pipeline_error)
+    }
+
+    fn decoder_device_context(&self) -> Option<DecoderNativeDeviceContext> {
+        self.inner.decoder_device_context()
+    }
+
+    fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.flush().map_err(player_error_to_pipeline_error)
+    }
+
+    fn close(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.close().map_err(player_error_to_pipeline_error)
+    }
+}
+
+struct AndroidProcessorChainAdapter {
+    inner: Box<dyn AndroidNativeFrameProcessorChain>,
+}
+
+impl NativeFrameProcessorPipelineAdapter for AndroidProcessorChainAdapter {
+    fn process_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+    ) -> Result<
+        (
+            NativeFrameProcessorProcessedFrame,
+            NativeFrameProcessorMetricsDelta,
+        ),
+        NativeFramePipelineError,
+    > {
+        let mut counters = AndroidNativeFramePipelineCounters::default();
+        let processed = self
+            .inner
+            .process_frame(frame, &mut counters)
+            .map_err(player_error_to_pipeline_error)?;
+        Ok((
+            processed,
+            NativeFrameProcessorMetricsDelta {
+                processed_frames: counters.processed_frames,
+                deadline_misses: counters.deadline_misses,
+                late_dropped: counters.late_dropped,
+                backpressure_count: counters.backpressure_count,
+            },
+        ))
+    }
+
+    fn release_processor_outputs(
+        &mut self,
+        outputs: Vec<NativeFrameProcessorOwnedFrame>,
+    ) -> Result<NativeFrameProcessorReleaseResult, NativeFrameProcessorReleaseError> {
+        self.inner.release_processor_outputs(outputs)
+    }
+
+    fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.flush().map_err(player_error_to_pipeline_error)
+    }
+
+    fn close(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.close().map_err(player_error_to_pipeline_error)
+    }
+}
+
+fn android_processor_chain_to_shared_core(
+    chain: Box<dyn AndroidNativeFrameProcessorChain>,
+) -> Box<dyn NativeFrameProcessorPipelineAdapter> {
+    Box::new(AndroidProcessorChainAdapter { inner: chain })
+}
+
+fn player_error_to_pipeline_error(error: PlayerError) -> NativeFramePipelineError {
+    NativeFramePipelineError::new("androidNativeFrame", error.message().to_owned())
+}
+
+fn pipeline_error_to_player_error(error: NativeFramePipelineError) -> PlayerError {
+    PlayerError::new(PlayerErrorCode::DecodeFailure, error.to_string())
+}
+
+impl std::fmt::Debug for AndroidNativeFramePipelineSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidNativeFramePipelineSession")
+            .field("source_uri", &self.source_uri)
+            .field("source_kind", &self.source_kind)
+            .field("source_protocol", &self.source_protocol)
+            .field("source_normalizer_mode", &self.source_normalizer_mode)
+            .field(
+                "decoder_plugin_library_paths",
+                &self.decoder_plugin_library_paths,
+            )
+            .field(
+                "frame_processor_plugin_library_paths",
+                &self.frame_processor_plugin_library_paths,
+            )
+            .field("max_in_flight_frames", &self.max_in_flight_frames)
+            .field("presenter_profile", &self.presenter_profile)
+            .field("presenter_surface_profile", &self.presenter_surface_profile)
+            .field(
+                "presenter_surface_attached",
+                &self.core.output_target_attached(),
+            )
+            .field("has_presenter_sink", &self.core.has_presenter())
+            .field("has_packet_source", &self.core.has_packet_source())
+            .field(
+                "has_decoder_open_plan_template",
+                &self.decoder_open_plan_template.is_some(),
+            )
+            .field("has_decoder_open_plan", &self.decoder_open_plan.is_some())
+            .field("has_decoder_sink", &self.core.has_decoder())
+            .field("pending_frames", &self.core.pending_frame_count())
+            .field("end_of_stream", &self.core.end_of_stream())
+            .field("counters", self.core.counters())
+            .finish()
+    }
+}
+
+impl AndroidNativeFramePipelineSession {
+    pub fn open(config: AndroidNativeFramePipelineOpenConfig) -> PlayerResult<Self> {
+        validate_native_frame_pipeline_open_config(&config)?;
+        let source = MediaSource::new(config.source_uri.clone());
+        let packet_open =
+            open_mobile_source_normalizer_packet_session(&source, &config.source_normalizer)
+                .map_err(|message| {
+                    PlayerError::new(
+                        PlayerErrorCode::Unsupported,
+                        format!("Android native-frame packet source open failed: {message}"),
+                    )
+                })?;
+        let packet_source = AndroidNativeFramePipelinePacketSource::new(
+            packet_open.plugin_name,
+            packet_open.plugin_path,
+            packet_open.session,
+        );
+        let decoder_open_plan = prepare_android_native_frame_decoder(
+            &config.native_frame_pipeline.decoder_plugin_library_paths,
+            packet_source.stream_info(),
+        )?;
+        let processor_chain = open_android_native_frame_processor_chain(
+            &config
+                .native_frame_pipeline
+                .frame_processor_plugin_library_paths,
+            packet_source.stream_info(),
+            config
+                .native_frame_pipeline
+                .max_in_flight_frames
+                .unwrap_or(3)
+                .max(1),
+        )?;
+        Self::open_with_components(
+            config,
+            source,
+            Some(packet_source),
+            Some(decoder_open_plan),
+            None,
+            processor_chain,
+        )
+    }
+
+    pub fn open_with_packet_source(
+        config: AndroidNativeFramePipelineOpenConfig,
+        source: MediaSource,
+        packet_source: Option<AndroidNativeFramePipelinePacketSource>,
+    ) -> PlayerResult<Self> {
+        let (decoder_open_plan, processor_chain) = match packet_source.as_ref() {
+            Some(packet_source) => (
+                Some(prepare_android_native_frame_decoder(
+                    &config.native_frame_pipeline.decoder_plugin_library_paths,
+                    packet_source.stream_info(),
+                )?),
+                open_android_native_frame_processor_chain(
+                    &config
+                        .native_frame_pipeline
+                        .frame_processor_plugin_library_paths,
+                    packet_source.stream_info(),
+                    config
+                        .native_frame_pipeline
+                        .max_in_flight_frames
+                        .unwrap_or(3)
+                        .max(1),
+                )?,
+            ),
+            None => (None, None),
+        };
+        Self::open_with_components(
+            config,
+            source,
+            packet_source,
+            decoder_open_plan,
+            None,
+            processor_chain,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_with_all_components(
+        config: AndroidNativeFramePipelineOpenConfig,
+        source: MediaSource,
+        packet_source: Option<AndroidNativeFramePipelinePacketSource>,
+        decoder_sink: Option<Box<dyn AndroidNativeFrameDecoderSink>>,
+        processor_chain: Option<Box<dyn AndroidNativeFrameProcessorChain>>,
+        presenter_sink: Option<Box<dyn AndroidNativeFramePresenterSink>>,
+    ) -> PlayerResult<Self> {
+        let mut session = Self::open_with_components(
+            config,
+            source,
+            packet_source,
+            None,
+            decoder_sink,
+            processor_chain,
+        )?;
+        if let Some(presenter_sink) = presenter_sink {
+            session
+                .core
+                .set_presenter(Box::new(AndroidPresenterAdapter {
+                    inner: presenter_sink,
+                }));
+        }
+        Ok(session)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_with_packet_source_without_decoder_sink(
+        config: AndroidNativeFramePipelineOpenConfig,
+        source: MediaSource,
+        packet_source: Option<AndroidNativeFramePipelinePacketSource>,
+    ) -> PlayerResult<Self> {
+        Self::open_with_components(config, source, packet_source, None, None, None)
+    }
+
+    fn open_with_components(
+        config: AndroidNativeFramePipelineOpenConfig,
+        source: MediaSource,
+        packet_source: Option<AndroidNativeFramePipelinePacketSource>,
+        decoder_open_plan: Option<AndroidNativeFrameDecoderOpenPlan>,
+        decoder_sink: Option<Box<dyn AndroidNativeFrameDecoderSink>>,
+        processor_chain: Option<Box<dyn AndroidNativeFrameProcessorChain>>,
+    ) -> PlayerResult<Self> {
+        validate_native_frame_pipeline_open_config(&config)?;
+        let max_in_flight_frames = config
+            .native_frame_pipeline
+            .max_in_flight_frames
+            .unwrap_or(3)
+            .max(1);
+        let core = NativeFramePipelineCore::with_components(
+            NativeFramePipelineCoreConfig {
+                max_in_flight_frames,
+                packet_budget: ANDROID_NATIVE_FRAME_ADVANCE_PACKET_BUDGET,
+                pending_presenter_message: "Android native-frame presenter is waiting".to_owned(),
+                missing_packet_source_message:
+                    "Android native-frame packet source is not configured".to_owned(),
+                decoder_warmup_message: "Android native-frame decoder is warming up".to_owned(),
+            },
+            packet_source.map(|source| Box::new(source) as Box<dyn NativeFramePacketSourceAdapter>),
+            decoder_sink.map(|sink| {
+                Box::new(AndroidDecoderAdapter { inner: sink })
+                    as Box<dyn NativeFrameDecoderAdapter>
+            }),
+            processor_chain.map(android_processor_chain_to_shared_core),
+            None,
+        );
+        Ok(Self {
+            source_uri: source.uri().to_owned(),
+            source_kind: source.kind(),
+            source_protocol: source.protocol(),
+            source_normalizer_mode: config.source_normalizer.mode,
+            decoder_plugin_library_paths: config.native_frame_pipeline.decoder_plugin_library_paths,
+            frame_processor_plugin_library_paths: config
+                .native_frame_pipeline
+                .frame_processor_plugin_library_paths,
+            max_in_flight_frames,
+            presenter_profile: config.presenter_profile,
+            selected_pipeline_profile: decoder_open_plan
+                .as_ref()
+                .map(|plan| plan.selected_profile)
+                .unwrap_or(AndroidNativeFramePipelineProfile::HostTimedSurface),
+            presenter_surface_profile: None,
+            decoder_open_plan_template: decoder_open_plan.clone(),
+            decoder_open_plan,
+            core,
+        })
+    }
+
+    pub fn open_wire(&self, handle: u64) -> AndroidNativeFramePipelineOpenWire {
+        let snapshot = self.core.status_snapshot();
+        AndroidNativeFramePipelineOpenWire {
+            handle,
+            route: PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
+            participation: "selected",
+            source_input: "sourceNormalizerPacket",
+            decoder_adapter: "MediaCodec",
+            selected_profile: self.selected_pipeline_profile.wire_name().to_owned(),
+            presenter_profile: self.presenter_profile.wire_name(),
+            presenter_ready: self.presenter_ready(),
+            presenter_configured: snapshot.presenter_configured,
+            presenter_state: self.presenter_state_wire_name(),
+            surface_attached: snapshot.output_target_attached,
+            surface_profile: self
+                .presenter_surface_profile
+                .map(AndroidNativeFramePresenterProfile::wire_name),
+            pipeline_profile: self.selected_pipeline_profile.pipeline_profile_label(),
+            source_uri: self.source_uri.clone(),
+            source_kind: media_source_kind_wire_name(self.source_kind).to_owned(),
+            source_protocol: media_source_protocol_wire_name(self.source_protocol).to_owned(),
+            source_normalizer_mode: source_normalizer_mode_wire_name(self.source_normalizer_mode)
+                .to_owned(),
+            decoder_plugin_count: self.decoder_plugin_library_paths.len(),
+            frame_processor_count: self.frame_processor_plugin_library_paths.len(),
+            max_in_flight_frames: self.max_in_flight_frames,
+            counters: snapshot.counters,
+        }
+    }
+
+    pub fn status_wire(
+        &self,
+        handle: u64,
+        message: Option<String>,
+    ) -> AndroidNativeFramePipelineStatusWire {
+        let snapshot = self.core.status_snapshot();
+        AndroidNativeFramePipelineStatusWire {
+            handle,
+            route: PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
+            participation: "selected",
+            source_input: "sourceNormalizerPacket",
+            decoder_adapter: "MediaCodec",
+            selected_profile: self.selected_pipeline_profile.wire_name().to_owned(),
+            presenter_profile: self.presenter_profile.wire_name(),
+            presenter_ready: self.presenter_ready(),
+            presenter_configured: snapshot.presenter_configured,
+            presenter_state: self.presenter_state_wire_name(),
+            surface_attached: snapshot.output_target_attached,
+            surface_profile: self
+                .presenter_surface_profile
+                .map(AndroidNativeFramePresenterProfile::wire_name),
+            pipeline_profile: self.selected_pipeline_profile.pipeline_profile_label(),
+            pending_frames: snapshot.pending_frames,
+            end_of_stream: snapshot.end_of_stream,
+            counters: snapshot.counters,
+            message,
+        }
+    }
+
+    pub fn advance(&mut self) -> PlayerResult<AndroidNativeFramePipelineFrameResult> {
+        self.ensure_decoder_open()?;
+        self.core.advance().map_err(pipeline_error_to_player_error)
+    }
+
+    pub fn flush(&mut self) -> PlayerResult<()> {
+        self.core.flush().map_err(pipeline_error_to_player_error)
+    }
+
+    pub fn seek(&mut self, position: Duration) -> PlayerResult<()> {
+        self.core
+            .seek(position)
+            .map_err(pipeline_error_to_player_error)
+    }
+
+    pub fn release_frame(&mut self, frame_handle: u64, presented: bool) -> PlayerResult<()> {
+        self.core
+            .release_frame(frame_handle, presented)
+            .map_err(pipeline_error_to_player_error)
+    }
+
+    pub fn attach_presenter_surface(
+        &mut self,
+        surface_profile: AndroidNativeFramePresenterProfile,
+    ) -> PlayerResult<()> {
+        if surface_profile != self.presenter_profile {
+            return Err(PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
+                format!(
+                    "Android native-frame presenter expected {} surface but received {}",
+                    self.presenter_profile.wire_name(),
+                    surface_profile.wire_name()
+                ),
+            ));
+        }
+        self.presenter_surface_profile = Some(surface_profile);
+        self.core.set_output_target_attached(true);
+        Ok(())
+    }
+
+    pub fn set_presenter_sink(&mut self, sink: Box<dyn AndroidNativeFramePresenterSink>) {
+        self.close_decoder_for_presenter_rebind();
+        self.core
+            .set_presenter(Box::new(AndroidPresenterAdapter { inner: sink }));
+    }
+
+    pub fn configure_presenter_sink(
+        &mut self,
+        sink: Box<dyn AndroidNativeFramePresenterSink>,
+    ) -> PlayerResult<()> {
+        self.set_presenter_sink(sink);
+        self.ensure_decoder_open()
+    }
+
+    pub fn detach_presenter_surface(&mut self) {
+        if let Err(error) = self.core.clear_presenter_for_detach() {
+            tracing::warn!(error = %error, "Android native-frame presenter detach failed");
+        }
+        self.presenter_surface_profile = None;
+        if self.decoder_open_plan.is_none() {
+            self.decoder_open_plan = self.decoder_open_plan_template.clone();
+        }
+    }
+
+    fn close_decoder_for_presenter_rebind(&mut self) {
+        if let Err(error) = self.core.close_decoder_for_rebind() {
+            tracing::warn!(error = %error, "Android native-frame decoder close before presenter rebind failed");
+        }
+        if self.decoder_open_plan.is_none() {
+            self.decoder_open_plan = self.decoder_open_plan_template.clone();
+        }
+    }
+
+    pub fn presenter_ready(&self) -> bool {
+        let snapshot = self.core.status_snapshot();
+        snapshot.output_target_attached
+            && snapshot.presenter_configured
+            && snapshot.decoder_configured
+    }
+
+    pub fn pending_frame_count(&self) -> usize {
+        self.core.pending_frame_count()
+    }
+
+    pub fn has_pending_packet(&self) -> bool {
+        self.core.has_pending_packet()
+    }
+
+    pub fn pending_packet_data_len(&self) -> Option<usize> {
+        self.core.pending_packet_data_len()
+    }
+
+    pub fn pending_packet_stream_index(&self) -> Option<u32> {
+        self.core.pending_packet_stream_index()
+    }
+
+    fn ensure_decoder_open(&mut self) -> PlayerResult<()> {
+        if self.core.has_decoder() {
+            return Ok(());
+        }
+        let Some(plan) = self.decoder_open_plan.take() else {
+            return Ok(());
+        };
+        let native_device_context = if plan.requires_android_native_window {
+            let context = self.core.presenter_decoder_device_context();
+            if context.is_none() {
+                self.decoder_open_plan = Some(plan);
+                return Ok(());
+            }
+            context
+        } else {
+            self.core.presenter_decoder_device_context()
+        };
+        match plan.open(native_device_context) {
+            Ok(decoder_sink) => {
+                self.core.set_decoder(Box::new(AndroidDecoderAdapter {
+                    inner: decoder_sink,
+                }));
+                self.decoder_open_plan_template = Some(plan);
+                Ok(())
+            }
+            Err(error) => {
+                self.decoder_open_plan = Some(plan);
+                Err(error)
+            }
+        }
+    }
+
+    fn presenter_state_wire_name(&self) -> &'static str {
+        if !self.core.output_target_attached() {
+            "waitingForSurface"
+        } else if !self.core.has_presenter() {
+            "waitingForPresenter"
+        } else if !self.core.has_decoder() && self.decoder_open_plan.is_some() {
+            "waitingForDecoder"
+        } else if self.core.status_snapshot().lifecycle_state
+            == NativeFramePipelineLifecycleState::Presenting
+        {
+            "presenting"
+        } else {
+            "ready"
+        }
     }
 }
 
@@ -1609,11 +3267,94 @@ fn placeholder_startup() -> PlayerRuntimeStartup {
     }
 }
 
+pub fn android_native_frame_pipeline_open_json(
+    handle: u64,
+    session: &AndroidNativeFramePipelineSession,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&session.open_wire(handle))
+}
+
+pub fn android_native_frame_pipeline_status_json(
+    handle: u64,
+    session: &AndroidNativeFramePipelineSession,
+    message: Option<String>,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&session.status_wire(handle, message))
+}
+
+pub fn android_native_frame_pipeline_frame_json(
+    result: AndroidNativeFramePipelineFrameResult,
+    counters: AndroidNativeFramePipelineCounters,
+) -> Result<String, serde_json::Error> {
+    let wire = match result.frame {
+        Some(frame) => AndroidNativeFramePipelineFrameWire {
+            status: "frame",
+            message: result.message,
+            handle: result.handle,
+            native_handle: Some(frame.handle),
+            presentation_time_us: Some(frame.presentation_time_us),
+            duration_us: frame.duration_us,
+            width: Some(frame.width),
+            height: Some(frame.height),
+            frame_id: frame.frame_id,
+            requires_host_release: result.requires_host_release,
+            counters,
+        },
+        None => AndroidNativeFramePipelineFrameWire {
+            status: match result.status {
+                AndroidNativeFramePipelineFrameStatus::Pending => "pending",
+                AndroidNativeFramePipelineFrameStatus::Frame => "frame",
+                AndroidNativeFramePipelineFrameStatus::Presented => "presented",
+                AndroidNativeFramePipelineFrameStatus::EndOfStream => "endOfStream",
+            },
+            message: result.message,
+            handle: result.handle,
+            native_handle: None,
+            presentation_time_us: None,
+            duration_us: None,
+            width: None,
+            height: None,
+            frame_id: None,
+            requires_host_release: result.requires_host_release,
+            counters,
+        },
+    };
+    serde_json::to_string(&wire)
+}
+
 fn normalize_media_info(source: &MediaSource, mut media_info: PlayerMediaInfo) -> PlayerMediaInfo {
     media_info.source_uri = source.uri().to_owned();
     media_info.source_kind = source.kind();
     media_info.source_protocol = source.protocol();
     media_info
+}
+
+fn media_source_kind_wire_name(kind: MediaSourceKind) -> &'static str {
+    match kind {
+        MediaSourceKind::Local => "local",
+        MediaSourceKind::Remote => "remote",
+    }
+}
+
+fn media_source_protocol_wire_name(protocol: MediaSourceProtocol) -> &'static str {
+    match protocol {
+        MediaSourceProtocol::Unknown => "unknown",
+        MediaSourceProtocol::File => "file",
+        MediaSourceProtocol::Content => "content",
+        MediaSourceProtocol::Progressive => "progressive",
+        MediaSourceProtocol::Hls => "hls",
+        MediaSourceProtocol::Dash => "dash",
+    }
+}
+
+fn source_normalizer_mode_wire_name(mode: SourceNormalizerMode) -> &'static str {
+    match mode {
+        SourceNormalizerMode::Disabled => "disabled",
+        SourceNormalizerMode::DiagnosticsOnly => "diagnosticsOnly",
+        SourceNormalizerMode::PreflightOnly => "preflightOnly",
+        SourceNormalizerMode::PreferNormalized => "preferNormalized",
+        SourceNormalizerMode::RequireNormalized => "requireNormalized",
+    }
 }
 
 fn android_native_capabilities() -> PlayerRuntimeAdapterCapabilities {
@@ -1637,9 +3378,9 @@ fn android_native_capabilities() -> PlayerRuntimeAdapterCapabilities {
 
 fn android_native_unavailable_message() -> &'static str {
     if cfg!(target_os = "android") {
-        "android native adapter skeleton exists, but the platform player bridge is not implemented yet"
+        "android native adapter requires a platform player bridge before initialization"
     } else {
-        "android native adapter can be probed as a skeleton on desktop builds, but initialization is only planned for Android targets"
+        "android native adapter can be probed on desktop builds, but initialization is Android-target only"
     }
 }
 

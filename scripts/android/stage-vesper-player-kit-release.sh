@@ -10,6 +10,7 @@ COMPOSE_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose"
 COMPOSE_UI_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-compose-ui"
 EXTERNAL_PLAYBACK_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-external-playback"
 FFMPEG_RUNTIME_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-ffmpeg-runtime"
+DECODER_MEDIACODEC_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-decoder-mediacodec"
 SOURCE_NORMALIZER_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-source-normalizer-ffmpeg"
 FRAME_PROCESSOR_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-frame-processor-diagnostic"
 FALLBACK_PROJECT_DIR="$ROOT_DIR/examples/android-compose-host"
@@ -50,9 +51,14 @@ for abi in "${selected_abis[@]}"; do
     :vesper-player-kit-compose-ui:clean \
     :vesper-player-kit-external-playback:clean \
     :vesper-player-kit-ffmpeg-runtime:clean \
+    :vesper-player-kit-decoder-mediacodec:clean \
     :vesper-player-kit-source-normalizer-ffmpeg:clean \
     :vesper-player-kit-frame-processor-diagnostic:clean
 
+  RUST_ANDROID_ABIS="$abi" \
+    "$ROOT_DIR/scripts/android/build-player-decoder-mediacodec-plugin.sh" \
+      "$DECODER_MEDIACODEC_MODULE_DIR/src/main/jniLibs" \
+      release
   RUST_ANDROID_ABIS="$abi" \
     "$ROOT_DIR/scripts/android/build-player-source-normalizer-ffmpeg-plugin.sh" \
       "$SOURCE_NORMALIZER_MODULE_DIR/src/main/jniLibs" \
@@ -82,6 +88,7 @@ for abi in "${selected_abis[@]}"; do
     :vesper-player-kit-compose-ui:assembleRelease \
     :vesper-player-kit-external-playback:assembleRelease \
     :vesper-player-kit-ffmpeg-runtime:assembleRelease \
+    :vesper-player-kit-decoder-mediacodec:assembleRelease \
     :vesper-player-kit-source-normalizer-ffmpeg:assembleRelease \
     :vesper-player-kit-frame-processor-diagnostic:assembleRelease
 
@@ -104,6 +111,21 @@ for abi in "${selected_abis[@]}"; do
   FFMPEG_RUNTIME_INPUT_AAR="$FFMPEG_RUNTIME_MODULE_DIR/build/outputs/aar/vesper-player-kit-ffmpeg-runtime-release.aar"
   FFMPEG_RUNTIME_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKitFfmpegRuntime-android-$abi.aar"
   cp "$FFMPEG_RUNTIME_INPUT_AAR" "$FFMPEG_RUNTIME_OUTPUT_AAR"
+
+  DECODER_MEDIACODEC_INPUT_AAR="$DECODER_MEDIACODEC_MODULE_DIR/build/outputs/aar/vesper-player-kit-decoder-mediacodec-release.aar"
+  DECODER_MEDIACODEC_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKitDecoderMediaCodec-android-$abi.aar"
+  cp "$DECODER_MEDIACODEC_INPUT_AAR" "$DECODER_MEDIACODEC_OUTPUT_AAR"
+  decoder_mediacodec_entries="$(unzip -Z1 "$DECODER_MEDIACODEC_OUTPUT_AAR")"
+  if ! grep -q '^jni/'"$abi"'/libplayer_decoder_mediacodec\.so$' <<<"$decoder_mediacodec_entries"; then
+    echo "Android MediaCodec decoder AAR is missing libplayer_decoder_mediacodec.so:" >&2
+    echo "  $DECODER_MEDIACODEC_OUTPUT_AAR" >&2
+    exit 1
+  fi
+  if grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' <<<"$decoder_mediacodec_entries" >/dev/null; then
+    echo "Android MediaCodec decoder AAR must not bundle FFmpeg runtime libraries:" >&2
+    grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' <<<"$decoder_mediacodec_entries" >&2
+    exit 1
+  fi
 
   SOURCE_NORMALIZER_INPUT_AAR="$SOURCE_NORMALIZER_MODULE_DIR/build/outputs/aar/vesper-player-kit-source-normalizer-ffmpeg-release.aar"
   SOURCE_NORMALIZER_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKitSourceNormalizerFfmpeg-android-$abi.aar"
@@ -136,6 +158,7 @@ for abi in "${selected_abis[@]}"; do
   echo "  $COMPOSE_UI_OUTPUT_AAR"
   echo "  $EXTERNAL_PLAYBACK_OUTPUT_AAR"
   echo "  $FFMPEG_RUNTIME_OUTPUT_AAR"
+  echo "  $DECODER_MEDIACODEC_OUTPUT_AAR"
   echo "  $SOURCE_NORMALIZER_OUTPUT_AAR"
   echo "  $FRAME_PROCESSOR_OUTPUT_AAR"
 done

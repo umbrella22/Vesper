@@ -30,24 +30,24 @@ use player_plugin::{
     SourceNormalizerResourceCachePolicy, SourceNormalizerResourceCapabilities,
     SourceNormalizerResourceInfo, SourceNormalizerResourceSessionInfo,
     SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
-    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1, VESPER_PLUGIN_ABI_VERSION_V2,
-    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
-    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3, VesperBenchmarkSinkApi,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2, VesperDecoderPluginApiV4,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, VesperBenchmarkSinkApi,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV5,
     VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult,
     VesperFrameProcessorOpenSessionResult, VesperFrameProcessorPluginApiV1,
     VesperFrameProcessorReceiveFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
     VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
     VesperPostDownloadProcessorApi, VesperSourceNormalizerOpenPacketSessionResult,
-    VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV2,
-    VesperSourceNormalizerPluginApiV3, VesperSourceNormalizerReadPacketResult,
+    VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV3,
+    VesperSourceNormalizerReadPacketResult,
 };
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::thread::ThreadId;
 
 static PROCESSOR_NAME: &[u8] = b"fixture-processor\0";
 static HOOK_NAME: &[u8] = b"fixture-hook\0";
@@ -58,7 +58,9 @@ static SOURCE_NORMALIZER_PACKET_NAME: &[u8] = b"test-source-normalizer-packet\0"
 static EVENTS: LazyLock<Mutex<Vec<PipelineEvent>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static BENCHMARK_BATCHES: LazyLock<Mutex<Vec<BenchmarkEventBatch>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
-static NATIVE_FRAME_RELEASES: LazyLock<Mutex<Vec<usize>>> =
+static NATIVE_FRAME_RELEASES: LazyLock<Mutex<Vec<(ThreadId, usize)>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+static NATIVE_FRAME_PRESENTATION_RELEASES: LazyLock<Mutex<Vec<(ThreadId, usize, bool)>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static FRAME_PROCESSOR_RELEASES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
@@ -96,10 +98,10 @@ fn source_normalizer_packet_releases() -> Vec<usize> {
 fn fixture_source_normalizer_packet_factory() -> Arc<dyn SourceNormalizerPacketPluginFactory> {
     let api = fixture_source_normalizer_packet_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
     };
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
         .expect("load source normalizer packet plugin");
@@ -178,8 +180,8 @@ fn fixture_benchmark_sink_api() -> VesperBenchmarkSinkApi {
     }
 }
 
-fn fixture_native_decoder_api() -> VesperDecoderPluginApiV2 {
-    VesperDecoderPluginApiV2 {
+fn fixture_native_decoder_api() -> VesperDecoderPluginApiV5 {
+    VesperDecoderPluginApiV5 {
         context: std::ptr::null_mut(),
         destroy: None,
         name: Some(fixture_decoder_name),
@@ -192,11 +194,13 @@ fn fixture_native_decoder_api() -> VesperDecoderPluginApiV2 {
         release_native_frame: Some(fixture_decoder_release_native_frame),
         flush_session: Some(fixture_decoder_flush_session),
         close_session: Some(fixture_decoder_close_session),
+        receive_pcm_frame: None,
+        release_native_frame2: None,
     }
 }
 
-fn fixture_native_decoder_pcm_api() -> VesperDecoderPluginApiV4 {
-    VesperDecoderPluginApiV4 {
+fn fixture_native_decoder_pcm_api() -> VesperDecoderPluginApiV5 {
+    VesperDecoderPluginApiV5 {
         context: std::ptr::null_mut(),
         destroy: None,
         name: Some(fixture_decoder_name),
@@ -210,6 +214,26 @@ fn fixture_native_decoder_pcm_api() -> VesperDecoderPluginApiV4 {
         flush_session: Some(fixture_decoder_flush_session),
         close_session: Some(fixture_decoder_close_session),
         receive_pcm_frame: Some(fixture_decoder_receive_pcm_frame),
+        release_native_frame2: None,
+    }
+}
+
+fn fixture_native_decoder_presentation_api() -> VesperDecoderPluginApiV5 {
+    VesperDecoderPluginApiV5 {
+        context: std::ptr::null_mut(),
+        destroy: None,
+        name: Some(fixture_decoder_name),
+        capabilities_json: Some(fixture_native_decoder_presentation_capabilities_json),
+        native_requirements_json: Some(fixture_native_decoder_requirements_json),
+        free_bytes: Some(fixture_free_bytes),
+        open_session_json: Some(fixture_native_decoder_open_session_json),
+        send_packet: Some(fixture_decoder_send_packet),
+        receive_native_frame: Some(fixture_decoder_receive_native_frame),
+        release_native_frame: Some(fixture_decoder_release_native_frame),
+        flush_session: Some(fixture_decoder_flush_session),
+        close_session: Some(fixture_decoder_close_session),
+        receive_pcm_frame: None,
+        release_native_frame2: Some(fixture_decoder_release_native_frame_with_presentation),
     }
 }
 
@@ -229,8 +253,8 @@ fn fixture_frame_processor_api() -> VesperFrameProcessorPluginApiV1 {
     }
 }
 
-fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV2 {
-    VesperSourceNormalizerPluginApiV2 {
+fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV3 {
+    VesperSourceNormalizerPluginApiV3 {
         context: std::ptr::null_mut(),
         destroy: None,
         name: Some(fixture_source_normalizer_packet_name),
@@ -241,6 +265,11 @@ fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV2 {
         seek_packet_session_json: Some(fixture_source_normalizer_seek_packet_session_json),
         flush_packet_session: Some(fixture_source_normalizer_flush_packet_session),
         close_packet_session: Some(fixture_source_normalizer_close_packet_session),
+        resource_capabilities_json: None,
+        open_resource_session_json: None,
+        poll_resource_session: None,
+        cancel_resource_session: None,
+        close_resource_session: None,
         free_bytes: Some(fixture_free_bytes),
     }
 }
@@ -389,21 +418,7 @@ unsafe extern "C" fn fixture_processor_process_json(
 unsafe extern "C" fn fixture_native_decoder_capabilities_json(
     _context: *mut c_void,
 ) -> VesperPluginBytes {
-    let capabilities = DecoderCapabilities {
-        codecs: vec![DecoderCodecCapability {
-            codec: "fixture-video".to_owned(),
-            media_kind: DecoderMediaKind::Video,
-            profiles: vec!["baseline".to_owned()],
-            output_formats: vec![DecoderFrameFormat::Nv12],
-        }],
-        supports_hardware_decode: true,
-        supports_cpu_video_frames: false,
-        supports_audio_frames: false,
-        supports_gpu_handles: true,
-        supports_flush: true,
-        supports_drain: true,
-        max_sessions: Some(1),
-    };
+    let capabilities = fixture_native_decoder_capabilities();
     VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
 }
 
@@ -428,12 +443,75 @@ unsafe extern "C" fn fixture_native_decoder_pcm_capabilities_json(
         supports_hardware_decode: true,
         supports_cpu_video_frames: false,
         supports_audio_frames: true,
+        supports_pcm_frames: true,
         supports_gpu_handles: true,
+        supports_presentation_release: false,
         supports_flush: true,
         supports_drain: true,
         max_sessions: Some(1),
     };
     VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
+}
+
+unsafe extern "C" fn fixture_native_decoder_legacy_audio_capabilities_json(
+    _context: *mut c_void,
+) -> VesperPluginBytes {
+    let capabilities = DecoderCapabilities {
+        codecs: vec![
+            DecoderCodecCapability {
+                codec: "fixture-video".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                profiles: vec!["baseline".to_owned()],
+                output_formats: vec![DecoderFrameFormat::Nv12],
+            },
+            DecoderCodecCapability {
+                codec: "fixture-audio".to_owned(),
+                media_kind: DecoderMediaKind::Audio,
+                profiles: Vec::new(),
+                output_formats: vec![DecoderFrameFormat::F32],
+            },
+        ],
+        supports_hardware_decode: true,
+        supports_cpu_video_frames: false,
+        supports_audio_frames: true,
+        supports_pcm_frames: false,
+        supports_gpu_handles: true,
+        supports_presentation_release: false,
+        supports_flush: true,
+        supports_drain: true,
+        max_sessions: Some(1),
+    };
+    VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
+}
+
+unsafe extern "C" fn fixture_native_decoder_presentation_capabilities_json(
+    _context: *mut c_void,
+) -> VesperPluginBytes {
+    let capabilities = DecoderCapabilities {
+        supports_presentation_release: true,
+        ..fixture_native_decoder_capabilities()
+    };
+    VesperPluginBytes::from_vec(serde_json::to_vec(&capabilities).expect("serialize caps"))
+}
+
+fn fixture_native_decoder_capabilities() -> DecoderCapabilities {
+    DecoderCapabilities {
+        codecs: vec![DecoderCodecCapability {
+            codec: "fixture-video".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            profiles: vec!["baseline".to_owned()],
+            output_formats: vec![DecoderFrameFormat::Nv12],
+        }],
+        supports_hardware_decode: true,
+        supports_cpu_video_frames: false,
+        supports_audio_frames: false,
+        supports_pcm_frames: false,
+        supports_gpu_handles: true,
+        supports_presentation_release: false,
+        supports_flush: true,
+        supports_drain: true,
+        max_sessions: Some(1),
+    }
 }
 
 unsafe extern "C" fn fixture_native_decoder_requirements_json(
@@ -744,7 +822,28 @@ unsafe extern "C" fn fixture_decoder_release_native_frame(
         ));
     }
     if let Ok(mut releases) = NATIVE_FRAME_RELEASES.lock() {
-        releases.push(handle);
+        releases.push((std::thread::current().id(), handle));
+    }
+    // SAFETY: the handle was allocated with `Box::into_raw` in this test
+    // fixture and is released exactly once here.
+    let _ = unsafe { Box::from_raw(handle as *mut Vec<u8>) };
+    decoder_process_success(&DecoderOperationStatus { completed: true })
+}
+
+unsafe extern "C" fn fixture_decoder_release_native_frame_with_presentation(
+    _context: *mut c_void,
+    _session: *mut c_void,
+    handle_kind: u32,
+    handle: usize,
+    presented: bool,
+) -> VesperPluginProcessResult {
+    if handle_kind != 2 || handle == 0 {
+        return decoder_process_error(DecoderError::abi_violation(
+            "fixture native frame release received an invalid handle",
+        ));
+    }
+    if let Ok(mut releases) = NATIVE_FRAME_PRESENTATION_RELEASES.lock() {
+        releases.push((std::thread::current().id(), handle, presented));
     }
     // SAFETY: the handle was allocated with `Box::into_raw` in this test
     // fixture and is released exactly once here.
@@ -1677,9 +1776,32 @@ unsafe extern "C" fn fixture_recording_free_bytes(
 }
 
 fn native_frame_releases() -> Vec<usize> {
+    let thread_id = std::thread::current().id();
     NATIVE_FRAME_RELEASES
         .lock()
-        .map(|releases| releases.clone())
+        .map(|releases| {
+            releases
+                .iter()
+                .filter_map(|(release_thread_id, handle)| {
+                    (*release_thread_id == thread_id).then_some(*handle)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn native_frame_presentation_releases() -> Vec<(usize, bool)> {
+    let thread_id = std::thread::current().id();
+    NATIVE_FRAME_PRESENTATION_RELEASES
+        .lock()
+        .map(|releases| {
+            releases
+                .iter()
+                .filter_map(|(release_thread_id, handle, presented)| {
+                    (*release_thread_id == thread_id).then_some((*handle, *presented))
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 

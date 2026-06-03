@@ -724,6 +724,8 @@ pub(crate) fn native_handle_kind_label(handle_kind: &NativeHandleKind) -> String
         NativeHandleKind::D3D11Texture2D => "d3d11_texture_2d".to_owned(),
         NativeHandleKind::DxgiSurface => "dxgi_surface".to_owned(),
         NativeHandleKind::VulkanImage => "vulkan_image".to_owned(),
+        NativeHandleKind::MediaCodecHardwareBuffer => "media_codec_hardware_buffer".to_owned(),
+        NativeHandleKind::MediaCodecSurfaceTexture => "media_codec_surface_texture".to_owned(),
         NativeHandleKind::Unknown(name) => name.clone(),
     }
 }

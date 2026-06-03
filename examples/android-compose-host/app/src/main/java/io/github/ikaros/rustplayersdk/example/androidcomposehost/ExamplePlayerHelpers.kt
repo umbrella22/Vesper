@@ -15,13 +15,17 @@ import io.github.ikaros.vesper.player.android.VesperBufferingPreset
 import io.github.ikaros.vesper.player.android.VesperCachePolicy
 import io.github.ikaros.vesper.player.android.VesperCachePreset
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
+import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHintKind
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionMode
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
+import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal sealed interface ExampleLiveButtonState {
     data object GoLive : ExampleLiveButtonState
@@ -400,9 +404,76 @@ internal fun displayNameForUri(context: Context, uri: Uri): String {
         ?: uri.toString()
 }
 
+internal suspend fun materializeExampleLocalVideoSource(
+    context: Context,
+    uri: Uri,
+    label: String,
+): VesperPlayerSource = withContext(Dispatchers.IO) {
+    val appContext = context.applicationContext
+    val cacheRoot =
+        File(appContext.cacheDir, EXAMPLE_LOCAL_MEDIA_CACHE_DIRECTORY).apply {
+            mkdirs()
+        }
+    val outputFile =
+        File(cacheRoot, exampleLocalMediaCacheFileName(label, System.currentTimeMillis()))
+    runCatching {
+        appContext.contentResolver.openInputStream(uri)?.use { input ->
+            outputFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        } ?: error("Selected video could not be opened.")
+        outputFile.setLastModified(System.currentTimeMillis())
+    }.onFailure {
+        runCatching { outputFile.delete() }
+    }.getOrThrow()
+    pruneExampleLocalMediaCache(cacheRoot)
+    VesperPlayerSource.local(
+        uri = Uri.fromFile(outputFile).toString(),
+        label = label,
+    )
+}
+
+internal fun exampleLocalMediaCacheFileName(
+    label: String,
+    nowMillis: Long,
+): String {
+    val candidate = label.replace('\\', '/').substringAfterLast('/').ifBlank { "video" }
+    val lastDot = candidate.lastIndexOf('.')
+    val rawBase = candidate.takeIf { lastDot <= 0 } ?: candidate.substring(0, lastDot)
+    val rawExtension =
+        candidate.takeIf { lastDot in 1 until candidate.lastIndex }
+            ?.substring(lastDot + 1)
+            .orEmpty()
+    val base = exampleSafeCacheFileNameToken(rawBase).ifBlank { "video" }.take(64)
+    val extension = exampleSafeCacheFileNameToken(rawExtension).lowercase(Locale.ROOT).take(12)
+    return if (extension.isBlank()) {
+        "$nowMillis-$base"
+    } else {
+        "$nowMillis-$base.$extension"
+    }
+}
+
+private fun exampleSafeCacheFileNameToken(value: String): String =
+    value
+        .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+        .trim('_', '.', '-')
+
+private fun pruneExampleLocalMediaCache(cacheRoot: File) {
+    cacheRoot
+        .listFiles()
+        .orEmpty()
+        .filter(File::isFile)
+        .sortedByDescending(File::lastModified)
+        .drop(EXAMPLE_LOCAL_MEDIA_CACHE_KEEP_COUNT)
+        .forEach { file -> runCatching { file.delete() } }
+}
+
 internal tailrec fun Context.findActivity(): Activity? =
     when (this) {
         is Activity -> this
         is ContextWrapper -> baseContext.findActivity()
         else -> null
     }
+
+private const val EXAMPLE_LOCAL_MEDIA_CACHE_DIRECTORY = "vesper-example-local-media"
+private const val EXAMPLE_LOCAL_MEDIA_CACHE_KEEP_COUNT = 3

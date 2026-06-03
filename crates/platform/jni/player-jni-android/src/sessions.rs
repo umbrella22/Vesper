@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use jni::Env;
 use jni::sys::jlong;
-use player_platform_android::AndroidHostBridgeSession;
+use player_platform_android::{AndroidHostBridgeSession, AndroidNativeFramePipelineSession};
 use player_platform_mobile::MobileSourceNormalizerResourceOpen;
 use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_runtime::{
@@ -27,6 +27,9 @@ static BENCHMARK_SINK_SESSIONS: OnceLock<Mutex<HandleRegistry<BenchmarkSinkPlugi
 static SOURCE_NORMALIZER_RESOURCE_SESSIONS: OnceLock<
     Mutex<HandleRegistry<MobileSourceNormalizerResourceOpen>>,
 > = OnceLock::new();
+static NATIVE_FRAME_PIPELINE_SESSIONS: OnceLock<
+    Mutex<HandleRegistry<AndroidNativeFramePipelineSession>>,
+> = OnceLock::new();
 
 pub(crate) fn sessions() -> &'static Mutex<HandleRegistry<AndroidJniSession>> {
     SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
@@ -41,6 +44,11 @@ fn source_normalizer_resource_sessions()
     SOURCE_NORMALIZER_RESOURCE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
+fn native_frame_pipeline_sessions()
+-> &'static Mutex<HandleRegistry<AndroidNativeFramePipelineSession>> {
+    NATIVE_FRAME_PIPELINE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
+}
+
 fn invalid_handle_error() -> &'static str {
     "invalid android JNI session handle"
 }
@@ -51,6 +59,10 @@ fn invalid_benchmark_sink_handle_error() -> &'static str {
 
 fn invalid_source_normalizer_resource_handle_error() -> &'static str {
     "invalid android source normalizer resource session handle"
+}
+
+fn invalid_native_frame_pipeline_handle_error() -> &'static str {
+    "invalid android native-frame pipeline session handle"
 }
 
 pub(crate) fn with_session_mut<R>(
@@ -116,6 +128,48 @@ pub(crate) fn new_source_normalizer_resource_session(
 pub(crate) fn dispose_source_normalizer_resource_session(handle: jlong) {
     let mut guard = lock_or_recover(source_normalizer_resource_sessions());
     guard.remove(handle);
+}
+
+pub(crate) fn new_native_frame_pipeline_session(
+    session: AndroidNativeFramePipelineSession,
+) -> Result<jlong, String> {
+    let mut guard = lock_or_recover(native_frame_pipeline_sessions());
+    let handle = guard.insert(session);
+    if handle == 0 {
+        return Err("android native-frame pipeline session registry overflow".to_owned());
+    }
+    Ok(handle)
+}
+
+pub(crate) fn dispose_native_frame_pipeline_session(handle: jlong) {
+    let mut guard = lock_or_recover(native_frame_pipeline_sessions());
+    guard.remove(handle);
+}
+
+pub(crate) fn with_native_frame_pipeline_session_mut<R>(
+    env: &mut Env<'_>,
+    handle: jlong,
+    f: impl FnOnce(&mut AndroidNativeFramePipelineSession) -> Result<R, String>,
+) -> Option<R> {
+    let mut guard = lock_or_recover(native_frame_pipeline_sessions());
+    let Some(session) = guard.get_mut(handle) else {
+        let _ = env.throw_new(
+            jni_name("java/lang/IllegalArgumentException"),
+            jni_name(invalid_native_frame_pipeline_handle_error()),
+        );
+        return None;
+    };
+
+    match f(session) {
+        Ok(value) => Some(value),
+        Err(message) => {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalStateException"),
+                jni_name(message),
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn with_source_normalizer_resource_session_mut<R>(

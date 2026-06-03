@@ -360,6 +360,7 @@ GitHub Releases 会以 `VesperPlayerKit` 产品名发布移动端下载产物：
 - Android Compose UI：`VesperPlayerKitComposeUi-android-<abi>.aar`
 - Android 外部播放：`VesperPlayerKitExternalPlayback-android-<abi>.aar`
 - Android FFmpeg 运行时：`VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
+- 可选 Android MediaCodec 解码插件：`VesperPlayerKitDecoderMediaCodec-android-<abi>.aar`
 - 可选 Android SourceNormalizer FFmpeg 插件：`VesperPlayerKitSourceNormalizerFfmpeg-android-<abi>.aar`
 - 可选 Android FrameProcessor 诊断插件：`VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar`
 - iOS framework 切片：`VesperPlayerKit-ios-*.framework.zip`
@@ -386,9 +387,9 @@ packet-stream 输出用于显式开启的 native frame pipeline。当前
 `nativeFramePipelineConfiguration` 已经能在 iOS/Android 上暴露 route decision、
 decoder/presenter profile、fallback reason 与 counters；iOS 本地/VOD 已可显式走
 VideoToolbox、MetalLayer presentation 和 Swift native audio bridge。Android
-仍上报计划中的 MediaCodec/SurfaceView route，并在 packet lane 接线完成前回退系统
-播放器。`requireNativeFrame` 在目标 native-frame lane 不可用时会返回 capability
-error，不会静默改走默认播放。
+在提供 SourceNormalizer、MediaCodec decoder 和可选 FrameProcessor 插件路径后，可显式走
+MediaCodec/SurfaceView native-frame route。`preferNativeFrame` 在目标 lane 不可用时回退系统
+播放器；`requireNativeFrame` 会返回 capability error，不会静默改走默认播放。
 
 Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载物的 host app
 在其自身 Gradle / Xcode 构建中不会运行本仓库的 JNI 或 FFmpeg 生成任务。

@@ -20,7 +20,7 @@ use player_plugin::{
     SourceNormalizerResourceCachePolicy, SourceNormalizerResourceCapabilities,
     SourceNormalizerResourceInfo, SourceNormalizerResourceSessionConfig,
     SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionState,
-    SourceNormalizerResourceSessionStatus, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
+    SourceNormalizerResourceSessionStatus, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
     VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
     VesperPluginResultStatus, VesperSourceNormalizerOpenPacketSessionResult,
     VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV3,
@@ -121,7 +121,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             free_bytes: Some(free_plugin_bytes),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
+            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
             plugin_kind: VesperPluginKind::SourceNormalizer,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
@@ -1482,7 +1482,7 @@ fn describe_channel_layout(layout: &ffmpeg::ffi::AVChannelLayout) -> Option<Stri
     if layout.nb_channels <= 0 {
         return None;
     }
-    let mut buffer = [0i8; 128];
+    let mut buffer = [0 as c_char; 128];
     // SAFETY: `layout` is a valid borrowed AVChannelLayout. FFmpeg writes at
     // most `buffer.len()` bytes including the trailing nul, and the buffer is
     // converted into an owned Rust string before returning.

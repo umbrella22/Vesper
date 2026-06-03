@@ -11,13 +11,14 @@ import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlaylistNeighborWindow
 import io.github.ikaros.vesper.player.android.VesperPlaylistPreloadWindow
 import io.github.ikaros.vesper.player.android.VesperDownloadManager
+import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineConfiguration
+import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineMode
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
 import io.github.ikaros.vesper.player.android.VesperSourceNormalizerConfiguration
-import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +46,8 @@ internal class PlayerHostViewModel(
 
     val sourceNormalizerPluginLibraryPaths: List<String> =
         bundledPluginLibraryPaths(application, "player_source_normalizer_ffmpeg")
+    val decoderMediaCodecPluginLibraryPaths: List<String> =
+        bundledPluginLibraryPaths(application, "player_decoder_mediacodec")
     val frameProcessorPluginLibraryPaths: List<String> =
         bundledPluginLibraryPaths(application, "player_frame_processor_diagnostic")
 
@@ -52,6 +55,7 @@ internal class PlayerHostViewModel(
         MutableStateFlow(
             createController(
                 sourceNormalizerSetting = ExampleSourceNormalizerSetting.PreflightOnly,
+                nativeFramePipelineSetting = ExampleNativeFramePipelineSetting.DiagnosticsOnly,
                 initialSource = null,
                 resiliencePolicy = ExampleResilienceProfile.Balanced.policy,
             ),
@@ -89,15 +93,18 @@ internal class PlayerHostViewModel(
 
     fun rebuildController(
         sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+        nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
         initialSource: VesperPlayerSource?,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         shouldResumePlayback: Boolean,
         restorePositionMs: Long?,
+        restorePlaybackRate: Float,
     ): VesperPlayerController {
         val previous = _controller.value
         val next =
             createController(
                 sourceNormalizerSetting = sourceNormalizerSetting,
+                nativeFramePipelineSetting = nativeFramePipelineSetting,
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
             )
@@ -106,7 +113,13 @@ internal class PlayerHostViewModel(
         if (initialSource != null) {
             restorePositionMs
                 ?.takeIf { position -> position > 0L }
-                ?.let { position -> runCatching { next.seekBy(position) } }
+                ?.let { position ->
+                    val currentPositionMs = next.uiState.value.timeline.positionMs
+                    runCatching { next.seekBy(position - currentPositionMs) }
+                }
+            if (restorePlaybackRate != 1.0f) {
+                runCatching { next.setPlaybackRate(restorePlaybackRate) }
+            }
             if (shouldResumePlayback) {
                 runCatching { next.play() }
             }
@@ -125,6 +138,7 @@ internal class PlayerHostViewModel(
 
     private fun createController(
         sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+        nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
         initialSource: VesperPlayerSource?,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
     ): VesperPlayerController =
@@ -132,8 +146,7 @@ internal class PlayerHostViewModel(
             context = application.applicationContext,
             initialSource = initialSource,
             resiliencePolicy = resiliencePolicy,
-            // TextureView is more stable than SurfaceView for tab switches and scrolling hosts.
-            surfaceKind = VesperVideoSurfaceKind.TextureView,
+            surfaceKind = exampleSurfaceKindForNativeFrameSetting(nativeFramePipelineSetting),
             preloadBudgetPolicy = playerPreloadBudgetPolicy,
             sourceNormalizerConfiguration =
                 VesperSourceNormalizerConfiguration(
@@ -150,8 +163,26 @@ internal class PlayerHostViewModel(
                         },
                     pluginLibraryPaths = frameProcessorPluginLibraryPaths,
                 ),
+            nativeFramePipelineConfiguration =
+                nativeFramePipelineConfiguration(nativeFramePipelineSetting),
         ).also { controller ->
             controller.initialize()
+        }
+
+    private fun nativeFramePipelineConfiguration(
+        setting: ExampleNativeFramePipelineSetting,
+    ): VesperNativeFramePipelineConfiguration =
+        when (setting.mode) {
+            VesperNativeFramePipelineMode.Disabled -> VesperNativeFramePipelineConfiguration()
+            VesperNativeFramePipelineMode.DiagnosticsOnly,
+            VesperNativeFramePipelineMode.PreferNativeFrame,
+            VesperNativeFramePipelineMode.RequireNativeFrame ->
+                VesperNativeFramePipelineConfiguration(
+                    mode = setting.mode,
+                    decoderPluginLibraryPaths = decoderMediaCodecPluginLibraryPaths,
+                    frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                    maxInFlightFrames = 3,
+                )
         }
 
     private fun bundledDownloadPluginLibraryPaths(application: Application): List<String> {

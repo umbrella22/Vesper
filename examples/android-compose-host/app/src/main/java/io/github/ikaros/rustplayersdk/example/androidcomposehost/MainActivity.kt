@@ -25,6 +25,8 @@ class MainActivity : FragmentActivity() {
                 isDownloadExportPluginInstalled = playerHostViewModel.isDownloadExportPluginInstalled,
                 sourceNormalizerPluginLibraryPaths =
                     playerHostViewModel.sourceNormalizerPluginLibraryPaths,
+                decoderMediaCodecPluginLibraryPaths =
+                    playerHostViewModel.decoderMediaCodecPluginLibraryPaths,
                 frameProcessorPluginLibraryPaths =
                     playerHostViewModel.frameProcessorPluginLibraryPaths,
             )

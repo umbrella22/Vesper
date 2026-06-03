@@ -13,6 +13,8 @@ pub enum NativeHandleKind {
     D3D11Texture2D,
     DxgiSurface,
     VulkanImage,
+    MediaCodecHardwareBuffer,
+    MediaCodecSurfaceTexture,
     Unknown(String),
 }
 
@@ -34,6 +36,8 @@ impl NativeFramePipelineProfile {
             NativeHandleKind::CvPixelBuffer => Self::VideoToolboxCvPixelBuffer,
             NativeHandleKind::MetalTexture => Self::MetalTexture,
             NativeHandleKind::D3D11Texture2D => Self::D3D11Texture2D,
+            NativeHandleKind::MediaCodecHardwareBuffer => Self::MediaCodecHardwareBuffer,
+            NativeHandleKind::MediaCodecSurfaceTexture => Self::MediaCodecSurfaceTexture,
             NativeHandleKind::IoSurface => Self::Unknown("io_surface".to_owned()),
             NativeHandleKind::DmaBuf => Self::Unknown("dma_buf".to_owned()),
             NativeHandleKind::VaapiSurface => Self::Unknown("vaapi_surface".to_owned()),
@@ -209,6 +213,18 @@ mod tests {
             metadata.effective_pipeline_profile(),
             NativeFramePipelineProfile::VideoToolboxCvPixelBuffer
         );
+
+        metadata.handle_kind = NativeHandleKind::MediaCodecHardwareBuffer;
+        assert_eq!(
+            metadata.effective_pipeline_profile(),
+            NativeFramePipelineProfile::MediaCodecHardwareBuffer
+        );
+
+        metadata.handle_kind = NativeHandleKind::MediaCodecSurfaceTexture;
+        assert_eq!(
+            metadata.effective_pipeline_profile(),
+            NativeFramePipelineProfile::MediaCodecSurfaceTexture
+        );
     }
 
     #[test]
@@ -216,6 +232,10 @@ mod tests {
         assert_eq!(
             NativeFramePipelineProfile::MediaCodecHardwareBuffer.label(),
             "media_codec_hardware_buffer"
+        );
+        assert_eq!(
+            NativeFramePipelineProfile::MediaCodecSurfaceTexture.label(),
+            "media_codec_surface_texture"
         );
         assert_eq!(
             NativeFramePipelineProfile::Unknown("fixture".to_owned()).label(),

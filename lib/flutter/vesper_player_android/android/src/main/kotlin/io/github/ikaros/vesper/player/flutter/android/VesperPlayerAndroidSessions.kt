@@ -16,6 +16,7 @@ internal data class PlayerSession(
     var hostDetachGeneration: Long = 0L,
     var observerJob: Job? = null,
     var lastError: Map<String, Any?>? = null,
+    var lastEmittedSnapshot: Map<String, Any?>? = null,
     var viewport: FlutterViewport? = null,
     var viewportHint: FlutterViewportHint = FlutterViewportHint.hidden(),
 ) {
@@ -23,6 +24,10 @@ internal data class PlayerSession(
 
     fun cancelPendingHostDetach() {
         pendingHostDetachJob?.cancel()
+        pendingHostDetachJob = null
+    }
+
+    fun clearPendingHostDetach() {
         pendingHostDetachJob = null
     }
 
@@ -80,3 +85,69 @@ internal class VesperPlayerPlatformView(
     }
 }
 
+internal class SurfaceHostLifecycleCoordinator<Session : Any, Host : Any>(
+    private val findSession: (String) -> Session?,
+    private val getHost: (Session) -> Host?,
+    private val setHost: (Session, Host?) -> Unit,
+    private val cancelPendingDetach: (Session) -> Unit,
+    private val clearPendingDetach: (Session) -> Unit,
+    private val advanceDetachGeneration: (Session) -> Long,
+    private val currentDetachGeneration: (Session) -> Long,
+    private val schedulePendingDetach: (
+        session: Session,
+        generation: Long,
+        action: () -> Unit,
+    ) -> Unit,
+    private val attachHost: (Session, Host) -> Unit,
+    private val detachHost: (Session, Host) -> Unit,
+    private val clearHostView: (Host) -> Unit,
+    private val emitSnapshot: (Session) -> Unit,
+) {
+    fun bind(playerId: String, host: Host) {
+        val session = findSession(playerId) ?: return
+        cancelPendingDetach(session)
+        advanceDetachGeneration(session)
+        if (getHost(session) === host) {
+            attachHost(session, host)
+            emitSnapshot(session)
+            return
+        }
+
+        val previousHost = getHost(session)
+        setHost(session, host)
+        attachHost(session, host)
+        previousHost?.let(clearHostView)
+        emitSnapshot(session)
+    }
+
+    fun unbind(playerId: String, host: Host) {
+        val session = findSession(playerId) ?: return
+        if (getHost(session) !== host) {
+            return
+        }
+        cancelPendingDetach(session)
+        val generation = advanceDetachGeneration(session)
+        schedulePendingDetach(session, generation) {
+            val currentSession = findSession(playerId) ?: return@schedulePendingDetach
+            if (currentSession !== session || getHost(currentSession) !== host) {
+                return@schedulePendingDetach
+            }
+            if (currentDetachGeneration(currentSession) != generation) {
+                return@schedulePendingDetach
+            }
+            detachHost(currentSession, host)
+            setHost(currentSession, null)
+            clearPendingDetach(currentSession)
+            emitSnapshot(currentSession)
+        }
+    }
+
+    fun detachSession(session: Session) {
+        cancelPendingDetach(session)
+        advanceDetachGeneration(session)
+        getHost(session)?.let { host ->
+            detachHost(session, host)
+            setHost(session, null)
+        }
+    }
+}

@@ -52,8 +52,15 @@ pub struct DecoderCapabilities {
     pub codecs: Vec<DecoderCodecCapability>,
     pub supports_hardware_decode: bool,
     pub supports_cpu_video_frames: bool,
+    /// Supports decoded audio frames in plugin-managed audio sessions.
     pub supports_audio_frames: bool,
+    /// Supports decoded PCM frame output through `receive_pcm_frame`.
+    #[serde(default)]
+    pub supports_pcm_frames: bool,
     pub supports_gpu_handles: bool,
+    /// Supports release calls that distinguish presented frames from discarded frames.
+    #[serde(default)]
+    pub supports_presentation_release: bool,
     pub supports_flush: bool,
     pub supports_drain: bool,
     pub max_sessions: Option<u32>,
@@ -65,6 +72,80 @@ impl DecoderCapabilities {
         self.codecs.iter().any(|capability| {
             capability.media_kind == media_kind && capability.codec.eq_ignore_ascii_case(codec)
         })
+    }
+}
+
+/// Requirements a host session needs from a decoder plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DecoderSessionRequirements {
+    pub codec: String,
+    pub media_kind: DecoderMediaKind,
+    #[serde(default)]
+    pub native_handle_kind: Option<DecoderNativeHandleKind>,
+    #[serde(default)]
+    pub pipeline_profile: Option<NativeFramePipelineProfile>,
+    #[serde(default)]
+    pub native_device_context_kind: Option<DecoderNativeDeviceContextKind>,
+    #[serde(default)]
+    pub require_presentation_release: bool,
+    #[serde(default)]
+    pub require_pcm_output: bool,
+}
+
+impl DecoderSessionRequirements {
+    /// Builds video native-frame requirements for an output handle/profile pair.
+    pub fn native_video(
+        codec: impl Into<String>,
+        native_handle_kind: DecoderNativeHandleKind,
+        pipeline_profile: NativeFramePipelineProfile,
+    ) -> Self {
+        Self {
+            codec: codec.into(),
+            media_kind: DecoderMediaKind::Video,
+            native_handle_kind: Some(native_handle_kind),
+            pipeline_profile: Some(pipeline_profile),
+            ..Self::default()
+        }
+    }
+
+    /// Returns missing capability names for this requirement.
+    pub fn missing_capabilities(
+        &self,
+        capabilities: &DecoderCapabilities,
+        native_requirements: &DecoderNativeRequirements,
+    ) -> Vec<String> {
+        let mut missing = Vec::new();
+        if !capabilities.supports_codec(&self.codec, self.media_kind) {
+            missing.push(format!("{:?} codec {}", self.media_kind, self.codec));
+        }
+        if self.require_pcm_output && !capabilities.supports_pcm_frames {
+            missing.push("supportsPcmFrames".to_owned());
+        }
+        if self.require_presentation_release && !capabilities.supports_presentation_release {
+            missing.push("supportsPresentationRelease".to_owned());
+        }
+        if let Some(handle_kind) = &self.native_handle_kind
+            && !native_requirements
+                .output_handle_kinds
+                .contains(handle_kind)
+        {
+            missing.push(format!("outputHandleKind::{handle_kind:?}"));
+        }
+        if let Some(profile) = &self.pipeline_profile
+            && !native_requirements
+                .output_pipeline_profiles
+                .contains(profile)
+        {
+            missing.push(format!("pipelineProfile::{profile:?}"));
+        }
+        if let Some(context_kind) = &self.native_device_context_kind
+            && !native_requirements
+                .required_device_context_kinds
+                .contains(context_kind)
+        {
+            missing.push(format!("nativeDeviceContext::{context_kind:?}"));
+        }
+        missing
     }
 }
 
@@ -228,6 +309,8 @@ pub enum DecoderNativeHandleKind {
     D3D11Texture2D,
     DxgiSurface,
     VulkanImage,
+    MediaCodecHardwareBuffer,
+    MediaCodecSurfaceTexture,
     Unknown(String),
 }
 
@@ -242,6 +325,8 @@ impl From<DecoderNativeHandleKind> for NativeHandleKind {
             DecoderNativeHandleKind::D3D11Texture2D => Self::D3D11Texture2D,
             DecoderNativeHandleKind::DxgiSurface => Self::DxgiSurface,
             DecoderNativeHandleKind::VulkanImage => Self::VulkanImage,
+            DecoderNativeHandleKind::MediaCodecHardwareBuffer => Self::MediaCodecHardwareBuffer,
+            DecoderNativeHandleKind::MediaCodecSurfaceTexture => Self::MediaCodecSurfaceTexture,
             DecoderNativeHandleKind::Unknown(name) => Self::Unknown(name),
         }
     }
@@ -258,6 +343,8 @@ impl From<NativeHandleKind> for DecoderNativeHandleKind {
             NativeHandleKind::D3D11Texture2D => Self::D3D11Texture2D,
             NativeHandleKind::DxgiSurface => Self::DxgiSurface,
             NativeHandleKind::VulkanImage => Self::VulkanImage,
+            NativeHandleKind::MediaCodecHardwareBuffer => Self::MediaCodecHardwareBuffer,
+            NativeHandleKind::MediaCodecSurfaceTexture => Self::MediaCodecSurfaceTexture,
             NativeHandleKind::Unknown(name) => Self::Unknown(name),
         }
     }
@@ -267,6 +354,7 @@ impl From<NativeHandleKind> for DecoderNativeHandleKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DecoderNativeDeviceContextKind {
     D3D11Device,
+    AndroidNativeWindow,
     Unknown(String),
 }
 
@@ -287,6 +375,10 @@ pub enum DecoderNativeDeviceContext {
     D3D11Device {
         device_ptr: usize,
     },
+    #[serde(rename = "android_native_window")]
+    AndroidNativeWindow {
+        window_ptr: usize,
+    },
     Unknown {
         name: String,
     },
@@ -296,6 +388,7 @@ impl DecoderNativeDeviceContext {
     pub fn kind(&self) -> DecoderNativeDeviceContextKind {
         match self {
             Self::D3D11Device { .. } => DecoderNativeDeviceContextKind::D3D11Device,
+            Self::AndroidNativeWindow { .. } => DecoderNativeDeviceContextKind::AndroidNativeWindow,
             Self::Unknown { name } => DecoderNativeDeviceContextKind::Unknown(name.clone()),
         }
     }
@@ -303,7 +396,14 @@ impl DecoderNativeDeviceContext {
     pub fn d3d11_device_ptr(&self) -> Option<usize> {
         match self {
             Self::D3D11Device { device_ptr } => Some(*device_ptr),
-            Self::Unknown { .. } => None,
+            Self::AndroidNativeWindow { .. } | Self::Unknown { .. } => None,
+        }
+    }
+
+    pub fn android_native_window_ptr(&self) -> Option<usize> {
+        match self {
+            Self::AndroidNativeWindow { window_ptr } => Some(*window_ptr),
+            Self::D3D11Device { .. } | Self::Unknown { .. } => None,
         }
     }
 }
@@ -669,6 +769,10 @@ pub trait NativeDecoderPluginFactory: Send + Sync {
         DecoderNativeRequirements::default()
     }
 
+    fn supports_native_frame_presentation_release(&self) -> bool {
+        self.capabilities().supports_presentation_release
+    }
+
     fn open_native_session(
         &self,
         config: &DecoderSessionConfig,
@@ -695,6 +799,16 @@ pub trait NativeDecoderSession: Send {
 
     fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError>;
 
+    fn release_native_frame_with_presentation(
+        &mut self,
+        _frame: DecoderNativeFrame,
+        _presented: bool,
+    ) -> Result<(), DecoderError> {
+        Err(DecoderError::UnsupportedCapability {
+            capability: "presentation-aware-native-frame-release".to_owned(),
+        })
+    }
+
     fn flush(&mut self) -> Result<(), DecoderError>;
 
     fn close(&mut self) -> Result<(), DecoderError>;
@@ -704,11 +818,12 @@ pub trait NativeDecoderSession: Send {
 mod tests {
     use super::{
         DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
-        DecoderNativeFrame, DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking,
-        DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult, DecoderPcmFrame,
-        DecoderPcmFrameMetadata, DecoderPcmSampleLayout, DecoderReceiveFrameStatus,
-        DecoderReceiveNativeFrameOutput, DecoderReceivePcmFrameMetadata, DecoderSessionConfig,
-        DecoderSessionInfo, DecoderVisibleRect, NativeDecoderSession,
+        DecoderNativeDeviceContext, DecoderNativeDeviceContextKind, DecoderNativeFrame,
+        DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
+        DecoderPacket, DecoderPacketResult, DecoderPcmFrame, DecoderPcmFrameMetadata,
+        DecoderPcmSampleLayout, DecoderReceiveFrameStatus, DecoderReceiveNativeFrameOutput,
+        DecoderReceivePcmFrameMetadata, DecoderSessionConfig, DecoderSessionInfo,
+        DecoderVisibleRect, NativeDecoderSession,
     };
     use crate::{
         NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameSyncInfo,
@@ -816,6 +931,35 @@ mod tests {
                 .map(|rect| rect.width),
             Some(3_840)
         );
+    }
+
+    #[test]
+    fn android_native_handle_kinds_round_trip_between_decoder_and_shared_frames() {
+        for handle_kind in [
+            DecoderNativeHandleKind::MediaCodecHardwareBuffer,
+            DecoderNativeHandleKind::MediaCodecSurfaceTexture,
+        ] {
+            let shared = NativeHandleKind::from(handle_kind.clone());
+            let recovered = DecoderNativeHandleKind::from(shared);
+
+            assert_eq!(recovered, handle_kind);
+        }
+    }
+
+    #[test]
+    fn android_native_window_device_context_round_trips_json_and_kind() {
+        let context = DecoderNativeDeviceContext::AndroidNativeWindow { window_ptr: 0xabc };
+
+        let encoded = serde_json::to_string(&context).expect("serialize Android native context");
+        let decoded: DecoderNativeDeviceContext =
+            serde_json::from_str(&encoded).expect("deserialize Android native context");
+
+        assert_eq!(
+            decoded.kind(),
+            DecoderNativeDeviceContextKind::AndroidNativeWindow
+        );
+        assert_eq!(decoded.android_native_window_ptr(), Some(0xabc));
+        assert_eq!(decoded.d3d11_device_ptr(), None);
     }
 
     #[test]
@@ -1070,6 +1214,20 @@ mod tests {
             error,
             DecoderError::UnsupportedCapability { capability }
                 if capability == "audio-pcm-output"
+        ));
+    }
+
+    #[test]
+    fn native_decoder_session_defaults_presentation_release_to_capability_error() {
+        let mut session = PcmUnsupportedDecoderSession;
+        let error = session
+            .release_native_frame_with_presentation(decoder_native_frame(), true)
+            .expect_err("default presentation release should be unsupported");
+
+        assert!(matches!(
+            error,
+            DecoderError::UnsupportedCapability { capability }
+                if capability == "presentation-aware-native-frame-release"
         ));
     }
 

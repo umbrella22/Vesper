@@ -602,21 +602,17 @@ internal fun ExampleResilienceSection(
 internal fun ExamplePluginDiagnosticsSection(
     palette: ExampleHostPalette,
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
     sourceNormalizerPluginLibraryPaths: List<String>,
+    decoderMediaCodecPluginLibraryPaths: List<String>,
     frameProcessorPluginLibraryPaths: List<String>,
     pluginDiagnostics: List<Map<String, Any?>>,
     onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Unit,
+    onNativeFramePipelineSettingChange: (ExampleNativeFramePipelineSetting) -> Unit,
 ) {
-    val sourceNormalizerDiagnostics =
-        pluginDiagnostics.filter { diagnostic ->
-            diagnostic["pluginKind"] == "source_normalizer" ||
-                diagnostic["status"]?.toString()?.startsWith("sourceNormalizer") == true
-        }
-    val frameProcessorDiagnostics =
-        pluginDiagnostics.filter { diagnostic ->
-            diagnostic["pluginKind"] == "frame_processor" ||
-                diagnostic["status"]?.toString()?.startsWith("frameProcessor") == true
-        }
+    val sourceNormalizerDiagnostics = exampleSourceNormalizerDiagnostics(pluginDiagnostics)
+    val frameProcessorDiagnostics = exampleFrameProcessorDiagnostics(pluginDiagnostics)
+    val nativeFramePipelineDiagnostics = exampleNativeFramePipelineDiagnostics(pluginDiagnostics)
     ExampleSectionShell(
         palette = palette,
         title = stringResource(R.string.example_plugins_title),
@@ -644,10 +640,38 @@ internal fun ExamplePluginDiagnosticsSection(
                     lineHeight = 22.sp,
                 ),
             )
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleNativeFramePipelineSetting.values().forEach { setting ->
+                    SelectionChip(
+                        label = stringResource(setting.titleRes),
+                        selected = setting == nativeFramePipelineSetting,
+                        onClick = { onNativeFramePipelineSettingChange(setting) },
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(nativeFramePipelineSetting.subtitleRes),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = palette.body,
+                    lineHeight = 22.sp,
+                ),
+            )
 
             ExampleFactRow(
                 label = stringResource(R.string.example_plugins_source_normalizer_path),
                 value = sourceNormalizerPluginLibraryPaths.joinToString().ifBlank {
+                    stringResource(R.string.example_plugins_missing)
+                },
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_plugins_decoder_mediacodec_path),
+                value = decoderMediaCodecPluginLibraryPaths.joinToString().ifBlank {
                     stringResource(R.string.example_plugins_missing)
                 },
                 palette = palette,
@@ -670,6 +694,12 @@ internal fun ExamplePluginDiagnosticsSection(
                 title = stringResource(R.string.example_plugins_frame_processor_group),
                 emptyLabel = stringResource(R.string.example_plugins_no_frame_processor_diagnostics),
                 diagnostics = frameProcessorDiagnostics,
+                palette = palette,
+            )
+            PluginDiagnosticGroup(
+                title = stringResource(R.string.example_plugins_native_frame_group),
+                emptyLabel = stringResource(R.string.example_plugins_no_native_frame_diagnostics),
+                diagnostics = nativeFramePipelineDiagnostics,
                 palette = palette,
             )
         }
@@ -712,8 +742,8 @@ private fun PluginDiagnosticRow(
     val status = diagnostic["status"]?.toString().orEmpty()
     val participation = diagnostic["participation"]?.toString().orEmpty()
     val pluginName = diagnostic["pluginName"]?.toString().orEmpty()
-    val path = diagnostic["path"]?.toString().orEmpty()
-    val message = diagnostic["message"]?.toString().orEmpty()
+    val path = exampleDiagnosticCompactPath(diagnostic["path"]?.toString().orEmpty())
+    val message = exampleDiagnosticCompactMessage(diagnostic["message"]?.toString().orEmpty())
     val outputRoute =
         diagnostic["route"]?.toString()?.takeIf(String::isNotBlank)
             ?: diagnostic["outputRoute"]?.toString().orEmpty()
@@ -721,6 +751,7 @@ private fun PluginDiagnosticRow(
     val primaryResource = diagnostic["primaryResource"]?.toString().orEmpty()
     val diskBytesUsed = (diagnostic["diskBytesUsed"] as? Number)?.toLong()
     val fallbackReason = diagnostic["fallbackReason"]?.toString().orEmpty()
+    val nativeFrameStatus = exampleNativeFramePipelineStatusLine(diagnostic)
     val cachePolicy = diagnostic["cachePolicy"] as? Map<*, *>
     val cacheLimit =
         (diagnostic["cacheQuota"] as? Number)?.toLong()
@@ -804,6 +835,14 @@ private fun PluginDiagnosticRow(
                 style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
             )
         }
+        if (nativeFrameStatus.isNotBlank()) {
+            Text(
+                text = nativeFrameStatus,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
         if (primaryResource.isNotBlank()) {
             Text(
                 text = stringResource(R.string.example_plugins_resource, primaryResource),
@@ -821,6 +860,60 @@ private fun PluginDiagnosticRow(
             )
         }
     }
+}
+
+internal fun exampleDiagnosticCompactMessage(message: String): String {
+    if (message.isBlank()) {
+        return ""
+    }
+    val normalized = message.replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
+    return if (normalized.length <= 220) {
+        normalized
+    } else {
+        "${normalized.take(217)}..."
+    }
+}
+
+internal fun exampleDiagnosticCompactPath(path: String): String {
+    if (path.isBlank()) {
+        return ""
+    }
+    return path
+        .split(java.io.File.pathSeparatorChar)
+        .map { entry -> entry.substringAfterLast('/') }
+        .filter(String::isNotBlank)
+        .joinToString(separator = java.io.File.pathSeparator)
+        .ifBlank { path.substringAfterLast('/') }
+}
+
+internal fun exampleNativeFramePipelineStatusLine(
+    diagnostic: Map<String, Any?>,
+): String {
+    if (diagnostic["pluginKind"] != "native_frame_pipeline") {
+        return ""
+    }
+    val lifecycle = diagnostic["lifecycle"]?.toString().orEmpty()
+    val presenterState = diagnostic["presenterState"]?.toString().orEmpty()
+    val surfaceProfile = diagnostic["surfaceProfile"]?.toString().orEmpty()
+    val processedFrames = (diagnostic["processedFrames"] as? Number)?.toLong()
+    val presentedFrames = (diagnostic["presentedFrames"] as? Number)?.toLong()
+    val deadlineMisses = (diagnostic["deadlineMisses"] as? Number)?.toLong()
+    val backpressureCount = (diagnostic["backpressureCount"] as? Number)?.toLong()
+
+    val statusParts =
+        listOfNotNull(
+            lifecycle.takeIf(String::isNotBlank)?.let { "lifecycle=$it" },
+            presenterState.takeIf(String::isNotBlank)?.let { "presenter=$it" },
+            surfaceProfile.takeIf(String::isNotBlank)?.let { "surface=$it" },
+        )
+    val counterParts =
+        listOfNotNull(
+            processedFrames?.let { "processed=$it" },
+            presentedFrames?.let { "presented=$it" },
+            deadlineMisses?.let { "deadlineMisses=$it" },
+            backpressureCount?.let { "backpressure=$it" },
+        )
+    return (statusParts + counterParts).joinToString(separator = " · ")
 }
 
 @Composable

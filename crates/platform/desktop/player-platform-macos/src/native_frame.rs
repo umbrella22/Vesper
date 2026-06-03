@@ -105,40 +105,34 @@ impl MacosNativeFramePrefetchWakeup {
 
 #[derive(Debug)]
 pub(crate) struct MacosFrameProcessorChain {
-    pub(crate) processors: Vec<MacosFrameProcessorNode>,
-    pub(crate) mode: FrameProcessorMode,
-    pub(crate) policy: FrameProcessorPolicy,
-    pub(crate) metrics: PlayerFrameProcessingMetrics,
-    pub(crate) pending_events: VecDeque<PlayerRuntimeEvent>,
+    pub(crate) core: NativeFrameProcessorChainCore,
     pub(crate) debug: FrameProcessorDebugState,
 }
 
-pub(crate) struct MacosFrameProcessorNode {
-    pub(crate) plugin_name: String,
-    pub(crate) processor_index: usize,
-    pub(crate) session: Box<dyn FrameProcessorSession>,
-}
+#[derive(Debug)]
+pub(crate) struct MacosFrameProcessorFrame(pub(crate) NativeFrameProcessorProcessedFrame);
 
-impl std::fmt::Debug for MacosFrameProcessorNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MacosFrameProcessorNode")
-            .field("plugin_name", &self.plugin_name)
-            .field("processor_index", &self.processor_index)
-            .finish()
+pub(crate) type ProcessorOwnedNativeFrame = NativeFrameProcessorOwnedFrame;
+
+impl MacosFrameProcessorFrame {
+    #[cfg(test)]
+    pub(crate) fn decoder_frame(&self) -> &DecoderNativeFrame {
+        &self.0.decoder_frame
     }
-}
 
-#[derive(Debug)]
-pub(crate) struct MacosFrameProcessorFrame {
-    pub(crate) decoder_frame: DecoderNativeFrame,
-    pub(crate) presentation_frame: DecoderNativeFrame,
-    pub(crate) processor_outputs: Vec<ProcessorOwnedNativeFrame>,
-}
+    pub(crate) fn presentation_frame(&self) -> &DecoderNativeFrame {
+        &self.0.presentation_frame
+    }
 
-#[derive(Debug)]
-pub(crate) struct ProcessorOwnedNativeFrame {
-    pub(crate) processor_index: usize,
-    pub(crate) frame: NativeFrame,
+    #[cfg(test)]
+    pub(crate) fn processor_outputs(&self) -> &[ProcessorOwnedNativeFrame] {
+        &self.0.processor_outputs
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_processor_outputs(self) -> Vec<ProcessorOwnedNativeFrame> {
+        self.0.processor_outputs
+    }
 }
 
 #[derive(Debug)]
@@ -372,14 +366,6 @@ pub(crate) struct FrameProcessorFrameDebugSample {
     pub(crate) dropped_output: bool,
     pub(crate) deadline_missed: bool,
     pub(crate) presented_processed: bool,
-}
-
-#[derive(Debug)]
-pub(crate) struct MacosFrameProcessorProcessState {
-    pub(crate) current_frame: NativeFrame,
-    pub(crate) processor_outputs: Vec<ProcessorOwnedNativeFrame>,
-    pub(crate) using_processor_output: bool,
-    pub(crate) debug_sample: FrameProcessorFrameDebugSample,
 }
 
 #[derive(Debug)]
@@ -670,14 +656,19 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
         let factory = plugin.native_decoder_plugin_factory().ok_or_else(|| {
             anyhow::anyhow!("decoder plugin does not export a v2 native-frame API")
         })?;
-        if !factory
-            .capabilities()
-            .supports_codec(&stream_info.codec, DecoderMediaKind::Video)
-        {
+        let requirements = DecoderSessionRequirements::native_video(
+            stream_info.codec.clone(),
+            DecoderNativeHandleKind::CvPixelBuffer,
+            NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+        );
+        let missing_capabilities = requirements
+            .missing_capabilities(&factory.capabilities(), &factory.native_requirements());
+        if !missing_capabilities.is_empty() {
             anyhow::bail!(
-                "native-frame decoder plugin `{}` does not support {} video",
+                "native-frame decoder plugin `{}` does not satisfy session requirements for {} video: missing {}",
                 factory.name(),
-                stream_info.codec
+                stream_info.codec,
+                missing_capabilities.join(", ")
             );
         }
 
@@ -808,14 +799,19 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
         let factory = plugin.native_decoder_plugin_factory().ok_or_else(|| {
             anyhow::anyhow!("decoder plugin does not export a v2 native-frame API")
         })?;
-        if !factory
-            .capabilities()
-            .supports_codec(&stream_info.codec, DecoderMediaKind::Video)
-        {
+        let requirements = DecoderSessionRequirements::native_video(
+            stream_info.codec.clone(),
+            DecoderNativeHandleKind::CvPixelBuffer,
+            NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+        );
+        let missing_capabilities = requirements
+            .missing_capabilities(&factory.capabilities(), &factory.native_requirements());
+        if !missing_capabilities.is_empty() {
             anyhow::bail!(
-                "native-frame decoder plugin `{}` does not support {} video",
+                "native-frame decoder plugin `{}` does not satisfy session requirements for {} video: missing {}",
                 factory.name(),
-                stream_info.codec
+                stream_info.codec,
+                missing_capabilities.join(", ")
             );
         }
 
@@ -1076,7 +1072,8 @@ impl MacosNativeFrameVideoSource {
         &self,
         frame: MacosFrameProcessorFrame,
     ) -> anyhow::Result<DesktopVideoFrame> {
-        if frame.presentation_frame.metadata.handle_kind != DecoderNativeHandleKind::CvPixelBuffer {
+        if frame.presentation_frame().metadata.handle_kind != DecoderNativeHandleKind::CvPixelBuffer
+        {
             let mut session = self
                 .session
                 .lock()
@@ -1093,14 +1090,13 @@ impl MacosNativeFrameVideoSource {
             );
             anyhow::bail!("macOS native-frame presenter only accepts CVPixelBuffer handles");
         }
-        let presentation_time = frame
-            .presentation_frame
-            .metadata
+        let presentation_metadata = &frame.presentation_frame().metadata;
+        let presentation_time = presentation_metadata
             .pts_us
             .and_then(duration_from_micros)
             .unwrap_or(Duration::ZERO);
-        let width = frame.presentation_frame.metadata.width;
-        let height = frame.presentation_frame.metadata.height;
+        let width = presentation_metadata.width;
+        let height = presentation_metadata.height;
         Ok(DesktopVideoFrame::native_deferred(
             presentation_time,
             width,
@@ -1502,10 +1498,13 @@ pub(crate) fn release_macos_processor_frame_and_track(
     outstanding_frames: &AtomicUsize,
     frame: MacosFrameProcessorFrame,
 ) -> anyhow::Result<()> {
+    let MacosFrameProcessorFrame(processed) = frame;
+    let decoder_frame = processed.decoder_frame;
+    let processor_outputs = processed.processor_outputs;
     if let Some(chain) = shared.frame_processor_chain.as_mut() {
-        chain.release_processor_outputs(frame.processor_outputs);
+        chain.release_processor_outputs(processor_outputs);
     }
-    release_native_frame_with_counter(session, outstanding_frames, frame.decoder_frame)
+    release_native_frame_with_counter(session, outstanding_frames, decoder_frame)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
@@ -1547,7 +1546,7 @@ pub(crate) fn present_and_release_macos_processor_frame(
         .as_mut()
         .ok_or_else(|| anyhow::anyhow!("macOS native-frame presenter is not configured"))?;
     let present_result = presenter
-        .present_cv_pixel_buffer_handle(frame.presentation_frame.handle)
+        .present_cv_pixel_buffer_handle(frame.presentation_frame().handle)
         .map_err(|error| anyhow::anyhow!(error.message().to_owned()));
     let release_result = release_macos_processor_frame_and_track(
         session.as_mut(),

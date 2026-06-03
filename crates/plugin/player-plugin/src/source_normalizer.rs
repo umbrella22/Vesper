@@ -58,6 +58,16 @@ impl SourceNormalizerPacketCapabilities {
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(codec))
     }
+
+    /// Returns whether this plugin advertises packet output for a media kind.
+    pub fn supports_media_kind(&self, media_kind: SourceNormalizerPacketMediaKind) -> bool {
+        self.media_kinds.contains(&media_kind)
+    }
+
+    /// Returns whether this plugin advertises a packet bitstream format.
+    pub fn supports_bitstream_format(&self, format: &DecoderBitstreamFormat) -> bool {
+        self.bitstream_formats.contains(format)
+    }
 }
 
 /// Normalized output route produced by a source normalizer.
@@ -132,6 +142,168 @@ impl SourceNormalizerResourceCapabilities {
     /// Returns whether this plugin advertises an output route.
     pub fn supports_output_route(&self, route: SourceNormalizerOutputRoute) -> bool {
         self.supported_output_routes.contains(&route)
+    }
+}
+
+/// Capability requirements used when opening one source normalizer session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SourceNormalizerSessionRequirements {
+    Packet(SourceNormalizerPacketSessionRequirements),
+    Resource(SourceNormalizerResourceSessionRequirements),
+}
+
+impl SourceNormalizerSessionRequirements {
+    /// Returns missing capability names for this requirement.
+    pub fn missing_capabilities(
+        &self,
+        capabilities: &SourceNormalizerSessionCapabilities<'_>,
+    ) -> Vec<String> {
+        match (self, capabilities) {
+            (
+                Self::Packet(requirements),
+                SourceNormalizerSessionCapabilities::Packet(capabilities),
+            ) => requirements.missing_capabilities(capabilities),
+            (
+                Self::Resource(requirements),
+                SourceNormalizerSessionCapabilities::Resource(capabilities),
+            ) => requirements.missing_capabilities(capabilities),
+            (Self::Packet(_), SourceNormalizerSessionCapabilities::Resource(_)) => {
+                vec!["packet stream route".to_owned()]
+            }
+            (Self::Resource(_), SourceNormalizerSessionCapabilities::Packet(_)) => {
+                vec!["resource output route".to_owned()]
+            }
+        }
+    }
+}
+
+/// Borrowed source normalizer capabilities used for generic requirement matching.
+#[derive(Debug, Clone, Copy)]
+pub enum SourceNormalizerSessionCapabilities<'a> {
+    Packet(&'a SourceNormalizerPacketCapabilities),
+    Resource(&'a SourceNormalizerResourceCapabilities),
+}
+
+/// Packet-stream capability requirements.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNormalizerPacketSessionRequirements {
+    pub runtime_profile: String,
+    #[serde(default)]
+    pub media_kind: Option<SourceNormalizerPacketMediaKind>,
+    #[serde(default)]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub bitstream_format: Option<DecoderBitstreamFormat>,
+    #[serde(default)]
+    pub require_seek: bool,
+    #[serde(default)]
+    pub require_flush: bool,
+    #[serde(default)]
+    pub require_lease_cleanup: bool,
+}
+
+impl SourceNormalizerPacketSessionRequirements {
+    /// Builds packet-stream requirements for native-frame video decode.
+    pub fn native_video(runtime_profile: impl Into<String>, codec: impl Into<String>) -> Self {
+        Self {
+            runtime_profile: runtime_profile.into(),
+            media_kind: Some(SourceNormalizerPacketMediaKind::Video),
+            codec: Some(codec.into()),
+            bitstream_format: None,
+            require_seek: false,
+            require_flush: true,
+            require_lease_cleanup: true,
+        }
+    }
+
+    /// Returns missing capability names for this requirement.
+    pub fn missing_capabilities(
+        &self,
+        capabilities: &SourceNormalizerPacketCapabilities,
+    ) -> Vec<String> {
+        let mut missing = Vec::new();
+        if !self.runtime_profile.is_empty()
+            && !capabilities.supports_runtime_profile(&self.runtime_profile)
+        {
+            missing.push(format!("runtime profile {}", self.runtime_profile));
+        }
+        if let Some(media_kind) = self.media_kind {
+            if !capabilities.supports_media_kind(media_kind) {
+                missing.push(format!("packet media kind {media_kind:?}"));
+            }
+        }
+        if let Some(codec) = &self.codec {
+            if !capabilities.supports_codec(codec) {
+                missing.push(format!("packet codec {codec}"));
+            }
+        }
+        if let Some(format) = &self.bitstream_format {
+            if !capabilities.supports_bitstream_format(format) {
+                missing.push(format!("packet bitstream format {format:?}"));
+            }
+        }
+        if self.require_seek && !capabilities.supports_seek {
+            missing.push("packet seek support".to_owned());
+        }
+        if self.require_flush && !capabilities.supports_flush {
+            missing.push("packet flush support".to_owned());
+        }
+        if self.require_lease_cleanup && !capabilities.supports_flush {
+            missing.push("outstanding lease cleanup".to_owned());
+        }
+        missing
+    }
+}
+
+/// Resource-output capability requirements.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceSessionRequirements {
+    pub runtime_profile: String,
+    pub output_route: SourceNormalizerOutputRoute,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub require_growing_resources: bool,
+    #[serde(default)]
+    pub require_range_reads: bool,
+    #[serde(default)]
+    pub require_cancel: bool,
+}
+
+impl SourceNormalizerResourceSessionRequirements {
+    /// Returns missing capability names for this requirement.
+    pub fn missing_capabilities(
+        &self,
+        capabilities: &SourceNormalizerResourceCapabilities,
+    ) -> Vec<String> {
+        let mut missing = Vec::new();
+        if !self.runtime_profile.is_empty()
+            && !capabilities.supports_runtime_profile(&self.runtime_profile)
+        {
+            missing.push(format!("runtime profile {}", self.runtime_profile));
+        }
+        if !capabilities.supports_output_route(self.output_route) {
+            missing.push(format!("resource output route {:?}", self.output_route));
+        }
+        if let Some(content_type) = &self.content_type {
+            let supported = capabilities
+                .content_types
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(content_type));
+            if !supported {
+                missing.push(format!("content type {content_type}"));
+            }
+        }
+        if self.require_growing_resources && !capabilities.supports_growing_resources {
+            missing.push("growing resources".to_owned());
+        }
+        if self.require_range_reads && !capabilities.supports_range_reads {
+            missing.push("range reads".to_owned());
+        }
+        if self.require_cancel && !capabilities.supports_cancel {
+            missing.push("cancel support".to_owned());
+        }
+        missing
     }
 }
 
@@ -538,19 +710,23 @@ pub trait SourceNormalizerResourceSession: Send {
 mod tests {
     use super::{
         SourceNormalizerOutputRoute, SourceNormalizerPacket, SourceNormalizerPacketCapabilities,
-        SourceNormalizerPacketMediaKind, SourceNormalizerPacketTrackInfo,
-        SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
-        SourceNormalizerRequiredCapabilities, SourceNormalizerResourceCachePolicy,
-        SourceNormalizerResourceCapabilities,
+        SourceNormalizerPacketMediaKind, SourceNormalizerPacketSessionRequirements,
+        SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
+        SourceNormalizerReadPacketStatus, SourceNormalizerRequiredCapabilities,
+        SourceNormalizerResourceCachePolicy, SourceNormalizerResourceCapabilities,
+        SourceNormalizerResourceSessionRequirements, SourceNormalizerSessionCapabilities,
+        SourceNormalizerSessionRequirements,
     };
     use crate::{
-        DecoderBitstreamFormat, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperPluginKind,
+        DecoderBitstreamFormat, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperPluginKind,
     };
 
     #[test]
     fn source_normalizer_abi_constants_are_stable() {
         assert_eq!(VesperPluginKind::SourceNormalizer as u32, 6);
         assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, 2);
+        assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, 3);
     }
 
     #[test]
@@ -691,5 +867,101 @@ mod tests {
 
         assert!(capabilities.supports_runtime_profile("DIAGNOSTIC-PACKET"));
         assert!(capabilities.supports_codec("h264"));
+        assert!(capabilities.supports_media_kind(SourceNormalizerPacketMediaKind::Video));
+        assert!(capabilities.supports_bitstream_format(&DecoderBitstreamFormat::Avcc));
+    }
+
+    #[test]
+    fn source_normalizer_packet_requirements_report_missing_capabilities() {
+        let requirements = SourceNormalizerPacketSessionRequirements {
+            require_seek: true,
+            bitstream_format: Some(DecoderBitstreamFormat::Avcc),
+            ..SourceNormalizerPacketSessionRequirements::native_video("native-frame-vod", "h264")
+        };
+        let capabilities = SourceNormalizerPacketCapabilities {
+            supported_runtime_profiles: vec!["other".to_owned()],
+            media_kinds: vec![SourceNormalizerPacketMediaKind::Audio],
+            codecs: vec!["hevc".to_owned()],
+            bitstream_formats: vec![DecoderBitstreamFormat::AnnexB],
+            supports_seek: false,
+            supports_flush: false,
+            ..Default::default()
+        };
+
+        let missing = requirements.missing_capabilities(&capabilities);
+
+        assert!(
+            missing
+                .iter()
+                .any(|item| item == "runtime profile native-frame-vod")
+        );
+        assert!(missing.iter().any(|item| item == "packet media kind Video"));
+        assert!(missing.iter().any(|item| item == "packet codec h264"));
+        assert!(
+            missing
+                .iter()
+                .any(|item| item == "packet bitstream format Avcc")
+        );
+        assert!(missing.iter().any(|item| item == "packet seek support"));
+        assert!(missing.iter().any(|item| item == "packet flush support"));
+        assert!(
+            missing
+                .iter()
+                .any(|item| item == "outstanding lease cleanup")
+        );
+    }
+
+    #[test]
+    fn source_normalizer_packet_requirements_treat_empty_profile_as_auto_detected() {
+        let requirements = SourceNormalizerPacketSessionRequirements {
+            runtime_profile: String::new(),
+            media_kind: Some(SourceNormalizerPacketMediaKind::Video),
+            codec: None,
+            bitstream_format: None,
+            require_seek: false,
+            require_flush: true,
+            require_lease_cleanup: true,
+        };
+        let capabilities = SourceNormalizerPacketCapabilities {
+            supported_runtime_profiles: vec!["native-frame-vod".to_owned()],
+            media_kinds: vec![SourceNormalizerPacketMediaKind::Video],
+            supports_flush: true,
+            ..Default::default()
+        };
+
+        assert!(requirements.missing_capabilities(&capabilities).is_empty());
+    }
+
+    #[test]
+    fn source_normalizer_session_requirements_match_route_kind() {
+        let requirements = SourceNormalizerSessionRequirements::Resource(
+            SourceNormalizerResourceSessionRequirements {
+                runtime_profile: "vod-resource".to_owned(),
+                output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
+                content_type: Some("video/mp4".to_owned()),
+                require_growing_resources: true,
+                require_range_reads: true,
+                require_cancel: true,
+            },
+        );
+        let packet_capabilities = SourceNormalizerPacketCapabilities::default();
+        let missing = requirements.missing_capabilities(
+            &SourceNormalizerSessionCapabilities::Packet(&packet_capabilities),
+        );
+        assert_eq!(missing, vec!["resource output route".to_owned()]);
+
+        let resource_capabilities = SourceNormalizerResourceCapabilities {
+            supported_runtime_profiles: vec!["vod-resource".to_owned()],
+            supported_output_routes: vec![SourceNormalizerOutputRoute::Fmp4LocalStream],
+            content_types: vec!["video/mp4".to_owned()],
+            supports_growing_resources: true,
+            supports_range_reads: true,
+            supports_cancel: true,
+            ..Default::default()
+        };
+        let missing = requirements.missing_capabilities(
+            &SourceNormalizerSessionCapabilities::Resource(&resource_capabilities),
+        );
+        assert!(missing.is_empty());
     }
 }

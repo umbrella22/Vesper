@@ -34,6 +34,7 @@ include(":app")
 include(":vesper-player-kit")
 include(":vesper-player-kit-external-playback")
 include(":vesper-player-kit-ffmpeg-runtime")
+include(":vesper-player-kit-decoder-mediacodec")
 include(":vesper-player-kit-source-normalizer-ffmpeg")
 include(":vesper-player-kit-frame-processor-diagnostic")
 include(":vesper-player-kit-compose")
@@ -42,6 +43,8 @@ include(":vesper-player-kit-compose-ui")
 project(":vesper-player-kit").projectDir = file("../../lib/android/vesper-player-kit")
 project(":vesper-player-kit-external-playback").projectDir = file("../../lib/android/vesper-player-kit-external-playback")
 project(":vesper-player-kit-ffmpeg-runtime").projectDir = file("../../lib/android/vesper-player-kit-ffmpeg-runtime")
+project(":vesper-player-kit-decoder-mediacodec").projectDir =
+    file("../../lib/android/vesper-player-kit-decoder-mediacodec")
 project(":vesper-player-kit-source-normalizer-ffmpeg").projectDir =
     file("../../lib/android/vesper-player-kit-source-normalizer-ffmpeg")
 project(":vesper-player-kit-frame-processor-diagnostic").projectDir =

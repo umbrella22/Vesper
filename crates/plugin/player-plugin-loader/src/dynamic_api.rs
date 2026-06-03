@@ -17,7 +17,7 @@ pub enum PluginLoadError {
     #[error("plugin descriptor pointer is null")]
     NullDescriptor,
     #[error("plugin ABI version mismatch: expected {expected}, got {actual}")]
-    AbiVersionMismatch { expected: u32, actual: u32 },
+    AbiVersionMismatch { expected: String, actual: u32 },
     #[error("plugin field `{field}` is missing")]
     MissingField { field: &'static str },
     #[error("plugin field `{field}` is not valid UTF-8")]
@@ -138,36 +138,15 @@ impl LoadedDynamicPlugin {
             VesperPluginKind::PipelineEventHook | VesperPluginKind::BenchmarkSink => {
                 VESPER_PLUGIN_ABI_VERSION_V2
             }
-            VesperPluginKind::Decoder => {
-                if descriptor.abi_version != VESPER_DECODER_PLUGIN_ABI_VERSION_V3
-                    && descriptor.abi_version != VESPER_DECODER_PLUGIN_ABI_VERSION_V4
-                {
-                    return Err(PluginLoadError::AbiVersionMismatch {
-                        expected: VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
-                        actual: descriptor.abi_version,
-                    });
-                }
-                descriptor.abi_version
-            }
-            VesperPluginKind::FrameProcessor => VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1,
+            VesperPluginKind::Decoder => VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+            VesperPluginKind::FrameProcessor => VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
             VesperPluginKind::SourceNormalizer => {
-                if descriptor.abi_version != VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2
-                    && descriptor.abi_version != VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3
-                {
-                    return Err(PluginLoadError::AbiVersionMismatch {
-                        expected: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
-                        actual: descriptor.abi_version,
-                    });
-                }
-                descriptor.abi_version
+                VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT
             }
         };
-        if descriptor.plugin_kind != VesperPluginKind::Decoder
-            && descriptor.plugin_kind != VesperPluginKind::SourceNormalizer
-            && descriptor.abi_version != expected_abi_version
-        {
+        if descriptor.abi_version != expected_abi_version {
             return Err(PluginLoadError::AbiVersionMismatch {
-                expected: expected_abi_version,
+                expected: expected_abi_version.to_string(),
                 actual: descriptor.abi_version,
             });
         }
@@ -253,25 +232,14 @@ impl LoadedDynamicPlugin {
                 })
             }
             VesperPluginKind::Decoder => {
-                let api = if descriptor.abi_version == VESPER_DECODER_PLUGIN_ABI_VERSION_V4 {
-                    let api_ptr = descriptor.api.cast::<VesperDecoderPluginApiV4>();
-                    let api =
-                        // SAFETY: `descriptor.api` must point at the v3 decoder ABI table
-                        // when the plugin exports a valid v4 decoder descriptor.
-                        unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                            field: "decoder_plugin_api_v4",
-                        })?;
-                    CheckedNativeDecoderPluginApi::try_from(*api)?
-                } else {
-                    let api_ptr = descriptor.api.cast::<VesperDecoderPluginApiV2>();
-                    let api =
-                        // SAFETY: `descriptor.api` must point at the v2 decoder ABI table
-                        // when the plugin exports a valid v3 decoder descriptor.
-                        unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                            field: "decoder_plugin_api_v2",
-                        })?;
-                    CheckedNativeDecoderPluginApi::try_from(*api)?
-                };
+                let api_ptr = descriptor.api.cast::<VesperDecoderPluginApiV5>();
+                let api =
+                    // SAFETY: `descriptor.api` must point at the current decoder ABI table
+                    // when the plugin exports a valid current decoder descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "decoder_plugin_api_current",
+                    })?;
+                let api = CheckedNativeDecoderPluginApi::try_from(*api)?;
                 let factory =
                     DynamicNativeDecoderPluginFactory::new(library, descriptor_name.clone(), api)?;
                 Ok(Self {
@@ -312,47 +280,44 @@ impl LoadedDynamicPlugin {
                 })
             }
             VesperPluginKind::SourceNormalizer => {
-                let (packet_factory, resource_factory) = if descriptor.abi_version
-                    == VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3
-                {
-                    let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV3>();
-                    let api =
-                            // SAFETY: `descriptor.api` must point at the v3 source normalizer
-                            // ABI table when the plugin exports a valid v3 descriptor.
-                            unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                                field: "source_normalizer_plugin_api_v3",
-                            })?;
+                let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV3>();
+                let api =
+                    // SAFETY: `descriptor.api` must point at the current source normalizer
+                    // ABI table when the plugin exports a valid current descriptor.
+                    unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
+                        field: "source_normalizer_plugin_api_current",
+                    })?;
+                let has_packet_callbacks = source_normalizer_packet_callbacks_present(api);
+                let has_resource_callbacks = source_normalizer_resource_callbacks_present(api);
+                let packet_factory = if has_packet_callbacks {
                     let packet_api = CheckedSourceNormalizerPacketPluginApi::try_from(*api)?;
-                    let resource_api = CheckedSourceNormalizerResourcePluginApi::try_from(*api)?;
-                    let packet_factory = DynamicSourceNormalizerPacketPluginFactory::new(
+                    Some(Arc::new(DynamicSourceNormalizerPacketPluginFactory::new(
                         library.clone(),
                         descriptor_name.clone(),
                         packet_api,
-                    )?;
-                    let resource_factory = DynamicSourceNormalizerResourcePluginFactory::new(
+                    )?))
+                } else {
+                    None
+                };
+                let resource_factory = if has_resource_callbacks {
+                    let mut resource_api =
+                        CheckedSourceNormalizerResourcePluginApi::try_from(*api)?;
+                    if has_packet_callbacks {
+                        resource_api.destroy = None;
+                    }
+                    Some(Arc::new(DynamicSourceNormalizerResourcePluginFactory::new(
                         library,
                         descriptor_name.clone(),
                         resource_api,
-                    )?;
-                    (
-                        Some(Arc::new(packet_factory)),
-                        Some(Arc::new(resource_factory)),
-                    )
+                    )?))
                 } else {
-                    let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV2>();
-                    let api =
-                            // SAFETY: `descriptor.api` must point at the v2 source normalizer
-                            // ABI table when the plugin exports a valid source normalizer descriptor.
-                            unsafe { api_ptr.as_ref() }.ok_or(PluginLoadError::MissingField {
-                                field: "source_normalizer_plugin_api_v2",
-                            })?;
-                    let factory = DynamicSourceNormalizerPacketPluginFactory::new(
-                        library,
-                        descriptor_name.clone(),
-                        CheckedSourceNormalizerPacketPluginApi::try_from(*api)?,
-                    )?;
-                    (Some(Arc::new(factory)), None)
+                    None
                 };
+                if packet_factory.is_none() && resource_factory.is_none() {
+                    return Err(PluginLoadError::CapabilitiesAbiViolation(format!(
+                        "source normalizer plugin `{descriptor_name}` exports no complete packet or resource callback group"
+                    )));
+                }
                 Ok(Self {
                     name: descriptor_name,
                     plugin_kind: descriptor.plugin_kind,
@@ -429,6 +394,14 @@ pub(crate) type DecoderReleaseNativeFrameFn = unsafe extern "C" fn(
     handle_kind: u32,
     handle: usize,
 ) -> VesperPluginProcessResult;
+pub(crate) type DecoderReleaseNativeFrameWithPresentationFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        session: *mut c_void,
+        handle_kind: u32,
+        handle: usize,
+        presented: bool,
+    ) -> VesperPluginProcessResult;
 pub(crate) type DecoderSessionOperationFn =
     unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
 pub(crate) type FrameProcessorOpenSessionJsonFn =
@@ -619,6 +592,8 @@ pub(crate) struct CheckedNativeDecoderPluginApi {
     pub(crate) receive_native_frame: DecoderReceiveNativeFrameFn,
     pub(crate) receive_pcm_frame: Option<DecoderReceivePcmFrameFn>,
     pub(crate) release_native_frame: DecoderReleaseNativeFrameFn,
+    pub(crate) release_native_frame_with_presentation:
+        Option<DecoderReleaseNativeFrameWithPresentationFn>,
     pub(crate) flush_session: DecoderSessionOperationFn,
     pub(crate) close_session: DecoderSessionOperationFn,
 }
@@ -632,93 +607,48 @@ unsafe impl Send for CheckedNativeDecoderPluginApi {}
 // `Arc` and relies on the plugin to make the context safe for concurrent use.
 unsafe impl Sync for CheckedNativeDecoderPluginApi {}
 
-impl TryFrom<VesperDecoderPluginApiV2> for CheckedNativeDecoderPluginApi {
+impl TryFrom<VesperDecoderPluginApiV5> for CheckedNativeDecoderPluginApi {
     type Error = PluginLoadError;
 
-    fn try_from(api: VesperDecoderPluginApiV2) -> Result<Self, Self::Error> {
+    fn try_from(api: VesperDecoderPluginApiV5) -> Result<Self, Self::Error> {
         Ok(Self {
             context: api.context,
             destroy: api.destroy,
             name: api.name,
             capabilities_json: api.capabilities_json.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v2.capabilities_json",
+                field: "decoder_plugin_api_current.capabilities_json",
             })?,
             native_requirements_json: api.native_requirements_json.ok_or(
                 PluginLoadError::MissingField {
-                    field: "decoder_plugin_api_v2.native_requirements_json",
+                    field: "decoder_plugin_api_current.native_requirements_json",
                 },
             )?,
             free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v2.free_bytes",
+                field: "decoder_plugin_api_current.free_bytes",
             })?,
             open_session_json: api.open_session_json.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v2.open_session_json",
+                field: "decoder_plugin_api_current.open_session_json",
             })?,
             send_packet: api.send_packet.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v2.send_packet",
+                field: "decoder_plugin_api_current.send_packet",
             })?,
             receive_native_frame: api.receive_native_frame.ok_or(
                 PluginLoadError::MissingField {
-                    field: "decoder_plugin_api_v2.receive_native_frame",
-                },
-            )?,
-            receive_pcm_frame: None,
-            release_native_frame: api.release_native_frame.ok_or(
-                PluginLoadError::MissingField {
-                    field: "decoder_plugin_api_v2.release_native_frame",
-                },
-            )?,
-            flush_session: api.flush_session.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v2.flush_session",
-            })?,
-            close_session: api.close_session.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v2.close_session",
-            })?,
-        })
-    }
-}
-
-impl TryFrom<VesperDecoderPluginApiV4> for CheckedNativeDecoderPluginApi {
-    type Error = PluginLoadError;
-
-    fn try_from(api: VesperDecoderPluginApiV4) -> Result<Self, Self::Error> {
-        Ok(Self {
-            context: api.context,
-            destroy: api.destroy,
-            name: api.name,
-            capabilities_json: api.capabilities_json.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v4.capabilities_json",
-            })?,
-            native_requirements_json: api.native_requirements_json.ok_or(
-                PluginLoadError::MissingField {
-                    field: "decoder_plugin_api_v4.native_requirements_json",
-                },
-            )?,
-            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v4.free_bytes",
-            })?,
-            open_session_json: api.open_session_json.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v4.open_session_json",
-            })?,
-            send_packet: api.send_packet.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v4.send_packet",
-            })?,
-            receive_native_frame: api.receive_native_frame.ok_or(
-                PluginLoadError::MissingField {
-                    field: "decoder_plugin_api_v4.receive_native_frame",
+                    field: "decoder_plugin_api_current.receive_native_frame",
                 },
             )?,
             receive_pcm_frame: api.receive_pcm_frame,
             release_native_frame: api.release_native_frame.ok_or(
                 PluginLoadError::MissingField {
-                    field: "decoder_plugin_api_v4.release_native_frame",
+                    field: "decoder_plugin_api_current.release_native_frame",
                 },
             )?,
+            release_native_frame_with_presentation: api.release_native_frame2,
             flush_session: api.flush_session.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v4.flush_session",
+                field: "decoder_plugin_api_current.flush_session",
             })?,
             close_session: api.close_session.ok_or(PluginLoadError::MissingField {
-                field: "decoder_plugin_api_v4.close_session",
+                field: "decoder_plugin_api_current.close_session",
             })?,
         })
     }
@@ -808,46 +738,23 @@ unsafe impl Send for CheckedSourceNormalizerPacketPluginApi {}
 // `Arc` and relies on the plugin to make the context safe for concurrent use.
 unsafe impl Sync for CheckedSourceNormalizerPacketPluginApi {}
 
-impl TryFrom<VesperSourceNormalizerPluginApiV2> for CheckedSourceNormalizerPacketPluginApi {
-    type Error = PluginLoadError;
+fn source_normalizer_packet_callbacks_present(api: &VesperSourceNormalizerPluginApiV3) -> bool {
+    api.packet_capabilities_json.is_some()
+        && api.open_packet_session_json.is_some()
+        && api.read_packet.is_some()
+        && api.release_packet.is_some()
+        && api.flush_packet_session.is_some()
+        && api.close_packet_session.is_some()
+        && api.free_bytes.is_some()
+}
 
-    fn try_from(api: VesperSourceNormalizerPluginApiV2) -> Result<Self, Self::Error> {
-        Ok(Self {
-            context: api.context,
-            destroy: api.destroy,
-            name: api.name,
-            packet_capabilities_json: api.packet_capabilities_json.ok_or(
-                PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v2.packet_capabilities_json",
-                },
-            )?,
-            free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
-                field: "source_normalizer_plugin_api_v2.free_bytes",
-            })?,
-            open_packet_session_json: api.open_packet_session_json.ok_or(
-                PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v2.open_packet_session_json",
-                },
-            )?,
-            read_packet: api.read_packet.ok_or(PluginLoadError::MissingField {
-                field: "source_normalizer_plugin_api_v2.read_packet",
-            })?,
-            release_packet: api.release_packet.ok_or(PluginLoadError::MissingField {
-                field: "source_normalizer_plugin_api_v2.release_packet",
-            })?,
-            seek_packet_session_json: api.seek_packet_session_json,
-            flush_packet_session: api.flush_packet_session.ok_or(
-                PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v2.flush_packet_session",
-                },
-            )?,
-            close_packet_session: api.close_packet_session.ok_or(
-                PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v2.close_packet_session",
-                },
-            )?,
-        })
-    }
+fn source_normalizer_resource_callbacks_present(api: &VesperSourceNormalizerPluginApiV3) -> bool {
+    api.resource_capabilities_json.is_some()
+        && api.open_resource_session_json.is_some()
+        && api.poll_resource_session.is_some()
+        && api.cancel_resource_session.is_some()
+        && api.close_resource_session.is_some()
+        && api.free_bytes.is_some()
 }
 
 impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerPacketPluginApi {
@@ -856,36 +763,36 @@ impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerPacke
     fn try_from(api: VesperSourceNormalizerPluginApiV3) -> Result<Self, Self::Error> {
         Ok(Self {
             context: api.context,
-            destroy: None,
+            destroy: api.destroy,
             name: api.name,
             packet_capabilities_json: api.packet_capabilities_json.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.packet_capabilities_json",
+                    field: "source_normalizer_plugin_api_current.packet_capabilities_json",
                 },
             )?,
             free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
-                field: "source_normalizer_plugin_api_v3.free_bytes",
+                field: "source_normalizer_plugin_api_current.free_bytes",
             })?,
             open_packet_session_json: api.open_packet_session_json.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.open_packet_session_json",
+                    field: "source_normalizer_plugin_api_current.open_packet_session_json",
                 },
             )?,
             read_packet: api.read_packet.ok_or(PluginLoadError::MissingField {
-                field: "source_normalizer_plugin_api_v3.read_packet",
+                field: "source_normalizer_plugin_api_current.read_packet",
             })?,
             release_packet: api.release_packet.ok_or(PluginLoadError::MissingField {
-                field: "source_normalizer_plugin_api_v3.release_packet",
+                field: "source_normalizer_plugin_api_current.release_packet",
             })?,
             seek_packet_session_json: api.seek_packet_session_json,
             flush_packet_session: api.flush_packet_session.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.flush_packet_session",
+                    field: "source_normalizer_plugin_api_current.flush_packet_session",
                 },
             )?,
             close_packet_session: api.close_packet_session.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.close_packet_session",
+                    field: "source_normalizer_plugin_api_current.close_packet_session",
                 },
             )?,
         })
@@ -924,30 +831,30 @@ impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerResou
             name: api.name,
             resource_capabilities_json: api.resource_capabilities_json.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.resource_capabilities_json",
+                    field: "source_normalizer_plugin_api_current.resource_capabilities_json",
                 },
             )?,
             free_bytes: api.free_bytes.ok_or(PluginLoadError::MissingField {
-                field: "source_normalizer_plugin_api_v3.free_bytes",
+                field: "source_normalizer_plugin_api_current.free_bytes",
             })?,
             open_resource_session_json: api.open_resource_session_json.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.open_resource_session_json",
+                    field: "source_normalizer_plugin_api_current.open_resource_session_json",
                 },
             )?,
             poll_resource_session: api.poll_resource_session.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.poll_resource_session",
+                    field: "source_normalizer_plugin_api_current.poll_resource_session",
                 },
             )?,
             cancel_resource_session: api.cancel_resource_session.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.cancel_resource_session",
+                    field: "source_normalizer_plugin_api_current.cancel_resource_session",
                 },
             )?,
             close_resource_session: api.close_resource_session.ok_or(
                 PluginLoadError::MissingField {
-                    field: "source_normalizer_plugin_api_v3.close_resource_session",
+                    field: "source_normalizer_plugin_api_current.close_resource_session",
                 },
             )?,
         })
@@ -964,8 +871,28 @@ pub(crate) fn native_handle_kind_code(handle_kind: &NativeHandleKind) -> Result<
         NativeHandleKind::D3D11Texture2D => Ok(6),
         NativeHandleKind::DxgiSurface => Ok(7),
         NativeHandleKind::VulkanImage => Ok(8),
+        NativeHandleKind::MediaCodecHardwareBuffer => Ok(9),
+        NativeHandleKind::MediaCodecSurfaceTexture => Ok(10),
         NativeHandleKind::Unknown(kind) => Err(format!(
             "native handle kind `{kind}` cannot be released through the dynamic plugin ABI"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_handle_kind_code;
+    use player_plugin::NativeHandleKind;
+
+    #[test]
+    fn native_handle_kind_code_includes_android_mediacodec_handles() {
+        assert_eq!(
+            native_handle_kind_code(&NativeHandleKind::MediaCodecHardwareBuffer),
+            Ok(9)
+        );
+        assert_eq!(
+            native_handle_kind_code(&NativeHandleKind::MediaCodecSurfaceTexture),
+            Ok(10)
+        );
     }
 }

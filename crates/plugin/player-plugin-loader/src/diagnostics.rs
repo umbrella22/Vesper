@@ -52,6 +52,7 @@ pub struct DecoderPluginCapabilitySummary {
     pub supports_audio_frames: bool,
     pub supports_pcm_frames: bool,
     pub supports_gpu_handles: bool,
+    pub supports_presentation_release: bool,
     pub supports_flush: bool,
     pub supports_drain: bool,
     pub max_sessions: Option<u32>,
@@ -206,14 +207,9 @@ impl DecoderPluginCapabilitySummary {
                 .iter()
                 .any(|codec| codec.media_kind == DecoderMediaKind::Audio),
             supports_audio_frames: capabilities.supports_audio_frames,
-            supports_pcm_frames: capabilities.supports_audio_frames
-                && capabilities.codecs.iter().any(|codec| {
-                    codec.media_kind == DecoderMediaKind::Audio
-                        && codec.output_formats.iter().any(|format| {
-                            matches!(format, DecoderFrameFormat::F32 | DecoderFrameFormat::S16)
-                        })
-                }),
+            supports_pcm_frames: capabilities.supports_pcm_frames,
             supports_gpu_handles: capabilities.supports_gpu_handles,
+            supports_presentation_release: capabilities.supports_presentation_release,
             supports_flush: capabilities.supports_flush,
             supports_drain: capabilities.supports_drain,
             max_sessions: capabilities.max_sessions,
@@ -462,7 +458,7 @@ impl PluginDiagnosticRecord {
                 PluginDiagnosticStatus::SourceNormalizerUnsupported
             };
             let message = if supported {
-                format!("{name} source_normalizer_resource_v3 plugin loaded")
+                format!("{name} source normalizer resource route loaded")
             } else if capabilities.supported_runtime_profiles.is_empty() {
                 format!("{name} does not advertise resource source normalizer runtime profiles")
             } else {
@@ -491,7 +487,7 @@ impl PluginDiagnosticRecord {
                 PluginDiagnosticStatus::SourceNormalizerUnsupported
             };
             let message = if supported {
-                format!("{name} source_normalizer_packet_v2 plugin loaded")
+                format!("{name} source normalizer packet route loaded")
             } else if capabilities.supported_runtime_profiles.is_empty() {
                 format!("{name} does not advertise packet source normalizer runtime profiles")
             } else {

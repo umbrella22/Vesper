@@ -299,7 +299,7 @@ pub(crate) fn prepare_source_normalizer_for_open(
         }
     } else {
         let message = format!(
-            "source normalizer requested but no source_normalizer_packet_v2 plugin is available: {}",
+            "source normalizer requested but no source normalizer packet route is available: {}",
             source_normalizer_registry_notes(&registry)
         );
         outcome
@@ -359,6 +359,23 @@ pub(crate) fn open_source_normalizer_packet_session(
                 plugin.plugin_name()
             )
         })?;
+    let requirements = SourceNormalizerPacketSessionRequirements {
+        runtime_profile: String::new(),
+        media_kind: Some(SourceNormalizerPacketMediaKind::Video),
+        codec: None,
+        bitstream_format: None,
+        require_seek: false,
+        require_flush: true,
+        require_lease_cleanup: true,
+    };
+    let missing_capabilities = requirements.missing_capabilities(&factory.packet_capabilities());
+    if !missing_capabilities.is_empty() {
+        return Err(format!(
+            "source normalizer packet plugin `{}` does not satisfy session requirements: missing {}",
+            factory.name(),
+            missing_capabilities.join(", ")
+        ));
+    }
     let config = SourceNormalizerPacketSessionConfig {
         runtime_profile: String::new(),
         input: source.uri().to_owned(),

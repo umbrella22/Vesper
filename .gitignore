@@ -38,6 +38,8 @@ lib/android/vesper-player-kit-dlna/build/
 lib/android/vesper-player-kit-ffmpeg-runtime/build/
 lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs/*
 lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime/*
+lib/android/vesper-player-kit-decoder-mediacodec/build/
+lib/android/vesper-player-kit-decoder-mediacodec/src/main/jniLibs/*
 lib/android/vesper-player-kit-source-normalizer-ffmpeg/build/
 lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs/*
 lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/assets/vesper-source-normalizer-ffmpeg/*

@@ -25,7 +25,7 @@ Use this example as a reference for:
   `preflightOnly` and lets you switch among `disabled`, `diagnosticsOnly`,
   `preflightOnly`, `preferNormalized`, and `requireNormalized` at runtime.
 - FrameProcessor diagnostic plugin logging. The example packages the diagnostic
-  plugin when available, but does not open frame sessions or alter rendering.
+  plugin and can run it in the explicit SDK-managed native-frame route.
 
 ## Optional Plugin Diagnostics
 
@@ -43,8 +43,8 @@ support. `preferNormalized` falls back to the original source on failure;
 `requireNormalized` reports a source error. Standard HLS and DASH stay
 native-first unless normalization is explicitly required or forced. The plugin
 diagnostics panel shows route, profile, cache usage, fallback reason, and
-participation. FrameProcessor remains debug diagnostics only in this example
-and is never marked as participating in mobile playback.
+participation. FrameProcessor participation is reported only when the explicit
+SDK-managed native-frame route opens a frame session.
 
 ## Cast and DLNA
 

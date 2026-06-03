@@ -14,13 +14,13 @@ use super::macos_runtime_adapter_factory;
 use super::{
     FrameProcessorDebugState, MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID,
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-    MacosFrameProcessorChain, MacosFrameProcessorNode, MacosHostPlayerRuntimeAdapterFactory,
-    MacosNativeFrameDecoderState, MacosNativeFramePacketSendStatus, MacosNativeFramePacketSource,
-    MacosNativeFramePrefetchWakeup, MacosNativeFrameVideoSource, MacosNativeFrameWorkerEvent,
-    MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
-    MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
-    MacosSoftwarePlayerRuntimeAdapterFactory, MacosSourceNormalizationOutcome,
-    apply_decoder_plugin_diagnostics, apply_decoder_plugin_diagnostics_to_video_decode,
+    MacosFrameProcessorChain, MacosHostPlayerRuntimeAdapterFactory, MacosNativeFrameDecoderState,
+    MacosNativeFramePacketSendStatus, MacosNativeFramePacketSource, MacosNativeFramePrefetchWakeup,
+    MacosNativeFrameVideoSource, MacosNativeFrameWorkerEvent, MacosRuntimeActiveFallback,
+    MacosRuntimeAdapter, MacosRuntimeAdapterFallback, MacosRuntimeAdapterInitializer,
+    MacosRuntimeDiagnostics, MacosSoftwarePlayerRuntimeAdapterFactory,
+    MacosSourceNormalizationOutcome, apply_decoder_plugin_diagnostics,
+    apply_decoder_plugin_diagnostics_to_video_decode,
     apply_decoder_plugin_registry_to_video_decode, apply_source_normalizer_open_diagnostics,
     attach_source_normalizer_to_runtime, flush_and_seek_macos_native_frame_source,
     macos_native_frame_decoder_video_decode_info, macos_runtime_diagnostics,
@@ -45,6 +45,9 @@ use player_backend_ffmpeg::{
 use player_model::MediaSource;
 use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
 use player_platform_desktop::{DesktopVideoFramePoll, DesktopVideoSource};
+use player_platform_native_frame::{
+    NativeFrameProcessorChainCore, NativeFrameProcessorNode, NativeFrameProcessorProcessedFrame,
+};
 use player_plugin::{
     DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeFrame,
     DecoderNativeFrameMetadata, DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
@@ -65,14 +68,14 @@ use player_plugin_loader::{
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
     FrameProcessorWarningKind, PlaybackProgress, PlayerAudioInfo, PlayerError, PlayerErrorCode,
-    PlayerFrameProcessingMetrics, PlayerMediaInfo, PlayerPluginCapabilitySummary,
-    PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResult,
-    PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
-    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PlayerVideoInfo, PlayerVideoSurfaceKind,
-    PlayerVideoSurfaceTarget, PresentationState, SourceNormalizerMode,
+    PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResult, PlayerRuntime,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
+    PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+    PlayerVideoInfo, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+    SourceNormalizerMode,
 };
 #[cfg(target_os = "macos")]
 use player_runtime::{PlayerDecoderPluginVideoMode, PlayerRuntimeInitializer};
@@ -3648,13 +3651,13 @@ fn frame_processor_prefer_mode_uses_processed_frame_and_releases_output() {
         .process(test_native_frame(10, Some(33_000)))
         .expect("processor chain should produce a frame");
 
-    assert_eq!(processed.presentation_frame.handle, 1_010);
-    assert_eq!(processed.decoder_frame.handle, 10);
-    assert_eq!(processed.processor_outputs.len(), 1);
-    assert_eq!(chain.metrics.submitted_frame_count, 1);
-    assert_eq!(chain.metrics.processed_frame_count, 1);
+    assert_eq!(processed.presentation_frame().handle, 1_010);
+    assert_eq!(processed.decoder_frame().handle, 10);
+    assert_eq!(processed.processor_outputs().len(), 1);
+    assert_eq!(chain.metrics().submitted_frame_count, 1);
+    assert_eq!(chain.metrics().processed_frame_count, 1);
 
-    chain.release_processor_outputs(processed.processor_outputs);
+    chain.release_processor_outputs(processed.into_processor_outputs());
     assert_eq!(
         state
             .lock()
@@ -3680,10 +3683,10 @@ fn frame_processor_prefer_mode_accepts_in_place_passthrough_output() {
         .process(test_native_frame(10, Some(33_000)))
         .expect("processor chain should accept in-place passthrough output");
 
-    assert_eq!(processed.presentation_frame.handle, 10);
-    assert!(processed.processor_outputs.is_empty());
+    assert_eq!(processed.presentation_frame().handle, 10);
+    assert!(processed.processor_outputs().is_empty());
 
-    chain.release_processor_outputs(processed.processor_outputs);
+    chain.release_processor_outputs(processed.into_processor_outputs());
     assert!(
         state
             .lock()
@@ -3708,11 +3711,11 @@ fn frame_processor_late_output_is_dropped_and_warns() {
         .process(test_native_frame(11, Some(66_000)))
         .expect("late output should bypass instead of failing in prefer mode");
 
-    assert_eq!(processed.presentation_frame.handle, 11);
-    assert!(processed.processor_outputs.is_empty());
-    assert_eq!(chain.metrics.deadline_miss_count, 1);
-    assert_eq!(chain.metrics.late_output_drop_count, 1);
-    assert_eq!(chain.metrics.dropped_output_count, 1);
+    assert_eq!(processed.presentation_frame().handle, 11);
+    assert!(processed.processor_outputs().is_empty());
+    assert_eq!(chain.metrics().deadline_miss_count, 1);
+    assert_eq!(chain.metrics().late_output_drop_count, 1);
+    assert_eq!(chain.metrics().dropped_output_count, 1);
     assert_eq!(
         state
             .lock()
@@ -3752,8 +3755,8 @@ fn frame_processor_diagnostics_mode_runs_processor_but_presents_original() {
         .process(test_native_frame(13, Some(120_000)))
         .expect("diagnostics mode should still run processor");
 
-    assert_eq!(processed.presentation_frame.handle, 13);
-    assert_eq!(processed.processor_outputs.len(), 1);
+    assert_eq!(processed.presentation_frame().handle, 13);
+    assert_eq!(processed.processor_outputs().len(), 1);
     assert_eq!(
         state
             .lock()
@@ -3762,7 +3765,7 @@ fn frame_processor_diagnostics_mode_runs_processor_but_presents_original() {
         vec![13]
     );
 
-    chain.release_processor_outputs(processed.processor_outputs);
+    chain.release_processor_outputs(processed.into_processor_outputs());
     assert_eq!(
         state
             .lock()
@@ -3789,9 +3792,9 @@ fn frame_processor_backpressure_bypasses_and_reports_queue_state() {
         .process(test_native_frame(14, Some(140_000)))
         .expect("backpressure should bypass original in prefer mode");
 
-    assert_eq!(processed.presentation_frame.handle, 14);
-    assert_eq!(chain.metrics.bypassed_frame_count, 1);
-    assert_eq!(chain.metrics.backpressure_count, 1);
+    assert_eq!(processed.presentation_frame().handle, 14);
+    assert_eq!(chain.metrics().bypassed_frame_count, 1);
+    assert_eq!(chain.metrics().backpressure_count, 1);
     let events = chain.drain_events();
     assert!(
         events.iter().any(|event| matches!(
@@ -4007,6 +4010,7 @@ fn decoder_plugin_record_with_native_frame_output(
         supports_audio_frames: false,
         supports_pcm_frames: false,
         supports_gpu_handles: supports_native_frame_output,
+        supports_presentation_release: false,
         supports_flush: true,
         supports_drain: true,
         max_sessions: Some(1),
@@ -4036,6 +4040,7 @@ fn decoder_audio_pcm_plugin_record(codec: &str, plugin_name: &str) -> PluginDiag
         supports_audio_frames: true,
         supports_pcm_frames: true,
         supports_gpu_handles: false,
+        supports_presentation_release: false,
         supports_flush: true,
         supports_drain: true,
         max_sessions: Some(1),
@@ -4988,11 +4993,11 @@ fn macos_frame_processor_frame_for_test(
     pts_us: Option<i64>,
 ) -> super::MacosFrameProcessorFrame {
     let frame = test_native_frame(handle, pts_us);
-    super::MacosFrameProcessorFrame {
+    super::MacosFrameProcessorFrame(NativeFrameProcessorProcessedFrame {
         decoder_frame: frame.clone(),
         presentation_frame: frame,
         processor_outputs: Vec::new(),
-    }
+    })
 }
 
 fn macos_frame_processor_frame_for_test_with_processor_output(
@@ -5004,7 +5009,7 @@ fn macos_frame_processor_frame_for_test_with_processor_output(
     let mut processor_frame = frame.clone();
     processor_frame.handle = processor_handle;
     processor_frame.metadata.frame_id = Some(processor_handle as u64);
-    super::MacosFrameProcessorFrame {
+    super::MacosFrameProcessorFrame(NativeFrameProcessorProcessedFrame {
         decoder_frame: frame.clone(),
         presentation_frame: frame,
         processor_outputs: vec![super::ProcessorOwnedNativeFrame {
@@ -5014,7 +5019,7 @@ fn macos_frame_processor_frame_for_test_with_processor_output(
                 handle: processor_frame.handle,
             },
         }],
-    }
+    })
 }
 
 #[derive(Default)]
@@ -5206,24 +5211,26 @@ fn frame_processor_chain_for_test(
     sessions: Vec<RecordingFrameProcessorSession>,
 ) -> MacosFrameProcessorChain {
     MacosFrameProcessorChain {
-        processors: sessions
-            .into_iter()
-            .enumerate()
-            .map(|(processor_index, session)| MacosFrameProcessorNode {
-                plugin_name: format!("recording-frame-processor-{processor_index}"),
-                processor_index,
-                session: Box::new(session),
-            })
-            .collect(),
-        mode,
-        policy: FrameProcessorPolicy {
-            frame_deadline: Duration::from_millis(16),
-            late_output_tolerance: Duration::from_millis(4),
-            max_chain_depth: 8,
-            max_in_flight_frames_per_processor: 1,
-        },
-        metrics: PlayerFrameProcessingMetrics::default(),
-        pending_events: VecDeque::new(),
+        core: NativeFrameProcessorChainCore::new(
+            sessions
+                .into_iter()
+                .enumerate()
+                .map(|(processor_index, session)| {
+                    NativeFrameProcessorNode::new(
+                        format!("recording-frame-processor-{processor_index}"),
+                        processor_index,
+                        Box::new(session),
+                    )
+                })
+                .collect(),
+            mode,
+            FrameProcessorPolicy {
+                frame_deadline: Duration::from_millis(16),
+                late_output_tolerance: Duration::from_millis(4),
+                max_chain_depth: 8,
+                max_in_flight_frames_per_processor: 1,
+            },
+        ),
         debug: FrameProcessorDebugState::from_env(),
     }
 }

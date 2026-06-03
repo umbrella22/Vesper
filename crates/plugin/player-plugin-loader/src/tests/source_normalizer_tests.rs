@@ -1,4 +1,7 @@
 use super::*;
+use player_plugin::{
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperSourceNormalizerPluginApiV2,
+};
 
 #[test]
 fn dynamic_source_normalizer_packet_plugin_round_trips_packet_lifecycle() {
@@ -132,15 +135,15 @@ fn dynamic_source_normalizer_packet_plugin_drop_releases_outstanding_packet() {
 
 #[test]
 fn dynamic_source_normalizer_packet_plugin_rejects_missing_release_callback() {
-    let api = VesperSourceNormalizerPluginApiV2 {
+    let api = VesperSourceNormalizerPluginApiV3 {
         release_packet: None,
         ..fixture_source_normalizer_packet_api()
     };
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
     };
 
     let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -148,20 +151,19 @@ fn dynamic_source_normalizer_packet_plugin_rejects_missing_release_callback() {
 
     assert!(matches!(
         error,
-        PluginLoadError::MissingField {
-            field: "source_normalizer_plugin_api_v2.release_packet"
-        }
+        PluginLoadError::CapabilitiesAbiViolation(message)
+            if message.contains("exports no complete packet or resource callback group")
     ));
 }
 
 #[test]
-fn plugin_registry_reports_source_normalizer_packet_v2_support() {
+fn plugin_registry_reports_source_normalizer_packet_current_support() {
     let api = fixture_source_normalizer_packet_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
     };
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
         .expect("load source normalizer packet plugin");
@@ -186,7 +188,7 @@ fn plugin_registry_reports_source_normalizer_packet_v2_support() {
         record
             .message
             .as_deref()
-            .is_some_and(|message| message.contains("source_normalizer_packet_v2"))
+            .is_some_and(|message| message.contains("source normalizer packet route"))
     );
 
     let registry = PluginRegistry::from_records(vec![record]);
@@ -205,10 +207,44 @@ fn plugin_registry_reports_source_normalizer_packet_v2_support() {
 }
 
 #[test]
-fn plugin_registry_reports_v3_source_normalizer_packet_and_resource_support() {
+fn dynamic_source_normalizer_plugin_rejects_legacy_v2_signature() {
+    let api = VesperSourceNormalizerPluginApiV2 {
+        context: std::ptr::null_mut(),
+        destroy: None,
+        name: Some(fixture_source_normalizer_packet_name),
+        packet_capabilities_json: Some(fixture_source_normalizer_packet_capabilities_json),
+        open_packet_session_json: Some(fixture_source_normalizer_open_packet_session_json),
+        read_packet: Some(fixture_source_normalizer_read_packet),
+        release_packet: Some(fixture_source_normalizer_release_packet),
+        seek_packet_session_json: Some(fixture_source_normalizer_seek_packet_session_json),
+        flush_packet_session: Some(fixture_source_normalizer_flush_packet_session),
+        close_packet_session: Some(fixture_source_normalizer_close_packet_session),
+        free_bytes: Some(fixture_free_bytes),
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
+    };
+
+    let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect_err("legacy source normalizer ABI should be rejected");
+
+    assert!(matches!(
+        error,
+        PluginLoadError::AbiVersionMismatch {
+            expected,
+            actual: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2
+        } if expected == VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT.to_string()
+    ));
+}
+
+#[test]
+fn plugin_registry_reports_current_source_normalizer_packet_and_resource_support() {
     let api = fixture_source_normalizer_dual_api();
     let descriptor = VesperPluginDescriptor {
-        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
@@ -339,7 +375,7 @@ fn resource_source_normalizer_record(name: &str, profiles: &[&str]) -> PluginDia
                 max_sessions: Some(1),
             },
         )),
-        message: Some("source_normalizer_resource_v3".to_owned()),
+        message: Some("source normalizer resource route".to_owned()),
     }
 }
 
@@ -365,6 +401,6 @@ fn packet_source_normalizer_record(name: &str, profiles: &[&str]) -> PluginDiagn
                 max_sessions: Some(1),
             },
         )),
-        message: Some("source_normalizer_packet_v2".to_owned()),
+        message: Some("source normalizer packet route".to_owned()),
     }
 }

@@ -54,6 +54,13 @@ class VesperSystemPlaybackService : MediaSessionService() {
             return
         }
 
+        if (!safely("failed to promote media playback service early") {
+            triggerNotificationUpdate()
+        }) {
+            stopSelf()
+            return
+        }
+
         if (registeredSession !== activeSession) {
             registeredSession?.let(::removeRegisteredSession)
             val attached = safely("failed to attach media session to playback service") {
@@ -66,12 +73,6 @@ class VesperSystemPlaybackService : MediaSessionService() {
                 stopSelf()
                 return
             }
-        }
-
-        if (!safely("failed to promote media playback service") {
-            triggerNotificationUpdate()
-        }) {
-            stopSelf()
         }
     }
 

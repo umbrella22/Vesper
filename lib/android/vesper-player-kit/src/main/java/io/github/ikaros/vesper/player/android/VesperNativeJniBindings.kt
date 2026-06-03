@@ -55,11 +55,16 @@ internal class VesperNativeJniBindings(
 
     @Volatile
     private var sessionHandle: Long? = null
+    @Volatile
+    private var nativeFramePipelineHandle: Long? = null
+    @Volatile
+    private var nativeFramePipelineStatus: Map<String, Any?>? = null
     private val isDisposed = AtomicBoolean(false)
     private var player: ExoPlayer? = null
     private var playerListener: Player.Listener? = null
     private var analyticsListener: AnalyticsListener? = null
     private var attachedSurface: Surface? = null
+    private var nativeFramePipelineOwnsSurface = false
     private var updateListener: (() -> Unit)? = null
     private var currentTrackCatalogState: VesperTrackCatalog = VesperTrackCatalog.Empty
     private var currentTrackSelectionState: VesperTrackSelectionSnapshot =
@@ -77,6 +82,7 @@ internal class VesperNativeJniBindings(
     private val sourceNormalizerLoopbackServer = VesperSourceNormalizerLoopbackServer()
     private var currentBenchmarkSourceProtocol: VesperPlayerSourceProtocol? = null
     private var currentSourceNormalizerResource: NativeSourceNormalizerResource? = null
+    private var currentNativeFramePacketSource: NativeFramePacketSource? = null
     private val firstFrameGate = VesperPlaybackEpochFirstFrameGate()
 
     override fun probeMobilePlugins(
@@ -103,6 +109,8 @@ internal class VesperNativeJniBindings(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         trackPreferencePolicy: VesperTrackPreferencePolicy,
+        systemPlaybackUsesSourceNormalizerResource: Boolean,
+        systemPlaybackVideoEnabled: Boolean,
     ): NativeBridgeStartup {
         Log.i(TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
         dispose()
@@ -115,7 +123,11 @@ internal class VesperNativeJniBindings(
         val handle = VesperNativeJni.createSession(source.uri)
         check(handle != 0L) { "native session handle must not be zero" }
         sessionHandle = handle
-        val normalizedResource = openSourceNormalizerResourceForPlayback(source)
+        val normalizedResource =
+            openSourceNormalizerResourceForPlayback(
+                source,
+                enabled = systemPlaybackUsesSourceNormalizerResource,
+            )
         val playbackSource = normalizedResource?.playbackSource ?: source
         val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
         val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
@@ -143,13 +155,17 @@ internal class VesperNativeJniBindings(
                 .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build()
-        applyTrackPreferenceDefaults(exoPlayer, resolvedTrackPreferences)
+        applyTrackPreferenceDefaults(
+            exoPlayer = exoPlayer,
+            policy = resolvedTrackPreferences,
+            videoEnabled = systemPlaybackVideoEnabled,
+        )
         val listener = buildPlayerListener(resolvedTrackPreferences)
         val analytics = buildAnalyticsListener()
         exoPlayer.addListener(listener)
         exoPlayer.addAnalyticsListener(analytics)
         exoPlayer.setMediaItem(buildMediaItem(playbackSource))
-        attachedSurface?.let { surface ->
+        attachedSurface?.takeIf { systemPlaybackVideoEnabled }?.let { surface ->
             Log.i(TAG, "reusing attached surface for source=${source.uri}")
             exoPlayer.setVideoSurface(surface)
         }
@@ -172,11 +188,165 @@ internal class VesperNativeJniBindings(
         )
     }
 
+    override fun openNativeFramePipeline(
+        source: VesperPlayerSource,
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration,
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration,
+        surfaceKind: NativeVideoSurfaceKind,
+    ): Map<String, Any?>? {
+        closeNativeFramePipeline()
+        VesperNativeLibrary.ensureLoaded()
+        val packetSource = openNativeFramePacketSource(source)
+        var keepPacketSource = false
+        try {
+            val json =
+                VesperNativeJni.openNativeFramePipeline(
+                    packetSource.source.uri,
+                    sourceNormalizerConfiguration.modeOrdinal,
+                    sourceNormalizerConfiguration.pluginLibraryPaths.toTypedArray(),
+                    sourceNormalizerConfiguration.runtimeProfile,
+                    nativeFramePipelineConfiguration.modeWireName,
+                    nativeFramePipelineConfiguration.decoderPluginLibraryPaths.toTypedArray(),
+                    nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.toTypedArray(),
+                    nativeFramePipelineConfiguration.maxInFlightFrames ?: 0,
+                    surfaceKind.nativeFramePresenterProfileWireName,
+                ) ?: return null
+            val opened = parseNativeFramePipelineJson(json) ?: return null
+            val handle = (opened["handle"] as? Number)?.toLong() ?: 0L
+            check(handle != 0L) { "native-frame pipeline handle must not be zero" }
+            nativeFramePipelineHandle = handle
+            nativeFramePipelineStatus = opened
+            currentNativeFramePacketSource = packetSource
+            keepPacketSource = true
+            nativeFramePipelineOwnsSurface = true
+            player?.clearVideoSurface()
+            Log.i(
+                TAG,
+                "opened native-frame pipeline handle=$handle route=${opened["route"]}",
+            )
+            attachedSurface?.let { surface ->
+                attachNativeFramePipelineSurface(surface, surfaceKind)
+            }
+            return opened
+        } finally {
+            if (!keepPacketSource) {
+                packetSource.close()
+            }
+        }
+    }
+
+    override fun advanceNativeFramePipeline(): Map<String, Any?>? {
+        val handle = nativeFramePipelineHandle ?: return null
+        val json = VesperNativeJni.advanceNativeFramePipeline(handle) ?: return null
+        return parseNativeFramePipelineJson(json)?.let(::rememberNativeFramePipelineStatus)
+    }
+
+    override fun releaseNativeFramePipelineFrame(
+        frameHandle: Long,
+        presented: Boolean,
+    ): Map<String, Any?>? {
+        val handle = nativeFramePipelineHandle ?: return null
+        val json =
+            VesperNativeJni.releaseNativeFramePipelineFrame(handle, frameHandle, presented)
+                ?: return null
+        return parseNativeFramePipelineJson(json)?.let(::rememberNativeFramePipelineStatus)
+    }
+
+    override fun attachNativeFramePipelineSurface(
+        surface: Surface,
+        surfaceKind: NativeVideoSurfaceKind,
+    ): Map<String, Any?>? {
+        val handle = nativeFramePipelineHandle ?: return null
+        val json =
+                VesperNativeJni.attachNativeFramePipelineSurface(
+                    handle,
+                    surface,
+                    surfaceKind.nativeFramePresenterProfileWireName,
+                ) ?: return null
+        return parseNativeFramePipelineJson(json)?.let { status ->
+            val mergedStatus = rememberNativeFramePipelineStatus(status)
+            Log.i(
+                TAG,
+                "native-frame pipeline surface attached " +
+                    "surfaceAttached=${mergedStatus["surfaceAttached"]} " +
+                    "presenterReady=${mergedStatus["presenterReady"]} " +
+                    "presenterState=${mergedStatus["presenterState"]}",
+            )
+            mergedStatus
+        }
+    }
+
+    override fun detachNativeFramePipelineSurface(): Map<String, Any?>? {
+        val handle = nativeFramePipelineHandle ?: return null
+        val json = VesperNativeJni.detachNativeFramePipelineSurface(handle) ?: return null
+        return parseNativeFramePipelineJson(json)?.let(::rememberNativeFramePipelineStatus)
+    }
+
+    override fun flushNativeFramePipeline(): Map<String, Any?>? {
+        val handle = nativeFramePipelineHandle ?: return null
+        val json = VesperNativeJni.flushNativeFramePipeline(handle) ?: return null
+        return parseNativeFramePipelineJson(json)?.let(::rememberNativeFramePipelineStatus)
+    }
+
+    override fun seekNativeFramePipeline(positionMs: Long): Map<String, Any?>? {
+        val handle = nativeFramePipelineHandle ?: return null
+        val json = VesperNativeJni.seekNativeFramePipeline(handle, positionMs) ?: return null
+        return parseNativeFramePipelineJson(json)?.let(::rememberNativeFramePipelineStatus)
+    }
+
+    override fun currentNativeFramePipelineStatus(): Map<String, Any?>? =
+        nativeFramePipelineStatus
+
+    private fun rememberNativeFramePipelineStatus(status: Map<String, Any?>): Map<String, Any?> {
+        val previous = nativeFramePipelineStatus.orEmpty()
+        val retainedSurfaceState =
+            listOf(
+                "presenterReady",
+                "presenterConfigured",
+                "presenterState",
+                "surfaceAttached",
+                "surfaceProfile",
+            )
+                .mapNotNull { key ->
+                    if (status.containsKey(key)) null else previous[key]?.let { key to it }
+                }
+                .toMap()
+        val mergedStatus = retainedSurfaceState + status
+        nativeFramePipelineStatus = mergedStatus
+        return mergedStatus
+    }
+
+    override fun closeNativeFramePipeline() {
+        val handle = nativeFramePipelineHandle
+        nativeFramePipelineHandle = null
+        nativeFramePipelineStatus = null
+        nativeFramePipelineOwnsSurface = false
+        if (handle != null) {
+            runCatching { VesperNativeJni.closeNativeFramePipeline(handle) }
+                .onFailure { error ->
+                    Log.w(TAG, "failed to close native-frame pipeline session", error)
+                }
+            closeCurrentNativeFramePacketSource()
+            attachedSurface?.let { surface ->
+                if (surface.isValid) {
+                    player?.setVideoSurface(surface)
+                } else {
+                    Log.i(TAG, "native-frame close skipped restoring invalid Surface")
+                    player?.clearVideoSurface()
+                    attachedSurface = null
+                }
+            }
+        } else {
+            closeCurrentNativeFramePacketSource()
+        }
+    }
+
     override fun dispose() {
         if (!isDisposed.compareAndSet(false, true)) {
             return
         }
         Log.i(TAG, "dispose")
+        closeNativeFramePipeline()
         preloadCoordinator.dispose()
         detachSurface()
         playerListener?.let { listener ->
@@ -189,8 +359,12 @@ internal class VesperNativeJniBindings(
         analyticsListener = null
         systemPlaybackCoordinator.attachPlayer(null)
         val handle = sessionHandle
+        val playerToRelease = player
+        currentSourceNormalizerResource?.let { resource ->
+            detachPlayerFromSourceNormalizerResource(resource, playerToRelease)
+        }
         try {
-            runCatching { player?.release() }
+            runCatching { playerToRelease?.release() }
                 .onFailure { error -> Log.w(TAG, "failed to release ExoPlayer", error) }
         } finally {
             player = null
@@ -240,10 +414,15 @@ internal class VesperNativeJniBindings(
         Log.i(TAG, "attachSurface kind=$surfaceKind")
         recordBenchmark("surface_attach", mapOf("surfaceKind" to surfaceKind.name))
         attachedSurface = surface
-        player?.setVideoSurface(surface)
+        if (nativeFramePipelineOwnsSurface) {
+            player?.clearVideoSurface()
+        } else {
+            player?.setVideoSurface(surface)
+        }
         sessionHandle?.let { handle ->
             VesperNativeJni.attachSurface(handle, surface, surfaceKind.ordinal)
         }
+        attachNativeFramePipelineSurface(surface, surfaceKind)
         pushSnapshotToRust()
         notifyNativeUpdate()
     }
@@ -257,6 +436,7 @@ internal class VesperNativeJniBindings(
         player?.clearVideoSurface()
         attachedSurface = null
         sessionHandle?.let(VesperNativeJni::detachSurface)
+        detachNativeFramePipelineSurface()
         notifyNativeUpdate()
     }
 
@@ -415,6 +595,9 @@ internal class VesperNativeJniBindings(
                         TAG,
                         "apply native command: SetVideoTrackSelection mode=${command.selection.modeOrdinal} trackId=${command.selection.trackId}",
                     )
+                    if (nativeFramePipelineOwnsSurface) {
+                        return@forEach
+                    }
                     applyTrackSelectionCommand(
                         exoPlayer = exoPlayer,
                         kind = NativeTrackKind.Video,
@@ -448,6 +631,9 @@ internal class VesperNativeJniBindings(
                         TAG,
                         "apply native command: SetAbrPolicy mode=${command.policy.modeOrdinal} trackId=${command.policy.trackId}",
                     )
+                    if (nativeFramePipelineOwnsSurface) {
+                        return@forEach
+                    }
                     applyAbrPolicyCommand(exoPlayer, command.policy)
                 }
             }
@@ -502,7 +688,9 @@ internal class VesperNativeJniBindings(
                 Log.d(TAG, "onTracksChanged groups=${tracks.groups.size}")
                 recordBenchmark("tracks_changed", mapOf("groups" to tracks.groups.size.toString()))
                 player?.let { exoPlayer ->
-                    pendingTrackOverrides?.let { defaults ->
+                    pendingTrackOverrides
+                        ?.takeIf { !nativeFramePipelineOwnsSurface }
+                        ?.let { defaults ->
                         applyTrackPreferenceTrackOverrides(exoPlayer, defaults)
                         pendingTrackOverrides = null
                     }
@@ -805,9 +993,14 @@ internal class VesperNativeJniBindings(
 
     private fun openSourceNormalizerResourceForPlayback(
         source: VesperPlayerSource,
+        enabled: Boolean,
     ): NativeSourceNormalizerResource? {
         closeCurrentSourceNormalizerResource()
-        if (!sourceNormalizerConfiguration.shouldOpenNormalizedResource) {
+        if (!enabled) {
+            Log.i(TAG, "source normalizer resource playback skipped for SDK-managed native-frame route")
+            return null
+        }
+        if (!sourceNormalizerConfiguration.shouldOpenNormalizedResourceForPlayback(source)) {
             return null
         }
         VesperNativeLibrary.ensureLoaded()
@@ -842,11 +1035,49 @@ internal class VesperNativeJniBindings(
     private fun closeCurrentSourceNormalizerResource() {
         val resource = currentSourceNormalizerResource ?: return
         currentSourceNormalizerResource = null
+        detachPlayerFromSourceNormalizerResource(resource, player)
         resource.loopbackToken?.let(sourceNormalizerLoopbackServer::invalidate)
         runCatching { VesperNativeJni.disposeSourceNormalizerResource(resource.handle) }
             .onFailure { error ->
                 Log.w(TAG, "failed to dispose source normalizer resource session", error)
             }
+    }
+
+    private fun detachPlayerFromSourceNormalizerResource(
+        resource: NativeSourceNormalizerResource,
+        exoPlayer: ExoPlayer?,
+    ) {
+        if (exoPlayer == null) {
+            return
+        }
+        val currentUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
+        if (currentUri != resource.playbackSource.uri) {
+            return
+        }
+        runCatching {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
+        }.onFailure { error ->
+            Log.w(TAG, "failed to detach ExoPlayer from normalized resource playback", error)
+        }
+    }
+
+    private fun openNativeFramePacketSource(source: VesperPlayerSource): NativeFramePacketSource {
+        if (
+            source.protocol != VesperPlayerSourceProtocol.Content &&
+            !source.uri.startsWith("content://", ignoreCase = true)
+        ) {
+            return NativeFramePacketSource(source = source)
+        }
+        error(
+            "Android native-frame packet input requires a file:// or app-private file path. " +
+                "Copy content:// media with ContentResolver before enabling SDK-managed native-frame playback.",
+        )
+    }
+
+    private fun closeCurrentNativeFramePacketSource() {
+        currentNativeFramePacketSource?.close()
+        currentNativeFramePacketSource = null
     }
 
     private fun recordBenchmark(
@@ -863,6 +1094,12 @@ internal class VesperNativeJniBindings(
     }
 }
 
+private data class NativeFramePacketSource(
+    val source: VesperPlayerSource,
+) {
+    fun close() = Unit
+}
+
 private data class NativeSourceNormalizerResource(
     val handle: Long,
     val outputRoute: String,
@@ -874,10 +1111,35 @@ private data class NativeSourceNormalizerResource(
         get() = "SourceNormalizer $outputRoute"
 }
 
-private val VesperSourceNormalizerConfiguration.shouldOpenNormalizedResource: Boolean
+internal fun VesperSourceNormalizerConfiguration.shouldOpenNormalizedResourceForPlayback(
+    source: VesperPlayerSource,
+): Boolean {
+    if (
+        mode != VesperSourceNormalizerMode.PreferNormalized &&
+            mode != VesperSourceNormalizerMode.RequireNormalized
+    ) {
+        return false
+    }
+    if (source.isHostHandledNetworkSource) {
+        Log.i(
+            TAG,
+            "source normalizer resource playback skipped for host-handled network source=${source.uri}",
+        )
+        return false
+    }
+    return true
+}
+
+private val VesperPlayerSource.isHostHandledNetworkSource: Boolean
     get() =
-        mode == VesperSourceNormalizerMode.PreferNormalized ||
-            mode == VesperSourceNormalizerMode.RequireNormalized
+        kind == VesperPlayerSourceKind.Remote &&
+            (
+                protocol == VesperPlayerSourceProtocol.Progressive ||
+                    protocol == VesperPlayerSourceProtocol.Hls ||
+                    protocol == VesperPlayerSourceProtocol.Dash ||
+                    uri.startsWith("http://", ignoreCase = true) ||
+                    uri.startsWith("https://", ignoreCase = true)
+            )
 
 private const val DEFAULT_NORMALIZED_READ_BUFFER_BYTES = 4L * 1024L * 1024L
 
@@ -959,6 +1221,20 @@ private fun parseSourceNormalizerResource(
     }.onFailure { error ->
         Log.w(TAG, "failed to parse source normalizer resource open result", error)
     }.getOrNull()
+
+private fun parseNativeFramePipelineJson(json: String): Map<String, Any?>? =
+    runCatching {
+        jsonObjectToMap(JSONObject(json))
+    }.onFailure { error ->
+        Log.w(TAG, "failed to parse native-frame pipeline result", error)
+    }.getOrNull()
+
+private val NativeVideoSurfaceKind.nativeFramePresenterProfileWireName: String
+    get() =
+        when (this) {
+            NativeVideoSurfaceKind.SurfaceView -> "SurfaceView"
+            NativeVideoSurfaceKind.TextureView -> "SurfaceTexture"
+        }
 
 private fun buildLoadControl(
     bufferingPolicy: NativeBufferingPolicy,
@@ -1213,11 +1489,17 @@ private fun hasTrackBasedPreferenceOverrides(policy: VesperTrackPreferencePolicy
 private fun applyTrackPreferenceDefaults(
     exoPlayer: ExoPlayer,
     policy: VesperTrackPreferencePolicy,
+    videoEnabled: Boolean = true,
 ) {
     val builder = exoPlayer.trackSelectionParameters.buildUpon()
     applyAudioPreferenceDefaults(builder, policy)
     applySubtitlePreferenceDefaults(builder, policy)
-    applyAbrPreferenceDefaults(builder, policy.abrPolicy)
+    if (videoEnabled) {
+        applyAbrPreferenceDefaults(builder, policy.abrPolicy)
+    } else {
+        builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        builder.setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+    }
     exoPlayer.setTrackSelectionParameters(builder.build())
 }
 

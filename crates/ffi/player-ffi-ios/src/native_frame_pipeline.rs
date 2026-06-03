@@ -9,10 +9,11 @@ use player_plugin::{
     DecoderBitstreamFormat, DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrame,
     DecoderNativeHandleKind, DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
     FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorReceiveOutput,
-    FrameProcessorSession, FrameProcessorSessionConfig, FrameProcessorSubmitFrame,
-    FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame, NativeFrameMetadata,
-    NativeFramePipelineProfile, NativeHandleKind, SourceNormalizerPacketMediaKind,
-    SourceNormalizerPacketSeek, SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    FrameProcessorSession, FrameProcessorSessionConfig, FrameProcessorSessionRequirements,
+    FrameProcessorSubmitFrame, FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame,
+    NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
     SourceNormalizerReadPacketStatus,
 };
 use player_plugin_loader::{
@@ -1094,11 +1095,29 @@ fn open_packet_source_normalizer(
                 plugin.plugin_name()
             )
         })?;
+    let runtime_profile = configured_runtime_profile(configuration)
+        .unwrap_or_default()
+        .to_owned();
+    let requirements = SourceNormalizerPacketSessionRequirements {
+        runtime_profile: runtime_profile.clone(),
+        media_kind: Some(SourceNormalizerPacketMediaKind::Video),
+        codec: None,
+        bitstream_format: None,
+        require_seek: false,
+        require_flush: true,
+        require_lease_cleanup: true,
+    };
+    let missing_capabilities = requirements.missing_capabilities(&factory.packet_capabilities());
+    if !missing_capabilities.is_empty() {
+        return Err(format!(
+            "SourceNormalizer packet plugin `{}` does not satisfy session requirements: missing {}",
+            factory.name(),
+            missing_capabilities.join(", ")
+        ));
+    }
     let session = factory
         .open_packet_session(&SourceNormalizerPacketSessionConfig {
-            runtime_profile: configured_runtime_profile(configuration)
-                .unwrap_or_default()
-                .to_owned(),
+            runtime_profile,
             input: source.uri().to_owned(),
             headers: Vec::new(),
             startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT_MS),
@@ -1153,22 +1172,13 @@ fn open_frame_processor_chain(
             )
         })?;
         let capabilities = factory.capabilities();
-        if !capabilities.supports_video_frames {
+        let requirements = FrameProcessorSessionRequirements::native_video(input_metadata.clone());
+        let missing_capabilities = requirements.missing_capabilities(&capabilities);
+        if !missing_capabilities.is_empty() {
             return Err(format!(
-                "frame processor `{}` does not support video frames",
-                factory.name()
-            ));
-        }
-        if capabilities.may_change_dimensions {
-            return Err(format!(
-                "frame processor `{}` changes frame dimensions, which mobile native-frame v1 does not allow",
-                factory.name()
-            ));
-        }
-        if !capabilities.supports_input_metadata(&input_metadata) {
-            return Err(format!(
-                "frame processor `{}` does not accept CVPixelBuffer VideoToolbox input",
-                factory.name()
+                "frame processor `{}` does not satisfy session requirements for CVPixelBuffer VideoToolbox input: missing {}",
+                factory.name(),
+                missing_capabilities.join(", ")
             ));
         }
         let session = factory
@@ -1741,6 +1751,7 @@ mod tests {
                         output_formats: Vec::new(),
                     }],
                     supports_audio_frames: false,
+                    supports_pcm_frames: false,
                     ..DecoderCapabilities::default()
                 },
             ),
@@ -1754,6 +1765,7 @@ mod tests {
                         output_formats: vec![DecoderFrameFormat::F32],
                     }],
                     supports_audio_frames: true,
+                    supports_pcm_frames: true,
                     ..DecoderCapabilities::default()
                 },
             ),

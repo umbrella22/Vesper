@@ -29,6 +29,32 @@ internal object VesperNativeJni {
     ): String?
     external fun pollSourceNormalizerResource(sessionHandle: Long): String?
     external fun disposeSourceNormalizerResource(sessionHandle: Long)
+    external fun openNativeFramePipeline(
+        sourceUri: String,
+        sourceModeOrdinal: Int,
+        sourcePluginLibraryPaths: Array<String>,
+        runtimeProfile: String?,
+        nativeFrameMode: String,
+        decoderPluginLibraryPaths: Array<String>,
+        frameProcessorPluginLibraryPaths: Array<String>,
+        maxInFlightFrames: Int,
+        presenterProfile: String,
+    ): String?
+    external fun advanceNativeFramePipeline(sessionHandle: Long): String?
+    external fun releaseNativeFramePipelineFrame(
+        sessionHandle: Long,
+        frameHandle: Long,
+        presented: Boolean,
+    ): String?
+    external fun attachNativeFramePipelineSurface(
+        sessionHandle: Long,
+        surface: Surface,
+        surfaceKind: String,
+    ): String?
+    external fun detachNativeFramePipelineSurface(sessionHandle: Long): String?
+    external fun flushNativeFramePipeline(sessionHandle: Long): String?
+    external fun seekNativeFramePipeline(sessionHandle: Long, positionMs: Long): String?
+    external fun closeNativeFramePipeline(sessionHandle: Long)
     external fun createPlaylistSession(
         config: NativePlaylistConfig,
         preloadBudget: NativeResolvedPreloadBudgetPolicy,

@@ -120,6 +120,26 @@ class VesperPlayerAndroidPlugin :
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = linkedMapOf<String, PlayerSession>()
     private val downloadSessions = linkedMapOf<String, DownloadSession>()
+    private val surfaceHostLifecycle =
+        SurfaceHostLifecycleCoordinator<PlayerSession, FrameLayout>(
+            findSession = { playerId -> sessions[playerId] },
+            getHost = { session -> session.hostView },
+            setHost = { session, host -> session.hostView = host },
+            cancelPendingDetach = { session -> session.cancelPendingHostDetach() },
+            clearPendingDetach = { session -> session.clearPendingHostDetach() },
+            advanceDetachGeneration = { session -> session.advanceHostDetachGeneration() },
+            currentDetachGeneration = { session -> session.hostDetachGeneration },
+            schedulePendingDetach = { session, generation, action ->
+                session.pendingHostDetachJob = scope.launch {
+                    delay(HOST_DETACH_GRACE_DELAY_MS)
+                    action()
+                }
+            },
+            attachHost = { session, host -> session.controller.attachSurfaceHost(host) },
+            detachHost = { session, host -> session.controller.detachSurfaceHost(host) },
+            clearHostView = { host -> host.removeAllViews() },
+            emitSnapshot = { session -> emitSnapshot(session) },
+        )
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
@@ -438,6 +458,9 @@ class VesperPlayerAndroidPlugin :
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
         eventSink = events
+        sessions.values.forEach { session ->
+            session.lastEmittedSnapshot = null
+        }
         sessions.values.forEach(::emitSnapshot)
     }
 
@@ -976,14 +999,7 @@ class VesperPlayerAndroidPlugin :
             ) { _, _, _ ->
                 buildSnapshotMap(session)
             }.collect { snapshot ->
-                emitEvent(
-                    mapOf(
-                        "playerId" to session.id,
-                        "type" to "snapshot",
-                        "snapshot" to snapshot,
-                    ),
-                )
-                emitBenchmarkConsoleLog(session)
+                emitSnapshot(session, snapshot)
             }
         }
     }
@@ -997,11 +1013,28 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun emitSnapshot(session: PlayerSession) {
-        emitEvent(
+        emitSnapshot(session, buildSnapshotMap(session))
+    }
+
+    private fun emitSnapshot(
+        session: PlayerSession,
+        snapshot: Map<String, Any?>,
+    ) {
+        val sink = eventSink
+        if (sink == null) {
+            emitBenchmarkConsoleLog(session)
+            return
+        }
+        if (session.lastEmittedSnapshot == snapshot) {
+            emitBenchmarkConsoleLog(session)
+            return
+        }
+        session.lastEmittedSnapshot = snapshot
+        sink.success(
             mapOf(
                 "playerId" to session.id,
                 "type" to "snapshot",
-                "snapshot" to buildSnapshotMap(session),
+                "snapshot" to snapshot,
             ),
         )
         emitBenchmarkConsoleLog(session)
@@ -1207,52 +1240,16 @@ class VesperPlayerAndroidPlugin :
         )
 
     private fun bindSessionHost(playerId: String, host: FrameLayout) {
-        val session = sessions[playerId] ?: return
-        session.cancelPendingHostDetach()
-        session.advanceHostDetachGeneration()
-        if (session.hostView === host) {
-            session.controller.attachSurfaceHost(host)
-            emitSnapshot(session)
-            return
-        }
-
-        val previousHost = session.hostView
-        session.hostView = host
-        session.controller.attachSurfaceHost(host)
-        previousHost?.removeAllViews()
-        emitSnapshot(session)
+        surfaceHostLifecycle.bind(playerId, host)
     }
 
     private fun unbindSessionHost(playerId: String, host: FrameLayout) {
-        val session = sessions[playerId] ?: return
-        if (session.hostView !== host) {
-            return
-        }
-        session.cancelPendingHostDetach()
-        val generation = session.advanceHostDetachGeneration()
-        session.pendingHostDetachJob = scope.launch {
-            delay(HOST_DETACH_GRACE_DELAY_MS)
-            val currentSession = sessions[playerId] ?: return@launch
-            if (
-                currentSession !== session ||
-                currentSession.hostView !== host ||
-                currentSession.hostDetachGeneration != generation
-            ) {
-                return@launch
-            }
-            currentSession.controller.detachSurfaceHost(host)
-            currentSession.hostView = null
-            currentSession.pendingHostDetachJob = null
-            emitSnapshot(currentSession)
-        }
+        surfaceHostLifecycle.unbind(playerId, host)
     }
 
     private fun disposeSession(session: PlayerSession) {
         session.observerJob?.cancel()
-        session.cancelPendingHostDetach()
-        session.advanceHostDetachGeneration()
-        session.hostView?.let(session.controller::detachSurfaceHost)
-        session.hostView = null
+        surfaceHostLifecycle.detachSession(session)
         session.controller.dispose()
         emitBenchmarkConsoleLog(session, force = true)
         sessions.remove(session.id)

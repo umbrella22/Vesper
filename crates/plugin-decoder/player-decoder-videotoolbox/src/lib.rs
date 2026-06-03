@@ -12,9 +12,9 @@ use player_plugin::{
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements,
     DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
     DecoderSessionConfig, DecoderSessionInfo, NativeFramePipelineProfile,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_V3, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-    VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperDecoderOpenSessionResult,
+    VesperDecoderPluginApiV5, VesperDecoderReceiveNativeFrameResult, VesperPluginBytes,
+    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-decoder-videotoolbox\0";
@@ -22,7 +22,7 @@ const VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED: bool =
     cfg!(any(target_os = "macos", target_os = "ios"));
 
 struct PluginBundle {
-    api: VesperDecoderPluginApiV2,
+    api: VesperDecoderPluginApiV5,
     descriptor: VesperPluginDescriptor,
 }
 
@@ -33,7 +33,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 
 fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(PluginBundle {
-        api: VesperDecoderPluginApiV2 {
+        api: VesperDecoderPluginApiV5 {
             context: std::ptr::null_mut(),
             destroy: None,
             name: Some(decoder_name),
@@ -46,15 +46,17 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             release_native_frame: Some(decoder_release_native_frame),
             flush_session: Some(decoder_flush_session),
             close_session: Some(decoder_close_session),
+            receive_pcm_frame: None,
+            release_native_frame2: None,
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V3,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
     });
-    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV2).cast::<c_void>();
+    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV5).cast::<c_void>();
     let bundle = Box::leak(bundle);
     &bundle.descriptor
 }
@@ -174,7 +176,9 @@ fn decoder_capabilities() -> DecoderCapabilities {
         supports_hardware_decode: VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED,
         supports_cpu_video_frames: false,
         supports_audio_frames: false,
+        supports_pcm_frames: false,
         supports_gpu_handles: VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED,
+        supports_presentation_release: false,
         supports_flush: true,
         supports_drain: true,
         max_sessions: None,

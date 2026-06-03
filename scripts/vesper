@@ -10,7 +10,7 @@ Usage: scripts/vesper <group> <command> [args...]
 Groups:
   ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
-  android  jni | aar | remux-plugin | source-normalizer-plugin | frame-processor-plugin | stage-release | sample-apks
+  android  jni | aar | remux-plugin | source-normalizer-plugin | decoder-mediacodec-plugin | frame-processor-plugin | stage-release | sample-apks
   ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim | verify-native-frame
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux
@@ -58,6 +58,9 @@ case "$group:$command" in
     ;;
   android:source-normalizer-plugin)
     exec "$SCRIPT_DIR/android/build-player-source-normalizer-ffmpeg-plugin.sh" "$@"
+    ;;
+  android:decoder-mediacodec-plugin)
+    exec "$SCRIPT_DIR/android/build-player-decoder-mediacodec-plugin.sh" "$@"
     ;;
   android:frame-processor-plugin)
     exec "$SCRIPT_DIR/android/build-player-frame-processor-diagnostic-plugin.sh" "$@"

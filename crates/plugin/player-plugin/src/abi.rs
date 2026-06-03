@@ -251,7 +251,7 @@ unsafe impl Sync for VesperBenchmarkSinkApi {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperDecoderPluginApiV2::open_session_json`.
+/// Result returned by the current decoder plugin ABI `open_session_json`.
 ///
 /// When `status` is `Success`, `session` must be a plugin-owned opaque session
 /// pointer and `payload` may encode a `DecoderSessionInfo` JSON document. When
@@ -275,7 +275,7 @@ impl Default for VesperDecoderOpenSessionResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperDecoderPluginApiV2::receive_native_frame`.
+/// Result returned by the current decoder plugin ABI `receive_native_frame`.
 ///
 /// On success, `metadata` must encode a `DecoderReceiveNativeFrameMetadata`
 /// JSON document. When that metadata reports a frame, `handle` is a plugin-owned
@@ -300,7 +300,7 @@ impl Default for VesperDecoderReceiveNativeFrameResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperDecoderPluginApiV4::receive_pcm_frame`.
+/// Result returned by the current decoder plugin ABI `receive_pcm_frame`.
 ///
 /// On success, `metadata` must encode a `DecoderReceivePcmFrameMetadata`
 /// JSON document. When that metadata reports a frame, `data` owns the decoded
@@ -467,7 +467,90 @@ unsafe impl Sync for VesperDecoderPluginApiV4 {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperFrameProcessorPluginApiV1::open_session_json`.
+/// Current decoder ABI table.
+///
+/// ABI version now represents only this C table's function signatures and
+/// layout. Functional differences such as PCM output or presentation-aware
+/// release must be advertised through `DecoderCapabilities`.
+pub struct VesperDecoderPluginApiV5 {
+    pub context: *mut c_void,
+    pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
+    pub name: Option<unsafe extern "C" fn(context: *mut c_void) -> *const c_char>,
+    pub capabilities_json: Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub native_requirements_json:
+        Option<unsafe extern "C" fn(context: *mut c_void) -> VesperPluginBytes>,
+    pub open_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            config_json: *const u8,
+            config_json_len: usize,
+        ) -> VesperDecoderOpenSessionResult,
+    >,
+    pub send_packet: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            packet_json: *const u8,
+            packet_json_len: usize,
+            packet_data: *const u8,
+            packet_data_len: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub receive_native_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperDecoderReceiveNativeFrameResult,
+    >,
+    pub release_native_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            handle_kind: u32,
+            handle: usize,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub flush_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub close_session: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperPluginProcessResult,
+    >,
+    pub free_bytes: Option<unsafe extern "C" fn(context: *mut c_void, payload: VesperPluginBytes)>,
+    pub receive_pcm_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+        ) -> VesperDecoderReceivePcmFrameResult,
+    >,
+    pub release_native_frame2: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session: *mut c_void,
+            handle_kind: u32,
+            handle: usize,
+            presented: bool,
+        ) -> VesperPluginProcessResult,
+    >,
+}
+
+// SAFETY: host-side wrappers only expose this API behind
+// `NativeDecoderPluginFactory`, and plugin authors must uphold the declared
+// `Send + Sync` contract for the underlying context pointer and callbacks.
+unsafe impl Send for VesperDecoderPluginApiV5 {}
+// SAFETY: same reasoning as above; the plugin context is required to be safe for
+// concurrent shared access when exposed as a decoder plugin.
+unsafe impl Sync for VesperDecoderPluginApiV5 {}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+/// Result returned by the current frame processor plugin ABI `open_session_json`.
 ///
 /// When `status` is `Success`, `session` must be a plugin-owned opaque session
 /// pointer and `payload` may encode a `FrameProcessorSessionInfo` JSON document.
@@ -491,7 +574,7 @@ impl Default for VesperFrameProcessorOpenSessionResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperFrameProcessorPluginApiV1::receive_frame`.
+/// Result returned by the current frame processor plugin ABI `receive_frame`.
 ///
 /// On success, `metadata` must encode a `FrameProcessorReceiveFrameMetadata`
 /// JSON document. When that metadata reports a frame, `handle` is a
@@ -582,7 +665,7 @@ unsafe impl Sync for VesperFrameProcessorPluginApiV1 {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperSourceNormalizerPluginApiV2::open_packet_session_json`.
+/// Result returned by the current source normalizer plugin ABI `open_packet_session_json`.
 ///
 /// When `status` is `Success`, `session` must be a plugin-owned opaque session
 /// pointer and `payload` must encode a `SourceNormalizerPacketStreamInfo` JSON
@@ -606,7 +689,7 @@ impl Default for VesperSourceNormalizerOpenPacketSessionResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperSourceNormalizerPluginApiV3::open_resource_session_json`.
+/// Result returned by the current source normalizer plugin ABI `open_resource_session_json`.
 ///
 /// When `status` is `Success`, `session` must be a plugin-owned opaque session
 /// pointer and `payload` must encode a `SourceNormalizerResourceSessionInfo`
@@ -630,7 +713,7 @@ impl Default for VesperSourceNormalizerOpenResourceSessionResult {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// Result returned by `VesperSourceNormalizerPluginApiV2::read_packet`.
+/// Result returned by the current source normalizer plugin ABI `read_packet`.
 ///
 /// On success, `metadata` must encode `SourceNormalizerReadPacketMetadata`.
 /// When that metadata reports a packet, `data/data_len` borrow plugin-owned
@@ -722,12 +805,12 @@ unsafe impl Sync for VesperSourceNormalizerPluginApiV2 {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-/// C ABI exposed by a source normalizer plugin with resource-output support.
+/// Current C ABI exposed by a source normalizer plugin.
 ///
-/// V3 preserves the V2 packet callbacks and adds optional disk-backed resource
-/// sessions for fMP4 local stream and short-window HLS routes. Resource session
-/// payloads are JSON-encoded and all returned byte buffers must be reclaimed
-/// with the matching `free_bytes` callback from the same dynamic library.
+/// The current source normalizer signature contains both packet-stream and
+/// resource-output callback groups. Plugins may support one or both groups, but
+/// each supported group must be complete and must be advertised through the
+/// corresponding capabilities payload.
 pub struct VesperSourceNormalizerPluginApiV3 {
     pub context: *mut c_void,
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
@@ -830,19 +913,29 @@ pub type VesperPluginEntryPoint = unsafe extern "C" fn() -> *const VesperPluginD
 
 /// ABI version used by non post-download plugin kinds.
 pub const VESPER_PLUGIN_ABI_VERSION_V2: u32 = 2;
-/// Legacy native-frame decoder ABI version.
+/// Historical native-frame decoder ABI version.
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V2: u32 = VESPER_PLUGIN_ABI_VERSION_V2;
-/// Native-frame decoder ABI with typed native context payloads.
+/// Historical native-frame decoder ABI with typed native context payloads.
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V3: u32 = 3;
-/// Native-frame decoder ABI with optional decoded PCM audio output.
+/// Historical native-frame decoder ABI with optional decoded PCM audio output.
 pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V4: u32 = 4;
+/// Current decoder ABI signature version.
+pub const VESPER_DECODER_PLUGIN_ABI_VERSION_V5: u32 = 5;
+/// Current decoder ABI signature version.
+pub const VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT: u32 = VESPER_DECODER_PLUGIN_ABI_VERSION_V5;
 /// ABI version used by post-download processors with assembly support.
 pub const VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3: u32 = 3;
-/// Initial ABI version used by native-frame processor plugins.
+/// Current native-frame processor ABI signature version.
 pub const VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1: u32 = 1;
-/// ABI version used by packet-stream source normalizer plugins.
+/// Current native-frame processor ABI signature version.
+pub const VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT: u32 =
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_V1;
+/// Historical packet-stream source normalizer ABI version.
 pub const VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2: u32 = 2;
-/// Source normalizer ABI with disk-backed resource-output sessions.
+/// Current source normalizer ABI signature version.
 pub const VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3: u32 = 3;
+/// Current source normalizer ABI signature version.
+pub const VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT: u32 =
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3;
 /// Exported symbol name used to locate the plugin descriptor entry point.
 pub const VESPER_PLUGIN_ENTRY_SYMBOL: &[u8] = b"vesper_plugin_entry\0";

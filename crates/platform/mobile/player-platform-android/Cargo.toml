@@ -10,5 +10,8 @@ player-model = { path = "../../../model/player-model" }
 player-plugin = { path = "../../../plugin/player-plugin" }
 player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }
 player-platform-mobile = { path = "../../common/player-platform-mobile" }
+player-platform-native-frame = { path = "../../common/player-platform-native-frame" }
 player-runtime = { path = "../../../core/player-runtime" }
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true

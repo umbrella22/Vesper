@@ -60,6 +60,13 @@ impl DynamicNativeDecoderPluginFactory {
                 "decoder plugin `{name}` advertises PCM frame output but does not export receive_pcm_frame"
             )));
         }
+        if capabilities.supports_presentation_release
+            && api.release_native_frame_with_presentation.is_none()
+        {
+            return Err(PluginLoadError::CapabilitiesAbiViolation(format!(
+                "decoder plugin `{name}` advertises presentation-aware native frame release but does not export release_native_frame2"
+            )));
+        }
         let native_requirements = decode_plugin_bytes::<DecoderNativeRequirements>(
             // SAFETY: the validated API guarantees `native_requirements_json`
             // and `free_bytes` are present and use the shared bytes ownership
@@ -83,7 +90,7 @@ impl DynamicNativeDecoderPluginFactory {
 }
 
 fn decoder_capabilities_advertise_pcm_frames(capabilities: &DecoderCapabilities) -> bool {
-    capabilities.supports_audio_frames
+    (capabilities.supports_pcm_frames || capabilities.supports_audio_frames)
         && capabilities.codecs.iter().any(|codec| {
             codec.media_kind == DecoderMediaKind::Audio
                 && codec.output_formats.iter().any(|format| {
@@ -103,6 +110,10 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
 
     fn native_requirements(&self) -> DecoderNativeRequirements {
         self.inner.native_requirements.clone()
+    }
+
+    fn supports_native_frame_presentation_release(&self) -> bool {
+        self.inner.capabilities.supports_presentation_release
     }
 
     fn open_native_session(
@@ -239,20 +250,46 @@ impl DynamicNativeDecoderSession {
         &mut self,
         frame: DecoderNativeFrame,
         operation: &'static str,
+        presented: bool,
     ) -> Result<(), DecoderError> {
         let handle_kind =
             native_handle_kind_code(&NativeHandleKind::from(frame.metadata.handle_kind.clone()))
                 .map_err(DecoderError::abi_violation)?;
-        // SAFETY: the validated plugin API guarantees `release_native_frame` is
-        // present. The frame handle was previously returned by this same plugin
-        // session and tracked by the loader.
-        let result = unsafe {
-            (self.factory.api.release_native_frame)(
-                self.factory.api.context,
-                self.session,
-                handle_kind,
-                frame.handle,
-            )
+        let result = if self.factory.capabilities.supports_presentation_release {
+            let release_native_frame_with_presentation = self
+                .factory
+                .api
+                .release_native_frame_with_presentation
+                .ok_or_else(|| {
+                    DecoderError::abi_violation(format!(
+                        "native decoder plugin `{}` advertises presentation-aware release but does not export release_native_frame2",
+                        self.factory.name
+                    ))
+                })?;
+            // SAFETY: the current decoder ABI callback follows the same synchronous
+            // ownership contract as legacy `release_native_frame` and accepts
+            // the render/discard decision as an extra ABI-safe bool.
+            unsafe {
+                release_native_frame_with_presentation(
+                    self.factory.api.context,
+                    self.session,
+                    handle_kind,
+                    frame.handle,
+                    presented,
+                )
+            }
+        } else {
+            // SAFETY: the validated plugin API guarantees `release_native_frame`
+            // is present. The frame handle was returned by this same plugin
+            // session and tracked by the loader.
+            unsafe {
+                (self.factory.api.release_native_frame)(
+                    self.factory.api.context,
+                    self.session,
+                    handle_kind,
+                    frame.handle,
+                )
+            }
         };
         self.decode_operation_result(result, operation)
     }
@@ -263,7 +300,7 @@ impl DynamicNativeDecoderSession {
     ) -> Result<(), DecoderError> {
         let mut first_error = None;
         while let Some(frame) = self.outstanding_frames.pop() {
-            let release_result = self.release_tracked_native_frame(frame.clone(), operation);
+            let release_result = self.release_tracked_native_frame(frame.clone(), operation, false);
             if release_result.is_err() {
                 self.outstanding_frames.push(frame);
             }
@@ -495,7 +532,17 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
     fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
         self.ensure_open()?;
         let frame = self.take_outstanding_native_frame(&frame)?;
-        self.release_tracked_native_frame(frame, "release_native_frame")
+        self.release_tracked_native_frame(frame, "release_native_frame", false)
+    }
+
+    fn release_native_frame_with_presentation(
+        &mut self,
+        frame: DecoderNativeFrame,
+        presented: bool,
+    ) -> Result<(), DecoderError> {
+        self.ensure_open()?;
+        let frame = self.take_outstanding_native_frame(&frame)?;
+        self.release_tracked_native_frame(frame, "release_native_frame", presented)
     }
 
     fn flush(&mut self) -> Result<(), DecoderError> {

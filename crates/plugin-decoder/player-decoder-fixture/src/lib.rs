@@ -10,9 +10,10 @@ use player_plugin::{
     DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderPcmFrameMetadata,
     DecoderPcmSampleLayout, DecoderReceiveNativeFrameMetadata, DecoderReceivePcmFrameMetadata,
     DecoderSessionConfig, DecoderSessionInfo, NativeFramePipelineProfile,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_V4, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV4,
-    VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperDecoderOpenSessionResult,
+    VesperDecoderPluginApiV5, VesperDecoderReceiveNativeFrameResult,
+    VesperDecoderReceivePcmFrameResult, VesperPluginBytes, VesperPluginDescriptor,
+    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-decoder-fixture\0";
@@ -20,7 +21,7 @@ const CONFIGURED_CODECS_ENV: &str = "VESPER_DECODER_FIXTURE_CODECS";
 const DEFAULT_VIDEO_CODEC: &str = "fixture-video";
 
 struct NativePluginBundle {
-    api: VesperDecoderPluginApiV4,
+    api: VesperDecoderPluginApiV5,
     descriptor: VesperPluginDescriptor,
 }
 
@@ -39,7 +40,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 
 fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(NativePluginBundle {
-        api: VesperDecoderPluginApiV4 {
+        api: VesperDecoderPluginApiV5 {
             context: std::ptr::null_mut(),
             destroy: None,
             name: Some(decoder_name),
@@ -53,15 +54,16 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             flush_session: Some(decoder_flush_session),
             close_session: Some(decoder_close_session),
             receive_pcm_frame: Some(decoder_receive_pcm_frame),
+            release_native_frame2: None,
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_V4,
+            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
             plugin_kind: VesperPluginKind::Decoder,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
     });
-    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV4).cast::<c_void>();
+    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV5).cast::<c_void>();
     let bundle = Box::leak(bundle);
     &bundle.descriptor
 }
@@ -327,7 +329,9 @@ fn decoder_capabilities() -> DecoderCapabilities {
         supports_hardware_decode: false,
         supports_cpu_video_frames: true,
         supports_audio_frames: true,
+        supports_pcm_frames: true,
         supports_gpu_handles: false,
+        supports_presentation_release: false,
         supports_flush: true,
         supports_drain: true,
         max_sessions: Some(1),
@@ -501,7 +505,7 @@ mod tests {
     use player_plugin::{
         DecoderError, DecoderFrameFormat, DecoderMediaKind, DecoderPacket,
         DecoderReceiveFrameStatus, DecoderReceivePcmFrameMetadata, DecoderSessionConfig,
-        VESPER_DECODER_PLUGIN_ABI_VERSION_V4, VesperPluginKind, VesperPluginResultStatus,
+        VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginKind, VesperPluginResultStatus,
     };
     use std::ffi::c_void;
 
@@ -511,7 +515,10 @@ mod tests {
         // pointer or null; this test immediately borrows it.
         let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
 
-        assert_eq!(descriptor.abi_version, VESPER_DECODER_PLUGIN_ABI_VERSION_V4);
+        assert_eq!(
+            descriptor.abi_version,
+            VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT
+        );
         assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());

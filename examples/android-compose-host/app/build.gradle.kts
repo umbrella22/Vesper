@@ -16,6 +16,10 @@ val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
 val playerSourceNormalizerPluginJniLibsDir =
     layout.buildDirectory.dir("generated/playerSourceNormalizerFfmpeg/jniLibs")
 val playerSourceNormalizerPluginJniLibsDirFile = playerSourceNormalizerPluginJniLibsDir.get().asFile
+val playerDecoderMediaCodecPluginJniLibsDir =
+    layout.buildDirectory.dir("generated/playerDecoderMediaCodec/jniLibs")
+val playerDecoderMediaCodecPluginJniLibsDirFile =
+    playerDecoderMediaCodecPluginJniLibsDir.get().asFile
 val playerFrameProcessorDiagnosticPluginJniLibsDir =
     layout.buildDirectory.dir("generated/playerFrameProcessorDiagnostic/jniLibs")
 val playerFrameProcessorDiagnosticPluginJniLibsDirFile =
@@ -70,6 +74,9 @@ android {
             playerSourceNormalizerPluginJniLibsDirFile.absolutePath,
         )
         getByName("main").jniLibs.directories.add(
+            playerDecoderMediaCodecPluginJniLibsDirFile.absolutePath,
+        )
+        getByName("main").jniLibs.directories.add(
             playerFrameProcessorDiagnosticPluginJniLibsDirFile.absolutePath,
         )
     }
@@ -99,8 +106,6 @@ dependencies {
     implementation(project(":vesper-player-kit-compose-ui"))
     implementation(project(":vesper-player-kit-external-playback"))
     implementation(project(":vesper-player-kit-ffmpeg-runtime"))
-    implementation(project(":vesper-player-kit-source-normalizer-ffmpeg"))
-    implementation(project(":vesper-player-kit-frame-processor-diagnostic"))
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
@@ -194,9 +199,37 @@ val buildPlayerFrameProcessorDiagnosticAndroidPlugin by tasks.registering(Exec::
     }
 }
 
+val buildPlayerDecoderMediaCodecAndroidPlugin by tasks.registering(Exec::class) {
+    description = "Builds the Android player-decoder-mediacodec plugin libraries used by the example host."
+    group = "vesper"
+
+    val scriptFile = workspaceRootDir.file("scripts/android/build-player-decoder-mediacodec-plugin.sh")
+
+    inputs.file(scriptFile)
+    inputs.file(workspaceRootDir.file("Cargo.toml"))
+    inputs.file(workspaceRootDir.file("Cargo.lock"))
+    inputs.dir(workspaceRootDir.dir("crates/plugin-decoder/player-decoder-mediacodec"))
+    inputs.dir(workspaceRootDir.dir("crates/plugin/player-plugin"))
+    inputs.property("abis", configuredAndroidAbis)
+    inputs.property("profile", playerFfmpegPluginBuildProfile)
+    outputs.dir(playerDecoderMediaCodecPluginJniLibsDirFile)
+
+    workingDir = workspaceRootDir.asFile
+    environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
+
+    doFirst {
+        commandLine(
+            scriptFile.asFile.absolutePath,
+            playerDecoderMediaCodecPluginJniLibsDirFile.absolutePath,
+            playerFfmpegPluginBuildProfile.get(),
+        )
+    }
+}
+
 tasks.named("preBuild").configure {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
+    dependsOn(buildPlayerDecoderMediaCodecAndroidPlugin)
     dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
 }
 
@@ -206,6 +239,7 @@ tasks.matching { task ->
 }.configureEach {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
+    dependsOn(buildPlayerDecoderMediaCodecAndroidPlugin)
     dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
 }
 

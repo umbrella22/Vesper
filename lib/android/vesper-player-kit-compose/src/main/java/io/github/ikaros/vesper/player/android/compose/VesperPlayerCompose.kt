@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.player.android.compose
 
+import android.util.Log
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.foundation.layout.fillMaxSize
@@ -7,7 +8,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
@@ -39,7 +42,6 @@ fun rememberVesperPlayerController(
     val controller = remember(
         isPreview,
         context,
-        initialSource,
         decoderBackend,
         surfaceKind,
         keepScreenOnDuringPlayback,
@@ -104,7 +106,31 @@ fun VesperPlayerSurface(
     modifier: Modifier = Modifier,
     manageControllerLifecycle: Boolean = true,
 ) {
-    val surfaceHostRef = remember { arrayOfNulls<ViewGroup>(1) }
+    var surfaceHost by remember { mutableStateOf<ViewGroup?>(null) }
+    val attachedControllerRef = remember { arrayOfNulls<VesperPlayerController>(1) }
+
+    fun attachControllerToHost(
+        host: ViewGroup,
+        nextController: VesperPlayerController,
+    ) {
+        val previousController = attachedControllerRef[0]
+        if (previousController !== nextController) {
+            Log.d(
+                TAG,
+                "surface composable switching controller previous=${previousController?.identity()} " +
+                    "next=${nextController.identity()}",
+            )
+            previousController?.detachSurfaceHost(host)
+            attachedControllerRef[0] = nextController
+        }
+        Log.d(
+            TAG,
+            "surface composable attach controller=${nextController.identity()} " +
+                "hostAttached=${host.isAttachedToWindow} hostSize=${host.width}x${host.height}",
+        )
+        nextController.attachSurfaceHost(host)
+    }
+
     if (manageControllerLifecycle) {
         DisposableEffect(controller) {
             controller.initialize()
@@ -115,21 +141,42 @@ fun VesperPlayerSurface(
         modifier = modifier.fillMaxSize(),
         factory = { context ->
             object : FrameLayout(context) {}.apply {
-                surfaceHostRef[0] = this
-                controller.attachSurfaceHost(this)
+                Log.d(TAG, "surface composable factory controller=${controller.identity()}")
+                surfaceHost = this
+                attachControllerToHost(this, controller)
             }
         },
         update = { host ->
-            surfaceHostRef[0] = host
-            controller.attachSurfaceHost(host)
+            Log.d(TAG, "surface composable update controller=${controller.identity()}")
+            surfaceHost = host
+            attachControllerToHost(host, controller)
         },
     )
-    DisposableEffect(controller) {
+    surfaceHost?.let { host ->
+        DisposableEffect(controller, host) {
+            attachControllerToHost(host, controller)
+            onDispose {
+                if (attachedControllerRef[0] === controller) {
+                    Log.d(TAG, "surface composable dispose controller=${controller.identity()}")
+                    controller.detachSurfaceHost(host)
+                    attachedControllerRef[0] = null
+                }
+            }
+        }
+    }
+    DisposableEffect(Unit) {
         onDispose {
-            controller.detachSurfaceHost(surfaceHostRef[0])
+            Log.d(TAG, "surface composable final dispose")
+            attachedControllerRef[0]?.detachSurfaceHost(surfaceHost)
+            attachedControllerRef[0] = null
         }
     }
 }
 
 private fun shouldRefreshProgress(uiState: PlayerHostUiState): Boolean =
     uiState.playbackState == PlaybackStateUi.Playing || uiState.isBuffering
+
+private fun VesperPlayerController.identity(): String =
+    Integer.toHexString(System.identityHashCode(this))
+
+private const val TAG = "VesperPlayerAndroidHost"

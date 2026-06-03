@@ -62,7 +62,7 @@ internal class VesperSourceNormalizerLoopbackServer(
         }
         return VesperNormalizedResourceHandle(
             token = token,
-            playbackUri = "http://127.0.0.1:${socket.localPort}$path",
+            playbackUri = "http://$LOOPBACK_HOST:${socket.localPort}$path",
         )
     }
 
@@ -89,7 +89,7 @@ internal class VesperSourceNormalizerLoopbackServer(
         if (running.get()) {
             return
         }
-        val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+        val socket = ServerSocket(0, 50, InetAddress.getByName(LOOPBACK_HOST))
         serverSocket = socket
         requestExecutor = Executors.newFixedThreadPool(DEFAULT_MAX_REQUEST_THREADS) { runnable ->
             Thread(runnable, "vesper-source-normalizer-loopback-request").apply {
@@ -571,4 +571,5 @@ private const val DEFAULT_GROWING_READ_WAIT_MILLIS = 2_000L
 private const val DEFAULT_GROWING_READ_POLL_MILLIS = 25L
 private const val DEFAULT_GROWING_READ_STABLE_WAIT_MILLIS = 250L
 private const val DEFAULT_MAX_REQUEST_THREADS = 8
+private const val LOOPBACK_HOST = "127.0.0.1"
 private const val TAG = "VesperSourceNormalizer"

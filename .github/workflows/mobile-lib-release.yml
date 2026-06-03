@@ -183,16 +183,27 @@ jobs:
           done < <(find release-assets/android -type f -name '*.aar' -print0)
 
           source_normalizer="release-assets/android/VesperPlayerKitSourceNormalizerFfmpeg-android-${{ matrix.abi }}.aar"
+          decoder_mediacodec="release-assets/android/VesperPlayerKitDecoderMediaCodec-android-${{ matrix.abi }}.aar"
           frame_processor="release-assets/android/VesperPlayerKitFrameProcessorDiagnostic-android-${{ matrix.abi }}.aar"
           runtime="release-assets/android/VesperPlayerKitFfmpegRuntime-android-${{ matrix.abi }}.aar"
 
-          for required in "$source_normalizer" "$frame_processor" "$runtime"; do
+          for required in "$source_normalizer" "$decoder_mediacodec" "$frame_processor" "$runtime"; do
             if [[ ! -f "$required" ]]; then
               echo "Missing expected Android optional artifact: $required" >&2
               exit 1
             fi
           done
 
+          if ! unzip -Z1 "$decoder_mediacodec" | grep -q '^jni/${{ matrix.abi }}/libplayer_decoder_mediacodec\.so$'; then
+            echo "Android MediaCodec decoder AAR is missing libplayer_decoder_mediacodec.so." >&2
+            unzip -Z1 "$decoder_mediacodec" >&2
+            exit 1
+          fi
+          if unzip -Z1 "$decoder_mediacodec" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >/dev/null; then
+            echo "Android MediaCodec decoder AAR must not bundle FFmpeg runtime libraries." >&2
+            unzip -Z1 "$decoder_mediacodec" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >&2
+            exit 1
+          fi
           if unzip -Z1 "$source_normalizer" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >/dev/null; then
             echo "Android SourceNormalizer plugin AAR must not bundle FFmpeg runtime libraries." >&2
             unzip -Z1 "$source_normalizer" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >&2

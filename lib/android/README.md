@@ -10,16 +10,18 @@ artifacts and consumable from any Android app or library.
 | `vesper-player-kit`            | Core Android library: `VesperPlayerController`, `VesperPlayerSource`, `VesperTrackSelection`, `VesperDownloadManager`, JNI-backed `ExoPlayer` bridge, `libvesper_player_android.so` |
 | `vesper-player-kit-external-playback` | Optional Google Cast, DLNA / UPnP AV discovery, local HTTP relay, relay FFmpeg adaptation JNI, route button, and default Cast options provider                              |
 | `vesper-player-kit-ffmpeg-runtime`    | Optional FFmpeg runtime AAR used by download remux and external playback relay remux                                                                                        |
+| `vesper-player-kit-decoder-mediacodec` | Optional MediaCodec decoder plugin AAR used by the explicit SDK-managed native-frame route; it does not bundle FFmpeg runtime libraries                                    |
 | `vesper-player-kit-source-normalizer-ffmpeg` | Optional SourceNormalizer FFmpeg plugin AAR for diagnostics, source preflight, and opt-in normalized-resource playback; depends on the shared FFmpeg runtime |
-| `vesper-player-kit-frame-processor-diagnostic` | Optional FrameProcessor diagnostic plugin AAR for capability probing only; it does not open frame sessions or participate in playback                                  |
+| `vesper-player-kit-frame-processor-diagnostic` | Optional FrameProcessor diagnostic plugin AAR for capability probing and opt-in SDK-managed native-frame processing; it does not bundle FFmpeg runtime libraries |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
-The external playback, FFmpeg runtime, SourceNormalizer plugin, FrameProcessor
-diagnostic plugin, Compose adapter, and higher-level Compose UI modules are
+The external playback, FFmpeg runtime, MediaCodec decoder plugin,
+SourceNormalizer plugin, FrameProcessor diagnostic plugin, Compose adapter, and
+higher-level Compose UI modules are
 optional. View-based or non-Compose hosts can depend on `vesper-player-kit`
 alone without pulling in Google Play Services, Cast Framework, DLNA discovery,
-FFmpeg, plugin diagnostics, Compose, or Material3.
+FFmpeg, native-frame plugins, plugin diagnostics, Compose, or Material3.
 
 Kotlin namespaces:
 
@@ -40,6 +42,7 @@ GitHub Releases publish the following artifacts via
 - `VesperPlayerKitComposeUi-android-arm64-v8a.aar`
 - `VesperPlayerKitExternalPlayback-android-arm64-v8a.aar`
 - `VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar`
+- `VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar`
 - `VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar`
 - `VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar`
 
@@ -70,6 +73,9 @@ Without a Gradle CLI, open `lib/android` in Android Studio and run:
 - `:vesper-player-kit:assembleRelease`
 - `:vesper-player-kit-external-playback:assembleRelease`
 - `:vesper-player-kit-ffmpeg-runtime:assembleRelease`
+- `:vesper-player-kit-decoder-mediacodec:assembleRelease`
+- `:vesper-player-kit-source-normalizer-ffmpeg:assembleRelease`
+- `:vesper-player-kit-frame-processor-diagnostic:assembleRelease`
 - `:vesper-player-kit-compose:assembleRelease`
 - `:vesper-player-kit-compose-ui:assembleRelease`
 
@@ -240,6 +246,10 @@ Optional Vesper FFmpeg features use a split runtime:
 - `vesper-player-kit-external-playback` contains the Cast, DLNA, relay, and
   relay FFmpeg adaptation APIs/JNI, but it must not carry its own `libav*`
   copies.
+- `vesper-player-kit-decoder-mediacodec` contains only
+  `libplayer_decoder_mediacodec.so`. It provides the Android hardware decoder
+  plugin for the explicit SDK-managed native-frame route and must not carry
+  `libav*`, `libsw*`, `libxml2*`, `libssl*`, or `libcrypto*` copies.
 - `player-remux-ffmpeg` contains only the download remux plugin `.so`.
 - `vesper-player-kit-source-normalizer-ffmpeg` contains only
   `libplayer_source_normalizer_ffmpeg.so` plus profile metadata; it depends on
@@ -266,11 +276,15 @@ required or forced by a test profile. The repository smoke expectations live in
 The mobile FrameProcessor path is opt-in through
 `VesperNativeFramePipelineConfiguration`. The Android host kit now reports the
 native-frame route decision for SourceNormalizer packet input, MediaCodec,
-SurfaceView presentation, fallback reason, and frame counters. Until the packet
-decoder lane is wired to the host kit, `preferNativeFrame` falls back to
-ExoPlayer and `requireNativeFrame` reports a capability error. The first Android
-native-frame presenter target is `SurfaceView`; `TextureView` falls back or
-fails according to the selected mode. Default ExoPlayer playback is unchanged.
+SurfaceView presentation, fallback reason, and frame counters. When
+`preferNativeFrame` or `requireNativeFrame` is selected and the
+SourceNormalizer, MediaCodec decoder, and optional FrameProcessor plugin paths
+are available, the explicit SDK-managed native-frame route reads packets,
+decodes through MediaCodec, and presents through a `SurfaceView`.
+`preferNativeFrame` falls back to ExoPlayer when that route is unavailable;
+`requireNativeFrame` reports a capability error. `TextureView` remains a system
+player surface and falls back or fails according to the selected mode. Default
+ExoPlayer playback is unchanged.
 
 Build the runtime through the root FFmpeg profile CLI:
 

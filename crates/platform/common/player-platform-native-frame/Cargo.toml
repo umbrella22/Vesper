@@ -1,0 +1,11 @@
+[package]
+name = "player-platform-native-frame"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+player-plugin = { path = "../../../plugin/player-plugin" }
+player-runtime = { path = "../../../core/player-runtime" }
+serde = { workspace = true, features = ["derive"] }

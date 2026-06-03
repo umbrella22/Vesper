@@ -64,6 +64,129 @@ impl FrameProcessorCapabilities {
         self.supports_input_handle_kind(&metadata.handle_kind)
             && self.supports_input_pipeline_profile(&metadata.effective_pipeline_profile())
     }
+
+    /// Returns whether the processor can produce an output native handle kind.
+    pub fn supports_output_handle_kind(&self, handle_kind: &NativeHandleKind) -> bool {
+        self.output_handle_kinds.is_empty()
+            || self
+                .output_handle_kinds
+                .iter()
+                .any(|candidate| candidate == handle_kind)
+    }
+
+    /// Returns whether the processor can produce an output pipeline profile.
+    pub fn supports_output_pipeline_profile(&self, profile: &NativeFramePipelineProfile) -> bool {
+        self.output_pipeline_profiles.is_empty()
+            || self
+                .output_pipeline_profiles
+                .iter()
+                .any(|candidate| candidate == profile)
+    }
+}
+
+/// Capability requirements used when opening one frame processor session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameProcessorSessionRequirements {
+    pub input_metadata: NativeFrameMetadata,
+    #[serde(default)]
+    pub output_handle_kind: Option<NativeHandleKind>,
+    #[serde(default)]
+    pub output_pipeline_profile: Option<NativeFramePipelineProfile>,
+    #[serde(default)]
+    pub require_video_frames: bool,
+    #[serde(default)]
+    pub require_native_first: bool,
+    #[serde(default)]
+    pub require_explicit_native_input: bool,
+    #[serde(default)]
+    pub require_flush: bool,
+    #[serde(default)]
+    pub reject_dimension_changes: bool,
+    #[serde(default)]
+    pub max_in_flight_frames: Option<u32>,
+}
+
+impl FrameProcessorSessionRequirements {
+    /// Builds native video requirements for a decoded frame processor chain.
+    pub fn native_video(input_metadata: NativeFrameMetadata) -> Self {
+        Self {
+            output_handle_kind: Some(input_metadata.handle_kind.clone()),
+            output_pipeline_profile: Some(input_metadata.effective_pipeline_profile()),
+            input_metadata,
+            require_video_frames: true,
+            require_native_first: true,
+            require_explicit_native_input: false,
+            require_flush: false,
+            reject_dimension_changes: true,
+            max_in_flight_frames: None,
+        }
+    }
+
+    /// Returns missing capability names for this requirement.
+    pub fn missing_capabilities(&self, capabilities: &FrameProcessorCapabilities) -> Vec<String> {
+        let mut missing = Vec::new();
+        if self.require_video_frames && !capabilities.supports_video_frames {
+            missing.push("video frames".to_owned());
+        }
+        if self.require_native_first
+            && !capabilities.supports_input_handle_kind(&self.input_metadata.handle_kind)
+        {
+            missing.push(format!(
+                "input handle kind {:?}",
+                self.input_metadata.handle_kind
+            ));
+        }
+        let input_profile = self.input_metadata.effective_pipeline_profile();
+        if self.require_native_first
+            && !capabilities.supports_input_pipeline_profile(&input_profile)
+        {
+            missing.push(format!("input pipeline profile {:?}", input_profile));
+        }
+        if self.require_explicit_native_input
+            && !capabilities
+                .accepted_input_handle_kinds
+                .contains(&self.input_metadata.handle_kind)
+        {
+            missing.push(format!(
+                "explicit input handle kind {:?}",
+                self.input_metadata.handle_kind
+            ));
+        }
+        if self.require_explicit_native_input
+            && !capabilities
+                .accepted_input_pipeline_profiles
+                .contains(&input_profile)
+        {
+            missing.push(format!(
+                "explicit input pipeline profile {:?}",
+                input_profile
+            ));
+        }
+        if let Some(handle_kind) = &self.output_handle_kind {
+            if !capabilities.supports_output_handle_kind(handle_kind) {
+                missing.push(format!("output handle kind {handle_kind:?}"));
+            }
+        }
+        if let Some(profile) = &self.output_pipeline_profile {
+            if !capabilities.supports_output_pipeline_profile(profile) {
+                missing.push(format!("output pipeline profile {profile:?}"));
+            }
+        }
+        if self.require_flush && !capabilities.supports_flush {
+            missing.push("flush support".to_owned());
+        }
+        if self.reject_dimension_changes && capabilities.may_change_dimensions {
+            missing.push("stable dimensions".to_owned());
+        }
+        if let (Some(required), Some(limit)) =
+            (self.max_in_flight_frames, capabilities.max_in_flight_frames)
+        {
+            if limit < required {
+                missing.push(format!("max in-flight frames >= {required}"));
+            }
+        }
+        missing
+    }
 }
 
 /// Configuration used to open one frame processor session.
@@ -285,7 +408,8 @@ pub trait FrameProcessorSession: Send {
 mod tests {
     use super::{
         FrameProcessorCapabilities, FrameProcessorFrameTimings, FrameProcessorReceiveFrameMetadata,
-        FrameProcessorReceiveStatus, FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
+        FrameProcessorReceiveStatus, FrameProcessorSessionRequirements, FrameProcessorSubmitResult,
+        FrameProcessorSubmitStatus,
     };
     use crate::{
         DecoderFrameFormat, DecoderMediaKind, NativeFrameMetadata, NativeFramePipelineProfile,
@@ -392,5 +516,52 @@ mod tests {
         let mut mismatched = metadata();
         mismatched.pipeline_profile = Some(NativeFramePipelineProfile::D3D11Texture2D);
         assert!(!capabilities.supports_input_metadata(&mismatched));
+    }
+
+    #[test]
+    fn frame_processor_session_requirements_report_missing_capabilities() {
+        let requirements = FrameProcessorSessionRequirements {
+            require_flush: true,
+            require_explicit_native_input: true,
+            max_in_flight_frames: Some(4),
+            ..FrameProcessorSessionRequirements::native_video(metadata())
+        };
+        let capabilities = FrameProcessorCapabilities {
+            accepted_input_handle_kinds: vec![NativeHandleKind::D3D11Texture2D],
+            output_handle_kinds: vec![NativeHandleKind::D3D11Texture2D],
+            accepted_input_pipeline_profiles: vec![NativeFramePipelineProfile::D3D11Texture2D],
+            output_pipeline_profiles: vec![NativeFramePipelineProfile::D3D11Texture2D],
+            supports_video_frames: false,
+            supports_flush: false,
+            may_change_dimensions: true,
+            max_in_flight_frames: Some(1),
+            ..Default::default()
+        };
+
+        let missing = requirements.missing_capabilities(&capabilities);
+
+        assert!(missing.iter().any(|item| item == "video frames"));
+        assert!(
+            missing
+                .iter()
+                .any(|item| item.contains("input handle kind CvPixelBuffer"))
+        );
+        assert!(
+            missing
+                .iter()
+                .any(|item| item.contains("explicit input handle kind CvPixelBuffer"))
+        );
+        assert!(
+            missing
+                .iter()
+                .any(|item| item.contains("output pipeline profile VideoToolboxCvPixelBuffer"))
+        );
+        assert!(missing.iter().any(|item| item == "flush support"));
+        assert!(missing.iter().any(|item| item == "stable dimensions"));
+        assert!(
+            missing
+                .iter()
+                .any(|item| item == "max in-flight frames >= 4")
+        );
     }
 }

@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
+import android.util.Log
 import android.view.Gravity
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -18,6 +19,8 @@ internal class VesperNativeSurfaceHost(
     private var hostView: ViewGroup? = null
     private var renderView: View? = null
     private var surface: Surface? = null
+    private var attachedSurface: Surface? = null
+    private var attachedSurfaceKind: NativeVideoSurfaceKind? = null
     private var videoLayoutInfo: NativeVideoLayoutInfo? = null
     private var keepScreenOn = false
 
@@ -27,9 +30,16 @@ internal class VesperNativeSurfaceHost(
         }
 
     fun attach(host: ViewGroup) {
+        Log.d(
+            TAG,
+            "surfaceHost attach kind=$surfaceKind reuse=${renderView != null} " +
+                "hostAttached=${host.isAttachedToWindow} hostSize=${host.width}x${host.height} " +
+                "hostChildren=${host.childCount}",
+        )
         if (hostView === host && renderView != null) {
             applyVideoTransform()
             reattachIfAvailable()
+            postSurfaceViewAttachCheck("same-host")
             return
         }
 
@@ -37,6 +47,7 @@ internal class VesperNativeSurfaceHost(
 
         val existingView = renderView
         if (existingView != null) {
+            Log.d(TAG, "surfaceHost moving existing $surfaceKind render view to new host")
             (existingView.parent as? ViewGroup)?.removeView(existingView)
             host.removeAllViews()
             host.addView(existingView, matchParentLayoutParams())
@@ -44,6 +55,7 @@ internal class VesperNativeSurfaceHost(
             host.addOnLayoutChangeListener(hostLayoutListener)
             applyVideoTransform()
             reattachIfAvailable()
+            postSurfaceViewAttachCheck("move-host")
             return
         }
 
@@ -59,12 +71,26 @@ internal class VesperNativeSurfaceHost(
         applyKeepScreenOn()
         host.addOnLayoutChangeListener(hostLayoutListener)
         applyVideoTransform()
+        postSurfaceViewAttachCheck("attach-created")
     }
 
     fun reattachIfAvailable() {
-        surface?.let { existingSurface ->
-            bindings.attachSurface(existingSurface, surfaceKind)
+        val existingSurface = surface
+        if (existingSurface == null) {
+            Log.d(TAG, "surfaceHost reattach skipped kind=$surfaceKind reason=no-surface")
+            return
         }
+        if (!existingSurface.isValid) {
+            Log.d(TAG, "surfaceHost reattach skipped kind=$surfaceKind reason=invalid-surface")
+            return
+        }
+        if (attachedSurface === existingSurface && attachedSurfaceKind == surfaceKind) {
+            Log.d(TAG, "surfaceHost reattach skipped kind=$surfaceKind reason=already-attached")
+            return
+        }
+        Log.d(TAG, "surfaceHost reattach kind=$surfaceKind")
+        rememberAttachedSurface(existingSurface, surfaceKind)
+        bindings.attachSurface(existingSurface, surfaceKind)
     }
 
     fun updateVideoLayout(layoutInfo: NativeVideoLayoutInfo?) {
@@ -78,18 +104,40 @@ internal class VesperNativeSurfaceHost(
     }
 
     fun detach(expectedHost: ViewGroup? = null) {
+        detach(expectedHost = expectedHost, notifyNative = true)
+    }
+
+    fun detachWithoutNativeNotification(expectedHost: ViewGroup? = null) {
+        detach(expectedHost = expectedHost, notifyNative = false)
+    }
+
+    private fun detach(
+        expectedHost: ViewGroup? = null,
+        notifyNative: Boolean,
+    ) {
         if (expectedHost != null && hostView !== expectedHost) {
             return
         }
+        Log.d(
+            TAG,
+            "surfaceHost detach kind=$surfaceKind notifyNative=$notifyNative " +
+                "hasSurface=${surface != null}",
+        )
         setKeepScreenOn(false)
-        bindings.detachSurface()
+        if (notifyNative) {
+            bindings.detachSurface()
+        }
+        clearAttachedSurface()
         when (surfaceKind) {
             NativeVideoSurfaceKind.TextureView -> {
                 surface?.release()
                 (renderView as? TextureView)?.surfaceTextureListener = null
             }
             NativeVideoSurfaceKind.SurfaceView -> {
-                (renderView as? SurfaceView)?.holder?.removeCallback(surfaceHolderCallback)
+                (renderView as? SurfaceView)?.let { view ->
+                    view.holder.removeCallback(surfaceHolderCallback)
+                    view.removeOnAttachStateChangeListener(surfaceViewAttachStateListener)
+                }
             }
         }
         surface = null
@@ -103,15 +151,19 @@ internal class VesperNativeSurfaceHost(
 
     private fun createSurfaceView(host: ViewGroup): SurfaceView =
         SurfaceView(host.context).apply {
+            Log.d(TAG, "surfaceHost create SurfaceView")
             holder.addCallback(surfaceHolderCallback)
+            addOnAttachStateChangeListener(surfaceViewAttachStateListener)
             keepScreenOn = this@VesperNativeSurfaceHost.keepScreenOn
         }
 
     private val surfaceHolderCallback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {
-            val newSurface = holder.surface
-            surface = newSurface
-            bindings.attachSurface(newSurface, NativeVideoSurfaceKind.SurfaceView)
+            Log.d(
+                TAG,
+                "surfaceHost SurfaceView surfaceCreated valid=${holder.surface?.isValid == true}",
+            )
+            attachSurfaceHolderIfValid(holder, reason = "surfaceCreated")
         }
 
         override fun surfaceChanged(
@@ -119,18 +171,81 @@ internal class VesperNativeSurfaceHost(
             format: Int,
             width: Int,
             height: Int,
-        ) = Unit
+        ) {
+            Log.d(
+                TAG,
+                "surfaceHost SurfaceView surfaceChanged format=$format size=${width}x$height " +
+                    "valid=${holder.surface?.isValid == true}",
+            )
+            attachSurfaceHolderIfValid(holder, reason = "surfaceChanged")
+        }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
+            Log.d(TAG, "surfaceHost SurfaceView surfaceDestroyed")
             bindings.detachSurface()
+            clearAttachedSurface(holder.surface)
             surface = null
         }
+    }
+
+    private val surfaceViewAttachStateListener =
+        object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) {
+                Log.d(TAG, "surfaceHost SurfaceView attachedToWindow")
+                val capturedView = view as SurfaceView
+                view.post {
+                    if (!isCurrentSurfaceView(capturedView)) {
+                        Log.d(TAG, "surfaceHost SurfaceView attach skipped reason=stale-viewAttached")
+                        return@post
+                    }
+                    attachSurfaceHolderIfValid(
+                        capturedView.holder,
+                        reason = "viewAttached",
+                    )
+                }
+            }
+
+            override fun onViewDetachedFromWindow(view: View) {
+                Log.d(TAG, "surfaceHost SurfaceView detachedFromWindow")
+            }
+        }
+
+    private fun postSurfaceViewAttachCheck(reason: String) {
+        val view = renderView as? SurfaceView ?: return
+        view.post {
+            if (!isCurrentSurfaceView(view)) {
+                Log.d(TAG, "surfaceHost SurfaceView attach skipped reason=stale-$reason")
+                return@post
+            }
+            attachSurfaceHolderIfValid(view.holder, reason = reason)
+        }
+    }
+
+    private fun attachSurfaceHolderIfValid(
+        holder: SurfaceHolder,
+        reason: String,
+    ): Boolean {
+        val newSurface = holder.surface
+        if (newSurface == null || !newSurface.isValid) {
+            Log.d(TAG, "surfaceHost SurfaceView attach skipped reason=$reason valid=false")
+            return false
+        }
+        surface = newSurface
+        if (attachedSurface === newSurface && attachedSurfaceKind == NativeVideoSurfaceKind.SurfaceView) {
+            Log.d(TAG, "surfaceHost SurfaceView attach skipped reason=$reason already-attached")
+            return true
+        }
+        Log.i(TAG, "surfaceHost SurfaceView attachSurface reason=$reason")
+        rememberAttachedSurface(newSurface, NativeVideoSurfaceKind.SurfaceView)
+        bindings.attachSurface(newSurface, NativeVideoSurfaceKind.SurfaceView)
+        return true
     }
 
     // ── TextureView ─────────────────────────────────────────────────────
 
     private fun createTextureView(host: ViewGroup): TextureView =
         TextureView(host.context).apply {
+            Log.d(TAG, "surfaceHost create TextureView")
             isOpaque = true
             keepScreenOn = this@VesperNativeSurfaceHost.keepScreenOn
             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -139,8 +254,10 @@ internal class VesperNativeSurfaceHost(
                     width: Int,
                     height: Int,
                 ) {
+                    Log.d(TAG, "surfaceHost TextureView available size=${width}x$height")
                     val newSurface = Surface(surfaceTexture)
                     surface = newSurface
+                    rememberAttachedSurface(newSurface, NativeVideoSurfaceKind.TextureView)
                     bindings.attachSurface(newSurface, NativeVideoSurfaceKind.TextureView)
                 }
 
@@ -151,9 +268,11 @@ internal class VesperNativeSurfaceHost(
                 ) = Unit
 
                 override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+                    Log.d(TAG, "surfaceHost TextureView destroyed")
                     try {
                         bindings.detachSurface()
                     } finally {
+                        clearAttachedSurface(surface)
                         surface?.release()
                         surface = null
                     }
@@ -169,6 +288,21 @@ internal class VesperNativeSurfaceHost(
     private fun applyKeepScreenOn() {
         hostView?.keepScreenOn = keepScreenOn
         renderView?.keepScreenOn = keepScreenOn
+    }
+
+    private fun isCurrentSurfaceView(view: SurfaceView): Boolean =
+        renderView === view && hostView != null
+
+    private fun rememberAttachedSurface(surface: Surface, kind: NativeVideoSurfaceKind) {
+        attachedSurface = surface
+        attachedSurfaceKind = kind
+    }
+
+    private fun clearAttachedSurface(surface: Surface? = null) {
+        if (surface == null || attachedSurface === surface) {
+            attachedSurface = null
+            attachedSurfaceKind = null
+        }
     }
 
     private fun applyVideoTransform() {
@@ -267,3 +401,5 @@ internal class VesperNativeSurfaceHost(
             Gravity.CENTER,
         )
 }
+
+private const val TAG = "VesperPlayerAndroidHost"

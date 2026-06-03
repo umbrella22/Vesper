@@ -10,10 +10,10 @@ use player_plugin::{
     SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
     SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
     SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
-    SourceNormalizerRequiredCapabilities, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+    SourceNormalizerRequiredCapabilities, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
     VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
     VesperPluginResultStatus, VesperSourceNormalizerOpenPacketSessionResult,
-    VesperSourceNormalizerPluginApiV2, VesperSourceNormalizerReadPacketResult,
+    VesperSourceNormalizerPluginApiV3, VesperSourceNormalizerReadPacketResult,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-source-normalizer-diagnostic\0";
@@ -21,7 +21,7 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static DIAGNOSTIC_PACKET_BYTES: &[u8] = b"vesper-diagnostic-source-normalizer-packet";
 
 struct PluginBundle {
-    api: VesperSourceNormalizerPluginApiV2,
+    api: VesperSourceNormalizerPluginApiV3,
     descriptor: VesperPluginDescriptor,
 }
 
@@ -46,7 +46,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 
 fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(PluginBundle {
-        api: VesperSourceNormalizerPluginApiV2 {
+        api: VesperSourceNormalizerPluginApiV3 {
             context: std::ptr::null_mut(),
             destroy: None,
             name: Some(normalizer_name),
@@ -57,17 +57,22 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             seek_packet_session_json: Some(normalizer_seek_packet_session_json),
             flush_packet_session: Some(normalizer_flush_packet_session),
             close_packet_session: Some(normalizer_close_packet_session),
+            resource_capabilities_json: None,
+            open_resource_session_json: None,
+            poll_resource_session: None,
+            cancel_resource_session: None,
+            close_resource_session: None,
             free_bytes: Some(free_plugin_bytes),
         },
         descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
+            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
             plugin_kind: VesperPluginKind::SourceNormalizer,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
     });
     bundle.descriptor.api =
-        (&bundle.api as *const VesperSourceNormalizerPluginApiV2).cast::<c_void>();
+        (&bundle.api as *const VesperSourceNormalizerPluginApiV3).cast::<c_void>();
     let bundle = Box::leak(bundle);
     &bundle.descriptor
 }
@@ -445,7 +450,7 @@ mod tests {
         SourceNormalizerError, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
         SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
         SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
-        VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperPluginBytes, VesperPluginKind,
+        VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginBytes, VesperPluginKind,
         VesperPluginResultStatus,
     };
     use std::ffi::CStr;
@@ -458,7 +463,7 @@ mod tests {
         let descriptor = unsafe { &*descriptor_ptr };
         assert_eq!(
             descriptor.abi_version,
-            VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2
+            VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT
         );
         assert_eq!(descriptor.plugin_kind, VesperPluginKind::SourceNormalizer);
         // SAFETY: plugin_name is a valid NUL-terminated static string.

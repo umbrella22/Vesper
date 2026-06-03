@@ -10,13 +10,16 @@ import android.content.res.Configuration
 import android.media.AudioManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,8 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.VideoLibrary
@@ -68,6 +70,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperBackgroundPlaybackMode
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControls
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
@@ -93,16 +96,19 @@ internal fun PlayerHostApp(
     controller: VesperPlayerController,
     onRebuildController: (
         ExampleSourceNormalizerSetting,
+        ExampleNativeFramePipelineSetting,
         VesperPlayerSource?,
         VesperPlaybackResiliencePolicy,
         Boolean,
         Long?,
+        Float,
     ) -> VesperPlayerController,
     playlistCoordinator: VesperPlaylistCoordinator,
     downloadManager: VesperDownloadManager,
     externalPlaybackController: VesperExternalPlaybackController,
     isDownloadExportPluginInstalled: Boolean,
     sourceNormalizerPluginLibraryPaths: List<String>,
+    decoderMediaCodecPluginLibraryPaths: List<String>,
     frameProcessorPluginLibraryPaths: List<String>,
 ) {
     val context = LocalContext.current
@@ -120,6 +126,9 @@ internal fun PlayerHostApp(
     }
     var sourceNormalizerSetting by rememberSaveable {
         mutableStateOf(ExampleSourceNormalizerSetting.PreflightOnly)
+    }
+    var nativeFramePipelineSetting by rememberSaveable {
+        mutableStateOf(ExampleNativeFramePipelineSetting.DiagnosticsOnly)
     }
     val systemDarkTheme = isSystemInDarkTheme()
     val useDarkTheme =
@@ -162,6 +171,8 @@ internal fun PlayerHostApp(
     var hasHandledFinishedPlayback by remember { mutableStateOf(false) }
     var queuedRemoteSource by remember { mutableStateOf<VesperPlayerSource?>(null) }
     var queuedLocalSource by remember { mutableStateOf<VesperPlayerSource?>(null) }
+    var activePlaybackSource by remember { mutableStateOf<VesperPlayerSource?>(null) }
+    var localPickRequestId by remember { mutableStateOf(0L) }
     var playlistItemIds by remember {
         mutableStateOf(listOf(ANDROID_HLS_PLAYLIST_ITEM_ID))
     }
@@ -201,8 +212,10 @@ internal fun PlayerHostApp(
                 itemState.item.itemId == activeItemId
             }?.item?.source
         }
+    val controllerRebuildSource =
+        exampleControllerRebuildSource(activePlaybackSource, activePlaylistSource)
     val latestExternalRoutes by rememberUpdatedState(externalRoutes)
-    val latestActivePlaylistSource by rememberUpdatedState(activePlaylistSource)
+    val latestActivePlaybackSource by rememberUpdatedState(controllerRebuildSource)
     val latestUiState by rememberUpdatedState(uiState)
 
     val displayedUiState =
@@ -263,6 +276,7 @@ internal fun PlayerHostApp(
     }
 
     fun selectSourceForPlayback(source: VesperPlayerSource) {
+        activePlaybackSource = source
         controller.selectSource(source)
         controller.configureSystemPlayback(
             VesperSystemPlaybackConfiguration(
@@ -271,6 +285,7 @@ internal fun PlayerHostApp(
                         title = source.label.ifBlank { source.uri },
                         contentUri = source.uri,
                     ),
+                backgroundMode = VesperBackgroundPlaybackMode.Disabled,
                 controls = VesperSystemPlaybackControls.videoDefault(),
             ),
         )
@@ -280,9 +295,15 @@ internal fun PlayerHostApp(
         if (setting == sourceNormalizerSetting) {
             return
         }
-        val activeSource = activePlaylistSource
-        val shouldResumePlayback = uiState.playbackState == PlaybackStateUi.Playing
-        val restorePositionMs = uiState.timeline.positionMs
+        val activeSource = latestActivePlaybackSource
+        val rebuildSnapshot = exampleControllerRebuildSnapshot(latestUiState)
+        Log.i(
+            PLAYER_HOST_EXAMPLE_TAG,
+            "source-normalizer setting previous=$sourceNormalizerSetting next=$setting " +
+                "source=${activeSource?.uri ?: "none"} " +
+                "resume=${rebuildSnapshot.shouldResumePlayback} " +
+                "positionMs=${rebuildSnapshot.restorePositionMs}",
+        )
         sourceNormalizerSetting = setting
         if (externalSession != null) {
             scope.launch {
@@ -293,10 +314,12 @@ internal fun PlayerHostApp(
         val nextController =
             onRebuildController(
                 setting,
+                nativeFramePipelineSetting,
                 activeSource,
                 selectedResilienceProfile.policy,
-                shouldResumePlayback,
-                restorePositionMs,
+                rebuildSnapshot.shouldResumePlayback,
+                rebuildSnapshot.restorePositionMs,
+                rebuildSnapshot.restorePlaybackRate,
             )
         if (activeSource != null) {
             nextController.configureSystemPlayback(
@@ -306,6 +329,60 @@ internal fun PlayerHostApp(
                             title = activeSource.label.ifBlank { activeSource.uri },
                             contentUri = activeSource.uri,
                         ),
+                    backgroundMode = VesperBackgroundPlaybackMode.Disabled,
+                    controls = VesperSystemPlaybackControls.videoDefault(),
+                ),
+            )
+        }
+        controlsVisible = true
+    }
+
+    fun applyNativeFramePipelineSetting(setting: ExampleNativeFramePipelineSetting) {
+        if (setting == nativeFramePipelineSetting) {
+            return
+        }
+        val activeSource = latestActivePlaybackSource
+        val rebuildSnapshot = exampleControllerRebuildSnapshot(latestUiState)
+        val previousSetting = nativeFramePipelineSetting
+        val requiresControllerRebuild =
+            exampleNativeFrameSettingRequiresControllerRebuild(previousSetting, setting)
+        Log.i(
+            PLAYER_HOST_EXAMPLE_TAG,
+            "native-frame setting previous=$previousSetting next=$setting " +
+                "rebuild=$requiresControllerRebuild source=${activeSource?.uri ?: "none"} " +
+                "resume=${rebuildSnapshot.shouldResumePlayback} " +
+                "positionMs=${rebuildSnapshot.restorePositionMs}",
+        )
+        nativeFramePipelineSetting = setting
+        if (!requiresControllerRebuild) {
+            controlsVisible = true
+            return
+        }
+        if (externalSession != null) {
+            scope.launch {
+                runCatching { externalPlaybackController.disconnectAsync() }
+            }
+            externalSession = null
+        }
+        val nextController =
+            onRebuildController(
+                sourceNormalizerSetting,
+                setting,
+                activeSource,
+                selectedResilienceProfile.policy,
+                rebuildSnapshot.shouldResumePlayback,
+                rebuildSnapshot.restorePositionMs,
+                rebuildSnapshot.restorePlaybackRate,
+            )
+        if (activeSource != null) {
+            nextController.configureSystemPlayback(
+                VesperSystemPlaybackConfiguration(
+                    metadata =
+                        VesperSystemPlaybackMetadata(
+                            title = activeSource.label.ifBlank { activeSource.uri },
+                            contentUri = activeSource.uri,
+                        ),
+                    backgroundMode = VesperBackgroundPlaybackMode.Disabled,
                     controls = VesperSystemPlaybackControls.videoDefault(),
                 ),
             )
@@ -389,7 +466,7 @@ internal fun PlayerHostApp(
         sourceOverride: VesperPlayerSource? = null,
         timelineOverride: TimelineUiState? = null,
     ) {
-        val source = sourceOverride ?: activePlaylistSource
+        val source = sourceOverride ?: controllerRebuildSource
         if (source == null) {
             Toast
                 .makeText(
@@ -437,7 +514,7 @@ internal fun PlayerHostApp(
                 routeName = route.name,
                 routeKind = route.kind,
                 status = ExampleExternalPlaybackStatus.Connecting,
-                source = activePlaylistSource,
+                source = controllerRebuildSource,
                 basePositionMs = uiState.timeline.externalStartPositionMs(),
                 durationMs = uiState.timeline.durationMs,
                 seekableRange = exampleSeekableRangePair(uiState.timeline),
@@ -713,36 +790,73 @@ internal fun PlayerHostApp(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
+        val label = displayNameForUri(context, uri)
+        localPickRequestId += 1
+        val requestId = localPickRequestId
         runCatching {
             context.contentResolver.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
-        val localSource =
-            VesperPlayerSource.local(
-                uri = uri.toString(),
-                label = displayNameForUri(context, uri),
+        Toast
+            .makeText(context, R.string.example_sources_prepare_local_video, Toast.LENGTH_SHORT)
+            .show()
+        scope.launch {
+            val result =
+                runCatching {
+                    materializeExampleLocalVideoSource(
+                        context = context,
+                        uri = uri,
+                        label = label,
+                    )
+                }
+            if (requestId != localPickRequestId) {
+                return@launch
+            }
+            val localSource =
+                result.getOrElse { error ->
+                    Log.w(
+                        PLAYER_HOST_EXAMPLE_TAG,
+                        "failed to materialize local video uri=$uri",
+                        error,
+                    )
+                    Toast
+                        .makeText(
+                            context,
+                            context.getString(
+                                R.string.example_sources_prepare_local_failed,
+                                error.localizedMessage
+                                    ?: context.getString(R.string.example_download_save_to_gallery_failed_unknown),
+                            ),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    return@launch
+                }
+            Log.i(
+                PLAYER_HOST_EXAMPLE_TAG,
+                "picked local video materialized uri=${localSource.uri} original=$uri",
             )
-        queuedLocalSource = localSource
-        val nextPlaylistItems =
-            enqueuePlaylistItem(
-                playlistItemIds = playlistItemIds,
-                itemId = ANDROID_LOCAL_PLAYLIST_ITEM_ID,
+            queuedLocalSource = localSource
+            val nextPlaylistItems =
+                enqueuePlaylistItem(
+                    playlistItemIds = playlistItemIds,
+                    itemId = ANDROID_LOCAL_PLAYLIST_ITEM_ID,
+                )
+            applyPlaylistQueue(
+                focusItemId = ANDROID_LOCAL_PLAYLIST_ITEM_ID,
+                playlistItems = nextPlaylistItems,
+                localSource = localSource,
             )
-        applyPlaylistQueue(
-            focusItemId = ANDROID_LOCAL_PLAYLIST_ITEM_ID,
-            playlistItems = nextPlaylistItems,
-            localSource = localSource,
-        )
-        controlsVisible = true
+            controlsVisible = true
+        }
     }
 
     LaunchedEffect(Unit) {
         applyPlaylistQueue(focusItemId = ANDROID_HLS_PLAYLIST_ITEM_ID)
     }
 
-    LaunchedEffect(playlistSnapshot.activeItem?.itemId) {
+    LaunchedEffect(playlistSnapshot.activeItem?.itemId, activePlaylistSource?.uri) {
         val activeItem = playlistSnapshot.activeItem ?: return@LaunchedEffect
         val source =
             playlistSnapshot.queue
@@ -785,7 +899,7 @@ internal fun PlayerHostApp(
                             )
                         return@collect
                     }
-                    val source = latestActivePlaylistSource
+                    val source = latestActivePlaybackSource
                     externalSession =
                         ExampleExternalPlaybackSession(
                             routeId = routeId,
@@ -1002,9 +1116,8 @@ internal fun PlayerHostApp(
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
                                     .padding(horizontal = 18.dp, vertical = 18.dp),
-                                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(18.dp),
                             ) {
                                 ExamplePlayerHeader(
                                     sourceLabel = displayedUiState.sourceLabel,
@@ -1056,213 +1169,240 @@ internal fun PlayerHostApp(
                                     onSetVolumeRatio = deviceControls::setVolumeRatio,
                                 )
 
-                                ExampleSourceSection(
-                                    palette = palette,
-                                    themeMode = themeMode,
-                                    remoteStreamUrl = remoteStreamUrl,
-                                    onThemeModeChange = { themeMode = it },
-                                    onRemoteStreamUrlChange = { remoteStreamUrl = it },
-                                    onPickVideo = {
-                                        pickVideoLauncher.launch(arrayOf("video/*"))
-                                    },
-                                    onUseHlsDemo = {
-                                        val nextPlaylistItems =
-                                            enqueuePlaylistItem(
-                                                playlistItemIds = playlistItemIds,
-                                                itemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
-                                            )
-                                        applyPlaylistQueue(
-                                            focusItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
-                                            playlistItems = nextPlaylistItems,
-                                        )
-                                        controlsVisible = true
-                                    },
-                                    onUseDashDemo = {
-                                        val nextPlaylistItems =
-                                            enqueuePlaylistItem(
-                                                playlistItemIds = playlistItemIds,
-                                                itemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
-                                            )
-                                        applyPlaylistQueue(
-                                            focusItemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
-                                            playlistItems = nextPlaylistItems,
-                                        )
-                                        controlsVisible = true
-                                    },
-                                    onUseLiveDvrAcceptance = {
-                                        val nextPlaylistItems =
-                                            enqueuePlaylistItem(
-                                                playlistItemIds = playlistItemIds,
-                                                itemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
-                                            )
-                                        applyPlaylistQueue(
-                                            focusItemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
-                                            playlistItems = nextPlaylistItems,
-                                        )
-                                        controlsVisible = true
-                                    },
-                                    onOpenRemote = {
-                                        val url = remoteStreamUrl.trim()
-                                        if (url.isNotEmpty()) {
-                                            val remoteSource =
-                                                VesperPlayerSource.remote(
-                                                    uri = url,
-                                                    label = context.getString(R.string.example_source_custom_remote_label),
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    contentPadding = PaddingValues(bottom = 18.dp),
+                                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                                ) {
+                                    item {
+                                        ExampleSourceSection(
+                                            palette = palette,
+                                            themeMode = themeMode,
+                                            remoteStreamUrl = remoteStreamUrl,
+                                            onThemeModeChange = { themeMode = it },
+                                            onRemoteStreamUrlChange = { remoteStreamUrl = it },
+                                            onPickVideo = {
+                                                pickVideoLauncher.launch(arrayOf("video/*"))
+                                            },
+                                            onUseHlsDemo = {
+                                                val nextPlaylistItems =
+                                                    enqueuePlaylistItem(
+                                                        playlistItemIds = playlistItemIds,
+                                                        itemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                                    )
+                                                applyPlaylistQueue(
+                                                    focusItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                                    playlistItems = nextPlaylistItems,
                                                 )
-                                            queuedRemoteSource = remoteSource
-                                            val nextPlaylistItems =
-                                                enqueuePlaylistItem(
-                                                    playlistItemIds = playlistItemIds,
-                                                    itemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                                controlsVisible = true
+                                            },
+                                            onUseDashDemo = {
+                                                val nextPlaylistItems =
+                                                    enqueuePlaylistItem(
+                                                        playlistItemIds = playlistItemIds,
+                                                        itemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                                    )
+                                                applyPlaylistQueue(
+                                                    focusItemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                                    playlistItems = nextPlaylistItems,
                                                 )
-                                            applyPlaylistQueue(
-                                                focusItemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
-                                                playlistItems = nextPlaylistItems,
-                                                remoteSource = remoteSource,
-                                            )
-                                            controlsVisible = true
-                                        }
-                                    },
-                                )
-
-                                ExampleExternalPlaybackSection(
-                                    palette = palette,
-                                    routes = externalRoutes,
-                                    session = externalSession,
-                                    isDiscovering = isExternalDiscoveryRunning,
-                                    isCastRoutePickerOpening = isCastRoutePickerOpening,
-                                    castRoutePickerRequestId = castRoutePickerRequestId,
-                                    hasDlnaPermission = hasNearbyWifiPermission,
-                                    onOpenCastRoutes = ::openCastRoutePicker,
-                                    onRequestDlnaPermission = {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                            dlnaPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
-                                        } else {
-                                            hasNearbyWifiPermission = true
-                                            externalPlaybackController.startDiscovery()
-                                            isExternalDiscoveryRunning = true
-                                        }
-                                    },
-                                    onStartDiscovery = {
-                                        externalPlaybackController.startDiscovery()
-                                        isExternalDiscoveryRunning = true
-                                    },
-                                    onStopDiscovery = {
-                                        externalPlaybackController.stopDiscovery()
-                                        isExternalDiscoveryRunning = false
-                                    },
-                                    onConnectRoute = ::connectExternalRoute,
-                                    onLoadCurrent = ::loadCurrentExternalSession,
-                                    onDisconnect = ::disconnectExternalPlayback,
-                                )
-
-                                ExamplePlaylistSection(
-                                    palette = palette,
-                                    playlistQueue = playlistSnapshot.queue,
-                                    onFocusPlaylistItem = { itemId ->
-                                        val queue =
-                                            playlistSnapshot.queue.map { itemState -> itemState.item }
-                                        playlistCoordinator.updateViewportHints(
-                                            examplePlaylistViewportHints(queue, itemId),
-                                        )
-                                        controlsVisible = true
-                                    },
-                                )
-
-                                ExamplePluginDiagnosticsSection(
-                                    palette = palette,
-                                    sourceNormalizerSetting = sourceNormalizerSetting,
-                                    sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
-                                    frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
-                                    pluginDiagnostics = controller.pluginDiagnostics,
-                                    onSourceNormalizerSettingChange = ::applySourceNormalizerSetting,
-                                )
-
-                                ExampleResilienceSection(
-                                    palette = palette,
-                                    selectedProfile = selectedResilienceProfile,
-                                    isApplyingProfile = isApplyingResilienceProfile,
-                                    onApplyProfile = { profile ->
-                                        if (
-                                            !isApplyingResilienceProfile &&
-                                            profile != selectedResilienceProfile
-                                        ) {
-                                            val previousProfile = selectedResilienceProfile
-                                            selectedResilienceProfile = profile
-                                            scope.launch {
-                                                isApplyingResilienceProfile = true
-                                                kotlinx.coroutines.yield()
-                                                val result =
-                                                    runCatching {
-                                                        controller.setResiliencePolicy(profile.policy)
-                                                        playlistCoordinator.setResiliencePolicy(profile.policy)
-                                                    }
-                                                if (result.isFailure) {
-                                                    selectedResilienceProfile = previousProfile
+                                                controlsVisible = true
+                                            },
+                                            onUseLiveDvrAcceptance = {
+                                                val nextPlaylistItems =
+                                                    enqueuePlaylistItem(
+                                                        playlistItemIds = playlistItemIds,
+                                                        itemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
+                                                    )
+                                                applyPlaylistQueue(
+                                                    focusItemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
+                                                    playlistItems = nextPlaylistItems,
+                                                )
+                                                controlsVisible = true
+                                            },
+                                            onOpenRemote = {
+                                                val url = remoteStreamUrl.trim()
+                                                if (url.isNotEmpty()) {
+                                                    val remoteSource =
+                                                        VesperPlayerSource.remote(
+                                                            uri = url,
+                                                            label = context.getString(R.string.example_source_custom_remote_label),
+                                                        )
+                                                    queuedRemoteSource = remoteSource
+                                                    val nextPlaylistItems =
+                                                        enqueuePlaylistItem(
+                                                            playlistItemIds = playlistItemIds,
+                                                            itemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                                        )
+                                                    applyPlaylistQueue(
+                                                        focusItemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                                        playlistItems = nextPlaylistItems,
+                                                        remoteSource = remoteSource,
+                                                    )
+                                                    controlsVisible = true
                                                 }
-                                                isApplyingResilienceProfile = false
-                                            }
-                                        }
-                                    },
-                                )
+                                            },
+                                        )
+                                    }
+
+                                    item {
+                                        ExampleExternalPlaybackSection(
+                                            palette = palette,
+                                            routes = externalRoutes,
+                                            session = externalSession,
+                                            isDiscovering = isExternalDiscoveryRunning,
+                                            isCastRoutePickerOpening = isCastRoutePickerOpening,
+                                            castRoutePickerRequestId = castRoutePickerRequestId,
+                                            hasDlnaPermission = hasNearbyWifiPermission,
+                                            onOpenCastRoutes = ::openCastRoutePicker,
+                                            onRequestDlnaPermission = {
+                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                    dlnaPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+                                                } else {
+                                                    hasNearbyWifiPermission = true
+                                                    externalPlaybackController.startDiscovery()
+                                                    isExternalDiscoveryRunning = true
+                                                }
+                                            },
+                                            onStartDiscovery = {
+                                                externalPlaybackController.startDiscovery()
+                                                isExternalDiscoveryRunning = true
+                                            },
+                                            onStopDiscovery = {
+                                                externalPlaybackController.stopDiscovery()
+                                                isExternalDiscoveryRunning = false
+                                            },
+                                            onConnectRoute = ::connectExternalRoute,
+                                            onLoadCurrent = ::loadCurrentExternalSession,
+                                            onDisconnect = ::disconnectExternalPlayback,
+                                        )
+                                    }
+
+                                    item {
+                                        ExamplePlaylistSection(
+                                            palette = palette,
+                                            playlistQueue = playlistSnapshot.queue,
+                                            onFocusPlaylistItem = { itemId ->
+                                                val queue =
+                                                    playlistSnapshot.queue.map { itemState -> itemState.item }
+                                                playlistCoordinator.updateViewportHints(
+                                                    examplePlaylistViewportHints(queue, itemId),
+                                                )
+                                                controlsVisible = true
+                                            },
+                                        )
+                                    }
+
+                                    item {
+                                        ExamplePluginDiagnosticsSection(
+                                            palette = palette,
+                                            sourceNormalizerSetting = sourceNormalizerSetting,
+                                            nativeFramePipelineSetting = nativeFramePipelineSetting,
+                                            sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
+                                            decoderMediaCodecPluginLibraryPaths =
+                                                decoderMediaCodecPluginLibraryPaths,
+                                            frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                                            pluginDiagnostics = controller.pluginDiagnostics,
+                                            onSourceNormalizerSettingChange = ::applySourceNormalizerSetting,
+                                            onNativeFramePipelineSettingChange = ::applyNativeFramePipelineSetting,
+                                        )
+                                    }
+
+                                    item {
+                                        ExampleResilienceSection(
+                                            palette = palette,
+                                            selectedProfile = selectedResilienceProfile,
+                                            isApplyingProfile = isApplyingResilienceProfile,
+                                            onApplyProfile = { profile ->
+                                                if (
+                                                    !isApplyingResilienceProfile &&
+                                                    profile != selectedResilienceProfile
+                                                ) {
+                                                    val previousProfile = selectedResilienceProfile
+                                                    selectedResilienceProfile = profile
+                                                    scope.launch {
+                                                        isApplyingResilienceProfile = true
+                                                        kotlinx.coroutines.yield()
+                                                        val result =
+                                                            runCatching {
+                                                                controller.setResiliencePolicy(profile.policy)
+                                                                playlistCoordinator.setResiliencePolicy(profile.policy)
+                                                            }
+                                                        if (result.isFailure) {
+                                                            selectedResilienceProfile = previousProfile
+                                                        }
+                                                        isApplyingResilienceProfile = false
+                                                    }
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
 
                         else -> {
-                            Column(
+                            LazyColumn(
                                 modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(horizontal = 18.dp, vertical = 18.dp),
-                                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(18.dp),
+                                    .fillMaxSize(),
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
+                                verticalArrangement = Arrangement.spacedBy(18.dp),
                             ) {
-                                ExampleDownloadHeader(
-                                    palette = palette,
-                                    isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
-                                )
-                                ExampleDownloadCreateSection(
-                                    palette = palette,
-                                    remoteUrl = downloadRemoteUrl,
-                                    onRemoteUrlChange = { downloadRemoteUrl = it },
-                                    onUseHlsDemo = {
-                                        createDownloadTask(
-                                            assetIdPrefix = ANDROID_HLS_PLAYLIST_ITEM_ID,
-                                            source = androidHlsDemoSource(context),
-                                        )
-                                    },
-                                    onUseDashDemo = {
-                                        createDownloadTask(
-                                            assetIdPrefix = ANDROID_DASH_PLAYLIST_ITEM_ID,
-                                            source = androidDashDemoSource(context),
-                                        )
-                                    },
-                                    onCreateRemote = {
-                                        val url = downloadRemoteUrl.trim()
-                                        if (url.isNotEmpty()) {
+                                item {
+                                    ExampleDownloadHeader(
+                                        palette = palette,
+                                        isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
+                                    )
+                                }
+                                item {
+                                    ExampleDownloadCreateSection(
+                                        palette = palette,
+                                        remoteUrl = downloadRemoteUrl,
+                                        onRemoteUrlChange = { downloadRemoteUrl = it },
+                                        onUseHlsDemo = {
                                             createDownloadTask(
-                                                assetIdPrefix = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
-                                                source =
-                                                    VesperPlayerSource.remote(
-                                                        uri = url,
-                                                        label = exampleDraftDownloadLabel(url),
-                                                    ),
+                                                assetIdPrefix = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                                source = androidHlsDemoSource(context),
                                             )
-                                        }
-                                    },
-                                )
-                                ExampleDownloadTasksSection(
-                                    palette = palette,
-                                    tasks = downloadSnapshot.tasks,
-                                    pendingTasks = pendingDownloadTasks,
-                                    isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
-                                    savingTaskIds = savingTaskIds,
-                                    exportProgressByTaskId = exportProgressByTaskId,
-                                    onPrimaryAction = ::handleDownloadPrimaryAction,
-                                    onSaveToGallery = ::handleSaveDownloadToGallery,
-                                    onRemoveTask = { task ->
-                                        downloadManager.removeTask(task.taskId)
-                                    },
-                                )
+                                        },
+                                        onUseDashDemo = {
+                                            createDownloadTask(
+                                                assetIdPrefix = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                                source = androidDashDemoSource(context),
+                                            )
+                                        },
+                                        onCreateRemote = {
+                                            val url = downloadRemoteUrl.trim()
+                                            if (url.isNotEmpty()) {
+                                                createDownloadTask(
+                                                    assetIdPrefix = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                                    source =
+                                                        VesperPlayerSource.remote(
+                                                            uri = url,
+                                                            label = exampleDraftDownloadLabel(url),
+                                                        ),
+                                                )
+                                            }
+                                        },
+                                    )
+                                }
+                                item {
+                                    ExampleDownloadTasksSection(
+                                        palette = palette,
+                                        tasks = downloadSnapshot.tasks,
+                                        pendingTasks = pendingDownloadTasks,
+                                        isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
+                                        savingTaskIds = savingTaskIds,
+                                        exportProgressByTaskId = exportProgressByTaskId,
+                                        onPrimaryAction = ::handleDownloadPrimaryAction,
+                                        onSaveToGallery = ::handleSaveDownloadToGallery,
+                                        onRemoveTask = { task ->
+                                            downloadManager.removeTask(task.taskId)
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
@@ -1365,3 +1505,5 @@ private enum class ExampleHostTab {
     Player,
     Downloads,
 }
+
+private const val PLAYER_HOST_EXAMPLE_TAG = "VesperPlayerExample"

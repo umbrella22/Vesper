@@ -400,6 +400,7 @@ name:
 - Android Compose UI: `VesperPlayerKitComposeUi-android-<abi>.aar`
 - Android external playback: `VesperPlayerKitExternalPlayback-android-<abi>.aar`
 - Android FFmpeg runtime: `VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
+- Optional Android MediaCodec decoder plugin: `VesperPlayerKitDecoderMediaCodec-android-<abi>.aar`
 - Optional Android SourceNormalizer FFmpeg plugin: `VesperPlayerKitSourceNormalizerFfmpeg-android-<abi>.aar`
 - Optional Android FrameProcessor diagnostic plugin: `VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar`
 - Android Compose sample APK: `VesperPlayerAndroidComposeHost-android-<abi>-debug-signed.apk`
@@ -427,11 +428,11 @@ their shared runtime must come from the same FFmpeg profile so
 The mobile SourceNormalizer artifact can run diagnostics/preflight and, in
 `preferNormalized` or `requireNormalized`, expose disk-backed fMP4 or
 short-window HLS output to Android ExoPlayer and iOS AVPlayer through local
-resource layers. Packet-stream output remains reserved for the future native
-frame pipeline. The mobile FrameProcessor artifact is diagnostics-only: it can
-be packaged and probed for capabilities, but it does not open frame sessions,
-process frames, or participate in default mobile playback. Mobile Decoder
-artifacts and configuration remain deferred.
+resource layers. Packet-stream output is also used by explicit SDK-managed
+native-frame routes: iOS can run the VideoToolbox/Metal native-frame path for
+local/VOD sources, while Android can opt into the MediaCodec/SurfaceView path
+when the SourceNormalizer, decoder, and optional FrameProcessor plugin paths
+are provided. Default mobile playback remains platform system-player first.
 
 Release AARs / XCFrameworks are fully packaged binary artifacts. Host apps that
 consume these downloads do not run the repository's local JNI or FFmpeg

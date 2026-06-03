@@ -34,6 +34,8 @@
     <string name="example_sources_remote_stream_url">Remote stream URL</string>
     <string name="example_sources_theme">Theme</string>
     <string name="example_sources_open_remote_url">Open Remote URL</string>
+    <string name="example_sources_prepare_local_video">Preparing local video…</string>
+    <string name="example_sources_prepare_local_failed">Failed to prepare the local video: %1$s</string>
     <string name="example_external_title">External Playback</string>
     <string name="example_external_subtitle">Route the active item to Cast or DLNA. Remote progress is estimated until the SDK exposes route status polling.</string>
     <string name="example_external_cast_button">Search Cast</string>
@@ -130,7 +132,7 @@
     <string name="example_resilience_backoff_exponential">Exponential</string>
 
     <string name="example_plugins_title">Plugin Diagnostics</string>
-    <string name="example_plugins_subtitle">SourceNormalizer can be switched from diagnostics/preflight into normalized playback routes. FrameProcessor is logged only as diagnostic capability.</string>
+    <string name="example_plugins_subtitle">SourceNormalizer, FrameProcessor, and Android native-frame pipeline diagnostics are shown from the same host contract.</string>
     <string name="example_plugins_source_normalizer_disabled">SourceNormalizer Off</string>
     <string name="example_plugins_source_normalizer_disabled_subtitle">The SourceNormalizer plugin is not loaded for playback probes.</string>
     <string name="example_plugins_source_normalizer_diagnostics">Diagnostics</string>
@@ -141,13 +143,24 @@
     <string name="example_plugins_source_normalizer_prefer_subtitle">Try disk-backed fMP4/HLS normalized playback and fall back to the original source on failure.</string>
     <string name="example_plugins_source_normalizer_require">Require normalized</string>
     <string name="example_plugins_source_normalizer_require_subtitle">Require disk-backed normalized playback and surface an error instead of falling back.</string>
+    <string name="example_plugins_native_frame_disabled">Native frame off</string>
+    <string name="example_plugins_native_frame_disabled_subtitle">Do not request Android SDK-managed native-frame diagnostics.</string>
+    <string name="example_plugins_native_frame_diagnostics">Native frame diagnostics</string>
+    <string name="example_plugins_native_frame_diagnostics_subtitle">Report Android native-frame route readiness while playback remains on the system player.</string>
+    <string name="example_plugins_native_frame_prefer">Prefer native frame</string>
+    <string name="example_plugins_native_frame_prefer_subtitle">Prefer the Android SDK-managed native-frame route and fall back to the system player if the MediaCodec packet lane is unavailable.</string>
+    <string name="example_plugins_native_frame_require">Require native frame</string>
+    <string name="example_plugins_native_frame_require_subtitle">Require the Android SDK-managed native-frame route and surface an error if the MediaCodec packet lane is unavailable.</string>
     <string name="example_plugins_source_normalizer_path">source</string>
+    <string name="example_plugins_decoder_mediacodec_path">decoder</string>
     <string name="example_plugins_frame_processor_path">frame</string>
     <string name="example_plugins_missing">missing</string>
     <string name="example_plugins_source_normalizer_group">SourceNormalizer</string>
     <string name="example_plugins_frame_processor_group">FrameProcessor Debug</string>
+    <string name="example_plugins_native_frame_group">Native Frame Pipeline</string>
     <string name="example_plugins_no_source_normalizer_diagnostics">No SourceNormalizer diagnostics yet.</string>
     <string name="example_plugins_no_frame_processor_diagnostics">No FrameProcessor debug diagnostics yet.</string>
+    <string name="example_plugins_no_native_frame_diagnostics">No native-frame pipeline diagnostics yet.</string>
     <string name="example_plugins_unknown_record">Plugin diagnostic</string>
     <string name="example_plugins_participation">participation: %1$s</string>
     <string name="example_plugins_profiles">profiles: %1$s</string>

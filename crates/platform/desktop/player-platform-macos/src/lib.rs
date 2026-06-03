@@ -30,14 +30,18 @@ use player_platform_desktop::{
     probe_platform_desktop_source_with_options,
     probe_platform_desktop_source_with_video_source_factory_and_options, runtime_fallback_events,
 };
+use player_platform_native_frame::{
+    NativeFrameProcessorChainCore, NativeFrameProcessorError, NativeFrameProcessorNode,
+    NativeFrameProcessorObserver, NativeFrameProcessorOwnedFrame,
+    NativeFrameProcessorProcessedFrame,
+};
 use player_plugin::{
     DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind,
-    DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig, FrameProcessorError,
-    FrameProcessorOutputFrame, FrameProcessorReceiveOutput, FrameProcessorSession,
-    FrameProcessorSessionConfig, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
-    FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame, NativeFrameMetadata,
-    NativeHandleKind, SourceNormalizerPacket, SourceNormalizerPacketMediaKind,
-    SourceNormalizerPacketSeek, SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
+    DecoderSessionRequirements, FrameProcessorSessionConfig, NativeDecoderSession,
+    NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind, SourceNormalizerPacket,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
     SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus, VesperPluginKind,
 };
 use player_plugin_loader::{
@@ -46,20 +50,20 @@ use player_plugin_loader::{
     PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
+#[cfg(test)]
+use player_runtime::PlayerFrameProcessingMetrics;
 use player_runtime::{
-    DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
-    FrameProcessorWarning, FrameProcessorWarningKind, PlaybackProgress,
-    PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerFrameProcessingMetrics,
-    PlayerMediaInfo, PlayerPlaybackRoute, PlayerPluginCapabilitySummary,
-    PlayerPluginCodecCapability, PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticDetail, PlayerPluginDiagnosticStatus,
-    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation, PlayerResult,
-    PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
-    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
-    PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap, PlayerRuntimeCommand,
-    PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-    PlayerVideoSurfaceTarget, PresentationState, SourceNormalizerMode,
+    DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, PlaybackProgress,
+    PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerMediaInfo,
+    PlayerPlaybackRoute, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
+    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticDetail,
+    PlayerPluginDiagnosticStatus, PlayerPluginFrameProcessorCapabilitySummary,
+    PlayerPluginParticipation, PlayerResult, PlayerRuntime, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
+    PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent,
+    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,
+    PlayerVideoDecodeMode, PlayerVideoSurfaceTarget, PresentationState, SourceNormalizerMode,
     register_default_runtime_adapter_factory,
 };
 use tracing::info;

@@ -2,6 +2,7 @@
 
 mod download_jni;
 mod handles;
+mod native_frame_presenter;
 mod object_builders;
 mod parsers;
 mod playlist_jni;
@@ -18,12 +19,18 @@ use jni::signature::{RuntimeFieldSignature, RuntimeMethodSignature};
 use jni::strings::JNIString;
 use jni::sys::{jboolean, jfloat, jint, jlong, jobject, jobjectArray, jstring};
 use player_platform_android::AndroidExoPlaybackSnapshot;
-use player_platform_mobile::{
-    MobileFrameProcessorConfiguration, MobileSourceNormalizerConfiguration,
-    MobileSourceNormalizerRouteDecision, mobile_plugin_diagnostics_json,
-    mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
-    open_mobile_source_normalizer_resource,
+use player_platform_android::{
+    AndroidNativeFramePipelineOpenConfig, AndroidNativeFramePipelineSession,
+    AndroidNativeFramePresenterProfile, android_native_frame_pipeline_frame_json,
+    android_native_frame_pipeline_open_json, android_native_frame_pipeline_status_json,
 };
+use player_platform_mobile::{
+    MobileFrameProcessorConfiguration, MobileNativeFramePipelineConfiguration,
+    MobileSourceNormalizerConfiguration, MobileSourceNormalizerRouteDecision,
+    mobile_plugin_diagnostics_json, mobile_source_normalizer_resource_open_json,
+    mobile_source_normalizer_resource_status_json, open_mobile_source_normalizer_resource,
+};
+use player_runtime::NativeFramePipelineMode;
 use player_runtime::{FrameProcessorMode, PlayerError, PlayerRuntimeCommand, SourceNormalizerMode};
 
 pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
@@ -32,6 +39,7 @@ pub(crate) use handles::{
     HandleRegistry, lock_or_recover, run_jni_entry, u64_to_jlong_saturating,
     u128_to_jlong_saturating,
 };
+use native_frame_presenter::AndroidNativeWindowPresenterSink;
 use object_builders::{
     host_event_object, host_snapshot_object, native_command_object,
     resolved_resilience_policy_object, track_preferences_object,
@@ -46,10 +54,12 @@ use parsers::{
 };
 pub(crate) use sessions::resolve_preload_budget_with_runtime;
 use sessions::{
-    dispose_benchmark_sink_session, dispose_source_normalizer_resource_session,
-    new_benchmark_sink_session, new_session, new_source_normalizer_resource_session,
+    dispose_benchmark_sink_session, dispose_native_frame_pipeline_session,
+    dispose_source_normalizer_resource_session, new_benchmark_sink_session,
+    new_native_frame_pipeline_session, new_session, new_source_normalizer_resource_session,
     resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime, sessions,
-    with_benchmark_sink_session, with_session_mut, with_source_normalizer_resource_session_mut,
+    with_benchmark_sink_session, with_native_frame_pipeline_session_mut, with_session_mut,
+    with_source_normalizer_resource_session_mut,
 };
 
 pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
@@ -272,6 +282,321 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_openNativeFramePipeline(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    source_uri: JString<'_>,
+    source_mode_ordinal: jint,
+    source_plugin_library_paths: JObjectArray<'_>,
+    runtime_profile: JObject<'_>,
+    native_frame_mode: JString<'_>,
+    decoder_plugin_library_paths: JObjectArray<'_>,
+    frame_processor_plugin_library_paths: JObjectArray<'_>,
+    max_in_flight_frames: jint,
+    presenter_profile: JString<'_>,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let source_uri = source_uri.try_to_string(env)?;
+                let source_plugin_library_paths =
+                    string_array_to_vec(env, source_plugin_library_paths)?
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect();
+                let runtime_profile = string_from_java_object(env, runtime_profile)?;
+                let native_frame_mode = native_frame_mode.try_to_string(env)?;
+                let native_frame_mode =
+                    match native_frame_pipeline_mode_from_wire_name(&native_frame_mode) {
+                        Ok(mode) => mode,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
+                let presenter_profile = presenter_profile.try_to_string(env)?;
+                let presenter_profile =
+                    match native_frame_presenter_profile_from_wire_name(&presenter_profile) {
+                        Ok(profile) => profile,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
+                let decoder_plugin_library_paths =
+                    string_array_to_vec(env, decoder_plugin_library_paths)?
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect();
+                let frame_processor_plugin_library_paths =
+                    string_array_to_vec(env, frame_processor_plugin_library_paths)?
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect();
+                let session = match AndroidNativeFramePipelineSession::open(
+                    AndroidNativeFramePipelineOpenConfig {
+                        source_uri,
+                        source_normalizer: MobileSourceNormalizerConfiguration {
+                            mode: source_normalizer_mode_from_ordinal(source_mode_ordinal),
+                            plugin_library_paths: source_plugin_library_paths,
+                            runtime_profile,
+                        },
+                        native_frame_pipeline: MobileNativeFramePipelineConfiguration {
+                            mode: native_frame_mode,
+                            decoder_plugin_library_paths,
+                            frame_processor_plugin_library_paths,
+                            max_in_flight_frames: (max_in_flight_frames > 0)
+                                .then_some(max_in_flight_frames as u32),
+                        },
+                        presenter_profile,
+                    },
+                ) {
+                    Ok(session) => session,
+                    Err(error) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(error.message()),
+                        )?;
+                        return Ok(std::ptr::null_mut());
+                    }
+                };
+                let handle = match new_native_frame_pipeline_session(session) {
+                    Ok(handle) => handle,
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalStateException"),
+                            jni_name(message),
+                        )?;
+                        return Ok(std::ptr::null_mut());
+                    }
+                };
+                let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
+                    android_native_frame_pipeline_open_json(handle as u64, session)
+                        .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_advanceNativeFramePipeline(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
+                    let result = session
+                        .advance()
+                        .map_err(|error| error.message().to_owned())?;
+                    let counters = session.status_wire(handle as u64, None).counters;
+                    android_native_frame_pipeline_frame_json(result, counters)
+                        .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_releaseNativeFramePipelineFrame(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    frame_handle: jlong,
+    presented: jboolean,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
+                    session
+                        .release_frame(frame_handle.max(0) as u64, presented)
+                        .map_err(|error| error.message().to_owned())?;
+                    android_native_frame_pipeline_status_json(
+                        handle as u64,
+                        session,
+                        Some("released".to_owned()),
+                    )
+                    .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_attachNativeFramePipelineSurface(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    surface: JObject<'_>,
+    surface_kind: JString<'_>,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let surface_kind = surface_kind.try_to_string(env)?;
+                let surface_profile =
+                    match native_frame_presenter_profile_from_wire_name(&surface_kind) {
+                        Ok(profile) => profile,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
+                let presenter_sink =
+                    match AndroidNativeWindowPresenterSink::from_surface(env, &surface) {
+                        Ok(sink) => sink,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalStateException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
+                let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
+                    session
+                        .attach_presenter_surface(surface_profile)
+                        .map_err(|error| error.message().to_owned())?;
+                    session
+                        .configure_presenter_sink(Box::new(presenter_sink))
+                        .map_err(|error| error.message().to_owned())?;
+                    android_native_frame_pipeline_status_json(
+                        handle as u64,
+                        session,
+                        Some(
+                            "presenter surface attached; ANativeWindow presenter context configured"
+                                .to_owned(),
+                        ),
+                    )
+                    .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_detachNativeFramePipelineSurface(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
+                    session.detach_presenter_surface();
+                    android_native_frame_pipeline_status_json(
+                        handle as u64,
+                        session,
+                        Some("presenter surface detached".to_owned()),
+                    )
+                    .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_flushNativeFramePipeline(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
+                    session
+                        .flush()
+                        .map_err(|error| error.message().to_owned())?;
+                    android_native_frame_pipeline_status_json(
+                        handle as u64,
+                        session,
+                        Some("flushed".to_owned()),
+                    )
+                    .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_seekNativeFramePipeline(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    position_ms: jlong,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
+                    session
+                        .seek(Duration::from_millis(position_ms.max(0) as u64))
+                        .map_err(|error| error.message().to_owned())?;
+                    android_native_frame_pipeline_status_json(
+                        handle as u64,
+                        session,
+                        Some("seeked".to_owned()),
+                    )
+                    .map_err(|error| error.to_string())
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env.new_string(json)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_closeNativeFramePipeline(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    run_jni_entry(&mut unowned_env, |_unowned_env| {
+        dispose_native_frame_pipeline_session(handle);
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeBenchmarkSinkSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -296,6 +621,33 @@ fn frame_processor_mode_from_ordinal(ordinal: jint) -> FrameProcessorMode {
     match ordinal {
         1 => FrameProcessorMode::DiagnosticsOnly,
         _ => FrameProcessorMode::Disabled,
+    }
+}
+
+fn native_frame_pipeline_mode_from_wire_name(
+    value: &str,
+) -> Result<NativeFramePipelineMode, String> {
+    match value {
+        "disabled" => Ok(NativeFramePipelineMode::Disabled),
+        "diagnosticsOnly" => Ok(NativeFramePipelineMode::DiagnosticsOnly),
+        "preferNativeFrame" => Ok(NativeFramePipelineMode::PreferNativeFrame),
+        "requireNativeFrame" => Ok(NativeFramePipelineMode::RequireNativeFrame),
+        other => Err(format!(
+            "unknown Android native-frame mode wire name `{other}`"
+        )),
+    }
+}
+
+fn native_frame_presenter_profile_from_wire_name(
+    value: &str,
+) -> Result<AndroidNativeFramePresenterProfile, String> {
+    match value {
+        "SurfaceView" => Ok(AndroidNativeFramePresenterProfile::SurfaceView),
+        "Surface" => Ok(AndroidNativeFramePresenterProfile::Surface),
+        "SurfaceTexture" => Ok(AndroidNativeFramePresenterProfile::SurfaceTexture),
+        other => Err(format!(
+            "unknown Android native-frame presenter profile wire name `{other}`"
+        )),
     }
 }
 
