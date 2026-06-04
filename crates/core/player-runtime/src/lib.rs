@@ -1,8 +1,15 @@
 #![deny(unsafe_code)]
+//! Core runtime facade and shared playback contracts.
+//!
+//! This crate exposes the runtime wrapper used by platform adapters, shared
+//! policy types, command/event payloads, playlist and preload re-exports, and
+//! capability snapshots. Concrete decoding, rendering, and platform ownership
+//! stay behind [`PlayerRuntimeAdapter`] implementations.
 
 mod adapter;
 mod clock;
 mod controller;
+/// Shared policy resolution helpers.
 pub mod policy;
 
 use std::path::PathBuf;
@@ -51,6 +58,7 @@ pub use player_preload::{
     PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
 };
 
+/// Download API re-exports.
 pub mod download {
     pub use player_download::{
         DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
@@ -62,10 +70,12 @@ pub mod download {
     };
 }
 
+/// Error API re-exports.
 pub mod error {
     pub use player_model::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 }
 
+/// Preload API re-exports.
 pub mod preload {
     pub use player_preload::{
         DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
@@ -79,6 +89,7 @@ pub mod preload {
     };
 }
 
+/// Playlist API re-exports.
 pub mod playlist {
     pub use player_playlist::{
         PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision,
@@ -90,6 +101,7 @@ pub mod playlist {
     };
 }
 
+/// Runtime default constants.
 pub mod defaults {
     pub use super::{
         DEFAULT_PLAYBACK_RATE, DEFAULT_RETRY_BASE_DELAY, DEFAULT_RETRY_MAX_DELAY,
@@ -103,86 +115,133 @@ pub mod defaults {
     };
 }
 
+/// Default playback rate used by runtime options.
 pub const DEFAULT_PLAYBACK_RATE: f32 = 1.0;
+/// Minimum accepted playback rate.
 pub const MIN_PLAYBACK_RATE: f32 = 0.5;
+/// Upper bound for rates considered natural playback.
 pub const NATURAL_PLAYBACK_RATE_MAX: f32 = 2.0;
+/// Maximum accepted playback rate.
 pub const MAX_PLAYBACK_RATE: f32 = 3.0;
+/// Default tolerance for presenting video frames early.
 pub const DEFAULT_VIDEO_PRESENT_EARLY_TOLERANCE: Duration = Duration::from_millis(4);
+/// Default idle poll interval for video runtimes.
 pub const DEFAULT_VIDEO_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(16);
+/// Default number of video frames allowed in the prefetch queue.
 pub const DEFAULT_VIDEO_PREFETCH_CAPACITY: usize = 8;
+/// Default base delay for retry policies.
 pub const DEFAULT_RETRY_BASE_DELAY: Duration = Duration::from_millis(1_000);
+/// Default maximum delay for retry policies.
 pub const DEFAULT_RETRY_MAX_DELAY: Duration = Duration::from_millis(5_000);
 
 static DEFAULT_RUNTIME_ADAPTER_FACTORY: OnceLock<&'static dyn PlayerRuntimeAdapterFactory> =
     OnceLock::new();
 
+/// Options used while probing and opening a runtime.
 #[derive(Debug, Clone)]
 pub struct PlayerRuntimeOptions {
+    /// Whether audio output should be enabled when the adapter supports it.
     pub enable_audio_output: bool,
+    /// Optional host-owned video surface passed to the adapter.
     pub video_surface: Option<PlayerVideoSurfaceTarget>,
+    /// Decoder plugin library paths considered during startup.
     pub decoder_plugin_library_paths: Vec<PathBuf>,
+    /// Decoder plugin video rollout mode.
     pub decoder_plugin_video_mode: PlayerDecoderPluginVideoMode,
+    /// Source normalizer plugin library paths considered during startup.
     pub source_normalizer_plugin_library_paths: Vec<PathBuf>,
+    /// Source normalizer rollout mode.
     pub source_normalizer_mode: SourceNormalizerMode,
+    /// Frame processor plugin library paths considered during startup.
     pub frame_processor_library_paths: Vec<PathBuf>,
+    /// Frame processor rollout mode.
     pub frame_processor_mode: FrameProcessorMode,
+    /// Frame processor scheduling policy.
     pub frame_processor_policy: FrameProcessorPolicy,
+    /// Maximum number of decoded video frames to prefetch.
     pub video_prefetch_capacity: usize,
+    /// Tolerance for presenting video frames before their target time.
     pub video_present_early_tolerance: Duration,
+    /// Poll interval used while waiting for video work.
     pub video_idle_poll_interval: Duration,
+    /// Buffering policy overrides.
     pub buffering_policy: PlayerBufferingPolicy,
+    /// Retry policy overrides.
     pub retry_policy: PlayerRetryPolicy,
+    /// Cache policy overrides.
     pub cache_policy: PlayerCachePolicy,
+    /// Preload budget overrides.
     pub preload_budget: PlayerPreloadBudgetPolicy,
+    /// Track selection preferences.
     pub track_preferences: PlayerTrackPreferencePolicy,
 }
 
+/// Rollout mode for decoder plugin video output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerDecoderPluginVideoMode {
+    /// Load and report diagnostics without requiring native-frame video output.
     DiagnosticsOnly,
+    /// Prefer plugin native-frame output when the adapter supports it.
     PreferNativeFrame,
 }
 
 /// Rust-internal source normalizer rollout mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceNormalizerMode {
+    /// Source normalizer plugins are ignored.
     #[default]
     Disabled,
+    /// Plugins are probed for diagnostics only.
     DiagnosticsOnly,
+    /// Plugins may validate a source before native playback continues.
     PreflightOnly,
+    /// Prefer normalized output but allow fallback.
     PreferNormalized,
+    /// Require normalized output.
     RequireNormalized,
 }
 
 /// Rust-internal frame processor rollout mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FrameProcessorMode {
+    /// Frame processors are ignored.
     #[default]
     Disabled,
+    /// Frame processors are probed for diagnostics only.
     DiagnosticsOnly,
+    /// Prefer processed output but allow fallback to original frames.
     PreferProcessed,
+    /// Require processed output.
     RequireProcessed,
 }
 
 /// Rust-internal native-frame pipeline rollout mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NativeFramePipelineMode {
+    /// Native-frame pipeline is disabled.
     #[default]
     Disabled,
+    /// Native-frame components are probed for diagnostics only.
     DiagnosticsOnly,
+    /// Prefer the native-frame pipeline but allow fallback.
     PreferNativeFrame,
+    /// Require the native-frame pipeline.
     RequireNativeFrame,
 }
 
 /// Shared playback route labels used by plugin diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerPlaybackRoute {
+    /// Playback is delegated to the platform or system player.
     SystemPlayer,
+    /// Playback uses an SDK-managed native-frame route.
     SdkManagedNativeFrame,
+    /// Playback uses a software decoder route.
     SoftwareDecoder,
 }
 
 impl PlayerPlaybackRoute {
+    /// Returns the stable diagnostic wire name.
     pub const fn wire_name(self) -> &'static str {
         match self {
             Self::SystemPlayer => "systemPlayer",
@@ -191,6 +250,7 @@ impl PlayerPlaybackRoute {
         }
     }
 
+    /// Parses a stable diagnostic wire name.
     pub const fn from_wire_name(value: &str) -> Option<Self> {
         match value.as_bytes() {
             b"systemPlayer" => Some(Self::SystemPlayer),
@@ -204,9 +264,13 @@ impl PlayerPlaybackRoute {
 /// Rust-internal frame processor scheduling policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameProcessorPolicy {
+    /// Target processing deadline for one frame.
     pub frame_deadline: Duration,
+    /// Extra tolerance before late output is treated as over deadline.
     pub late_output_tolerance: Duration,
+    /// Maximum number of processors in one chain.
     pub max_chain_depth: usize,
+    /// Maximum queued or in-flight frames per processor.
     pub max_in_flight_frames_per_processor: u32,
 }
 
@@ -221,217 +285,350 @@ impl Default for FrameProcessorPolicy {
     }
 }
 
+/// Named buffering presets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerBufferingPreset {
+    /// Resolve from source kind and protocol.
     Default,
+    /// Balanced default for ordinary playback.
     Balanced,
+    /// Larger buffers for remote progressive playback.
     Streaming,
+    /// Larger buffers for streaming protocols.
     Resilient,
+    /// Smaller buffers for latency-sensitive playback.
     LowLatency,
 }
 
+/// Buffering policy with optional explicit duration overrides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerBufferingPolicy {
+    /// Preset used as the base policy.
     pub preset: PlayerBufferingPreset,
+    /// Minimum desired buffered duration.
     pub min_buffer: Option<Duration>,
+    /// Maximum desired buffered duration.
     pub max_buffer: Option<Duration>,
+    /// Buffer required before initial playback.
     pub buffer_for_playback: Option<Duration>,
+    /// Buffer required before resuming after rebuffering.
     pub buffer_for_rebuffer: Option<Duration>,
 }
 
+/// Retry backoff shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerRetryBackoff {
+    /// Use the same delay for every retry.
     Fixed,
+    /// Increase delay linearly.
     Linear,
+    /// Increase delay exponentially.
     Exponential,
 }
 
+/// Retry policy used by runtimes that support recovery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerRetryPolicy {
+    /// Maximum retry attempts, or unlimited when `None`.
     pub max_attempts: Option<u32>,
+    /// Initial retry delay.
     pub base_delay: Duration,
+    /// Maximum retry delay.
     pub max_delay: Duration,
+    /// Delay growth behavior.
     pub backoff: PlayerRetryBackoff,
 }
 
+/// Named cache presets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerCachePreset {
+    /// Resolve from source kind and protocol.
     Default,
+    /// Disable runtime cache use.
     Disabled,
+    /// Cache budget for remote progressive playback.
     Streaming,
+    /// Larger cache budget for streaming protocols.
     Resilient,
 }
 
+/// Cache policy with optional explicit budget overrides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerCachePolicy {
+    /// Preset used as the base policy.
     pub preset: PlayerCachePreset,
+    /// Maximum memory bytes available for cache use.
     pub max_memory_bytes: Option<u64>,
+    /// Maximum disk bytes available for cache use.
     pub max_disk_bytes: Option<u64>,
 }
 
+/// Resolved resilience policies for one source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerResolvedResiliencePolicy {
+    /// Resolved buffering policy.
     pub buffering_policy: PlayerBufferingPolicy,
+    /// Resolved retry policy.
     pub retry_policy: PlayerRetryPolicy,
+    /// Resolved cache policy.
     pub cache_policy: PlayerCachePolicy,
 }
 
+/// Preferred track selection policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerTrackPreferencePolicy {
+    /// Preferred audio language tag.
     pub preferred_audio_language: Option<String>,
+    /// Preferred subtitle language tag.
     pub preferred_subtitle_language: Option<String>,
+    /// Whether subtitles should be selected by default.
     pub select_subtitles_by_default: bool,
+    /// Whether undetermined-language subtitles may be selected by default.
     pub select_undetermined_subtitle_language: bool,
+    /// Preferred audio selection.
     pub audio_selection: MediaTrackSelection,
+    /// Preferred subtitle selection.
     pub subtitle_selection: MediaTrackSelection,
+    /// Preferred adaptive bitrate policy.
     pub abr_policy: MediaAbrPolicy,
 }
 
+/// Platform surface kinds accepted by runtime adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerVideoSurfaceKind {
+    /// macOS `NSView` pointer.
     NsView,
+    /// iOS `UIView` pointer.
     UiView,
+    /// Apple `AVPlayerLayer` pointer.
     PlayerLayer,
+    /// Apple `CAMetalLayer` pointer.
     MetalLayer,
+    /// Windows `HWND` value.
     Win32Hwnd,
 }
 
+/// Host-owned video surface handle passed through the runtime boundary.
+///
+/// The `handle` is an opaque platform pointer or integer value whose lifetime
+/// remains owned by the host. Runtime adapters must validate that `kind` is
+/// supported for their platform before using the handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerVideoSurfaceTarget {
+    /// Platform-specific handle kind.
     pub kind: PlayerVideoSurfaceKind,
+    /// Opaque host-owned handle value.
     pub handle: usize,
 }
 
+/// Best-known video stream details.
 #[derive(Debug, Clone)]
 pub struct PlayerVideoInfo {
+    /// Codec name or identifier.
     pub codec: String,
+    /// Encoded width in pixels.
     pub width: u32,
+    /// Encoded height in pixels.
     pub height: u32,
+    /// Optional frame rate in frames per second.
     pub frame_rate: Option<f64>,
 }
 
+/// Best-known audio stream details.
 #[derive(Debug, Clone)]
 pub struct PlayerAudioInfo {
+    /// Codec name or identifier.
     pub codec: String,
+    /// Sample rate in hertz.
     pub sample_rate: u32,
+    /// Channel count.
     pub channels: u16,
 }
 
+/// Media metadata discovered during probing or playback.
 #[derive(Debug, Clone)]
 pub struct PlayerMediaInfo {
+    /// Source URI.
     pub source_uri: String,
+    /// Source storage kind.
     pub source_kind: MediaSourceKind,
+    /// Source protocol.
     pub source_protocol: MediaSourceProtocol,
+    /// Known duration, if available.
     pub duration: Option<Duration>,
+    /// Known aggregate bit rate, if available.
     pub bit_rate: Option<u64>,
+    /// Number of audio streams.
     pub audio_streams: usize,
+    /// Number of video streams.
     pub video_streams: usize,
+    /// Best video stream summary, if available.
     pub best_video: Option<PlayerVideoInfo>,
+    /// Best audio stream summary, if available.
     pub best_audio: Option<PlayerAudioInfo>,
+    /// Available media tracks.
     pub track_catalog: MediaTrackCatalog,
+    /// Current track selection snapshot.
     pub track_selection: MediaTrackSelectionSnapshot,
 }
 
+/// Timeline classification for playback progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerTimelineKind {
+    /// Video-on-demand timeline.
     Vod,
+    /// Live timeline without a seekable DVR window.
     Live,
+    /// Live timeline with a seekable DVR window.
     LiveDvr,
 }
 
+/// Inclusive seekable media position range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerSeekableRange {
+    /// Start of the seekable range.
     pub start: Duration,
+    /// End of the seekable range.
     pub end: Duration,
 }
 
 impl PlayerSeekableRange {
+    /// Returns the range duration when `end >= start`.
     pub fn duration(&self) -> Option<Duration> {
         self.end.checked_sub(self.start)
     }
 
+    /// Clamps a media position into this range.
     pub fn clamp_position(&self, position: Duration) -> Duration {
         position.clamp(self.start, self.end)
     }
 
+    /// Returns whether a media position is inside this range.
     pub fn contains(&self, position: Duration) -> bool {
         position >= self.start && position <= self.end
     }
 }
 
+/// Runtime timeline snapshot derived from progress and media metadata.
 #[derive(Debug, Clone)]
 pub struct PlayerTimelineSnapshot {
+    /// Timeline kind.
     pub kind: PlayerTimelineKind,
+    /// Whether seeking is currently supported.
     pub is_seekable: bool,
+    /// Seekable range when available.
     pub seekable_range: Option<PlayerSeekableRange>,
+    /// Effective live edge when known.
     pub live_edge: Option<Duration>,
+    /// Current media position.
     pub position: Duration,
+    /// Current timeline duration when known.
     pub duration: Option<Duration>,
 }
 
+/// Audio output information reported by a runtime.
 #[derive(Debug, Clone)]
 pub struct PlayerAudioOutputInfo {
+    /// Output device display name.
     pub device_name: Option<String>,
+    /// Output channel count.
     pub channels: Option<u16>,
+    /// Output sample rate in hertz.
     pub sample_rate: Option<u32>,
+    /// Output sample format.
     pub sample_format: Option<String>,
 }
 
+/// Broad backend family used by diagnostics and capability snapshots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerRuntimeAdapterBackendFamily {
+    /// Software desktop backend.
     SoftwareDesktop,
+    /// Native macOS backend.
     NativeMacos,
+    /// Native Android backend.
     NativeAndroid,
+    /// Native iOS backend.
     NativeIos,
     #[deprecated(
         since = "0.1.0",
         note = "HarmonyOS backend is not implemented in this workspace."
     )]
+    /// Deprecated placeholder for an unimplemented HarmonyOS backend.
     NativeHarmony,
+    /// Unknown or custom backend family.
     Unknown,
 }
 
+/// Runtime capability snapshot.
 #[derive(Debug, Clone)]
 pub struct PlayerRuntimeAdapterCapabilities {
+    /// Stable adapter id.
     pub adapter_id: &'static str,
+    /// Broad backend family.
     pub backend_family: PlayerRuntimeAdapterBackendFamily,
+    /// Whether the adapter can output audio.
     pub supports_audio_output: bool,
+    /// Whether the adapter can return decoded frames from `advance`.
     pub supports_frame_output: bool,
+    /// Whether the adapter accepts an external video surface.
     pub supports_external_video_surface: bool,
+    /// Whether seeking is supported.
     pub supports_seek: bool,
+    /// Whether stopping is supported.
     pub supports_stop: bool,
+    /// Whether playback-rate changes are supported.
     pub supports_playback_rate: bool,
+    /// Minimum supported playback rate.
     pub playback_rate_min: Option<f32>,
+    /// Maximum supported playback rate.
     pub playback_rate_max: Option<f32>,
+    /// Maximum playback rate considered natural by the backend.
     pub natural_playback_rate_max: Option<f32>,
+    /// Whether hardware decoding is available.
     pub supports_hardware_decode: bool,
+    /// Whether remote streaming protocols are supported.
     pub supports_streaming: bool,
+    /// Whether HDR playback is supported.
     pub supports_hdr: bool,
 }
 
+/// Probed runtime that can be initialized into a [`PlayerRuntime`].
 pub struct PlayerRuntimeInitializer {
     adapter_id: &'static str,
     inner: Box<dyn PlayerRuntimeAdapterInitializer>,
 }
 
+/// Summary of decoded audio collected during startup.
 #[derive(Debug, Clone)]
 pub struct DecodedAudioSummary {
+    /// Audio channel count.
     pub channels: u16,
+    /// Sample rate in hertz.
     pub sample_rate: u32,
+    /// Decoded audio duration.
     pub duration: Duration,
 }
 
+/// Selected video decode mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerVideoDecodeMode {
+    /// CPU/software decode.
     Software,
+    /// Hardware-accelerated decode.
     Hardware,
 }
 
+/// Video decode startup summary.
 #[derive(Debug, Clone)]
 pub struct PlayerVideoDecodeInfo {
+    /// Decode mode selected by the runtime.
     pub selected_mode: PlayerVideoDecodeMode,
+    /// Whether hardware decode was available.
     pub hardware_available: bool,
+    /// Backend name for hardware decode when available.
     pub hardware_backend: Option<String>,
+    /// Reason hardware decode was not selected, if any.
     pub fallback_reason: Option<String>,
 }
 
@@ -450,6 +647,7 @@ pub enum PlayerPluginDiagnosticStatus {
 }
 
 impl PlayerPluginDiagnosticStatus {
+    /// Returns the stable diagnostic wire name.
     pub const fn wire_name(self) -> &'static str {
         match self {
             Self::Loaded => "loaded",
@@ -464,6 +662,7 @@ impl PlayerPluginDiagnosticStatus {
         }
     }
 
+    /// Parses a stable diagnostic wire name.
     pub const fn from_wire_name(value: &str) -> Option<Self> {
         match value.as_bytes() {
             b"loaded" => Some(Self::Loaded),
@@ -483,96 +682,158 @@ impl PlayerPluginDiagnosticStatus {
 /// Rust-side codec capability summary emitted by decoder plugin diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginCodecCapability {
+    /// Media kind reported by the plugin.
     pub media_kind: String,
+    /// Codec identifier reported by the plugin.
     pub codec: String,
 }
 
 /// Rust-side decoder capability summary emitted by desktop runtime probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginDecoderCapabilitySummary {
+    /// Structured codec capabilities.
     pub codecs: Vec<PlayerPluginCodecCapability>,
+    /// Legacy codec names.
     pub legacy_codecs: Vec<String>,
+    /// Whether native-frame video output is supported.
     pub supports_native_frame_output: bool,
+    /// Whether hardware decode is supported.
     pub supports_hardware_decode: bool,
+    /// Whether CPU video frames are supported.
     pub supports_cpu_video_frames: bool,
+    /// Whether compressed audio packets are supported.
     pub supports_audio_packets: bool,
+    /// Whether decoded audio frames are supported.
     pub supports_audio_frames: bool,
+    /// Whether PCM frames are supported.
     pub supports_pcm_frames: bool,
+    /// Whether GPU handles are supported.
     pub supports_gpu_handles: bool,
+    /// Whether the decoder can flush.
     pub supports_flush: bool,
+    /// Whether the decoder can drain.
     pub supports_drain: bool,
+    /// Maximum simultaneous sessions.
     pub max_sessions: Option<u32>,
 }
 
 /// Rust-side frame processor capability summary emitted by desktop runtime probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginFrameProcessorCapabilitySummary {
+    /// Accepted input handle kinds.
     pub accepted_input_handle_kinds: Vec<String>,
+    /// Produced output handle kinds.
     pub output_handle_kinds: Vec<String>,
+    /// Accepted input pipeline profiles.
     pub accepted_input_pipeline_profiles: Vec<String>,
+    /// Produced output pipeline profiles.
     pub output_pipeline_profiles: Vec<String>,
+    /// Whether video frames are supported.
     pub supports_video_frames: bool,
+    /// Whether in-place passthrough is supported.
     pub supports_in_place_passthrough: bool,
+    /// Whether dimensions are preserved.
     pub preserves_dimensions: bool,
+    /// Whether dimensions may change.
     pub may_change_dimensions: bool,
+    /// Whether color metadata is preserved.
     pub preserves_color_metadata: bool,
+    /// Whether HDR metadata is preserved.
     pub preserves_hdr_metadata: bool,
+    /// Whether the processor can flush.
     pub supports_flush: bool,
+    /// Maximum simultaneous sessions.
     pub max_sessions: Option<u32>,
+    /// Maximum in-flight frames accepted.
     pub max_in_flight_frames: Option<u32>,
 }
 
 /// Rust-side source normalizer capability summary emitted by runtime probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginSourceNormalizerCapabilitySummary {
+    /// Supported runtime profile names.
     pub supported_runtime_profiles: Vec<String>,
+    /// Supported output route names.
     pub supported_output_routes: Vec<String>,
+    /// Maximum normalization level.
     pub max_level: String,
+    /// Supported media kind names.
     pub media_kinds: Vec<String>,
+    /// Supported codec names.
     pub codecs: Vec<String>,
+    /// Supported bitstream format names.
     pub bitstream_formats: Vec<String>,
+    /// Whether seeking is supported.
     pub supports_seek: bool,
+    /// Whether flushing is supported.
     pub supports_flush: bool,
+    /// Whether growing resources are supported.
     pub supports_growing_resources: bool,
+    /// Whether range reads are supported.
     pub supports_range_reads: bool,
+    /// Whether cancellation is supported.
     pub supports_cancel: bool,
+    /// Supported content types.
     pub content_types: Vec<String>,
+    /// Required external library names.
     pub required_libraries: Vec<String>,
+    /// Required demuxer names.
     pub required_demuxers: Vec<String>,
+    /// Required muxer names.
     pub required_muxers: Vec<String>,
+    /// Required protocol names.
     pub required_protocols: Vec<String>,
+    /// Required parser names.
     pub required_parsers: Vec<String>,
+    /// Required bitstream filter names.
     pub required_bitstream_filters: Vec<String>,
+    /// Required TLS backend.
     pub required_tls: Option<String>,
+    /// Whether network access is required.
     pub requires_network: bool,
+    /// Suggested session read buffer size.
     pub session_read_buffer_bytes: Option<u64>,
+    /// Suggested manifest snapshot size.
     pub manifest_snapshot_bytes: Option<u64>,
+    /// Suggested per-session disk soft cap.
     pub session_disk_soft_cap_bytes: Option<u64>,
+    /// Suggested global disk soft cap.
     pub global_disk_soft_cap_bytes: Option<u64>,
+    /// Maximum simultaneous sessions.
     pub max_sessions: Option<u32>,
 }
 
 /// Rust-side capability summary emitted by plugin diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerPluginCapabilitySummary {
+    /// Decoder plugin capabilities.
     Decoder(PlayerPluginDecoderCapabilitySummary),
+    /// Frame processor plugin capabilities.
     FrameProcessor(PlayerPluginFrameProcessorCapabilitySummary),
+    /// Source normalizer plugin capabilities.
     SourceNormalizer(PlayerPluginSourceNormalizerCapabilitySummary),
 }
 
 /// Runtime participation state for plugin diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerPluginParticipation {
+    /// Participation is not known.
     #[default]
     Unknown,
+    /// Plugin was available for selection.
     Available,
+    /// Plugin was selected for the route.
     Selected,
+    /// Plugin participated in playback.
     Participated,
+    /// Plugin was bypassed by policy or runtime conditions.
     Bypassed,
+    /// Playback fell back away from the plugin.
     Fallback,
 }
 
 impl PlayerPluginParticipation {
+    /// Returns the stable diagnostic wire name.
     pub const fn wire_name(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
@@ -584,6 +845,7 @@ impl PlayerPluginParticipation {
         }
     }
 
+    /// Parses a stable diagnostic wire name.
     pub const fn from_wire_name(value: &str) -> Option<Self> {
         match value.as_bytes() {
             b"unknown" => Some(Self::Unknown),
@@ -600,80 +862,131 @@ impl PlayerPluginParticipation {
 /// Stable key/value detail attached to a plugin diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginDiagnosticDetail {
+    /// Stable detail key.
     pub key: String,
+    /// Detail value.
     pub value: String,
 }
 
 /// Rust-side plugin diagnostic record emitted by desktop runtime probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginDiagnostic {
+    /// Plugin path.
     pub path: String,
+    /// Plugin name when available.
     pub plugin_name: Option<String>,
+    /// Plugin kind when available.
     pub plugin_kind: Option<String>,
+    /// Diagnostic status.
     pub status: PlayerPluginDiagnosticStatus,
+    /// Human-readable diagnostic message.
     pub message: Option<String>,
+    /// Capability summary when probing produced one.
     pub capability: Option<PlayerPluginCapabilitySummary>,
+    /// Runtime participation state.
     pub participation: PlayerPluginParticipation,
+    /// Additional stable diagnostic details.
     pub details: Vec<PlayerPluginDiagnosticDetail>,
 }
 
+/// Startup diagnostics and discovered output capabilities.
 #[derive(Debug, Clone)]
 pub struct PlayerRuntimeStartup {
+    /// Whether FFmpeg initialization completed.
     pub ffmpeg_initialized: bool,
+    /// Audio output information discovered during startup.
     pub audio_output: Option<PlayerAudioOutputInfo>,
+    /// Decoded audio summary collected during startup.
     pub decoded_audio: Option<DecodedAudioSummary>,
+    /// Video decode summary collected during startup.
     pub video_decode: Option<PlayerVideoDecodeInfo>,
+    /// Plugin diagnostics collected during startup.
     pub plugin_diagnostics: Vec<PlayerPluginDiagnostic>,
 }
 
+/// Command sent to a runtime adapter.
 #[derive(Debug, Clone)]
 pub enum PlayerRuntimeCommand {
+    /// Start or resume playback.
     Play,
+    /// Pause playback.
     Pause,
+    /// Toggle between playing and paused states.
     TogglePause,
+    /// Seek to an absolute media position.
     SeekTo { position: Duration },
+    /// Set playback rate.
     SetPlaybackRate { rate: f32 },
+    /// Set video track selection.
     SetVideoTrackSelection { selection: MediaTrackSelection },
+    /// Set audio track selection.
     SetAudioTrackSelection { selection: MediaTrackSelection },
+    /// Set subtitle track selection.
     SetSubtitleTrackSelection { selection: MediaTrackSelection },
+    /// Set adaptive bitrate policy.
     SetAbrPolicy { policy: MediaAbrPolicy },
+    /// Stop playback when the adapter supports it.
     Stop,
 }
 
+/// Result returned after a runtime command is dispatched.
 #[derive(Debug)]
 pub struct PlayerRuntimeCommandResult {
+    /// Whether the adapter applied the command.
     pub applied: bool,
+    /// Optional frame produced while applying the command.
     pub frame: Option<DecodedVideoFrame>,
+    /// Snapshot after command handling.
     pub snapshot: PlayerSnapshot,
 }
 
+/// Aggregate resilience counters reported by runtimes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerResilienceMetrics {
+    /// Number of buffering transitions into buffering state.
     pub buffering_event_count: u32,
+    /// Number of buffering events after playback had already started.
     pub rebuffer_count: u32,
+    /// Highest retry attempt observed.
     pub retry_count: u32,
+    /// Total time spent buffering.
     pub total_buffering_duration: Duration,
+    /// Last retry delay that was scheduled.
     pub last_retry_delay: Option<Duration>,
 }
 
 /// Aggregate frame processing counters reported by frame-processing runtimes.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PlayerFrameProcessingMetrics {
+    /// Frames submitted to frame processors.
     pub submitted_frame_count: u64,
+    /// Frames that produced processed output.
     pub processed_frame_count: u64,
+    /// Frames that bypassed processing.
     pub bypassed_frame_count: u64,
+    /// Processor outputs dropped by policy.
     pub dropped_output_count: u64,
+    /// Frame deadline misses.
     pub deadline_miss_count: u64,
+    /// Late outputs dropped by policy.
     pub late_output_drop_count: u64,
+    /// Backpressure events.
     pub backpressure_count: u64,
+    /// Processors disabled by policy.
     pub disabled_processor_count: u32,
+    /// Maximum observed queue depth.
     pub max_queue_depth: Option<u32>,
+    /// Maximum observed in-flight frames.
     pub max_in_flight_frames: Option<u32>,
+    /// Last queue wait duration in microseconds.
     pub last_queue_wait_us: Option<u64>,
+    /// Last processing duration in microseconds.
     pub last_process_time_us: Option<u64>,
+    /// Last submit-to-ready duration in microseconds.
     pub last_submit_to_ready_us: Option<u64>,
 }
 
+/// Helper for tracking resilience metrics from runtime observations.
 #[derive(Debug, Default)]
 pub struct PlayerResilienceMetricsTracker {
     metrics: PlayerResilienceMetrics,
@@ -681,75 +994,127 @@ pub struct PlayerResilienceMetricsTracker {
     has_started_playback: bool,
 }
 
+/// Point-in-time runtime state.
 #[derive(Debug, Clone)]
 pub struct PlayerSnapshot {
+    /// Source URI.
     pub source_uri: String,
+    /// Current presentation state.
     pub state: PresentationState,
+    /// Whether a video surface is attached.
     pub has_video_surface: bool,
+    /// Whether playback is interrupted by the host platform.
     pub is_interrupted: bool,
+    /// Whether the runtime is buffering.
     pub is_buffering: bool,
+    /// Current playback rate.
     pub playback_rate: f32,
+    /// Current playback progress.
     pub progress: PlaybackProgress,
+    /// Current timeline information.
     pub timeline: PlayerTimelineSnapshot,
+    /// Current media information.
     pub media_info: PlayerMediaInfo,
+    /// Current resilience metrics.
     pub resilience_metrics: PlayerResilienceMetrics,
 }
 
+/// Metadata attached to a first-frame-ready event.
 #[derive(Debug, Clone)]
 pub struct FirstFrameReady {
+    /// Presentation timestamp of the first frame.
     pub presentation_time: Duration,
+    /// Frame width in pixels.
     pub width: u32,
+    /// Frame height in pixels.
     pub height: u32,
 }
 
+/// Warning domain identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerRuntimeWarningDomain {
+    /// Warning produced by frame processing.
     FrameProcessor,
 }
 
+/// Frame processor warning kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameProcessorWarningKind {
+    /// Processing was slow but playback may continue.
     Slow,
+    /// Processing missed a presentation deadline.
     DeadlineMissed,
+    /// Processor reported backpressure.
     Backpressure,
+    /// Original frame bypass was activated.
     BypassActivated,
+    /// Late output was dropped.
     LateOutputDropped,
+    /// Output was dropped by policy.
     OutputDropped,
+    /// Processor was disabled by policy.
     Disabled,
+    /// Processor recovered after a warning condition.
     Recovered,
+    /// Processor did not support the frame or configuration.
     Unsupported,
 }
 
+/// Policy action associated with a frame processor warning.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameProcessorPolicyAction {
+    /// Continue using the output.
     Continue,
+    /// Bypass and present the original frame.
     BypassOriginalFrame,
+    /// Drop the processor output.
     DropOutput,
+    /// Disable the processor.
     DisableProcessor,
+    /// Fail playback.
     FailPlayback,
+    /// Record diagnostics only.
     DiagnosticsOnly,
 }
 
 /// Structured diagnostics for one frame processor warning.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameProcessorWarning {
+    /// Warning kind.
     pub kind: FrameProcessorWarningKind,
+    /// Plugin name.
     pub plugin_name: String,
+    /// Processor index in the chain.
     pub processor_index: usize,
+    /// Frame id when available.
     pub frame_id: Option<u64>,
+    /// Frame presentation timestamp in microseconds.
     pub frame_pts_us: Option<i64>,
+    /// Frame duration in microseconds.
     pub frame_duration_us: Option<i64>,
+    /// Input handle kind.
     pub input_handle_kind: Option<String>,
+    /// Output handle kind.
     pub output_handle_kind: Option<String>,
+    /// Processor queue depth.
     pub queue_depth: Option<u32>,
+    /// Processor in-flight frame count.
     pub in_flight_frames: Option<u32>,
+    /// Queue wait duration in microseconds.
     pub queue_wait_us: Option<u64>,
+    /// Processing duration in microseconds.
     pub process_time_us: Option<u64>,
+    /// Submit-to-ready duration in microseconds.
     pub submit_to_ready_us: Option<u64>,
+    /// Presentation deadline in microseconds.
     pub present_deadline_us: Option<i64>,
+    /// Amount by which the deadline was overrun.
     pub deadline_overrun_us: Option<u64>,
+    /// Consecutive deadline miss count.
     pub consecutive_miss_count: Option<u32>,
+    /// Policy action chosen for the warning.
     pub policy_action: FrameProcessorPolicyAction,
+    /// Human-readable warning message.
     pub message: Option<String>,
 }
 
@@ -757,10 +1122,12 @@ pub struct FrameProcessorWarning {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "domain", content = "payload")]
 pub enum PlayerRuntimeWarning {
+    /// Frame processor warning payload.
     FrameProcessor(FrameProcessorWarning),
 }
 
 impl PlayerRuntimeWarning {
+    /// Returns the warning domain.
     pub fn domain(&self) -> PlayerRuntimeWarningDomain {
         match self {
             Self::FrameProcessor(_) => PlayerRuntimeWarningDomain::FrameProcessor,
@@ -768,30 +1135,50 @@ impl PlayerRuntimeWarning {
     }
 }
 
+/// Event emitted by a runtime adapter.
 #[derive(Debug, Clone)]
 pub enum PlayerRuntimeEvent {
+    /// Runtime finished initialization.
     Initialized(PlayerRuntimeStartup),
+    /// Metadata became available or changed.
     MetadataReady(PlayerMediaInfo),
+    /// First frame became available.
     FirstFrameReady(FirstFrameReady),
+    /// Presentation state changed.
     PlaybackStateChanged(PresentationState),
+    /// Host interruption state changed.
     InterruptionChanged { interrupted: bool },
+    /// Buffering state changed.
     BufferingChanged { buffering: bool },
+    /// Video surface attachment changed.
     VideoSurfaceChanged { attached: bool },
+    /// Audio output changed.
     AudioOutputChanged(Option<PlayerAudioOutputInfo>),
+    /// Playback rate changed.
     PlaybackRateChanged { rate: f32 },
+    /// Seek completed.
     SeekCompleted { position: Duration },
+    /// Retry was scheduled.
     RetryScheduled { attempt: u32, delay: Duration },
+    /// Non-fatal runtime warning.
     Warning(PlayerRuntimeWarning),
+    /// Runtime error.
     Error(PlayerError),
+    /// Playback reached the end.
     Ended,
 }
 
+/// Runtime returned after opening a source.
 pub struct PlayerRuntimeBootstrap {
+    /// Runtime wrapper.
     pub runtime: PlayerRuntime,
+    /// Optional frame available immediately after opening.
     pub initial_frame: Option<DecodedVideoFrame>,
+    /// Startup diagnostics collected while opening.
     pub startup: PlayerRuntimeStartup,
 }
 
+/// Runtime facade that serializes access to a concrete adapter.
 pub struct PlayerRuntime {
     adapter_id: &'static str,
     inner: Box<dyn PlayerRuntimeAdapter>,
@@ -840,11 +1227,13 @@ impl Default for PlayerRuntimeOptions {
 }
 
 impl PlayerRuntimeOptions {
+    /// Sets the initial host-owned video surface.
     pub fn with_video_surface(mut self, video_surface: PlayerVideoSurfaceTarget) -> Self {
         self.video_surface = Some(video_surface);
         self
     }
 
+    /// Replaces decoder plugin library paths.
     pub fn with_decoder_plugin_library_paths(
         mut self,
         paths: impl IntoIterator<Item = PathBuf>,
@@ -853,11 +1242,13 @@ impl PlayerRuntimeOptions {
         self
     }
 
+    /// Sets decoder plugin video mode.
     pub fn with_decoder_plugin_video_mode(mut self, mode: PlayerDecoderPluginVideoMode) -> Self {
         self.decoder_plugin_video_mode = mode;
         self
     }
 
+    /// Replaces source normalizer plugin library paths.
     pub fn with_source_normalizer_plugin_library_paths(
         mut self,
         paths: impl IntoIterator<Item = PathBuf>,
@@ -866,16 +1257,19 @@ impl PlayerRuntimeOptions {
         self
     }
 
+    /// Sets source normalizer mode.
     pub fn with_source_normalizer_mode(mut self, mode: SourceNormalizerMode) -> Self {
         self.source_normalizer_mode = mode;
         self
     }
 
+    /// Sets frame processor mode.
     pub fn with_frame_processor_mode(mut self, mode: FrameProcessorMode) -> Self {
         self.frame_processor_mode = mode;
         self
     }
 
+    /// Replaces frame processor plugin library paths.
     pub fn with_frame_processor_library_paths(
         mut self,
         paths: impl IntoIterator<Item = PathBuf>,
@@ -884,31 +1278,37 @@ impl PlayerRuntimeOptions {
         self
     }
 
+    /// Sets frame processor scheduling policy.
     pub fn with_frame_processor_policy(mut self, policy: FrameProcessorPolicy) -> Self {
         self.frame_processor_policy = policy;
         self
     }
 
+    /// Sets buffering policy overrides.
     pub fn with_buffering_policy(mut self, buffering_policy: PlayerBufferingPolicy) -> Self {
         self.buffering_policy = buffering_policy;
         self
     }
 
+    /// Sets retry policy overrides.
     pub fn with_retry_policy(mut self, retry_policy: PlayerRetryPolicy) -> Self {
         self.retry_policy = retry_policy;
         self
     }
 
+    /// Sets cache policy overrides.
     pub fn with_cache_policy(mut self, cache_policy: PlayerCachePolicy) -> Self {
         self.cache_policy = cache_policy;
         self
     }
 
+    /// Sets preload budget overrides.
     pub fn with_preload_budget(mut self, preload_budget: PlayerPreloadBudgetPolicy) -> Self {
         self.preload_budget = preload_budget;
         self
     }
 
+    /// Sets track preference policy.
     pub fn with_track_preferences(
         mut self,
         track_preferences: PlayerTrackPreferencePolicy,
@@ -917,6 +1317,7 @@ impl PlayerRuntimeOptions {
         self
     }
 
+    /// Resolves buffering, retry, and cache policies for a source.
     pub fn resolved_resilience_policy(
         &self,
         source_kind: MediaSourceKind,
@@ -933,16 +1334,19 @@ impl PlayerRuntimeOptions {
         }
     }
 
+    /// Returns normalized track preferences.
     pub fn resolved_track_preferences(&self) -> PlayerTrackPreferencePolicy {
         self.track_preferences.resolved()
     }
 
+    /// Returns preload budget policy with defaults applied.
     pub fn resolved_preload_budget(&self) -> PlayerResolvedPreloadBudgetPolicy {
         self.preload_budget.resolved()
     }
 }
 
 impl PlayerBufferingPolicy {
+    /// Returns the buffering policy implied by a source, if any.
     pub fn source_default(
         source_kind: MediaSourceKind,
         source_protocol: MediaSourceProtocol,
@@ -978,6 +1382,7 @@ impl PlayerBufferingPolicy {
         }
     }
 
+    /// Resolves this policy against source-specific defaults.
     pub fn resolved_for_source(
         &self,
         source_kind: MediaSourceKind,
@@ -994,6 +1399,7 @@ impl PlayerBufferingPolicy {
         self.merge_onto(base.as_ref())
     }
 
+    /// Returns the balanced buffering preset.
     pub fn balanced() -> Self {
         Self {
             preset: PlayerBufferingPreset::Balanced,
@@ -1004,6 +1410,7 @@ impl PlayerBufferingPolicy {
         }
     }
 
+    /// Returns the streaming buffering preset.
     pub fn streaming() -> Self {
         Self {
             preset: PlayerBufferingPreset::Streaming,
@@ -1014,6 +1421,7 @@ impl PlayerBufferingPolicy {
         }
     }
 
+    /// Returns the resilient buffering preset.
     pub fn resilient() -> Self {
         Self {
             preset: PlayerBufferingPreset::Resilient,
@@ -1024,6 +1432,7 @@ impl PlayerBufferingPolicy {
         }
     }
 
+    /// Returns the low-latency buffering preset.
     pub fn low_latency() -> Self {
         Self {
             preset: PlayerBufferingPreset::LowLatency,
@@ -1048,10 +1457,12 @@ impl Default for PlayerBufferingPolicy {
 }
 
 impl PlayerRetryPolicy {
+    /// Returns this retry policy with runtime defaults applied.
     pub fn resolved(&self) -> Self {
         self.clone()
     }
 
+    /// Returns a short retry policy for quick failure.
     pub fn aggressive() -> Self {
         Self {
             max_attempts: Some(2),
@@ -1061,6 +1472,7 @@ impl PlayerRetryPolicy {
         }
     }
 
+    /// Returns a longer retry policy for unstable networks.
     pub fn resilient() -> Self {
         Self {
             max_attempts: Some(6),
@@ -1083,6 +1495,7 @@ impl Default for PlayerRetryPolicy {
 }
 
 impl PlayerCachePolicy {
+    /// Returns the cache policy implied by a source.
     pub fn source_default(
         source_kind: MediaSourceKind,
         source_protocol: MediaSourceProtocol,
@@ -1108,6 +1521,7 @@ impl PlayerCachePolicy {
         }
     }
 
+    /// Resolves this policy against source-specific defaults.
     pub fn resolved_for_source(
         &self,
         source_kind: MediaSourceKind,
@@ -1127,6 +1541,7 @@ impl PlayerCachePolicy {
         self.merge_onto(&base)
     }
 
+    /// Returns a policy that disables cache budgets.
     pub fn disabled() -> Self {
         Self {
             preset: PlayerCachePreset::Disabled,
@@ -1135,6 +1550,7 @@ impl PlayerCachePolicy {
         }
     }
 
+    /// Returns the streaming cache preset.
     pub fn streaming() -> Self {
         Self {
             preset: PlayerCachePreset::Streaming,
@@ -1143,6 +1559,7 @@ impl PlayerCachePolicy {
         }
     }
 
+    /// Returns the resilient cache preset.
     pub fn resilient() -> Self {
         Self {
             preset: PlayerCachePreset::Resilient,
@@ -1163,6 +1580,7 @@ impl Default for PlayerCachePolicy {
 }
 
 impl PlayerTrackPreferencePolicy {
+    /// Returns track preferences with empty text and invalid selections normalized.
     pub fn resolved(&self) -> Self {
         Self {
             preferred_audio_language: normalize_optional_text(
@@ -1255,12 +1673,14 @@ fn normalize_abr_policy(policy: &MediaAbrPolicy) -> MediaAbrPolicy {
 }
 
 impl PlayerResilienceMetricsTracker {
+    /// Observes presentation state changes for rebuffer classification.
     pub fn observe_playback_state(&mut self, state: PresentationState) {
         if state == PresentationState::Playing {
             self.has_started_playback = true;
         }
     }
 
+    /// Observes buffering transitions.
     pub fn observe_buffering(&mut self, buffering: bool) {
         let now = Instant::now();
         match (buffering, self.buffering_started_at) {
@@ -1279,11 +1699,13 @@ impl PlayerResilienceMetricsTracker {
         }
     }
 
+    /// Observes a scheduled retry.
     pub fn observe_retry_scheduled(&mut self, attempt: u32, delay: Duration) {
         self.metrics.retry_count = self.metrics.retry_count.max(attempt);
         self.metrics.last_retry_delay = Some(delay);
     }
 
+    /// Returns current resilience metrics.
     pub fn snapshot(&self) -> PlayerResilienceMetrics {
         let mut metrics = self.metrics.clone();
         if let Some(started_at) = self.buffering_started_at {
@@ -1295,10 +1717,12 @@ impl PlayerResilienceMetricsTracker {
 }
 
 impl PlayerTimelineSnapshot {
+    /// Builds a VOD timeline from playback progress.
     pub fn vod(progress: PlaybackProgress, supports_seek: bool) -> Self {
         Self::vod_with_duration(progress, progress.duration(), supports_seek)
     }
 
+    /// Builds a non-seekable live timeline from playback progress.
     pub fn live(progress: PlaybackProgress) -> Self {
         Self {
             kind: PlayerTimelineKind::Live,
@@ -1310,6 +1734,7 @@ impl PlayerTimelineSnapshot {
         }
     }
 
+    /// Builds a live DVR timeline with an explicit seekable range.
     pub fn live_dvr(
         progress: PlaybackProgress,
         seekable_range: PlayerSeekableRange,
@@ -1326,6 +1751,7 @@ impl PlayerTimelineSnapshot {
         }
     }
 
+    /// Builds a VOD timeline with an explicit duration override.
     pub fn vod_with_duration(
         progress: PlaybackProgress,
         duration: Option<Duration>,
@@ -1347,6 +1773,7 @@ impl PlayerTimelineSnapshot {
         }
     }
 
+    /// Infers a timeline from playback progress and media metadata.
     pub fn from_media_info(
         progress: PlaybackProgress,
         supports_seek: bool,
@@ -1368,10 +1795,12 @@ impl PlayerTimelineSnapshot {
         }
     }
 
+    /// Returns the displayed position as a ratio of the seekable range.
     pub fn displayed_ratio(&self) -> Option<f64> {
         self.ratio_for_position(self.position)
     }
 
+    /// Returns the effective live edge for live timelines.
     pub fn effective_live_edge(&self) -> Option<Duration> {
         match self.kind {
             PlayerTimelineKind::Vod => None,
@@ -1382,10 +1811,12 @@ impl PlayerTimelineSnapshot {
         }
     }
 
+    /// Returns the position used by a go-live action.
     pub fn go_live_position(&self) -> Option<Duration> {
         self.effective_live_edge()
     }
 
+    /// Clamps a position into the current timeline window.
     pub fn clamp_position(&self, position: Duration) -> Duration {
         if let Some(range) = self.seekable_range {
             return range.clamp_position(position);
@@ -1398,6 +1829,7 @@ impl PlayerTimelineSnapshot {
         position
     }
 
+    /// Returns whether a position is outside the current timeline window.
     pub fn is_position_out_of_range(&self, position: Duration) -> bool {
         if let Some(range) = self.seekable_range {
             return !range.contains(position);
@@ -1410,6 +1842,7 @@ impl PlayerTimelineSnapshot {
         false
     }
 
+    /// Validates a position and returns the original position on success.
     pub fn validate_position(&self, position: Duration) -> PlayerResult<Duration> {
         if self.is_position_out_of_range(position) {
             return Err(PlayerError::new(
@@ -1424,15 +1857,18 @@ impl PlayerTimelineSnapshot {
         Ok(position)
     }
 
+    /// Returns distance from current position to live edge.
     pub fn live_offset(&self) -> Option<Duration> {
         let live_edge = self.effective_live_edge()?;
         Some(live_edge.saturating_sub(self.clamp_position(self.position)))
     }
 
+    /// Returns whether the current position is within tolerance of live edge.
     pub fn is_at_live_edge(&self, tolerance: Duration) -> bool {
         self.live_offset().is_some_and(|offset| offset <= tolerance)
     }
 
+    /// Converts a position into a seekable-range ratio.
     pub fn ratio_for_position(&self, position: Duration) -> Option<f64> {
         let range = self.seekable_range?;
         let total = range.duration()?;
@@ -1445,6 +1881,7 @@ impl PlayerTimelineSnapshot {
         Some((offset.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0))
     }
 
+    /// Converts a seekable-range ratio into a position.
     pub fn position_for_ratio(&self, ratio: f64) -> Option<Duration> {
         if !ratio.is_finite() {
             return None;
@@ -1462,10 +1899,12 @@ impl PlayerTimelineSnapshot {
 }
 
 impl PlayerRuntimeInitializer {
+    /// Probes a URI with default options and the registered default factory.
     pub fn probe_uri(uri: impl Into<String>) -> PlayerResult<Self> {
         Self::probe_source(MediaSource::new(uri))
     }
 
+    /// Probes a URI with explicit options and factory.
     pub fn probe_uri_with_options_and_factory(
         uri: impl Into<String>,
         options: PlayerRuntimeOptions,
@@ -1474,10 +1913,12 @@ impl PlayerRuntimeInitializer {
         Self::probe_source_with_factory(MediaSource::new(uri), options, factory)
     }
 
+    /// Probes a source with default options and the registered default factory.
     pub fn probe_source(source: MediaSource) -> PlayerResult<Self> {
         Self::probe_source_with_options(source, PlayerRuntimeOptions::default())
     }
 
+    /// Probes a source with explicit options and the registered default factory.
     pub fn probe_source_with_options(
         source: MediaSource,
         options: PlayerRuntimeOptions,
@@ -1485,6 +1926,7 @@ impl PlayerRuntimeInitializer {
         Self::probe_source_with_factory(source, options, default_runtime_adapter_factory()?)
     }
 
+    /// Probes a source with explicit options and factory.
     pub fn probe_source_with_factory(
         source: MediaSource,
         options: PlayerRuntimeOptions,
@@ -1496,22 +1938,27 @@ impl PlayerRuntimeInitializer {
         })
     }
 
+    /// Returns the adapter id selected by probing.
     pub fn adapter_id(&self) -> &str {
         self.adapter_id
     }
 
+    /// Returns capabilities discovered during probing.
     pub fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
         self.inner.capabilities()
     }
 
+    /// Returns media information discovered during probing.
     pub fn media_info(&self) -> PlayerMediaInfo {
         self.inner.media_info()
     }
 
+    /// Returns startup diagnostics available before full initialization.
     pub fn startup(&self) -> PlayerRuntimeStartup {
         self.inner.startup()
     }
 
+    /// Initializes the probed runtime.
     pub fn initialize(self) -> PlayerResult<PlayerRuntimeBootstrap> {
         let Self { adapter_id, inner } = self;
         Ok(PlayerRuntime::from_adapter_bootstrap(
@@ -1522,6 +1969,7 @@ impl PlayerRuntimeInitializer {
 }
 
 impl PlayerRuntime {
+    /// Wraps an adapter bootstrap with a runtime facade.
     pub fn from_adapter_bootstrap(
         adapter_id: &'static str,
         bootstrap: PlayerRuntimeAdapterBootstrap,
@@ -1542,10 +1990,12 @@ impl PlayerRuntime {
         }
     }
 
+    /// Opens a URI with default options and the registered default factory.
     pub fn open_uri(uri: impl Into<String>) -> PlayerResult<PlayerRuntimeBootstrap> {
         Self::open_source(MediaSource::new(uri))
     }
 
+    /// Opens a URI with explicit options and factory.
     pub fn open_uri_with_options_and_factory(
         uri: impl Into<String>,
         options: PlayerRuntimeOptions,
@@ -1554,10 +2004,12 @@ impl PlayerRuntime {
         Self::open_source_with_factory(MediaSource::new(uri), options, factory)
     }
 
+    /// Opens a source with default options and the registered default factory.
     pub fn open_source(source: MediaSource) -> PlayerResult<PlayerRuntimeBootstrap> {
         Self::open_source_with_options(source, PlayerRuntimeOptions::default())
     }
 
+    /// Opens a source with explicit options and the registered default factory.
     pub fn open_source_with_options(
         source: MediaSource,
         options: PlayerRuntimeOptions,
@@ -1565,6 +2017,7 @@ impl PlayerRuntime {
         Self::open_source_with_factory(source, options, default_runtime_adapter_factory()?)
     }
 
+    /// Opens a source with explicit options and factory.
     pub fn open_source_with_factory(
         source: MediaSource,
         options: PlayerRuntimeOptions,
@@ -1573,54 +2026,67 @@ impl PlayerRuntime {
         PlayerRuntimeInitializer::probe_source_with_factory(source, options, factory)?.initialize()
     }
 
+    /// Returns the adapter id.
     pub fn adapter_id(&self) -> &str {
         self.adapter_id
     }
 
+    /// Returns the current source URI.
     pub fn source_uri(&self) -> &str {
         self.inner.source_uri()
     }
 
+    /// Returns current runtime capabilities.
     pub fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
         self.inner.capabilities()
     }
 
+    /// Returns current media information.
     pub fn media_info(&self) -> &PlayerMediaInfo {
         self.inner.media_info()
     }
 
+    /// Returns current presentation state.
     pub fn presentation_state(&self) -> PresentationState {
         self.inner.presentation_state()
     }
 
+    /// Returns current playback progress.
     pub fn progress(&self) -> PlaybackProgress {
         self.inner.progress()
     }
 
+    /// Returns whether a video surface is attached.
     pub fn has_video_surface(&self) -> bool {
         self.inner.has_video_surface()
     }
 
+    /// Returns whether playback is interrupted by the host platform.
     pub fn is_interrupted(&self) -> bool {
         self.inner.is_interrupted()
     }
 
+    /// Returns the current playback rate.
     pub fn playback_rate(&self) -> f32 {
         self.inner.playback_rate()
     }
 
+    /// Returns whether the runtime is buffering.
     pub fn is_buffering(&self) -> bool {
         self.inner.is_buffering()
     }
 
+    /// Returns a point-in-time runtime snapshot.
     pub fn snapshot(&self) -> PlayerSnapshot {
         self.inner.snapshot()
     }
 
+    /// Drains pending runtime events.
     pub fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
         self.inner.drain_events()
     }
 
+    /// Dispatches a command to the underlying adapter.
     pub fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
@@ -1628,10 +2094,12 @@ impl PlayerRuntime {
         self.inner.dispatch(command)
     }
 
+    /// Sets playback rate through command dispatch.
     pub fn set_playback_rate(&mut self, rate: f32) -> PlayerResult<PlayerRuntimeCommandResult> {
         self.dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate })
     }
 
+    /// Sets video track selection through command dispatch.
     pub fn set_video_track_selection(
         &mut self,
         selection: MediaTrackSelection,
@@ -1639,6 +2107,7 @@ impl PlayerRuntime {
         self.dispatch(PlayerRuntimeCommand::SetVideoTrackSelection { selection })
     }
 
+    /// Sets audio track selection through command dispatch.
     pub fn set_audio_track_selection(
         &mut self,
         selection: MediaTrackSelection,
@@ -1646,6 +2115,7 @@ impl PlayerRuntime {
         self.dispatch(PlayerRuntimeCommand::SetAudioTrackSelection { selection })
     }
 
+    /// Sets subtitle track selection through command dispatch.
     pub fn set_subtitle_track_selection(
         &mut self,
         selection: MediaTrackSelection,
@@ -1653,6 +2123,7 @@ impl PlayerRuntime {
         self.dispatch(PlayerRuntimeCommand::SetSubtitleTrackSelection { selection })
     }
 
+    /// Sets ABR policy through command dispatch.
     pub fn set_abr_policy(
         &mut self,
         policy: MediaAbrPolicy,
@@ -1660,6 +2131,7 @@ impl PlayerRuntime {
         self.dispatch(PlayerRuntimeCommand::SetAbrPolicy { policy })
     }
 
+    /// Replaces the host-owned video surface.
     pub fn replace_video_surface(
         &mut self,
         video_surface: Option<PlayerVideoSurfaceTarget>,
@@ -1667,15 +2139,18 @@ impl PlayerRuntime {
         self.inner.replace_video_surface(video_surface)
     }
 
+    /// Advances decoding or presentation state.
     pub fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>> {
         self.inner.advance()
     }
 
+    /// Returns the next time the host should call [`advance`](Self::advance).
     pub fn next_deadline(&self) -> Option<Instant> {
         self.inner.next_deadline()
     }
 }
 
+/// Registers the process-wide default runtime adapter factory.
 pub fn register_default_runtime_adapter_factory(
     factory: &'static dyn PlayerRuntimeAdapterFactory,
 ) -> PlayerResult<()> {

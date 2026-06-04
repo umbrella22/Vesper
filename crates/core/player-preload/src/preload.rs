@@ -5,28 +5,43 @@ use std::time::{Duration, Instant};
 use player_download::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 use player_model::MediaSource;
 
+/// Default number of preload tasks that may run concurrently.
 pub const DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS: u32 = 2;
+/// Default memory budget reserved for active preload work.
 pub const DEFAULT_PRELOAD_MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+/// Default disk budget reserved for active preload work.
 pub const DEFAULT_PRELOAD_MAX_DISK_BYTES: u64 = 256 * 1024 * 1024;
+/// Default window used when a candidate does not provide a warmup duration.
 pub const DEFAULT_PRELOAD_WARMUP_WINDOW: Duration = Duration::from_secs(30);
 
+/// User-provided preload budget overrides.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerPreloadBudgetPolicy {
+    /// Maximum number of active tasks allowed at once.
     pub max_concurrent_tasks: Option<u32>,
+    /// Maximum memory bytes allowed for active tasks.
     pub max_memory_bytes: Option<u64>,
+    /// Maximum disk bytes allowed for active tasks.
     pub max_disk_bytes: Option<u64>,
+    /// Default warmup window used when candidates do not override it.
     pub warmup_window: Option<Duration>,
 }
 
+/// Fully resolved preload budget with defaults applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerResolvedPreloadBudgetPolicy {
+    /// Maximum number of active tasks allowed at once.
     pub max_concurrent_tasks: u32,
+    /// Maximum memory bytes allowed for active tasks.
     pub max_memory_bytes: u64,
+    /// Maximum disk bytes allowed for active tasks.
     pub max_disk_bytes: u64,
+    /// Default warmup window used when candidates do not override it.
     pub warmup_window: Duration,
 }
 
 impl PlayerPreloadBudgetPolicy {
+    /// Returns this policy with missing values filled from crate defaults.
     pub fn resolved(&self) -> PlayerResolvedPreloadBudgetPolicy {
         PlayerResolvedPreloadBudgetPolicy {
             max_concurrent_tasks: self
@@ -43,65 +58,85 @@ impl PlayerPreloadBudgetPolicy {
     }
 }
 
+/// Stable identifier assigned to a planned preload task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PreloadTaskId(u64);
 
 impl PreloadTaskId {
+    /// Creates a task id from a raw numeric value.
     pub fn from_raw(value: u64) -> Self {
         Self(value)
     }
 
+    /// Returns the raw numeric id.
     pub fn get(self) -> u64 {
         self.0
     }
 }
 
+/// Normalized source identity used to compare preload candidates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PreloadSourceIdentity(String);
 
 impl PreloadSourceIdentity {
+    /// Creates an identity by trimming the provided value.
     pub fn new(value: impl Into<String>) -> Self {
         Self(normalize_preload_key(value))
     }
 
+    /// Creates an identity from a media source URI.
     pub fn from_media_source(source: &MediaSource) -> Self {
         Self::new(source.uri())
     }
 
+    /// Returns the normalized identity string.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Normalized key used to deduplicate live preload tasks.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PreloadCacheKey(String);
 
 impl PreloadCacheKey {
+    /// Creates a cache key by trimming the provided value.
     pub fn new(value: impl Into<String>) -> Self {
         Self(normalize_preload_key(value))
     }
 
+    /// Creates a cache key from a media source URI.
     pub fn from_media_source(source: &MediaSource) -> Self {
         Self::new(source.uri())
     }
 
+    /// Returns the normalized cache key string.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Budget namespace used when evaluating preload capacity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreloadBudgetScope {
+    /// Process-wide or application-wide preload budget.
     App,
+    /// Budget associated with a playback session id.
     Session(String),
+    /// Budget associated with a playlist id.
     Playlist(String),
 }
 
+/// Capacity limits for active preload work in one budget scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadBudget {
+    /// Maximum number of active tasks allowed at once.
     pub max_concurrent_tasks: u32,
+    /// Maximum memory bytes allowed for active tasks.
     pub max_memory_bytes: u64,
+    /// Maximum disk bytes allowed for active tasks.
     pub max_disk_bytes: u64,
+    /// Default warmup window used when candidates do not override it.
     pub warmup_window: Duration,
 }
 
@@ -116,38 +151,61 @@ impl From<PlayerResolvedPreloadBudgetPolicy> for PreloadBudget {
     }
 }
 
+/// Scheduling priority within a candidate kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreloadPriority {
+    /// Highest priority, normally used for the current item.
     Critical,
+    /// High priority, normally used for adjacent items.
     High,
+    /// Normal priority, normally used for recommended near-visible items.
     Normal,
+    /// Low priority work.
     Low,
+    /// Lowest priority background fill work.
     Background,
 }
 
+/// Semantic reason a source is being considered for preload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PreloadCandidateKind {
+    /// The currently active media source.
     Current,
+    /// A source adjacent to the active item.
     Neighbor,
+    /// A source recommended by viewport or product context.
     Recommended,
+    /// Background fill work with no immediate playback intent.
     Background,
 }
 
+/// Source selection hint preserved on task snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreloadSelectionHint {
+    /// No selection hint was provided.
     None,
+    /// The candidate came from the current item.
     CurrentItem,
+    /// The candidate came from a neighboring item.
     NeighborItem,
+    /// The candidate came from a recommendation or near-visible item.
     RecommendedItem,
+    /// The candidate came from background prefetch work.
     BackgroundFill,
 }
 
+/// Per-candidate preload cost and scheduling configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadConfig {
+    /// Priority used after candidate kind ordering.
     pub priority: PreloadPriority,
+    /// Optional time-to-live after which non-terminal tasks expire.
     pub ttl: Option<Duration>,
+    /// Expected memory bytes charged against the active budget.
     pub expected_memory_bytes: u64,
+    /// Expected disk bytes charged against the active budget.
     pub expected_disk_bytes: u64,
+    /// Optional warmup window overriding the scope budget default.
     pub warmup_window: Option<Duration>,
 }
 
@@ -163,32 +221,51 @@ impl Default for PreloadConfig {
     }
 }
 
+/// A source proposed for preload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadCandidate {
+    /// Media source to warm up.
     pub source: MediaSource,
+    /// Budget scope charged by this candidate.
     pub scope: PreloadBudgetScope,
+    /// Semantic candidate kind used for ordering.
     pub kind: PreloadCandidateKind,
+    /// Hint describing why this source was selected.
     pub selection_hint: PreloadSelectionHint,
+    /// Cost and scheduling configuration.
     pub config: PreloadConfig,
 }
 
+/// Lifecycle status of a preload task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreloadTaskStatus {
+    /// The task has been created but not yet accepted by the executor.
     Planned,
+    /// The task is running in the executor.
     Active,
+    /// The task was cancelled before completion.
     Cancelled,
+    /// The task completed successfully.
     Completed,
+    /// The task expired after its time-to-live.
     Expired,
+    /// The task failed while starting or running.
     Failed,
 }
 
+/// Deprecated-compatible alias for [`PreloadTaskStatus`].
 pub type PreloadTaskState = PreloadTaskStatus;
 
+/// Stable error details captured on failed preload tasks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadErrorSummary {
+    /// Structured error code.
     pub code: PlayerErrorCode,
+    /// Broad error category.
     pub category: PlayerErrorCategory,
+    /// Whether the source error is retriable.
     pub retriable: bool,
+    /// Human-readable error message.
     pub message: String,
 }
 
@@ -203,43 +280,70 @@ impl From<PlayerError> for PreloadErrorSummary {
     }
 }
 
+/// Immutable view of one preload task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadTaskSnapshot {
+    /// Stable task id.
     pub task_id: PreloadTaskId,
+    /// Media source associated with the task.
     pub source: MediaSource,
+    /// Normalized source identity.
     pub source_identity: PreloadSourceIdentity,
+    /// Normalized cache key used for live-task deduplication.
     pub cache_key: PreloadCacheKey,
+    /// Budget scope charged by this task.
     pub scope: PreloadBudgetScope,
+    /// Candidate kind that created the task.
     pub kind: PreloadCandidateKind,
+    /// Selection hint that created the task.
     pub selection_hint: PreloadSelectionHint,
+    /// Candidate priority.
     pub priority: PreloadPriority,
+    /// Current lifecycle status.
     pub status: PreloadTaskStatus,
+    /// Memory bytes charged against the active budget.
     pub expected_memory_bytes: u64,
+    /// Disk bytes charged against the active budget.
     pub expected_disk_bytes: u64,
+    /// Warmup duration requested for this task.
     pub warmup_window: Duration,
+    /// Optional expiration instant for non-terminal tasks.
     pub expires_at: Option<Instant>,
+    /// Error summary when the task failed.
     pub error_summary: Option<PreloadErrorSummary>,
 }
 
+/// Snapshot of all tasks known to a planner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadSnapshot {
+    /// Tasks sorted by task id.
     pub tasks: Vec<PreloadTaskSnapshot>,
 }
 
+/// Lifecycle event emitted by a preload planner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreloadEvent {
+    /// A task was accepted by the planner.
     Planned(PreloadTaskSnapshot),
+    /// A task was accepted by the executor and became active.
     Started(PreloadTaskSnapshot),
+    /// A live task was cancelled.
     Cancelled(PreloadTaskSnapshot),
+    /// An active task completed successfully.
     Completed(PreloadTaskSnapshot),
+    /// A non-terminal task expired.
     Expired(PreloadTaskSnapshot),
+    /// A task failed while starting or running.
     Failed(PreloadTaskSnapshot),
 }
 
+/// Supplies preload budgets for planner scopes.
 pub trait PreloadBudgetProvider {
+    /// Returns the budget for the provided scope.
     fn budget_for_scope(&self, scope: &PreloadBudgetScope) -> PreloadBudget;
 }
 
+/// Simple budget provider backed by in-memory maps.
 #[derive(Debug, Clone)]
 pub struct InMemoryPreloadBudgetProvider {
     app_budget: PreloadBudget,
@@ -248,6 +352,7 @@ pub struct InMemoryPreloadBudgetProvider {
 }
 
 impl InMemoryPreloadBudgetProvider {
+    /// Creates a provider with an application fallback budget.
     pub fn new(app_budget: PreloadBudget) -> Self {
         Self {
             app_budget,
@@ -256,6 +361,7 @@ impl InMemoryPreloadBudgetProvider {
         }
     }
 
+    /// Adds or replaces the budget for a session id.
     pub fn insert_session_budget(
         mut self,
         session_id: impl Into<String>,
@@ -265,6 +371,7 @@ impl InMemoryPreloadBudgetProvider {
         self
     }
 
+    /// Adds or replaces the budget for a playlist id.
     pub fn insert_playlist_budget(
         mut self,
         playlist_id: impl Into<String>,
@@ -293,12 +400,16 @@ impl PreloadBudgetProvider for InMemoryPreloadBudgetProvider {
     }
 }
 
+/// Performs concrete preload start and cancellation work.
 pub trait PreloadExecutor {
+    /// Starts warmup for a planned task.
     fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()>;
 
+    /// Cancels a live task.
     fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()>;
 }
 
+/// Test-friendly executor that records started and cancelled task ids.
 #[derive(Debug, Default)]
 pub struct InMemoryPreloadExecutor {
     started: Vec<PreloadTaskId>,
@@ -306,10 +417,12 @@ pub struct InMemoryPreloadExecutor {
 }
 
 impl InMemoryPreloadExecutor {
+    /// Returns task ids passed to [`PreloadExecutor::warmup`].
     pub fn started(&self) -> &[PreloadTaskId] {
         &self.started
     }
 
+    /// Returns task ids passed to [`PreloadExecutor::cancel`].
     pub fn cancelled(&self) -> &[PreloadTaskId] {
         &self.cancelled
     }
@@ -381,6 +494,7 @@ impl PreloadTaskRecord {
     }
 }
 
+/// Plans preload tasks, enforces budgets, and records lifecycle events.
 #[derive(Debug)]
 pub struct PreloadPlanner<P, E> {
     budget_provider: P,
@@ -395,6 +509,7 @@ where
     P: PreloadBudgetProvider,
     E: PreloadExecutor,
 {
+    /// Creates a planner from a budget provider and executor.
     pub fn new(budget_provider: P, executor: E) -> Self {
         Self {
             budget_provider,
@@ -405,14 +520,17 @@ where
         }
     }
 
+    /// Returns the underlying executor.
     pub fn executor(&self) -> &E {
         &self.executor
     }
 
+    /// Returns the underlying executor mutably.
     pub fn executor_mut(&mut self) -> &mut E {
         &mut self.executor
     }
 
+    /// Returns a stable snapshot of known tasks sorted by id.
     pub fn snapshot(&self) -> PreloadSnapshot {
         let mut tasks = self
             .tasks
@@ -423,14 +541,21 @@ where
         PreloadSnapshot { tasks }
     }
 
+    /// Drains pending planner events.
     pub fn drain_events(&mut self) -> Vec<PreloadEvent> {
         self.events.drain(..).collect()
     }
 
+    /// Returns a snapshot for one task id.
     pub fn task(&self, task_id: PreloadTaskId) -> Option<PreloadTaskSnapshot> {
         self.tasks.get(&task_id).map(PreloadTaskRecord::snapshot)
     }
 
+    /// Plans new preload tasks for the provided candidates.
+    ///
+    /// Candidates are ordered by kind and priority. Live tasks with the same
+    /// cache key are not duplicated, and candidates that do not fit their scope
+    /// budget are skipped.
     pub fn plan(
         &mut self,
         candidates: impl IntoIterator<Item = PreloadCandidate>,
@@ -502,6 +627,10 @@ where
         planned
     }
 
+    /// Cancels a live task and returns its latest snapshot.
+    ///
+    /// Unknown task ids return `Ok(None)`. Terminal tasks are returned without
+    /// invoking the executor again.
     pub fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<Option<PreloadTaskSnapshot>> {
         let Some(record) = self.tasks.get_mut(&task_id) else {
             return Ok(None);
@@ -518,6 +647,10 @@ where
         Ok(Some(snapshot))
     }
 
+    /// Marks an active task as completed.
+    ///
+    /// Unknown task ids return `Ok(None)`. Non-active tasks are returned
+    /// unchanged.
     pub fn complete(
         &mut self,
         task_id: PreloadTaskId,
@@ -537,6 +670,10 @@ where
         Ok(Some(snapshot))
     }
 
+    /// Marks a non-terminal task as failed.
+    ///
+    /// Unknown task ids return `Ok(None)`. Terminal tasks are returned
+    /// unchanged.
     pub fn fail(
         &mut self,
         task_id: PreloadTaskId,
@@ -557,6 +694,10 @@ where
         Ok(Some(snapshot))
     }
 
+    /// Restarts a cancelled task when it still fits the current budget.
+    ///
+    /// Unknown task ids return `Ok(None)`. Expired tasks are marked expired
+    /// before restart, and non-cancelled tasks are returned unchanged.
     pub fn resume(
         &mut self,
         task_id: PreloadTaskId,
@@ -602,6 +743,7 @@ where
         Ok(None)
     }
 
+    /// Expires all non-terminal tasks whose time-to-live has elapsed.
     pub fn expire_due_tasks(&mut self, now: Instant) {
         let expired_ids = self
             .tasks

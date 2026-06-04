@@ -10,48 +10,64 @@ use player_preload::{
     PreloadTaskSnapshot, PreloadTaskStatus,
 };
 
+/// Stable playlist identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlaylistId(String);
 
 impl PlaylistId {
+    /// Creates a playlist id by trimming the provided value.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into().trim().to_owned())
     }
 
+    /// Returns the normalized playlist id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Stable identifier for one item in a playlist queue.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlaylistQueueItemId(String);
 
 impl PlaylistQueueItemId {
+    /// Creates a queue item id by trimming the provided value.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into().trim().to_owned())
     }
 
+    /// Returns the normalized queue item id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Preload costs and timing attached to a playlist item.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlaylistItemPreloadProfile {
+    /// Expected memory bytes charged when the item is preloaded.
     pub expected_memory_bytes: u64,
+    /// Expected disk bytes charged when the item is preloaded.
     pub expected_disk_bytes: u64,
+    /// Optional time-to-live for preload tasks derived from this item.
     pub ttl: Option<Duration>,
+    /// Optional warmup window overriding the preload budget default.
     pub warmup_window: Option<Duration>,
 }
 
+/// One media item in a playlist queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistQueueItem {
+    /// Stable item id.
     pub item_id: PlaylistQueueItemId,
+    /// Media source to play.
     pub source: MediaSource,
+    /// Preload configuration used when this item becomes desirable.
     pub preload_profile: PlaylistItemPreloadProfile,
 }
 
 impl PlaylistQueueItem {
+    /// Creates an item with a default preload profile.
     pub fn new(item_id: impl Into<String>, source: MediaSource) -> Self {
         Self {
             item_id: PlaylistQueueItemId::new(item_id),
@@ -60,15 +76,19 @@ impl PlaylistQueueItem {
         }
     }
 
+    /// Replaces the item's preload profile.
     pub fn with_preload_profile(mut self, preload_profile: PlaylistItemPreloadProfile) -> Self {
         self.preload_profile = preload_profile;
         self
     }
 }
 
+/// Number of adjacent items considered part of the playback neighborhood.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaylistNeighborWindow {
+    /// Number of previous items to preload near the active item.
     pub previous: usize,
+    /// Number of next items to preload near the active item.
     pub next: usize,
 }
 
@@ -81,9 +101,12 @@ impl Default for PlaylistNeighborWindow {
     }
 }
 
+/// Limits for viewport-driven preload candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaylistPreloadWindow {
+    /// Maximum number of near-visible items to preload.
     pub near_visible: usize,
+    /// Maximum number of prefetch-only items to preload.
     pub prefetch_only: usize,
 }
 
@@ -96,22 +119,32 @@ impl Default for PlaylistPreloadWindow {
     }
 }
 
+/// Visibility class reported by a host viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistViewportHintKind {
+    /// The item is visible and may become the active item.
     Visible,
+    /// The item is close to the viewport and should be preloaded normally.
     NearVisible,
+    /// The item should be considered only for background prefetch.
     PrefetchOnly,
+    /// The item is hidden or should not influence selection.
     Hidden,
 }
 
+/// Host-provided visibility hint for one queue item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistViewportHint {
+    /// Queue item the hint applies to.
     pub item_id: PlaylistQueueItemId,
+    /// Visibility class.
     pub kind: PlaylistViewportHintKind,
+    /// Stable ordering within hints of the same kind.
     pub order: u32,
 }
 
 impl PlaylistViewportHint {
+    /// Creates a hint with order `0`.
     pub fn new(item_id: impl Into<String>, kind: PlaylistViewportHintKind) -> Self {
         Self {
             item_id: PlaylistQueueItemId::new(item_id),
@@ -120,29 +153,41 @@ impl PlaylistViewportHint {
         }
     }
 
+    /// Sets the hint order used for visible and preload ordering.
     pub fn with_order(mut self, order: u32) -> Self {
         self.order = order;
         self
     }
 }
 
+/// Repeat behavior used when advancing past queue boundaries or completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistRepeatMode {
+    /// Do not repeat at boundaries.
     Off,
+    /// Repeat the active item on playback completion.
     One,
+    /// Wrap next/previous navigation at queue boundaries.
     All,
 }
 
+/// Behavior used when playback of an item fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistFailureStrategy {
+    /// Keep the current item active.
     Pause,
+    /// Try to activate the next item.
     SkipToNext,
 }
 
+/// Policy controlling automatic playlist switches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaylistSwitchPolicy {
+    /// Whether completion should automatically advance when repeat mode allows it.
     pub auto_advance: bool,
+    /// Repeat behavior for completion and queue boundaries.
     pub repeat_mode: PlaylistRepeatMode,
+    /// Failure handling strategy.
     pub failure_strategy: PlaylistFailureStrategy,
 }
 
@@ -156,86 +201,140 @@ impl Default for PlaylistSwitchPolicy {
     }
 }
 
+/// Configuration for playlist coordination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlaylistCoordinatorConfig {
+    /// Adjacent items considered for high-priority preload.
     pub neighbor_window: PlaylistNeighborWindow,
+    /// Viewport-driven preload limits.
     pub preload_window: PlaylistPreloadWindow,
+    /// Active item switching policy.
     pub switch_policy: PlaylistSwitchPolicy,
 }
 
+/// Reason an item became active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistActivationReason {
+    /// Initial queue activation.
     Initial,
+    /// Queue replacement changed or confirmed the active item.
     QueueUpdate,
+    /// Viewport hints changed the active item.
     Viewport,
+    /// Manual next navigation.
     ManualNext,
+    /// Manual previous navigation.
     ManualPrevious,
+    /// Playback completion selected the item.
     PlaybackCompleted,
+    /// Playback failure selected the item.
     PlaybackFailed,
+    /// Repeat-one reused the current item.
     RepeatCurrent,
 }
 
+/// Active playlist item with its queue index and activation reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistActiveItem {
+    /// Active queue item id.
     pub item_id: PlaylistQueueItemId,
+    /// Active item index in the current queue.
     pub index: usize,
+    /// Media source for the active item.
     pub source: MediaSource,
+    /// Reason this item is active.
     pub reason: PlaylistActivationReason,
 }
 
+/// External trigger that asks the coordinator to advance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistAdvanceTrigger {
+    /// Manual next navigation.
     ManualNext,
+    /// Manual previous navigation.
     ManualPrevious,
+    /// Active item playback completed.
     PlaybackCompleted,
+    /// Active item playback failed.
     PlaybackFailed,
 }
 
+/// Result of resolving an advance trigger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlaylistAdvanceOutcome {
+    /// A different item became active.
     Activated(PlaylistActiveItem),
+    /// The active item should be replayed.
     RepeatedCurrent(PlaylistActiveItem),
+    /// Policy kept the current state unchanged.
     NoChange,
+    /// No item was available in the requested direction.
     ReachedEnd,
 }
 
+/// Full decision record for an advance trigger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistAdvanceDecision {
+    /// Trigger that produced the decision.
     pub trigger: PlaylistAdvanceTrigger,
+    /// Item active before the trigger, if any.
     pub from_item_id: Option<PlaylistQueueItemId>,
+    /// Decision outcome.
     pub outcome: PlaylistAdvanceOutcome,
+    /// Whether the decision wrapped around a queue boundary.
     pub wrapped: bool,
 }
 
+/// Snapshot of one queue item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistQueueItemSnapshot {
+    /// Queue item id.
     pub item_id: PlaylistQueueItemId,
+    /// Item index in the current queue.
     pub index: usize,
+    /// Media source for the item.
     pub source: MediaSource,
+    /// Latest viewport hint known for this item.
     pub viewport_hint: PlaylistViewportHintKind,
+    /// Whether this item is currently active.
     pub is_active: bool,
 }
 
+/// Snapshot of playlist state and preload state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistSnapshot {
+    /// Playlist id.
     pub playlist_id: PlaylistId,
+    /// Queue item snapshots in queue order.
     pub queue: Vec<PlaylistQueueItemSnapshot>,
+    /// Current active item, if any.
     pub active_item: Option<PlaylistActiveItem>,
+    /// Neighbor preload window in effect.
     pub neighbor_window: PlaylistNeighborWindow,
+    /// Viewport preload window in effect.
     pub preload_window: PlaylistPreloadWindow,
+    /// Switching policy in effect.
     pub switch_policy: PlaylistSwitchPolicy,
+    /// Underlying preload planner snapshot.
     pub preload: PreloadSnapshot,
 }
 
+/// Event emitted by a playlist coordinator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlaylistEvent {
+    /// Queue state changed.
     QueueChanged(PlaylistSnapshot),
+    /// Active item changed or was re-emitted during sync.
     ActiveItemChanged(PlaylistActiveItem),
+    /// Viewport hints changed, sorted by hint order.
     ViewportHintsChanged(Vec<PlaylistViewportHint>),
+    /// An advance trigger was resolved.
     AdvanceResolved(PlaylistAdvanceDecision),
+    /// Event forwarded from the underlying preload planner.
     Preload(PreloadEvent),
 }
 
+/// Coordinates playlist state and the preload tasks implied by that state.
 #[derive(Debug)]
 pub struct PlaylistCoordinator<P, E> {
     playlist_id: PlaylistId,
@@ -252,6 +351,7 @@ where
     P: PreloadBudgetProvider,
     E: PreloadExecutor,
 {
+    /// Creates an empty coordinator with the provided preload adapters.
     pub fn new(
         playlist_id: impl Into<String>,
         config: PlaylistCoordinatorConfig,
@@ -269,14 +369,17 @@ where
         }
     }
 
+    /// Returns the underlying preload executor.
     pub fn preload_executor(&self) -> &E {
         self.preload_planner.executor()
     }
 
+    /// Returns the underlying preload executor mutably.
     pub fn preload_executor_mut(&mut self) -> &mut E {
         self.preload_planner.executor_mut()
     }
 
+    /// Returns the current playlist and preload snapshot.
     pub fn snapshot(&self) -> PlaylistSnapshot {
         let active_item = self.active_item();
         let active_item_id = active_item.as_ref().map(|item| item.item_id.clone());
@@ -310,10 +413,15 @@ where
         }
     }
 
+    /// Drains pending playlist and forwarded preload events.
     pub fn drain_events(&mut self) -> Vec<PlaylistEvent> {
         self.events.drain(..).collect()
     }
 
+    /// Replaces the queue and reconciles active item and preloads.
+    ///
+    /// The coordinator prefers the first visible hint, then the existing active
+    /// item if it still exists, then the first queue item.
     pub fn replace_queue(
         &mut self,
         queue: impl IntoIterator<Item = PlaylistQueueItem>,
@@ -346,6 +454,10 @@ where
             .push(PlaylistEvent::QueueChanged(self.snapshot()));
     }
 
+    /// Replaces viewport hints and reconciles active item and preloads.
+    ///
+    /// Hidden hints and hints for unknown items are ignored. The lowest-order
+    /// visible hint becomes active when present.
     pub fn update_viewport_hints(
         &mut self,
         hints: impl IntoIterator<Item = PlaylistViewportHint>,
@@ -375,6 +487,7 @@ where
             .push(PlaylistEvent::ViewportHintsChanged(viewport_hints));
     }
 
+    /// Clears all viewport hints and reconciles preload state.
     pub fn clear_viewport_hints(&mut self, now: Instant) {
         if self.viewport_hints.is_empty() {
             return;
@@ -386,22 +499,27 @@ where
             .push(PlaylistEvent::ViewportHintsChanged(Vec::new()));
     }
 
+    /// Resolves manual next navigation.
     pub fn advance_to_next(&mut self, now: Instant) -> PlaylistAdvanceDecision {
         self.advance(PlaylistAdvanceTrigger::ManualNext, now)
     }
 
+    /// Resolves manual previous navigation.
     pub fn advance_to_previous(&mut self, now: Instant) -> PlaylistAdvanceDecision {
         self.advance(PlaylistAdvanceTrigger::ManualPrevious, now)
     }
 
+    /// Resolves playback completion according to the switch policy.
     pub fn handle_playback_completed(&mut self, now: Instant) -> PlaylistAdvanceDecision {
         self.advance(PlaylistAdvanceTrigger::PlaybackCompleted, now)
     }
 
+    /// Resolves playback failure according to the failure strategy.
     pub fn handle_playback_failed(&mut self, now: Instant) -> PlaylistAdvanceDecision {
         self.advance(PlaylistAdvanceTrigger::PlaybackFailed, now)
     }
 
+    /// Marks a forwarded preload task as completed.
     pub fn complete_preload_task(
         &mut self,
         task_id: PreloadTaskId,
@@ -411,6 +529,7 @@ where
         Ok(result)
     }
 
+    /// Marks a forwarded preload task as failed.
     pub fn fail_preload_task(
         &mut self,
         task_id: PreloadTaskId,
@@ -421,6 +540,7 @@ where
         Ok(result)
     }
 
+    /// Returns the current active item, if it still exists in the queue.
     pub fn active_item(&self) -> Option<PlaylistActiveItem> {
         let active_item_id = self.active_item_id.as_ref()?;
         let index = self

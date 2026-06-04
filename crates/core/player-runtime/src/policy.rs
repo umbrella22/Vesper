@@ -6,6 +6,7 @@ use crate::{
     PlayerRetryPolicy, PlayerRuntimeOptions, PlayerTrackPreferencePolicy,
 };
 
+/// Resolves buffering, retry, and cache policies for one source.
 pub fn resolve_resilience_policy(
     source_kind: MediaSourceKind,
     source_protocol: MediaSourceProtocol,
@@ -20,6 +21,7 @@ pub fn resolve_resilience_policy(
         .resolved_resilience_policy(source_kind, source_protocol)
 }
 
+/// Normalizes track preferences using runtime defaults.
 pub fn resolve_track_preferences(
     track_preferences: PlayerTrackPreferencePolicy,
 ) -> PlayerTrackPreferencePolicy {
@@ -28,6 +30,7 @@ pub fn resolve_track_preferences(
         .resolved_track_preferences()
 }
 
+/// Resolves preload budget overrides using runtime defaults.
 pub fn resolve_preload_budget(
     preload_budget: PlayerPreloadBudgetPolicy,
 ) -> PlayerResolvedPreloadBudgetPolicy {

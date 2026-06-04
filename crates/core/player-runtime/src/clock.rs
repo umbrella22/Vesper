@@ -2,10 +2,13 @@
 
 use std::time::{Duration, Instant};
 
+/// Source of the current playback position.
 pub trait MediaClock {
+    /// Returns the media position represented by this clock.
     fn playback_position(&self) -> Duration;
 }
 
+/// Wall-clock-backed media clock with pause and playback-rate support.
 #[derive(Debug)]
 pub struct PlaybackClock {
     wall_start: Instant,
@@ -16,6 +19,7 @@ pub struct PlaybackClock {
 }
 
 impl PlaybackClock {
+    /// Creates a clock starting at the provided media time.
     pub fn new(first_frame_time: Duration, playback_rate: f32) -> Self {
         Self {
             wall_start: Instant::now(),
@@ -26,20 +30,24 @@ impl PlaybackClock {
         }
     }
 
+    /// Returns the current media position.
     pub fn playback_position(&self) -> Duration {
         <Self as MediaClock>::playback_position(self)
     }
 
+    /// Returns the sanitized playback rate.
     pub fn playback_rate(&self) -> f32 {
         self.playback_rate
     }
 
+    /// Freezes media position until [`resume`](Self::resume) is called.
     pub fn pause(&mut self) {
         if self.paused_at.is_none() {
             self.paused_at = Some(Instant::now());
         }
     }
 
+    /// Resumes media position advancement after a pause.
     pub fn resume(&mut self) {
         if let Some(paused_at) = self.paused_at.take() {
             self.paused_total += Instant::now().saturating_duration_since(paused_at);

@@ -7,10 +7,14 @@ use player_model::{MediaSource, PlaybackState, PlayerError};
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;
 
+/// Configuration for the lightweight async player command loop.
 #[derive(Debug, Clone)]
 pub struct PlayerConfig {
+    /// Whether audio handling should be enabled by the host.
     pub enable_audio: bool,
+    /// Whether video handling should be enabled by the host.
     pub enable_video: bool,
+    /// Maximum buffered packet count requested by the host.
     pub buffered_packet_limit: usize,
 }
 
@@ -24,24 +28,37 @@ impl Default for PlayerConfig {
     }
 }
 
+/// Commands accepted by the lightweight async player loop.
 #[derive(Debug, Clone)]
 pub enum PlaybackCommand {
+    /// Load a new media source.
     Load(MediaSource),
+    /// Transition to playing state.
     Play,
+    /// Transition to paused state.
     Pause,
+    /// Transition to stopped state.
     Stop,
+    /// Report a completed seek to the requested position.
     Seek(Duration),
+    /// Stop the command loop.
     Shutdown,
 }
 
+/// Events emitted by the lightweight async player loop.
 #[derive(Debug, Clone)]
 pub enum PlayerEvent {
+    /// Playback state changed.
     StateChanged(PlaybackState),
+    /// A source was accepted by the loop.
     SourceLoaded(MediaSource),
+    /// A seek command completed.
     SeekCompleted(Duration),
+    /// The loop is shutting down.
     Shutdown,
 }
 
+/// Lightweight async command-loop player.
 #[derive(Debug)]
 pub struct Player {
     config: PlayerConfig,
@@ -50,32 +67,39 @@ pub struct Player {
     event_tx: mpsc::Sender<PlayerEvent>,
 }
 
+/// Cloneable sender for [`PlaybackCommand`] values.
 #[derive(Clone, Debug)]
 pub struct PlayerHandle {
     command_tx: mpsc::Sender<PlaybackCommand>,
 }
 
 impl PlayerHandle {
+    /// Sends a load command.
     pub async fn load(&self, source: MediaSource) -> Result<(), PlayerError> {
         self.send(PlaybackCommand::Load(source)).await
     }
 
+    /// Sends a play command.
     pub async fn play(&self) -> Result<(), PlayerError> {
         self.send(PlaybackCommand::Play).await
     }
 
+    /// Sends a pause command.
     pub async fn pause(&self) -> Result<(), PlayerError> {
         self.send(PlaybackCommand::Pause).await
     }
 
+    /// Sends a stop command.
     pub async fn stop(&self) -> Result<(), PlayerError> {
         self.send(PlaybackCommand::Stop).await
     }
 
+    /// Sends a seek command.
     pub async fn seek(&self, position: Duration) -> Result<(), PlayerError> {
         self.send(PlaybackCommand::Seek(position)).await
     }
 
+    /// Sends a shutdown command.
     pub async fn shutdown(&self) -> Result<(), PlayerError> {
         self.send(PlaybackCommand::Shutdown).await
     }
@@ -89,6 +113,7 @@ impl PlayerHandle {
 }
 
 impl Player {
+    /// Creates a player, its handle, and the event receiver.
     pub fn new(config: PlayerConfig) -> (Self, PlayerHandle, mpsc::Receiver<PlayerEvent>) {
         let (command_tx, command_rx) = mpsc::channel(DEFAULT_CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel(DEFAULT_CHANNEL_CAPACITY);
@@ -105,10 +130,12 @@ impl Player {
         )
     }
 
+    /// Returns the player configuration.
     pub fn config(&self) -> &PlayerConfig {
         &self.config
     }
 
+    /// Runs the command loop until the command channel closes or shutdown is requested.
     pub async fn run(mut self) -> Result<(), PlayerError> {
         self.publish_state().await?;
 

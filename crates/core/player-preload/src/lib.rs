@@ -1,4 +1,10 @@
 #![deny(unsafe_code)]
+//! Preload planning primitives for media warmup.
+//!
+//! This crate keeps preload decisions independent from a concrete downloader or
+//! cache implementation. Callers provide budget and executor adapters, then feed
+//! candidates into a [`PreloadPlanner`] to receive task snapshots and lifecycle
+//! events.
 
 mod preload;
 

@@ -9,15 +9,23 @@ use crate::{
     PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoSurfaceTarget, PresentationState,
 };
 
+/// Result of creating a concrete runtime adapter.
 pub struct PlayerRuntimeAdapterBootstrap {
+    /// Runtime adapter that owns backend playback state.
     pub runtime: Box<dyn PlayerRuntimeAdapter>,
+    /// Optional decoded frame available immediately after initialization.
     pub initial_frame: Option<DecodedVideoFrame>,
+    /// Startup diagnostics collected while creating the adapter.
     pub startup: PlayerRuntimeStartup,
 }
 
+/// Deferred adapter initialization returned after source probing.
 pub trait PlayerRuntimeAdapterInitializer: Send {
+    /// Capabilities discovered during probing.
     fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities;
+    /// Media information discovered during probing.
     fn media_info(&self) -> PlayerMediaInfo;
+    /// Startup diagnostics available before full initialization.
     fn startup(&self) -> PlayerRuntimeStartup;
     /// Performs any blocking backend startup required to create the adapter.
     ///
@@ -26,7 +34,9 @@ pub trait PlayerRuntimeAdapterInitializer: Send {
     fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap>;
 }
 
+/// Factory that probes media sources and creates runtime initializers.
 pub trait PlayerRuntimeAdapterFactory: Sync + Send {
+    /// Stable adapter id used in diagnostics and runtime wrappers.
     fn adapter_id(&self) -> &'static str;
     /// Probes a source and returns an initializer for a concrete runtime.
     ///
@@ -39,21 +49,31 @@ pub trait PlayerRuntimeAdapterFactory: Sync + Send {
     ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>>;
 }
 
+/// Backend playback contract used by [`crate::PlayerRuntime`].
 pub trait PlayerRuntimeAdapter: Send {
+    /// Returns the source URI currently owned by this adapter.
     fn source_uri(&self) -> &str;
+    /// Returns current adapter capabilities.
     fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities;
+    /// Returns current media information.
     fn media_info(&self) -> &PlayerMediaInfo;
+    /// Returns current presentation state.
     fn presentation_state(&self) -> PresentationState;
+    /// Returns whether an external video surface is attached.
     fn has_video_surface(&self) -> bool {
         false
     }
+    /// Returns whether playback is interrupted by the host platform.
     fn is_interrupted(&self) -> bool {
         false
     }
+    /// Returns whether the adapter is currently buffering.
     fn is_buffering(&self) -> bool {
         false
     }
+    /// Returns the current playback rate.
     fn playback_rate(&self) -> f32;
+    /// Returns current playback progress.
     fn progress(&self) -> PlaybackProgress;
     /// Drains pending adapter events.
     ///
@@ -70,6 +90,7 @@ pub trait PlayerRuntimeAdapter: Send {
         &mut self,
         command: PlayerRuntimeCommand,
     ) -> PlayerResult<PlayerRuntimeCommandResult>;
+    /// Replaces the host-owned video surface when the adapter supports it.
     fn replace_video_surface(
         &mut self,
         _video_surface: Option<PlayerVideoSurfaceTarget>,
@@ -85,8 +106,10 @@ pub trait PlayerRuntimeAdapter: Send {
     /// poll worker channels and should not be invoked concurrently with command
     /// dispatch or event draining.
     fn advance(&mut self) -> PlayerResult<Option<DecodedVideoFrame>>;
+    /// Returns the next time the host should call [`advance`](Self::advance).
     fn next_deadline(&self) -> Option<Instant>;
 
+    /// Builds a snapshot from the adapter's current query methods.
     fn snapshot(&self) -> PlayerSnapshot {
         PlayerSnapshot {
             source_uri: self.source_uri().to_owned(),
