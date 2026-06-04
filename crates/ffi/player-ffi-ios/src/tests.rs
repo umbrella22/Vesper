@@ -6,8 +6,13 @@ use super::{
     map_player_error, player_error_to_ffi, player_ffi_ios_native_frame_pipeline_advance,
     player_ffi_ios_native_frame_pipeline_close, player_ffi_ios_native_frame_pipeline_open,
     player_ffi_ios_native_frame_pipeline_release_frame, player_ffi_ios_native_frame_pipeline_seek,
+    player_ffi_ios_plugin_abi_summary_json,
 };
 use crate::handles::HandleRegistry;
+use player_plugin::{
+    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+};
 use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode};
 
 #[test]
@@ -181,6 +186,42 @@ fn ffi_error_code_direct_mapping_preserves_legacy_and_appended_values() {
     for (ffi_code, code) in cases {
         assert_eq!(PlayerErrorCode::from(ffi_code), code);
     }
+}
+
+#[test]
+fn plugin_abi_summary_reports_current_signature_versions() {
+    let mut out_json: *mut c_char = ptr::null_mut();
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe { player_ffi_ios_plugin_abi_summary_json(&mut out_json, &mut error) };
+
+    assert_eq!(status, PlayerFfiCallStatus::Ok);
+    assert!(error.message.is_null());
+    assert!(!out_json.is_null());
+    let json = unsafe {
+        std::ffi::CStr::from_ptr(out_json)
+            .to_string_lossy()
+            .into_owned()
+    };
+    unsafe { super::player_ffi_mobile_plugin_diagnostics_string_free(out_json) };
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse ABI summary JSON");
+    assert_eq!(
+        value["decoderAbiVersion"].as_u64(),
+        Some(VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT as u64)
+    );
+    assert_eq!(
+        value["frameProcessorAbiVersion"].as_u64(),
+        Some(VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT as u64)
+    );
+    assert_eq!(
+        value["sourceNormalizerAbiVersion"].as_u64(),
+        Some(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT as u64)
+    );
+    assert_eq!(value["abiSemantics"].as_str(), Some("signature-only"));
+    assert_eq!(
+        value["capabilityMatching"].as_str(),
+        Some("requirements-first")
+    );
 }
 
 #[test]

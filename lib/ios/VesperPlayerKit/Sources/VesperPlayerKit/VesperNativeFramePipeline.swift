@@ -255,6 +255,15 @@ final class VesperNativeFramePipelineCoordinator {
                 message: "iOS native-frame pipeline requires a VideoToolbox decoder plugin path."
             )
         }
+        guard sourceNormalizer.supportsPacketInput else {
+            return VesperNativeFramePipelineIssue(
+                kind: .missingSourceNormalizerPacketPlugin,
+                message:
+                    "iOS native-frame pipeline v1 requires SourceNormalizer packet-stream input via " +
+                    "preflightOnly, preferNormalized, or requireNormalized mode. Disabled and diagnosticsOnly " +
+                    "modes remain on system playback."
+            )
+        }
         guard !sourceNormalizer.pluginLibraryPaths.isEmpty else {
             return VesperNativeFramePipelineIssue(
                 kind: .missingSourceNormalizerPacketPlugin,
@@ -551,6 +560,7 @@ final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBacken
 
 @MainActor
 protocol VesperNativeFrameAudioOutputing: AnyObject {
+    var onStateChanged: ((VesperNativeFrameAudioBridgeState) -> Void)? { get set }
     var currentPositionMs: Int64? { get }
 
     func prepare(
@@ -587,7 +597,7 @@ final class VesperNativeFramePipelineSession {
     let source: VesperPlayerSource
     let configuration: VesperNativeFramePipelineConfiguration
     let sourceNormalizer: VesperSourceNormalizerConfiguration
-    let surfaceHost: PlayerSurfaceView
+    private(set) var surfaceHost: PlayerSurfaceView
     private(set) var counters = VesperNativeFramePipelineCounters()
     private(set) var isClosed = false
     private(set) var didStart = false
@@ -615,7 +625,8 @@ final class VesperNativeFramePipelineSession {
     private var frameLeaseGeneration: UInt64 = 1
     private let backend: VesperNativeFramePipelineBackend
     private let audioOutput: VesperNativeFrameAudioOutputing
-    private let nativeFramePresenter: VesperNativeFramePresenting
+    private var nativeFramePresenter: VesperNativeFramePresenting
+    private let usesSurfaceHostPresenter: Bool
     private var audioBridgeState: VesperNativeFrameAudioBridgeState?
 
     init(
@@ -634,6 +645,14 @@ final class VesperNativeFramePipelineSession {
         self.backend = backend ?? VesperFfiNativeFramePipelineBackend()
         self.audioOutput = audioOutput ?? VesperNativeFrameAudioOutput()
         self.nativeFramePresenter = nativeFramePresenter ?? surfaceHost
+        usesSurfaceHostPresenter = nativeFramePresenter == nil
+        self.audioOutput.onStateChanged = { [weak self] state in
+            guard let self, !self.isClosed else { return }
+            self.applyAudioBridgeState(state)
+            if state.outputKind == "unavailable", let issue = state.issue {
+                iosHostLog("native audio pipeline unavailable; using video clock reason=\(issue)")
+            }
+        }
     }
 
     var route: String {
@@ -695,6 +714,21 @@ final class VesperNativeFramePipelineSession {
             )
         }
         return .success(self)
+    }
+
+    func rebindSurfaceHost(_ nextSurfaceHost: PlayerSurfaceView) {
+        guard !isClosed else { return }
+        if surfaceHost === nextSurfaceHost {
+            nextSurfaceHost.setNativeFramePresentationEnabled(true)
+            return
+        }
+
+        surfaceHost.setNativeFramePresentationEnabled(false)
+        surfaceHost = nextSurfaceHost
+        if usesSurfaceHostPresenter {
+            nativeFramePresenter = nextSurfaceHost
+        }
+        nextSurfaceHost.setNativeFramePresentationEnabled(true)
     }
 
     func play(rate: Float = 1.0) {
@@ -1073,6 +1107,7 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
     private var playbackRate: Float = 1.0
     private var isPrepared = false
     private var seekPositionMs: Int64 = 0
+    var onStateChanged: ((VesperNativeFrameAudioBridgeState) -> Void)?
 
     var currentPositionMs: Int64? {
         guard isPrepared else { return nil }
@@ -1178,6 +1213,9 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         engine?.stop()
         scheduledAudioFile = nil
         temporaryFiles.cleanupActiveFile()
+        playerNode = nil
+        timePitch = nil
+        self.engine = nil
         let engine = AVAudioEngine()
         let playerNode = AVAudioPlayerNode()
         let timePitch = AVAudioUnitTimePitch()
@@ -1190,6 +1228,7 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
             try engine.start()
         } catch {
             iosHostLog("native audio engine start failed: \(error.localizedDescription)")
+            markBridgeUnavailable(reason: "Swift native audio bridge engine start failed: \(error.localizedDescription)")
             return
         }
         self.engine = engine
@@ -1213,10 +1252,33 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
                 }
             } catch {
                 await MainActor.run {
+                    guard self.playbackGate.isCurrent(playbackGeneration) else { return }
                     iosHostLog("native audio decode failed: \(error.localizedDescription)")
+                    self.markBridgeUnavailable(
+                        reason: "Swift native audio bridge decode failed: \(error.localizedDescription)"
+                    )
                 }
             }
         }
+    }
+
+    private func markBridgeUnavailable(reason: String) {
+        playbackGate.cancelPlayback()
+        playerNode?.stop()
+        engine?.stop()
+        playerNode = nil
+        timePitch = nil
+        engine = nil
+        scheduledAudioFile = nil
+        temporaryFiles.cleanupActiveFile()
+        isPrepared = false
+        onStateChanged?(
+            VesperNativeFrameAudioBridgeState.resolved(
+                hasAudioTrack: true,
+                bridgePrepared: false,
+                unavailableReason: reason
+            )
+        )
     }
 
     nonisolated private static func makePcmFile(
@@ -1283,32 +1345,104 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
             return nil
         }
-        let audioFormat = AVAudioFormat(cmAudioFormatDescription: formatDescription)
+        guard let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?
+            .pointee
+        else {
+            return nil
+        }
+        let channelCount = AVAudioChannelCount(streamDescription.mChannelsPerFrame)
+        guard streamDescription.mSampleRate > 0, channelCount > 0 else {
+            return nil
+        }
         let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frameCount) else {
+        guard frameCount > 0 else {
+            return nil
+        }
+        guard
+            let audioFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: streamDescription.mSampleRate,
+                channels: channelCount,
+                interleaved: true
+            ),
+            let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frameCount)
+        else {
             return nil
         }
         buffer.frameLength = frameCount
         var blockBuffer: CMBlockBuffer?
-        var audioBufferList = AudioBufferList()
+        var bufferListSize = 0
+        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &bufferListSize,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: 0,
+            blockBufferOut: nil
+        )
+        guard sizeStatus == noErr, bufferListSize > 0 else {
+            return nil
+        }
+        let rawBufferList = UnsafeMutableRawPointer.allocate(
+            byteCount: bufferListSize,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer {
+            rawBufferList.deallocate()
+        }
+        let audioBufferList = rawBufferList.bindMemory(to: AudioBufferList.self, capacity: 1)
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
             bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            bufferListOut: audioBufferList,
+            bufferListSize: bufferListSize,
             blockBufferAllocator: kCFAllocatorDefault,
             blockBufferMemoryAllocator: kCFAllocatorDefault,
             flags: 0,
             blockBufferOut: &blockBuffer
         )
         guard status == noErr else { return nil }
-        let audioBuffer = audioBufferList.mBuffers
-        guard let sourceData = audioBuffer.mData else { return nil }
-        let byteCount = Int(audioBuffer.mDataByteSize)
-        if let target = buffer.floatChannelData?[0] {
-            memcpy(target, sourceData, byteCount)
-        } else if let target = buffer.mutableAudioBufferList.pointee.mBuffers.mData {
-            memcpy(target, sourceData, byteCount)
+        let sourceBuffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        let targetBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        guard
+            let targetData = targetBuffers.first?.mData,
+            let firstSourceBuffer = sourceBuffers.first,
+            let firstSourceData = firstSourceBuffer.mData
+        else {
+            return nil
+        }
+        let channelCountInt = Int(channelCount)
+        let targetByteCount = min(
+            Int(frameCount) * channelCountInt * MemoryLayout<Float>.size,
+            Int(targetBuffers[0].mDataByteSize)
+        )
+        memset(targetData, 0, targetByteCount)
+        if sourceBuffers.count == 1 {
+            memcpy(
+                targetData,
+                firstSourceData,
+                min(Int(firstSourceBuffer.mDataByteSize), targetByteCount)
+            )
+            return buffer
+        }
+        guard sourceBuffers.count == channelCountInt else {
+            return nil
+        }
+        let targetSamples = targetData.assumingMemoryBound(to: Float.self)
+        for channelIndex in 0..<channelCountInt {
+            guard let sourceData = sourceBuffers[channelIndex].mData else {
+                return nil
+            }
+            let sourceSamples = sourceData.assumingMemoryBound(to: Float.self)
+            let sourceFrameCount = min(
+                Int(frameCount),
+                Int(sourceBuffers[channelIndex].mDataByteSize) / MemoryLayout<Float>.size
+            )
+            for frameIndex in 0..<sourceFrameCount {
+                targetSamples[frameIndex * channelCountInt + channelIndex] = sourceSamples[frameIndex]
+            }
         }
         return buffer
     }

@@ -80,6 +80,7 @@ public struct VesperPlayerStage: View {
     public var body: some View {
         ZStack {
             surface
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             GeometryReader { proxy in
                 Color.clear
@@ -176,6 +177,7 @@ public struct VesperPlayerStage: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: isFullscreen ? 0 : 28, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             if !isFullscreen {
                 RoundedRectangle(cornerRadius: 28, style: .continuous)

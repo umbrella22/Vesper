@@ -46,6 +46,75 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun surfaceHostAspectFitSizeDoesNotCropWideVideo() {
+        val size =
+            calculateAspectFitSize(
+                containerWidth = 400,
+                containerHeight = 300,
+                videoWidth = 1920,
+                videoHeight = 1080,
+            )
+
+        assertEquals(AspectFitSize(width = 400, height = 225), size)
+    }
+
+    @Test
+    fun surfaceHostAspectFitSizeDoesNotCropPortraitVideo() {
+        val size =
+            calculateAspectFitSize(
+                containerWidth = 400,
+                containerHeight = 300,
+                videoWidth = 1080,
+                videoHeight = 1920,
+            )
+
+        assertEquals(AspectFitSize(width = 168, height = 300), size)
+    }
+
+    @Test
+    fun surfaceHostAspectFitScaleKeepsTextureViewInsideContainer() {
+        val wideScale =
+            calculateAspectFitScale(
+                containerWidth = 400f,
+                containerHeight = 300f,
+                videoWidth = 1920,
+                videoHeight = 1080,
+            )
+        val portraitScale =
+            calculateAspectFitScale(
+                containerWidth = 400f,
+                containerHeight = 300f,
+                videoWidth = 1080,
+                videoHeight = 1920,
+            )
+
+        assertEquals(1.0f, wideScale?.scaleX)
+        assertEquals(0.75f, wideScale?.scaleY)
+        assertEquals(0.421875f, portraitScale?.scaleX)
+        assertEquals(1.0f, portraitScale?.scaleY)
+    }
+
+    @Test
+    fun surfaceHostAspectFitRejectsInvalidDimensions() {
+        assertNull(
+            calculateAspectFitSize(
+                containerWidth = 0,
+                containerHeight = 300,
+                videoWidth = 1920,
+                videoHeight = 1080,
+            )
+        )
+        assertNull(
+            calculateAspectFitScale(
+                containerWidth = 400f,
+                containerHeight = 300f,
+                videoWidth = 1920,
+                videoHeight = 0,
+            )
+        )
+    }
+
+    @Test
     fun refreshMirrorsEffectiveVideoTrackIdFromBindings() {
         val bindings =
             FakeBindings(

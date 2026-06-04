@@ -30,6 +30,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
     private var playbackStalledObserver: NSObjectProtocol?
+    private var didLogLinkedPluginAbiSummary = false
     private var pendingAutoPlay = false
     private var pendingNativeFrameSurfaceLoad = false
     private var pendingNativeFrameSeek: PendingNativeFrameSeek?
@@ -182,6 +183,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     func initialize() {
         clearLastError()
         recordBenchmark("initialize_start")
+        logLinkedPluginAbiSummaryIfNeeded()
         guard let currentSource else {
             recordBenchmark("initialize_without_source")
             updateState {
@@ -333,6 +335,33 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         ) + nativeFramePipelineDiagnostics(fallbackIssue: nativeFramePipelineFallbackIssue)
     }
 
+    private func logLinkedPluginAbiSummaryIfNeeded() {
+        guard !didLogLinkedPluginAbiSummary else {
+            return
+        }
+        didLogLinkedPluginAbiSummary = true
+
+        var outputPointer: UnsafeMutablePointer<CChar>?
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let ok = vesper_ios_plugin_abi_summary_json(&outputPointer, &errorPointer)
+        defer {
+            if let outputPointer {
+                vesper_mobile_plugin_diagnostics_string_free(outputPointer)
+            }
+            if let errorPointer {
+                vesper_mobile_plugin_diagnostics_string_free(errorPointer)
+            }
+        }
+
+        if ok, let outputPointer {
+            iosHostLog("linked Rust plugin ABI summary: \(String(cString: outputPointer))")
+        } else if let errorPointer {
+            iosHostLog("linked Rust plugin ABI summary failed: \(String(cString: errorPointer))")
+        } else {
+            iosHostLog("linked Rust plugin ABI summary failed")
+        }
+    }
+
     private func nativeFramePipelineDiagnostics(
         fallbackIssue: VesperNativeFramePipelineIssue? = nil
     ) -> [[String: Any]] {
@@ -374,6 +403,14 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         return decision
     }
 
+    private func resumePendingNativeFrameSurfaceLoadIfNeeded() {
+        guard pendingNativeFrameSurfaceLoad, player == nil, currentSource != nil else {
+            return
+        }
+        pendingNativeFrameSurfaceLoad = false
+        initialize()
+    }
+
     private func tearDownActivePlayback() {
         releaseDashStartupAbrLimitIfNeeded(reason: "tearDown", item: player?.currentItem)
         _ = advancePlaybackEpoch()
@@ -400,19 +437,32 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         guard let host = host as? PlayerSurfaceView else {
             return
         }
-        recordBenchmark("attach_surface_host")
-        if surfaceHost !== host {
-            iosHostLog("attachSurfaceHost")
-            surfaceHost?.onReadyForDisplay = nil
-        }
         let activeNativeSession = nativeFramePipelineCoordinator.activeSession
-        let shouldReloadNativeSession =
+        if surfaceHost === host {
+            host.onReadyForDisplay = { [weak self] in
+                Task { @MainActor in
+                    self?.handleSurfaceReadyForDisplay()
+                }
+            }
+            if activeNativeSession?.didStart == true, player == nil {
+                host.attachNativeFramePresenter()
+            } else {
+                host.attach(player: player)
+            }
+            resumePendingNativeFrameSurfaceLoadIfNeeded()
+            attemptPendingPlaybackStart(reason: "attachSurfaceHost")
+            return
+        }
+
+        recordBenchmark("attach_surface_host")
+        iosHostLog("attachSurfaceHost")
+        surfaceHost?.onReadyForDisplay = nil
+        let shouldRebindNativeSession =
             activeNativeSession?.didStart == true &&
             activeNativeSession?.surfaceHost !== host
-        if shouldReloadNativeSession {
-            iosHostLog("native-frame pipeline reloading after surface host change")
-            pendingAutoPlay = pendingAutoPlay || publishedUiState.playbackState == .playing
-            nativeFramePipelineCoordinator.closeActiveSession()
+        if shouldRebindNativeSession {
+            iosHostLog("native-frame pipeline rebinding after surface host change")
+            activeNativeSession?.rebindSurfaceHost(host)
         }
         surfaceHost = host
         host.onReadyForDisplay = { [weak self] in
@@ -420,19 +470,32 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 self?.handleSurfaceReadyForDisplay()
             }
         }
-        if activeNativeSession?.didStart == true, !shouldReloadNativeSession, player == nil {
+        if activeNativeSession?.didStart == true, player == nil {
             host.attachNativeFramePresenter()
         } else {
             host.attach(player: player)
         }
-        if (pendingNativeFrameSurfaceLoad || shouldReloadNativeSession), player == nil, currentSource != nil {
-            pendingNativeFrameSurfaceLoad = false
-            initialize()
-        }
+        resumePendingNativeFrameSurfaceLoadIfNeeded()
         attemptPendingPlaybackStart(reason: "attachSurfaceHost")
     }
 
     func detachSurfaceHost() {
+        detachSurfaceHostIfCurrent(nil)
+    }
+
+    func detachSurfaceHost(_ host: UIView) {
+        guard let host = host as? PlayerSurfaceView else {
+            return
+        }
+        detachSurfaceHostIfCurrent(host)
+    }
+
+    private func detachSurfaceHostIfCurrent(_ expectedHost: PlayerSurfaceView?) {
+        if let expectedHost, surfaceHost !== expectedHost {
+            expectedHost.clearReadyCallback()
+            expectedHost.detachBridgeIfNeeded()
+            return
+        }
         iosHostLog("detachSurfaceHost")
         recordBenchmark("detach_surface_host")
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
@@ -1012,8 +1075,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             case .failure(let error):
                 if nativeFramePipelineConfiguration.mode == .preferNativeFrame {
                     nativeFramePipelineFallbackIssue = error.issue
-                    currentPluginDiagnostics = probePlugins(for: currentSource)
                     nativeFramePipelineCoordinator.closeActiveSession()
+                    currentPluginDiagnostics = probePlugins(for: currentSource)
                     iosHostLog("native-frame pipeline fallback: \(error.message)")
                     break
                 }

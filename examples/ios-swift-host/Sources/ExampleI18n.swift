@@ -196,6 +196,9 @@ enum ExampleI18n {
     static var photoLibraryAddAccessRequired: String { string("example.message.photo_library_add_required") }
     static var unknownPhotoAuthorizationState: String { string("example.message.unknown_photo_authorization_state") }
     static var failedToLoadSelectedVideoFromPhotos: String { string("example.message.failed_to_load_selected_video_from_photos") }
+    static var nativeFrameRequireDowngradedForPlayback: String {
+        string("example.message.native_frame_require_downgraded_for_playback")
+    }
     static func failedToLoadSelectedLocalVideo(_ reason: String) -> String {
         string("example.message.failed_to_load_selected_local_video", reason)
     }

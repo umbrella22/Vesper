@@ -16,7 +16,11 @@ use player_platform_mobile::{
     mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
     open_mobile_source_normalizer_resource,
 };
-use player_plugin::ProcessorProgress;
+use player_plugin::{
+    ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+};
 use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_runtime::{
     DownloadTaskSnapshot, FrameProcessorMode, NativeFramePipelineMode, PlayerError, PreloadBudget,
@@ -45,6 +49,41 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests;
+
+/// # Safety
+///
+/// `out_json` must point to writable storage for a Rust-owned string pointer. The returned
+/// string must be released with `player_ffi_mobile_plugin_diagnostics_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        unsafe {
+            ptr::write(out_json, ptr::null_mut());
+        }
+
+        let summary = serde_json::json!({
+            "decoderAbiVersion": VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+            "frameProcessorAbiVersion": VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+            "sourceNormalizerAbiVersion": VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+            "abiSemantics": "signature-only",
+            "capabilityMatching": "requirements-first",
+        });
+        unsafe {
+            ptr::write(out_json, into_c_string_ptr(summary.to_string()));
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(

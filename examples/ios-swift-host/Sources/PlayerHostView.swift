@@ -45,6 +45,28 @@ private func makeExampleController(
     )
 }
 
+private func playbackSafeNativeFrameSetting(
+    _ setting: ExampleNativeFramePipelineSetting
+) -> ExampleNativeFramePipelineSetting {
+    switch setting {
+    case .requireNativeFrame:
+        return .preferNativeFrame
+    case .disabled, .diagnosticsOnly, .preferNativeFrame:
+        return setting
+    }
+}
+
+private func nativeFrameSettingForSourceNormalizer(
+    sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
+) -> ExampleNativeFramePipelineSetting {
+    guard !sourceNormalizerSetting.supportsNativeFramePacketInput,
+          nativeFramePipelineSetting == .requireNativeFrame else {
+        return nativeFramePipelineSetting
+    }
+    return .preferNativeFrame
+}
+
 @MainActor
 private final class ExamplePlayerControllerStore: ObservableObject {
     @Published private(set) var controller: VesperPlayerController
@@ -300,6 +322,7 @@ struct PlayerHostView: View {
             isPresented: $isVideoPickerPresented,
             selection: $selectedVideoItem,
             matching: .videos,
+            preferredItemEncoding: .current,
             photoLibrary: .shared()
         )
         .onChange(of: selectedVideoItem) { _, item in
@@ -574,9 +597,17 @@ struct PlayerHostView: View {
         let activeSource = activePlaylistSource()
         let previousUiState = previousController.uiState
         sourceNormalizerSetting = setting
+        let resolvedNativeFrameSetting = nativeFrameSettingForSourceNormalizer(
+            sourceNormalizerSetting: setting,
+            nativeFramePipelineSetting: nativeFramePipelineSetting
+        )
+        if resolvedNativeFrameSetting != nativeFramePipelineSetting {
+            nativeFramePipelineSetting = resolvedNativeFrameSetting
+            hostMessage = ExampleI18n.nativeFrameRequireDowngradedForPlayback
+        }
         let nextController = makeExampleController(
             sourceNormalizerSetting: setting,
-            nativeFramePipelineSetting: nativeFramePipelineSetting,
+            nativeFramePipelineSetting: resolvedNativeFrameSetting,
             initialSource: activeSource,
             resiliencePolicy: selectedResilienceProfile.policy
         )
@@ -587,7 +618,7 @@ struct PlayerHostView: View {
             nextController,
             activeSource: activeSource,
             previousUiState: previousUiState,
-            nativeFramePipelineSetting: nativeFramePipelineSetting
+            nativeFramePipelineSetting: resolvedNativeFrameSetting
         )
     }
 
@@ -599,10 +630,17 @@ struct PlayerHostView: View {
         let previousController = controller
         let activeSource = activePlaylistSource()
         let previousUiState = previousController.uiState
-        nativeFramePipelineSetting = setting
+        let resolvedSetting = nativeFrameSettingForSourceNormalizer(
+            sourceNormalizerSetting: sourceNormalizerSetting,
+            nativeFramePipelineSetting: setting
+        )
+        nativeFramePipelineSetting = resolvedSetting
+        if resolvedSetting != setting {
+            hostMessage = ExampleI18n.nativeFrameRequireDowngradedForPlayback
+        }
         let nextController = makeExampleController(
             sourceNormalizerSetting: sourceNormalizerSetting,
-            nativeFramePipelineSetting: setting,
+            nativeFramePipelineSetting: resolvedSetting,
             initialSource: activeSource,
             resiliencePolicy: selectedResilienceProfile.policy
         )
@@ -613,7 +651,7 @@ struct PlayerHostView: View {
             nextController,
             activeSource: activeSource,
             previousUiState: previousUiState,
-            nativeFramePipelineSetting: setting
+            nativeFramePipelineSetting: resolvedSetting
         )
     }
 
@@ -632,7 +670,10 @@ struct PlayerHostView: View {
                 configureSystemPlayback(for: activeSource, controller: nextController)
             }
             nextController.initialize()
-            if shouldRestorePosition(for: nativeFramePipelineSetting) {
+            if shouldRestorePosition(
+                for: nativeFramePipelineSetting,
+                controller: nextController
+            ) {
                 let restorePositionMs = previousUiState.timeline.positionMs
                 if restorePositionMs > 0 {
                     nextController.seek(by: restorePositionMs)
@@ -645,19 +686,35 @@ struct PlayerHostView: View {
     }
 
     private func shouldRestorePosition(
-        for nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
+        for nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+        controller: VesperPlayerController
     ) -> Bool {
         switch nativeFramePipelineSetting {
         case .disabled, .diagnosticsOnly:
             return true
-        case .preferNativeFrame, .requireNativeFrame:
+        case .preferNativeFrame:
+            return controller.pluginDiagnostics.contains { diagnostic in
+                diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
+                    diagnostic["route"] as? String == "systemPlayer"
+            }
+        case .requireNativeFrame:
             return false
         }
     }
 
     private func selectSourceForPlayback(_ source: VesperPlayerSource) {
+        ensurePlaybackSafeNativeFrameSetting()
         controller.selectSource(source)
         configureSystemPlayback(for: source)
+    }
+
+    private func ensurePlaybackSafeNativeFrameSetting() {
+        let resolvedSetting = playbackSafeNativeFrameSetting(nativeFramePipelineSetting)
+        guard resolvedSetting != nativeFramePipelineSetting else {
+            return
+        }
+        nativeFramePipelineSetting = resolvedSetting
+        hostMessage = ExampleI18n.nativeFrameRequireDowngradedForPlayback
     }
 
     private func configureSystemPlayback(
@@ -996,13 +1053,18 @@ struct PlayerHostView: View {
             await MainActor.run {
                 hostMessage = nil
                 exampleIosHostLog("picked local video url=\(imported.url.absoluteString)")
+                ensurePlaybackSafeNativeFrameSetting()
                 queuedLocalSource = .localFile(url: imported.url, label: imported.label)
+                let localItemId = iosLocalPlaylistItemId()
+                let playlistWithoutPreviousLocalItems = playlistItemIds.filter {
+                    !isIosLocalPlaylistItemId($0)
+                }
                 let nextPlaylistItemIds = enqueuePlaylistItem(
-                    playlistItemIds,
-                    itemId: IOS_LOCAL_PLAYLIST_ITEM_ID
+                    playlistWithoutPreviousLocalItems,
+                    itemId: localItemId
                 )
                 applyPlaylistQueue(
-                    focusItemId: IOS_LOCAL_PLAYLIST_ITEM_ID,
+                    focusItemId: localItemId,
                     playlistItemIds: nextPlaylistItemIds
                 )
                 controlsVisible = true

@@ -13,18 +13,58 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
         self.controller = controller
     }
 
+    public func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     public func makeUIView(context: Context) -> PlayerSurfaceView {
         let view = PlayerSurfaceView()
-        controller.attachSurfaceHost(view)
+        context.coordinator.attach(controller: controller, view: view)
         return view
     }
 
     public func updateUIView(_ uiView: PlayerSurfaceView, context: Context) {
-        controller.attachSurfaceHost(uiView)
+        guard !context.coordinator.isAttached(controller: controller, view: uiView) else {
+            return
+        }
+        context.coordinator.attach(controller: controller, view: uiView)
     }
 
-    public static func dismantleUIView(_ uiView: PlayerSurfaceView, coordinator: ()) {
-        uiView.detachBridgeIfNeeded()
+    public static func dismantleUIView(_ uiView: PlayerSurfaceView, coordinator: Coordinator) {
+        coordinator.detach(view: uiView)
+    }
+
+    public final class Coordinator {
+        private weak var attachedController: VesperPlayerController?
+        private weak var attachedView: PlayerSurfaceView?
+
+        @MainActor
+        func isAttached(controller: VesperPlayerController, view: PlayerSurfaceView) -> Bool {
+            attachedController === controller && attachedView === view
+        }
+
+        @MainActor
+        func attach(controller: VesperPlayerController, view: PlayerSurfaceView) {
+            if let attachedController,
+               let attachedView,
+               attachedController !== controller || attachedView !== view {
+                attachedController.detachSurfaceHost(attachedView)
+            }
+            controller.attachSurfaceHost(view)
+            attachedController = controller
+            attachedView = view
+        }
+
+        @MainActor
+        func detach(view: PlayerSurfaceView) {
+            if let attachedController {
+                attachedController.detachSurfaceHost(view)
+            } else {
+                view.detachBridgeIfNeeded()
+            }
+            attachedController = nil
+            attachedView = nil
+        }
     }
 }
 
@@ -168,29 +208,52 @@ public final class PlayerSurfaceView: UIView {
         let pixelBuffer = Unmanaged<CVPixelBuffer>.fromOpaque(pointer).takeUnretainedValue()
         let retainedPixelBuffer = Unmanaged.passRetained(pixelBuffer)
         let image = CIImage(cvPixelBuffer: pixelBuffer)
-        let targetRect = AVMakeRect(
-            aspectRatio: image.extent.size,
-            insideRect: CGRect(origin: .zero, size: metalLayer.drawableSize)
+        let drawableBounds = CGRect(origin: .zero, size: metalLayer.drawableSize)
+        let imageExtent = image.extent
+        guard imageExtent.width > 0, imageExtent.height > 0,
+              drawableBounds.width > 0, drawableBounds.height > 0 else {
+            retainedPixelBuffer.release()
+            completion(false)
+            return
+        }
+        let scale = min(
+            drawableBounds.width / imageExtent.width,
+            drawableBounds.height / imageExtent.height
         )
+        let scaledWidth = imageExtent.width * scale
+        let scaledHeight = imageExtent.height * scale
+        let offsetX = (drawableBounds.width - scaledWidth) / 2
+        let offsetY = (drawableBounds.height - scaledHeight) / 2
+        let fittedImage = image
+            .transformed(by: CGAffineTransform(
+                translationX: -imageExtent.origin.x,
+                y: -imageExtent.origin.y
+            ))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             retainedPixelBuffer.release()
             completion(false)
             return
         }
+        let clearPass = MTLRenderPassDescriptor()
+        clearPass.colorAttachments[0].texture = drawable.texture
+        clearPass.colorAttachments[0].loadAction = .clear
+        clearPass.colorAttachments[0].storeAction = .store
+        clearPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        guard let clearEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: clearPass) else {
+            retainedPixelBuffer.release()
+            completion(false)
+            return
+        }
+        clearEncoder.endEncoding()
         ciContext.render(
-            image,
+            fittedImage,
             to: drawable.texture,
             commandBuffer: commandBuffer,
-            bounds: image.extent,
+            bounds: drawableBounds,
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
-        // TODO(native-frame v2): honor aspect-fit. `targetRect` computes the
-        // aspect-fitted destination, but `ciContext.render` above draws the full
-        // pixel buffer across the drawable, so non-source-sized layers stretch the
-        // image. Follow-up: render into `targetRect` (letterbox/pillarbox the
-        // remainder) or drive layout from the frame's display aspect ratio so the
-        // Metal layer matches the source. Tracked for the v2 presenter pass.
-        _ = targetRect
         commandBuffer.present(drawable)
         commandBuffer.addCompletedHandler { _ in
             retainedPixelBuffer.release()

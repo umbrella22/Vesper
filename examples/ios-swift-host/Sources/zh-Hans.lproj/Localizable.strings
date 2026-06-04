@@ -125,7 +125,7 @@
 "example.plugins.native_frame.prefer" = "Prefer native frame";
 "example.plugins.native_frame.prefer_subtitle" = "优先尝试 SourceNormalizer packet 输入、VideoToolbox 硬件解码、FrameProcessor 和 MetalLayer；失败时回退 AVPlayer。";
 "example.plugins.native_frame.require" = "Require native frame";
-"example.plugins.native_frame.require_subtitle" = "要求使用 SourceNormalizer packet、VideoToolbox 硬件解码、FrameProcessor 和 MetalLayer 路线；失败时展示错误。";
+"example.plugins.native_frame.require_subtitle" = "SDK-managed native frame 的严格诊断模式。普通切源会降级为 Prefer，让不支持的 codec 和 HDR 片段回退 AVPlayer。";
 "example.plugins.source_path" = "source";
 "example.plugins.decoder_path" = "decoder";
 "example.plugins.frame_path" = "frame";
@@ -149,6 +149,7 @@
 "example.message.photo_library_add_required" = "需要相册写入权限才能保存下载视频。";
 "example.message.unknown_photo_authorization_state" = "未知的相册授权状态。";
 "example.message.failed_to_load_selected_video_from_photos" = "无法从“照片”加载所选视频。";
+"example.message.native_frame_require_downgraded_for_playback" = "已将 native-frame require 切为 prefer；不支持的源会回退 AVPlayer 播放。";
 "example.message.failed_to_load_selected_local_video" = "打开所选视频失败：%@";
 "example.message.failed_to_load_selected_photo_video" = "加载所选相册视频失败：%@";
 

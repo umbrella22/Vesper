@@ -159,6 +159,15 @@ enum ExampleSourceNormalizerSetting: String, CaseIterable, Identifiable {
             return .requireNormalized
         }
     }
+
+    var supportsNativeFramePacketInput: Bool {
+        switch self {
+        case .preflightOnly, .preferNormalized, .requireNormalized:
+            return true
+        case .disabled, .diagnosticsOnly:
+            return false
+        }
+    }
 }
 
 enum ExampleNativeFramePipelineSetting: String, CaseIterable, Identifiable {
@@ -268,6 +277,14 @@ let IOS_LIVE_DVR_PLAYLIST_ITEM_ID = "live-dvr-acceptance"
 let IOS_REMOTE_PLAYLIST_ITEM_ID = "custom-remote"
 let IOS_LOCAL_PLAYLIST_ITEM_ID = "local-file"
 
+func iosLocalPlaylistItemId() -> String {
+    "\(IOS_LOCAL_PLAYLIST_ITEM_ID)-\(UUID().uuidString)"
+}
+
+func isIosLocalPlaylistItemId(_ itemId: String) -> Bool {
+    itemId == IOS_LOCAL_PLAYLIST_ITEM_ID || itemId.hasPrefix("\(IOS_LOCAL_PLAYLIST_ITEM_ID)-")
+}
+
 func iosHlsDemoSource() -> VesperPlayerSource {
     return VesperPlayerSource.hls(
         url: URL(string: IOS_HLS_DEMO_URL)!,
@@ -329,10 +346,10 @@ func examplePlaylistQueue(
                 )
             )
 
-        case IOS_LOCAL_PLAYLIST_ITEM_ID:
+        case let itemId where isIosLocalPlaylistItemId(itemId):
             guard let localSource else { return nil }
             return VesperPlaylistQueueItem(
-                itemId: IOS_LOCAL_PLAYLIST_ITEM_ID,
+                itemId: itemId,
                 source: localSource,
                 preloadProfile: VesperPlaylistItemPreloadProfile(
                     expectedMemoryBytes: 128 * 1024

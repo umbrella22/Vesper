@@ -671,6 +671,10 @@ bool vesper_runtime_benchmark_sink_session_flush_json(
 
 void vesper_runtime_benchmark_string_free(char *value);
 
+bool vesper_ios_plugin_abi_summary_json(
+    char **out_json,
+    char **out_error_message);
+
 bool vesper_mobile_plugin_diagnostics_json(
     const char *source_uri,
     uint32_t source_mode,

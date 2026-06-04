@@ -28,6 +28,15 @@ public struct VesperSourceNormalizerConfiguration: Equatable {
         mode == .disabled && pluginLibraryPaths.isEmpty
     }
 
+    var supportsPacketInput: Bool {
+        switch mode {
+        case .preflightOnly, .preferNormalized, .requireNormalized:
+            return true
+        case .disabled, .diagnosticsOnly:
+            return false
+        }
+    }
+
     var ffiMode: UInt32 {
         switch mode {
         case .disabled:

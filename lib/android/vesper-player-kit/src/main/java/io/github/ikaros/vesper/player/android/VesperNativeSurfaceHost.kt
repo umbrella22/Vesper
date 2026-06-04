@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android
 
 import android.graphics.Matrix
+import android.graphics.Color
 import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Gravity
@@ -36,6 +37,7 @@ internal class VesperNativeSurfaceHost(
                 "hostAttached=${host.isAttachedToWindow} hostSize=${host.width}x${host.height} " +
                 "hostChildren=${host.childCount}",
         )
+        host.setBackgroundColor(Color.BLACK)
         if (hostView === host && renderView != null) {
             applyVideoTransform()
             reattachIfAvailable()
@@ -283,7 +285,7 @@ internal class VesperNativeSurfaceHost(
             }
         }
 
-    // ── Aspect ratio fit ────────────────────────────────────────────────
+    // ── Aspect-preserving fit transform ─────────────────────────────────
 
     private fun applyKeepScreenOn() {
         hostView?.keepScreenOn = keepScreenOn
@@ -323,28 +325,20 @@ internal class VesperNativeSurfaceHost(
             return
         }
 
-        val videoAspectRatio =
-            (layout.width.toFloat() * layout.pixelWidthHeightRatio) / layout.height.toFloat()
-        if (videoAspectRatio <= 0f) {
+        val transform = calculateAspectFitScale(
+            containerWidth = viewWidth,
+            containerHeight = viewHeight,
+            videoWidth = layout.width,
+            videoHeight = layout.height,
+            pixelWidthHeightRatio = layout.pixelWidthHeightRatio,
+        ) ?: run {
             view.setTransform(Matrix())
             return
         }
 
-        val viewAspectRatio = viewWidth / viewHeight
-        val scaleX: Float
-        val scaleY: Float
-
-        if (videoAspectRatio > viewAspectRatio) {
-            scaleX = 1.0f
-            scaleY = viewAspectRatio / videoAspectRatio
-        } else {
-            scaleX = videoAspectRatio / viewAspectRatio
-            scaleY = 1.0f
-        }
-
         val matrix =
             Matrix().apply {
-                setScale(scaleX, scaleY, viewWidth / 2f, viewHeight / 2f)
+                setScale(transform.scaleX, transform.scaleY, viewWidth / 2f, viewHeight / 2f)
             }
         view.setTransform(matrix)
     }
@@ -367,21 +361,16 @@ internal class VesperNativeSurfaceHost(
             return
         }
 
-        val videoAspectRatio =
-            (layout.width.toFloat() * layout.pixelWidthHeightRatio) / layout.height.toFloat()
-        if (videoAspectRatio <= 0f) return
-
-        val hostAspectRatio = hostWidth.toFloat() / hostHeight.toFloat()
-        val targetWidth: Int
-        val targetHeight: Int
-
-        if (videoAspectRatio > hostAspectRatio) {
-            targetWidth = hostWidth
-            targetHeight = (hostWidth / videoAspectRatio).toInt()
-        } else {
-            targetHeight = hostHeight
-            targetWidth = (hostHeight * videoAspectRatio).toInt()
-        }
+        val targetSize =
+            calculateAspectFitSize(
+                containerWidth = hostWidth,
+                containerHeight = hostHeight,
+                videoWidth = layout.width,
+                videoHeight = layout.height,
+                pixelWidthHeightRatio = layout.pixelWidthHeightRatio,
+            ) ?: return
+        val targetWidth = targetSize.width
+        val targetHeight = targetSize.height
 
         val lp = view.layoutParams
         if (lp is FrameLayout.LayoutParams) {
@@ -403,3 +392,77 @@ internal class VesperNativeSurfaceHost(
 }
 
 private const val TAG = "VesperPlayerAndroidHost"
+
+internal data class AspectFitSize(
+    val width: Int,
+    val height: Int,
+)
+
+internal data class AspectFitScale(
+    val scaleX: Float,
+    val scaleY: Float,
+)
+
+internal fun calculateAspectFitSize(
+    containerWidth: Int,
+    containerHeight: Int,
+    videoWidth: Int,
+    videoHeight: Int,
+    pixelWidthHeightRatio: Float = 1.0f,
+): AspectFitSize? {
+    if (
+        containerWidth <= 0 ||
+        containerHeight <= 0 ||
+        videoWidth <= 0 ||
+        videoHeight <= 0 ||
+        pixelWidthHeightRatio <= 0f
+    ) {
+        return null
+    }
+    val videoAspectRatio = (videoWidth.toFloat() * pixelWidthHeightRatio) / videoHeight.toFloat()
+    if (videoAspectRatio <= 0f) return null
+    val containerAspectRatio = containerWidth.toFloat() / containerHeight.toFloat()
+    return if (videoAspectRatio > containerAspectRatio) {
+        AspectFitSize(
+            width = containerWidth,
+            height = (containerWidth / videoAspectRatio).toInt().coerceAtLeast(1),
+        )
+    } else {
+        AspectFitSize(
+            width = (containerHeight * videoAspectRatio).toInt().coerceAtLeast(1),
+            height = containerHeight,
+        )
+    }
+}
+
+internal fun calculateAspectFitScale(
+    containerWidth: Float,
+    containerHeight: Float,
+    videoWidth: Int,
+    videoHeight: Int,
+    pixelWidthHeightRatio: Float = 1.0f,
+): AspectFitScale? {
+    if (
+        containerWidth <= 0f ||
+        containerHeight <= 0f ||
+        videoWidth <= 0 ||
+        videoHeight <= 0 ||
+        pixelWidthHeightRatio <= 0f
+    ) {
+        return null
+    }
+    val videoAspectRatio = (videoWidth.toFloat() * pixelWidthHeightRatio) / videoHeight.toFloat()
+    if (videoAspectRatio <= 0f) return null
+    val containerAspectRatio = containerWidth / containerHeight
+    return if (videoAspectRatio > containerAspectRatio) {
+        AspectFitScale(
+            scaleX = 1.0f,
+            scaleY = containerAspectRatio / videoAspectRatio,
+        )
+    } else {
+        AspectFitScale(
+            scaleX = videoAspectRatio / containerAspectRatio,
+            scaleY = 1.0f,
+        )
+    }
+}

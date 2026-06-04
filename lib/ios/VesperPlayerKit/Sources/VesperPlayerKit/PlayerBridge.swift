@@ -501,6 +501,7 @@ protocol PlayerBridge: AnyObject {
 
     func attachSurfaceHost(_ host: UIView)
     func detachSurfaceHost()
+    func detachSurfaceHost(_ host: UIView)
 
     func play()
     func pause()
@@ -535,6 +536,10 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
 extension PlayerBridge {
     var routePickerPlayer: AVPlayer? {
         nil
+    }
+
+    func detachSurfaceHost(_ host: UIView) {
+        detachSurfaceHost()
     }
 }
 

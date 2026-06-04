@@ -74,6 +74,7 @@ public final class VesperPlayerController: ObservableObject {
     private let selectSourceImpl: (VesperPlayerSource) -> Void
     private let attachSurfaceHostImpl: (UIView) -> Void
     private let detachSurfaceHostImpl: () -> Void
+    private let detachSurfaceHostForHostImpl: (UIView) -> Void
     private let playImpl: () -> Void
     private let pauseImpl: () -> Void
     private let togglePauseImpl: () -> Void
@@ -118,6 +119,9 @@ public final class VesperPlayerController: ObservableObject {
             bridge.attachSurfaceHost(host)
         }
         detachSurfaceHostImpl = bridge.detachSurfaceHost
+        detachSurfaceHostForHostImpl = { host in
+            bridge.detachSurfaceHost(host)
+        }
         playImpl = bridge.play
         pauseImpl = bridge.pause
         togglePauseImpl = bridge.togglePause
@@ -190,6 +194,10 @@ public final class VesperPlayerController: ObservableObject {
 
     public func detachSurfaceHost() {
         detachSurfaceHostImpl()
+    }
+
+    func detachSurfaceHost(_ host: UIView) {
+        detachSurfaceHostForHostImpl(host)
     }
 
     public func play() {

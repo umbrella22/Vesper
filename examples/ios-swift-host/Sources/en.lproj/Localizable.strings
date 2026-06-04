@@ -125,7 +125,7 @@
 "example.plugins.native_frame.prefer" = "Prefer native frame";
 "example.plugins.native_frame.prefer_subtitle" = "Try SourceNormalizer packet input, VideoToolbox hardware decode, FrameProcessor, and MetalLayer first; fall back to AVPlayer on failure.";
 "example.plugins.native_frame.require" = "Require native frame";
-"example.plugins.native_frame.require_subtitle" = "Require the SourceNormalizer packet, VideoToolbox hardware decode, FrameProcessor, and MetalLayer path; surface an error on failure.";
+"example.plugins.native_frame.require_subtitle" = "Strict diagnostic mode for SDK-managed native frame. Regular source switches downgrade to Prefer so unsupported codecs and HDR clips can fall back to AVPlayer.";
 "example.plugins.source_path" = "source";
 "example.plugins.decoder_path" = "decoder";
 "example.plugins.frame_path" = "frame";
@@ -149,6 +149,7 @@
 "example.message.photo_library_add_required" = "Photo Library add access is required to save videos.";
 "example.message.unknown_photo_authorization_state" = "Unknown Photo Library authorization state.";
 "example.message.failed_to_load_selected_video_from_photos" = "Failed to load the selected video from Photos.";
+"example.message.native_frame_require_downgraded_for_playback" = "Switched native-frame require to prefer for playback; unsupported sources can now fall back to AVPlayer.";
 "example.message.failed_to_load_selected_local_video" = "Failed to open selected video: %@";
 "example.message.failed_to_load_selected_photo_video" = "Failed to load selected photo video: %@";
 

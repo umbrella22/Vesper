@@ -226,6 +226,44 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
+    func testNativeFramePipelinePreferFallsBackWhenSourceNormalizerModeCannotProvidePackets() {
+        let source = try! VesperPlayerSource(
+            uri: "file:///tmp/example.mov",
+            label: "Local MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let bridge = VesperNativePlayerBridge(
+            initialSource: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+                mode: .disabled,
+                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            ),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+                mode: .preferNativeFrame,
+                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            )
+        )
+        let surface = PlayerSurfaceView()
+        bridge.attachSurfaceHost(surface)
+
+        bridge.initialize()
+
+        XCTAssertNil(bridge.lastError)
+        XCTAssertTrue(
+            bridge.pluginDiagnostics.contains { diagnostic in
+                diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
+                    diagnostic["status"] as? String == "unsupported" &&
+                    diagnostic["participation"] as? String == "fallback" &&
+                    diagnostic["route"] as? String == "systemPlayer" &&
+                    diagnostic["fallbackKind"] as? String == "missingSourceNormalizerPacketPlugin" &&
+                    diagnostic["fallbackTargetRoute"] as? String == "systemPlayer" &&
+                    (diagnostic["fallbackReason"] as? String)?
+                        .contains("SourceNormalizer packet-stream input") == true
+            }
+        )
+    }
+
     func testNativeFramePipelineRequireFailsWhenDecoderPluginPathIsMissing() {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
@@ -327,6 +365,65 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                     diagnostic["fallbackKind"] as? String == "missingSourceNormalizerPacketPlugin" &&
                     diagnostic["fallbackTargetRoute"] as? String == "systemPlayer" &&
                     (diagnostic["fallbackReason"] as? String)?.contains("SourceNormalizer packet plugin") == true
+            }
+        )
+    }
+
+    func testNativeFramePipelinePreferFallsBackWhenStartupCodecUnsupported() {
+        let source = try! VesperPlayerSource(
+            uri: "file:///tmp/hdr.mov",
+            label: "HDR MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let backend = TestNativeFramePipelineBackend()
+        backend.openResult = .failure(
+            VesperNativeFramePipelineStartupError(
+                issue: VesperNativeFramePipelineIssue(
+                    kind: .unsupportedCodec,
+                    message: "iOS native-frame pipeline first pass only supports H264 packet streams, got HEVC"
+                )
+            )
+        )
+        let coordinator = VesperNativeFramePipelineCoordinator { source, configuration, sourceNormalizer, surfaceHost in
+            VesperNativeFramePipelineSession(
+                source: source,
+                configuration: configuration,
+                sourceNormalizer: sourceNormalizer,
+                surfaceHost: surfaceHost,
+                backend: backend,
+                audioOutput: TestNativeFrameAudioOutput()
+            )
+        }
+        let bridge = VesperNativePlayerBridge(
+            initialSource: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+                mode: .preflightOnly,
+                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            ),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+                mode: .preferNativeFrame,
+                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            ),
+            nativeFramePipelineCoordinator: coordinator
+        )
+        let surface = PlayerSurfaceView()
+        bridge.attachSurfaceHost(surface)
+
+        bridge.initialize()
+
+        XCTAssertNil(bridge.lastError)
+        XCTAssertNotNil(bridge.routePickerPlayer)
+        XCTAssertEqual(backend.closeHandles, [])
+        XCTAssertTrue(
+            bridge.pluginDiagnostics.contains { diagnostic in
+                diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
+                    diagnostic["status"] as? String == "unsupported" &&
+                    diagnostic["participation"] as? String == "fallback" &&
+                    diagnostic["route"] as? String == "systemPlayer" &&
+                    diagnostic["fallbackKind"] as? String == "unsupportedCodec" &&
+                    diagnostic["fallbackTargetRoute"] as? String == "systemPlayer" &&
+                    (diagnostic["fallbackReason"] as? String)?.contains("HEVC") == true
             }
         )
     }
@@ -976,6 +1073,51 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.playbackState, .playing)
     }
 
+    func testNativeFramePipelineSurfaceHostChangeRebindsWithoutReloadingSession() {
+        let source = try! VesperPlayerSource(
+            uri: "file:///tmp/example.mov",
+            label: "Local MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let backend = TestNativeFramePipelineBackend()
+        let audioOutput = TestNativeFrameAudioOutput()
+        let coordinator = VesperNativeFramePipelineCoordinator { source, configuration, sourceNormalizer, surfaceHost in
+            VesperNativeFramePipelineSession(
+                source: source,
+                configuration: configuration,
+                sourceNormalizer: sourceNormalizer,
+                surfaceHost: surfaceHost,
+                backend: backend,
+                audioOutput: audioOutput
+            )
+        }
+        let bridge = VesperNativePlayerBridge(
+            initialSource: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+                mode: .preflightOnly,
+                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            ),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+                mode: .preferNativeFrame,
+                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            ),
+            nativeFramePipelineCoordinator: coordinator
+        )
+
+        let firstSurface = PlayerSurfaceView()
+        let secondSurface = PlayerSurfaceView()
+        bridge.attachSurfaceHost(firstSurface)
+        bridge.initialize()
+
+        bridge.attachSurfaceHost(secondSurface)
+
+        XCTAssertEqual(backend.openSourceUris, ["file:///tmp/example.mov"])
+        XCTAssertEqual(backend.closeHandles, [])
+        XCTAssertTrue(coordinator.activeSession?.surfaceHost === secondSurface)
+        XCTAssertEqual(bridge.uiState.playbackState, .playing)
+    }
+
     func testNativeFramePipelineSurfaceDetachClosesAndReattachRestoresPlayingSession() {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
@@ -1511,6 +1653,59 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(
             session.timelinePositionMs(framePresentationTimeUs: 12_000_000),
             24_000
+        )
+    }
+
+    func testNativeFramePipelineTimelineFallsBackToVideoClockAfterRuntimeAudioFailure() {
+        let source = try! VesperPlayerSource(
+            uri: "file:///tmp/example.mov",
+            label: "Local MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let backend = TestNativeFramePipelineBackend()
+        let audioOutput = TestNativeFrameAudioOutput()
+        let session = VesperNativeFramePipelineSession(
+            source: source,
+            configuration: VesperNativeFramePipelineConfiguration(
+                mode: .preferNativeFrame,
+                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            ),
+            sourceNormalizer: VesperSourceNormalizerConfiguration(
+                mode: .preflightOnly,
+                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            ),
+            surfaceHost: PlayerSurfaceView(),
+            backend: backend,
+            audioOutput: audioOutput
+        )
+
+        guard case .success = session.start() else {
+            XCTFail("expected fake native-frame session to start")
+            return
+        }
+        audioOutput.currentPositionMs = 24_000
+        XCTAssertEqual(session.clockSource, "swiftNativeAudioBridge")
+        XCTAssertEqual(
+            session.timelinePositionMs(framePresentationTimeUs: 12_000_000),
+            24_000
+        )
+
+        audioOutput.emitState(
+            VesperNativeFrameAudioBridgeState.resolved(
+                hasAudioTrack: true,
+                bridgePrepared: false,
+                unavailableReason: "Swift native audio bridge decode failed in test"
+            )
+        )
+        audioOutput.currentPositionMs = 48_000
+
+        XCTAssertEqual(session.clockSource, "video")
+        XCTAssertEqual(session.audioOutputKind, "unavailable")
+        XCTAssertTrue(session.audioOutputIssue?.contains("decode failed") == true)
+        XCTAssertEqual(
+            session.timelinePositionMs(framePresentationTimeUs: 12_000_000),
+            12_000
         )
     }
 
@@ -2141,6 +2336,7 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
     var seekResult: Result<[String: Any], VesperNativeFramePipelineOperationError>?
     var advanceResults: [Result<[String: Any], VesperNativeFramePipelineOperationError>] = []
     var releaseResult: [String: Any] = ["counters": [:]]
+    var openResult: Result<VesperNativeFramePipelineOpenResult, VesperNativeFramePipelineStartupError>?
     private(set) var openSourceUris: [String] = []
     private(set) var closeHandles: [UInt64] = []
     private var nextHandle: UInt64 = 42
@@ -2153,6 +2349,9 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
         openSourceUris.append(source.uri)
         let handle = nextHandle
         nextHandle += 1
+        if let openResult {
+            return openResult
+        }
         return .success(
             VesperNativeFramePipelineOpenResult(
                 handle: handle,
@@ -2295,6 +2494,7 @@ private final class RecordingNativeFramePresenter: VesperNativeFramePresenting {
 @MainActor
 private final class TestNativeFrameAudioOutput: VesperNativeFrameAudioOutputing {
     private(set) var events: [String] = []
+    var onStateChanged: ((VesperNativeFrameAudioBridgeState) -> Void)?
     var currentPositionMs: Int64?
     var prepareResult: VesperNativeFrameAudioBridgeState?
 
@@ -2334,6 +2534,10 @@ private final class TestNativeFrameAudioOutput: VesperNativeFrameAudioOutputing 
 
     func close() {
         events.append("close")
+    }
+
+    func emitState(_ state: VesperNativeFrameAudioBridgeState) {
+        onStateChanged?(state)
     }
 }
 
