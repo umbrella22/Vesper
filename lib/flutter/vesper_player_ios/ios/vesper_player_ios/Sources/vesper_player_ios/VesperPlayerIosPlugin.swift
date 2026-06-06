@@ -77,6 +77,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         switch call.method {
         case "createPlayer":
             handleCreatePlayer(call, result: result)
+        case "probePlaybackCapability":
+            handleProbePlaybackCapability(call, result: result)
         case "createDownloadManager":
             handleCreateDownloadManager(call, result: result)
         case "disposePlayer":
@@ -465,6 +467,29 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         } catch {
             result(asFlutterError(error, code: "vesper_create_failed"))
         }
+    }
+
+    private func handleProbePlaybackCapability(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        let args = arguments(of: call)
+        let request = VesperPlaybackCapabilityProbeRequest(
+            source: (try? nestedMap(args["source"])?.toRawVesperPlayerSource()) ?? nil,
+            codec: args["codec"] as? String,
+            requiresNativeFrame: args["requiresNativeFrame"] as? Bool ?? false,
+            requiresHdrNativeFrame: args["requiresHdrNativeFrame"] as? Bool ?? false,
+            sourceNormalizerConfiguration: (try? nestedMap(args["sourceNormalizer"])?
+                .toSourceNormalizerConfiguration())
+                ?? VesperSourceNormalizerConfiguration(),
+            frameProcessorConfiguration: (try? nestedMap(args["frameProcessor"])?
+                .toFrameProcessorConfiguration())
+                ?? VesperFrameProcessorConfiguration(),
+            nativeFramePipelineConfiguration: (try? nestedMap(args["nativeFramePipeline"])?
+                .toNativeFramePipelineConfiguration())
+                ?? VesperNativeFramePipelineConfiguration()
+        )
+        result(VesperPlayerControllerFactory.probePlaybackCapability(request).wireMap)
     }
 
     @MainActor

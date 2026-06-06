@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
 use player_plugin::{
-    DecoderBitstreamFormat, SourceNormalizerNormalizeLevel, SourceNormalizerOutputRoute,
-    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSession,
-    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
-    SourceNormalizerPacketStreamInfo, SourceNormalizerResourceCachePolicy,
+    DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata,
+    SourceNormalizerNormalizeLevel, SourceNormalizerOutputRoute, SourceNormalizerPacketMediaKind,
+    SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    SourceNormalizerPacketSessionRequirements, SourceNormalizerPacketStreamInfo,
+    SourceNormalizerPacketTrackInfo, SourceNormalizerResourceCachePolicy,
     SourceNormalizerResourceSession, SourceNormalizerResourceSessionConfig,
     SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionRequirements,
     SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
@@ -104,6 +105,11 @@ pub struct MobileSourceNormalizerResourceOpen {
     pub info: SourceNormalizerResourceSessionInfo,
     pub status: SourceNormalizerResourceSessionStatus,
     pub cache_policy: SourceNormalizerResourceCachePolicy,
+    pub diagnostics: Vec<PlayerPluginDiagnostic>,
+}
+
+pub struct MobileSourceNormalizerResourceOpenOutcome {
+    pub opened: Option<MobileSourceNormalizerResourceOpen>,
     pub diagnostics: Vec<PlayerPluginDiagnostic>,
 }
 
@@ -291,13 +297,34 @@ pub fn open_mobile_source_normalizer_resource(
     output_root: impl Into<String>,
     decision: MobileSourceNormalizerRouteDecision,
 ) -> Result<Option<MobileSourceNormalizerResourceOpen>, String> {
+    open_mobile_source_normalizer_resource_with_diagnostics(
+        source,
+        configuration,
+        output_root,
+        decision,
+    )
+    .map(|outcome| outcome.opened)
+}
+
+pub fn open_mobile_source_normalizer_resource_with_diagnostics(
+    source: &MediaSource,
+    configuration: &MobileSourceNormalizerConfiguration,
+    output_root: impl Into<String>,
+    decision: MobileSourceNormalizerRouteDecision,
+) -> Result<MobileSourceNormalizerResourceOpenOutcome, String> {
     let playback_decision =
         mobile_source_normalizer_playback_decision(source, configuration, decision);
     if playback_decision.action == MobileSourceNormalizerPlaybackAction::Disabled {
-        return Ok(None);
+        return Ok(MobileSourceNormalizerResourceOpenOutcome {
+            opened: None,
+            diagnostics: Vec::new(),
+        });
     }
     if playback_decision.action == MobileSourceNormalizerPlaybackAction::BypassNativeFirst {
-        return Ok(None);
+        return Ok(MobileSourceNormalizerResourceOpenOutcome {
+            opened: None,
+            diagnostics: Vec::new(),
+        });
     }
 
     let output_root = output_root.into();
@@ -313,7 +340,10 @@ pub fn open_mobile_source_normalizer_resource(
         ));
         return match configuration.mode {
             SourceNormalizerMode::RequireNormalized => Err(message.to_owned()),
-            _ => Ok(None),
+            _ => Ok(MobileSourceNormalizerResourceOpenOutcome {
+                opened: None,
+                diagnostics,
+            }),
         };
     }
 
@@ -340,14 +370,52 @@ pub fn open_mobile_source_normalizer_resource(
         ));
         return match configuration.mode {
             SourceNormalizerMode::RequireNormalized => Err(message),
-            _ => Ok(None),
+            _ => Ok(MobileSourceNormalizerResourceOpenOutcome {
+                opened: None,
+                diagnostics,
+            }),
         };
     };
 
     match open_source_normalizer_resource_session(source, configuration, output_root, record) {
         Ok(mut opened) => {
             opened.diagnostics.splice(0..0, diagnostics);
-            Ok(Some(opened))
+            if let Some(reason) = hdr_resource_metadata_not_preserved_reason(&opened.info) {
+                opened
+                    .diagnostics
+                    .push(runtime_source_normalizer_diagnostic(
+                        record.path.display().to_string(),
+                        opened
+                            .plugin_name
+                            .clone()
+                            .or_else(|| record.plugin_name.clone()),
+                        PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                        reason.clone(),
+                        PlayerPluginParticipation::Bypassed,
+                    ));
+                if let Err(error) = opened.session.close() {
+                    opened.diagnostics.push(runtime_source_normalizer_diagnostic(
+                        record.path.display().to_string(),
+                        opened.plugin_name.clone().or_else(|| record.plugin_name.clone()),
+                        PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                        format!(
+                            "source normalizer normalized-resource close after HDR bypass failed: {error}"
+                        ),
+                        PlayerPluginParticipation::Bypassed,
+                    ));
+                }
+                return match configuration.mode {
+                    SourceNormalizerMode::RequireNormalized => Err(reason),
+                    _ => Ok(MobileSourceNormalizerResourceOpenOutcome {
+                        opened: None,
+                        diagnostics: opened.diagnostics,
+                    }),
+                };
+            }
+            Ok(MobileSourceNormalizerResourceOpenOutcome {
+                opened: Some(opened),
+                diagnostics: Vec::new(),
+            })
         }
         Err(error) => {
             diagnostics.push(runtime_source_normalizer_diagnostic(
@@ -362,10 +430,74 @@ pub fn open_mobile_source_normalizer_resource(
             ));
             match configuration.mode {
                 SourceNormalizerMode::RequireNormalized => Err(error),
-                _ => Ok(None),
+                _ => Ok(MobileSourceNormalizerResourceOpenOutcome {
+                    opened: None,
+                    diagnostics,
+                }),
             }
         }
     }
+}
+
+pub const HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED: &str = "hdrProgrammableProcessingNotSupported";
+const HDR_RESOURCE_METADATA_NOT_PRESERVED: &str = "HdrResourceMetadataNotPreserved";
+
+pub fn hdr_programmable_processing_not_supported_reason(
+    track: &SourceNormalizerPacketTrackInfo,
+) -> Option<String> {
+    if !track_requires_hdr_or_dolby_vision_metadata(track) {
+        return None;
+    }
+    Some(format!(
+        "{HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED}: HDR10, HLG, Dolby Vision, and 10-bit sources use system playback; SDK-managed native-frame processing is SDR-only"
+    ))
+}
+
+fn hdr_resource_metadata_not_preserved_reason(
+    info: &SourceNormalizerResourceSessionInfo,
+) -> Option<String> {
+    if info.output_route != SourceNormalizerOutputRoute::Fmp4LocalStream {
+        return None;
+    }
+    let track = info
+        .tracks
+        .iter()
+        .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)?;
+    if !track_requires_hdr_or_dolby_vision_metadata(track) {
+        return None;
+    }
+    Some(format!(
+        "{HDR_RESOURCE_METADATA_NOT_PRESERVED}: source normalizer fMP4 resource route cannot currently guarantee HDR/Dolby Vision metadata preservation for system playback"
+    ))
+}
+
+pub fn track_requires_hdr_or_dolby_vision_metadata(
+    track: &SourceNormalizerPacketTrackInfo,
+) -> bool {
+    codec_is_dolby_vision(&track.codec)
+        || track.hdr.as_ref().is_some_and(hdr_requires_preservation)
+        || track
+            .color
+            .as_ref()
+            .is_some_and(color_requires_hdr_preservation)
+}
+
+fn hdr_requires_preservation(hdr: &NativeFrameHdrMetadata) -> bool {
+    hdr.is_dolby_vision() || !hdr.kind.trim().is_empty()
+}
+
+fn color_requires_hdr_preservation(color: &NativeFrameColorMetadata) -> bool {
+    color.bit_depth.is_some_and(|bit_depth| bit_depth >= 10) || color.is_hdr_transfer()
+}
+
+fn codec_is_dolby_vision(codec: &str) -> bool {
+    codec
+        .split(',')
+        .map(|value| value.trim().to_ascii_lowercase())
+        .any(|value| {
+            let normalized = value.strip_prefix("video/").unwrap_or(&value);
+            normalized.starts_with("dvh1") || normalized.starts_with("dvhe")
+        })
 }
 
 pub fn open_mobile_source_normalizer_packet_session(
@@ -436,6 +568,17 @@ pub fn mobile_source_normalizer_resource_status_json(
         opened,
         playback_uri,
     ))
+}
+
+pub fn mobile_source_normalizer_resource_bypass_diagnostics_json(
+    diagnostics: &[PlayerPluginDiagnostic],
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(
+        &diagnostics
+            .iter()
+            .map(MobilePluginDiagnosticOwnedWire::from)
+            .collect::<Vec<_>>(),
+    )
 }
 
 pub fn source_normalizer_diagnostics(
@@ -867,6 +1010,7 @@ fn probe_source_normalizer_resource(
         }
     };
     let session_info = session.session_info();
+    let metadata_preservation_reason = hdr_resource_metadata_not_preserved_reason(&session_info);
     let poll_summary = match session.poll() {
         Ok(status) => {
             let route = status
@@ -882,6 +1026,21 @@ fn probe_source_normalizer_resource(
         Ok(()) => None,
         Err(error) => Some(format!("; close failed: {error}")),
     };
+    if let Some(reason) = metadata_preservation_reason {
+        return runtime_source_normalizer_diagnostic(
+            path,
+            session_info
+                .normalizer_name
+                .clone()
+                .or_else(|| Some(factory.name().to_owned())),
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+            format!(
+                "{reason}; {poll_summary}{}",
+                close_message.unwrap_or_default()
+            ),
+            PlayerPluginParticipation::Bypassed,
+        );
+    }
     let participation = match session_info.output_route {
         SourceNormalizerOutputRoute::PacketStream => PlayerPluginParticipation::Bypassed,
         SourceNormalizerOutputRoute::Fmp4LocalStream
@@ -2610,6 +2769,99 @@ mod tests {
         assert!(session.polls > 0);
     }
 
+    #[test]
+    fn fmp4_resource_hdr_metadata_requires_bypass() {
+        let mut info = resource_info_with_video_track(Some(SourceNormalizerPacketTrackInfo {
+            color: Some(NativeFrameColorMetadata {
+                primaries: Some("bt2020".to_owned()),
+                transfer: Some("smpte2084".to_owned()),
+                matrix: Some("bt2020-ncl".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(10),
+            }),
+            hdr: Some(NativeFrameHdrMetadata {
+                kind: "hdr10".to_owned(),
+                mastering_display: None,
+                content_light: None,
+                dolby_vision: None,
+            }),
+            ..video_track("hevc")
+        }));
+
+        let reason = hdr_resource_metadata_not_preserved_reason(&info)
+            .expect("HDR fMP4 resource should be bypassed");
+        assert!(reason.contains(HDR_RESOURCE_METADATA_NOT_PRESERVED));
+
+        info.output_route = SourceNormalizerOutputRoute::HlsShortWindow;
+        assert!(hdr_resource_metadata_not_preserved_reason(&info).is_none());
+    }
+
+    #[test]
+    fn fmp4_resource_dolby_vision_metadata_requires_bypass() {
+        let info = resource_info_with_video_track(Some(SourceNormalizerPacketTrackInfo {
+            hdr: Some(NativeFrameHdrMetadata {
+                kind: "dolbyVision".to_owned(),
+                mastering_display: None,
+                content_light: None,
+                dolby_vision: None,
+            }),
+            ..video_track("hevc")
+        }));
+
+        assert!(
+            hdr_resource_metadata_not_preserved_reason(&info)
+                .is_some_and(|reason| reason.contains("Dolby Vision"))
+        );
+    }
+
+    #[test]
+    fn fmp4_resource_dolby_vision_codec_alias_requires_bypass() {
+        for codec in ["dvh1.05.06", "dvhe.08.04", "video/dvh1.05.06"] {
+            let info = resource_info_with_video_track(Some(SourceNormalizerPacketTrackInfo {
+                hdr: None,
+                color: None,
+                ..video_track(codec)
+            }));
+
+            assert!(
+                hdr_resource_metadata_not_preserved_reason(&info)
+                    .is_some_and(|reason| reason.contains("Dolby Vision")),
+                "{codec} should bypass fMP4 resource playback"
+            );
+        }
+    }
+
+    #[test]
+    fn dolby_vision_codec_alias_requires_native_frame_hdr_bypass() {
+        let track = SourceNormalizerPacketTrackInfo {
+            hdr: None,
+            color: None,
+            ..video_track("dvhe.05.06")
+        };
+
+        assert!(track_requires_hdr_or_dolby_vision_metadata(&track));
+        assert!(
+            hdr_programmable_processing_not_supported_reason(&track)
+                .is_some_and(|reason| reason.contains(HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED))
+        );
+    }
+
+    #[test]
+    fn fmp4_resource_sdr_metadata_stays_supported() {
+        let info = resource_info_with_video_track(Some(SourceNormalizerPacketTrackInfo {
+            color: Some(NativeFrameColorMetadata {
+                primaries: Some("bt709".to_owned()),
+                transfer: Some("bt709".to_owned()),
+                matrix: Some("bt709".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(8),
+            }),
+            ..video_track("h264")
+        }));
+
+        assert!(hdr_resource_metadata_not_preserved_reason(&info).is_none());
+    }
+
     fn mobile_resource_record(name: &str, profiles: &[&str]) -> PluginDiagnosticRecord {
         PluginDiagnosticRecord {
             path: PathBuf::from(format!("/plugins/{name}.so")),
@@ -2660,6 +2912,52 @@ mod tests {
                 },
             )),
             message: Some("source normalizer packet route".to_owned()),
+        }
+    }
+
+    fn resource_info_with_video_track(
+        track: Option<SourceNormalizerPacketTrackInfo>,
+    ) -> SourceNormalizerResourceSessionInfo {
+        SourceNormalizerResourceSessionInfo {
+            session_id: Some("resource".to_owned()),
+            normalizer_name: Some("test".to_owned()),
+            runtime_profile: Some("test".to_owned()),
+            selected_backend: None,
+            output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
+            container: "mp4".to_owned(),
+            primary_resource_path: Some("/tmp/normalized.mp4".to_owned()),
+            primary_content_type: Some("video/mp4".to_owned()),
+            resources: Vec::new(),
+            tracks: track.into_iter().collect(),
+            duration_millis: Some(1_000),
+            seekable: true,
+            disk_bytes_used: Some(128),
+        }
+    }
+
+    fn video_track(codec: &str) -> SourceNormalizerPacketTrackInfo {
+        SourceNormalizerPacketTrackInfo {
+            stream_index: 0,
+            media_kind: SourceNormalizerPacketMediaKind::Video,
+            codec: codec.to_owned(),
+            extradata: Vec::new(),
+            bitstream_format: None,
+            width: Some(1920),
+            height: Some(1080),
+            coded_width: Some(1920),
+            coded_height: Some(1080),
+            sample_rate: None,
+            channels: None,
+            channel_layout: None,
+            codec_delay_samples: None,
+            priming_samples: None,
+            trailing_padding_samples: None,
+            seek_preroll_samples: None,
+            color: None,
+            hdr: None,
+            frame_rate: Some(30.0),
+            time_base_num: Some(1),
+            time_base_den: Some(90_000),
         }
     }
 

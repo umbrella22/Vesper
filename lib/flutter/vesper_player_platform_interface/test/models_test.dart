@@ -69,6 +69,87 @@ void main() {
     expect(VesperPlayerRenderSurfaceKind.surfaceView.name, 'surfaceView');
   });
 
+  test('playback capability probe DTOs round-trip stable wire fields', () {
+    const sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+      mode: VesperSourceNormalizerMode.preflightOnly,
+      pluginLibraryPaths: <String>['/tmp/libsource.so'],
+      runtimeProfile: 'generic-fallback',
+    );
+    const nativeFramePipelineConfiguration =
+        VesperNativeFramePipelineConfiguration(
+      mode: VesperNativeFramePipelineMode.preferNativeFrame,
+      decoderPluginLibraryPaths: <String>['/tmp/libdecoder.so'],
+    );
+    const request = VesperPlaybackCapabilityProbeRequest(
+      source: VesperPlayerSource(
+        uri: 'file:///tmp/hdr.mov',
+        label: 'hdr.mov',
+        kind: VesperPlayerSourceKind.local,
+        protocol: VesperPlayerSourceProtocol.file,
+      ),
+      codec: 'hvc1.1.6.L93.B0',
+      requiresNativeFrame: true,
+      requiresHdrNativeFrame: true,
+      sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+      nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
+    );
+
+    final decodedRequest = VesperPlaybackCapabilityProbeRequest.fromMap(
+      Map<Object?, Object?>.from(request.toMap()),
+    );
+
+    expect(decodedRequest.source?.uri, request.source?.uri);
+    expect(decodedRequest.codec, request.codec);
+    expect(decodedRequest.requiresNativeFrame, isTrue);
+    expect(decodedRequest.requiresHdrNativeFrame, isTrue);
+    expect(
+      decodedRequest.sourceNormalizerConfiguration.mode,
+      VesperSourceNormalizerMode.preflightOnly,
+    );
+    expect(
+      decodedRequest.nativeFramePipelineConfiguration.mode,
+      VesperNativeFramePipelineMode.preferNativeFrame,
+    );
+
+    final result = VesperPlaybackCapabilityProbeResult.fromMap(
+      <Object?, Object?>{
+        'status': 'unsupported',
+        'codecFamily': 'hevc',
+        'systemPlaybackSupported': true,
+        'hardwareDecodeSupported': true,
+        'sdkManagedNativeFrameSupported': false,
+        'hdrNativeFrameSupported': false,
+        'outputFormat': 'unknown',
+        'hdrKind': 'dolbyVision',
+        'dolbyVisionMode': 'unsupported',
+        'confidence': 'sourceMetadata',
+        'missingCapabilities': <Object?>[
+          'hdrProgrammableProcessingNotSupported'
+        ],
+        'diagnostics': <Object?, Object?>{
+          'probeVersion': '1',
+          'hdrNativeFramePolicy': 'systemPlaybackOnly',
+          'nativeFrameRejectedForHdrProcessing': 'true',
+        },
+      },
+    );
+
+    expect(result.status, VesperPlaybackCapabilityProbeStatus.unsupported);
+    expect(result.codecFamily, VesperPlaybackCodecFamily.hevc);
+    expect(result.outputFormat, VesperPlaybackCapabilityOutputFormat.unknown);
+    expect(result.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
+    expect(
+      result.dolbyVisionMode,
+      VesperPlaybackCapabilityDolbyVisionMode.unsupported,
+    );
+    expect(result.confidence, VesperPlaybackCapabilityConfidence.sourceMetadata);
+    expect(
+      result.missingCapabilities,
+      <String>['hdrProgrammableProcessingNotSupported'],
+    );
+    expect(result.toMap()['codecFamily'], 'hevc');
+  });
+
   test('download DTOs encode FLV byte ranges and target output', () {
     const source = VesperDownloadSource(
       source: VesperPlayerSource(

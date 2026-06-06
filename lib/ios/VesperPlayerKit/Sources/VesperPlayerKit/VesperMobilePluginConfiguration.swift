@@ -216,15 +216,20 @@ struct VesperSourceNormalizerResourceOpenResult {
     }
 }
 
+struct VesperSourceNormalizerResourceOpenOutcome {
+    let resource: VesperSourceNormalizerResourceOpenResult?
+    let diagnostics: [[String: Any]]
+}
+
 enum VesperMobileSourceNormalizerResource {
     static func open(
         source: VesperPlayerSource,
         configuration: VesperSourceNormalizerConfiguration,
         outputRoot: URL,
         forceNormalized: Bool
-    ) -> VesperSourceNormalizerResourceOpenResult? {
+    ) -> VesperSourceNormalizerResourceOpenOutcome {
         guard configuration.mode == .preferNormalized || configuration.mode == .requireNormalized else {
-            return nil
+            return VesperSourceNormalizerResourceOpenOutcome(resource: nil, diagnostics: [])
         }
 
         var handle: UInt64 = 0
@@ -263,7 +268,10 @@ enum VesperMobileSourceNormalizerResource {
             if let errorPointer {
                 iosHostLog("source normalizer resource open failed: \(String(cString: errorPointer))")
             }
-            return nil
+            return VesperSourceNormalizerResourceOpenOutcome(
+                resource: nil,
+                diagnostics: parseDiagnostics(from: outputPointer)
+            )
         }
 
         let json = String(cString: outputPointer)
@@ -274,23 +282,26 @@ enum VesperMobileSourceNormalizerResource {
             let primaryPath = object["primaryResourcePath"] as? String
         else {
             vesper_source_normalizer_resource_dispose(handle)
-            return nil
+            return VesperSourceNormalizerResourceOpenOutcome(resource: nil, diagnostics: [])
         }
 
-        return VesperSourceNormalizerResourceOpenResult(
-            handle: handle,
-            outputRoute: route,
-            selectedProfile: object["selectedProfile"] as? String,
-            container: object["container"] as? String ?? "",
-            primaryResourcePath: primaryPath,
-            primaryContentType: object["primaryContentType"] as? String,
-            playbackUri: object["playbackUri"] as? String,
-            resources: object["resources"] as? [[String: Any]] ?? [],
-            cachePolicy: object["cachePolicy"] as? [String: Any] ?? [:],
-            route: object["route"] as? String,
-            participation: object["participation"] as? String,
-            fallbackReason: object["fallbackReason"] as? String,
-            cacheQuota: (object["cacheQuota"] as? NSNumber)?.uint64Value,
+        return VesperSourceNormalizerResourceOpenOutcome(
+            resource: VesperSourceNormalizerResourceOpenResult(
+                handle: handle,
+                outputRoute: route,
+                selectedProfile: object["selectedProfile"] as? String,
+                container: object["container"] as? String ?? "",
+                primaryResourcePath: primaryPath,
+                primaryContentType: object["primaryContentType"] as? String,
+                playbackUri: object["playbackUri"] as? String,
+                resources: object["resources"] as? [[String: Any]] ?? [],
+                cachePolicy: object["cachePolicy"] as? [String: Any] ?? [:],
+                route: object["route"] as? String,
+                participation: object["participation"] as? String,
+                fallbackReason: object["fallbackReason"] as? String,
+                cacheQuota: (object["cacheQuota"] as? NSNumber)?.uint64Value,
+                diagnostics: object["diagnostics"] as? [[String: Any]] ?? []
+            ),
             diagnostics: object["diagnostics"] as? [[String: Any]] ?? []
         )
     }
@@ -298,6 +309,22 @@ enum VesperMobileSourceNormalizerResource {
     static func dispose(handle: UInt64) {
         guard handle != 0 else { return }
         vesper_source_normalizer_resource_dispose(handle)
+    }
+
+    private static func parseDiagnostics(
+        from pointer: UnsafeMutablePointer<CChar>?
+    ) -> [[String: Any]] {
+        guard let pointer else {
+            return []
+        }
+        let json = String(cString: pointer)
+        guard
+            let data = json.data(using: .utf8),
+            let diagnostics = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else {
+            return []
+        }
+        return diagnostics
     }
 }
 

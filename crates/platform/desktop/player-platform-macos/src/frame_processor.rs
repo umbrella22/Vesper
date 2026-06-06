@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) fn open_macos_frame_processor_chain(
-    stream_info: &VideoPacketStreamInfo,
+    stream_info: &MacosNativeFrameStreamInfo,
     paths: &[PathBuf],
     mode: FrameProcessorMode,
     policy: FrameProcessorPolicy,
@@ -12,20 +12,25 @@ pub(crate) fn open_macos_frame_processor_chain(
     let input_metadata = NativeFrameMetadata {
         media_kind: DecoderMediaKind::Video,
         format: player_plugin::DecoderFrameFormat::Nv12,
-        codec: stream_info.codec.clone(),
+        codec: stream_info.packet.codec.clone(),
         pts_us: None,
         duration_us: None,
-        width: stream_info.width.unwrap_or(0),
-        height: stream_info.height.unwrap_or(0),
-        coded_width: stream_info.width,
-        coded_height: stream_info.height,
+        width: stream_info.packet.width.unwrap_or(0),
+        height: stream_info.packet.height.unwrap_or(0),
+        coded_width: stream_info.packet.width,
+        coded_height: stream_info.packet.height,
         visible_rect: None,
         handle_kind: NativeHandleKind::CvPixelBuffer,
         pipeline_profile: Some(
             player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
         ),
-        color_space: None,
-        hdr_metadata: None,
+        color_space: stream_info
+            .color
+            .as_ref()
+            .and_then(|color| color.primaries.clone()),
+        hdr_metadata: stream_info.hdr.as_ref().map(|hdr| hdr.kind.clone()),
+        color: stream_info.color.clone(),
+        hdr: stream_info.hdr.clone(),
         sync_info: None,
         transform: None,
         frame_id: None,

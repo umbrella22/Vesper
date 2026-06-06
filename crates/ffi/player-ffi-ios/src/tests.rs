@@ -6,7 +6,7 @@ use super::{
     map_player_error, player_error_to_ffi, player_ffi_ios_native_frame_pipeline_advance,
     player_ffi_ios_native_frame_pipeline_close, player_ffi_ios_native_frame_pipeline_open,
     player_ffi_ios_native_frame_pipeline_release_frame, player_ffi_ios_native_frame_pipeline_seek,
-    player_ffi_ios_plugin_abi_summary_json,
+    player_ffi_ios_plugin_abi_summary_json, player_ffi_source_normalizer_resource_open,
 };
 use crate::handles::HandleRegistry;
 use player_plugin::{
@@ -222,6 +222,53 @@ fn plugin_abi_summary_reports_current_signature_versions() {
         value["capabilityMatching"].as_str(),
         Some("requirements-first")
     );
+}
+
+#[test]
+fn source_normalizer_resource_open_can_return_bypass_diagnostics_without_handle() {
+    let source = test_c_string("file:///tmp/video.flv");
+    let output_root = test_c_string("/tmp/vesper-source-normalizer");
+    let mut out_handle = 99_u64;
+    let mut out_json: *mut c_char = ptr::null_mut();
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_source_normalizer_resource_open(
+            source.as_ptr(),
+            3,
+            ptr::null_mut(),
+            0,
+            ptr::null(),
+            output_root.as_ptr(),
+            false,
+            &mut out_handle,
+            &mut out_json,
+            &mut error,
+        )
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Ok);
+    assert_eq!(out_handle, 0);
+    assert!(error.message.is_null());
+    assert!(
+        !out_json.is_null(),
+        "preferNormalized bypass diagnostics should be returned even without a resource handle"
+    );
+    let json = unsafe {
+        std::ffi::CStr::from_ptr(out_json)
+            .to_string_lossy()
+            .into_owned()
+    };
+    unsafe { super::player_ffi_mobile_plugin_diagnostics_string_free(out_json) };
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse diagnostics JSON");
+    let diagnostics = value.as_array().expect("diagnostics should be an array");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["status"].as_str() == Some("sourceNormalizerUnsupported")
+            && diagnostic["participation"].as_str() == Some("bypassed")
+            && diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("no plugin paths"))
+    }));
 }
 
 #[test]

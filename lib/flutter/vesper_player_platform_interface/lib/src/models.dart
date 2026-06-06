@@ -38,6 +38,43 @@ enum VesperPlayerBackendFamily {
 
 enum VesperPlayerRenderSurfaceKind { auto, textureView, surfaceView }
 
+enum VesperPlaybackCapabilityProbeStatus {
+  supported,
+  fallbackRequired,
+  unsupported,
+  unknown,
+}
+
+enum VesperPlaybackCodecFamily { h264, hevc, av1, vvc, unknown }
+
+enum VesperPlaybackCapabilityOutputFormat {
+  nv12,
+  p010,
+  surfaceOpaque,
+  unknown,
+}
+
+enum VesperPlaybackCapabilityHdrKind {
+  none,
+  hdr10,
+  hlg,
+  dolbyVision,
+  unknown,
+}
+
+enum VesperPlaybackCapabilityDolbyVisionMode {
+  none,
+  fullChainCandidate,
+  compatibleBaseLayer,
+  unsupported,
+}
+
+enum VesperPlaybackCapabilityConfidence {
+  codecOnly,
+  sourceMetadata,
+  sessionProbe,
+}
+
 Map<String, Object?> vesperDecodeMap(Object? raw) {
   final decoded = _rawMap(raw);
   if (decoded != null) {

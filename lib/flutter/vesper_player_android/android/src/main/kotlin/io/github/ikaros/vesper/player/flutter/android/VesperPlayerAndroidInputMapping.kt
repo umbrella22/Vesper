@@ -23,6 +23,7 @@ import io.github.ikaros.vesper.player.android.VesperFrameProcessorConfiguration
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorMode
 import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineConfiguration
 import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineMode
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeRequest
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
@@ -118,6 +119,27 @@ internal fun Map<String, Any?>?.toNativeFramePipelineConfiguration():
         maxInFlightFrames = (this["maxInFlightFrames"] as? Number)?.toInt(),
     )
 }
+
+internal fun Map<String, Any?>.toPlaybackCapabilityProbeRequest():
+    VesperPlaybackCapabilityProbeRequest =
+    VesperPlaybackCapabilityProbeRequest(
+        source = (this["source"] as? Map<*, *>)?.stringMap()?.toVesperPlayerSource(),
+        codec = this["codec"] as? String,
+        requiresNativeFrame = this["requiresNativeFrame"] as? Boolean ?: false,
+        requiresHdrNativeFrame = this["requiresHdrNativeFrame"] as? Boolean ?: false,
+        sourceNormalizerConfiguration =
+            (this["sourceNormalizer"] as? Map<*, *>)
+                ?.stringMap()
+                .toSourceNormalizerConfiguration(),
+        frameProcessorConfiguration =
+            (this["frameProcessor"] as? Map<*, *>)
+                ?.stringMap()
+                .toFrameProcessorConfiguration(),
+        nativeFramePipelineConfiguration =
+            (this["nativeFramePipeline"] as? Map<*, *>)
+                ?.stringMap()
+                .toNativeFramePipelineConfiguration(),
+    )
 
 internal fun Any?.toVesperVideoSurfaceKind(): VesperVideoSurfaceKind =
     when (this as? String ?: "auto") {

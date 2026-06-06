@@ -27,6 +27,14 @@ class VesperHardwareMediaCodecSelectorTest {
             vesperAndroidVideoCodecFamily("hev1.1.6.L93.B0"),
         )
         assertEquals(
+            VesperAndroidVideoCodecFamily.Hevc,
+            vesperAndroidVideoCodecFamily("dvh1.05.06"),
+        )
+        assertEquals(
+            VesperAndroidVideoCodecFamily.Hevc,
+            vesperAndroidVideoCodecFamily("dvhe.08.07"),
+        )
+        assertEquals(
             VesperAndroidVideoCodecFamily.Avc,
             vesperAndroidVideoCodecFamily("avc1.4d401f"),
         )

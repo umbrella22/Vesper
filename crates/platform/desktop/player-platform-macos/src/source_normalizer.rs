@@ -406,6 +406,12 @@ pub(crate) fn open_source_normalizer_packet_session(
 pub(crate) fn macos_packet_stream_info_from_source_normalizer(
     stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
 ) -> anyhow::Result<VideoPacketStreamInfo> {
+    Ok(macos_native_frame_stream_info_from_source_normalizer(stream_info)?.packet)
+}
+
+pub(crate) fn macos_native_frame_stream_info_from_source_normalizer(
+    stream_info: &player_plugin::SourceNormalizerPacketStreamInfo,
+) -> anyhow::Result<MacosNativeFrameStreamInfo> {
     let track = stream_info
         .selected_track_index
         .and_then(|selected| {
@@ -421,22 +427,26 @@ pub(crate) fn macos_packet_stream_info_from_source_normalizer(
                 .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Video)
         })
         .ok_or_else(|| anyhow::anyhow!("source normalizer packet stream has no video track"))?;
-    macos_packet_track_info_from_source_normalizer(track)
+    macos_native_frame_track_info_from_source_normalizer(track)
 }
 
-pub(crate) fn macos_packet_track_info_from_source_normalizer(
+pub(crate) fn macos_native_frame_track_info_from_source_normalizer(
     track: &SourceNormalizerPacketTrackInfo,
-) -> anyhow::Result<VideoPacketStreamInfo> {
+) -> anyhow::Result<MacosNativeFrameStreamInfo> {
     if track.media_kind != SourceNormalizerPacketMediaKind::Video {
         anyhow::bail!("selected source normalizer packet track is not video");
     }
-    Ok(VideoPacketStreamInfo {
-        stream_index: usize::try_from(track.stream_index).unwrap_or(usize::MAX),
-        codec: track.codec.clone(),
-        extradata: track.extradata.clone(),
-        width: track.width,
-        height: track.height,
-        frame_rate: track.frame_rate,
+    Ok(MacosNativeFrameStreamInfo {
+        packet: VideoPacketStreamInfo {
+            stream_index: usize::try_from(track.stream_index).unwrap_or(usize::MAX),
+            codec: track.codec.clone(),
+            extradata: track.extradata.clone(),
+            width: track.width,
+            height: track.height,
+            frame_rate: track.frame_rate,
+        },
+        color: track.color.clone(),
+        hdr: track.hdr.clone(),
     })
 }
 

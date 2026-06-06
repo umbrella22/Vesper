@@ -555,6 +555,8 @@ fn sample_metadata() -> NativeFrameMetadata {
         pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
         color_space: Some("bt709".to_owned()),
         hdr_metadata: None,
+        color: None,
+        hdr: None,
         sync_info: None,
         transform: None,
         frame_id: Some(1),

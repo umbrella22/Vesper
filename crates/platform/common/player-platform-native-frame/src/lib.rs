@@ -2213,6 +2213,8 @@ mod tests {
                 pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
                 color_space: None,
                 hdr_metadata: None,
+                color: None,
+                hdr: None,
                 sync_info: None,
                 transform: None,
                 frame_id: Some(handle as u64),

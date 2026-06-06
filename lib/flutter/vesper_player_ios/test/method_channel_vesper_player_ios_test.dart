@@ -222,6 +222,67 @@ void main() {
     );
   });
 
+  test('probePlaybackCapability forwards request and decodes result', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{
+        'status': 'unsupported',
+        'codecFamily': 'hevc',
+        'systemPlaybackSupported': true,
+        'hardwareDecodeSupported': true,
+        'sdkManagedNativeFrameSupported': false,
+        'hdrNativeFrameSupported': false,
+        'outputFormat': 'unknown',
+        'hdrKind': 'dolbyVision',
+        'dolbyVisionMode': 'unsupported',
+        'confidence': 'sourceMetadata',
+        'missingCapabilities': <String>[
+          'hdrProgrammableProcessingNotSupported'
+        ],
+        'diagnostics': <String, Object?>{
+          'probeVersion': '1',
+          'hdrNativeFramePolicy': 'systemPlaybackOnly',
+          'nativeFrameRejectedForHdrProcessing': 'true',
+        },
+      };
+    });
+    final platform = MethodChannelVesperPlayerIos();
+    const source = VesperPlayerSource(
+      uri: 'file:///tmp/hdr.mov',
+      label: 'hdr.mov',
+      kind: VesperPlayerSourceKind.local,
+      protocol: VesperPlayerSourceProtocol.file,
+    );
+    const request = VesperPlaybackCapabilityProbeRequest(
+      source: source,
+      codec: 'dvh1.05.06',
+      requiresHdrNativeFrame: true,
+      nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+        mode: VesperNativeFramePipelineMode.preferNativeFrame,
+        decoderPluginLibraryPaths: <String>[
+          '/Frameworks/VideoToolboxDecoder.framework/VideoToolboxDecoder'
+        ],
+      ),
+    );
+
+    final result = await platform.probePlaybackCapability(request);
+
+    expect(calls.single.method, 'probePlaybackCapability');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      request.toMap(),
+    );
+    expect(result.status, VesperPlaybackCapabilityProbeStatus.unsupported);
+    expect(result.codecFamily, VesperPlaybackCodecFamily.hevc);
+    expect(result.outputFormat, VesperPlaybackCapabilityOutputFormat.unknown);
+    expect(result.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
+    expect(
+      result.dolbyVisionMode,
+      VesperPlaybackCapabilityDolbyVisionMode.unsupported,
+    );
+  });
+
   test('createPlayer accepts explicit render surface kind', () async {
     final platform = MethodChannelVesperPlayerIos();
 

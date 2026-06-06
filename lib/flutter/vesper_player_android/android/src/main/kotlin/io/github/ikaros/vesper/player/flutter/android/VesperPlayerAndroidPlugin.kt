@@ -222,6 +222,7 @@ class VesperPlayerAndroidPlugin :
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "createPlayer" -> handleCreatePlayer(call, result)
+            "probePlaybackCapability" -> handleProbePlaybackCapability(call, result)
             "createDownloadManager" -> handleCreateDownloadManager(call, result)
             "disposePlayer" -> handleSessionCommand(call, result) { session ->
                 disposeSession(session)
@@ -591,6 +592,16 @@ class VesperPlayerAndroidPlugin :
                     error.toErrorMap(),
                 )
             }
+    }
+
+    private fun handleProbePlaybackCapability(call: MethodCall, result: MethodChannel.Result) {
+        runCatching {
+            val request = call.argumentMap().toPlaybackCapabilityProbeRequest()
+            VesperPlayerControllerFactory.probePlaybackCapability(applicationContext, request).toMap()
+        }.fold(
+            onSuccess = result::success,
+            onFailure = { error -> result.error("invalid_probe_request", error.message, null) },
+        )
     }
 
     private fun handleCreateDownloadManager(call: MethodCall, result: MethodChannel.Result) {

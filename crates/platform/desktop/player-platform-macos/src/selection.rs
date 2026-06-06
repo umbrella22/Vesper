@@ -41,6 +41,13 @@ pub(crate) fn select_macos_native_frame_decoder(
     if codec.is_empty() {
         return None;
     }
+    if macos_codec_is_dolby_vision(&codec) {
+        tracing::debug!(
+            codec = %codec,
+            "macOS native-frame decoder selection skipped Dolby Vision; system playback remains selected"
+        );
+        return None;
+    }
     let request = DecoderPluginMatchRequest::video(codec);
     let registry = PluginRegistry::inspect_decoder_support(
         &options.decoder_plugin_library_paths,
@@ -88,7 +95,7 @@ pub(crate) fn select_macos_source_normalizer_packet_decoder(
         return None;
     }
     let stream_info = stream_info?;
-    let video_stream = match macos_packet_stream_info_from_source_normalizer(stream_info) {
+    let video_stream = match macos_native_frame_stream_info_from_source_normalizer(stream_info) {
         Ok(video_stream) => video_stream,
         Err(error) => {
             tracing::debug!(
@@ -98,10 +105,17 @@ pub(crate) fn select_macos_source_normalizer_packet_decoder(
             return None;
         }
     };
-    if video_stream.codec.is_empty() {
+    if video_stream.packet.codec.is_empty() {
         return None;
     }
-    let request = DecoderPluginMatchRequest::video(video_stream.codec);
+    if let Some(reason) = macos_hdr_programmable_processing_not_supported_reason(&video_stream) {
+        tracing::debug!(
+            reason = %reason,
+            "macOS SourceNormalizer native-frame decoder selection skipped HDR/DV source"
+        );
+        return None;
+    }
+    let request = DecoderPluginMatchRequest::video(video_stream.packet.codec);
     let registry = PluginRegistry::inspect_decoder_support(
         &options.decoder_plugin_library_paths,
         request.clone(),
@@ -165,9 +179,18 @@ pub(crate) fn native_frame_decoder_codec(
 }
 
 pub(crate) fn macos_decoder_bitstream_format(codec: &str) -> DecoderBitstreamFormat {
-    match codec.to_ascii_uppercase().as_str() {
-        "HEVC" | "H265" | "HVC1" | "HEV1" => DecoderBitstreamFormat::Hvcc,
-        _ => DecoderBitstreamFormat::Avcc,
+    let codec = codec.trim().to_ascii_lowercase();
+    let codec = codec.strip_prefix("video/").unwrap_or(&codec);
+    if codec == "hevc"
+        || codec == "h265"
+        || codec.starts_with("hvc1")
+        || codec.starts_with("hev1")
+        || codec.starts_with("dvh1")
+        || codec.starts_with("dvhe")
+    {
+        DecoderBitstreamFormat::Hvcc
+    } else {
+        DecoderBitstreamFormat::Avcc
     }
 }
 

@@ -1,5 +1,0 @@
-#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"
-#include "ephemeral/Flutter-Generated.xcconfig"
-
-// Apple platform examples produce only arm64 slices and no longer build x86_64.
-EXCLUDED_ARCHS[sdk=macosx*]=x86_64

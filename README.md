@@ -6,7 +6,8 @@ Vesper is a native-first, multi-platform player SDK for applications that need
 real platform playback behavior without rebuilding every product feature from
 scratch on each target. Android playback runs through Media3 ExoPlayer, iOS
 playback runs through AVPlayer, desktop playback uses native Rust pipelines,
-and Flutter apps consume the same capabilities through a federated plugin.
+and Flutter mobile apps consume the same capabilities through a federated
+plugin.
 
 The shared Rust layer keeps cross-platform semantics aligned: runtime contracts,
 timeline and live-DVR state, playback resilience, ABR policy, playlist
@@ -24,7 +25,7 @@ reference.
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | Android Kotlin / Compose | [lib/android/README.md](lib/android/README.md)                                                                   | [examples/android-compose-host/README.md](examples/android-compose-host/README.md) | You are integrating the AAR modules directly in an Android app.                     |
 | iOS Swift / SwiftUI      | [lib/ios/VesperPlayerKit/README.md](lib/ios/VesperPlayerKit/README.md)                                           | [examples/ios-swift-host/README.md](examples/ios-swift-host/README.md)             | You are consuming the Swift Package or XCFramework from a UIKit / SwiftUI app.      |
-| Flutter                  | [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)                                       | [examples/flutter-host/README.md](examples/flutter-host/README.md)                 | You want one Dart API over Android and iOS today; macOS is a package stub.          |
+| Flutter                  | [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)                                       | [examples/flutter-host/README.md](examples/flutter-host/README.md)                 | You want one Dart API over Android and iOS today; desktop Flutter targets are paused. |
 | Flutter platform authors | [lib/flutter/vesper_player_platform_interface/README.md](lib/flutter/vesper_player_platform_interface/README.md) | [lib/flutter/vesper_player_ui/README.md](lib/flutter/vesper_player_ui/README.md)   | You are extending the federated plugin or adopting the optional Flutter UI package. |
 | C / C++ via FFI          | [include/player_ffi.h](include/player_ffi.h)                                                                     | [examples/c-host/README.md](examples/c-host/README.md)                             | You need the generated C ABI from a native host or plugin runtime.                  |
 | Desktop Rust             | [examples/basic-player](examples/basic-player)                                                                   | [Desktop FFmpeg](#desktop-ffmpeg)                                                  | You are trying the desktop demo or working with the Rust playback pipeline.         |
@@ -79,9 +80,10 @@ check before exposing advanced controls.
 | Hardware decode probe    | `VesperDecoderBackend`       | `VesperCodecSupport`                          | macOS VideoToolbox native-frame opt-in    | Reflected through mobile capabilities |
 | Plugin startup diagnostics | Internal runtime diagnostics | Internal runtime diagnostics                  | ✅ decoder / frame processor / source normalizer diagnostics | Exposed as create-result diagnostics where supported |
 
-The Flutter macOS package exists as an experimental stub and does not yet ship a
-real playback backend. Product UI should rely on runtime capability flags rather
-than assuming every row above is available on every backend.
+Flutter support is mobile-only for now. Desktop Flutter targets are intentionally
+not shipped while the Flutter desktop integration model settles. Product UI
+should rely on runtime capability flags rather than assuming every row above is
+available on every backend.
 
 ## Repository Layout
 
@@ -251,8 +253,6 @@ Flutter is a federated plugin family:
 - `vesper_player_platform_interface`: shared DTOs and platform contracts.
 - `vesper_player_android`: Android implementation over the Android host kit.
 - `vesper_player_ios`: iOS implementation over `VesperPlayerKit`.
-- `vesper_player_macos`: experimental macOS package stub without a real
-  playback backend yet.
 - `vesper_player_external_playback`: optional Android Cast / DLNA controller
   with local HTTP relay support.
 - `vesper_player_ui`: optional Flutter controls and player stage widgets.

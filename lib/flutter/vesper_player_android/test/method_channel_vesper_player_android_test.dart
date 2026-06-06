@@ -108,9 +108,7 @@ void main() {
         VesperNativeFramePipelineConfiguration(
       mode: VesperNativeFramePipelineMode.preferNativeFrame,
       decoderPluginLibraryPaths: <String>['/data/local/tmp/libdecoder.so'],
-      frameProcessorPluginLibraryPaths: <String>[
-        '/data/local/tmp/libframe.so'
-      ],
+      frameProcessorPluginLibraryPaths: <String>['/data/local/tmp/libframe.so'],
       maxInFlightFrames: 2,
     );
 
@@ -135,6 +133,115 @@ void main() {
         'nativeFramePipeline',
         nativeFramePipelineConfiguration.toMap(),
       ),
+    );
+  });
+
+  test('createPlayer decodes source normalizer HDR bypass diagnostics',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{
+        'playerId': 'android-player',
+        'pluginDiagnostics': <Object?>[
+          <Object?, Object?>{
+            'path': '/data/local/tmp/libsource_normalizer.so',
+            'pluginKind': 'source_normalizer',
+            'status': 'sourceNormalizerUnsupported',
+            'participation': 'bypassed',
+            'message':
+                'HdrResourceMetadataNotPreserved: source normalizer fMP4 resource route cannot currently guarantee HDR/Dolby Vision metadata preservation for system playback',
+            'route': 'native',
+            'fallbackReason': 'sourceNormalizerResourceBypassedForHdr',
+          },
+        ],
+      };
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    final result = await platform.createPlayer();
+
+    expect(calls.single.method, 'createPlayer');
+    expect(result.pluginDiagnostics, hasLength(1));
+    final diagnostic = result.pluginDiagnostics.single;
+    expect(
+      diagnostic.status,
+      VesperPluginDiagnosticStatus.sourceNormalizerUnsupported,
+    );
+    expect(diagnostic.participation, VesperPluginParticipation.bypassed);
+    expect(
+      diagnostic.message,
+      contains('HdrResourceMetadataNotPreserved'),
+    );
+    expect(diagnostic.extra['route'], 'native');
+    expect(
+      diagnostic.extra['fallbackReason'],
+      'sourceNormalizerResourceBypassedForHdr',
+    );
+  });
+
+  test('probePlaybackCapability forwards request and decodes result', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{
+        'status': 'unsupported',
+        'codecFamily': 'hevc',
+        'systemPlaybackSupported': true,
+        'hardwareDecodeSupported': true,
+        'sdkManagedNativeFrameSupported': false,
+        'hdrNativeFrameSupported': false,
+        'outputFormat': 'unknown',
+        'hdrKind': 'unknown',
+        'dolbyVisionMode': 'unsupported',
+        'confidence': 'sourceMetadata',
+        'missingCapabilities': <String>[
+          'hdrProgrammableProcessingNotSupported'
+        ],
+        'diagnostics': <String, Object?>{
+          'probeVersion': '1',
+          'hdrNativeFramePolicy': 'systemPlaybackOnly',
+          'nativeFrameRejectedForHdrProcessing': 'true',
+        },
+      };
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+    const source = VesperPlayerSource(
+      uri: 'file:///tmp/hdr.mp4',
+      label: 'hdr.mp4',
+      kind: VesperPlayerSourceKind.local,
+      protocol: VesperPlayerSourceProtocol.file,
+    );
+    const request = VesperPlaybackCapabilityProbeRequest(
+      source: source,
+      codec: 'dvh1.05.06',
+      requiresHdrNativeFrame: true,
+      nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+        mode: VesperNativeFramePipelineMode.requireNativeFrame,
+        decoderPluginLibraryPaths: <String>['/tmp/libmediacodec.so'],
+      ),
+    );
+
+    final result = await platform.probePlaybackCapability(request);
+
+    expect(calls.single.method, 'probePlaybackCapability');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      request.toMap(),
+    );
+    expect(result.status, VesperPlaybackCapabilityProbeStatus.unsupported);
+    expect(result.codecFamily, VesperPlaybackCodecFamily.hevc);
+    expect(
+      result.outputFormat,
+      VesperPlaybackCapabilityOutputFormat.unknown,
+    );
+    expect(
+      result.dolbyVisionMode,
+      VesperPlaybackCapabilityDolbyVisionMode.unsupported,
+    );
+    expect(
+      result.missingCapabilities,
+      <String>['hdrProgrammableProcessingNotSupported'],
     );
   });
 

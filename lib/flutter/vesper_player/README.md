@@ -4,7 +4,6 @@ A cross-platform Flutter video player built around native-first backends:
 
 - Android uses ExoPlayer through the Vesper Android host kit
 - iOS uses AVPlayer through the Vesper iOS host kit
-- macOS is currently a package stub without a real playback backend
 
 The package exposes one Dart API surface so host apps can keep playback, track
 selection, resilience, download, preload, and benchmark capture flows aligned
@@ -12,24 +11,25 @@ across platforms.
 
 ## Platform Support
 
-| Feature                  | Android                                      | iOS                                                 | macOS package        |
-| ------------------------ | -------------------------------------------- | --------------------------------------------------- | -------------------- |
-| Local files              | ✅                                           | ✅                                                  | ❌ Backend not wired |
-| Progressive HTTP         | ✅                                           | ✅                                                  | ❌ Backend not wired |
-| HLS                      | ✅                                           | ✅                                                  | ❌ Backend not wired |
-| DASH                     | ✅                                           | ✅ DASH-to-HLS bridge for VOD / live fMP4           | ❌ Backend not wired |
-| Live streams             | ✅                                           | ✅                                                  | ❌ Backend not wired |
-| Live DVR                 | ✅                                           | ✅                                                  | ❌ Backend not wired |
-| Track selection          | ✅                                           | ✅                                                  | ❌ Backend not wired |
-| Adaptive bitrate (ABR)   | ✅                                           | ⚠️ Constrained + best-effort fixed-track on iOS 15+ | ❌ Backend not wired |
-| Buffering / retry policy | ✅                                           | ✅                                                  | ❌ Backend not wired |
-| Download management      | ✅                                           | ✅                                                  | ❌                   |
-| Preload                  | ✅                                           | ✅                                                  | ❌                   |
-| System playback controls | ✅ MediaSession notification + FGS           | ✅ Now Playing / RemoteCommand                      | ❌                   |
-| External playback        | ✅ Optional `vesper_player_external_playback` package | ✅ AirPlay route picker via `vesper_player_ui`      | ❌                   |
+| Feature                  | Android                                      | iOS                                                 |
+| ------------------------ | -------------------------------------------- | --------------------------------------------------- |
+| Local files              | ✅                                           | ✅                                                  |
+| Progressive HTTP         | ✅                                           | ✅                                                  |
+| HLS                      | ✅                                           | ✅                                                  |
+| DASH                     | ✅                                           | ✅ DASH-to-HLS bridge for VOD / live fMP4           |
+| Live streams             | ✅                                           | ✅                                                  |
+| Live DVR                 | ✅                                           | ✅                                                  |
+| Track selection          | ✅                                           | ✅                                                  |
+| Adaptive bitrate (ABR)   | ✅                                           | ⚠️ Constrained + best-effort fixed-track on iOS 15+ |
+| Buffering / retry policy | ✅                                           | ✅                                                  |
+| Download management      | ✅                                           | ✅                                                  |
+| Preload                  | ✅                                           | ✅                                                  |
+| System playback controls | ✅ MediaSession notification + FGS           | ✅ Now Playing / RemoteCommand                      |
+| External playback        | ✅ Optional `vesper_player_external_playback` package | ✅ AirPlay route picker via `vesper_player_ui`      |
 
-> `vesper_player_macos` exists as an experimental federated package stub. The
-> main package currently registers Android and iOS implementations only.
+The main package currently registers Android and iOS implementations only.
+Desktop Flutter implementations, including macOS, are intentionally not shipped
+while the Flutter desktop integration model settles.
 
 ## Installation
 
@@ -655,4 +655,3 @@ if (caps.isExperimental) {
 | `vesper_player_platform_interface` | Shared platform contract and DTOs         |
 | `vesper_player_android`            | Android implementation built on ExoPlayer |
 | `vesper_player_ios`                | iOS implementation built on AVPlayer      |
-| `vesper_player_macos`              | Experimental macOS package stub           |

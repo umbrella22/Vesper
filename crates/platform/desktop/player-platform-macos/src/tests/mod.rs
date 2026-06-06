@@ -23,9 +23,9 @@ use super::{
     apply_decoder_plugin_diagnostics_to_video_decode,
     apply_decoder_plugin_registry_to_video_decode, apply_source_normalizer_open_diagnostics,
     attach_source_normalizer_to_runtime, flush_and_seek_macos_native_frame_source,
-    macos_native_frame_decoder_video_decode_info, macos_runtime_diagnostics,
-    macos_video_decode_info, mark_source_normalizer_packet_stream_participated,
-    open_macos_host_runtime_source_with_options,
+    macos_decoder_bitstream_format, macos_native_frame_decoder_video_decode_info,
+    macos_runtime_diagnostics, macos_video_decode_info,
+    mark_source_normalizer_packet_stream_participated, open_macos_host_runtime_source_with_options,
     open_macos_software_runtime_source_with_options_and_interrupt,
     prepare_source_normalizer_for_open, present_and_release_native_frame_with_presenter,
     present_if_current_epoch_and_release, probe_macos_host_runtime_initializer_with_factories,
@@ -1180,6 +1180,27 @@ fn macos_native_frame_preference_without_surface_reports_software_route() {
     let fallback = info.fallback_reason.as_deref().unwrap_or_default();
     assert!(fallback.contains("selected softwareDecoder route"));
     assert!(fallback.contains("no macOS video surface is available"));
+}
+
+#[test]
+fn macos_decoder_bitstream_format_accepts_hevc_and_dolby_vision_aliases() {
+    for codec in [
+        "HEVC",
+        "h265",
+        "hvc1.1.6.L93.B0",
+        "hev1",
+        "dvh1.05.06",
+        "dvhe.08.07",
+    ] {
+        assert_eq!(
+            macos_decoder_bitstream_format(codec),
+            DecoderBitstreamFormat::Hvcc
+        );
+    }
+    assert_eq!(
+        macos_decoder_bitstream_format("avc1.4d401f"),
+        DecoderBitstreamFormat::Avcc
+    );
 }
 
 #[test]
@@ -2651,6 +2672,8 @@ fn release_native_frame_tracking_decrements_outstanding_count() {
             ),
             color_space: None,
             hdr_metadata: None,
+            color: None,
+            hdr: None,
             sync_info: None,
             transform: None,
             frame_id: Some(7),
@@ -2688,6 +2711,8 @@ fn present_failure_still_releases_native_frame() {
             ),
             color_space: None,
             hdr_metadata: None,
+            color: None,
+            hdr: None,
             sync_info: None,
             transform: None,
             frame_id: Some(11),
@@ -2732,6 +2757,8 @@ fn stale_presentation_epoch_releases_frame_without_presenting() {
             ),
             color_space: None,
             hdr_metadata: None,
+            color: None,
+            hdr: None,
             sync_info: None,
             transform: None,
             frame_id: Some(13),
@@ -3280,6 +3307,41 @@ fn source_normalizer_packet_source_preserves_metadata_and_releases_packet() {
 }
 
 #[test]
+fn source_normalizer_native_frame_stream_info_preserves_hdr_metadata() {
+    let mut stream_info = fake_source_normalizer_packet_stream_info("H264");
+    let track = stream_info
+        .tracks
+        .first_mut()
+        .expect("fake stream should include one video track");
+    track.color = Some(player_plugin::NativeFrameColorMetadata {
+        primaries: Some("bt2020".to_owned()),
+        transfer: Some("smpte2084".to_owned()),
+        matrix: Some("bt2020-ncl".to_owned()),
+        range: Some("limited".to_owned()),
+        bit_depth: Some(10),
+    });
+    track.hdr = Some(player_plugin::NativeFrameHdrMetadata {
+        kind: "hdr10".to_owned(),
+        mastering_display: None,
+        content_light: None,
+        dolby_vision: None,
+    });
+
+    let native_info = super::macos_native_frame_stream_info_from_source_normalizer(&stream_info)
+        .expect("source normalizer video track should convert");
+
+    assert_eq!(native_info.packet.codec, "H264");
+    assert_eq!(
+        native_info.color.as_ref().and_then(|color| color.bit_depth),
+        Some(10)
+    );
+    assert_eq!(
+        native_info.hdr.as_ref().map(|hdr| hdr.kind.as_str()),
+        Some("hdr10")
+    );
+}
+
+#[test]
 fn source_normalizer_packet_source_skips_non_video_packets() {
     let mut stream_info = fake_source_normalizer_packet_stream_info("H264");
     stream_info.tracks.push(SourceNormalizerPacketTrackInfo {
@@ -3299,6 +3361,8 @@ fn source_normalizer_packet_source_skips_non_video_packets() {
         priming_samples: Some(2_112),
         trailing_padding_samples: None,
         seek_preroll_samples: Some(1_024),
+        color: None,
+        hdr: None,
         frame_rate: None,
         time_base_num: Some(1),
         time_base_den: Some(48_000),
@@ -3360,6 +3424,8 @@ fn source_normalizer_packet_source_skips_unselected_video_stream() {
         priming_samples: None,
         trailing_padding_samples: None,
         seek_preroll_samples: None,
+        color: None,
+        hdr: None,
         frame_rate: Some(30.0),
         time_base_num: Some(1),
         time_base_den: Some(30_000),
@@ -4873,6 +4939,8 @@ fn fake_source_normalizer_packet_stream_info(codec: &str) -> SourceNormalizerPac
             priming_samples: None,
             trailing_padding_samples: None,
             seek_preroll_samples: None,
+            color: None,
+            hdr: None,
             frame_rate: Some(24.0),
             time_base_num: Some(1),
             time_base_den: Some(24_000),
@@ -4905,6 +4973,8 @@ fn fake_source_normalizer_packet_stream_info_with_audio(
         priming_samples: None,
         trailing_padding_samples: None,
         seek_preroll_samples: Some(1_024),
+        color: None,
+        hdr: None,
         frame_rate: None,
         time_base_num: Some(1),
         time_base_den: Some(48_000),
@@ -4979,6 +5049,8 @@ fn test_native_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {
             ),
             color_space: None,
             hdr_metadata: None,
+            color: None,
+            hdr: None,
             sync_info: None,
             transform: None,
             frame_id: Some(handle as u64),

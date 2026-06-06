@@ -4,14 +4,17 @@ use std::thread;
 use std::time::Duration;
 
 use player_model::MediaSource;
-use player_platform_mobile::MobileSourceNormalizerConfiguration;
+use player_platform_mobile::{
+    HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED, MobileSourceNormalizerConfiguration,
+    hdr_programmable_processing_not_supported_reason,
+};
 use player_plugin::{
     DecoderBitstreamFormat, DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrame,
     DecoderNativeHandleKind, DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
     FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorReceiveOutput,
     FrameProcessorSession, FrameProcessorSessionConfig, FrameProcessorSessionRequirements,
     FrameProcessorSubmitFrame, FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame,
-    NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind,
+    NativeFrameHdrMetadata, NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind,
     SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
     SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
     SourceNormalizerReadPacketStatus,
@@ -73,6 +76,11 @@ pub struct IosNativeFramePipelineSession {
     audio_decoder_plugin_name: Option<String>,
     audio_decoder_plugin_ready: bool,
     video_stream_index: u32,
+    video_output_format: String,
+    video_transfer: Option<String>,
+    video_bit_depth: Option<u8>,
+    hdr_kind: Option<String>,
+    dolby_vision_mode: Option<String>,
     source_normalizer_plugin_name: Option<String>,
     decoder_plugin_name: String,
     processor_plugin_names: Vec<String>,
@@ -137,6 +145,15 @@ pub struct IosNativeFramePipelineWire {
     pub audio_track_codec: Option<String>,
     pub selected_video_stream_index: u32,
     pub selected_video_media_kind: &'static str,
+    pub video_output_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_transfer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_bit_depth: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hdr_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dolby_vision_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_stream_index: Option<u32>,
     pub audio_media_kind: &'static str,
@@ -165,6 +182,15 @@ pub struct IosNativeFramePipelineStatusWire {
     pub audio_track_codec: Option<String>,
     pub selected_video_stream_index: u32,
     pub selected_video_media_kind: &'static str,
+    pub video_output_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_transfer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_bit_depth: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hdr_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dolby_vision_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_stream_index: Option<u32>,
     pub audio_media_kind: &'static str,
@@ -321,17 +347,32 @@ impl IosNativeFramePipelineSession {
         let stream_info = packet_session.stream_info();
         let track = selected_video_track(&stream_info)
             .map_err(|error| IosNativeFramePipelineOpenError::new("unsupportedCodec", error))?;
+        if let Some(reason) = hdr_programmable_processing_not_supported_reason(&track) {
+            let _ = packet_session.close();
+            return Err(IosNativeFramePipelineOpenError::new(
+                HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED,
+                reason,
+            ));
+        }
         let video_stream_index = track.stream_index;
         let audio_track = selected_audio_track(&stream_info);
         let has_audio_track = audio_track.is_some();
         let audio_track_codec = audio_track.as_ref().map(|track| track.codec.clone());
         let audio_stream_index = audio_track.as_ref().map(|track| track.stream_index);
-        if !track.codec.eq_ignore_ascii_case("h264") && !track.codec.eq_ignore_ascii_case("avc1") {
+        let video_output_format = decoder_frame_format_label(&DecoderFrameFormat::Nv12);
+        let video_transfer = track
+            .color
+            .as_ref()
+            .and_then(|color| color.transfer.clone());
+        let video_bit_depth = track.color.as_ref().and_then(|color| color.bit_depth);
+        let hdr_kind = track.hdr.as_ref().map(|hdr| hdr.kind.clone());
+        let dolby_vision_mode = track.hdr.as_ref().and_then(dolby_vision_mode);
+        if !apple_native_frame_video_codec_supported(&track.codec) {
             let _ = packet_session.close();
             return Err(IosNativeFramePipelineOpenError::new(
                 "unsupportedCodec",
                 format!(
-                    "iOS native-frame pipeline first pass only supports H264 packet streams, got {}",
+                    "iOS native-frame pipeline supports H264/HEVC packet streams, got {}",
                     track.codec
                 ),
             ));
@@ -395,6 +436,8 @@ impl IosNativeFramePipelineSession {
                 coded_height: track.coded_height.or(track.height),
                 prefer_hardware: true,
                 require_cpu_output: false,
+                color: track.color.clone(),
+                hdr: track.hdr.clone(),
                 ..DecoderSessionConfig::default()
             })
             .map_err(|error| {
@@ -440,6 +483,11 @@ impl IosNativeFramePipelineSession {
             audio_decoder_plugin_name,
             audio_decoder_plugin_ready,
             video_stream_index,
+            video_output_format,
+            video_transfer,
+            video_bit_depth,
+            hdr_kind,
+            dolby_vision_mode,
             source_normalizer_plugin_name: source_record
                 .plugin_name
                 .clone()
@@ -478,6 +526,11 @@ impl IosNativeFramePipelineSession {
             audio_track_codec: self.audio_track_codec.clone(),
             selected_video_stream_index: self.video_stream_index,
             selected_video_media_kind: "video",
+            video_output_format: self.video_output_format.clone(),
+            video_transfer: self.video_transfer.clone(),
+            video_bit_depth: self.video_bit_depth,
+            hdr_kind: self.hdr_kind.clone(),
+            dolby_vision_mode: self.dolby_vision_mode.clone(),
             audio_stream_index: self.audio_stream_index,
             audio_media_kind: self.audio_media_kind(),
             audio_decoder_plugin: self.audio_decoder_plugin_name.clone(),
@@ -509,6 +562,11 @@ impl IosNativeFramePipelineSession {
             audio_track_codec: self.audio_track_codec.clone(),
             selected_video_stream_index: self.video_stream_index,
             selected_video_media_kind: "video",
+            video_output_format: self.video_output_format.clone(),
+            video_transfer: self.video_transfer.clone(),
+            video_bit_depth: self.video_bit_depth,
+            hdr_kind: self.hdr_kind.clone(),
+            dolby_vision_mode: self.dolby_vision_mode.clone(),
             audio_stream_index: self.audio_stream_index,
             audio_media_kind: self.audio_media_kind(),
             audio_decoder_plugin: self.audio_decoder_plugin_name.clone(),
@@ -914,13 +972,40 @@ impl IosNativeFramePipelineSession {
             details: IosNativeFramePipelineDiagnosticDetailsWire::from_pairs([
                 (
                     "route",
-                    PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
+                    PlayerPlaybackRoute::SdkManagedNativeFrame
+                        .wire_name()
+                        .to_owned(),
                 ),
-                ("presenter", "MetalLayer"),
-                ("clockSource", self.clock_source()),
-                ("audioDecoder", self.audio_decoder_kind()),
-                ("audioOutput", self.audio_output_kind()),
-                ("audioPipeline", self.audio_pipeline_kind()),
+                ("presenter", "MetalLayer".to_owned()),
+                ("videoOutputFormat", self.video_output_format.clone()),
+                (
+                    "videoTransfer",
+                    self.video_transfer
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                ),
+                (
+                    "videoBitDepth",
+                    self.video_bit_depth
+                        .map(|bit_depth| bit_depth.to_string())
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                ),
+                (
+                    "hdrKind",
+                    self.hdr_kind
+                        .clone()
+                        .unwrap_or_else(|| "sdr".to_owned()),
+                ),
+                (
+                    "dolbyVisionMode",
+                    self.dolby_vision_mode
+                        .clone()
+                        .unwrap_or_else(|| "none".to_owned()),
+                ),
+                ("clockSource", self.clock_source().to_owned()),
+                ("audioDecoder", self.audio_decoder_kind().to_owned()),
+                ("audioOutput", self.audio_output_kind().to_owned()),
+                ("audioPipeline", self.audio_pipeline_kind().to_owned()),
             ]),
         });
         diagnostics
@@ -1150,8 +1235,13 @@ fn open_frame_processor_chain(
         visible_rect: None,
         handle_kind: NativeHandleKind::CvPixelBuffer,
         pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
-        color_space: None,
-        hdr_metadata: None,
+        color_space: track
+            .color
+            .as_ref()
+            .and_then(|color| color.primaries.clone()),
+        hdr_metadata: track.hdr.as_ref().map(|hdr| hdr.kind.clone()),
+        color: track.color.clone(),
+        hdr: track.hdr.clone(),
         sync_info: None,
         transform: None,
         frame_id: None,
@@ -1419,6 +1509,33 @@ fn selected_audio_track(
         .cloned()
 }
 
+fn decoder_frame_format_label(format: &DecoderFrameFormat) -> String {
+    match format {
+        DecoderFrameFormat::Rgba8888 => "rgba8888".to_owned(),
+        DecoderFrameFormat::Bgra8888 => "bgra8888".to_owned(),
+        DecoderFrameFormat::Yuv420p => "yuv420p".to_owned(),
+        DecoderFrameFormat::Nv12 => "nv12".to_owned(),
+        DecoderFrameFormat::P010 => "p010".to_owned(),
+        DecoderFrameFormat::F32 => "f32".to_owned(),
+        DecoderFrameFormat::S16 => "s16".to_owned(),
+        DecoderFrameFormat::Unknown(label) => label.clone(),
+    }
+}
+
+fn dolby_vision_mode(hdr: &NativeFrameHdrMetadata) -> Option<String> {
+    if !hdr.is_dolby_vision() {
+        return None;
+    }
+    let Some(dolby_vision) = hdr.dolby_vision.as_ref() else {
+        return Some("unsupported".to_owned());
+    };
+    if dolby_vision.has_bl && dolby_vision.compatibility_id.is_some_and(|id| id > 0) {
+        Some("compatibleBaseLayer".to_owned())
+    } else {
+        Some("unsupported".to_owned())
+    }
+}
+
 fn audio_pcm_decoder_plugin_name(registry: &PluginRegistry, codec: &str) -> Option<String> {
     registry
         .best_pcm_audio_decoder_for(&DecoderPluginMatchRequest::audio(codec))
@@ -1432,10 +1549,33 @@ fn decoder_packet_from_source_normalizer_packet(
 }
 
 fn decoder_bitstream_format(codec: &str) -> DecoderBitstreamFormat {
-    match codec.to_ascii_uppercase().as_str() {
-        "HEVC" | "H265" | "HVC1" | "HEV1" => DecoderBitstreamFormat::Hvcc,
-        _ => DecoderBitstreamFormat::Avcc,
+    let codec = codec.trim().to_ascii_lowercase();
+    let codec = codec.strip_prefix("video/").unwrap_or(&codec);
+    if codec == "hevc"
+        || codec == "h265"
+        || codec.starts_with("hvc1")
+        || codec.starts_with("hev1")
+        || codec.starts_with("dvh1")
+        || codec.starts_with("dvhe")
+    {
+        DecoderBitstreamFormat::Hvcc
+    } else {
+        DecoderBitstreamFormat::Avcc
     }
+}
+
+fn apple_native_frame_video_codec_supported(codec: &str) -> bool {
+    let codec = codec.trim().to_ascii_lowercase();
+    let codec = codec.strip_prefix("video/").unwrap_or(&codec);
+    codec == "h264"
+        || codec == "avc"
+        || codec.starts_with("avc1")
+        || codec == "hevc"
+        || codec == "h265"
+        || codec.starts_with("hvc1")
+        || codec.starts_with("hev1")
+        || codec.starts_with("dvh1")
+        || codec.starts_with("dvhe")
 }
 
 fn configured_runtime_profile(configuration: &MobileSourceNormalizerConfiguration) -> Option<&str> {
@@ -1739,6 +1879,42 @@ mod tests {
     }
 
     #[test]
+    fn open_and_status_wire_report_sdr_video_summary() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut session = test_session(events);
+        session.video_output_format = "nv12".to_owned();
+        session.video_transfer = Some("bt709".to_owned());
+        session.video_bit_depth = Some(8);
+
+        let open = session.open_wire(7);
+        let status = session.status_wire(7, None);
+
+        assert_eq!(open.video_output_format, "nv12");
+        assert_eq!(open.video_transfer.as_deref(), Some("bt709"));
+        assert_eq!(open.video_bit_depth, Some(8));
+        assert_eq!(open.hdr_kind.as_deref(), None);
+        assert_eq!(open.dolby_vision_mode.as_deref(), None);
+        assert_eq!(status.video_output_format, "nv12");
+        assert_eq!(status.video_transfer.as_deref(), Some("bt709"));
+        assert_eq!(status.video_bit_depth, Some(8));
+        assert_eq!(status.hdr_kind.as_deref(), None);
+        assert_eq!(status.dolby_vision_mode.as_deref(), None);
+        assert!(open.diagnostics.iter().any(|diagnostic| {
+            diagnostic.plugin_kind.as_deref() == Some("native_frame_pipeline")
+                && diagnostic
+                    .details
+                    .details
+                    .iter()
+                    .any(|(key, value)| key == "videoOutputFormat" && value == "nv12")
+                && diagnostic
+                    .details
+                    .details
+                    .iter()
+                    .any(|(key, value)| key == "hdrKind" && value == "sdr")
+        }));
+    }
+
+    #[test]
     fn audio_pcm_decoder_selection_ignores_packet_only_audio_decoders() {
         let registry = PluginRegistry::from_records(vec![
             decoder_record(
@@ -1778,6 +1954,73 @@ mod tests {
         assert_eq!(audio_pcm_decoder_plugin_name(&registry, "mp3"), None);
     }
 
+    #[test]
+    fn apple_native_frame_video_codec_gate_accepts_hevc_aliases() {
+        for codec in [
+            "h264", "avc1", "HEVC", "h265", "hvc1", "hev1", "dvh1", "dvhe",
+        ] {
+            assert!(
+                apple_native_frame_video_codec_supported(codec),
+                "{codec} should be accepted by the Apple native-frame codec gate"
+            );
+        }
+        assert!(!apple_native_frame_video_codec_supported("vp9"));
+        assert_eq!(
+            decoder_bitstream_format("hvc1"),
+            DecoderBitstreamFormat::Hvcc
+        );
+        assert_eq!(
+            decoder_bitstream_format("HEVC"),
+            DecoderBitstreamFormat::Hvcc
+        );
+        assert_eq!(
+            decoder_bitstream_format("dvh1"),
+            DecoderBitstreamFormat::Hvcc
+        );
+        assert_eq!(
+            decoder_bitstream_format("avc1"),
+            DecoderBitstreamFormat::Avcc
+        );
+    }
+
+    #[test]
+    fn hdr_track_reports_programmable_processing_rejection() {
+        let mut track = SourceNormalizerPacketTrackInfo {
+            stream_index: 0,
+            media_kind: SourceNormalizerPacketMediaKind::Video,
+            codec: "hvc1".to_owned(),
+            extradata: Vec::new(),
+            bitstream_format: Some(DecoderBitstreamFormat::Hvcc),
+            width: Some(1_920),
+            height: Some(1_080),
+            coded_width: Some(1_920),
+            coded_height: Some(1_080),
+            sample_rate: None,
+            channels: None,
+            channel_layout: None,
+            codec_delay_samples: None,
+            priming_samples: None,
+            trailing_padding_samples: None,
+            seek_preroll_samples: None,
+            color: None,
+            hdr: None,
+            frame_rate: None,
+            time_base_num: None,
+            time_base_den: None,
+        };
+        track.hdr = Some(NativeFrameHdrMetadata {
+            kind: "hdr10".to_owned(),
+            mastering_display: None,
+            content_light: None,
+            dolby_vision: None,
+        });
+
+        let reason = hdr_programmable_processing_not_supported_reason(&track)
+            .expect("HDR track should be rejected for native-frame processing");
+
+        assert!(reason.contains(HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED));
+    }
+
     fn test_session(events: Arc<Mutex<Vec<FlushEvent>>>) -> IosNativeFramePipelineSession {
         IosNativeFramePipelineSession {
             source_uri: "file:///tmp/video.mp4".to_owned(),
@@ -1789,6 +2032,11 @@ mod tests {
             audio_decoder_plugin_name: None,
             audio_decoder_plugin_ready: false,
             video_stream_index: 0,
+            video_output_format: "nv12".to_owned(),
+            video_transfer: None,
+            video_bit_depth: Some(8),
+            hdr_kind: None,
+            dolby_vision_mode: None,
             source_normalizer_plugin_name: Some("test-source-normalizer".to_owned()),
             decoder_plugin_name: "test-decoder".to_owned(),
             processor_plugin_names: vec!["test-processor".to_owned()],
@@ -1869,6 +2117,8 @@ mod tests {
                 pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
                 color_space: Some("bt709".to_owned()),
                 hdr_metadata: None,
+                color: None,
+                hdr: None,
                 sync_info: None,
                 transform: None,
                 frame_id: Some(handle as u64),
@@ -1898,6 +2148,8 @@ mod tests {
                 pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
                 color_space: Some("bt709".to_owned()),
                 hdr_metadata: None,
+                color: None,
+                hdr: None,
                 sync_info: None,
                 transform: None,
                 frame_id: Some(handle as u64),
@@ -1935,6 +2187,8 @@ mod tests {
                         priming_samples: None,
                         trailing_padding_samples: None,
                         seek_preroll_samples: None,
+                        color: None,
+                        hdr: None,
                         frame_rate: None,
                         time_base_num: None,
                         time_base_den: None,
@@ -1956,6 +2210,8 @@ mod tests {
                         priming_samples: None,
                         trailing_padding_samples: None,
                         seek_preroll_samples: Some(1_024),
+                        color: None,
+                        hdr: None,
                         frame_rate: None,
                         time_base_num: Some(1),
                         time_base_den: Some(48_000),

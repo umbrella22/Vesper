@@ -68,6 +68,14 @@ static SOURCE_NORMALIZER_PACKET_RELEASES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static FRAME_PROCESSOR_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static SOURCE_NORMALIZER_PACKET_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static DECODER_NATIVE_FRAME_RELEASE_TEST_LOCK: LazyLock<Mutex<()>> =
+    LazyLock::new(|| Mutex::new(()));
+
+fn decoder_native_frame_release_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    DECODER_NATIVE_FRAME_RELEASE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 fn frame_processor_test_guard() -> std::sync::MutexGuard<'static, ()> {
     FRAME_PROCESSOR_TEST_LOCK
@@ -712,6 +720,8 @@ unsafe extern "C" fn fixture_decoder_receive_native_frame(
         pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
         color_space: None,
         hdr_metadata: None,
+        color: None,
+        hdr: None,
         sync_info: None,
         transform: None,
         frame_id: Some(handle as u64),
@@ -753,6 +763,8 @@ unsafe extern "C" fn fixture_decoder_receive_null_native_frame(
         pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
         color_space: None,
         hdr_metadata: None,
+        color: None,
+        hdr: None,
         sync_info: None,
         transform: None,
         frame_id: None,
@@ -1165,6 +1177,8 @@ unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
             priming_samples: None,
             trailing_padding_samples: None,
             seek_preroll_samples: None,
+            color: None,
+            hdr: None,
             frame_rate: Some(30.0),
             time_base_num: Some(1),
             time_base_den: Some(90_000),
@@ -1738,6 +1752,8 @@ fn fixture_native_frame() -> NativeFrame {
             pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
             color_space: None,
             hdr_metadata: None,
+            color: None,
+            hdr: None,
             sync_info: None,
             transform: None,
             frame_id: Some(41),

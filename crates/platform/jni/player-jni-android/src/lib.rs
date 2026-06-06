@@ -27,8 +27,9 @@ use player_platform_android::{
 use player_platform_mobile::{
     MobileFrameProcessorConfiguration, MobileNativeFramePipelineConfiguration,
     MobileSourceNormalizerConfiguration, MobileSourceNormalizerRouteDecision,
-    mobile_plugin_diagnostics_json, mobile_source_normalizer_resource_open_json,
-    mobile_source_normalizer_resource_status_json, open_mobile_source_normalizer_resource,
+    mobile_plugin_diagnostics_json, mobile_source_normalizer_resource_bypass_diagnostics_json,
+    mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
+    open_mobile_source_normalizer_resource_with_diagnostics,
 };
 use player_runtime::NativeFramePipelineMode;
 use player_runtime::{FrameProcessorMode, PlayerError, PlayerRuntimeCommand, SourceNormalizerMode};
@@ -201,7 +202,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 } else {
                     MobileSourceNormalizerRouteDecision::NativeFirst
                 };
-                let opened = match open_mobile_source_normalizer_resource(
+                let outcome = match open_mobile_source_normalizer_resource_with_diagnostics(
                     &player_model::MediaSource::new(source_uri),
                     &MobileSourceNormalizerConfiguration {
                         mode: source_normalizer_mode_from_ordinal(source_mode_ordinal),
@@ -211,14 +212,34 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                     output_root,
                     decision,
                 ) {
-                    Ok(Some(opened)) => opened,
-                    Ok(None) => return Ok(std::ptr::null_mut()),
+                    Ok(outcome) => outcome,
                     Err(message) => {
                         env.throw_new(
                             jni_name("java/lang/IllegalStateException"),
                             jni_name(message),
                         )?;
                         return Ok(std::ptr::null_mut());
+                    }
+                };
+                let opened = match outcome.opened {
+                    Some(opened) => opened,
+                    None => {
+                        if outcome.diagnostics.is_empty() {
+                            return Ok(std::ptr::null_mut());
+                        }
+                        let json = match mobile_source_normalizer_resource_bypass_diagnostics_json(
+                            &outcome.diagnostics,
+                        ) {
+                            Ok(value) => value,
+                            Err(message) => {
+                                env.throw_new(
+                                    jni_name("java/lang/IllegalStateException"),
+                                    jni_name(message.to_string()),
+                                )?;
+                                return Ok(std::ptr::null_mut());
+                            }
+                        };
+                        return Ok(env.new_string(json)?.into_raw());
                     }
                 };
                 let handle = match new_source_normalizer_resource_session(opened) {

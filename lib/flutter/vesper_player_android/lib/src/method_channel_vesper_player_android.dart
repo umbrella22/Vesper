@@ -87,6 +87,20 @@ class MethodChannelVesperPlayerAndroid extends VesperPlayerPlatform {
   }
 
   @override
+  Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
+    VesperPlaybackCapabilityProbeRequest request,
+  ) async {
+    final result = await _invokeMethod<Object?>(
+      'probePlaybackCapability',
+      request.toMap(),
+    );
+    final decoded = result is Map
+        ? Map<Object?, Object?>.from(result)
+        : <Object?, Object?>{};
+    return VesperPlaybackCapabilityProbeResult.fromMap(decoded);
+  }
+
+  @override
   Stream<VesperPlayerEvent> eventsFor(String playerId) {
     return _events.where((event) => event.playerId == playerId);
   }

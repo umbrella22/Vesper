@@ -9,7 +9,8 @@ use player_plugin::{
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext,
     DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderNativeRequirements,
     DecoderOperationStatus, DecoderPacket, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
-    DecoderSessionInfo, NativeFramePipelineProfile, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+    DecoderSessionInfo, NativeFrameColorMetadata, NativeFrameHdrMetadata,
+    NativeFramePipelineProfile, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV5,
     VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult, VesperPluginBytes,
     VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
@@ -401,6 +402,8 @@ fn decoder_capabilities() -> DecoderCapabilities {
             video_codec_capability("H265"),
             video_codec_capability("HVC1"),
             video_codec_capability("HEV1"),
+            video_codec_capability("DVH1"),
+            video_codec_capability("DVHE"),
         ],
         supports_hardware_decode: MEDIACODEC_SUPPORTED,
         supports_cpu_video_frames: false,
@@ -476,12 +479,20 @@ fn media_codec_session_mut<'a>(session: *mut c_void) -> Option<&'a mut MediaCode
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn codec_mime(codec: &str) -> Option<&'static str> {
-    if codec.eq_ignore_ascii_case("h264") || codec.eq_ignore_ascii_case("avc1") {
+    let normalized = codec
+        .trim()
+        .to_ascii_lowercase()
+        .strip_prefix("video/")
+        .map(str::to_owned)
+        .unwrap_or_else(|| codec.trim().to_ascii_lowercase());
+    if normalized == "h264" || normalized == "avc" || normalized.starts_with("avc1") {
         Some("video/avc")
-    } else if codec.eq_ignore_ascii_case("hevc")
-        || codec.eq_ignore_ascii_case("h265")
-        || codec.eq_ignore_ascii_case("hvc1")
-        || codec.eq_ignore_ascii_case("hev1")
+    } else if normalized == "hevc"
+        || normalized == "h265"
+        || normalized.starts_with("hvc1")
+        || normalized.starts_with("hev1")
+        || normalized.starts_with("dvh1")
+        || normalized.starts_with("dvhe")
     {
         Some("video/hevc")
     } else {
@@ -749,6 +760,117 @@ fn mediacodec_pending_output_eos_action(
     }
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn merge_mediacodec_color_metadata(
+    fallback: Option<NativeFrameColorMetadata>,
+    runtime: Option<NativeFrameColorMetadata>,
+) -> Option<NativeFrameColorMetadata> {
+    match (fallback, runtime) {
+        (Some(fallback), Some(runtime)) => Some(NativeFrameColorMetadata {
+            primaries: runtime.primaries.or(fallback.primaries),
+            transfer: runtime.transfer.or(fallback.transfer),
+            matrix: runtime.matrix.or(fallback.matrix),
+            range: runtime.range.or(fallback.range),
+            bit_depth: runtime.bit_depth.or(fallback.bit_depth),
+        }),
+        (Some(fallback), None) => Some(fallback),
+        (None, Some(runtime)) => Some(runtime),
+        (None, None) => None,
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn mediacodec_hdr_metadata_from_color(
+    color: Option<&NativeFrameColorMetadata>,
+) -> Option<NativeFrameHdrMetadata> {
+    let transfer = color?.transfer.as_deref()?.to_ascii_lowercase();
+    let kind = if transfer.contains("st2084") || transfer.contains("smpte2084") {
+        "hdr10"
+    } else if transfer.contains("hlg") || transfer.contains("arib-std-b67") {
+        "hlg"
+    } else {
+        return None;
+    };
+    Some(NativeFrameHdrMetadata {
+        kind: kind.to_owned(),
+        mastering_display: None,
+        content_light: None,
+        dolby_vision: None,
+    })
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn merge_mediacodec_hdr_metadata(
+    fallback: Option<NativeFrameHdrMetadata>,
+    runtime: Option<NativeFrameHdrMetadata>,
+) -> Option<NativeFrameHdrMetadata> {
+    match (fallback, runtime) {
+        (Some(fallback), Some(runtime)) => {
+            if mediacodec_hdr_metadata_has_richer_fields(&fallback) {
+                Some(fallback)
+            } else {
+                Some(NativeFrameHdrMetadata {
+                    kind: fallback.kind,
+                    mastering_display: fallback.mastering_display.or(runtime.mastering_display),
+                    content_light: fallback.content_light.or(runtime.content_light),
+                    dolby_vision: fallback.dolby_vision.or(runtime.dolby_vision),
+                })
+            }
+        }
+        (Some(fallback), None) => Some(fallback),
+        (None, Some(runtime)) => Some(runtime),
+        (None, None) => None,
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn mediacodec_hdr_metadata_has_richer_fields(metadata: &NativeFrameHdrMetadata) -> bool {
+    metadata.is_dolby_vision()
+        || metadata.mastering_display.is_some()
+        || metadata.content_light.is_some()
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_color_standard_label(value: i32) -> Option<String> {
+    match value {
+        1 => Some("bt709".to_owned()),
+        2 => Some("bt601-pal".to_owned()),
+        4 => Some("bt601-ntsc".to_owned()),
+        6 => Some("bt2020".to_owned()),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_color_standard_matrix_label(value: i32) -> Option<String> {
+    match value {
+        1 => Some("bt709".to_owned()),
+        2 | 4 => Some("bt601".to_owned()),
+        6 => Some("bt2020-ncl".to_owned()),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_color_transfer_label(value: i32) -> Option<String> {
+    match value {
+        1 => Some("linear".to_owned()),
+        3 => Some("sdr-video".to_owned()),
+        6 => Some("st2084".to_owned()),
+        7 => Some("hlg".to_owned()),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn android_color_range_label(value: i32) -> Option<String> {
+    match value {
+        1 => Some("full".to_owned()),
+        2 => Some("limited".to_owned()),
+        _ => None,
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android_media {
     use std::collections::HashMap;
@@ -759,13 +881,16 @@ mod android_media {
         DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeFrameMetadata,
         DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderPacket,
         DecoderPacketResult, DecoderReceiveNativeFrameMetadata, DecoderVisibleRect,
-        NativeFramePipelineProfile,
+        NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFramePipelineProfile,
     };
 
     use super::{
-        MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, codec_config_buffers,
-        codec_mime, mediacodec_output_buffer_kind, mediacodec_pending_output_eos_action,
-        mediacodec_surface_texture_format, nal_length_size_for_config,
+        MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, android_color_range_label,
+        android_color_standard_label, android_color_standard_matrix_label,
+        android_color_transfer_label, codec_config_buffers, codec_mime,
+        mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
+        mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
+        merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
         packet_input_data_for_mediacodec,
     };
 
@@ -779,6 +904,9 @@ mod android_media {
     const AMEDIAFORMAT_KEY_CROP_RIGHT_FALLBACK: &CStr = c"crop-right";
     const AMEDIAFORMAT_KEY_CROP_TOP_FALLBACK: &CStr = c"crop-top";
     const AMEDIAFORMAT_KEY_CROP_BOTTOM_FALLBACK: &CStr = c"crop-bottom";
+    const AMEDIAFORMAT_KEY_COLOR_STANDARD_FALLBACK: &CStr = c"color-standard";
+    const AMEDIAFORMAT_KEY_COLOR_TRANSFER_FALLBACK: &CStr = c"color-transfer";
+    const AMEDIAFORMAT_KEY_COLOR_RANGE_FALLBACK: &CStr = c"color-range";
 
     type MediaStatus = i32;
 
@@ -899,10 +1027,17 @@ mod android_media {
         coded_width: u32,
         coded_height: u32,
         visible_rect: DecoderVisibleRect,
+        color: Option<NativeFrameColorMetadata>,
+        hdr: Option<NativeFrameHdrMetadata>,
     }
 
     impl MediaCodecOutputFormat {
-        fn new(width: u32, height: u32) -> Self {
+        fn new(
+            width: u32,
+            height: u32,
+            color: Option<NativeFrameColorMetadata>,
+            hdr: Option<NativeFrameHdrMetadata>,
+        ) -> Self {
             Self {
                 width,
                 height,
@@ -914,6 +1049,8 @@ mod android_media {
                     width,
                     height,
                 },
+                color,
+                hdr,
             }
         }
     }
@@ -999,7 +1136,12 @@ mod android_media {
             }
             Ok(Self {
                 codec,
-                output_format: MediaCodecOutputFormat::new(width, height),
+                output_format: MediaCodecOutputFormat::new(
+                    width,
+                    height,
+                    config.color.clone(),
+                    config.hdr.clone(),
+                ),
                 bitstream_format: config.bitstream_format.clone(),
                 nal_length_size: nal_length_size_for_config(config),
                 outstanding: HashMap::new(),
@@ -1154,7 +1296,9 @@ mod android_media {
                                 NativeFramePipelineProfile::MediaCodecSurfaceTexture,
                             ),
                             color_space: None,
-                            hdr_metadata: None,
+                            hdr_metadata: output_format.hdr.as_ref().map(|hdr| hdr.kind.clone()),
+                            color: output_format.color.clone(),
+                            hdr: output_format.hdr.clone(),
                             sync_info: None,
                             transform: None,
                             frame_id: Some(handle as u64),
@@ -1401,7 +1545,16 @@ mod android_media {
                 height: coded_height,
             },
         };
-        normalize_output_format(coded_width, coded_height, visible_rect)
+        let mut output_format = normalize_output_format(coded_width, coded_height, visible_rect);
+        output_format.color = merge_mediacodec_color_metadata(
+            fallback.color.clone(),
+            media_format_color_metadata(format),
+        );
+        output_format.hdr = merge_mediacodec_hdr_metadata(
+            fallback.hdr.clone(),
+            mediacodec_hdr_metadata_from_color(output_format.color.as_ref()),
+        );
+        output_format
     }
 
     fn normalize_output_format(
@@ -1419,6 +1572,35 @@ mod android_media {
             coded_width: fallback_width,
             coded_height: fallback_height,
             visible_rect,
+            color: None,
+            hdr: None,
+        }
+    }
+
+    fn media_format_color_metadata(format: &MediaFormat) -> Option<NativeFrameColorMetadata> {
+        let color = NativeFrameColorMetadata {
+            primaries: format
+                .get_i32(AMEDIAFORMAT_KEY_COLOR_STANDARD_FALLBACK.as_ptr())
+                .and_then(android_color_standard_label),
+            transfer: format
+                .get_i32(AMEDIAFORMAT_KEY_COLOR_TRANSFER_FALLBACK.as_ptr())
+                .and_then(android_color_transfer_label),
+            matrix: format
+                .get_i32(AMEDIAFORMAT_KEY_COLOR_STANDARD_FALLBACK.as_ptr())
+                .and_then(android_color_standard_matrix_label),
+            range: format
+                .get_i32(AMEDIAFORMAT_KEY_COLOR_RANGE_FALLBACK.as_ptr())
+                .and_then(android_color_range_label),
+            bit_depth: None,
+        };
+        if color.primaries.is_none()
+            && color.transfer.is_none()
+            && color.matrix.is_none()
+            && color.range.is_none()
+        {
+            None
+        } else {
+            Some(color)
         }
     }
 
@@ -1555,18 +1737,22 @@ fn plugin_panic_error() -> DecoderError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, android_native_window_ptr,
-        codec_config_buffers, codec_mime, decoder_capabilities, decoder_native_requirements,
-        decoder_open_session_json, length_prefixed_sample_to_annex_b,
-        mediacodec_output_buffer_kind, mediacodec_pending_output_eos_action,
-        mediacodec_surface_texture_format, nal_length_size_for_config, packet_data_for_mediacodec,
-        packet_input_data_for_mediacodec, split_avcc_extradata, split_hvcc_extradata,
-        vesper_plugin_entry,
+        MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, android_color_standard_label,
+        android_color_standard_matrix_label, android_color_transfer_label,
+        android_native_window_ptr, codec_config_buffers, codec_mime, decoder_capabilities,
+        decoder_native_requirements, decoder_open_session_json, length_prefixed_sample_to_annex_b,
+        mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
+        mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
+        merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
+        packet_data_for_mediacodec, packet_input_data_for_mediacodec, split_avcc_extradata,
+        split_hvcc_extradata, vesper_plugin_entry,
     };
     use player_plugin::{
         DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
         DecoderNativeDeviceContext, DecoderNativeDeviceContextKind, DecoderNativeHandleKind,
-        DecoderPacket, DecoderSessionConfig, NativeFramePipelineProfile,
+        DecoderPacket, DecoderSessionConfig, NativeFrameColorMetadata,
+        NativeFrameContentLightMetadata, NativeFrameDolbyVisionMetadata, NativeFrameHdrMetadata,
+        NativeFrameMasteringDisplayMetadata, NativeFramePipelineProfile,
         VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginKind, VesperPluginResultStatus,
     };
 
@@ -1591,6 +1777,8 @@ mod tests {
 
         assert!(capabilities.supports_codec("h264", DecoderMediaKind::Video));
         assert!(capabilities.supports_codec("HEV1", DecoderMediaKind::Video));
+        assert!(capabilities.supports_codec("dvh1", DecoderMediaKind::Video));
+        assert!(capabilities.supports_codec("dvhe", DecoderMediaKind::Video));
         assert!(!capabilities.supports_audio_frames);
         assert!(!capabilities.supports_cpu_video_frames);
         assert_eq!(
@@ -1609,6 +1797,159 @@ mod tests {
                 )]
             );
         }
+    }
+
+    #[test]
+    fn android_color_labels_match_media_format_constants() {
+        assert_eq!(android_color_standard_label(1).as_deref(), Some("bt709"));
+        assert_eq!(
+            android_color_standard_label(2).as_deref(),
+            Some("bt601-pal")
+        );
+        assert_eq!(
+            android_color_standard_label(4).as_deref(),
+            Some("bt601-ntsc")
+        );
+        assert_eq!(android_color_standard_label(6).as_deref(), Some("bt2020"));
+        assert_eq!(
+            android_color_standard_matrix_label(2).as_deref(),
+            Some("bt601")
+        );
+        assert_eq!(
+            android_color_standard_matrix_label(4).as_deref(),
+            Some("bt601")
+        );
+        assert_eq!(
+            android_color_standard_matrix_label(6).as_deref(),
+            Some("bt2020-ncl")
+        );
+        assert_eq!(
+            android_color_transfer_label(3).as_deref(),
+            Some("sdr-video")
+        );
+        assert_eq!(android_color_transfer_label(6).as_deref(), Some("st2084"));
+        assert_eq!(android_color_transfer_label(7).as_deref(), Some("hlg"));
+    }
+
+    #[test]
+    fn android_hdr_metadata_uses_correct_transfer_constants() {
+        let sdr = NativeFrameColorMetadata {
+            primaries: Some("bt709".to_owned()),
+            transfer: android_color_transfer_label(3),
+            matrix: Some("bt709".to_owned()),
+            range: Some("limited".to_owned()),
+            bit_depth: Some(8),
+        };
+        assert!(mediacodec_hdr_metadata_from_color(Some(&sdr)).is_none());
+
+        let hdr10 = NativeFrameColorMetadata {
+            transfer: android_color_transfer_label(6),
+            ..sdr.clone()
+        };
+        assert_eq!(
+            mediacodec_hdr_metadata_from_color(Some(&hdr10))
+                .as_ref()
+                .map(|hdr| hdr.kind.as_str()),
+            Some("hdr10")
+        );
+
+        let hlg = NativeFrameColorMetadata {
+            transfer: android_color_transfer_label(7),
+            ..sdr
+        };
+        assert_eq!(
+            mediacodec_hdr_metadata_from_color(Some(&hlg))
+                .as_ref()
+                .map(|hdr| hdr.kind.as_str()),
+            Some("hlg")
+        );
+    }
+
+    #[test]
+    fn color_metadata_merge_preserves_config_fields_missing_from_runtime() {
+        let fallback = NativeFrameColorMetadata {
+            primaries: Some("bt2020".to_owned()),
+            transfer: Some("st2084".to_owned()),
+            matrix: Some("bt2020-ncl".to_owned()),
+            range: Some("limited".to_owned()),
+            bit_depth: Some(10),
+        };
+        let runtime = NativeFrameColorMetadata {
+            primaries: None,
+            transfer: None,
+            matrix: None,
+            range: Some("full".to_owned()),
+            bit_depth: None,
+        };
+
+        let merged = merge_mediacodec_color_metadata(Some(fallback), Some(runtime))
+            .expect("runtime range should merge with fallback color");
+
+        assert_eq!(merged.primaries.as_deref(), Some("bt2020"));
+        assert_eq!(merged.transfer.as_deref(), Some("st2084"));
+        assert_eq!(merged.matrix.as_deref(), Some("bt2020-ncl"));
+        assert_eq!(merged.range.as_deref(), Some("full"));
+        assert_eq!(merged.bit_depth, Some(10));
+    }
+
+    #[test]
+    fn hdr_metadata_merge_does_not_downgrade_dolby_vision() {
+        let fallback = NativeFrameHdrMetadata {
+            kind: "dolbyVision".to_owned(),
+            mastering_display: None,
+            content_light: None,
+            dolby_vision: Some(NativeFrameDolbyVisionMetadata {
+                profile: Some(8),
+                level: Some(6),
+                compatibility_id: Some(1),
+                has_rpu: true,
+                has_el: false,
+                has_bl: true,
+            }),
+        };
+        let runtime = NativeFrameHdrMetadata {
+            kind: "hdr10".to_owned(),
+            mastering_display: None,
+            content_light: None,
+            dolby_vision: None,
+        };
+
+        let merged = merge_mediacodec_hdr_metadata(Some(fallback), Some(runtime))
+            .expect("Dolby Vision metadata should be preserved");
+
+        assert_eq!(merged.kind, "dolbyVision");
+        assert!(merged.dolby_vision.is_some());
+    }
+
+    #[test]
+    fn hdr_metadata_merge_preserves_static_hdr_metadata() {
+        let fallback = NativeFrameHdrMetadata {
+            kind: "hdr10".to_owned(),
+            mastering_display: Some(NativeFrameMasteringDisplayMetadata {
+                display_primaries: Some("bt2020".to_owned()),
+                white_point: Some("d65".to_owned()),
+                max_luminance_nits: Some(1_000),
+                min_luminance_nits: Some(0),
+            }),
+            content_light: Some(NativeFrameContentLightMetadata {
+                max_content_light_level: Some(1_000),
+                max_frame_average_light_level: Some(400),
+            }),
+            dolby_vision: None,
+        };
+        let runtime = NativeFrameHdrMetadata {
+            kind: "hdr10".to_owned(),
+            mastering_display: None,
+            content_light: None,
+            dolby_vision: None,
+        };
+
+        let merged = merge_mediacodec_hdr_metadata(Some(fallback), Some(runtime))
+            .expect("HDR10 static metadata should be preserved");
+
+        assert_eq!(merged.kind, "hdr10");
+        assert!(merged.mastering_display.is_some());
+        assert!(merged.content_light.is_some());
     }
 
     #[test]
@@ -1690,6 +2031,8 @@ mod tests {
         assert_eq!(codec_mime("AVC1"), Some("video/avc"));
         assert_eq!(codec_mime("hevc"), Some("video/hevc"));
         assert_eq!(codec_mime("HVC1"), Some("video/hevc"));
+        assert_eq!(codec_mime("dvh1.05.06"), Some("video/hevc"));
+        assert_eq!(codec_mime("dvhe.08.07"), Some("video/hevc"));
         assert_eq!(codec_mime("vp9"), None);
     }
 

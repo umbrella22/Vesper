@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreAudio
 import Foundation
 import VesperPlayerKitBridgeShim
 
@@ -104,6 +105,11 @@ final class VesperNativeFramePipelineCoordinator {
         let audioRateControl = activeSession?.audioRateControlKind ?? "pending"
         let selectedVideoStreamIndex = activeSession?.selectedVideoStreamIndex
         let selectedVideoMediaKind = activeSession?.selectedVideoMediaKind ?? "pending"
+        let videoOutputFormat = activeSession?.videoOutputFormat ?? "pending"
+        let videoTransfer = activeSession?.videoTransfer ?? "unknown"
+        let videoBitDepth = activeSession?.videoBitDepth.map(String.init) ?? "unknown"
+        let hdrKind = activeSession?.hdrKind ?? "sdr"
+        let dolbyVisionMode = activeSession?.dolbyVisionMode ?? "none"
         let audioStreamIndex = activeSession?.audioStreamIndex
         let audioMediaKind = activeSession?.audioMediaKind ?? "pending"
         var diagnostic: [String: Any] = [
@@ -123,6 +129,11 @@ final class VesperNativeFramePipelineCoordinator {
             "seekable": sessionSeekable,
             "hasAudioTrack": sessionHasAudioTrack,
             "selectedVideoMediaKind": selectedVideoMediaKind,
+            "videoOutputFormat": videoOutputFormat,
+            "videoTransfer": videoTransfer,
+            "videoBitDepth": videoBitDepth,
+            "hdrKind": hdrKind,
+            "dolbyVisionMode": dolbyVisionMode,
             "audioMediaKind": audioMediaKind,
             "audioDecoder": sessionAudioDecoder,
             "audioOutput": sessionAudioOutput,
@@ -328,8 +339,7 @@ struct VesperNativeFramePipelineOperationError: LocalizedError, Equatable {
     }
 }
 
-@MainActor
-protocol VesperNativeFramePipelineBackend: AnyObject {
+protocol VesperNativeFramePipelineBackend: AnyObject, Sendable {
     func open(
         source: VesperPlayerSource,
         configuration: VesperNativeFramePipelineConfiguration,
@@ -354,8 +364,7 @@ protocol VesperNativeFramePipelineBackend: AnyObject {
     func close(handle: UInt64)
 }
 
-@MainActor
-final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBackend {
+final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBackend, @unchecked Sendable {
     func open(
         source: VesperPlayerSource,
         configuration: VesperNativeFramePipelineConfiguration,
@@ -591,155 +600,46 @@ extension PlayerSurfaceView: VesperNativeFramePresenting {
     }
 }
 
-@MainActor
-final class VesperNativeFramePipelineSession {
-    let id = UUID()
-    let source: VesperPlayerSource
-    let configuration: VesperNativeFramePipelineConfiguration
-    let sourceNormalizer: VesperSourceNormalizerConfiguration
-    private(set) var surfaceHost: PlayerSurfaceView
-    private(set) var counters = VesperNativeFramePipelineCounters()
-    private(set) var isClosed = false
-    private(set) var didStart = false
-    private(set) var durationMs: Int64?
-    private(set) var seekable = false
-    private(set) var hasAudioTrack = false
-    private(set) var selectedVideoStreamIndex: Int?
-    private(set) var selectedVideoMediaKind = "pending"
-    private(set) var audioStreamIndex: Int?
-    private(set) var audioMediaKind = "pending"
-    private(set) var clockSource = "pending"
-    private(set) var audioDecoderKind = "pending"
-    private(set) var audioOutputKind = "pending"
-    private(set) var audioPipelineKind = "pending"
-    private(set) var audioRateControlKind = "pending"
-    private(set) var audioOutputIssue: String?
-    var onFramePresented: ((VesperNativeFramePipelineTimeline) -> Void)?
-    var onPlaybackEnded: (() -> Void)?
+actor VesperNativeFramePipelineRuntime {
+    enum CommandResult {
+        case success([String: Any])
+        case failure(VesperNativeFramePipelineOperationError)
+        case ignored
+    }
+
+    private weak var owner: VesperNativeFramePipelineSession?
+    private let backend: VesperNativeFramePipelineBackend
     private var handle: UInt64 = 0
     private var displayTask: Task<Void, Never>?
+    private var isClosed = false
     private var isPlaying = false
     private var playbackRate: Float = 1.0
     private var playbackAnchorMediaUs: Int64?
     private var playbackAnchorHostNs: UInt64?
     private var frameLeaseGeneration: UInt64 = 1
-    private let backend: VesperNativeFramePipelineBackend
-    private let audioOutput: VesperNativeFrameAudioOutputing
-    private var nativeFramePresenter: VesperNativeFramePresenting
-    private let usesSurfaceHostPresenter: Bool
-    private var audioBridgeState: VesperNativeFrameAudioBridgeState?
 
     init(
-        source: VesperPlayerSource,
-        configuration: VesperNativeFramePipelineConfiguration,
-        sourceNormalizer: VesperSourceNormalizerConfiguration,
-        surfaceHost: PlayerSurfaceView,
-        backend: VesperNativeFramePipelineBackend? = nil,
-        audioOutput: VesperNativeFrameAudioOutputing? = nil,
-        nativeFramePresenter: VesperNativeFramePresenting? = nil
+        owner: VesperNativeFramePipelineSession,
+        backend: VesperNativeFramePipelineBackend,
+        openedHandle: UInt64 = 0
     ) {
-        self.source = source
-        self.configuration = configuration
-        self.sourceNormalizer = sourceNormalizer
-        self.surfaceHost = surfaceHost
-        self.backend = backend ?? VesperFfiNativeFramePipelineBackend()
-        self.audioOutput = audioOutput ?? VesperNativeFrameAudioOutput()
-        self.nativeFramePresenter = nativeFramePresenter ?? surfaceHost
-        usesSurfaceHostPresenter = nativeFramePresenter == nil
-        self.audioOutput.onStateChanged = { [weak self] state in
-            guard let self, !self.isClosed else { return }
-            self.applyAudioBridgeState(state)
-            if state.outputKind == "unavailable", let issue = state.issue {
-                iosHostLog("native audio pipeline unavailable; using video clock reason=\(issue)")
-            }
-        }
+        self.owner = owner
+        self.backend = backend
+        handle = openedHandle
     }
 
-    var route: String {
-        "sdkManagedNativeFrame"
+    func bind(openedHandle: UInt64) {
+        handle = openedHandle
     }
 
-    var status: String {
-        didStart ? "running" : "loaded"
-    }
-
-    var participation: String {
-        didStart ? "participated" : "selected"
-    }
-
-    func start() -> Result<VesperNativeFramePipelineSession, VesperNativeFramePipelineStartupError> {
-        guard !isClosed else {
-            let issue = VesperNativeFramePipelineIssue(
-                kind: .sessionClosed,
-                message: "iOS native-frame pipeline session is already closed."
-            )
-            return .failure(
-                VesperNativeFramePipelineStartupError(issue: issue)
-            )
-        }
-        guard handle == 0 else {
-            didStart = true
-            return .success(self)
-        }
-
-        let openResult = backend.open(
-            source: source,
-            configuration: configuration,
-            sourceNormalizer: sourceNormalizer
-        )
-        guard case .success(let opened) = openResult else {
-            if case .failure(let error) = openResult {
-                return .failure(error)
-            }
-            return .failure(
-                VesperNativeFramePipelineStartupError(
-                    issue: VesperNativeFramePipelineIssue.classifyStartupFailure(
-                        "iOS native-frame pipeline open failed."
-                    )
-                )
-            )
-        }
-
-        handle = opened.handle
-        didStart = true
-        mergeStatus(from: opened.status)
-        let audioState = audioOutput.prepare(source: source, hasAudioTrack: hasAudioTrack)
-        applyAudioBridgeState(audioState)
-        if audioState.outputKind == "swiftNativeAudioBridge" {
-            iosHostLog("native audio pipeline configured audioPipeline=\(audioPipelineKind) source=\(source.uri)")
-        } else {
-            let reason = audioState.issue.map { " reason=\($0)" } ?? ""
-            iosHostLog(
-                "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); using video clock source=\(source.uri)\(reason)"
-            )
-        }
-        return .success(self)
-    }
-
-    func rebindSurfaceHost(_ nextSurfaceHost: PlayerSurfaceView) {
-        guard !isClosed else { return }
-        if surfaceHost === nextSurfaceHost {
-            nextSurfaceHost.setNativeFramePresentationEnabled(true)
-            return
-        }
-
-        surfaceHost.setNativeFramePresentationEnabled(false)
-        surfaceHost = nextSurfaceHost
-        if usesSurfaceHostPresenter {
-            nativeFramePresenter = nextSurfaceHost
-        }
-        nextSurfaceHost.setNativeFramePresentationEnabled(true)
-    }
-
-    func play(rate: Float = 1.0) {
-        guard didStart, !isClosed else { return }
+    func play(rate: Float) {
+        guard handle != 0, !isClosed else { return }
         playbackRate = max(rate, 0.01)
         isPlaying = true
         playbackAnchorMediaUs = nil
         playbackAnchorHostNs = nil
-        audioOutput.play(rate: playbackRate)
         if displayTask == nil {
-            displayTask = Task { @MainActor [weak self] in
+            displayTask = Task { [weak self] in
                 await self?.displayLoop()
             }
         }
@@ -747,87 +647,53 @@ final class VesperNativeFramePipelineSession {
 
     func pause() {
         isPlaying = false
-        audioOutput.pause()
-    }
-
-    func stop() {
-        isPlaying = false
-        audioOutput.stop()
-        seek(toMs: 0)
-    }
-
-    func flush() {
-        guard handle != 0 else { return }
-        isPlaying = false
-        playbackAnchorMediaUs = nil
-        playbackAnchorHostNs = nil
-        invalidateFrameLeases()
-        audioOutput.pause()
-        switch backend.flush(handle: handle) {
-        case .success(let object):
-            mergeStatus(from: object)
-        case .failure(let error):
-            iosHostLog("native-frame flush failed: \(error.message)")
-        }
     }
 
     func setPlaybackRate(_ rate: Float) {
         playbackRate = max(rate, 0.01)
-        audioOutput.setPlaybackRate(playbackRate)
         playbackAnchorMediaUs = nil
         playbackAnchorHostNs = nil
     }
 
-    func applyAudioBridgeState(_ state: VesperNativeFrameAudioBridgeState) {
-        audioBridgeState = state
-        applyAudioBridgeStateValues(state)
-    }
-
-    @discardableResult
-    func seek(toMs positionMs: Int64) -> Bool {
-        guard handle != 0 else { return false }
-        guard seekable else {
-            iosHostLog("native-frame seek failed: source is not seekable")
-            return false
-        }
-        let targetMs = clampedSeekPositionMs(positionMs)
-        let wasPlaying = isPlaying
+    func flush() -> CommandResult {
+        guard handle != 0, !isClosed else { return .ignored }
         isPlaying = false
         playbackAnchorMediaUs = nil
         playbackAnchorHostNs = nil
-        audioOutput.pause()
         invalidateFrameLeases()
-        switch backend.seek(handle: handle, positionMs: targetMs) {
+        switch backend.flush(handle: handle) {
         case .success(let object):
-            mergeStatus(from: object)
-            audioOutput.seek(toMs: targetMs)
-            onFramePresented?(
-                VesperNativeFramePipelineTimeline(
-                    positionMs: targetMs,
-                    durationMs: durationMs
-                )
-            )
-            if wasPlaying {
-                isPlaying = true
-                audioOutput.play(rate: playbackRate)
-            }
-            return true
+            return .success(object)
         case .failure(let error):
-            iosHostLog("native-frame seek failed: \(error.message)")
-            if wasPlaying {
-                isPlaying = true
-                audioOutput.play(rate: playbackRate)
-            }
-            return false
+            return .failure(error)
         }
     }
 
-    private func clampedSeekPositionMs(_ positionMs: Int64) -> Int64 {
-        let lowerBounded = max(positionMs, 0)
-        guard let durationMs, durationMs > 0 else {
-            return lowerBounded
+    func seek(positionMs: Int64) -> CommandResult {
+        guard handle != 0, !isClosed else { return .ignored }
+        isPlaying = false
+        playbackAnchorMediaUs = nil
+        playbackAnchorHostNs = nil
+        invalidateFrameLeases()
+        switch backend.seek(handle: handle, positionMs: positionMs) {
+        case .success(let object):
+            return .success(object)
+        case .failure(let error):
+            return .failure(error)
         }
-        return min(lowerBounded, durationMs)
+    }
+
+    func close() {
+        guard !isClosed else { return }
+        isClosed = true
+        isPlaying = false
+        invalidateFrameLeases()
+        displayTask?.cancel()
+        displayTask = nil
+        if handle != 0 {
+            backend.close(handle: handle)
+            handle = 0
+        }
     }
 
     private func displayLoop() async {
@@ -845,42 +711,40 @@ final class VesperNativeFramePipelineSession {
                 try? await Task.sleep(nanoseconds: 5_000_000)
                 continue
             case .endOfStream:
-                handleEndOfStream()
+                await owner?.runtimeDidReachEndOfStream()
+                pauseForEndOfStream()
                 continue
             }
             await waitForPresentationTime(frame.presentationTimeUs)
             guard frameLeaseIsCurrent(frame) else {
+                release(frame: frame, presented: false)
                 continue
             }
             guard isPlaying else {
                 release(frame: frame, presented: false)
                 continue
             }
-            let presented = await present(frame: frame)
+            let presented = await owner?.runtimePresent(frame: frame) ?? false
             guard frameLeaseIsCurrent(frame) else {
+                release(frame: frame, presented: false)
                 continue
             }
             release(frame: frame, presented: presented)
             if presented, isPlaying {
-                onFramePresented?(
-                    VesperNativeFramePipelineTimeline(
-                        positionMs: timelinePositionMs(
-                            framePresentationTimeUs: frame.presentationTimeUs
-                        ),
-                        durationMs: durationMs
-                    )
+                let timeline = await owner?.runtimeTimeline(
+                    framePresentationTimeUs: frame.presentationTimeUs
                 )
+                if let timeline {
+                    await owner?.runtimeDidPresentFrame(timeline)
+                }
             }
         }
     }
 
-    func timelinePositionMs(framePresentationTimeUs presentationTimeUs: Int64) -> Int64 {
-        let videoPositionMs = max(presentationTimeUs / 1_000, 0)
-        guard clockSource == "swiftNativeAudioBridge",
-              let audioPositionMs = audioOutput.currentPositionMs else {
-            return videoPositionMs
-        }
-        return max(audioPositionMs, 0)
+    private func pauseForEndOfStream() {
+        isPlaying = false
+        playbackAnchorMediaUs = nil
+        playbackAnchorHostNs = nil
     }
 
     private func waitForPresentationTime(_ presentationTimeUs: Int64) async {
@@ -920,7 +784,9 @@ final class VesperNativeFramePipelineSession {
             isPlaying = false
             return .pending
         }
-        updateCounters(from: object["counters"] as? [String: Any])
+        Task { @MainActor [weak owner] in
+            owner?.runtimeMergeStatus(object)
+        }
         let status = object["status"] as? String
         if status == "endOfStream" {
             return .endOfStream
@@ -945,13 +811,417 @@ final class VesperNativeFramePipelineSession {
         )
     }
 
+    private func release(frame: VesperNativeFramePipelineFrame, presented: Bool) {
+        guard handle != 0, !isClosed else { return }
+        let shouldReportPresented = presented && frameLeaseIsCurrent(frame)
+        switch backend.releaseFrame(
+            handle: handle,
+            frameHandle: frame.frameHandle,
+            presented: shouldReportPresented
+        ) {
+        case .success(let object):
+            Task { @MainActor [weak owner] in
+                owner?.runtimeMergeStatus(object)
+            }
+        case .failure(let error):
+            iosHostLog("native-frame release failed: \(error.message)")
+        }
+    }
+
+    private func invalidateFrameLeases() {
+        frameLeaseGeneration = frameLeaseGeneration &+ 1
+        if frameLeaseGeneration == 0 {
+            frameLeaseGeneration = 1
+        }
+    }
+
+    private func frameLeaseIsCurrent(_ frame: VesperNativeFramePipelineFrame) -> Bool {
+        !isClosed && handle != 0 && frame.leaseGeneration == frameLeaseGeneration
+    }
+}
+
+@MainActor
+private final class VesperNativeFramePipelineCommandQueue {
+    struct Token: Sendable {
+        let generation: UInt64
+        let sequence: UInt64
+    }
+
+    private var tail: Task<Void, Never>?
+    private var generation: UInt64 = 1
+    private var nextSequence: UInt64 = 1
+    private var latestSequence: UInt64 = 0
+
+    @discardableResult
+    func submit(_ operation: @escaping @Sendable (Token) async -> Void) -> Token {
+        let token = Token(generation: generation, sequence: nextSequence)
+        latestSequence = token.sequence
+        nextSequence &+= 1
+        if nextSequence == 0 {
+            nextSequence = 1
+        }
+        let previous = tail
+        tail = Task {
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            guard self.isCurrentGeneration(token) else { return }
+            await operation(token)
+        }
+        return token
+    }
+
+    func cancel() {
+        generation &+= 1
+        if generation == 0 {
+            generation = 1
+        }
+        nextSequence = 1
+        latestSequence = 0
+        tail?.cancel()
+        tail = nil
+    }
+
+    func isLatest(_ token: Token) -> Bool {
+        token.generation == generation && token.sequence == latestSequence
+    }
+
+    private func isCurrentGeneration(_ token: Token) -> Bool {
+        token.generation == generation
+    }
+}
+
+@MainActor
+final class VesperNativeFramePipelineSession {
+    let id = UUID()
+    let source: VesperPlayerSource
+    let configuration: VesperNativeFramePipelineConfiguration
+    let sourceNormalizer: VesperSourceNormalizerConfiguration
+    private(set) var surfaceHost: PlayerSurfaceView
+    private(set) var counters = VesperNativeFramePipelineCounters()
+    private(set) var isClosed = false
+    private(set) var didStart = false
+    private(set) var durationMs: Int64?
+    private(set) var seekable = false
+    private(set) var hasAudioTrack = false
+    private(set) var selectedVideoStreamIndex: Int?
+    private(set) var selectedVideoMediaKind = "pending"
+    private(set) var videoOutputFormat = "pending"
+    private(set) var videoTransfer: String?
+    private(set) var videoBitDepth: Int?
+    private(set) var hdrKind: String?
+    private(set) var dolbyVisionMode: String?
+    private(set) var audioStreamIndex: Int?
+    private(set) var audioMediaKind = "pending"
+    private(set) var clockSource = "pending"
+    private(set) var audioDecoderKind = "pending"
+    private(set) var audioOutputKind = "pending"
+    private(set) var audioPipelineKind = "pending"
+    private(set) var audioRateControlKind = "pending"
+    private(set) var audioOutputIssue: String?
+    var onFramePresented: ((VesperNativeFramePipelineTimeline) -> Void)?
+    var onPlaybackEnded: (() -> Void)?
+    var onPlaybackFailed: ((VesperNativeFramePipelineIssue) -> Void)?
+    private var isPlaying = false
+    private var playbackRate: Float = 1.0
+    private let backend: VesperNativeFramePipelineBackend
+    private var runtime: VesperNativeFramePipelineRuntime?
+    private let audioOutput: VesperNativeFrameAudioOutputing
+    private var nativeFramePresenter: VesperNativeFramePresenting
+    private let usesSurfaceHostPresenter: Bool
+    private var audioBridgeState: VesperNativeFrameAudioBridgeState?
+    private let commandQueue = VesperNativeFramePipelineCommandQueue()
+
+    init(
+        source: VesperPlayerSource,
+        configuration: VesperNativeFramePipelineConfiguration,
+        sourceNormalizer: VesperSourceNormalizerConfiguration,
+        surfaceHost: PlayerSurfaceView,
+        backend: VesperNativeFramePipelineBackend? = nil,
+        audioOutput: VesperNativeFrameAudioOutputing? = nil,
+        nativeFramePresenter: VesperNativeFramePresenting? = nil
+    ) {
+        self.source = source
+        self.configuration = configuration
+        self.sourceNormalizer = sourceNormalizer
+        self.surfaceHost = surfaceHost
+        self.backend = backend ?? VesperFfiNativeFramePipelineBackend()
+        self.audioOutput = audioOutput ?? VesperNativeFrameAudioOutput()
+        self.nativeFramePresenter = nativeFramePresenter ?? surfaceHost
+        usesSurfaceHostPresenter = nativeFramePresenter == nil
+        self.audioOutput.onStateChanged = { [weak self] state in
+            guard let self, !self.isClosed else { return }
+            self.applyAudioBridgeState(state)
+            if state.outputKind == "unavailable", let issue = state.issue {
+                if state.hasAudioTrack {
+                    iosHostLog("native audio pipeline unavailable; failing playback reason=\(issue)")
+                    self.failPlaybackForAudioBridge(reason: issue)
+                } else {
+                    iosHostLog("native audio pipeline unavailable; using video clock reason=\(issue)")
+                }
+            }
+        }
+    }
+
+    var route: String {
+        "sdkManagedNativeFrame"
+    }
+
+    var status: String {
+        didStart ? "running" : "loaded"
+    }
+
+    var participation: String {
+        didStart ? "participated" : "selected"
+    }
+
+    func start() -> Result<VesperNativeFramePipelineSession, VesperNativeFramePipelineStartupError> {
+        guard !isClosed else {
+            let issue = VesperNativeFramePipelineIssue(
+                kind: .sessionClosed,
+                message: "iOS native-frame pipeline session is already closed."
+            )
+            return .failure(
+                VesperNativeFramePipelineStartupError(issue: issue)
+            )
+        }
+        guard !didStart else {
+            didStart = true
+            return .success(self)
+        }
+
+        let openResult = backend.open(
+            source: source,
+            configuration: configuration,
+            sourceNormalizer: sourceNormalizer
+        )
+        guard case .success(let opened) = openResult else {
+            if case .failure(let error) = openResult {
+                return .failure(error)
+            }
+            return .failure(
+                VesperNativeFramePipelineStartupError(
+                    issue: VesperNativeFramePipelineIssue.classifyStartupFailure(
+                        "iOS native-frame pipeline open failed."
+                    )
+                )
+            )
+        }
+
+        didStart = true
+        runtime = VesperNativeFramePipelineRuntime(
+            owner: self,
+            backend: backend,
+            openedHandle: opened.handle
+        )
+        mergeStatus(from: opened.status)
+        let audioState = audioOutput.prepare(source: source, hasAudioTrack: hasAudioTrack)
+        applyAudioBridgeState(audioState)
+        if audioState.outputKind == "swiftNativeAudioBridge" {
+            iosHostLog("native audio pipeline configured audioPipeline=\(audioPipelineKind) source=\(source.uri)")
+        } else if audioState.hasAudioTrack {
+            let reason = audioState.issue ?? "Swift native audio bridge is unavailable."
+            iosHostLog(
+                "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); playback cannot start source=\(source.uri) reason=\(reason)"
+            )
+            runtime = nil
+            backend.close(handle: opened.handle)
+            didStart = false
+            let issue = VesperNativeFramePipelineIssue(
+                kind: .nativeAudioBridgeUnavailable,
+                message: "nativeFrameIssueKind=nativeAudioBridgeUnavailable; \(reason)"
+            )
+            return .failure(VesperNativeFramePipelineStartupError(issue: issue))
+        } else {
+            let reason = audioState.issue.map { " reason=\($0)" } ?? ""
+            iosHostLog(
+                "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); using video clock source=\(source.uri)\(reason)"
+            )
+        }
+        return .success(self)
+    }
+
+    func rebindSurfaceHost(_ nextSurfaceHost: PlayerSurfaceView) {
+        guard !isClosed else { return }
+        if surfaceHost === nextSurfaceHost {
+            nextSurfaceHost.setNativeFramePresentationEnabled(true)
+            return
+        }
+
+        surfaceHost.setNativeFramePresentationEnabled(false)
+        surfaceHost = nextSurfaceHost
+        if usesSurfaceHostPresenter {
+            nativeFramePresenter = nextSurfaceHost
+        }
+        nextSurfaceHost.setNativeFramePresentationEnabled(true)
+    }
+
+    func play(rate: Float = 1.0) {
+        guard didStart, !isClosed else { return }
+        playbackRate = max(rate, 0.01)
+        isPlaying = true
+        audioOutput.play(rate: playbackRate)
+        guard let runtime else { return }
+        commandQueue.submit { [runtime, playbackRate] _ in
+            await runtime.play(rate: playbackRate)
+        }
+    }
+
+    func pause() {
+        isPlaying = false
+        audioOutput.pause()
+        guard let runtime else { return }
+        commandQueue.submit { [runtime] _ in
+            await runtime.pause()
+        }
+    }
+
+    func stop() {
+        isPlaying = false
+        audioOutput.stop()
+        seek(toMs: 0)
+    }
+
+    func flush() {
+        guard didStart else { return }
+        isPlaying = false
+        audioOutput.pause()
+        guard let runtime else { return }
+        commandQueue.submit { [self, runtime] token in
+            let result = await runtime.flush()
+            await MainActor.run {
+                guard commandQueue.isLatest(token) else { return }
+                applyRuntimeCommandResult(result, operation: "flush")
+            }
+        }
+    }
+
+    func setPlaybackRate(_ rate: Float) {
+        playbackRate = max(rate, 0.01)
+        audioOutput.setPlaybackRate(playbackRate)
+        guard let runtime else { return }
+        commandQueue.submit { [runtime, playbackRate] _ in
+            await runtime.setPlaybackRate(playbackRate)
+        }
+    }
+
+    func applyAudioBridgeState(_ state: VesperNativeFrameAudioBridgeState) {
+        audioBridgeState = state
+        applyAudioBridgeStateValues(state)
+    }
+
+    @discardableResult
+    func seek(
+        toMs positionMs: Int64,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) -> Bool {
+        guard didStart else { return false }
+        guard seekable else {
+            iosHostLog("native-frame seek failed: source is not seekable")
+            return false
+        }
+        let targetMs = clampedSeekPositionMs(positionMs)
+        let wasPlaying = isPlaying
+        isPlaying = false
+        audioOutput.pause()
+        guard let runtime else { return false }
+        commandQueue.submit { [self, runtime] token in
+            let result = await runtime.seek(positionMs: targetMs)
+            await MainActor.run {
+                guard commandQueue.isLatest(token) else {
+                    completion?(false)
+                    return
+                }
+                let didApply = applyRuntimeSeekResult(
+                    result,
+                    targetMs: targetMs,
+                    resumePlayback: wasPlaying
+                )
+                completion?(didApply)
+            }
+        }
+        return true
+    }
+
+    private func applyRuntimeCommandResult(
+        _ result: VesperNativeFramePipelineRuntime.CommandResult,
+        operation: String
+    ) {
+        guard !isClosed else { return }
+        switch result {
+        case .success(let object):
+            mergeStatus(from: object)
+        case .failure(let error):
+            iosHostLog("native-frame \(operation) failed: \(error.message)")
+        case .ignored:
+            break
+        }
+    }
+
+    private func applyRuntimeSeekResult(
+        _ result: VesperNativeFramePipelineRuntime.CommandResult,
+        targetMs: Int64,
+        resumePlayback: Bool
+    ) -> Bool {
+        guard !isClosed else { return false }
+        switch result {
+        case .success(let object):
+            mergeStatus(from: object)
+            audioOutput.seek(toMs: targetMs)
+            onFramePresented?(
+                VesperNativeFramePipelineTimeline(
+                    positionMs: targetMs,
+                    durationMs: durationMs
+                )
+            )
+            if resumePlayback {
+                isPlaying = true
+                audioOutput.play(rate: playbackRate)
+                if let runtime {
+                    commandQueue.submit { [runtime, playbackRate] _ in
+                        await runtime.play(rate: playbackRate)
+                    }
+                }
+            }
+            return true
+        case .failure(let error):
+            iosHostLog("native-frame seek failed: \(error.message)")
+            if resumePlayback {
+                isPlaying = true
+                audioOutput.play(rate: playbackRate)
+                if let runtime {
+                    commandQueue.submit { [runtime, playbackRate] _ in
+                        await runtime.play(rate: playbackRate)
+                    }
+                }
+            }
+            return false
+        case .ignored:
+            return false
+        }
+    }
+
+    private func clampedSeekPositionMs(_ positionMs: Int64) -> Int64 {
+        let lowerBounded = max(positionMs, 0)
+        guard let durationMs, durationMs > 0 else {
+            return lowerBounded
+        }
+        return min(lowerBounded, durationMs)
+    }
+
+    func timelinePositionMs(framePresentationTimeUs presentationTimeUs: Int64) -> Int64 {
+        let videoPositionMs = max(presentationTimeUs / 1_000, 0)
+        guard clockSource == "swiftNativeAudioBridge",
+              let audioPositionMs = audioOutput.currentPositionMs else {
+            return videoPositionMs
+        }
+        return max(audioPositionMs, 0)
+    }
+
     /// Stops the display loop and reports end-of-playback once the SDK pipeline
     /// drains. A seek clears the Rust-side EOF state and bumps the frame lease, so
     /// `isPlaying` resumes the loop and a later EOF reports again.
-    private func handleEndOfStream() {
+    func runtimeDidReachEndOfStream() {
         isPlaying = false
-        playbackAnchorMediaUs = nil
-        playbackAnchorHostNs = nil
         audioOutput.pause()
         if let durationMs {
             onFramePresented?(
@@ -964,22 +1234,42 @@ final class VesperNativeFramePipelineSession {
         onPlaybackEnded?()
     }
 
-    private func present(frame: VesperNativeFramePipelineFrame) async -> Bool {
-        await nativeFramePresenter.presentNativeFrame(pixelBufferAddress: frame.pixelBufferAddress)
+    private func failPlaybackForAudioBridge(reason: String) {
+        guard !isClosed else { return }
+        isPlaying = false
+        audioOutput.pause()
+        let runtime = runtime
+        commandQueue.submit { [runtime] _ in
+            await runtime?.pause()
+        }
+        onPlaybackFailed?(
+            VesperNativeFramePipelineIssue(
+                kind: .nativeAudioBridgeUnavailable,
+                message: reason
+            )
+        )
     }
 
-    private func release(frame: VesperNativeFramePipelineFrame, presented: Bool) {
-        guard handle != 0, frameLeaseIsCurrent(frame) else { return }
-        switch backend.releaseFrame(
-            handle: handle,
-            frameHandle: frame.frameHandle,
-            presented: presented
-        ) {
-        case .success(let object):
-            mergeStatus(from: object)
-        case .failure(let error):
-            iosHostLog("native-frame release failed: \(error.message)")
-        }
+    func runtimePresent(frame: VesperNativeFramePipelineFrame) async -> Bool {
+        guard !isClosed else { return false }
+        return await nativeFramePresenter.presentNativeFrame(pixelBufferAddress: frame.pixelBufferAddress)
+    }
+
+    func runtimeTimeline(framePresentationTimeUs presentationTimeUs: Int64) -> VesperNativeFramePipelineTimeline {
+        VesperNativeFramePipelineTimeline(
+            positionMs: timelinePositionMs(framePresentationTimeUs: presentationTimeUs),
+            durationMs: durationMs
+        )
+    }
+
+    func runtimeDidPresentFrame(_ timeline: VesperNativeFramePipelineTimeline) {
+        guard !isClosed, isPlaying else { return }
+        onFramePresented?(timeline)
+    }
+
+    func runtimeMergeStatus(_ object: [String: Any]) {
+        guard !isClosed else { return }
+        mergeStatus(from: object)
     }
 
     private func mergeStatus(from object: [String: Any]) {
@@ -1002,6 +1292,25 @@ final class VesperNativeFramePipelineSession {
         }
         if let value = object["selectedVideoMediaKind"] as? String, !value.isEmpty {
             selectedVideoMediaKind = value
+        }
+        if let value = object["videoOutputFormat"] as? String, !value.isEmpty {
+            videoOutputFormat = value
+        }
+        if let value = object["videoTransfer"] as? String, !value.isEmpty {
+            videoTransfer = value
+        }
+        if let value = object["videoBitDepth"] as? NSNumber {
+            videoBitDepth = value.intValue
+        } else if let value = object["videoBitDepth"] as? Int {
+            videoBitDepth = value
+        } else if let value = object["videoBitDepth"] as? String, let parsed = Int(value) {
+            videoBitDepth = parsed
+        }
+        if let value = object["hdrKind"] as? String, !value.isEmpty {
+            hdrKind = value
+        }
+        if let value = object["dolbyVisionMode"] as? String, !value.isEmpty {
+            dolbyVisionMode = value
         }
         if let value = object["audioStreamIndex"] as? NSNumber {
             audioStreamIndex = value.intValue
@@ -1071,38 +1380,29 @@ final class VesperNativeFramePipelineSession {
         guard !isClosed else { return }
         isClosed = true
         isPlaying = false
-        displayTask?.cancel()
-        displayTask = nil
-        if handle != 0 {
-            backend.close(handle: handle)
-            handle = 0
+        let runtime = runtime
+        self.runtime = nil
+        commandQueue.cancel()
+        commandQueue.submit { [runtime] _ in
+            await runtime?.close()
         }
         audioOutput.close()
         onFramePresented = nil
         nativeFramePresenter.setNativeFramePresentationEnabled(false)
-    }
-
-    private func invalidateFrameLeases() {
-        frameLeaseGeneration = frameLeaseGeneration &+ 1
-        if frameLeaseGeneration == 0 {
-            frameLeaseGeneration = 1
-        }
-    }
-
-    private func frameLeaseIsCurrent(_ frame: VesperNativeFramePipelineFrame) -> Bool {
-        !isClosed && handle != 0 && frame.leaseGeneration == frameLeaseGeneration
+        onPlaybackFailed = nil
     }
 }
 
 @MainActor
-private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing {
+private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unchecked Sendable {
     private var engine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
     private var timePitch: AVAudioUnitTimePitch?
     private var asset: AVURLAsset?
     private var sourceURL: URL?
-    private var scheduledAudioFile: VesperNativeFrameAudioPcmFile?
-    private let temporaryFiles = VesperNativeFrameAudioTemporaryFileStore()
+    private var preparedAudioFormat: AVAudioFormat?
+    private var audioDecodeTask: Task<Void, Never>?
+    private var scheduledBufferGate: VesperNativeFrameAudioScheduledBufferGate?
     private let playbackGate = VesperNativeFrameAudioPlaybackGate()
     private var playbackRate: Float = 1.0
     private var isPrepared = false
@@ -1148,7 +1448,17 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
             )
         }
         sourceURL = url
-        asset = AVURLAsset(url: url)
+        let asset = AVURLAsset(url: url)
+        do {
+            preparedAudioFormat = try Self.preflightAudioFormat(asset: asset)
+        } catch {
+            return VesperNativeFrameAudioBridgeState.resolved(
+                hasAudioTrack: true,
+                bridgePrepared: false,
+                unavailableReason: "Swift native audio bridge preflight failed: \(error.localizedDescription)"
+            )
+        }
+        self.asset = asset
         isPrepared = true
         seekPositionMs = 0
         return VesperNativeFrameAudioBridgeState.resolved(
@@ -1171,14 +1481,15 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
     }
 
     func stop() {
+        audioDecodeTask?.cancel()
+        audioDecodeTask = nil
         playbackGate.cancelPlayback()
         playerNode?.stop()
         engine?.stop()
         playerNode = nil
         timePitch = nil
         engine = nil
-        scheduledAudioFile = nil
-        temporaryFiles.cleanupActiveFile()
+        scheduledBufferGate = nil
         seekPositionMs = 0
     }
 
@@ -1203,27 +1514,29 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         stop()
         asset = nil
         sourceURL = nil
+        preparedAudioFormat = nil
         isPrepared = false
     }
 
     private func rebuildAndStart() {
-        guard let asset else { return }
+        guard let asset, let preparedAudioFormat else { return }
+        audioDecodeTask?.cancel()
+        audioDecodeTask = nil
         playbackGate.cancelPlayback()
         playerNode?.stop()
         engine?.stop()
-        scheduledAudioFile = nil
-        temporaryFiles.cleanupActiveFile()
         playerNode = nil
         timePitch = nil
         self.engine = nil
+        scheduledBufferGate = nil
         let engine = AVAudioEngine()
         let playerNode = AVAudioPlayerNode()
         let timePitch = AVAudioUnitTimePitch()
         timePitch.rate = playbackRate
         engine.attach(playerNode)
         engine.attach(timePitch)
-        engine.connect(playerNode, to: timePitch, format: nil)
-        engine.connect(timePitch, to: engine.mainMixerNode, format: nil)
+        engine.connect(playerNode, to: timePitch, format: preparedAudioFormat)
+        engine.connect(timePitch, to: engine.mainMixerNode, format: preparedAudioFormat)
         do {
             try engine.start()
         } catch {
@@ -1235,21 +1548,41 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         self.playerNode = playerNode
         self.timePitch = timePitch
         let playbackGeneration = playbackGate.beginPlayback()
+        let bufferGate = VesperNativeFrameAudioScheduledBufferGate(maxQueuedBuffers: 12)
+        scheduledBufferGate = bufferGate
 
-        Task.detached(priority: .userInitiated) { [asset, seekPositionMs] in
+        audioDecodeTask = Task.detached(priority: .userInitiated) {
+            [self, asset, seekPositionMs, playerNode, bufferGate, playbackGeneration] in
             do {
-                let pcmFile = try await Self.makePcmFile(asset: asset, startMs: seekPositionMs)
-                await MainActor.run {
-                    guard self.playerNode === playerNode,
-                          self.playbackGate.isCurrent(playbackGeneration) else {
-                        VesperNativeFrameAudioTemporaryFileStore.removeFile(at: pcmFile.url)
-                        return
+                try await Self.streamPcmBuffers(asset: asset, startMs: seekPositionMs) { pcmBuffer in
+                    try bufferGate.waitUntilSlotAvailable()
+                    if Task.isCancelled {
+                        bufferGate.releaseSlot()
+                        throw CancellationError()
                     }
-                    self.temporaryFiles.replaceActiveFile(with: pcmFile.url)
-                    self.scheduledAudioFile = pcmFile
-                    playerNode.scheduleFile(pcmFile.file, at: nil)
-                    playerNode.play()
+                    let scheduled = await MainActor.run {
+                        guard self.playerNode === playerNode,
+                              self.playbackGate.isCurrent(playbackGeneration) else {
+                            return false
+                        }
+                        playerNode.scheduleBuffer(
+                            pcmBuffer,
+                            completionCallbackType: .dataConsumed
+                        ) { _ in
+                            bufferGate.releaseSlot()
+                        }
+                        if !playerNode.isPlaying {
+                            playerNode.play()
+                        }
+                        return true
+                    }
+                    if !scheduled {
+                        bufferGate.releaseSlot()
+                        throw CancellationError()
+                    }
                 }
+            } catch is CancellationError {
+                return
             } catch {
                 await MainActor.run {
                     guard self.playbackGate.isCurrent(playbackGeneration) else { return }
@@ -1263,14 +1596,15 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
     }
 
     private func markBridgeUnavailable(reason: String) {
+        audioDecodeTask?.cancel()
+        audioDecodeTask = nil
         playbackGate.cancelPlayback()
         playerNode?.stop()
         engine?.stop()
         playerNode = nil
         timePitch = nil
         engine = nil
-        scheduledAudioFile = nil
-        temporaryFiles.cleanupActiveFile()
+        scheduledBufferGate = nil
         isPrepared = false
         onStateChanged?(
             VesperNativeFrameAudioBridgeState.resolved(
@@ -1281,22 +1615,46 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         )
     }
 
-    nonisolated private static func makePcmFile(
+    nonisolated private static func preflightAudioFormat(asset: AVURLAsset) throws -> AVAudioFormat {
+        let tracks = asset.tracks(withMediaType: .audio)
+        guard let track = tracks.first else {
+            throw VesperNativeFrameAudioOutputError.noAudioTrack
+        }
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: pcmOutputSettings())
+        output.alwaysCopiesSampleData = false
+        let reader = try AVAssetReader(asset: asset)
+        guard reader.canAdd(output) else {
+            throw VesperNativeFrameAudioOutputError.readerOutputRejected
+        }
+        reader.add(output)
+        guard reader.startReading() else {
+            throw reader.error ?? VesperNativeFrameAudioOutputError.readerStartFailed
+        }
+        defer {
+            reader.cancelReading()
+        }
+        while let sampleBuffer = output.copyNextSampleBuffer() {
+            if let format = pcmAudioFormat(from: sampleBuffer) {
+                return format
+            }
+        }
+        if reader.status == .failed {
+            throw reader.error ?? VesperNativeFrameAudioOutputError.readerFailed
+        }
+        throw VesperNativeFrameAudioOutputError.readerProducedNoAudio
+    }
+
+    nonisolated private static func streamPcmBuffers(
         asset: AVURLAsset,
-        startMs: Int64
-    ) async throws -> VesperNativeFrameAudioPcmFile {
+        startMs: Int64,
+        onBuffer: (AVAudioPCMBuffer) async throws -> Void
+    ) async throws {
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         guard let track = tracks.first else {
             throw VesperNativeFrameAudioOutputError.noAudioTrack
         }
-        let outputSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsNonInterleaved: false,
-        ]
         let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: pcmOutputSettings())
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else {
             throw VesperNativeFrameAudioOutputError.readerOutputRejected
@@ -1309,39 +1667,36 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         guard reader.startReading() else {
             throw reader.error ?? VesperNativeFrameAudioOutputError.readerStartFailed
         }
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vesper-native-audio-\(UUID().uuidString).caf")
-        do {
-            var audioFile: AVAudioFile?
-            while let sampleBuffer = output.copyNextSampleBuffer() {
-                if let pcmBuffer = pcmBuffer(from: sampleBuffer) {
-                    if audioFile == nil {
-                        audioFile = try AVAudioFile(
-                            forWriting: outputURL,
-                            settings: pcmBuffer.format.settings
-                        )
-                    }
-                    try audioFile?.write(from: pcmBuffer)
-                }
+        var producedAudio = false
+        while !Task.isCancelled, let sampleBuffer = output.copyNextSampleBuffer() {
+            if let pcmBuffer = pcmBuffer(from: sampleBuffer) {
+                producedAudio = true
+                try await onBuffer(pcmBuffer)
             }
-            if reader.status == .failed {
-                throw reader.error ?? VesperNativeFrameAudioOutputError.readerFailed
-            }
-            guard audioFile != nil else {
-                throw VesperNativeFrameAudioOutputError.readerProducedNoAudio
-            }
-            audioFile = nil
-            return VesperNativeFrameAudioPcmFile(
-                file: try AVAudioFile(forReading: outputURL),
-                url: outputURL
-            )
-        } catch {
-            VesperNativeFrameAudioTemporaryFileStore.removeFile(at: outputURL)
-            throw error
+        }
+        if Task.isCancelled {
+            reader.cancelReading()
+            throw CancellationError()
+        }
+        if reader.status == .failed {
+            throw reader.error ?? VesperNativeFrameAudioOutputError.readerFailed
+        }
+        guard producedAudio else {
+            throw VesperNativeFrameAudioOutputError.readerProducedNoAudio
         }
     }
 
-    nonisolated private static func pcmBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
+    nonisolated private static func pcmOutputSettings() -> [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: true,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+    }
+
+    nonisolated private static func pcmAudioFormat(from sampleBuffer: CMSampleBuffer) -> AVAudioFormat? {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
             return nil
         }
@@ -1354,19 +1709,22 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         guard streamDescription.mSampleRate > 0, channelCount > 0 else {
             return nil
         }
+        return AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: streamDescription.mSampleRate,
+            channels: channelCount,
+            interleaved: false
+        )
+    }
+
+    nonisolated private static func pcmBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
+        guard let audioFormat = pcmAudioFormat(from: sampleBuffer) else { return nil }
+        let channelCount = audioFormat.channelCount
         let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
         guard frameCount > 0 else {
             return nil
         }
-        guard
-            let audioFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: streamDescription.mSampleRate,
-                channels: channelCount,
-                interleaved: true
-            ),
-            let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frameCount)
-        else {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frameCount) else {
             return nil
         }
         buffer.frameLength = frameCount
@@ -1406,75 +1764,74 @@ private final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputin
         guard status == noErr else { return nil }
         let sourceBuffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
         let targetBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-        guard
-            let targetData = targetBuffers.first?.mData,
-            let firstSourceBuffer = sourceBuffers.first,
-            let firstSourceData = firstSourceBuffer.mData
-        else {
-            return nil
-        }
         let channelCountInt = Int(channelCount)
-        let targetByteCount = min(
-            Int(frameCount) * channelCountInt * MemoryLayout<Float>.size,
-            Int(targetBuffers[0].mDataByteSize)
-        )
-        memset(targetData, 0, targetByteCount)
-        if sourceBuffers.count == 1 {
-            memcpy(
-                targetData,
-                firstSourceData,
-                min(Int(firstSourceBuffer.mDataByteSize), targetByteCount)
-            )
-            return buffer
-        }
-        guard sourceBuffers.count == channelCountInt else {
+        guard targetBuffers.count == channelCountInt else {
             return nil
         }
-        let targetSamples = targetData.assumingMemoryBound(to: Float.self)
         for channelIndex in 0..<channelCountInt {
-            guard let sourceData = sourceBuffers[channelIndex].mData else {
+            guard let targetData = targetBuffers[channelIndex].mData else {
                 return nil
             }
-            let sourceSamples = sourceData.assumingMemoryBound(to: Float.self)
-            let sourceFrameCount = min(
-                Int(frameCount),
-                Int(sourceBuffers[channelIndex].mDataByteSize) / MemoryLayout<Float>.size
-            )
+            memset(targetData, 0, Int(targetBuffers[channelIndex].mDataByteSize))
+        }
+        if sourceBuffers.count == channelCountInt {
+            for channelIndex in 0..<channelCountInt {
+                guard
+                    let sourceData = sourceBuffers[channelIndex].mData,
+                    let targetData = targetBuffers[channelIndex].mData
+                else {
+                    return nil
+                }
+                memcpy(
+                    targetData,
+                    sourceData,
+                    min(
+                        Int(sourceBuffers[channelIndex].mDataByteSize),
+                        Int(targetBuffers[channelIndex].mDataByteSize)
+                    )
+                )
+            }
+            return buffer
+        }
+        guard sourceBuffers.count == 1,
+              let sourceData = sourceBuffers.first?.mData else {
+            return nil
+        }
+        let sourceSamples = sourceData.assumingMemoryBound(to: Float.self)
+        let sourceFrameCount = min(
+            Int(frameCount),
+            Int(sourceBuffers[0].mDataByteSize) / (channelCountInt * MemoryLayout<Float>.size)
+        )
+        for channelIndex in 0..<channelCountInt {
+            guard let targetData = targetBuffers[channelIndex].mData else {
+                return nil
+            }
+            let targetSamples = targetData.assumingMemoryBound(to: Float.self)
             for frameIndex in 0..<sourceFrameCount {
-                targetSamples[frameIndex * channelCountInt + channelIndex] = sourceSamples[frameIndex]
+                targetSamples[frameIndex] = sourceSamples[frameIndex * channelCountInt + channelIndex]
             }
         }
         return buffer
     }
 }
 
-private struct VesperNativeFrameAudioPcmFile {
-    let file: AVAudioFile
-    let url: URL
-}
+final class VesperNativeFrameAudioScheduledBufferGate: @unchecked Sendable {
+    private let semaphore: DispatchSemaphore
 
-@MainActor
-final class VesperNativeFrameAudioTemporaryFileStore {
-    private let fileManager: FileManager
-    private(set) var activeFileURL: URL?
-
-    init(fileManager: FileManager = .default) {
-        self.fileManager = fileManager
+    init(maxQueuedBuffers: Int) {
+        semaphore = DispatchSemaphore(value: max(maxQueuedBuffers, 1))
     }
 
-    func replaceActiveFile(with url: URL?) {
-        cleanupActiveFile()
-        activeFileURL = url
+    func waitUntilSlotAvailable() throws {
+        while semaphore.wait(timeout: .now() + 0.05) == .timedOut {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+        }
     }
 
-    func cleanupActiveFile() {
-        guard let activeFileURL else { return }
-        Self.removeFile(at: activeFileURL, fileManager: fileManager)
-        self.activeFileURL = nil
-    }
-
-    nonisolated static func removeFile(at url: URL, fileManager: FileManager = .default) {
-        try? fileManager.removeItem(at: url)
+    func releaseSlot() {
+        semaphore.signal()
     }
 }
 
@@ -1632,8 +1989,10 @@ struct VesperNativeFramePipelineIssue: Equatable {
         case missingVideoToolboxDecoderPlugin
         case unsupportedSource
         case unsupportedCodec
+        case hdrProgrammableProcessingNotSupported
         case sessionNotPrepared
         case sessionClosed
+        case nativeAudioBridgeUnavailable
         case startupFailure
     }
 
@@ -1674,6 +2033,15 @@ struct VesperNativeFramePipelineIssue: Equatable {
         {
             return VesperNativeFramePipelineIssue(kind: .unsupportedSource, message: message)
         }
+        if normalized.contains("hdrprogrammableprocessingnotsupported") ||
+            normalized.contains("hdr programmable") ||
+            normalized.contains("sdk-managed native-frame processing is sdr-only")
+        {
+            return VesperNativeFramePipelineIssue(
+                kind: .hdrProgrammableProcessingNotSupported,
+                message: message
+            )
+        }
         if normalized.contains("unsupported codec") ||
             normalized.contains("does not support") ||
             normalized.contains("first pass only supports") ||
@@ -1687,6 +2055,15 @@ struct VesperNativeFramePipelineIssue: Equatable {
         }
         if normalized.contains("not prepared") {
             return VesperNativeFramePipelineIssue(kind: .sessionNotPrepared, message: message)
+        }
+        if normalized.contains("swift native audio bridge") ||
+            normalized.contains("native audio bridge") ||
+            normalized.contains("audio bridge")
+        {
+            return VesperNativeFramePipelineIssue(
+                kind: .nativeAudioBridgeUnavailable,
+                message: message
+            )
         }
         return VesperNativeFramePipelineIssue(kind: .startupFailure, message: message)
     }

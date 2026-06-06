@@ -513,6 +513,42 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun sourceNormalizerBypassDiagnosticsDecodeHdrResourceReason() {
+        val diagnostics =
+            listOf(
+                mapOf(
+                    "path" to "/tmp/libsource_normalizer.so",
+                    "pluginKind" to "source_normalizer",
+                    "status" to "sourceNormalizerUnsupported",
+                    "participation" to "bypassed",
+                    "message" to
+                        "HdrResourceMetadataNotPreserved: source normalizer fMP4 resource route cannot currently guarantee HDR/Dolby Vision metadata preservation for system playback",
+                )
+            )
+
+        assertEquals(1, diagnostics.size)
+        assertEquals("sourceNormalizerUnsupported", diagnostics.first()["status"])
+        assertEquals("bypassed", diagnostics.first()["participation"])
+        assertEquals("sourceNormalizerResourceBypassedForHdr", sourceNormalizerBypassReason(diagnostics))
+    }
+
+    @Test
+    fun sourceNormalizerResourceOpenObjectIsNotParsedAsBypassDiagnostics() {
+        val diagnostics =
+            parseSourceNormalizerBypassDiagnostics(
+                """
+                {
+                  "handle": 42,
+                  "outputRoute": "fmp4LocalStream",
+                  "primaryResourcePath": "/tmp/normalized.mp4"
+                }
+                """.trimIndent(),
+            )
+
+        assertNull(diagnostics)
+    }
+
+    @Test
     fun nativeFramePipelineDiagnosticsReportPresenterSurfaceState() {
         val initialSource =
             VesperPlayerSource.remote(
@@ -3555,7 +3591,8 @@ private class FakeBindings(
 private class ManualNativeFramePipelinePumpScheduler(
     private val beforeRun: (() -> Unit)? = null,
 ) : NativeFramePipelinePumpScheduler {
-    private val pendingActions = ArrayDeque<() -> Unit>()
+    override val inlineCallbacksForTests: Boolean = true
+    private var scheduledAction: (() -> Unit)? = null
     var cancelCount = 0
         private set
     var closeCount = 0
@@ -3569,13 +3606,19 @@ private class ManualNativeFramePipelinePumpScheduler(
             return
         }
         lastDelayMs = delayMs
-        pendingActions.clear()
-        pendingActions.addLast(action)
+        scheduledAction = action
+    }
+
+    override fun execute(action: () -> Unit) {
+        if (closed) {
+            return
+        }
+        action()
     }
 
     override fun cancel() {
         cancelCount += 1
-        pendingActions.clear()
+        scheduledAction = null
     }
 
     override fun close() {
@@ -3584,10 +3627,10 @@ private class ManualNativeFramePipelinePumpScheduler(
         cancel()
     }
 
-    fun hasPendingActions(): Boolean = pendingActions.isNotEmpty()
+    fun hasPendingActions(): Boolean = scheduledAction != null
 
     fun runNext() {
-        pendingActions.removeFirstOrNull()?.let { action ->
+        scheduledAction.also { scheduledAction = null }?.let { action ->
             beforeRun?.invoke()
             action()
         }
@@ -3595,6 +3638,7 @@ private class ManualNativeFramePipelinePumpScheduler(
 }
 
 private class ThreadedNativeFramePipelinePumpScheduler : NativeFramePipelinePumpScheduler {
+    override val inlineCallbacksForTests: Boolean = true
     @Volatile
     var lastError: Throwable? = null
         private set

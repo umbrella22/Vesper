@@ -84,4 +84,10 @@ public enum VesperPlayerControllerFactory {
             nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
         )
     }
+
+    public static func probePlaybackCapability(
+        _ request: VesperPlaybackCapabilityProbeRequest
+    ) -> VesperPlaybackCapabilityProbeResult {
+        VesperPlaybackCapabilityProbe.probe(request)
+    }
 }

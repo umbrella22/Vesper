@@ -97,6 +97,12 @@ class VesperPlayerController internal constructor(
 }
 
 object VesperPlayerControllerFactory {
+    fun probePlaybackCapability(
+        context: Context,
+        request: VesperPlaybackCapabilityProbeRequest,
+    ): VesperPlaybackCapabilityProbeResult =
+        VesperPlaybackCapabilityProbe.probe(request)
+
     fun createDefault(
         context: Context,
         initialSource: VesperPlayerSource? = null,

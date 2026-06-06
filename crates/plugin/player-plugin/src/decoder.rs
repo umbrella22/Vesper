@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
-    NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind, SourceNormalizerPacketMediaKind,
+    NativeFrame, NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFrameMetadata,
+    NativeFramePipelineProfile, NativeFrameReleaseTracking, NativeFrameSyncInfo,
+    NativeFrameTransform, NativeHandleKind, SourceNormalizerPacketMediaKind,
     SourceNormalizerPacketTrackInfo, VisibleRect,
 };
 
@@ -22,6 +23,8 @@ pub enum DecoderFrameFormat {
     Bgra8888,
     Yuv420p,
     Nv12,
+    /// 10-bit 4:2:0 bi-planar YUV, commonly exposed as P010.
+    P010,
     /// 32-bit floating point PCM samples.
     F32,
     /// Signed 16-bit PCM samples.
@@ -183,6 +186,10 @@ pub struct DecoderSessionConfig {
     pub require_cpu_output: bool,
     #[serde(default)]
     pub native_device_context: Option<DecoderNativeDeviceContext>,
+    #[serde(default)]
+    pub color: Option<NativeFrameColorMetadata>,
+    #[serde(default)]
+    pub hdr: Option<NativeFrameHdrMetadata>,
 }
 
 impl DecoderSessionConfig {
@@ -211,6 +218,8 @@ impl DecoderSessionConfig {
             priming_samples: track.priming_samples,
             trailing_padding_samples: track.trailing_padding_samples,
             seek_preroll_samples: track.seek_preroll_samples,
+            color: track.color.clone(),
+            hdr: track.hdr.clone(),
             prefer_hardware: true,
             require_cpu_output: true,
             ..Self::default()
@@ -499,6 +508,10 @@ pub struct DecoderNativeFrameMetadata {
     #[serde(default)]
     pub hdr_metadata: Option<String>,
     #[serde(default)]
+    pub color: Option<NativeFrameColorMetadata>,
+    #[serde(default)]
+    pub hdr: Option<NativeFrameHdrMetadata>,
+    #[serde(default)]
     pub sync_info: Option<NativeFrameSyncInfo>,
     #[serde(default)]
     pub transform: Option<NativeFrameTransform>,
@@ -525,6 +538,8 @@ impl From<DecoderNativeFrameMetadata> for NativeFrameMetadata {
             pipeline_profile: value.pipeline_profile,
             color_space: value.color_space,
             hdr_metadata: value.hdr_metadata,
+            color: value.color,
+            hdr: value.hdr,
             sync_info: value.sync_info,
             transform: value.transform,
             frame_id: value.frame_id,
@@ -550,6 +565,8 @@ impl From<NativeFrameMetadata> for DecoderNativeFrameMetadata {
             pipeline_profile: value.pipeline_profile,
             color_space: value.color_space,
             hdr_metadata: value.hdr_metadata,
+            color: value.color,
+            hdr: value.hdr,
             sync_info: value.sync_info,
             transform: value.transform,
             frame_id: value.frame_id,
@@ -826,8 +843,8 @@ mod tests {
         DecoderVisibleRect, NativeDecoderSession,
     };
     use crate::{
-        NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameSyncInfo,
-        NativeFrameTransform, NativeHandleKind,
+        NativeFrame, NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFrameMetadata,
+        NativeFramePipelineProfile, NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind,
     };
 
     fn decoder_native_frame() -> DecoderNativeFrame {
@@ -852,6 +869,19 @@ mod tests {
                 pipeline_profile: Some(NativeFramePipelineProfile::D3D11Texture2D),
                 color_space: Some("bt709".to_owned()),
                 hdr_metadata: Some("hdr10".to_owned()),
+                color: Some(NativeFrameColorMetadata {
+                    primaries: Some("bt2020".to_owned()),
+                    transfer: Some("smpte2084".to_owned()),
+                    matrix: Some("bt2020-ncl".to_owned()),
+                    range: Some("limited".to_owned()),
+                    bit_depth: Some(10),
+                }),
+                hdr: Some(NativeFrameHdrMetadata {
+                    kind: "hdr10".to_owned(),
+                    mastering_display: None,
+                    content_light: None,
+                    dolby_vision: None,
+                }),
                 sync_info: Some(NativeFrameSyncInfo {
                     kind: "d3d11_keyed_mutex".to_owned(),
                     handle: None,
@@ -1097,6 +1127,14 @@ mod tests {
             priming_samples: Some(2_112),
             trailing_padding_samples: Some(512),
             seek_preroll_samples: Some(1_024),
+            color: Some(NativeFrameColorMetadata {
+                primaries: Some("bt709".to_owned()),
+                transfer: Some("bt709".to_owned()),
+                matrix: Some("bt709".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(8),
+            }),
+            hdr: None,
             ..DecoderSessionConfig::default()
         };
 
@@ -1117,6 +1155,10 @@ mod tests {
         assert_eq!(decoded.priming_samples, Some(2_112));
         assert_eq!(decoded.trailing_padding_samples, Some(512));
         assert_eq!(decoded.seek_preroll_samples, Some(1_024));
+        assert_eq!(
+            decoded.color.as_ref().and_then(|color| color.bit_depth),
+            Some(8)
+        );
     }
 
     #[test]
@@ -1138,6 +1180,14 @@ mod tests {
             priming_samples: Some(2_112),
             trailing_padding_samples: Some(512),
             seek_preroll_samples: Some(1_024),
+            color: Some(NativeFrameColorMetadata {
+                primaries: Some("bt709".to_owned()),
+                transfer: Some("bt709".to_owned()),
+                matrix: Some("bt709".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(8),
+            }),
+            hdr: None,
             frame_rate: None,
             time_base_num: Some(1),
             time_base_den: Some(48_000),
@@ -1165,6 +1215,10 @@ mod tests {
         assert_eq!(config.priming_samples, Some(2_112));
         assert_eq!(config.trailing_padding_samples, Some(512));
         assert_eq!(config.seek_preroll_samples, Some(1_024));
+        assert_eq!(
+            config.color.as_ref().and_then(|color| color.bit_depth),
+            Some(8)
+        );
         assert!(config.prefer_hardware);
         assert!(config.require_cpu_output);
     }
@@ -1188,6 +1242,8 @@ mod tests {
             priming_samples: None,
             trailing_padding_samples: None,
             seek_preroll_samples: None,
+            color: None,
+            hdr: None,
             frame_rate: Some(30.0),
             time_base_num: Some(1),
             time_base_den: Some(90_000),

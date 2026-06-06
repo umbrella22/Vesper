@@ -62,6 +62,12 @@ class VesperPlayerController {
     );
   }
 
+  static Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
+    VesperPlaybackCapabilityProbeRequest request,
+  ) {
+    return VesperPlayerPlatform.instance.probePlaybackCapability(request);
+  }
+
   final String playerId;
   final VesperPlayerPlatform _platform;
   final List<VesperPluginDiagnostic> pluginDiagnostics;

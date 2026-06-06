@@ -7,7 +7,7 @@ use player_model::MediaSource;
 use player_platform_mobile::{
     MobileNativeFramePipelineConfiguration, MobilePluginConfiguration,
     MobileSourceNormalizerConfiguration, apply_mobile_plugin_diagnostics,
-    open_mobile_source_normalizer_packet_session,
+    hdr_programmable_processing_not_supported_reason, open_mobile_source_normalizer_packet_session,
 };
 use player_platform_native_frame::{
     NativeFrameDecoderAdapter, NativeFramePacketRead, NativeFramePacketSourceAdapter,
@@ -76,6 +76,24 @@ impl AndroidNativeFramePipelineProfile {
 
     fn pipeline_profile_label(self) -> String {
         self.pipeline_profile().label()
+    }
+
+    fn processor_handle_kind(self) -> NativeHandleKind {
+        match self {
+            Self::HostTimedSurface => NativeHandleKind::MediaCodecSurfaceTexture,
+            Self::SdkOwnedHardwareBuffer => NativeHandleKind::MediaCodecHardwareBuffer,
+        }
+    }
+
+    fn processor_format(self) -> player_plugin::DecoderFrameFormat {
+        match self {
+            Self::HostTimedSurface => {
+                player_plugin::DecoderFrameFormat::Unknown("mediacodec_surface_texture".to_owned())
+            }
+            Self::SdkOwnedHardwareBuffer => {
+                player_plugin::DecoderFrameFormat::Unknown("mediacodec_hardware_buffer".to_owned())
+            }
+        }
     }
 
     fn decoder_requirements(self, codec: impl Into<String>) -> DecoderSessionRequirements {
@@ -972,6 +990,9 @@ fn prepare_android_native_frame_decoder(
             "Android native-frame pipeline SourceNormalizer video stream did not report a codec",
         ));
     }
+    if let Some(reason) = hdr_programmable_processing_not_supported_reason(video_track) {
+        return Err(PlayerError::new(PlayerErrorCode::Unsupported, reason));
+    }
     let request = DecoderPluginMatchRequest::video(video_track.codec.clone());
     let registry =
         PluginRegistry::inspect_decoder_support(decoder_plugin_library_paths, request.clone());
@@ -1020,7 +1041,7 @@ fn prepare_android_native_frame_decoder(
             ),
         ));
     }
-    let selected_profile = AndroidNativeFramePipelineProfile::HostTimedSurface;
+    let selected_profile = select_android_native_frame_pipeline_profile(video_track);
     let requirements_for_session = selected_profile.decoder_requirements(video_track.codec.clone());
     let missing_capabilities = requirements_for_session
         .missing_capabilities(&capabilities, &factory.native_requirements());
@@ -1075,6 +1096,8 @@ fn open_android_native_frame_decoder_session(
         prefer_hardware: true,
         require_cpu_output: false,
         native_device_context,
+        color: video_track.color.clone(),
+        hdr: video_track.hdr.clone(),
         ..DecoderSessionConfig::default()
     };
     factory.open_native_session(&config).map_err(|error| {
@@ -1092,6 +1115,7 @@ fn open_android_native_frame_processor_chain(
     frame_processor_plugin_library_paths: &[PathBuf],
     stream_info: &SourceNormalizerPacketStreamInfo,
     max_in_flight_frames: u32,
+    selected_profile: AndroidNativeFramePipelineProfile,
 ) -> PlayerResult<Option<Box<dyn AndroidNativeFrameProcessorChain>>> {
     if frame_processor_plugin_library_paths.is_empty() {
         return Ok(None);
@@ -1107,7 +1131,7 @@ fn open_android_native_frame_processor_chain(
         max_in_flight_frames_per_processor: max_in_flight_frames.max(1),
         ..FrameProcessorPolicy::default()
     };
-    let input_metadata = android_frame_processor_input_metadata(video_track);
+    let input_metadata = android_frame_processor_input_metadata(video_track, selected_profile);
     let mut nodes = Vec::new();
     for (processor_index, path) in frame_processor_plugin_library_paths
         .iter()
@@ -1130,7 +1154,11 @@ fn open_android_native_frame_processor_chain(
             )
         })?;
         let capabilities = factory.capabilities();
-        validate_android_frame_processor_capabilities(factory.name(), &capabilities)?;
+        validate_android_frame_processor_capabilities(
+            factory.name(),
+            &capabilities,
+            &input_metadata,
+        )?;
         let session = factory
             .open_session(&FrameProcessorSessionConfig {
                 processor_index,
@@ -1164,14 +1192,14 @@ fn open_android_native_frame_processor_chain(
 
 fn android_frame_processor_input_metadata(
     video_track: &SourceNormalizerPacketTrackInfo,
+    selected_profile: AndroidNativeFramePipelineProfile,
 ) -> NativeFrameMetadata {
     NativeFrameMetadata {
         media_kind: DecoderMediaKind::Video,
-        // The Android v1 host-timed MediaCodec path outputs into a Surface, so
-        // the host cannot know a CPU-readable pixel format at session-open time.
-        // Capability gating is therefore limited to the stable native handle and
-        // pipeline profile until first-frame metadata can be validated at runtime.
-        format: player_plugin::DecoderFrameFormat::Unknown("mediacodec_surface_texture".to_owned()),
+        // Android MediaCodec native outputs are opaque at session-open time.
+        // Capability gating must use the selected handle/profile rather than a
+        // pretend CPU-readable pixel format.
+        format: selected_profile.processor_format(),
         codec: video_track.codec.clone(),
         pts_us: None,
         duration_us: None,
@@ -1180,10 +1208,15 @@ fn android_frame_processor_input_metadata(
         coded_width: video_track.coded_width.or(video_track.width),
         coded_height: video_track.coded_height.or(video_track.height),
         visible_rect: None,
-        handle_kind: NativeHandleKind::MediaCodecSurfaceTexture,
-        pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
-        color_space: None,
-        hdr_metadata: None,
+        handle_kind: selected_profile.processor_handle_kind(),
+        pipeline_profile: Some(selected_profile.pipeline_profile()),
+        color_space: video_track
+            .color
+            .as_ref()
+            .and_then(|color| color.primaries.clone()),
+        hdr_metadata: video_track.hdr.as_ref().map(|hdr| hdr.kind.clone()),
+        color: video_track.color.clone(),
+        hdr: video_track.hdr.clone(),
         sync_info: None,
         transform: None,
         frame_id: None,
@@ -1194,34 +1227,14 @@ fn android_frame_processor_input_metadata(
 fn validate_android_frame_processor_capabilities(
     processor_name: &str,
     capabilities: &FrameProcessorCapabilities,
+    input_metadata: &NativeFrameMetadata,
 ) -> PlayerResult<()> {
     let requirements = FrameProcessorSessionRequirements {
-        output_handle_kind: Some(NativeHandleKind::MediaCodecSurfaceTexture),
-        output_pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
+        output_handle_kind: Some(input_metadata.handle_kind.clone()),
+        output_pipeline_profile: Some(input_metadata.effective_pipeline_profile()),
         require_explicit_native_input: true,
         require_flush: false,
-        ..FrameProcessorSessionRequirements::native_video(NativeFrameMetadata {
-            media_kind: DecoderMediaKind::Video,
-            format: player_plugin::DecoderFrameFormat::Unknown(
-                "mediacodec_surface_texture".to_owned(),
-            ),
-            codec: "android-native-frame".to_owned(),
-            pts_us: None,
-            duration_us: None,
-            width: 0,
-            height: 0,
-            coded_width: None,
-            coded_height: None,
-            visible_rect: None,
-            handle_kind: NativeHandleKind::MediaCodecSurfaceTexture,
-            pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
-            color_space: None,
-            hdr_metadata: None,
-            sync_info: None,
-            transform: None,
-            frame_id: None,
-            release_tracking: None,
-        })
+        ..FrameProcessorSessionRequirements::native_video(input_metadata.clone())
     };
     let missing = requirements.missing_capabilities(capabilities);
     if !missing.is_empty() {
@@ -1253,6 +1266,12 @@ fn validate_android_native_decoder_record(
         )?;
     }
     Ok(())
+}
+
+fn select_android_native_frame_pipeline_profile(
+    _video_track: &SourceNormalizerPacketTrackInfo,
+) -> AndroidNativeFramePipelineProfile {
+    AndroidNativeFramePipelineProfile::HostTimedSurface
 }
 
 fn validate_android_native_decoder_requirements(
@@ -1933,6 +1952,7 @@ impl AndroidNativeFramePipelineSession {
                 .max_in_flight_frames
                 .unwrap_or(3)
                 .max(1),
+            decoder_open_plan.selected_profile,
         )?;
         Self::open_with_components(
             config,
@@ -1950,12 +1970,12 @@ impl AndroidNativeFramePipelineSession {
         packet_source: Option<AndroidNativeFramePipelinePacketSource>,
     ) -> PlayerResult<Self> {
         let (decoder_open_plan, processor_chain) = match packet_source.as_ref() {
-            Some(packet_source) => (
-                Some(prepare_android_native_frame_decoder(
+            Some(packet_source) => {
+                let decoder_open_plan = prepare_android_native_frame_decoder(
                     &config.native_frame_pipeline.decoder_plugin_library_paths,
                     packet_source.stream_info(),
-                )?),
-                open_android_native_frame_processor_chain(
+                )?;
+                let processor_chain = open_android_native_frame_processor_chain(
                     &config
                         .native_frame_pipeline
                         .frame_processor_plugin_library_paths,
@@ -1965,8 +1985,10 @@ impl AndroidNativeFramePipelineSession {
                         .max_in_flight_frames
                         .unwrap_or(3)
                         .max(1),
-                )?,
-            ),
+                    decoder_open_plan.selected_profile,
+                )?;
+                (Some(decoder_open_plan), processor_chain)
+            }
             None => (None, None),
         };
         Self::open_with_components(

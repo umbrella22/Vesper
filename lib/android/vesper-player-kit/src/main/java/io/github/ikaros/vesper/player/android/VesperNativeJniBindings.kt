@@ -36,10 +36,11 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
 import java.net.URI
-import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.pow
 import kotlin.math.roundToLong
+import org.json.JSONArray
+import org.json.JSONObject
 
 internal class VesperNativeJniBindings(
     context: Context,
@@ -123,11 +124,12 @@ internal class VesperNativeJniBindings(
         val handle = VesperNativeJni.createSession(source.uri)
         check(handle != 0L) { "native session handle must not be zero" }
         sessionHandle = handle
-        val normalizedResource =
+        val sourceNormalizerOpen =
             openSourceNormalizerResourceForPlayback(
                 source,
                 enabled = systemPlaybackUsesSourceNormalizerResource,
             )
+        val normalizedResource = sourceNormalizerOpen.resource
         val playbackSource = normalizedResource?.playbackSource ?: source
         val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
         val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
@@ -184,7 +186,9 @@ internal class VesperNativeJniBindings(
 
         return NativeBridgeStartup(
             subtitle = normalizedResource?.subtitle ?: i18n.sourceSubtitle(source),
-            pluginDiagnostics = normalizedResource?.diagnostics ?: emptyList(),
+            pluginDiagnostics =
+                normalizedResource?.diagnostics
+                    ?: sourceNormalizerOpen.diagnostics,
         )
     }
 
@@ -994,14 +998,14 @@ internal class VesperNativeJniBindings(
     private fun openSourceNormalizerResourceForPlayback(
         source: VesperPlayerSource,
         enabled: Boolean,
-    ): NativeSourceNormalizerResource? {
+    ): NativeSourceNormalizerResourceOpenOutcome {
         closeCurrentSourceNormalizerResource()
         if (!enabled) {
             Log.i(TAG, "source normalizer resource playback skipped for SDK-managed native-frame route")
-            return null
+            return NativeSourceNormalizerResourceOpenOutcome()
         }
         if (!sourceNormalizerConfiguration.shouldOpenNormalizedResourceForPlayback(source)) {
-            return null
+            return NativeSourceNormalizerResourceOpenOutcome()
         }
         VesperNativeLibrary.ensureLoaded()
         val outputRoot = File(appContext.cacheDir, "vesper-source-normalizer").absolutePath
@@ -1021,15 +1025,22 @@ internal class VesperNativeJniBindings(
                 }
                 Log.w(TAG, "source normalizer normalized resource open failed; using original source", error)
                 null
-            } ?: return null
+            } ?: return NativeSourceNormalizerResourceOpenOutcome()
 
-        val resource = parseSourceNormalizerResource(json, source, sourceNormalizerLoopbackServer) ?: return null
+        parseSourceNormalizerBypassDiagnostics(json)?.let { diagnostics ->
+            val bypassReason = sourceNormalizerBypassReason(diagnostics)
+            Log.i(TAG, "source normalizer resource bypassed; route=native fallbackReason=$bypassReason")
+            return NativeSourceNormalizerResourceOpenOutcome(diagnostics = diagnostics)
+        }
+        val resource =
+            parseSourceNormalizerResource(json, source, sourceNormalizerLoopbackServer)
+                ?: return NativeSourceNormalizerResourceOpenOutcome()
         currentSourceNormalizerResource = resource
         Log.i(
             TAG,
             "source normalizer resource selected route=${resource.outputRoute} playbackUri=${resource.playbackSource.uri}",
         )
-        return resource
+        return NativeSourceNormalizerResourceOpenOutcome(resource = resource)
     }
 
     private fun closeCurrentSourceNormalizerResource() {
@@ -1099,6 +1110,11 @@ private data class NativeFramePacketSource(
 ) {
     fun close() = Unit
 }
+
+private data class NativeSourceNormalizerResourceOpenOutcome(
+    val resource: NativeSourceNormalizerResource? = null,
+    val diagnostics: List<Map<String, Any?>> = emptyList(),
+)
 
 private data class NativeSourceNormalizerResource(
     val handle: Long,
@@ -1221,6 +1237,25 @@ private fun parseSourceNormalizerResource(
     }.onFailure { error ->
         Log.w(TAG, "failed to parse source normalizer resource open result", error)
     }.getOrNull()
+
+internal fun parseSourceNormalizerBypassDiagnostics(json: String): List<Map<String, Any?>>? =
+    runCatching {
+        if (!json.trimStart().startsWith("[")) {
+            return null
+        }
+        val array = JSONArray(json)
+        List(array.length()) { index ->
+            jsonObjectToMap(array.getJSONObject(index))
+        }
+    }.getOrNull()?.takeIf(List<Map<String, Any?>>::isNotEmpty)
+
+internal fun sourceNormalizerBypassReason(diagnostics: List<Map<String, Any?>>): String {
+    val messages = diagnostics.mapNotNull { it["message"] as? String }
+    if (messages.any { it.contains("HdrResourceMetadataNotPreserved") }) {
+        return "sourceNormalizerResourceBypassedForHdr"
+    }
+    return messages.firstOrNull() ?: "sourceNormalizerResourceBypassed"
+}
 
 private fun parseNativeFramePipelineJson(json: String): Map<String, Any?>? =
     runCatching {

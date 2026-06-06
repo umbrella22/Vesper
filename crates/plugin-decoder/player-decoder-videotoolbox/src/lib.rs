@@ -11,7 +11,7 @@ use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements,
     DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-    DecoderSessionConfig, DecoderSessionInfo, NativeFramePipelineProfile,
+    DecoderSessionConfig, DecoderSessionInfo, NativeFrameColorMetadata, NativeFramePipelineProfile,
     VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperDecoderOpenSessionResult,
     VesperDecoderPluginApiV5, VesperDecoderReceiveNativeFrameResult, VesperPluginBytes,
     VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
@@ -172,6 +172,8 @@ fn decoder_capabilities() -> DecoderCapabilities {
             video_codec_capability("H265"),
             video_codec_capability("HVC1"),
             video_codec_capability("HEV1"),
+            video_codec_capability("DVH1"),
+            video_codec_capability("DVHE"),
         ],
         supports_hardware_decode: VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED,
         supports_cpu_video_frames: false,
@@ -204,6 +206,22 @@ fn video_codec_capability(codec: &str) -> DecoderCodecCapability {
         media_kind: DecoderMediaKind::Video,
         profiles: Vec::new(),
         output_formats: vec![DecoderFrameFormat::Nv12],
+    }
+}
+
+fn legacy_color_space_label(color: &NativeFrameColorMetadata) -> Option<String> {
+    match (
+        color.primaries.as_deref(),
+        color.transfer.as_deref(),
+        color.matrix.as_deref(),
+    ) {
+        (Some(primaries), Some(transfer), Some(matrix)) => {
+            Some(format!("{primaries}/{transfer}/{matrix}"))
+        }
+        (Some(primaries), _, _) => Some(primaries.to_owned()),
+        (_, Some(transfer), _) => Some(transfer.to_owned()),
+        (_, _, Some(matrix)) => Some(matrix.to_owned()),
+        _ => None,
     }
 }
 
@@ -325,12 +343,20 @@ enum VideoCodecKind {
 }
 
 fn video_codec_kind(codec: &str) -> Option<VideoCodecKind> {
-    if codec.eq_ignore_ascii_case("h264") || codec.eq_ignore_ascii_case("avc1") {
+    let normalized = codec
+        .trim()
+        .to_ascii_lowercase()
+        .strip_prefix("video/")
+        .map(str::to_owned)
+        .unwrap_or_else(|| codec.trim().to_ascii_lowercase());
+    if normalized == "h264" || normalized == "avc" || normalized.starts_with("avc1") {
         Some(VideoCodecKind::H264)
-    } else if codec.eq_ignore_ascii_case("hevc")
-        || codec.eq_ignore_ascii_case("h265")
-        || codec.eq_ignore_ascii_case("hvc1")
-        || codec.eq_ignore_ascii_case("hev1")
+    } else if normalized == "hevc"
+        || normalized == "h265"
+        || normalized.starts_with("hvc1")
+        || normalized.starts_with("hev1")
+        || normalized.starts_with("dvh1")
+        || normalized.starts_with("dvhe")
     {
         Some(VideoCodecKind::Hevc)
     } else {
@@ -350,14 +376,15 @@ mod platform {
         DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
         DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
         DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-        DecoderSessionConfig, DecoderSessionInfo, NativeFramePipelineProfile,
-        VesperDecoderOpenSessionResult, VesperDecoderReceiveNativeFrameResult,
-        VesperPluginProcessResult,
+        DecoderSessionConfig, DecoderSessionInfo, NativeFrameColorMetadata, NativeFrameHdrMetadata,
+        NativeFramePipelineProfile, VesperDecoderOpenSessionResult,
+        VesperDecoderReceiveNativeFrameResult, VesperPluginProcessResult,
     };
 
     use super::{
-        DecoderOperationStatus, VideoCodecKind, native_frame_error, native_frame_success,
-        open_error, open_success, packet_success, process_error, process_success, video_codec_kind,
+        DecoderOperationStatus, VideoCodecKind, legacy_color_space_label, native_frame_error,
+        native_frame_success, open_error, open_success, packet_success, process_error,
+        process_success, video_codec_kind,
     };
 
     type OSStatus = i32;
@@ -378,7 +405,24 @@ mod platform {
     const CM_TIME_FLAGS_VALID: u32 = 1;
     const CV_PIXEL_BUFFER_HANDLE_KIND: u32 = 1;
     const K_CF_NUMBER_SINT32_TYPE: i32 = 3;
-    const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_VIDEO_RANGE: i32 = 875_704_438;
+    const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_VIDEO_RANGE: i32 = fourcc(*b"420v");
+    const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_FULL_RANGE: u32 = fourcc_u32(*b"420f");
+    const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE: i32 = fourcc(*b"x420");
+    const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_FULL_RANGE: u32 = fourcc_u32(*b"xf20");
+
+    const fn fourcc(code: [u8; 4]) -> i32 {
+        ((code[0] as i32) << 24)
+            | ((code[1] as i32) << 16)
+            | ((code[2] as i32) << 8)
+            | code[3] as i32
+    }
+
+    const fn fourcc_u32(code: [u8; 4]) -> u32 {
+        ((code[0] as u32) << 24)
+            | ((code[1] as u32) << 16)
+            | ((code[2] as u32) << 8)
+            | code[3] as u32
+    }
 
     #[repr(C)]
     struct CFDictionaryKeyCallBacks {
@@ -459,6 +503,7 @@ mod platform {
         static kCVPixelBufferIOSurfacePropertiesKey: CFStringRef;
         fn CVPixelBufferGetWidth(pixel_buffer: CVPixelBufferRef) -> usize;
         fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
+        fn CVPixelBufferGetPixelFormatType(pixel_buffer: CVPixelBufferRef) -> u32;
     }
 
     #[link(name = "CoreMedia", kind = "framework")]
@@ -657,6 +702,9 @@ mod platform {
         codec_name: String,
         width: u32,
         height: u32,
+        color: Option<NativeFrameColorMetadata>,
+        hdr: Option<NativeFrameHdrMetadata>,
+        requested_output_format: DecoderFrameFormat,
         bitstream_format: Option<DecoderBitstreamFormat>,
         nal_length_size: usize,
         parameter_sets: Vec<Vec<u8>>,
@@ -678,11 +726,15 @@ mod platform {
             } else {
                 Some(parse_extradata(codec, &config.extradata)?)
             };
+            let requested_output_format = requested_output_format();
             let mut session = Self {
                 codec,
                 codec_name: config.codec,
                 width: config.width.unwrap_or_default(),
                 height: config.height.unwrap_or_default(),
+                color: config.color,
+                hdr: config.hdr,
+                requested_output_format,
                 bitstream_format: config.bitstream_format,
                 nal_length_size: parsed.as_ref().map_or(4, |parsed| parsed.nal_length_size),
                 parameter_sets: parsed
@@ -705,7 +757,7 @@ mod platform {
             DecoderSessionInfo {
                 decoder_name: Some("player-decoder-videotoolbox".to_owned()),
                 selected_hardware_backend: Some("VideoToolbox".to_owned()),
-                output_format: Some(DecoderFrameFormat::Nv12),
+                output_format: Some(self.requested_output_format.clone()),
             }
         }
 
@@ -793,10 +845,15 @@ mod platform {
                     Ok(NativeReceiveResult::NeedMoreInput)
                 };
             };
+            // SAFETY: `frame.pixel_buffer` is a retained CVPixelBuffer from the
+            // VideoToolbox callback and remains valid until host release.
+            let pixel_format = unsafe { CVPixelBufferGetPixelFormatType(frame.pixel_buffer) };
+            let format = decoder_frame_format_from_pixel_format(pixel_format);
+            let color = color_metadata_for_pixel_format(self.color.clone(), &format);
             Ok(NativeReceiveResult::Frame(NativeFrame {
                 metadata: DecoderNativeFrameMetadata {
                     media_kind: DecoderMediaKind::Video,
-                    format: DecoderFrameFormat::Nv12,
+                    format,
                     codec: self.codec_name.clone(),
                     pts_us: frame.pts_us,
                     duration_us: frame.duration_us,
@@ -815,8 +872,10 @@ mod platform {
                     visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
                     pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
-                    color_space: None,
-                    hdr_metadata: None,
+                    color_space: color.as_ref().and_then(legacy_color_space_label),
+                    hdr_metadata: self.hdr.as_ref().map(|hdr| hdr.kind.clone()),
+                    color,
+                    hdr: self.hdr.clone(),
                     sync_info: None,
                     transform: None,
                     frame_id: Some(frame.pixel_buffer as u64),
@@ -896,7 +955,8 @@ mod platform {
                 decompression_output_callback: Some(decompression_output_callback),
                 decompression_output_ref_con: Arc::as_ptr(&self.callback_state).cast_mut().cast(),
             };
-            let pixel_buffer_attributes = create_pixel_buffer_attributes()?;
+            let pixel_buffer_attributes =
+                create_pixel_buffer_attributes(&self.requested_output_format)?;
             let mut decompression_session = ptr::null_mut();
             // SAFETY: format_description and callback are valid for the call.
             let status = unsafe {
@@ -1370,8 +1430,66 @@ mod platform {
         Ok(sample_buffer)
     }
 
-    fn create_pixel_buffer_attributes() -> Result<CFDictionaryRef, DecoderError> {
-        let pixel_format_value = K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_VIDEO_RANGE;
+    fn requested_output_format() -> DecoderFrameFormat {
+        DecoderFrameFormat::Nv12
+    }
+
+    fn pixel_format_for_requested_output(output_format: &DecoderFrameFormat) -> i32 {
+        match output_format {
+            DecoderFrameFormat::P010 => K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE,
+            _ => K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_VIDEO_RANGE,
+        }
+    }
+
+    fn decoder_frame_format_from_pixel_format(pixel_format: u32) -> DecoderFrameFormat {
+        match pixel_format {
+            value if value == K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_VIDEO_RANGE as u32 => {
+                DecoderFrameFormat::Nv12
+            }
+            K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_FULL_RANGE => DecoderFrameFormat::Nv12,
+            value if value == K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE as u32 => {
+                DecoderFrameFormat::P010
+            }
+            K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_FULL_RANGE => DecoderFrameFormat::P010,
+            other => DecoderFrameFormat::Unknown(format!("cvpixelbuffer_{}", fourcc_label(other))),
+        }
+    }
+
+    fn color_metadata_for_pixel_format(
+        mut color: Option<NativeFrameColorMetadata>,
+        format: &DecoderFrameFormat,
+    ) -> Option<NativeFrameColorMetadata> {
+        if matches!(format, DecoderFrameFormat::P010) {
+            color
+                .get_or_insert_with(|| NativeFrameColorMetadata {
+                    primaries: None,
+                    transfer: None,
+                    matrix: None,
+                    range: None,
+                    bit_depth: None,
+                })
+                .bit_depth
+                .get_or_insert(10);
+        }
+        color
+    }
+
+    fn fourcc_label(value: u32) -> String {
+        let bytes = value.to_be_bytes();
+        if bytes
+            .iter()
+            .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+        {
+            String::from_utf8_lossy(&bytes).trim().to_owned()
+        } else {
+            format!("{value:#010x}")
+        }
+    }
+
+    fn create_pixel_buffer_attributes(
+        output_format: &DecoderFrameFormat,
+    ) -> Result<CFDictionaryRef, DecoderError> {
+        let pixel_format_value = pixel_format_for_requested_output(output_format);
         // SAFETY: CoreFoundation objects created here are released before
         // returning, except for the dictionary returned to the caller.
         unsafe {
@@ -1575,9 +1693,13 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::{
-            VideoCodecKind, annexb_to_length_prefixed, length_prefixed_sample_is_well_formed,
+            K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE, VideoCodecKind,
+            annexb_to_length_prefixed, color_metadata_for_pixel_format,
+            decoder_frame_format_from_pixel_format, length_prefixed_sample_is_well_formed,
             normalize_sample_data, parse_annexb_parameter_sets, parse_avcc_extradata,
+            requested_output_format,
         };
+        use player_plugin::{DecoderFrameFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata};
 
         #[test]
         fn avcc_extradata_parser_reads_sps_and_pps() {
@@ -1623,6 +1745,36 @@ mod platform {
                 normalize_sample_data(&packet, 4).expect("length-prefixed sample should normalize");
 
             assert_eq!(normalized, packet);
+        }
+
+        #[test]
+        fn hdr_metadata_does_not_request_p010_output() {
+            let _color = NativeFrameColorMetadata {
+                primaries: Some("bt2020".to_owned()),
+                transfer: Some("smpte2084".to_owned()),
+                matrix: Some("bt2020-ncl".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(10),
+            };
+            let _hdr = NativeFrameHdrMetadata {
+                kind: "hdr10".to_owned(),
+                mastering_display: None,
+                content_light: None,
+                dolby_vision: None,
+            };
+
+            assert_eq!(requested_output_format(), DecoderFrameFormat::Nv12);
+        }
+
+        #[test]
+        fn cvpixelbuffer_10bit_format_reports_p010_and_bit_depth() {
+            let format = decoder_frame_format_from_pixel_format(
+                K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE as u32,
+            );
+            let color = color_metadata_for_pixel_format(None, &format);
+
+            assert_eq!(format, DecoderFrameFormat::P010);
+            assert_eq!(color.and_then(|color| color.bit_depth), Some(10));
         }
     }
 }
@@ -1686,6 +1838,8 @@ mod tests {
         assert!(capabilities.supports_codec("avc1", player_plugin::DecoderMediaKind::Video));
         assert!(capabilities.supports_codec("HEVC", player_plugin::DecoderMediaKind::Video));
         assert!(capabilities.supports_codec("hvc1", player_plugin::DecoderMediaKind::Video));
+        assert!(capabilities.supports_codec("dvh1", player_plugin::DecoderMediaKind::Video));
+        assert!(capabilities.supports_codec("dvhe", player_plugin::DecoderMediaKind::Video));
         assert!(capabilities.supports_gpu_handles == super::VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED);
         assert!(!capabilities.supports_cpu_video_frames);
     }
@@ -1695,6 +1849,8 @@ mod tests {
         assert!(video_codec_kind("avc1").is_some());
         assert!(video_codec_kind("hvc1").is_some());
         assert!(video_codec_kind("H265").is_some());
+        assert!(video_codec_kind("dvh1.05.06").is_some());
+        assert!(video_codec_kind("dvhe.08.07").is_some());
         assert!(video_codec_kind("vp9").is_none());
     }
 

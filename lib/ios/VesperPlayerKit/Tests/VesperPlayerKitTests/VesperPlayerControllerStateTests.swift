@@ -381,7 +381,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             VesperNativeFramePipelineStartupError(
                 issue: VesperNativeFramePipelineIssue(
                     kind: .unsupportedCodec,
-                    message: "iOS native-frame pipeline first pass only supports H264 packet streams, got HEVC"
+                    message: "iOS native-frame pipeline supports H264/HEVC packet streams, got VP9"
                 )
             )
         )
@@ -761,7 +761,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineBridgeRoutesRateSeekAndDiagnosticsThroughActiveSession() {
+    func testNativeFramePipelineBridgeRoutesRateSeekAndDiagnosticsThroughActiveSession() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -799,6 +799,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.play()
         bridge.setPlaybackRate(1.5)
         bridge.seek(toRatio: 0.5)
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [30_000]
+        }
 
         XCTAssertNil(bridge.lastError)
         XCTAssertEqual(backend.seekRequests, [30_000])
@@ -833,7 +836,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(audioOutput.events.last, "play:1.5")
     }
 
-    func testNativeFramePipelineStopKeepsTimelineSeekable() {
+    func testNativeFramePipelineStopKeepsTimelineSeekable() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -870,6 +873,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.initialize()
         bridge.seek(toRatio: 0.5)
         bridge.stop()
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [30_000, 0]
+        }
 
         XCTAssertEqual(bridge.uiState.playbackState, .ready)
         XCTAssertEqual(bridge.uiState.timeline.positionMs, 0)
@@ -881,7 +887,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertTrue(audioOutput.events.contains("seek:0"))
     }
 
-    func testNativeFramePipelinePendingRatioSeekAppliesAfterSurfaceAttach() {
+    func testNativeFramePipelinePendingRatioSeekAppliesAfterSurfaceAttach() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -916,6 +922,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.initialize()
         bridge.seek(toRatio: 0.5)
         bridge.attachSurfaceHost(PlayerSurfaceView())
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [30_000]
+        }
 
         XCTAssertEqual(backend.seekRequests, [30_000])
         XCTAssertEqual(bridge.uiState.timeline.positionMs, 30_000)
@@ -924,7 +933,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(audioOutput.events.last, "play:1.0")
     }
 
-    func testNativeFramePipelinePendingRelativeSeekAppliesAfterSurfaceAttach() {
+    func testNativeFramePipelinePendingRelativeSeekAppliesAfterSurfaceAttach() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -959,6 +968,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.initialize()
         bridge.seek(by: 12_000)
         bridge.attachSurfaceHost(PlayerSurfaceView())
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [12_000]
+        }
 
         XCTAssertEqual(backend.seekRequests, [12_000])
         XCTAssertEqual(bridge.uiState.timeline.positionMs, 12_000)
@@ -1017,7 +1029,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.timeline.durationMs, 60_000)
     }
 
-    func testNativeFramePipelineSourceSwitchClosesActiveSessionAndStartsNewSource() {
+    func testNativeFramePipelineSourceSwitchClosesActiveSessionAndStartsNewSource() async {
         let firstSource = try! VesperPlayerSource(
             uri: "file:///tmp/first.mov",
             label: "First MOV",
@@ -1060,13 +1072,16 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.initialize()
         bridge.seek(toRatio: 0.5)
         bridge.selectSource(secondSource)
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.closeHandles == [42]
+        }
 
         XCTAssertEqual(backend.openSourceUris, [
             "file:///tmp/first.mov",
             "file:///tmp/second.mov",
         ])
         XCTAssertEqual(backend.closeHandles, [42])
-        XCTAssertEqual(backend.seekRequests, [30_000])
+        XCTAssertTrue(backend.seekRequests.isEmpty)
         XCTAssertEqual(bridge.uiState.sourceLabel, "Second MOV")
         XCTAssertEqual(bridge.uiState.timeline.positionMs, 0)
         XCTAssertEqual(bridge.uiState.timeline.durationMs, 60_000)
@@ -1118,7 +1133,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.playbackState, .playing)
     }
 
-    func testNativeFramePipelineSurfaceDetachClosesAndReattachRestoresPlayingSession() {
+    func testNativeFramePipelineSurfaceDetachClosesAndReattachRestoresPlayingSession() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1155,6 +1170,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.initialize()
         bridge.setPlaybackRate(1.5)
         bridge.detachSurfaceHost()
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.closeHandles == [42]
+        }
 
         XCTAssertEqual(backend.closeHandles, [42])
 
@@ -1348,7 +1366,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineDiagnosticsFallBackToVideoClockWhenSwiftAudioUnavailable() {
+    func testNativeFramePipelineDiagnosticsReportSwiftAudioUnavailable() {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "Remote MP4",
@@ -1396,7 +1414,47 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineSeekRestoresPlayingStateRateAndTimeline() {
+    func testNativeFramePipelineStartupFailsWhenAudioTrackBridgeUnavailable() {
+        let source = try! VesperPlayerSource(
+            uri: "file:///tmp/example.mov",
+            label: "Local MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let backend = TestNativeFramePipelineBackend()
+        let audioOutput = TestNativeFrameAudioOutput()
+        audioOutput.prepareResult = VesperNativeFrameAudioBridgeState.resolved(
+            hasAudioTrack: true,
+            bridgePrepared: false,
+            unavailableReason: "Swift native audio bridge preflight failed in test"
+        )
+        let session = VesperNativeFramePipelineSession(
+            source: source,
+            configuration: VesperNativeFramePipelineConfiguration(
+                mode: .preferNativeFrame,
+                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            ),
+            sourceNormalizer: VesperSourceNormalizerConfiguration(
+                mode: .preflightOnly,
+                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            ),
+            surfaceHost: PlayerSurfaceView(),
+            backend: backend,
+            audioOutput: audioOutput
+        )
+
+        guard case .failure(let error) = session.start() else {
+            XCTFail("expected native-frame startup to fail when audio bridge is unavailable")
+            return
+        }
+        XCTAssertEqual(error.issue.kind, .nativeAudioBridgeUnavailable)
+        XCTAssertTrue(error.message.contains("preflight failed"))
+        XCTAssertEqual(session.clockSource, "video")
+        XCTAssertEqual(session.audioOutputKind, "unavailable")
+        XCTAssertEqual(backend.closeHandles, [42])
+    }
+
+    func testNativeFramePipelineSeekRestoresPlayingStateRateAndTimeline() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1429,6 +1487,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         session.play(rate: 1.5)
 
         XCTAssertTrue(session.seek(toMs: 12_345))
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [12_345]
+        }
 
         XCTAssertEqual(backend.seekRequests, [12_345])
         XCTAssertEqual(audioOutput.events, [
@@ -1449,7 +1510,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(session.audioPipelineKind, "swiftNativeAudioBridgeV1")
     }
 
-    func testNativeFramePipelineSeekClampsNegativePositionToStart() {
+    func testNativeFramePipelineSeekClampsNegativePositionToStart() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1481,6 +1542,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         }
 
         XCTAssertTrue(session.seek(toMs: -1_000))
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [0]
+        }
 
         XCTAssertEqual(backend.seekRequests, [0])
         XCTAssertTrue(audioOutput.events.contains("seek:0"))
@@ -1490,7 +1554,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineSeekClampsPastDurationToEnd() {
+    func testNativeFramePipelineSeekClampsPastDurationToEnd() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1522,6 +1586,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         }
 
         XCTAssertTrue(session.seek(toMs: 90_000))
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [60_000]
+        }
 
         XCTAssertEqual(backend.seekRequests, [60_000])
         XCTAssertTrue(audioOutput.events.contains("seek:60000"))
@@ -1531,7 +1598,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineSeekFailureRestoresPlaybackWithoutTimelineMutation() {
+    func testNativeFramePipelineSeekFailureRestoresPlaybackWithoutTimelineMutation() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1566,7 +1633,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         }
         session.play(rate: 2.0)
 
-        XCTAssertFalse(session.seek(toMs: 22_000))
+        XCTAssertTrue(session.seek(toMs: 22_000))
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [22_000] && audioOutput.events.last == "play:2.0"
+        }
 
         XCTAssertEqual(backend.seekRequests, [22_000])
         XCTAssertEqual(audioOutput.events, [
@@ -1578,7 +1648,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertTrue(timelines.isEmpty)
     }
 
-    func testNativeFramePipelineFlushStopsPlaybackAndAudioOutput() {
+    func testNativeFramePipelineFlushStopsPlaybackAndAudioOutput() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1609,6 +1679,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         session.play(rate: 1.25)
 
         session.flush()
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.flushRequests == [42]
+        }
 
         XCTAssertEqual(backend.flushRequests, [42])
         XCTAssertEqual(audioOutput.events, [
@@ -1656,7 +1729,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineTimelineFallsBackToVideoClockAfterRuntimeAudioFailure() {
+    func testNativeFramePipelineRuntimeAudioFailureReportsPlaybackFailure() {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1679,6 +1752,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             backend: backend,
             audioOutput: audioOutput
         )
+        var failedIssue: VesperNativeFramePipelineIssue?
+        session.onPlaybackFailed = { failedIssue = $0 }
 
         guard case .success = session.start() else {
             XCTFail("expected fake native-frame session to start")
@@ -1703,10 +1778,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(session.clockSource, "video")
         XCTAssertEqual(session.audioOutputKind, "unavailable")
         XCTAssertTrue(session.audioOutputIssue?.contains("decode failed") == true)
-        XCTAssertEqual(
-            session.timelinePositionMs(framePresentationTimeUs: 12_000_000),
-            12_000
-        )
+        XCTAssertEqual(failedIssue?.kind, .nativeAudioBridgeUnavailable)
+        XCTAssertTrue(failedIssue?.message.contains("decode failed") == true)
     }
 
     func testNativeFramePipelinePlaybackAdvancesPresentsReleasesAndUpdatesAudioClockTimeline() async {
@@ -1902,10 +1975,15 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
         XCTAssertTrue(session.seek(toMs: 12_345))
         presenter.resumePresentation()
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.seekRequests == [12_345] &&
+                backend.releasedFrameHandles == [7] &&
+                backend.releasePresentedFlags == [false]
+        }
 
-        XCTAssertEqual(backend.releasedFrameHandles, [])
         XCTAssertEqual(backend.seekRequests, [12_345])
+        XCTAssertEqual(backend.releasedFrameHandles, [7])
+        XCTAssertEqual(backend.releasePresentedFlags, [false])
         XCTAssertEqual(session.counters.presentedFrames, 0)
     }
 
@@ -2074,32 +2152,23 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(session.audioDecoderKind, "none")
     }
 
-    func testNativeFrameAudioTemporaryFileStoreRemovesReplacedAndClosedFiles() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vesper-native-audio-store-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        defer {
-            try? FileManager.default.removeItem(at: directory)
+    func testNativeFrameAudioScheduledBufferGateBlocksUntilSlotIsReleased() async throws {
+        let gate = VesperNativeFrameAudioScheduledBufferGate(maxQueuedBuffers: 1)
+        try gate.waitUntilSlotAvailable()
+        let blocked = XCTestExpectation(description: "second buffer waits for a release slot")
+        blocked.isInverted = true
+        let resumed = XCTestExpectation(description: "second buffer resumes after release")
+
+        Task.detached {
+            try? gate.waitUntilSlotAvailable()
+            blocked.fulfill()
+            resumed.fulfill()
         }
-        let first = directory.appendingPathComponent("first.caf")
-        let second = directory.appendingPathComponent("second.caf")
-        try Data([0x01]).write(to: first)
-        try Data([0x02]).write(to: second)
-        let store = VesperNativeFrameAudioTemporaryFileStore()
+        await fulfillment(of: [blocked], timeout: 0.02)
 
-        store.replaceActiveFile(with: first)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
-
-        store.replaceActiveFile(with: second)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
-
-        store.cleanupActiveFile()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
-        XCTAssertNil(store.activeFileURL)
+        gate.releaseSlot()
+        await fulfillment(of: [resumed], timeout: 0.2)
+        gate.releaseSlot()
     }
 
     func testNativeFrameAudioPlaybackGateRejectsStalePlayback() {
@@ -2120,13 +2189,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
     func testNativeFramePipelineIssueParsesStructuredFfiIssueKind() {
         let issue = VesperNativeFramePipelineIssue.classifyStartupFailure(
-            "nativeFrameIssueKind=unsupportedCodec; iOS native-frame pipeline first pass only supports H264 packet streams, got HEVC"
+            "nativeFrameIssueKind=unsupportedCodec; iOS native-frame pipeline supports H264/HEVC packet streams, got VP9"
         )
 
         XCTAssertEqual(issue.kind, .unsupportedCodec)
         XCTAssertEqual(
             issue.message,
-            "iOS native-frame pipeline first pass only supports H264 packet streams, got HEVC"
+            "iOS native-frame pipeline supports H264/HEVC packet streams, got VP9"
         )
     }
 
@@ -2326,29 +2395,60 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     }
 }
 
-@MainActor
-private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBackend {
-    var seekRequests: [Int64] = []
-    private(set) var flushRequests: [UInt64] = []
-    private(set) var advanceRequests: [UInt64] = []
-    private(set) var releasedFrameHandles: [UInt64] = []
-    private(set) var releasePresentedFlags: [Bool] = []
+private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBackend, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedSeekRequests: [Int64] = []
+    private var storedFlushRequests: [UInt64] = []
+    private var storedAdvanceRequests: [UInt64] = []
+    private var storedReleasedFrameHandles: [UInt64] = []
+    private var storedReleasePresentedFlags: [Bool] = []
     var seekResult: Result<[String: Any], VesperNativeFramePipelineOperationError>?
     var advanceResults: [Result<[String: Any], VesperNativeFramePipelineOperationError>] = []
     var releaseResult: [String: Any] = ["counters": [:]]
     var openResult: Result<VesperNativeFramePipelineOpenResult, VesperNativeFramePipelineStartupError>?
-    private(set) var openSourceUris: [String] = []
-    private(set) var closeHandles: [UInt64] = []
+    private var storedOpenSourceUris: [String] = []
+    private var storedCloseHandles: [UInt64] = []
     private var nextHandle: UInt64 = 42
+
+    var seekRequests: [Int64] {
+        withLock { storedSeekRequests }
+    }
+
+    var flushRequests: [UInt64] {
+        withLock { storedFlushRequests }
+    }
+
+    var advanceRequests: [UInt64] {
+        withLock { storedAdvanceRequests }
+    }
+
+    var releasedFrameHandles: [UInt64] {
+        withLock { storedReleasedFrameHandles }
+    }
+
+    var releasePresentedFlags: [Bool] {
+        withLock { storedReleasePresentedFlags }
+    }
+
+    var openSourceUris: [String] {
+        withLock { storedOpenSourceUris }
+    }
+
+    var closeHandles: [UInt64] {
+        withLock { storedCloseHandles }
+    }
 
     func open(
         source: VesperPlayerSource,
         configuration _: VesperNativeFramePipelineConfiguration,
         sourceNormalizer _: VesperSourceNormalizerConfiguration
     ) -> Result<VesperNativeFramePipelineOpenResult, VesperNativeFramePipelineStartupError> {
-        openSourceUris.append(source.uri)
-        let handle = nextHandle
-        nextHandle += 1
+        let handle = withLock {
+            storedOpenSourceUris.append(source.uri)
+            let handle = nextHandle
+            nextHandle += 1
+            return handle
+        }
         if let openResult {
             return openResult
         }
@@ -2375,7 +2475,9 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
     }
 
     func flush(handle: UInt64) -> Result<[String: Any], VesperNativeFramePipelineOperationError> {
-        flushRequests.append(handle)
+        withLock {
+            storedFlushRequests.append(handle)
+        }
         return .success([
             "durationMillis": NSNumber(value: 60_000),
             "seekable": true,
@@ -2393,7 +2495,9 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
         handle _: UInt64,
         positionMs: Int64
     ) -> Result<[String: Any], VesperNativeFramePipelineOperationError> {
-        seekRequests.append(positionMs)
+        withLock {
+            storedSeekRequests.append(positionMs)
+        }
         if let seekResult {
             return seekResult
         }
@@ -2414,9 +2518,12 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
     }
 
     func advance(handle: UInt64) -> Result<[String: Any], VesperNativeFramePipelineOperationError> {
-        advanceRequests.append(handle)
-        if !advanceResults.isEmpty {
-            return advanceResults.removeFirst()
+        let nextResult = withLock {
+            storedAdvanceRequests.append(handle)
+            return advanceResults.isEmpty ? nil : advanceResults.removeFirst()
+        }
+        if let nextResult {
+            return nextResult
         }
         return .success(["status": "pending", "counters": [:]])
     }
@@ -2426,13 +2533,23 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
         frameHandle: UInt64,
         presented: Bool
     ) -> Result<[String: Any], VesperNativeFramePipelineOperationError> {
-        releasedFrameHandles.append(frameHandle)
-        releasePresentedFlags.append(presented)
+        withLock {
+            storedReleasedFrameHandles.append(frameHandle)
+            storedReleasePresentedFlags.append(presented)
+        }
         return .success(releaseResult)
     }
 
     func close(handle: UInt64) {
-        closeHandles.append(handle)
+        withLock {
+            storedCloseHandles.append(handle)
+        }
+    }
+
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
     }
 }
 

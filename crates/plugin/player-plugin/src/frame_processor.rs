@@ -33,7 +33,9 @@ pub struct FrameProcessorCapabilities {
     pub supports_in_place_passthrough: bool,
     pub preserves_dimensions: bool,
     pub may_change_dimensions: bool,
+    #[serde(default)]
     pub preserves_color_metadata: bool,
+    #[serde(default)]
     pub preserves_hdr_metadata: bool,
     pub supports_flush: bool,
     pub max_sessions: Option<u32>,
@@ -103,6 +105,10 @@ pub struct FrameProcessorSessionRequirements {
     #[serde(default)]
     pub reject_dimension_changes: bool,
     #[serde(default)]
+    pub require_color_metadata_preservation: bool,
+    #[serde(default)]
+    pub require_hdr_metadata_preservation: bool,
+    #[serde(default)]
     pub max_in_flight_frames: Option<u32>,
 }
 
@@ -112,6 +118,8 @@ impl FrameProcessorSessionRequirements {
         Self {
             output_handle_kind: Some(input_metadata.handle_kind.clone()),
             output_pipeline_profile: Some(input_metadata.effective_pipeline_profile()),
+            require_color_metadata_preservation: input_metadata.requires_color_preservation(),
+            require_hdr_metadata_preservation: input_metadata.requires_hdr_preservation(),
             input_metadata,
             require_video_frames: true,
             require_native_first: true,
@@ -177,6 +185,12 @@ impl FrameProcessorSessionRequirements {
         }
         if self.reject_dimension_changes && capabilities.may_change_dimensions {
             missing.push("stable dimensions".to_owned());
+        }
+        if self.require_color_metadata_preservation && !capabilities.preserves_color_metadata {
+            missing.push("preservesColorMetadata".to_owned());
+        }
+        if self.require_hdr_metadata_preservation && !capabilities.preserves_hdr_metadata {
+            missing.push("preservesHdrMetadata".to_owned());
         }
         if let (Some(required), Some(limit)) =
             (self.max_in_flight_frames, capabilities.max_in_flight_frames)
@@ -412,8 +426,8 @@ mod tests {
         FrameProcessorSubmitStatus,
     };
     use crate::{
-        DecoderFrameFormat, DecoderMediaKind, NativeFrameMetadata, NativeFramePipelineProfile,
-        NativeHandleKind, VisibleRect,
+        DecoderFrameFormat, DecoderMediaKind, NativeFrameColorMetadata, NativeFrameHdrMetadata,
+        NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind, VisibleRect,
     };
 
     fn metadata() -> NativeFrameMetadata {
@@ -437,6 +451,14 @@ mod tests {
             pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
             color_space: Some("bt709".to_owned()),
             hdr_metadata: None,
+            color: Some(NativeFrameColorMetadata {
+                primaries: Some("bt709".to_owned()),
+                transfer: Some("bt709".to_owned()),
+                matrix: Some("bt709".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(8),
+            }),
+            hdr: None,
             sync_info: None,
             transform: None,
             frame_id: Some(42),
@@ -499,6 +521,27 @@ mod tests {
     }
 
     #[test]
+    fn frame_processor_capabilities_default_metadata_preservation_fields() {
+        let decoded: FrameProcessorCapabilities = serde_json::from_str(
+            r#"{
+                "accepted_input_handle_kinds": [],
+                "output_handle_kinds": [],
+                "supports_video_frames": true,
+                "supports_in_place_passthrough": true,
+                "preserves_dimensions": true,
+                "may_change_dimensions": false,
+                "supports_flush": false,
+                "max_sessions": null,
+                "max_in_flight_frames": null
+            }"#,
+        )
+        .expect("legacy capabilities should deserialize without preservation fields");
+
+        assert!(!decoded.preserves_color_metadata);
+        assert!(!decoded.preserves_hdr_metadata);
+    }
+
+    #[test]
     fn frame_processor_capabilities_match_input_metadata_by_handle_and_profile() {
         let capabilities = FrameProcessorCapabilities {
             accepted_input_handle_kinds: vec![NativeHandleKind::CvPixelBuffer],
@@ -534,6 +577,8 @@ mod tests {
             supports_video_frames: false,
             supports_flush: false,
             may_change_dimensions: true,
+            preserves_color_metadata: false,
+            preserves_hdr_metadata: false,
             max_in_flight_frames: Some(1),
             ..Default::default()
         };
@@ -558,10 +603,68 @@ mod tests {
         );
         assert!(missing.iter().any(|item| item == "flush support"));
         assert!(missing.iter().any(|item| item == "stable dimensions"));
+        assert!(!missing.iter().any(|item| item == "preservesColorMetadata"));
         assert!(
             missing
                 .iter()
                 .any(|item| item == "max in-flight frames >= 4")
         );
+    }
+
+    #[test]
+    fn frame_processor_session_requirements_report_color_preservation_for_wide_color() {
+        let mut metadata = metadata();
+        metadata.color_space = Some("bt2020".to_owned());
+        metadata.color = Some(NativeFrameColorMetadata {
+            primaries: Some("bt2020".to_owned()),
+            transfer: Some("sdr-video".to_owned()),
+            matrix: Some("bt2020-ncl".to_owned()),
+            range: Some("limited".to_owned()),
+            bit_depth: Some(8),
+        });
+        let requirements = FrameProcessorSessionRequirements::native_video(metadata);
+        let capabilities = FrameProcessorCapabilities {
+            accepted_input_handle_kinds: vec![NativeHandleKind::CvPixelBuffer],
+            output_handle_kinds: vec![NativeHandleKind::CvPixelBuffer],
+            accepted_input_pipeline_profiles: vec![
+                NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ],
+            output_pipeline_profiles: vec![NativeFramePipelineProfile::VideoToolboxCvPixelBuffer],
+            supports_video_frames: true,
+            preserves_color_metadata: false,
+            ..Default::default()
+        };
+
+        let missing = requirements.missing_capabilities(&capabilities);
+
+        assert!(missing.iter().any(|item| item == "preservesColorMetadata"));
+    }
+
+    #[test]
+    fn frame_processor_session_requirements_report_hdr_preservation() {
+        let mut metadata = metadata();
+        metadata.hdr = Some(NativeFrameHdrMetadata {
+            kind: "hlg".to_owned(),
+            mastering_display: None,
+            content_light: None,
+            dolby_vision: None,
+        });
+        let requirements = FrameProcessorSessionRequirements::native_video(metadata);
+        let capabilities = FrameProcessorCapabilities {
+            accepted_input_handle_kinds: vec![NativeHandleKind::CvPixelBuffer],
+            output_handle_kinds: vec![NativeHandleKind::CvPixelBuffer],
+            accepted_input_pipeline_profiles: vec![
+                NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
+            ],
+            output_pipeline_profiles: vec![NativeFramePipelineProfile::VideoToolboxCvPixelBuffer],
+            supports_video_frames: true,
+            preserves_color_metadata: true,
+            preserves_hdr_metadata: false,
+            ..Default::default()
+        };
+
+        let missing = requirements.missing_capabilities(&capabilities);
+
+        assert!(missing.iter().any(|item| item == "preservesHdrMetadata"));
     }
 }

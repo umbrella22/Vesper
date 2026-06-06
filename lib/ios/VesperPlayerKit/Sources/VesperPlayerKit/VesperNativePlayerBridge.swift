@@ -1096,6 +1096,16 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             )
         }
         let normalizedResource = openSourceNormalizerResourceIfNeeded(for: currentSource)
+        if normalizedResource == nil && sourceNormalizerConfiguration.mode == .requireNormalized {
+            throw NSError(
+                domain: "io.github.ikaros.vesper.host.ios",
+                code: -2,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "SourceNormalizer requireNormalized failed to open a normalized resource."
+                ]
+            )
+        }
         let normalizedSession = makeSourceNormalizerResourceSession(for: normalizedResource)
         let playbackSource = normalizedPlaybackSource(
             original: currentSource,
@@ -1207,21 +1217,37 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             guard let self else { return }
             self.handlePlaybackEnded()
         }
-        applyPendingNativeFrameSeekIfNeeded(session: session)
+        session.onPlaybackFailed = { [weak self] issue in
+            guard let self else { return }
+            self.handlePlaybackFailure(
+                error: nil,
+                fallbackMessage: issue.message
+            )
+        }
+        let shouldPlayAfterPendingSeek = pendingAutoPlay
+        if applyPendingNativeFrameSeekIfNeeded(session: session, playAfterSeek: shouldPlayAfterPendingSeek) {
+            pendingAutoPlay = false
+            return
+        }
         if pendingAutoPlay {
-            session.play(rate: desiredPlaybackRate)
-            updateState {
-                PlayerHostUiState(
-                    title: $0.title,
-                    subtitle: $0.subtitle,
-                    sourceLabel: $0.sourceLabel,
-                    playbackState: .playing,
-                    playbackRate: $0.playbackRate,
-                    isBuffering: false,
-                    isInterrupted: $0.isInterrupted,
-                    timeline: $0.timeline
-                )
-            }
+            pendingAutoPlay = false
+            startNativeFrameSessionPlayback(session)
+        }
+    }
+
+    private func startNativeFrameSessionPlayback(_ session: VesperNativeFramePipelineSession) {
+        session.play(rate: desiredPlaybackRate)
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: $0.subtitle,
+                sourceLabel: $0.sourceLabel,
+                playbackState: .playing,
+                playbackRate: $0.playbackRate,
+                isBuffering: false,
+                isInterrupted: $0.isInterrupted,
+                timeline: $0.timeline
+            )
         }
     }
 
@@ -1255,8 +1281,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         return max(proposed, 0)
     }
 
-    private func applyPendingNativeFrameSeekIfNeeded(session: VesperNativeFramePipelineSession) {
-        guard let pendingSeek = pendingNativeFrameSeek else { return }
+    private func applyPendingNativeFrameSeekIfNeeded(
+        session: VesperNativeFramePipelineSession,
+        playAfterSeek: Bool
+    ) -> Bool {
+        guard let pendingSeek = pendingNativeFrameSeek else { return false }
         pendingNativeFrameSeek = nil
         let timeline = nativeFrameTimelineState(
             positionMs: publishedUiState.timeline.positionMs,
@@ -1264,7 +1293,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         let target = pendingSeek.resolve(using: timeline)
         iosHostLog("applying pending native-frame seek targetMs=\(target)")
-        _ = session.seek(toMs: target)
+        _ = session.seek(toMs: target) { [weak self, weak session] _ in
+            guard playAfterSeek, let self, let session, !session.isClosed else { return }
+            self.startNativeFrameSessionPlayback(session)
+        }
+        return true
     }
 
     private func updateNativeFrameTimeline(_ timeline: VesperNativeFramePipelineTimeline) {
@@ -1385,18 +1418,28 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         let outputRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-source-normalizer", isDirectory: true)
-        let resource = VesperMobileSourceNormalizerResource.open(
+        let outcome = VesperMobileSourceNormalizerResource.open(
             source: source,
             configuration: sourceNormalizerConfiguration,
             outputRoot: outputRoot,
             forceNormalized: sourceNormalizerConfiguration.mode == .requireNormalized
         )
+        if !outcome.diagnostics.isEmpty {
+            currentPluginDiagnostics = outcome.diagnostics
+        }
+        let resource = outcome.resource
         guard let resource else {
             if sourceNormalizerConfiguration.mode == .requireNormalized {
                 reportCommandError(
                     code: .backendFailure,
                     category: .source,
                     message: "SourceNormalizer requireNormalized failed to open a normalized resource"
+                )
+            } else {
+                let bypassReason = sourceNormalizerBypassReason(from: outcome.diagnostics)
+                    ?? "sourceNormalizerResourceBypassed"
+                iosHostLog(
+                    "source normalizer resource bypassed; route=native fallbackReason=\(bypassReason)"
                 )
             }
             return nil
@@ -1426,6 +1469,16 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             "source normalizer resource selected route=\(resource.outputRoute) path=\(resource.primaryResourcePath)"
         )
         return resource
+    }
+
+    private func sourceNormalizerBypassReason(
+        from diagnostics: [[String: Any]]
+    ) -> String? {
+        let messages = diagnostics.compactMap { $0["message"] as? String }
+        if messages.contains(where: { $0.contains("HdrResourceMetadataNotPreserved") }) {
+            return "sourceNormalizerResourceBypassedForHdr"
+        }
+        return messages.first
     }
 
     private func makeSourceNormalizerResourceSession(

@@ -11,8 +11,6 @@ import android.view.ViewGroup
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.absoluteValue
 
@@ -43,6 +41,7 @@ internal class VesperNativePlayerBridge(
     private var pendingAutoPlay = false
     private val i18n = VesperPlayerI18n.fromContext(appContext)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val nativeFramePipelineRuntimeLock = Any()
 
     private val _uiState = MutableStateFlow(
         PlayerHostUiState(
@@ -69,11 +68,15 @@ internal class VesperNativePlayerBridge(
     private val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     private val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
     private val surfaceHost = VesperNativeSurfaceHost(bindings, surfaceKind)
+    @Volatile
     private var nativeFramePipelineFallbackReason: String? = null
     private var nativeFramePipelineRequiredFailure = false
+    @Volatile
     private var nativeFramePipelineOpenStatus: Map<String, Any?>? = null
     private var nativeFramePipelineLastStatus: Map<String, Any?>? = null
+    @Volatile
     private var nativeFramePipelinePumpRunning = false
+    @Volatile
     private var nativeFramePipelinePumpEpoch = 0L
     private var nativeFramePipelinePlaybackRequested = false
     private var pendingTimedNativeFrame: TimedNativeFrameRelease? = null
@@ -127,11 +130,11 @@ internal class VesperNativePlayerBridge(
 
         currentPluginDiagnostics = probePluginsForSource(source)
         stopNativeFramePipelinePump()
-        releasePendingTimedNativeFrame(presented = false)
-        bindings.closeNativeFramePipeline()
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
+        closeNativeFramePipelineOnRuntime()
         nativeFramePipelineOpenStatus = null
         nativeFramePipelineLastStatus = null
-        pendingTimedNativeFrame = null
+        clearPendingTimedNativeFrameFromRuntime()
         nativeFramePipelinePlaybackRequested = false
         resetNativeFramePipelineRuntimeMarkers()
         val nativeFrameDecision = evaluateNativeFramePipelineRoute()
@@ -237,13 +240,13 @@ internal class VesperNativePlayerBridge(
         advanceNativeUpdateEpoch(clearListener = true)
         hasInitializedSource = false
         stopNativeFramePipelinePump()
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
+        closeNativeFramePipelineOnRuntime()
         nativeFramePipelinePumpScheduler.close()
-        releasePendingTimedNativeFrame(presented = false)
         clearTrackState()
-        bindings.closeNativeFramePipeline()
         nativeFramePipelineOpenStatus = null
         nativeFramePipelineLastStatus = null
-        pendingTimedNativeFrame = null
+        clearPendingTimedNativeFrameFromRuntime()
         nativeFramePipelinePlaybackRequested = false
         resetNativeFramePipelineRuntimeMarkers()
         bindings.clearSystemPlayback()
@@ -271,11 +274,11 @@ internal class VesperNativePlayerBridge(
             mapOf("targetProtocol" to source.protocol.name.lowercase()),
         )
         stopNativeFramePipelinePump()
-        releasePendingTimedNativeFrame(presented = false)
-        bindings.closeNativeFramePipeline()
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
+        closeNativeFramePipelineOnRuntime()
         nativeFramePipelineOpenStatus = null
         nativeFramePipelineLastStatus = null
-        pendingTimedNativeFrame = null
+        clearPendingTimedNativeFrameFromRuntime()
         resetNativeFramePipelineRuntimeMarkers()
         currentSource = source
         pendingAutoPlay = true
@@ -517,7 +520,7 @@ internal class VesperNativePlayerBridge(
     override fun detachSurfaceHost(host: ViewGroup?) {
         recordBenchmark("detach_surface_host")
         stopNativeFramePipelinePump()
-        releasePendingTimedNativeFrame(presented = false)
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
         if (isRequiredNativeFramePipelineFailureActive()) {
             surfaceHost.detachWithoutNativeNotification(host)
             return
@@ -548,7 +551,7 @@ internal class VesperNativePlayerBridge(
     override fun pause() {
         recordBenchmark("pause_command")
         stopNativeFramePipelinePump()
-        releasePendingTimedNativeFrame(presented = false)
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
         if (isRequiredNativeFramePipelineFailureActive()) {
             return
         }
@@ -838,11 +841,7 @@ internal class VesperNativePlayerBridge(
         _trackSelection.value = bindings.currentTrackSelection()
         _effectiveVideoTrackId.value = bindings.currentEffectiveVideoTrackId()
         _videoVariantObservation.value = bindings.currentVideoVariantObservation()
-        bindings.currentNativeFramePipelineStatus()?.let { status ->
-            nativeFramePipelineLastStatus = status
-            currentPluginDiagnostics =
-                pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
-        }
+        currentNativeFramePipelineStatusOnRuntime()
 
         bindings.pollSnapshot()?.let { snapshot ->
             updateState {
@@ -992,39 +991,71 @@ internal class VesperNativePlayerBridge(
         source: VesperPlayerSource,
         startupDiagnostics: List<Map<String, Any?>>,
     ): Boolean {
-        val result =
-            runCatching {
-                nativeFramePipelineOpenStatus =
-                    bindings.openNativeFramePipeline(
-                        source = source,
-                        sourceNormalizerConfiguration = sourceNormalizerConfiguration,
-                        nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
-                        surfaceKind = surfaceKind,
-                    )
-                check(nativeFramePipelineOpenStatus != null) {
-                    "Android native-frame pipeline open returned no session."
+        currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(startupDiagnostics)
+        nativeFramePipelinePumpScheduler.execute {
+            val result =
+                runCatching {
+                    val openStatus =
+                        bindings.openNativeFramePipeline(
+                            source = source,
+                            sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                            nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
+                            surfaceKind = surfaceKind,
+                        )
+                    check(openStatus != null) {
+                        "Android native-frame pipeline open returned no session."
+                    }
+                    openStatus to advanceNativeFramePipelineOnce()
                 }
+            runOnMainThread {
+                applyNativeFramePipelineOpenResult(source, startupDiagnostics, result)
+            }
+        }
+        return !isRequiredNativeFramePipelineFailureActive()
+    }
+
+    private fun applyNativeFramePipelineOpenResult(
+        source: VesperPlayerSource,
+        startupDiagnostics: List<Map<String, Any?>>,
+        result: Result<Pair<Map<String, Any?>, Map<String, Any?>?>>,
+    ) {
+        if (isDisposed.get() || source != currentSource) {
+            result.getOrNull()?.second?.nativeFramePipelineFrameHandle()?.let { handle ->
+                postNativeFramePipelineRelease(handle, presented = false)
+            }
+            return
+        }
+        result
+            .onSuccess { opened ->
+                nativeFramePipelineOpenStatus = opened.first
                 Log.i(
                     TAG,
                     "native-frame pipeline opened route=${nativeFramePipelineOpenStatus?.get("route")} " +
                         "presenter=${nativeFramePipelineOpenStatus?.get("presenterProfile")} " +
                         "surfaceAttached=${nativeFramePipelineOpenStatus?.get("surfaceAttached")}",
                 )
-                nativeFramePipelineLastStatus = advanceNativeFramePipelineOnce()
+                nativeFramePipelineLastStatus = opened.second
                 Log.i(
                     TAG,
                     "native-frame pipeline first advance status=${nativeFramePipelineLastStatus?.get("status")} " +
                         "message=${nativeFramePipelineLastStatus?.get("message")}",
                 )
                 publishNativeFramePipelinePumpStatus(nativeFramePipelineLastStatus)
+                currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(startupDiagnostics)
+                syncNativeFramePipelinePumpWithPlaybackState()
             }
-        if (result.isSuccess) {
-            currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(startupDiagnostics)
-            return true
-        }
+            .onFailure { error ->
+                handleNativeFramePipelineOpenFailure(source, startupDiagnostics, error)
+            }
+    }
 
+    private fun handleNativeFramePipelineOpenFailure(
+        source: VesperPlayerSource,
+        startupDiagnostics: List<Map<String, Any?>>,
+        error: Throwable,
+    ) {
         val reason =
-            result.exceptionOrNull()?.message
+            error.message
                 ?.takeUnless(String::isBlank)
                 ?: "Android native-frame pipeline open failed."
         stopNativeFramePipelinePump()
@@ -1034,25 +1065,24 @@ internal class VesperNativePlayerBridge(
         nativeFramePipelineFallbackReason = reason
         nativeFramePipelineRequiredFailure =
             nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame
-        runCatching { bindings.closeNativeFramePipeline() }
+        closeNativeFramePipelineOnRuntime()
         currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(startupDiagnostics)
 
         if (nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame) {
             recordBenchmark("native_frame_pipeline_failed", mapOf("reason" to reason))
             failRequiredNativeFramePipeline(reason, source)
-            return false
+            return
         }
 
         recordBenchmark("native_frame_pipeline_fallback", mapOf("reason" to reason))
         Log.i(TAG, "native-frame pipeline open failed; continuing system playback: $reason")
-        return true
     }
 
     private fun seekBindingsTo(positionMs: Long): Boolean {
         val shouldResumeNativeFramePump =
             nativeFramePipelinePumpRunning || _uiState.value.playbackState == PlaybackStateUi.Playing
         stopNativeFramePipelinePump()
-        releasePendingTimedNativeFrame(presented = false)
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
         if (isRequiredNativeFramePipelineFailureActive()) {
             return false
         }
@@ -1064,12 +1094,7 @@ internal class VesperNativePlayerBridge(
         if (nativeFramePipelineOpenStatus == null) {
             return true
         }
-        runCatching { bindings.seekNativeFramePipeline(positionMs) }
-            .onSuccess { status ->
-                nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
-                markNativeFramePipelineDiagnosticsDirty()
-            }
-            .onFailure { handleNativeFramePipelineRuntimeFailure("seek", it) }
+        seekNativeFramePipelineOnRuntime(positionMs)
         if (isRequiredNativeFramePipelineFailureActive()) {
             return false
         }
@@ -1083,13 +1108,8 @@ internal class VesperNativePlayerBridge(
         if (nativeFramePipelineOpenStatus == null) {
             return
         }
-        releasePendingTimedNativeFrame(presented = false)
-        runCatching { bindings.flushNativeFramePipeline() }
-            .onSuccess { status ->
-                nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
-                markNativeFramePipelineDiagnosticsDirty()
-            }
-            .onFailure { handleNativeFramePipelineRuntimeFailure("flush", it) }
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
+        flushNativeFramePipelineOnRuntime()
     }
 
     private fun restartNativeFramePipelineFromBeginning() {
@@ -1097,13 +1117,8 @@ internal class VesperNativePlayerBridge(
             return
         }
         stopNativeFramePipelinePump()
-        releasePendingTimedNativeFrame(presented = false)
-        runCatching { bindings.seekNativeFramePipeline(0L) }
-            .onSuccess { status ->
-                nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
-                markNativeFramePipelineDiagnosticsDirty()
-            }
-            .onFailure { handleNativeFramePipelineRuntimeFailure("seek", it) }
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
+        seekNativeFramePipelineOnRuntime(0L)
     }
 
     private fun isRequiredNativeFramePipelineFailureActive(): Boolean =
@@ -1113,9 +1128,7 @@ internal class VesperNativePlayerBridge(
         if (nativeFramePipelineOpenStatus == null) {
             return
         }
-        nativeFramePipelineLastStatus =
-            bindings.currentNativeFramePipelineStatus() ?: nativeFramePipelineLastStatus
-        markNativeFramePipelineDiagnosticsDirty()
+        currentNativeFramePipelineStatusOnRuntime()
     }
 
     private fun advanceNativeFramePipelineOnce(): Map<String, Any?>? {
@@ -1133,6 +1146,66 @@ internal class VesperNativePlayerBridge(
         return status
     }
 
+    private fun flushNativeFramePipelineOnRuntime() {
+        postNativeFramePipelineCommand("flush") {
+            releasePendingTimedNativeFrameFromRuntime(presented = false)
+            bindings.flushNativeFramePipeline()
+        }
+    }
+
+    private fun postNativeFramePipelineCommand(
+        operation: String,
+        command: () -> Map<String, Any?>?,
+    ) {
+        nativeFramePipelinePumpScheduler.execute {
+            val result = runCatching(command)
+            runOnMainThread {
+                applyNativeFramePipelineCommandResult(operation, result)
+            }
+        }
+    }
+
+    private fun seekNativeFramePipelineOnRuntime(positionMs: Long) {
+        postNativeFramePipelineCommand("seek") {
+            releasePendingTimedNativeFrameFromRuntime(presented = false)
+            bindings.seekNativeFramePipeline(positionMs)
+        }
+    }
+
+    private fun currentNativeFramePipelineStatusOnRuntime() {
+        postNativeFramePipelineCommand("status") {
+            bindings.currentNativeFramePipelineStatus()
+        }
+    }
+
+    private fun closeNativeFramePipelineOnRuntime() {
+        nativeFramePipelinePumpScheduler.execute {
+            runCatching {
+                releasePendingTimedNativeFrameFromRuntime(presented = false)
+                bindings.closeNativeFramePipeline()
+            }.onFailure { error ->
+                runOnMainThread {
+                    Log.w(TAG, "native-frame pipeline close failed", error)
+                }
+            }
+        }
+    }
+
+    private fun applyNativeFramePipelineCommandResult(
+        operation: String,
+        result: Result<Map<String, Any?>?>,
+    ) {
+        if (isDisposed.get()) {
+            return
+        }
+        result
+            .onSuccess { status ->
+                nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
+                markNativeFramePipelineDiagnosticsDirty()
+            }
+            .onFailure { handleNativeFramePipelineRuntimeFailure(operation, it) }
+    }
+
     private fun handleNativeFramePipelineRuntimeFailure(operation: String, error: Throwable) {
         val reason =
             error.message
@@ -1144,7 +1217,7 @@ internal class VesperNativePlayerBridge(
             Log.w(TAG, "native-frame pipeline $operation failed; falling back to system playback", error)
         }
         stopNativeFramePipelinePump()
-        pendingTimedNativeFrame = null
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
         nativeFramePipelineFallbackReason = reason
         nativeFramePipelineRequiredFailure =
             nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame
@@ -1158,7 +1231,7 @@ internal class VesperNativePlayerBridge(
             if (isDisposed.get()) {
                 return@runOnMainThread
             }
-            runCatching { bindings.closeNativeFramePipeline() }
+            closeNativeFramePipelineOnRuntime()
             if (shouldFailRequiredNativeFrame) {
                 recordBenchmark("native_frame_pipeline_failed", mapOf("reason" to reason))
                 failRequiredNativeFramePipeline(reason, currentSource)
@@ -1167,33 +1240,14 @@ internal class VesperNativePlayerBridge(
     }
 
     private fun runOnMainThread(action: () -> Unit) {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
+        if (
+            nativeFramePipelinePumpScheduler.inlineCallbacksForTests ||
+                Looper.myLooper() == Looper.getMainLooper()
+        ) {
             action()
         } else {
             mainHandler.post(action)
         }
-    }
-
-    private fun <T> runOnMainThreadForResult(action: () -> T): T {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            return action()
-        }
-        var result: MainThreadResult<T>? = null
-        val latch = CountDownLatch(1)
-        val posted = mainHandler.post {
-            result = MainThreadResult(runCatching(action))
-            latch.countDown()
-        }
-        if (!posted) {
-            throw IllegalStateException("Main thread action could not be posted.")
-        }
-        if (!latch.await(NATIVE_FRAME_PIPELINE_MAIN_THREAD_RESULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            throw IllegalStateException("Main thread action timed out.")
-        }
-        val completed =
-            result
-                ?: throw IllegalStateException("Main thread action did not produce a result.")
-        return completed.value.getOrThrow()
     }
 
     private fun failRequiredNativeFramePipeline(reason: String, source: VesperPlayerSource?) {
@@ -1264,19 +1318,11 @@ internal class VesperNativePlayerBridge(
     }
 
     private fun runNativeFramePipelinePumpTickWorkerUnchecked(epoch: Long) {
-        val pendingRelease =
-            runOnMainThreadForResult {
-                if (!canApplyNativeFramePumpResult(epoch)) {
-                    null
-                } else if (nativeFramePipelineOpenStatus == null || nativeFramePipelineFallbackReason != null) {
-                    stopNativeFramePipelinePump()
-                    null
-                } else {
-                    pendingTimedNativeFrame?.also {
-                        pendingTimedNativeFrame = null
-                    }
-                }
-            }
+        if (!canContinueNativeFramePump(epoch)) {
+            releasePendingTimedNativeFrameFromRuntime(presented = false)
+            return
+        }
+        val pendingRelease = takePendingTimedNativeFrameForRuntime()
         if (pendingRelease != null) {
             if (!canContinueNativeFramePump(epoch)) {
                 releaseStaleNativeFramePipelineFrame(pendingRelease.handle)
@@ -1353,11 +1399,15 @@ internal class VesperNativePlayerBridge(
         if (timedFrame != null) {
             val delayMs = nativeFramePipelineDelayUntilPresentation(timedFrame.presentationTimeUs)
             if (delayMs > 0L) {
-                pendingTimedNativeFrame = timedFrame
+                storePendingTimedNativeFrameFromRuntime(timedFrame)
                 scheduleNativeFramePipelinePump(delayMs)
                 return
             }
-            releaseNativeFramePipelineFrame(timedFrame.handle, presented = true)
+            val releaseResult =
+                runCatching {
+                    bindings.releaseNativeFramePipelineFrame(timedFrame.handle, presented = true)
+                }
+            applyNativeFramePipelineReleaseResult(epoch, releaseResult)
             if (nativeFramePipelineOpenStatus == null || nativeFramePipelineFallbackReason != null) {
                 return
             }
@@ -1375,7 +1425,9 @@ internal class VesperNativePlayerBridge(
     }
 
     private fun canContinueNativeFramePump(epoch: Long): Boolean =
-        runOnMainThreadForResult { canApplyNativeFramePumpResult(epoch) }
+        canApplyNativeFramePumpResult(epoch) &&
+            nativeFramePipelineOpenStatus != null &&
+            nativeFramePipelineFallbackReason == null
 
     private fun canApplyNativeFramePumpResult(epoch: Long): Boolean =
         epoch == nativeFramePipelinePumpEpoch &&
@@ -1567,7 +1619,9 @@ internal class VesperNativePlayerBridge(
     }
 
     private fun reschedulePendingTimedNativeFrameForCurrentRate() {
-        val pending = pendingTimedNativeFrame ?: return
+        val pending = synchronized(nativeFramePipelineRuntimeLock) {
+            pendingTimedNativeFrame
+        } ?: return
         if (
             !nativeFramePipelinePumpRunning ||
                 nativeFramePipelineOpenStatus == null ||
@@ -1581,28 +1635,72 @@ internal class VesperNativePlayerBridge(
     }
 
     private fun releasePendingTimedNativeFrame(presented: Boolean) {
-        val pending = pendingTimedNativeFrame ?: return
-        pendingTimedNativeFrame = null
-        releaseNativeFramePipelineFrame(pending.handle, presented)
+        releasePendingTimedNativeFrameOnRuntime(presented)
+    }
+
+    private fun releasePendingTimedNativeFrameOnRuntime(presented: Boolean) {
+        nativeFramePipelinePumpScheduler.execute {
+            val result = runCatching {
+                releasePendingTimedNativeFrameFromRuntime(presented)
+            }
+            runOnMainThread {
+                result.onFailure { handleNativeFramePipelineRuntimeFailure("release", it) }
+            }
+        }
+    }
+
+    private fun takePendingTimedNativeFrameForRuntime(): TimedNativeFrameRelease? =
+        synchronized(nativeFramePipelineRuntimeLock) {
+            pendingTimedNativeFrame?.also {
+                pendingTimedNativeFrame = null
+            }
+        }
+
+    private fun storePendingTimedNativeFrameFromRuntime(timedFrame: TimedNativeFrameRelease) {
+        synchronized(nativeFramePipelineRuntimeLock) {
+            pendingTimedNativeFrame = timedFrame
+        }
+    }
+
+    private fun clearPendingTimedNativeFrameFromRuntime(): TimedNativeFrameRelease? =
+        synchronized(nativeFramePipelineRuntimeLock) {
+            pendingTimedNativeFrame?.also {
+                pendingTimedNativeFrame = null
+            }
+        }
+
+    private fun releasePendingTimedNativeFrameFromRuntime(presented: Boolean) {
+        val pending = clearPendingTimedNativeFrameFromRuntime() ?: return
+        if (presented) {
+            bindings.releaseNativeFramePipelineFrame(pending.handle, presented = true)
+        } else {
+            releaseStaleNativeFramePipelineFrame(pending.handle)
+        }
     }
 
     private fun releaseNativeFramePipelineFrame(frameHandle: Long, presented: Boolean) {
-        runCatching {
-            bindings.releaseNativeFramePipelineFrame(frameHandle, presented = presented)
-        }
-            .onSuccess { status ->
-                nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
-                publishNativeFramePipelinePumpStatus(nativeFramePipelineLastStatus)
+        postNativeFramePipelineRelease(frameHandle, presented)
+    }
+
+    private fun postNativeFramePipelineRelease(frameHandle: Long, presented: Boolean) {
+        nativeFramePipelinePumpScheduler.execute {
+            val result =
+                runCatching {
+                    bindings.releaseNativeFramePipelineFrame(frameHandle, presented = presented)
+                }
+            runOnMainThread {
+                result
+                    .onSuccess { status ->
+                        nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
+                        publishNativeFramePipelinePumpStatus(nativeFramePipelineLastStatus)
+                    }
+                    .onFailure { handleNativeFramePipelineRuntimeFailure("release", it) }
             }
-            .onFailure { handleNativeFramePipelineRuntimeFailure("release", it) }
+        }
     }
 
     private fun releaseStaleNativeFramePipelineFrame(frameHandle: Long) {
-        runCatching {
-            bindings.releaseNativeFramePipelineFrame(frameHandle, presented = false)
-        }.onFailure {
-            Log.w(TAG, "Failed to release stale native-frame pipeline frame", it)
-        }
+        bindings.releaseNativeFramePipelineFrame(frameHandle, presented = false)
     }
 
     private fun nativeFramePipelineCounters(): Map<String, Any?> {
@@ -1679,7 +1777,6 @@ private const val NATIVE_FRAME_PIPELINE_ACTIVE_PUMP_DELAY_MS = 8L
 private const val NATIVE_FRAME_PIPELINE_IDLE_PUMP_DELAY_MS = 16L
 private const val NATIVE_FRAME_PIPELINE_BACKPRESSURE_PUMP_DELAY_MS = 32L
 private const val NATIVE_FRAME_PIPELINE_MAX_FRAME_DELAY_MS = 100L
-private const val NATIVE_FRAME_PIPELINE_MAIN_THREAD_RESULT_TIMEOUT_MS = 1_000L
 private const val NATIVE_FRAME_PIPELINE_FIRST_FRAME_TIMEOUT_MS = 2_500L
 private const val NATIVE_FRAME_PIPELINE_LOG_COUNTER_BUCKET_SIZE = 30L
 
@@ -1688,17 +1785,19 @@ private data class TimedNativeFrameRelease(
     val presentationTimeUs: Long,
 )
 
-private data class MainThreadResult<T>(
-    val value: Result<T>,
-)
-
 internal interface NativeFramePipelinePumpScheduler {
+    val inlineCallbacksForTests: Boolean
+        get() = false
     fun schedule(delayMs: Long, action: () -> Unit)
+    fun execute(action: () -> Unit) = schedule(delayMs = 0L, action)
     fun cancel()
     fun close() = cancel()
 }
 
-private class HandlerNativeFramePipelinePumpScheduler : NativeFramePipelinePumpScheduler {
+private class HandlerNativeFramePipelinePumpScheduler(
+    private val inlineRuntimeCommandsForLocalTests: Boolean = isLocalUnitTestRuntime(),
+) : NativeFramePipelinePumpScheduler {
+    override val inlineCallbacksForTests: Boolean = inlineRuntimeCommandsForLocalTests
     private val thread: HandlerThread by lazy {
         HandlerThread("VesperNativeFramePump").also { it.start() }
     }
@@ -1729,6 +1828,26 @@ private class HandlerNativeFramePipelinePumpScheduler : NativeFramePipelinePumpS
         handler.postDelayed(runnable, delayMs.coerceAtLeast(0L))
     }
 
+    override fun execute(action: () -> Unit) {
+        if (inlineRuntimeCommandsForLocalTests) {
+            action()
+            return
+        }
+        val shouldPost =
+            synchronized(this) {
+                if (closed) {
+                    false
+                } else {
+                    started = true
+                    true
+                }
+            }
+        if (!shouldPost) {
+            return
+        }
+        handler.post(action)
+    }
+
     @Synchronized
     override fun cancel() {
         scheduled?.let(handler::removeCallbacks)
@@ -1747,6 +1866,10 @@ private class HandlerNativeFramePipelinePumpScheduler : NativeFramePipelinePumpS
         }
     }
 }
+
+private fun isLocalUnitTestRuntime(): Boolean =
+    System.getProperty("java.vm.name")
+        ?.contains("Dalvik", ignoreCase = true) != true
 
 private data class PreservedPlaybackState(
     val positionMs: Long,

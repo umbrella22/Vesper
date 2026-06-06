@@ -96,6 +96,148 @@ pub struct NativeFrameTransform {
     pub mirrored_vertical: bool,
 }
 
+/// Color characteristics that must be preserved for HDR native-frame playback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeFrameColorMetadata {
+    #[serde(default)]
+    pub primaries: Option<String>,
+    #[serde(default)]
+    pub transfer: Option<String>,
+    #[serde(default)]
+    pub matrix: Option<String>,
+    #[serde(default)]
+    pub range: Option<String>,
+    #[serde(default)]
+    pub bit_depth: Option<u8>,
+}
+
+impl NativeFrameColorMetadata {
+    /// Returns whether this metadata describes a known HDR transfer function.
+    pub fn is_hdr_transfer(&self) -> bool {
+        self.transfer
+            .as_deref()
+            .map(|transfer| {
+                let transfer = transfer.to_ascii_lowercase();
+                transfer.contains("pq")
+                    || transfer.contains("st2084")
+                    || transfer.contains("smpte2084")
+                    || transfer.contains("hlg")
+                    || transfer.contains("arib-std-b67")
+                    || transfer.contains("arib_std_b67")
+            })
+            .unwrap_or(false)
+    }
+
+    /// Returns whether this color metadata requires explicit preservation.
+    pub fn requires_preservation(&self) -> bool {
+        self.bit_depth.is_some_and(|bit_depth| bit_depth > 8)
+            || self.is_hdr_transfer()
+            || self.primaries.as_deref().is_some_and(is_wide_color_label)
+            || self.matrix.as_deref().is_some_and(is_wide_color_label)
+            || self
+                .transfer
+                .as_deref()
+                .is_some_and(is_wide_color_transfer_label)
+    }
+}
+
+fn is_wide_color_label(label: &str) -> bool {
+    let normalized = normalize_color_label(label);
+    matches!(
+        normalized.as_str(),
+        "bt2020"
+            | "rec2020"
+            | "bt2020nc"
+            | "bt2020ncl"
+            | "bt2020c"
+            | "bt2020cl"
+            | "smpte431"
+            | "smpte431p3"
+            | "smpte432"
+            | "smpte432p3"
+            | "displayp3"
+            | "displayp3d65"
+            | "p3"
+            | "dcip3"
+            | "ictcp"
+    )
+}
+
+fn is_wide_color_transfer_label(label: &str) -> bool {
+    let normalized = normalize_color_label(label);
+    matches!(
+        normalized.as_str(),
+        "bt2020" | "bt202010" | "bt202012" | "smpte2084" | "st2084" | "pq" | "hlg" | "aribstdb67"
+    )
+}
+
+fn normalize_color_label(label: &str) -> String {
+    label
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect()
+}
+
+/// Mastering display metadata carried by HDR10-style streams.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeFrameMasteringDisplayMetadata {
+    #[serde(default)]
+    pub display_primaries: Option<String>,
+    #[serde(default)]
+    pub white_point: Option<String>,
+    #[serde(default)]
+    pub max_luminance_nits: Option<u32>,
+    #[serde(default)]
+    pub min_luminance_nits: Option<u32>,
+}
+
+/// Content light metadata carried by HDR streams.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeFrameContentLightMetadata {
+    #[serde(default)]
+    pub max_content_light_level: Option<u32>,
+    #[serde(default)]
+    pub max_frame_average_light_level: Option<u32>,
+}
+
+/// Dolby Vision stream metadata used for diagnostics and route selection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeFrameDolbyVisionMetadata {
+    #[serde(default)]
+    pub profile: Option<u8>,
+    #[serde(default)]
+    pub level: Option<u8>,
+    #[serde(default)]
+    pub compatibility_id: Option<u8>,
+    #[serde(default)]
+    pub has_rpu: bool,
+    #[serde(default)]
+    pub has_el: bool,
+    #[serde(default)]
+    pub has_bl: bool,
+}
+
+/// Structured HDR metadata attached to tracks and native frames.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeFrameHdrMetadata {
+    pub kind: String,
+    #[serde(default)]
+    pub mastering_display: Option<NativeFrameMasteringDisplayMetadata>,
+    #[serde(default)]
+    pub content_light: Option<NativeFrameContentLightMetadata>,
+    #[serde(default)]
+    pub dolby_vision: Option<NativeFrameDolbyVisionMetadata>,
+}
+
+impl NativeFrameHdrMetadata {
+    /// Returns whether the metadata describes Dolby Vision.
+    pub fn is_dolby_vision(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("dolbyVision") || self.dolby_vision.is_some()
+    }
+}
+
 /// Metadata shared by native frame producers, processors, and consumers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeFrameMetadata {
@@ -120,6 +262,10 @@ pub struct NativeFrameMetadata {
     #[serde(default)]
     pub hdr_metadata: Option<String>,
     #[serde(default)]
+    pub color: Option<NativeFrameColorMetadata>,
+    #[serde(default)]
+    pub hdr: Option<NativeFrameHdrMetadata>,
+    #[serde(default)]
     pub sync_info: Option<NativeFrameSyncInfo>,
     #[serde(default)]
     pub transform: Option<NativeFrameTransform>,
@@ -136,6 +282,30 @@ impl NativeFrameMetadata {
             .clone()
             .unwrap_or_else(|| NativeFramePipelineProfile::from_handle_kind(&self.handle_kind))
     }
+
+    /// Returns whether this frame should be treated as HDR by native-frame gates.
+    pub fn requires_hdr_preservation(&self) -> bool {
+        self.hdr.is_some()
+            || self
+                .hdr_metadata
+                .as_deref()
+                .map(|metadata| !metadata.trim().is_empty())
+                .unwrap_or(false)
+            || self
+                .color
+                .as_ref()
+                .map(NativeFrameColorMetadata::is_hdr_transfer)
+                .unwrap_or(false)
+    }
+
+    /// Returns whether this frame carries color metadata that should be preserved.
+    pub fn requires_color_preservation(&self) -> bool {
+        self.color
+            .as_ref()
+            .is_some_and(NativeFrameColorMetadata::requires_preservation)
+            || self.color_space.as_deref().is_some_and(is_wide_color_label)
+            || self.requires_hdr_preservation()
+    }
 }
 
 /// A native frame handle plus metadata.
@@ -149,8 +319,10 @@ pub struct NativeFrame {
 #[cfg(test)]
 mod tests {
     use super::{
-        NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
-        NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind, VisibleRect,
+        NativeFrameColorMetadata, NativeFrameContentLightMetadata, NativeFrameDolbyVisionMetadata,
+        NativeFrameHdrMetadata, NativeFrameMasteringDisplayMetadata, NativeFrameMetadata,
+        NativeFramePipelineProfile, NativeFrameReleaseTracking, NativeFrameSyncInfo,
+        NativeFrameTransform, NativeHandleKind, VisibleRect,
     };
     use crate::{DecoderFrameFormat, DecoderMediaKind};
 
@@ -175,6 +347,27 @@ mod tests {
             pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
             color_space: Some("bt709".to_owned()),
             hdr_metadata: Some("hdr10".to_owned()),
+            color: Some(NativeFrameColorMetadata {
+                primaries: Some("bt2020".to_owned()),
+                transfer: Some("smpte2084".to_owned()),
+                matrix: Some("bt2020-ncl".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(10),
+            }),
+            hdr: Some(NativeFrameHdrMetadata {
+                kind: "hdr10".to_owned(),
+                mastering_display: Some(NativeFrameMasteringDisplayMetadata {
+                    display_primaries: Some("bt2020".to_owned()),
+                    white_point: Some("d65".to_owned()),
+                    max_luminance_nits: Some(1_000),
+                    min_luminance_nits: Some(0),
+                }),
+                content_light: Some(NativeFrameContentLightMetadata {
+                    max_content_light_level: Some(1_000),
+                    max_frame_average_light_level: Some(400),
+                }),
+                dolby_vision: None,
+            }),
             sync_info: Some(NativeFrameSyncInfo {
                 kind: "test_fence".to_owned(),
                 handle: Some(12),
@@ -202,6 +395,137 @@ mod tests {
             serde_json::from_str(&encoded).expect("deserialize metadata");
 
         assert_eq!(decoded, metadata);
+    }
+
+    #[test]
+    fn native_frame_metadata_detects_hdr_preservation_requirement() {
+        let mut metadata = test_metadata();
+
+        assert!(metadata.requires_color_preservation());
+        assert!(metadata.requires_hdr_preservation());
+
+        metadata.color = Some(NativeFrameColorMetadata {
+            primaries: Some("bt2020".to_owned()),
+            transfer: Some("arib-std-b67".to_owned()),
+            matrix: Some("bt2020-ncl".to_owned()),
+            range: Some("limited".to_owned()),
+            bit_depth: Some(10),
+        });
+        metadata.hdr = None;
+        metadata.hdr_metadata = None;
+
+        assert!(metadata.requires_hdr_preservation());
+
+        metadata.color = None;
+        metadata.color_space = None;
+
+        assert!(!metadata.requires_color_preservation());
+        assert!(!metadata.requires_hdr_preservation());
+    }
+
+    #[test]
+    fn native_frame_metadata_does_not_require_color_preservation_for_ordinary_sdr() {
+        let mut metadata = test_metadata();
+        metadata.color_space = Some("bt709".to_owned());
+        metadata.color = Some(NativeFrameColorMetadata {
+            primaries: Some("bt709".to_owned()),
+            transfer: Some("sdr-video".to_owned()),
+            matrix: Some("bt709".to_owned()),
+            range: Some("limited".to_owned()),
+            bit_depth: Some(8),
+        });
+        metadata.hdr = None;
+        metadata.hdr_metadata = None;
+
+        assert!(!metadata.requires_color_preservation());
+        assert!(!metadata.requires_hdr_preservation());
+
+        metadata.color_space = Some("bt2020".to_owned());
+        assert!(metadata.requires_color_preservation());
+    }
+
+    #[test]
+    fn native_frame_metadata_accepts_ffmpeg_sdr_color_spellings() {
+        let mut metadata = test_metadata();
+        metadata.color_space = None;
+        metadata.hdr = None;
+        metadata.hdr_metadata = None;
+
+        for label in ["bt470bg", "fcc", "smpte240m"] {
+            metadata.color = Some(NativeFrameColorMetadata {
+                primaries: Some(label.to_owned()),
+                transfer: Some("bt709".to_owned()),
+                matrix: Some(label.to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(8),
+            });
+
+            assert!(
+                !metadata.requires_color_preservation(),
+                "{label} should be treated as ordinary SDR"
+            );
+            assert!(!metadata.requires_hdr_preservation());
+        }
+    }
+
+    #[test]
+    fn native_frame_metadata_requires_preservation_for_wide_color_labels() {
+        let mut metadata = test_metadata();
+        metadata.color_space = None;
+        metadata.hdr = None;
+        metadata.hdr_metadata = None;
+
+        for label in ["bt2020", "display-p3", "ictcp"] {
+            metadata.color = Some(NativeFrameColorMetadata {
+                primaries: Some(label.to_owned()),
+                transfer: Some("sdr-video".to_owned()),
+                matrix: Some(label.to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(8),
+            });
+
+            assert!(
+                metadata.requires_color_preservation(),
+                "{label} should require preservation"
+            );
+        }
+    }
+
+    #[test]
+    fn native_frame_color_metadata_recognizes_android_hdr_transfer_labels() {
+        let mut color = NativeFrameColorMetadata {
+            primaries: Some("bt2020".to_owned()),
+            transfer: Some("st2084".to_owned()),
+            matrix: Some("bt2020-ncl".to_owned()),
+            range: Some("limited".to_owned()),
+            bit_depth: Some(10),
+        };
+
+        assert!(color.is_hdr_transfer());
+        assert!(color.requires_preservation());
+
+        color.transfer = Some("hlg".to_owned());
+        assert!(color.is_hdr_transfer());
+        assert!(color.requires_preservation());
+    }
+
+    #[test]
+    fn native_frame_hdr_metadata_identifies_dolby_vision() {
+        let metadata = NativeFrameHdrMetadata {
+            kind: "dolbyVision".to_owned(),
+            mastering_display: None,
+            content_light: None,
+            dolby_vision: Some(NativeFrameDolbyVisionMetadata {
+                profile: Some(8),
+                level: Some(6),
+                compatibility_id: Some(1),
+                has_rpu: true,
+                has_el: false,
+                has_bl: true,
+            }),
+        };
+
+        assert!(metadata.is_dolby_vision());
     }
 
     #[test]

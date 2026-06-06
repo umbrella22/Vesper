@@ -56,7 +56,9 @@ pub use frame_processor::{
 };
 pub use hook::{PipelineEvent, PipelineEventHook};
 pub use native_frame::{
-    NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
+    NativeFrame, NativeFrameColorMetadata, NativeFrameContentLightMetadata,
+    NativeFrameDolbyVisionMetadata, NativeFrameHdrMetadata, NativeFrameMasteringDisplayMetadata,
+    NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
     NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind, VisibleRect,
 };
 pub use processor::{

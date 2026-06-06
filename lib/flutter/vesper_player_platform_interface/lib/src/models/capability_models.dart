@@ -207,6 +207,158 @@ final class VesperPlayerCapabilities {
   }
 }
 
+final class VesperPlaybackCapabilityProbeRequest {
+  const VesperPlaybackCapabilityProbeRequest({
+    this.source,
+    this.codec,
+    this.requiresNativeFrame = false,
+    this.requiresHdrNativeFrame = false,
+    this.sourceNormalizerConfiguration =
+        const VesperSourceNormalizerConfiguration(),
+    this.frameProcessorConfiguration =
+        const VesperFrameProcessorConfiguration(),
+    this.nativeFramePipelineConfiguration =
+        const VesperNativeFramePipelineConfiguration(),
+  });
+
+  factory VesperPlaybackCapabilityProbeRequest.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    final rawSource = vesperDecodeMap(map['source']);
+    return VesperPlaybackCapabilityProbeRequest(
+      source: rawSource.isEmpty ? null : VesperPlayerSource.fromMap(rawSource),
+      codec: map['codec'] as String?,
+      requiresNativeFrame: _decodeBool(map, 'requiresNativeFrame'),
+      requiresHdrNativeFrame: _decodeBool(map, 'requiresHdrNativeFrame'),
+      sourceNormalizerConfiguration:
+          VesperSourceNormalizerConfiguration.fromMap(
+        vesperDecodeMap(map['sourceNormalizer']),
+      ),
+      frameProcessorConfiguration: VesperFrameProcessorConfiguration.fromMap(
+        vesperDecodeMap(map['frameProcessor']),
+      ),
+      nativeFramePipelineConfiguration:
+          VesperNativeFramePipelineConfiguration.fromMap(
+        vesperDecodeMap(map['nativeFramePipeline']),
+      ),
+    );
+  }
+
+  final VesperPlayerSource? source;
+  final String? codec;
+  final bool requiresNativeFrame;
+  final bool requiresHdrNativeFrame;
+  final VesperSourceNormalizerConfiguration sourceNormalizerConfiguration;
+  final VesperFrameProcessorConfiguration frameProcessorConfiguration;
+  final VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'source': source?.toMap(),
+      'codec': codec,
+      'requiresNativeFrame': requiresNativeFrame,
+      'requiresHdrNativeFrame': requiresHdrNativeFrame,
+      if (sourceNormalizerConfiguration.hasOverrides)
+        'sourceNormalizer': sourceNormalizerConfiguration.toMap(),
+      if (frameProcessorConfiguration.hasOverrides)
+        'frameProcessor': frameProcessorConfiguration.toMap(),
+      if (nativeFramePipelineConfiguration.hasOverrides)
+        'nativeFramePipeline': nativeFramePipelineConfiguration.toMap(),
+    };
+  }
+}
+
+final class VesperPlaybackCapabilityProbeResult {
+  const VesperPlaybackCapabilityProbeResult({
+    required this.status,
+    required this.codecFamily,
+    required this.systemPlaybackSupported,
+    required this.hardwareDecodeSupported,
+    required this.sdkManagedNativeFrameSupported,
+    required this.hdrNativeFrameSupported,
+    required this.outputFormat,
+    required this.hdrKind,
+    required this.dolbyVisionMode,
+    required this.confidence,
+    this.missingCapabilities = const <String>[],
+    this.diagnostics = const <String, Object?>{},
+  });
+
+  factory VesperPlaybackCapabilityProbeResult.fromMap(
+    Map<Object?, Object?> map,
+  ) {
+    return VesperPlaybackCapabilityProbeResult(
+      status: _decodeEnum(
+        VesperPlaybackCapabilityProbeStatus.values,
+        map['status'],
+        VesperPlaybackCapabilityProbeStatus.unknown,
+      ),
+      codecFamily: _decodeEnum(
+        VesperPlaybackCodecFamily.values,
+        map['codecFamily'],
+        VesperPlaybackCodecFamily.unknown,
+      ),
+      systemPlaybackSupported: _decodeBool(map, 'systemPlaybackSupported'),
+      hardwareDecodeSupported: _decodeBool(map, 'hardwareDecodeSupported'),
+      sdkManagedNativeFrameSupported:
+          _decodeBool(map, 'sdkManagedNativeFrameSupported'),
+      hdrNativeFrameSupported: _decodeBool(map, 'hdrNativeFrameSupported'),
+      outputFormat: _decodeEnum(
+        VesperPlaybackCapabilityOutputFormat.values,
+        map['outputFormat'],
+        VesperPlaybackCapabilityOutputFormat.unknown,
+      ),
+      hdrKind: _decodeEnum(
+        VesperPlaybackCapabilityHdrKind.values,
+        map['hdrKind'],
+        VesperPlaybackCapabilityHdrKind.none,
+      ),
+      dolbyVisionMode: _decodeEnum(
+        VesperPlaybackCapabilityDolbyVisionMode.values,
+        map['dolbyVisionMode'],
+        VesperPlaybackCapabilityDolbyVisionMode.none,
+      ),
+      confidence: _decodeEnum(
+        VesperPlaybackCapabilityConfidence.values,
+        map['confidence'],
+        VesperPlaybackCapabilityConfidence.codecOnly,
+      ),
+      missingCapabilities: _decodeStringList(map['missingCapabilities']),
+      diagnostics: vesperDecodeMap(map['diagnostics']),
+    );
+  }
+
+  final VesperPlaybackCapabilityProbeStatus status;
+  final VesperPlaybackCodecFamily codecFamily;
+  final bool systemPlaybackSupported;
+  final bool hardwareDecodeSupported;
+  final bool sdkManagedNativeFrameSupported;
+  final bool hdrNativeFrameSupported;
+  final VesperPlaybackCapabilityOutputFormat outputFormat;
+  final VesperPlaybackCapabilityHdrKind hdrKind;
+  final VesperPlaybackCapabilityDolbyVisionMode dolbyVisionMode;
+  final VesperPlaybackCapabilityConfidence confidence;
+  final List<String> missingCapabilities;
+  final Map<String, Object?> diagnostics;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'status': status.name,
+      'codecFamily': codecFamily.name,
+      'systemPlaybackSupported': systemPlaybackSupported,
+      'hardwareDecodeSupported': hardwareDecodeSupported,
+      'sdkManagedNativeFrameSupported': sdkManagedNativeFrameSupported,
+      'hdrNativeFrameSupported': hdrNativeFrameSupported,
+      'outputFormat': outputFormat.name,
+      'hdrKind': hdrKind.name,
+      'dolbyVisionMode': dolbyVisionMode.name,
+      'confidence': confidence.name,
+      'missingCapabilities': missingCapabilities,
+      'diagnostics': diagnostics,
+    };
+  }
+}
+
 final class VesperSeekableRange {
   const VesperSeekableRange({required this.startMs, required this.endMs});
 
@@ -1013,4 +1165,3 @@ final class VesperPlaybackResiliencePolicy {
     };
   }
 }
-

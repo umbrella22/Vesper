@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::DecoderBitstreamFormat;
+use crate::{DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata};
 
 /// Normalization work level supported by a source normalizer plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
@@ -382,6 +382,10 @@ pub struct SourceNormalizerPacketTrackInfo {
     #[serde(default)]
     pub seek_preroll_samples: Option<u32>,
     #[serde(default)]
+    pub color: Option<NativeFrameColorMetadata>,
+    #[serde(default)]
+    pub hdr: Option<NativeFrameHdrMetadata>,
+    #[serde(default)]
     pub frame_rate: Option<f64>,
     #[serde(default)]
     pub time_base_num: Option<i32>,
@@ -718,7 +722,8 @@ mod tests {
         SourceNormalizerSessionRequirements,
     };
     use crate::{
-        DecoderBitstreamFormat, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata,
+        VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperPluginKind,
     };
 
@@ -808,6 +813,19 @@ mod tests {
             priming_samples: None,
             trailing_padding_samples: None,
             seek_preroll_samples: None,
+            color: Some(NativeFrameColorMetadata {
+                primaries: Some("bt2020".to_owned()),
+                transfer: Some("smpte2084".to_owned()),
+                matrix: Some("bt2020-ncl".to_owned()),
+                range: Some("limited".to_owned()),
+                bit_depth: Some(10),
+            }),
+            hdr: Some(NativeFrameHdrMetadata {
+                kind: "hdr10".to_owned(),
+                mastering_display: None,
+                content_light: None,
+                dolby_vision: None,
+            }),
             frame_rate: Some(30.0),
             time_base_num: Some(1),
             time_base_den: Some(90_000),
@@ -818,6 +836,14 @@ mod tests {
             serde_json::from_str(&encoded).expect("deserialize track");
 
         assert_eq!(decoded, track);
+        assert_eq!(
+            decoded.color.as_ref().and_then(|color| color.bit_depth),
+            Some(10)
+        );
+        assert_eq!(
+            decoded.hdr.as_ref().map(|hdr| hdr.kind.as_str()),
+            Some("hdr10")
+        );
     }
 
     #[test]
@@ -839,6 +865,8 @@ mod tests {
             priming_samples: Some(2_112),
             trailing_padding_samples: Some(512),
             seek_preroll_samples: Some(1_024),
+            color: None,
+            hdr: None,
             frame_rate: None,
             time_base_num: Some(1),
             time_base_den: Some(48_000),

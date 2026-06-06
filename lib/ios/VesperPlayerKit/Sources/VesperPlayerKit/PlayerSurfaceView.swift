@@ -171,8 +171,9 @@ public final class PlayerSurfaceView: UIView {
             if metalLayer == nil {
                 let layer = CAMetalLayer()
                 layer.device = device
-                layer.pixelFormat = .bgra8Unorm
+                layer.pixelFormat = nativeFrameMetalPixelFormat()
                 layer.framebufferOnly = false
+                layer.wantsExtendedDynamicRangeContent = true
                 layer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
                 layer.contentsGravity = .resizeAspect
                 layer.frame = bounds
@@ -252,14 +253,14 @@ public final class PlayerSurfaceView: UIView {
             to: drawable.texture,
             commandBuffer: commandBuffer,
             bounds: drawableBounds,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
+            colorSpace: nativeFrameRenderColorSpace()
         )
         commandBuffer.present(drawable)
         commandBuffer.addCompletedHandler { _ in
             retainedPixelBuffer.release()
-            completion(true)
         }
         commandBuffer.commit()
+        completion(true)
     }
 
     private func configurePlayerLayer() {
@@ -268,5 +269,14 @@ public final class PlayerSurfaceView: UIView {
         if playerLayer.superlayer == nil {
             layer.addSublayer(playerLayer)
         }
+    }
+
+    private func nativeFrameMetalPixelFormat() -> MTLPixelFormat {
+        return .bgra8Unorm
+    }
+
+    private func nativeFrameRenderColorSpace() -> CGColorSpace {
+        CGColorSpace(name: CGColorSpace.sRGB)
+            ?? CGColorSpaceCreateDeviceRGB()
     }
 }

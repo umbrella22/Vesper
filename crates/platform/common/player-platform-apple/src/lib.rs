@@ -44,6 +44,8 @@ impl AppleSystemVideoCodec {
             }
             if codec.starts_with("hvc1")
                 || codec.starts_with("hev1")
+                || codec.starts_with("dvh1")
+                || codec.starts_with("dvhe")
                 || codec == "hevc"
                 || codec == "h265"
             {
@@ -154,6 +156,14 @@ mod tests {
         );
         assert_eq!(
             AppleSystemVideoCodec::from_codec_name("h265"),
+            AppleSystemVideoCodec::Hevc
+        );
+        assert_eq!(
+            AppleSystemVideoCodec::from_codec_name("dvh1.05.06"),
+            AppleSystemVideoCodec::Hevc
+        );
+        assert_eq!(
+            AppleSystemVideoCodec::from_codec_name("dvhe.08.07"),
             AppleSystemVideoCodec::Hevc
         );
         assert_eq!(

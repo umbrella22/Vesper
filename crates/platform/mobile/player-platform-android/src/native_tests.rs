@@ -31,7 +31,8 @@ use player_plugin::{
     DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
     DecoderNativeRequirements, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameOutput,
     DecoderReceivePcmFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
-    NativeDecoderPluginFactory, NativeDecoderSession, NativeFrame, NativeFramePipelineProfile,
+    FrameProcessorCapabilities, NativeDecoderPluginFactory, NativeDecoderSession, NativeFrame,
+    NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFramePipelineProfile, NativeHandleKind,
     SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerPacket,
     SourceNormalizerPacketLease, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
     SourceNormalizerPacketSession, SourceNormalizerPacketStreamInfo,
@@ -205,6 +206,118 @@ fn android_native_frame_pipeline_sdk_owned_hardware_buffer_profile_requires_dist
             .iter()
             .any(|item| item.contains("MediaCodecHardwareBuffer")),
         "SDK-owned HardwareBuffer presenter must not reuse the SurfaceTexture decoder contract: {missing:?}"
+    );
+}
+
+#[test]
+fn android_native_frame_pipeline_rejects_hdr_programmable_processing() {
+    let mut track = test_video_track();
+    track.color = Some(NativeFrameColorMetadata {
+        primaries: Some("bt2020".to_owned()),
+        transfer: Some("smpte2084".to_owned()),
+        matrix: Some("bt2020-ncl".to_owned()),
+        range: Some("limited".to_owned()),
+        bit_depth: Some(10),
+    });
+    track.hdr = Some(NativeFrameHdrMetadata {
+        kind: "hdr10".to_owned(),
+        mastering_display: None,
+        content_light: None,
+        dolby_vision: None,
+    });
+
+    let mut packet_session = TestPacketSession::new(vec![]);
+    packet_session.video_track = track;
+    let config = test_native_frame_open_config(NativeFramePipelineMode::PreferNativeFrame);
+    let source = MediaSource::new(config.source_uri.clone());
+
+    let error = AndroidNativeFramePipelineSession::open_with_packet_source(
+        config,
+        source,
+        Some(test_packet_source_with_session(packet_session)),
+    )
+    .expect_err("HDR native-frame processing should be rejected before decoder selection");
+
+    assert_eq!(error.code(), PlayerErrorCode::Unsupported);
+    assert!(
+        error
+            .message()
+            .contains("hdrProgrammableProcessingNotSupported"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn android_native_frame_processor_metadata_can_describe_explicit_hardware_buffer_hdr_profile() {
+    let mut track = test_video_track();
+    track.color = Some(NativeFrameColorMetadata {
+        primaries: Some("bt2020".to_owned()),
+        transfer: Some("smpte2084".to_owned()),
+        matrix: Some("bt2020-ncl".to_owned()),
+        range: Some("limited".to_owned()),
+        bit_depth: Some(10),
+    });
+    track.hdr = Some(NativeFrameHdrMetadata {
+        kind: "hdr10".to_owned(),
+        mastering_display: None,
+        content_light: None,
+        dolby_vision: None,
+    });
+
+    let metadata = super::android_frame_processor_input_metadata(
+        &track,
+        AndroidNativeFramePipelineProfile::SdkOwnedHardwareBuffer,
+    );
+
+    assert_eq!(
+        metadata.handle_kind,
+        NativeHandleKind::MediaCodecHardwareBuffer
+    );
+    assert_eq!(
+        metadata.pipeline_profile,
+        Some(NativeFramePipelineProfile::MediaCodecHardwareBuffer)
+    );
+    assert!(metadata.requires_hdr_preservation());
+}
+
+#[test]
+fn android_native_frame_processor_capability_gate_requires_hdr_preservation() {
+    let mut track = test_video_track();
+    track.hdr = Some(NativeFrameHdrMetadata {
+        kind: "hlg".to_owned(),
+        mastering_display: None,
+        content_light: None,
+        dolby_vision: None,
+    });
+    let metadata = super::android_frame_processor_input_metadata(
+        &track,
+        AndroidNativeFramePipelineProfile::SdkOwnedHardwareBuffer,
+    );
+    let capabilities = FrameProcessorCapabilities {
+        accepted_input_handle_kinds: vec![NativeHandleKind::MediaCodecHardwareBuffer],
+        output_handle_kinds: vec![NativeHandleKind::MediaCodecHardwareBuffer],
+        accepted_input_pipeline_profiles: vec![
+            NativeFramePipelineProfile::MediaCodecHardwareBuffer,
+        ],
+        output_pipeline_profiles: vec![NativeFramePipelineProfile::MediaCodecHardwareBuffer],
+        supports_video_frames: true,
+        preserves_color_metadata: true,
+        preserves_hdr_metadata: false,
+        ..Default::default()
+    };
+
+    let error = super::validate_android_frame_processor_capabilities(
+        "test-processor",
+        &capabilities,
+        &metadata,
+    )
+    .expect_err("HDR processor must preserve HDR metadata");
+
+    assert!(
+        error.message().contains("preservesHdrMetadata"),
+        "{}",
+        error.message()
     );
 }
 
@@ -2603,6 +2716,8 @@ fn test_video_track() -> SourceNormalizerPacketTrackInfo {
         priming_samples: None,
         trailing_padding_samples: None,
         seek_preroll_samples: None,
+        color: None,
+        hdr: None,
         frame_rate: Some(30.0),
         time_base_num: Some(1),
         time_base_den: Some(1_000_000),
@@ -2644,6 +2759,8 @@ fn test_decoder_native_frame(handle: usize, pts_us: i64) -> DecoderNativeFrame {
             pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
             color_space: None,
             hdr_metadata: None,
+            color: None,
+            hdr: None,
             sync_info: None,
             transform: None,
             frame_id: Some(handle as u64),
@@ -3130,6 +3247,7 @@ impl TestPacketRead {
 
 struct TestPacketSession {
     reads: std::collections::VecDeque<TestPacketRead>,
+    video_track: SourceNormalizerPacketTrackInfo,
     current_data: Vec<u8>,
     outstanding_handle: Option<usize>,
     next_handle: usize,
@@ -3142,6 +3260,7 @@ impl TestPacketSession {
     fn new(reads: Vec<TestPacketRead>) -> Self {
         Self {
             reads: reads.into(),
+            video_track: test_video_track(),
             current_data: Vec::new(),
             outstanding_handle: None,
             next_handle: 1,
@@ -3177,31 +3296,13 @@ impl SourceNormalizerPacketSession for TestPacketSession {
                     priming_samples: None,
                     trailing_padding_samples: None,
                     seek_preroll_samples: None,
+                    color: None,
+                    hdr: None,
                     frame_rate: None,
                     time_base_num: None,
                     time_base_den: None,
                 },
-                SourceNormalizerPacketTrackInfo {
-                    stream_index: 1,
-                    media_kind: SourceNormalizerPacketMediaKind::Video,
-                    codec: "h264".to_owned(),
-                    extradata: Vec::new(),
-                    bitstream_format: None,
-                    width: Some(1_920),
-                    height: Some(1_080),
-                    coded_width: Some(1_920),
-                    coded_height: Some(1_080),
-                    sample_rate: None,
-                    channels: None,
-                    channel_layout: None,
-                    codec_delay_samples: None,
-                    priming_samples: None,
-                    trailing_padding_samples: None,
-                    seek_preroll_samples: None,
-                    frame_rate: Some(30.0),
-                    time_base_num: Some(1),
-                    time_base_den: Some(1_000_000),
-                },
+                self.video_track.clone(),
             ],
             selected_track_index: Some(1),
             duration_millis: Some(1_000),

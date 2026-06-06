@@ -73,6 +73,8 @@ internal fun vesperAndroidVideoCodecFamily(codec: String?): VesperAndroidVideoCo
                     normalized == "av1" -> return VesperAndroidVideoCodecFamily.Av1
                 normalized.startsWith("hvc1") ||
                     normalized.startsWith("hev1") ||
+                    normalized.startsWith("dvh1") ||
+                    normalized.startsWith("dvhe") ||
                     normalized == "hevc" ||
                     normalized == "h265" -> return VesperAndroidVideoCodecFamily.Hevc
                 normalized.startsWith("avc1") ||

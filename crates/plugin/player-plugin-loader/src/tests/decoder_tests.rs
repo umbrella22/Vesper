@@ -122,6 +122,7 @@ fn dynamic_native_decoder_plugin_adapter_round_trips_native_frame() {
 
 #[test]
 fn dynamic_native_decoder_plugin_v5_forwards_presented_flag_on_release() {
+    let _guard = decoder_native_frame_release_test_guard();
     if let Ok(mut releases) = NATIVE_FRAME_PRESENTATION_RELEASES.lock() {
         releases.clear();
     }
@@ -177,6 +178,7 @@ fn dynamic_native_decoder_plugin_v5_forwards_presented_flag_on_release() {
 
 #[test]
 fn dynamic_native_decoder_plugin_without_presentation_capability_uses_legacy_release() {
+    let _guard = decoder_native_frame_release_test_guard();
     if let Ok(mut releases) = NATIVE_FRAME_RELEASES.lock() {
         releases.clear();
     }
@@ -500,6 +502,7 @@ fn dynamic_native_decoder_plugin_current_reclaims_pcm_data_on_malformed_metadata
 
 #[test]
 fn dynamic_native_decoder_plugin_close_releases_unreturned_native_frames() {
+    let _guard = decoder_native_frame_release_test_guard();
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,

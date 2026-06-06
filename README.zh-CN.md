@@ -4,7 +4,7 @@
 
 Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平台播放体验、
 同时又不想在每个端重复实现产品能力的应用。Android 通过 Media3 ExoPlayer
-播放，iOS 通过 AVPlayer 播放，桌面端使用原生 Rust 播放管线，Flutter 应用则
+播放，iOS 通过 AVPlayer 播放，桌面端使用原生 Rust 播放管线，Flutter 移动端应用则
 通过 federated plugin 复用同一套能力。
 
 共享 Rust 层负责对齐跨平台语义：runtime contract、timeline 与 live-DVR 状态、
@@ -21,7 +21,7 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | Android Kotlin / Compose | [lib/android/README.md](lib/android/README.md)                                                                   | [examples/android-compose-host/README.md](examples/android-compose-host/README.md) | 直接在 Android app 中接入 AAR modules。                           |
 | iOS Swift / SwiftUI      | [lib/ios/VesperPlayerKit/README.md](lib/ios/VesperPlayerKit/README.md)                                           | [examples/ios-swift-host/README.md](examples/ios-swift-host/README.md)             | 在 UIKit / SwiftUI app 中消费 Swift Package 或 XCFramework。      |
-| Flutter                  | [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)                                       | [examples/flutter-host/README.md](examples/flutter-host/README.md)                 | 当前用一套 Dart API 覆盖 Android / iOS；macOS 仍是 package stub。 |
+| Flutter                  | [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)                                       | [examples/flutter-host/README.md](examples/flutter-host/README.md)                 | 当前用一套 Dart API 覆盖 Android / iOS；Flutter 桌面端暂缓。      |
 | Flutter 平台包作者       | [lib/flutter/vesper_player_platform_interface/README.md](lib/flutter/vesper_player_platform_interface/README.md) | [lib/flutter/vesper_player_ui/README.md](lib/flutter/vesper_player_ui/README.md)   | 需要扩展 federated plugin，或接入可选 Flutter UI package。        |
 | C / C++ via FFI          | [include/player_ffi.h](include/player_ffi.h)                                                                     | [examples/c-host/README.md](examples/c-host/README.md)                             | 需要从原生 host 或 plugin runtime 调用生成的 C ABI。              |
 | Desktop Rust             | [examples/basic-player](examples/basic-player)                                                                   | [Desktop FFmpeg](#desktop-ffmpeg)                                                  | 试用桌面 demo，或接入 Rust 播放管线。                             |
@@ -67,7 +67,7 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 | 硬件解码探测           | `VesperDecoderBackend` | `VesperCodecSupport`                          | macOS VideoToolbox native-frame 可选启用 | 通过移动端 capability 上报体现      |
 | Plugin 启动诊断        | 内部 runtime diagnostics | 内部 runtime diagnostics                    | ✅ decoder / frame processor / source normalizer diagnostics | 在支持的平台通过 create-result diagnostics 暴露 |
 
-Flutter macOS package 目前只是实验性占位实现，尚未提供真实播放后端。产品 UI
+Flutter 当前仅覆盖移动端；Flutter 桌面端目标暂不随包发布。产品 UI
 应以运行时能力标记为准，而不是假设上表能力在每个后端上都可用。
 
 ## 仓库结构
@@ -231,7 +231,6 @@ Flutter 是 federated plugin family：
 - `vesper_player_platform_interface`：共享 DTO 与平台契约。
 - `vesper_player_android`：基于 Android host kit 的 Android 实现。
 - `vesper_player_ios`：基于 `VesperPlayerKit` 的 iOS 实现。
-- `vesper_player_macos`：实验性 macOS package stub，尚未接入真实 playback backend。
 - `vesper_player_external_playback`：可选 Android Cast / DLNA 统一控制器，支持本地
   HTTP relay 和系统 Cast route button。
 - `vesper_player_ui`：可选 Flutter 控件与 player stage widgets。
@@ -398,9 +397,8 @@ Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载
 
 Vesper 仍在演进中，尚未作为稳定的 SDK 发布。Android 和 iOS host kits
 已经有可发布的打包路径；Flutter federated packages 目前仍从本仓库源码分发。
-macOS Flutter package 当前只是未接入真实播放后端的占位实现；macOS native
-VideoToolbox native-frame decoder path 仍是可选启用的实验路径；桌面端默认路径仍是
-FFmpeg software fallback。
+Flutter 桌面端目标当前暂不随包发布；macOS native VideoToolbox native-frame decoder
+path 仍是可选启用的实验路径；桌面端默认路径仍是 FFmpeg software fallback。
 
 ## 许可
 

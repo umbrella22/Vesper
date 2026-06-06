@@ -21,6 +21,13 @@ import io.github.ikaros.vesper.player.android.VesperDownloadTaskProgressPatch
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskStatePatch
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityConfidence
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityDolbyVisionMode
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityHdrKind
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityOutputFormat
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeStatus
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
+import io.github.ikaros.vesper.player.android.VesperPlaybackCodecFamily
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
@@ -132,6 +139,77 @@ internal fun Throwable.toErrorMap(): Map<String, Any?> =
         ),
     )
 
+internal fun VesperPlaybackCapabilityProbeResult.toMap(): Map<String, Any?> =
+    mapOf(
+        "status" to status.wireName,
+        "codecFamily" to codecFamily.wireName,
+        "systemPlaybackSupported" to systemPlaybackSupported,
+        "hardwareDecodeSupported" to hardwareDecodeSupported,
+        "sdkManagedNativeFrameSupported" to sdkManagedNativeFrameSupported,
+        "hdrNativeFrameSupported" to hdrNativeFrameSupported,
+        "outputFormat" to outputFormat.wireName,
+        "hdrKind" to hdrKind.wireName,
+        "dolbyVisionMode" to dolbyVisionMode.wireName,
+        "confidence" to confidence.wireName,
+        "missingCapabilities" to missingCapabilities,
+        "diagnostics" to diagnostics,
+    )
+
+private val VesperPlaybackCapabilityProbeStatus.wireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityProbeStatus.Supported -> "supported"
+            VesperPlaybackCapabilityProbeStatus.FallbackRequired -> "fallbackRequired"
+            VesperPlaybackCapabilityProbeStatus.Unsupported -> "unsupported"
+            VesperPlaybackCapabilityProbeStatus.Unknown -> "unknown"
+        }
+
+private val VesperPlaybackCodecFamily.wireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCodecFamily.H264 -> "h264"
+            VesperPlaybackCodecFamily.Hevc -> "hevc"
+            VesperPlaybackCodecFamily.Av1 -> "av1"
+            VesperPlaybackCodecFamily.Vvc -> "vvc"
+            VesperPlaybackCodecFamily.Unknown -> "unknown"
+        }
+
+private val VesperPlaybackCapabilityOutputFormat.wireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityOutputFormat.Nv12 -> "nv12"
+            VesperPlaybackCapabilityOutputFormat.P010 -> "p010"
+            VesperPlaybackCapabilityOutputFormat.SurfaceOpaque -> "surfaceOpaque"
+            VesperPlaybackCapabilityOutputFormat.Unknown -> "unknown"
+        }
+
+private val VesperPlaybackCapabilityHdrKind.wireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityHdrKind.None -> "none"
+            VesperPlaybackCapabilityHdrKind.Hdr10 -> "hdr10"
+            VesperPlaybackCapabilityHdrKind.Hlg -> "hlg"
+            VesperPlaybackCapabilityHdrKind.DolbyVision -> "dolbyVision"
+            VesperPlaybackCapabilityHdrKind.Unknown -> "unknown"
+        }
+
+private val VesperPlaybackCapabilityDolbyVisionMode.wireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityDolbyVisionMode.None -> "none"
+            VesperPlaybackCapabilityDolbyVisionMode.FullChainCandidate -> "fullChainCandidate"
+            VesperPlaybackCapabilityDolbyVisionMode.CompatibleBaseLayer -> "compatibleBaseLayer"
+            VesperPlaybackCapabilityDolbyVisionMode.Unsupported -> "unsupported"
+        }
+
+private val VesperPlaybackCapabilityConfidence.wireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityConfidence.CodecOnly -> "codecOnly"
+            VesperPlaybackCapabilityConfidence.SourceMetadata -> "sourceMetadata"
+            VesperPlaybackCapabilityConfidence.SessionProbe -> "sessionProbe"
+        }
+
 internal fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
     mapOf(
         "code" to "backendFailure",
@@ -142,4 +220,3 @@ internal fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
             "exception" to this::class.java.name,
         ),
     )
-

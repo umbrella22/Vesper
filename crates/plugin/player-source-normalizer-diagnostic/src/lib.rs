@@ -333,6 +333,8 @@ fn diagnostic_video_track() -> SourceNormalizerPacketTrackInfo {
         priming_samples: None,
         trailing_padding_samples: None,
         seek_preroll_samples: None,
+        color: None,
+        hdr: None,
         frame_rate: Some(30.0),
         time_base_num: Some(1),
         time_base_den: Some(90_000),

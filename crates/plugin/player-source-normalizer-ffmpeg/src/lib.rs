@@ -9,22 +9,24 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ffmpeg_next::util::format::Pixel;
 use ffmpeg_next::{self as ffmpeg, codec, encoder, format, media};
 use player_plugin::{
-    DecoderBitstreamFormat, SourceNormalizerError, SourceNormalizerNormalizeLevel,
-    SourceNormalizerOperationStatus, SourceNormalizerOutputRoute,
-    SourceNormalizerPacketCapabilities, SourceNormalizerPacketMediaKind,
-    SourceNormalizerPacketSeek, SourceNormalizerPacketSessionConfig,
-    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
-    SourceNormalizerReadPacketMetadata, SourceNormalizerRequiredCapabilities,
-    SourceNormalizerResourceCachePolicy, SourceNormalizerResourceCapabilities,
-    SourceNormalizerResourceInfo, SourceNormalizerResourceSessionConfig,
-    SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionState,
-    SourceNormalizerResourceSessionStatus, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-    VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
-    VesperPluginResultStatus, VesperSourceNormalizerOpenPacketSessionResult,
-    VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV3,
-    VesperSourceNormalizerReadPacketResult,
+    DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameContentLightMetadata,
+    NativeFrameDolbyVisionMetadata, NativeFrameHdrMetadata, NativeFrameMasteringDisplayMetadata,
+    SourceNormalizerError, SourceNormalizerNormalizeLevel, SourceNormalizerOperationStatus,
+    SourceNormalizerOutputRoute, SourceNormalizerPacketCapabilities,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
+    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
+    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
+    SourceNormalizerRequiredCapabilities, SourceNormalizerResourceCachePolicy,
+    SourceNormalizerResourceCapabilities, SourceNormalizerResourceInfo,
+    SourceNormalizerResourceSessionConfig, SourceNormalizerResourceSessionInfo,
+    SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginBytes, VesperPluginDescriptor,
+    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerOpenResourceSessionResult,
+    VesperSourceNormalizerPluginApiV3, VesperSourceNormalizerReadPacketResult,
 };
 use player_source_normalizer::{
     SourceNormalizerOutputContainer, SourceNormalizerProfile, SourceNormalizerProfileSet,
@@ -1315,6 +1317,8 @@ fn audio_track_info(
         priming_samples: audio_parameters.priming_samples,
         trailing_padding_samples: audio_parameters.trailing_padding_samples,
         seek_preroll_samples: audio_parameters.seek_preroll_samples,
+        color: None,
+        hdr: None,
         frame_rate: None,
         time_base_num: Some(stream.time_base().numerator()),
         time_base_den: Some(stream.time_base().denominator()),
@@ -1380,6 +1384,10 @@ fn packet_track_info(
     let parameters = stream.parameters();
     let codec_name = format!("{:?}", parameters.id());
     let (width, height) = video_dimensions_from_parameters(&parameters);
+    let color = video_color_metadata_from_parameters(&parameters);
+    let side_data = hdr_side_data_summary(stream);
+    let hdr =
+        video_hdr_metadata_from_parameters(&parameters, &codec_name, color.as_ref(), &side_data);
     Ok(SourceNormalizerPacketTrackInfo {
         stream_index: u32::try_from(stream.index()).unwrap_or(u32::MAX),
         media_kind: SourceNormalizerPacketMediaKind::Video,
@@ -1397,10 +1405,213 @@ fn packet_track_info(
         priming_samples: None,
         trailing_padding_samples: None,
         seek_preroll_samples: None,
+        color,
+        hdr,
         frame_rate: rational_to_f64(stream.avg_frame_rate())
             .or_else(|| rational_to_f64(stream.rate())),
         time_base_num: Some(stream.time_base().numerator()),
         time_base_den: Some(stream.time_base().denominator()),
+    })
+}
+
+fn video_color_metadata_from_parameters(
+    parameters: &ffmpeg::codec::Parameters,
+) -> Option<NativeFrameColorMetadata> {
+    // SAFETY: `parameters` points to a live AVCodecParameters owned by the input
+    // stream. The color fields are scalar values copied synchronously.
+    unsafe {
+        let raw = parameters.as_ptr();
+        if raw.is_null() {
+            return None;
+        }
+        let color = NativeFrameColorMetadata {
+            primaries: ffmpeg::util::color::Primaries::from((*raw).color_primaries)
+                .name()
+                .map(str::to_owned),
+            transfer: ffmpeg::util::color::TransferCharacteristic::from((*raw).color_trc)
+                .name()
+                .map(str::to_owned),
+            matrix: ffmpeg::util::color::Space::from((*raw).color_space)
+                .name()
+                .map(str::to_owned),
+            range: ffmpeg::util::color::Range::from((*raw).color_range)
+                .name()
+                .map(str::to_owned),
+            bit_depth: pixel_format_component_depth((*raw).format),
+        };
+        if color.primaries.is_none()
+            && color.transfer.is_none()
+            && color.matrix.is_none()
+            && color.range.is_none()
+            && color.bit_depth.is_none()
+        {
+            None
+        } else {
+            Some(color)
+        }
+    }
+}
+
+fn pixel_format_component_depth(raw_pixel_format: i32) -> Option<u8> {
+    let pixel = Pixel::from(av_pixel_format_from_raw(raw_pixel_format)?);
+    let descriptor = pixel.descriptor()?;
+    // SAFETY: `descriptor` is a process-lifetime FFmpeg pixel-format descriptor.
+    // We read the fixed component table synchronously without retaining pointers.
+    unsafe {
+        let descriptor = descriptor.as_ptr().as_ref()?;
+        let component_count = usize::from(descriptor.nb_components).min(descriptor.comp.len());
+        descriptor
+            .comp
+            .iter()
+            .take(component_count)
+            .filter_map(|component| u8::try_from(component.depth).ok())
+            .filter(|depth| *depth > 0)
+            .max()
+    }
+}
+
+fn av_pixel_format_from_raw(raw_pixel_format: i32) -> Option<ffmpeg_next::ffi::AVPixelFormat> {
+    let none = ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_NONE as i32;
+    let upper_bound = ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_NB as i32;
+    if raw_pixel_format == none || raw_pixel_format < 0 || raw_pixel_format >= upper_bound {
+        return None;
+    }
+    // SAFETY: FFmpeg stores AVCodecParameters::format as the integer value of
+    // AVPixelFormat for video tracks. Values in 0..AV_PIX_FMT_NB are valid
+    // AVPixelFormat discriminants in the generated bindings.
+    Some(unsafe { std::mem::transmute::<i32, ffmpeg_next::ffi::AVPixelFormat>(raw_pixel_format) })
+}
+
+fn video_hdr_metadata_from_parameters(
+    parameters: &ffmpeg::codec::Parameters,
+    codec_name: &str,
+    color: Option<&NativeFrameColorMetadata>,
+    side_data: &HdrSideDataSummary,
+) -> Option<NativeFrameHdrMetadata> {
+    let codec_tag = codec_tag_from_parameters(parameters);
+    let dolby_vision = side_data
+        .dolby_vision
+        .clone()
+        .or_else(|| dolby_vision_metadata(codec_name, codec_tag));
+    if let Some(dolby_vision) = dolby_vision {
+        return Some(NativeFrameHdrMetadata {
+            kind: "dolbyVision".to_owned(),
+            mastering_display: side_data.mastering_display.clone(),
+            content_light: side_data.content_light.clone(),
+            dolby_vision: Some(dolby_vision),
+        });
+    }
+    let transfer = color.and_then(|color| color.transfer.as_deref());
+    let kind = match transfer.map(|transfer| transfer.to_ascii_lowercase()) {
+        Some(transfer) if transfer.contains("smpte2084") || transfer.contains("pq") => {
+            Some("hdr10")
+        }
+        Some(transfer) if transfer.contains("arib-std-b67") || transfer.contains("hlg") => {
+            Some("hlg")
+        }
+        _ if side_data.has_mastering_display || side_data.has_content_light => Some("hdr10"),
+        _ => None,
+    }?;
+    Some(NativeFrameHdrMetadata {
+        kind: kind.to_owned(),
+        mastering_display: side_data.mastering_display.clone(),
+        content_light: side_data.content_light.clone(),
+        dolby_vision: None,
+    })
+}
+
+#[derive(Debug, Clone, Default)]
+struct HdrSideDataSummary {
+    has_mastering_display: bool,
+    has_content_light: bool,
+    mastering_display: Option<NativeFrameMasteringDisplayMetadata>,
+    content_light: Option<NativeFrameContentLightMetadata>,
+    dolby_vision: Option<NativeFrameDolbyVisionMetadata>,
+}
+
+fn hdr_side_data_summary(stream: &ffmpeg::Stream<'_>) -> HdrSideDataSummary {
+    let mut summary = HdrSideDataSummary::default();
+    for side_data in stream.side_data() {
+        match side_data.kind() {
+            ffmpeg::codec::packet::side_data::Type::MasteringDisplayMetadata => {
+                summary.has_mastering_display = true;
+                summary.mastering_display.get_or_insert_with(|| {
+                    NativeFrameMasteringDisplayMetadata {
+                        display_primaries: None,
+                        white_point: None,
+                        max_luminance_nits: None,
+                        min_luminance_nits: None,
+                    }
+                });
+            }
+            ffmpeg::codec::packet::side_data::Type::ContentLightLevel => {
+                summary.has_content_light = true;
+                summary
+                    .content_light
+                    .get_or_insert_with(|| NativeFrameContentLightMetadata {
+                        max_content_light_level: None,
+                        max_frame_average_light_level: None,
+                    });
+            }
+            kind if format!("{kind:?}") == "DOVI_CONF" => {
+                summary.dolby_vision = dolby_vision_metadata_from_dovi_conf(side_data.data());
+            }
+            _ => {}
+        }
+    }
+    summary
+}
+
+fn codec_tag_from_parameters(parameters: &ffmpeg::codec::Parameters) -> Option<String> {
+    // SAFETY: `parameters` points to a live AVCodecParameters owned by FFmpeg.
+    // `codec_tag` is a copied FourCC-like scalar.
+    unsafe {
+        let raw = parameters.as_ptr();
+        if raw.is_null() || (*raw).codec_tag == 0 {
+            return None;
+        }
+        let bytes = (*raw).codec_tag.to_le_bytes();
+        let tag = String::from_utf8_lossy(&bytes)
+            .trim_matches(char::from(0))
+            .to_owned();
+        if tag.is_empty() { None } else { Some(tag) }
+    }
+}
+
+fn dolby_vision_metadata(
+    codec_name: &str,
+    codec_tag: Option<String>,
+) -> Option<NativeFrameDolbyVisionMetadata> {
+    let codec_name = codec_name.to_ascii_lowercase();
+    let codec_tag = codec_tag.unwrap_or_default().to_ascii_lowercase();
+    if !(codec_name.contains("dovi")
+        || codec_name.contains("dolby")
+        || codec_tag == "dvh1"
+        || codec_tag == "dvhe")
+    {
+        return None;
+    }
+    Some(NativeFrameDolbyVisionMetadata {
+        profile: None,
+        level: None,
+        compatibility_id: None,
+        has_rpu: true,
+        has_el: false,
+        has_bl: true,
+    })
+}
+
+fn dolby_vision_metadata_from_dovi_conf(data: &[u8]) -> Option<NativeFrameDolbyVisionMetadata> {
+    if data.len() < 8 {
+        return None;
+    }
+    Some(NativeFrameDolbyVisionMetadata {
+        profile: Some(data[2]),
+        level: Some(data[3]),
+        has_rpu: data[4] != 0,
+        has_el: data[5] != 0,
+        has_bl: data[6] != 0,
+        compatibility_id: Some(data[7]),
     })
 }
 
@@ -1707,9 +1918,10 @@ mod tests {
         detect_profile_name, free_plugin_bytes, load_profile_set, normalizer_close_packet_session,
         normalizer_open_packet_session_json, normalizer_packet_capabilities_json,
         normalizer_read_packet, normalizer_release_packet, normalizer_seek_packet_session_json,
-        packet_capabilities_from_profiles, unique_session_suffix, validate_packet_profile,
-        video_dimensions_from_parameters,
+        packet_capabilities_from_profiles, pixel_format_component_depth, unique_session_suffix,
+        validate_packet_profile, video_dimensions_from_parameters,
     };
+    use ffmpeg_next::util::format::Pixel;
     use player_plugin::{
         SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerPacketCapabilities,
         SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
@@ -1744,6 +1956,36 @@ mod tests {
         let payload = unsafe { normalizer_packet_capabilities_json(std::ptr::null_mut()) };
         let decoded: SourceNormalizerPacketCapabilities = take_plugin_bytes(payload);
         assert_eq!(decoded, capabilities);
+    }
+
+    #[test]
+    fn hdr_metadata_identifies_dolby_vision_codec_tag() {
+        let hdr = super::dolby_vision_metadata("HEVC", Some("dvh1".to_owned()))
+            .expect("dvh1 tag should be treated as Dolby Vision");
+
+        assert!(hdr.has_rpu);
+        assert!(hdr.has_bl);
+
+        let structured = player_plugin::NativeFrameHdrMetadata {
+            kind: "dolbyVision".to_owned(),
+            mastering_display: None,
+            content_light: None,
+            dolby_vision: Some(hdr),
+        };
+        assert!(structured.is_dolby_vision());
+    }
+
+    #[test]
+    fn hdr_metadata_decodes_dolby_vision_configuration_record() {
+        let hdr = super::dolby_vision_metadata_from_dovi_conf(&[1, 0, 8, 6, 1, 0, 1, 1, 0])
+            .expect("DOVI config should decode");
+
+        assert_eq!(hdr.profile, Some(8));
+        assert_eq!(hdr.level, Some(6));
+        assert_eq!(hdr.compatibility_id, Some(1));
+        assert!(hdr.has_rpu);
+        assert!(hdr.has_bl);
+        assert!(!hdr.has_el);
     }
 
     #[test]
@@ -1812,6 +2054,24 @@ mod tests {
         assert_eq!(
             video_dimensions_from_parameters(&parameters),
             (Some(1920), Some(1080))
+        );
+    }
+
+    #[test]
+    fn pixel_format_component_depth_reports_per_component_depth() {
+        assert_eq!(
+            pixel_format_component_depth(ffmpeg_next::ffi::AVPixelFormat::from(Pixel::RGB24) as i32),
+            Some(8)
+        );
+        assert_eq!(
+            pixel_format_component_depth(
+                ffmpeg_next::ffi::AVPixelFormat::from(Pixel::YUV420P10) as i32
+            ),
+            Some(10)
+        );
+        assert_eq!(
+            pixel_format_component_depth(ffmpeg_next::ffi::AVPixelFormat::from(Pixel::None) as i32),
+            None
         );
     }
 

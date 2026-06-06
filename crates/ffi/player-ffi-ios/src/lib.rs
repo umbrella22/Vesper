@@ -13,8 +13,9 @@ use player_platform_ios::{
 use player_platform_mobile::{
     MobileFrameProcessorConfiguration, MobileSourceNormalizerConfiguration,
     MobileSourceNormalizerRouteDecision, mobile_plugin_diagnostics_json,
+    mobile_source_normalizer_resource_bypass_diagnostics_json,
     mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
-    open_mobile_source_normalizer_resource,
+    open_mobile_source_normalizer_resource_with_diagnostics,
 };
 use player_plugin::{
     ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
@@ -2477,8 +2478,9 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_string_free(value:
 ///
 /// String and array pointers must be valid for the duration of the call. The returned JSON string
 /// is allocated by Rust and must be released with
-/// `player_ffi_mobile_plugin_diagnostics_string_free`. The returned handle must be disposed with
-/// `player_ffi_source_normalizer_resource_dispose`.
+/// `player_ffi_mobile_plugin_diagnostics_string_free`. A zero handle means no resource session was
+/// opened; `out_json` may still contain bypass diagnostics in that case. A non-zero returned handle
+/// must be disposed with `player_ffi_source_normalizer_resource_dispose`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
     source_uri: *const c_char,
@@ -2559,7 +2561,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
         } else {
             MobileSourceNormalizerRouteDecision::NativeFirst
         };
-        let opened = match open_mobile_source_normalizer_resource(
+        let outcome = match open_mobile_source_normalizer_resource_with_diagnostics(
             &MediaSource::new(source_uri),
             &MobileSourceNormalizerConfiguration {
                 mode: source_normalizer_mode_from_u32(source_mode),
@@ -2569,14 +2571,39 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
             output_root,
             decision,
         ) {
-            Ok(Some(opened)) => opened,
-            Ok(None) => return PlayerFfiCallStatus::Ok,
+            Ok(outcome) => outcome,
             Err(error) => {
                 write_error(
                     out_error,
                     owned_api_error(PlayerFfiErrorCode::BackendFailure, &error),
                 );
                 return PlayerFfiCallStatus::Error;
+            }
+        };
+        let opened = match outcome.opened {
+            Some(opened) => opened,
+            None => {
+                if !outcome.diagnostics.is_empty() {
+                    let json = match mobile_source_normalizer_resource_bypass_diagnostics_json(
+                        &outcome.diagnostics,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            write_error(
+                                out_error,
+                                owned_api_error(
+                                    PlayerFfiErrorCode::BackendFailure,
+                                    &error.to_string(),
+                                ),
+                            );
+                            return PlayerFfiCallStatus::Error;
+                        }
+                    };
+                    unsafe {
+                        ptr::write(out_json, into_c_string_ptr(json));
+                    }
+                }
+                return PlayerFfiCallStatus::Ok;
             }
         };
         let mut sessions = match source_normalizer_resource_sessions().lock() {

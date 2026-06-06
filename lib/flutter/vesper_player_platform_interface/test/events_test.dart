@@ -387,6 +387,39 @@ void main() {
         isFalse);
   });
 
+  test('platform create result preserves source normalizer bypass diagnostic extras',
+      () {
+    final result = VesperPlatformCreateResult.fromMap(<Object?, Object?>{
+      'playerId': 'android-player',
+      'snapshot': const VesperPlayerSnapshot.initial().toMap(),
+      'pluginDiagnostics': <Object?>[
+        <Object?, Object?>{
+          'path': '/data/local/tmp/libsource_normalizer.so',
+          'pluginKind': 'source_normalizer',
+          'status': 'sourceNormalizerUnsupported',
+          'participation': 'bypassed',
+          'message':
+              'HdrResourceMetadataNotPreserved: source normalizer fMP4 resource route cannot currently guarantee HDR/Dolby Vision metadata preservation for system playback',
+          'route': 'native',
+          'fallbackReason': 'sourceNormalizerResourceBypassedForHdr',
+        },
+      ],
+    });
+
+    final diagnostic = result.pluginDiagnostics.single;
+    expect(
+      diagnostic.status,
+      VesperPluginDiagnosticStatus.sourceNormalizerUnsupported,
+    );
+    expect(diagnostic.participation, VesperPluginParticipation.bypassed);
+    expect(diagnostic.message, contains('HdrResourceMetadataNotPreserved'));
+    expect(diagnostic.extra['route'], 'native');
+    expect(
+      diagnostic.extra['fallbackReason'],
+      'sourceNormalizerResourceBypassedForHdr',
+    );
+  });
+
   test('mobile plugin configurations round-trip through maps', () {
     const sourceNormalizer = VesperSourceNormalizerConfiguration(
       mode: VesperSourceNormalizerMode.requireNormalized,

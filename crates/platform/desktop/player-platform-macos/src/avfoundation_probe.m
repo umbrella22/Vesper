@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <CoreImage/CoreImage.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
@@ -1338,11 +1339,34 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
      "  return float4(r, g, b, 1.0);\n"
      "}\n";
 
+static MTLPixelFormat player_macos_native_frame_layer_pixel_format(void) {
+    return MTLPixelFormatBGRA8Unorm;
+}
+
+static OSType player_macos_fourcc(char a, char b, char c, char d) {
+    return ((OSType)(uint8_t)a << 24) | ((OSType)(uint8_t)b << 16) |
+           ((OSType)(uint8_t)c << 8) | (OSType)(uint8_t)d;
+}
+
+static BOOL player_macos_pixel_format_is_10bit_biplanar(OSType pixel_format) {
+    return pixel_format == player_macos_fourcc('x', '4', '2', '0') ||
+           pixel_format == player_macos_fourcc('x', 'f', '2', '0');
+}
+
+static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
+    CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    if (color_space != NULL) {
+        return color_space;
+    }
+    return CGColorSpaceCreateDeviceRGB();
+}
+
 @interface PlayerMacosMetalPresenter : NSObject
 
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) id<MTLCommandQueue> commandQueue;
 @property(nonatomic, strong) id<MTLRenderPipelineState> pipelineState;
+@property(nonatomic, strong) CIContext *ciContext;
 @property(nonatomic, strong) CAMetalLayer *metalLayer;
 @property(nonatomic, strong) CALayer *layerHost;
 @property(nonatomic, assign) CVMetalTextureCacheRef textureCache;
@@ -1351,6 +1375,7 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
 
 - (instancetype)initWithSurface:(PlayerMacosVideoSurfaceTarget)surface error:(NSString **)error;
 - (BOOL)presentPixelBuffer:(CVPixelBufferRef)pixelBuffer error:(NSString **)error;
+- (BOOL)presentPixelBufferWithCoreImage:(CVPixelBufferRef)pixelBuffer error:(NSString **)error;
 - (void)detachSurface;
 
 @end
@@ -1377,6 +1402,13 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
         }
         return nil;
     }
+    self.ciContext = [CIContext contextWithMTLDevice:self.device];
+    if (self.ciContext == nil) {
+        if (error != NULL) {
+            *error = @"failed to create CoreImage Metal context";
+        }
+        return nil;
+    }
 
     NSError *shader_error = nil;
     id<MTLLibrary> library = [self.device newLibraryWithSource:PlayerMacosMetalPresenterShaderSource
@@ -1391,7 +1423,7 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
     MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
     descriptor.vertexFunction = [library newFunctionWithName:@"vertex_main"];
     descriptor.fragmentFunction = [library newFunctionWithName:@"fragment_main"];
-    descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    descriptor.colorAttachments[0].pixelFormat = player_macos_native_frame_layer_pixel_format();
     self.pipelineState = [self.device newRenderPipelineStateWithDescriptor:descriptor
                                                                       error:&shader_error];
     if (self.pipelineState == nil) {
@@ -1495,10 +1527,13 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
     }
 
     metal_layer.device = self.device;
-    metal_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    metal_layer.framebufferOnly = YES;
+    metal_layer.pixelFormat = player_macos_native_frame_layer_pixel_format();
+    metal_layer.framebufferOnly = NO;
     metal_layer.opaque = YES;
     metal_layer.contentsGravity = kCAGravityResizeAspect;
+    if ([metal_layer respondsToSelector:@selector(setWantsExtendedDynamicRangeContent:)]) {
+        metal_layer.wantsExtendedDynamicRangeContent = YES;
+    }
     self.metalLayer = metal_layer;
     self.layerHost = layer_host;
     self.ownsMetalLayer = owns_layer;
@@ -1535,6 +1570,10 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
             *error = @"Metal presenter is not attached to a layer";
         }
         return NO;
+    }
+    OSType pixel_format = CVPixelBufferGetPixelFormatType(pixelBuffer);
+    if (player_macos_pixel_format_is_10bit_biplanar(pixel_format)) {
+        return [self presentPixelBufferWithCoreImage:pixelBuffer error:error];
     }
     if (CVPixelBufferGetPlaneCount(pixelBuffer) < 2) {
         if (error != NULL) {
@@ -1644,6 +1683,89 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
 
     CFRelease(y_ref);
     CFRelease(uv_ref);
+    return YES;
+}
+
+- (BOOL)presentPixelBufferWithCoreImage:(CVPixelBufferRef)pixelBuffer error:(NSString **)error {
+    if (self.ciContext == nil) {
+        if (error != NULL) {
+            *error = @"CoreImage Metal context is unavailable for HDR CVPixelBuffer presentation";
+        }
+        return NO;
+    }
+
+    CGFloat scale = self.metalLayer.contentsScale > 0.0
+                        ? self.metalLayer.contentsScale
+                        : NSScreen.mainScreen.backingScaleFactor;
+    CGSize bounds_size = self.metalLayer.bounds.size;
+    CGSize drawable_size =
+        CGSizeMake(MAX(bounds_size.width * scale, 1.0), MAX(bounds_size.height * scale, 1.0));
+    self.metalLayer.drawableSize = drawable_size;
+    id<CAMetalDrawable> drawable = [self.metalLayer nextDrawable];
+    if (drawable == nil) {
+        if (error != NULL) {
+            *error = @"failed to acquire Metal drawable for HDR CVPixelBuffer presentation";
+        }
+        return NO;
+    }
+
+    CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
+    CGRect image_extent = image.extent;
+    CGRect drawable_bounds =
+        CGRectMake(0.0, 0.0, (CGFloat)drawable.texture.width, (CGFloat)drawable.texture.height);
+    if (CGRectIsEmpty(image_extent) || CGRectIsEmpty(drawable_bounds)) {
+        if (error != NULL) {
+            *error = @"HDR CVPixelBuffer or drawable has an empty extent";
+        }
+        return NO;
+    }
+
+    CGFloat fit_scale = MIN(CGRectGetWidth(drawable_bounds) / CGRectGetWidth(image_extent),
+                            CGRectGetHeight(drawable_bounds) / CGRectGetHeight(image_extent));
+    CGFloat fitted_width = CGRectGetWidth(image_extent) * fit_scale;
+    CGFloat fitted_height = CGRectGetHeight(image_extent) * fit_scale;
+    CGFloat offset_x = (CGRectGetWidth(drawable_bounds) - fitted_width) * 0.5;
+    CGFloat offset_y = (CGRectGetHeight(drawable_bounds) - fitted_height) * 0.5;
+    CIImage *fitted_image =
+        [[image imageByApplyingTransform:CGAffineTransformMakeTranslation(-image_extent.origin.x,
+                                                                          -image_extent.origin.y)]
+            imageByApplyingTransform:CGAffineTransformMakeScale(fit_scale, fit_scale)];
+    fitted_image =
+        [fitted_image imageByApplyingTransform:CGAffineTransformMakeTranslation(offset_x, offset_y)];
+
+    id<MTLCommandBuffer> command_buffer = [self.commandQueue commandBuffer];
+    if (command_buffer == nil) {
+        if (error != NULL) {
+            *error = @"failed to create Metal command buffer for HDR CVPixelBuffer presentation";
+        }
+        return NO;
+    }
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = drawable.texture;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+    id<MTLRenderCommandEncoder> clear_encoder =
+        [command_buffer renderCommandEncoderWithDescriptor:pass];
+    if (clear_encoder == nil) {
+        if (error != NULL) {
+            *error = @"failed to clear Metal drawable for HDR CVPixelBuffer presentation";
+        }
+        return NO;
+    }
+    [clear_encoder endEncoding];
+
+    CGColorSpaceRef color_space = player_macos_native_frame_render_color_space();
+    [self.ciContext render:fitted_image
+              toMTLTexture:drawable.texture
+             commandBuffer:command_buffer
+                    bounds:drawable_bounds
+                colorSpace:color_space];
+    if (color_space != NULL) {
+        CGColorSpaceRelease(color_space);
+    }
+    [command_buffer presentDrawable:drawable];
+    [command_buffer commit];
     return YES;
 }
 

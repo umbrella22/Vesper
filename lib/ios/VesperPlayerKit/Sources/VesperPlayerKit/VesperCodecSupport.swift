@@ -35,7 +35,13 @@ enum VesperHardwareDecodeCandidateCodec: Equatable {
         if codec.hasPrefix("av01") || codec == "av1" {
             return .av1
         }
-        if codec.hasPrefix("hvc1") || codec.hasPrefix("hev1") || codec == "hevc" || codec == "h265" {
+        if codec.hasPrefix("hvc1") ||
+            codec.hasPrefix("hev1") ||
+            codec.hasPrefix("dvh1") ||
+            codec.hasPrefix("dvhe") ||
+            codec == "hevc" ||
+            codec == "h265"
+        {
             return .hevc
         }
         if codec.hasPrefix("avc1") || codec.hasPrefix("avc3") || codec == "avc" || codec == "h264" {

@@ -98,6 +98,27 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
         const VesperNativeFramePipelineConfiguration(),
   });
 
+  Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
+    VesperPlaybackCapabilityProbeRequest request,
+  ) async {
+    return const VesperPlaybackCapabilityProbeResult(
+      status: VesperPlaybackCapabilityProbeStatus.unknown,
+      codecFamily: VesperPlaybackCodecFamily.unknown,
+      systemPlaybackSupported: false,
+      hardwareDecodeSupported: false,
+      sdkManagedNativeFrameSupported: false,
+      hdrNativeFrameSupported: false,
+      outputFormat: VesperPlaybackCapabilityOutputFormat.unknown,
+      hdrKind: VesperPlaybackCapabilityHdrKind.none,
+      dolbyVisionMode: VesperPlaybackCapabilityDolbyVisionMode.none,
+      confidence: VesperPlaybackCapabilityConfidence.codecOnly,
+      missingCapabilities: <String>['platformProbeNotImplemented'],
+      diagnostics: <String, Object?>{
+        'reason': 'platformProbeNotImplemented',
+      },
+    );
+  }
+
   Stream<VesperPlayerEvent> eventsFor(String playerId);
 
   Future<void> initialize(String playerId);
@@ -267,6 +288,12 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
   }) async {
     throw VesperUnsupportedError();
   }
+
+  @override
+  Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
+    VesperPlaybackCapabilityProbeRequest request,
+  ) async =>
+      throw VesperUnsupportedError();
 
   @override
   Stream<VesperPlayerEvent> eventsFor(String playerId) {

@@ -9,6 +9,77 @@ pub(crate) struct MacosNativeFrameVideoSourceFactory {
     pub(crate) frame_processor_policy: FrameProcessorPolicy,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct MacosNativeFrameStreamInfo {
+    pub(crate) packet: VideoPacketStreamInfo,
+    pub(crate) color: Option<player_plugin::NativeFrameColorMetadata>,
+    pub(crate) hdr: Option<player_plugin::NativeFrameHdrMetadata>,
+}
+
+impl MacosNativeFrameStreamInfo {
+    pub(crate) fn from_packet(packet: VideoPacketStreamInfo) -> Self {
+        Self {
+            packet,
+            color: None,
+            hdr: None,
+        }
+    }
+}
+
+pub(crate) const HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED: &str =
+    "hdrProgrammableProcessingNotSupported";
+
+pub(crate) fn macos_hdr_programmable_processing_not_supported_reason(
+    stream_info: &MacosNativeFrameStreamInfo,
+) -> Option<String> {
+    let requires_system_playback = macos_codec_is_dolby_vision(&stream_info.packet.codec)
+        || stream_info
+            .hdr
+            .as_ref()
+            .is_some_and(|hdr| hdr.is_dolby_vision() || !hdr.kind.trim().is_empty())
+        || stream_info
+            .color
+            .as_ref()
+            .is_some_and(macos_color_requires_hdr_system_playback);
+    if !requires_system_playback {
+        return None;
+    }
+    Some(format!(
+        "{HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED}: HDR10, HLG, Dolby Vision, and 10-bit sources use system playback; SDK-managed native-frame processing is SDR-only"
+    ))
+}
+
+pub(crate) fn macos_codec_is_dolby_vision(codec: &str) -> bool {
+    codec
+        .split(',')
+        .map(|value| value.trim().to_ascii_lowercase())
+        .any(|value| {
+            let normalized = value.strip_prefix("video/").unwrap_or(&value);
+            normalized.starts_with("dvh1") || normalized.starts_with("dvhe")
+        })
+}
+
+fn macos_codec_requires_source_aware_hdr_probe(codec: &str) -> bool {
+    codec
+        .split(',')
+        .map(|value| value.trim().to_ascii_lowercase())
+        .any(|value| {
+            let normalized = value.strip_prefix("video/").unwrap_or(&value);
+            normalized == "hevc"
+                || normalized == "h265"
+                || normalized.starts_with("hvc1")
+                || normalized.starts_with("hev1")
+                || normalized.starts_with("dvh1")
+                || normalized.starts_with("dvhe")
+        })
+}
+
+fn macos_color_requires_hdr_system_playback(
+    color: &player_plugin::NativeFrameColorMetadata,
+) -> bool {
+    color.bit_depth.is_some_and(|bit_depth| bit_depth >= 10) || color.is_hdr_transfer()
+}
+
 pub(crate) struct MacosSourceNormalizerPacketVideoSourceFactory {
     pub(crate) decoder_plugin_path: PathBuf,
     pub(crate) decoder_plugin_name: Option<String>,
@@ -645,8 +716,12 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             let session = guard.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("source normalizer packet session is not configured")
             })?;
-            macos_packet_stream_info_from_source_normalizer(&session.stream_info())?
+            macos_native_frame_stream_info_from_source_normalizer(&session.stream_info())?
         };
+        if let Some(reason) = macos_hdr_programmable_processing_not_supported_reason(&stream_info) {
+            anyhow::bail!("{reason}");
+        }
+        let packet_stream_info = &stream_info.packet;
         let plugin = LoadedDynamicPlugin::load(&self.decoder_plugin_path).with_context(|| {
             format!(
                 "failed to load native-frame decoder plugin {}",
@@ -657,7 +732,7 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             anyhow::anyhow!("decoder plugin does not export a v2 native-frame API")
         })?;
         let requirements = DecoderSessionRequirements::native_video(
-            stream_info.codec.clone(),
+            packet_stream_info.codec.clone(),
             DecoderNativeHandleKind::CvPixelBuffer,
             NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
         );
@@ -667,23 +742,25 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             anyhow::bail!(
                 "native-frame decoder plugin `{}` does not satisfy session requirements for {} video: missing {}",
                 factory.name(),
-                stream_info.codec,
+                packet_stream_info.codec,
                 missing_capabilities.join(", ")
             );
         }
 
         let session = factory
             .open_native_session(&DecoderSessionConfig {
-                codec: stream_info.codec.clone(),
+                codec: packet_stream_info.codec.clone(),
                 media_kind: DecoderMediaKind::Video,
-                extradata: stream_info.extradata.clone(),
-                bitstream_format: Some(macos_decoder_bitstream_format(&stream_info.codec)),
-                width: stream_info.width,
-                height: stream_info.height,
-                coded_width: stream_info.width,
-                coded_height: stream_info.height,
+                extradata: packet_stream_info.extradata.clone(),
+                bitstream_format: Some(macos_decoder_bitstream_format(&packet_stream_info.codec)),
+                width: packet_stream_info.width,
+                height: packet_stream_info.height,
+                coded_width: packet_stream_info.width,
+                coded_height: packet_stream_info.height,
                 prefer_hardware: true,
                 require_cpu_output: false,
+                color: stream_info.color.clone(),
+                hdr: stream_info.hdr.clone(),
                 ..DecoderSessionConfig::default()
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -716,11 +793,11 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             audio_streams: 0,
             video_streams: 1,
             best_video: Some(player_backend_ffmpeg::VideoStreamProbe {
-                index: stream_info.stream_index,
-                codec: stream_info.codec.clone(),
-                width: stream_info.width.unwrap_or_default(),
-                height: stream_info.height.unwrap_or_default(),
-                frame_rate: stream_info.frame_rate,
+                index: packet_stream_info.stream_index,
+                codec: packet_stream_info.codec.clone(),
+                width: packet_stream_info.width.unwrap_or_default(),
+                height: packet_stream_info.height.unwrap_or_default(),
+                frame_rate: packet_stream_info.frame_rate,
             }),
             best_audio: None,
         };
@@ -754,7 +831,7 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
 
         Ok(DesktopVideoSourceBootstrap {
             source: Box::new(MacosNativeFrameVideoSource {
-                stream_info,
+                stream_info: packet_stream_info.clone(),
                 session,
                 shared,
                 outstanding_frames,
@@ -790,6 +867,12 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
             .open_video_packet_source_with_interrupt(source, interrupt_flag)
             .context("failed to open FFmpeg packet source for native-frame decoder")?;
         let stream_info = packet_source.stream_info().clone();
+        if macos_codec_requires_source_aware_hdr_probe(&stream_info.codec) {
+            anyhow::bail!(
+                "{HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED}: HEVC-family direct FFmpeg native-frame sources need source-aware HDR/10-bit metadata before SDK-managed processing; use SourceNormalizer packet native-frame for SDR HEVC or system playback for HDR/Dolby Vision"
+            );
+        }
+        let native_stream_info = MacosNativeFrameStreamInfo::from_packet(stream_info.clone());
         let plugin = LoadedDynamicPlugin::load(&self.plugin_path).with_context(|| {
             format!(
                 "failed to load native-frame decoder plugin {}",
@@ -834,7 +917,7 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
         let presenter = MacosMetalLayerPresenter::new(self.video_surface)
             .map_err(|error| anyhow::anyhow!(error.message().to_owned()))?;
         let frame_processor_chain = open_macos_frame_processor_chain(
-            &stream_info,
+            &native_stream_info,
             &self.frame_processor_paths,
             self.frame_processor_mode,
             self.frame_processor_policy.clone(),
