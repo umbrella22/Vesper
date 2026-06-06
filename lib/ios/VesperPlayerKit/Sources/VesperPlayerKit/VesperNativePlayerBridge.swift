@@ -1724,6 +1724,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     private func advancePlaybackEpoch() -> UInt64 {
         playbackEpoch &+= 1
+        readyForDisplayCountByEpoch = [playbackEpoch: readyForDisplayCountByEpoch[playbackEpoch] ?? 0]
         return playbackEpoch
     }
 
@@ -1733,6 +1734,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func playbackEpochSnapshot() -> UInt64 {
         playbackEpoch
+    }
+
+    func readyForDisplayEpochCountSnapshot() -> Int {
+        readyForDisplayCountByEpoch.count
     }
 
     func stopSeekStateSnapshot() -> StopSeekStateSnapshot {

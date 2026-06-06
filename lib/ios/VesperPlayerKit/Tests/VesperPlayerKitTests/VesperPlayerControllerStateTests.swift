@@ -132,6 +132,21 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(readyEvents.last?.attributes["isFirstForEpoch"], "false")
     }
 
+    func testNativeBridgeClearsReadyForDisplayCountsWhenEpochAdvances() {
+        let bridge = VesperNativePlayerBridge(
+            benchmarkConfiguration: VesperBenchmarkConfiguration(enabled: true)
+        )
+
+        bridge.handleSurfaceReadyForDisplay()
+        bridge.handleSurfaceReadyForDisplay()
+        XCTAssertEqual(bridge.readyForDisplayEpochCountSnapshot(), 1)
+
+        bridge.dispose()
+
+        XCTAssertEqual(bridge.playbackEpochSnapshot(), 1)
+        XCTAssertLessThanOrEqual(bridge.readyForDisplayEpochCountSnapshot(), 1)
+    }
+
     func testNativeFramePipelineConfigurationAddsDiagnosticsWithoutReplacingPlaybackSource() {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",

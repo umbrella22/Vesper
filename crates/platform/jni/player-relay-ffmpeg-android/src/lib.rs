@@ -26,6 +26,8 @@ const DEFAULT_REMUX_TIMEOUT: Duration = Duration::from_secs(90);
 const MPEG_TS_RANGE_WAIT: Duration = Duration::from_secs(5);
 const HLS_SEGMENT_WAIT: Duration = Duration::from_secs(10);
 const STALE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_SESSION_CACHES: usize = 64;
+const MAX_NATIVE_STREAMS: usize = 256;
 const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/x-mpegURL";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +100,25 @@ struct RelayError {
 struct SessionCache {
     root_dir: PathBuf,
     state: Mutex<SessionState>,
+}
+
+struct SessionCacheEntry {
+    cache: Arc<SessionCache>,
+    last_access: Instant,
+}
+
+impl SessionCacheEntry {
+    fn new(cache: Arc<SessionCache>) -> Self {
+        Self {
+            cache,
+            last_access: Instant::now(),
+        }
+    }
+
+    fn touch(&mut self) -> Arc<SessionCache> {
+        self.last_access = Instant::now();
+        self.cache.clone()
+    }
 }
 
 #[derive(Default)]
@@ -177,9 +198,24 @@ enum NativeStream {
     },
 }
 
-impl Read for NativeStream {
+struct NativeStreamEntry {
+    stream: NativeStream,
+    last_access: Instant,
+}
+
+impl NativeStreamEntry {
+    fn new(stream: NativeStream) -> Self {
+        Self {
+            stream,
+            last_access: Instant::now(),
+        }
+    }
+}
+
+impl Read for NativeStreamEntry {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        match self {
+        self.last_access = Instant::now();
+        match &mut self.stream {
             NativeStream::Bytes(cursor) => cursor.read(buffer),
             NativeStream::File(file) => file.read(buffer),
             NativeStream::LimitedFile { file, remaining } => {
@@ -492,7 +528,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
             .unwrap_or_else(|error| error.into_inner())
             .remove(&session_id)
         {
-            let _ = fs::remove_dir_all(&cache.root_dir);
+            let _ = fs::remove_dir_all(&cache.cache.root_dir);
         }
         Ok(())
     });
@@ -687,8 +723,8 @@ fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError>
     cleanup_stale_caches_once();
 
     let mut sessions = sessions().lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(existing) = sessions.get(&request.session_id) {
-        return Ok(existing.clone());
+    if let Some(existing) = sessions.get_mut(&request.session_id) {
+        return Ok(existing.touch());
     }
 
     let root_dir = relay_cache_root().join(safe_file_component(&request.session_id));
@@ -708,7 +744,7 @@ fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError>
         root_dir,
         state: Mutex::new(SessionState::default()),
     });
-    sessions.insert(request.session_id.clone(), cache.clone());
+    insert_session_cache(&mut sessions, request.session_id.clone(), cache.clone());
     Ok(cache)
 }
 
@@ -1226,18 +1262,15 @@ fn open_growing_cache_file(
         )
     })?;
     let handle = next_handle();
-    streams()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(
-            handle,
-            NativeStream::GrowingFile {
-                file,
-                cache,
-                position: 0,
-                remaining: None,
-            },
-        );
+    insert_native_stream(
+        handle,
+        NativeStream::GrowingFile {
+            file,
+            cache,
+            position: 0,
+            remaining: None,
+        },
+    );
 
     Ok(OpenedStream {
         handle,
@@ -1298,18 +1331,15 @@ fn open_growing_cache_range(
         resolved.range.start, resolved.range.end, total
     );
     let handle = next_handle();
-    streams()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(
-            handle,
-            NativeStream::GrowingFile {
-                file,
-                cache,
-                position: resolved.range.start,
-                remaining: Some(length),
-            },
-        );
+    insert_native_stream(
+        handle,
+        NativeStream::GrowingFile {
+            file,
+            cache,
+            position: resolved.range.start,
+            remaining: Some(length),
+        },
+    );
 
     Ok(OpenedStream {
         handle,
@@ -1627,10 +1657,7 @@ fn open_bytes_stream(
 ) -> Result<OpenedStream, RelayError> {
     let content_length = bytes.len() as i64;
     let handle = next_handle();
-    streams()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(handle, NativeStream::Bytes(Cursor::new(bytes)));
+    insert_native_stream(handle, NativeStream::Bytes(Cursor::new(bytes)));
     Ok(OpenedStream {
         handle,
         status: 200,
@@ -1767,10 +1794,7 @@ fn open_cached_file(
     };
 
     let handle = next_handle();
-    streams()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(handle, stream);
+    insert_native_stream(handle, stream);
 
     Ok(OpenedStream {
         handle,
@@ -1884,14 +1908,65 @@ fn optional_string<'local>(
     }
 }
 
-fn sessions() -> &'static Mutex<HashMap<String, Arc<SessionCache>>> {
-    static SESSIONS: OnceLock<Mutex<HashMap<String, Arc<SessionCache>>>> = OnceLock::new();
+fn sessions() -> &'static Mutex<HashMap<String, SessionCacheEntry>> {
+    static SESSIONS: OnceLock<Mutex<HashMap<String, SessionCacheEntry>>> = OnceLock::new();
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn streams() -> &'static Mutex<HashMap<i64, NativeStream>> {
-    static STREAMS: OnceLock<Mutex<HashMap<i64, NativeStream>>> = OnceLock::new();
+fn streams() -> &'static Mutex<HashMap<i64, NativeStreamEntry>> {
+    static STREAMS: OnceLock<Mutex<HashMap<i64, NativeStreamEntry>>> = OnceLock::new();
     STREAMS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn insert_session_cache(
+    sessions: &mut HashMap<String, SessionCacheEntry>,
+    session_id: String,
+    cache: Arc<SessionCache>,
+) {
+    sessions.insert(session_id, SessionCacheEntry::new(cache));
+    evict_oldest_session_caches(sessions);
+}
+
+fn evict_oldest_session_caches(sessions: &mut HashMap<String, SessionCacheEntry>) {
+    while sessions.len() > MAX_SESSION_CACHES {
+        let Some(oldest_key) = sessions
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_access)
+            .map(|(session_id, _)| session_id.clone())
+        else {
+            return;
+        };
+        if let Some(entry) = sessions.remove(&oldest_key) {
+            let _ = fs::remove_dir_all(&entry.cache.root_dir);
+        }
+    }
+}
+
+fn insert_native_stream(handle: i64, stream: NativeStream) {
+    let mut streams = streams().lock().unwrap_or_else(|error| error.into_inner());
+    insert_native_stream_entry(&mut streams, handle, stream);
+}
+
+fn insert_native_stream_entry(
+    streams: &mut HashMap<i64, NativeStreamEntry>,
+    handle: i64,
+    stream: NativeStream,
+) {
+    streams.insert(handle, NativeStreamEntry::new(stream));
+    evict_oldest_native_streams(streams);
+}
+
+fn evict_oldest_native_streams(streams: &mut HashMap<i64, NativeStreamEntry>) {
+    while streams.len() > MAX_NATIVE_STREAMS {
+        let Some(oldest_handle) = streams
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_access)
+            .map(|(handle, _)| *handle)
+        else {
+            return;
+        };
+        streams.remove(&oldest_handle);
+    }
 }
 
 fn next_handle() -> i64 {
@@ -2047,18 +2122,22 @@ fn ffmpeg_error_text(code: i32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs;
+    use std::io::Cursor;
     use std::io::Read;
     use std::sync::Arc;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
 
     use super::{
-        FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, OpenRequest, PreparedTrack,
-        RangeRequest, cleanup_stale_caches_in, hls_playlist_snapshot, open_growing_cache_file,
-        open_growing_cache_range, packet_sort_timestamp_us, prewarm_stream, resolve_range,
-        safe_file_component, sessions, streams, validate_request,
+        FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, MAX_NATIVE_STREAMS,
+        MAX_SESSION_CACHES, NativeStream, NativeStreamEntry, OpenRequest, PreparedTrack,
+        RangeRequest, SessionCache, SessionCacheEntry, cleanup_stale_caches_in,
+        evict_oldest_native_streams, evict_oldest_session_caches, hls_playlist_snapshot,
+        open_growing_cache_file, open_growing_cache_range, packet_sort_timestamp_us,
+        prewarm_stream, resolve_range, safe_file_component, sessions, streams, validate_request,
     };
 
     #[test]
@@ -2120,6 +2199,56 @@ mod tests {
         assert!(!stale.exists());
         assert!(active.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_cache_eviction_keeps_cache_count_bounded_and_removes_old_dirs() {
+        let root = unique_temp_dir("session-cache-cap");
+        let mut sessions = HashMap::new();
+        for index in 0..=MAX_SESSION_CACHES {
+            let root_dir = root.join(format!("session-{index}"));
+            fs::create_dir_all(&root_dir).expect("cache dir");
+            sessions.insert(
+                format!("session-{index}"),
+                SessionCacheEntry {
+                    cache: Arc::new(SessionCache {
+                        root_dir,
+                        state: Default::default(),
+                    }),
+                    last_access: Instant::now()
+                        + Duration::from_millis(u64::try_from(index).expect("index")),
+                },
+            );
+        }
+
+        evict_oldest_session_caches(&mut sessions);
+
+        assert_eq!(sessions.len(), MAX_SESSION_CACHES);
+        assert!(!sessions.contains_key("session-0"));
+        assert!(!root.join("session-0").exists());
+        assert!(root.join(format!("session-{MAX_SESSION_CACHES}")).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_stream_eviction_keeps_stream_count_bounded() {
+        let mut streams = HashMap::new();
+        for handle in 0..=MAX_NATIVE_STREAMS {
+            streams.insert(
+                i64::try_from(handle).expect("handle"),
+                NativeStreamEntry {
+                    stream: NativeStream::Bytes(Cursor::new(vec![handle as u8])),
+                    last_access: Instant::now()
+                        + Duration::from_millis(u64::try_from(handle).expect("handle")),
+                },
+            );
+        }
+
+        evict_oldest_native_streams(&mut streams);
+
+        assert_eq!(streams.len(), MAX_NATIVE_STREAMS);
+        assert!(!streams.contains_key(&0));
+        assert!(streams.contains_key(&i64::try_from(MAX_NATIVE_STREAMS).expect("handle")));
     }
 
     #[test]

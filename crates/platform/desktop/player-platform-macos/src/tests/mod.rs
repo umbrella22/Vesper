@@ -3622,6 +3622,24 @@ fn source_normalizer_packet_source_drop_after_backpressure_has_no_outstanding_le
 }
 
 #[test]
+fn macos_native_frame_prefetch_wakeup_recovers_poisoned_state() {
+    let wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+    let poison_wakeup = wakeup.clone();
+    let _ = std::thread::spawn(move || {
+        let _guard = poison_wakeup.state.lock().expect("lock wakeup state");
+        panic!("poison wakeup state");
+    })
+    .join();
+
+    wakeup.notify();
+
+    let mut observed_sequence = 0;
+    wakeup.wait_for_change_timeout(&mut observed_sequence, Duration::from_millis(1));
+
+    assert_eq!(observed_sequence, 1);
+}
+
+#[test]
 fn native_frame_source_seek_after_eof_allows_packets_again() {
     let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let session_state = RecordingNativeDecoderState::shared(events.clone());

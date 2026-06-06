@@ -37,6 +37,7 @@ static PLUGIN_NAME: &[u8] = b"player-source-normalizer-ffmpeg\0";
 const DEFAULT_PROFILE_TOML: &str =
     include_str!("../../../../scripts/source-normalizer-profiles.toml");
 const PROFILE_PATH_ENV: &str = "VESPER_SOURCE_NORMALIZER_PROFILE_PATH";
+const MAX_SKIPPED_NON_AV_PACKETS: usize = 10_000;
 static NEXT_SESSION_SUFFIX: AtomicU64 = AtomicU64::new(1);
 
 struct ResourceWorkerConfig {
@@ -263,6 +264,7 @@ unsafe extern "C" fn normalizer_read_packet(
         let selected_video_stream_index = session.selected_video_stream_index;
         let selected_audio_stream_index = session.selected_audio_stream_index;
         let tracks = session.tracks.clone();
+        let mut skipped_packets = 0usize;
         loop {
             match session.input.packets().next() {
                 Some((stream, packet))
@@ -322,7 +324,14 @@ unsafe extern "C" fn normalizer_read_packet(
                         packet_handle: leased.handle,
                     };
                 }
-                Some((_stream, _packet)) => {}
+                Some((_stream, _packet)) => {
+                    skipped_packets = skipped_packets.saturating_add(1);
+                    if skipped_packets > MAX_SKIPPED_NON_AV_PACKETS {
+                        return read_packet_error(SourceNormalizerError::internal(format!(
+                            "skipped too many non-selected packets ({skipped_packets})"
+                        )));
+                    }
+                }
                 None => {
                     return VesperSourceNormalizerReadPacketResult {
                         status: VesperPluginResultStatus::Success,
@@ -358,12 +367,9 @@ unsafe extern "C" fn normalizer_release_packet(
                     message: None,
                 })
             }
-            Some(packet) => {
-                session.leased_packet = Some(packet);
-                process_error(SourceNormalizerError::abi_violation(format!(
-                    "unknown packet handle {packet_handle}"
-                )))
-            }
+            Some(_packet) => process_error(SourceNormalizerError::abi_violation(format!(
+                "unknown packet handle {packet_handle}"
+            ))),
             None => process_error(SourceNormalizerError::abi_violation(
                 "no packet lease is outstanding",
             )),
@@ -2187,6 +2193,58 @@ mod tests {
         assert_eq!(close.status, VesperPluginResultStatus::Success);
         let close_status: SourceNormalizerOperationStatus = take_plugin_bytes(close.payload);
         assert!(close_status.completed);
+    }
+
+    #[test]
+    fn fixture_packet_session_mismatched_release_invalidates_lease() {
+        let fixture = fixture_path();
+        if !fixture.is_file() {
+            eprintln!(
+                "skipping FFmpeg source normalizer mismatched lease test: {} is unavailable",
+                fixture.display()
+            );
+            return;
+        }
+
+        let open = open_packet_session(SourceNormalizerPacketSessionConfig {
+            runtime_profile: "generic-fallback".to_owned(),
+            input: fixture.to_string_lossy().into_owned(),
+            headers: Vec::new(),
+            startup_timeout_ms: None,
+            session_timeout_ms: None,
+            preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+        });
+        assert_eq!(open.status, VesperPluginResultStatus::Success);
+        assert!(!open.session.is_null());
+
+        // SAFETY: the session pointer was returned by this plugin's open call.
+        let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
+        assert_eq!(packet.status, VesperPluginResultStatus::Success);
+        assert!(packet.packet_handle > 0);
+
+        // SAFETY: this intentionally exercises an ABI-violating stale handle.
+        let mismatched_release = unsafe {
+            normalizer_release_packet(
+                std::ptr::null_mut(),
+                open.session,
+                packet.packet_handle.saturating_add(1),
+            )
+        };
+        assert_eq!(mismatched_release.status, VesperPluginResultStatus::Failure);
+        let mismatch_error: SourceNormalizerError = take_plugin_bytes(mismatched_release.payload);
+        assert!(format!("{mismatch_error}").contains("unknown packet handle"));
+
+        // SAFETY: the mismatched release poisons and clears the outstanding lease.
+        let stale_release = unsafe {
+            normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
+        };
+        assert_eq!(stale_release.status, VesperPluginResultStatus::Failure);
+        let stale_error: SourceNormalizerError = take_plugin_bytes(stale_release.payload);
+        assert!(format!("{stale_error}").contains("no packet lease is outstanding"));
+
+        // SAFETY: the session pointer was returned by open and is closed once.
+        let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };
+        assert_eq!(close.status, VesperPluginResultStatus::Success);
     }
 
     #[test]

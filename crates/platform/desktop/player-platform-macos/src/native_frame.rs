@@ -141,36 +141,30 @@ pub(crate) struct MacosNativeFramePrefetchWakeupState {
 
 impl MacosNativeFramePrefetchWakeup {
     pub(crate) fn notify(&self) {
-        match self.state.lock() {
-            Ok(mut state) => {
-                state.sequence = state.sequence.wrapping_add(1);
-                self.changed.notify_all();
-            }
-            Err(_) => {
-                tracing::error!("macOS native frame prefetch wakeup state mutex was poisoned");
-            }
-        }
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.sequence = state.sequence.wrapping_add(1);
+        self.changed.notify_all();
     }
 
     pub(crate) fn wait_for_change(&self, observed_sequence: &mut u64) {
-        let state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                tracing::error!("macOS native frame prefetch wakeup state mutex was poisoned");
-                return;
-            }
-        };
+        self.wait_for_change_timeout(
+            observed_sequence,
+            MACOS_NATIVE_FRAME_PREFETCH_COMMAND_POLL_INTERVAL,
+        );
+    }
+
+    pub(crate) fn wait_for_change_timeout(&self, observed_sequence: &mut u64, timeout: Duration) {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let sequence = state.sequence;
         if sequence != *observed_sequence {
             *observed_sequence = sequence;
             return;
         }
-        if let Ok((state_after_wait, _)) = self
+        let (state_after_wait, _) = self
             .changed
-            .wait_timeout(state, MACOS_NATIVE_FRAME_PREFETCH_COMMAND_POLL_INTERVAL)
-        {
-            *observed_sequence = state_after_wait.sequence;
-        }
+            .wait_timeout(state, timeout)
+            .unwrap_or_else(|error| error.into_inner());
+        *observed_sequence = state_after_wait.sequence;
     }
 }
 
@@ -1300,6 +1294,8 @@ pub(crate) fn macos_native_frame_prefetch_worker_loop(
                     generation,
                     &mut end_of_input_sent,
                     &mut end_of_stream_received,
+                    &prefetch_wakeup,
+                    &mut wakeup_sequence,
                 ) {
                     Ok(event) => event,
                     Err(error) => MacosNativeFrameWorkerEvent::Error {
@@ -1423,6 +1419,8 @@ pub(crate) fn decode_next_macos_native_frame_worker_event(
     generation: u64,
     end_of_input_sent: &mut bool,
     end_of_stream_received: &mut bool,
+    wakeup: &MacosNativeFramePrefetchWakeup,
+    observed_sequence: &mut u64,
 ) -> anyhow::Result<MacosNativeFrameWorkerEvent> {
     loop {
         match receive_macos_native_frame_from_decoder(shared, session, outstanding_frames)? {
@@ -1438,14 +1436,14 @@ pub(crate) fn decode_next_macos_native_frame_worker_event(
         }
 
         if *end_of_input_sent {
-            thread::sleep(MACOS_NATIVE_FRAME_DECODER_DRAIN_RETRY_INTERVAL);
+            wait_for_macos_native_frame_decoder_retry(wakeup, observed_sequence);
             continue;
         }
 
         match packet_source.send_next_packet(session)? {
             MacosNativeFramePacketSendStatus::Sent => {}
             MacosNativeFramePacketSendStatus::NeedMoreData => {
-                thread::sleep(MACOS_NATIVE_FRAME_DECODER_DRAIN_RETRY_INTERVAL);
+                wait_for_macos_native_frame_decoder_retry(wakeup, observed_sequence);
             }
             MacosNativeFramePacketSendStatus::EndOfStream => {
                 send_macos_native_frame_end_of_stream(session)?;
@@ -1453,6 +1451,16 @@ pub(crate) fn decode_next_macos_native_frame_worker_event(
             }
         }
     }
+}
+
+pub(crate) fn wait_for_macos_native_frame_decoder_retry(
+    wakeup: &MacosNativeFramePrefetchWakeup,
+    observed_sequence: &mut u64,
+) {
+    wakeup.wait_for_change_timeout(
+        observed_sequence,
+        MACOS_NATIVE_FRAME_DECODER_DRAIN_RETRY_INTERVAL,
+    );
 }
 
 pub(crate) fn receive_macos_native_frame_from_decoder(

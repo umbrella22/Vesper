@@ -409,6 +409,7 @@ mod platform {
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_FULL_RANGE: u32 = fourcc_u32(*b"420f");
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE: i32 = fourcc(*b"x420");
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_FULL_RANGE: u32 = fourcc_u32(*b"xf20");
+    const MAX_PENDING_NATIVE_FRAMES: usize = 16;
 
     const fn fourcc(code: [u8; 4]) -> i32 {
         ((code[0] as i32) << 24)
@@ -1022,6 +1023,7 @@ mod platform {
         frames: Mutex<VecDeque<PendingNativeFrame>>,
     }
 
+    #[derive(Debug)]
     struct PendingNativeFrame {
         pixel_buffer: CVPixelBufferRef,
         pts_us: Option<i64>,
@@ -1100,12 +1102,29 @@ mod platform {
             height,
         };
         match callback_state.frames.lock() {
-            Ok(mut frames) => frames.push_back(frame),
+            Ok(mut frames) => {
+                if let Err(frame) = enqueue_pending_native_frame(&mut frames, frame) {
+                    // SAFETY: release the retain above if the bounded queue
+                    // cannot accept another frame.
+                    unsafe { CFRelease(frame.pixel_buffer as CFTypeRef) };
+                }
+            }
             Err(_) => {
                 // SAFETY: release the retain above if the queue is unavailable.
                 unsafe { CFRelease(pixel_buffer as CFTypeRef) };
             }
         }
+    }
+
+    fn enqueue_pending_native_frame(
+        frames: &mut VecDeque<PendingNativeFrame>,
+        frame: PendingNativeFrame,
+    ) -> Result<(), PendingNativeFrame> {
+        if frames.len() >= MAX_PENDING_NATIVE_FRAMES {
+            return Err(frame);
+        }
+        frames.push_back(frame);
+        Ok(())
     }
 
     struct ParsedVideoConfig {
@@ -1693,13 +1712,15 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::{
-            K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE, VideoCodecKind,
-            annexb_to_length_prefixed, color_metadata_for_pixel_format,
-            decoder_frame_format_from_pixel_format, length_prefixed_sample_is_well_formed,
+            K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE, MAX_PENDING_NATIVE_FRAMES,
+            PendingNativeFrame, VideoCodecKind, annexb_to_length_prefixed,
+            color_metadata_for_pixel_format, decoder_frame_format_from_pixel_format,
+            enqueue_pending_native_frame, length_prefixed_sample_is_well_formed,
             normalize_sample_data, parse_annexb_parameter_sets, parse_avcc_extradata,
             requested_output_format,
         };
         use player_plugin::{DecoderFrameFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata};
+        use std::collections::VecDeque;
 
         #[test]
         fn avcc_extradata_parser_reads_sps_and_pps() {
@@ -1775,6 +1796,31 @@ mod platform {
 
             assert_eq!(format, DecoderFrameFormat::P010);
             assert_eq!(color.and_then(|color| color.bit_depth), Some(10));
+        }
+
+        #[test]
+        fn pending_native_frame_queue_rejects_frames_over_limit() {
+            let mut frames = VecDeque::new();
+            for handle in 1..=MAX_PENDING_NATIVE_FRAMES {
+                enqueue_pending_native_frame(&mut frames, pending_frame(handle))
+                    .expect("frame should fit under limit");
+            }
+
+            let rejected = enqueue_pending_native_frame(&mut frames, pending_frame(999))
+                .expect_err("queue should reject frames over limit");
+
+            assert_eq!(frames.len(), MAX_PENDING_NATIVE_FRAMES);
+            assert_eq!(rejected.pixel_buffer as usize, 999);
+        }
+
+        fn pending_frame(handle: usize) -> PendingNativeFrame {
+            PendingNativeFrame {
+                pixel_buffer: handle as *mut _,
+                pts_us: None,
+                duration_us: None,
+                width: 0,
+                height: 0,
+            }
         }
     }
 }

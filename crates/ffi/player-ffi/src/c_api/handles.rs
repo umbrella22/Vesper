@@ -239,68 +239,62 @@ pub(crate) fn write_default_if_non_null<T: Default>(out: *mut T) {
     }
 }
 
-pub(crate) fn error_mut(error: *mut PlayerFfiError) -> Option<&'static mut PlayerFfiError> {
-    if error.is_null() {
+fn with_mut_ptr<T, R>(ptr: *mut T, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+    if ptr.is_null() {
         return None;
     }
 
-    unsafe { Some(&mut *error) }
+    // SAFETY: FFI callers must pass a valid, uniquely borrowed pointer for the
+    // duration of the synchronous call. The mutable reference cannot escape
+    // this helper because it is only exposed to the closure.
+    Some(f(unsafe { &mut *ptr }))
 }
 
-pub(crate) fn media_info_mut(
+pub(crate) fn with_error_mut<R>(
+    error: *mut PlayerFfiError,
+    f: impl FnOnce(&mut PlayerFfiError) -> R,
+) -> Option<R> {
+    with_mut_ptr(error, f)
+}
+
+pub(crate) fn with_media_info_mut<R>(
     media_info: *mut PlayerFfiMediaInfo,
-) -> Option<&'static mut PlayerFfiMediaInfo> {
-    if media_info.is_null() {
-        return None;
-    }
-
-    unsafe { Some(&mut *media_info) }
+    f: impl FnOnce(&mut PlayerFfiMediaInfo) -> R,
+) -> Option<R> {
+    with_mut_ptr(media_info, f)
 }
 
-pub(crate) fn track_preferences_mut(
+pub(crate) fn with_track_preferences_mut<R>(
     track_preferences: *mut PlayerFfiTrackPreferences,
-) -> Option<&'static mut PlayerFfiTrackPreferences> {
-    if track_preferences.is_null() {
-        return None;
-    }
-
-    unsafe { Some(&mut *track_preferences) }
+    f: impl FnOnce(&mut PlayerFfiTrackPreferences) -> R,
+) -> Option<R> {
+    with_mut_ptr(track_preferences, f)
 }
 
-pub(crate) fn startup_mut(startup: *mut PlayerFfiStartup) -> Option<&'static mut PlayerFfiStartup> {
-    if startup.is_null() {
-        return None;
-    }
-
-    unsafe { Some(&mut *startup) }
+pub(crate) fn with_startup_mut<R>(
+    startup: *mut PlayerFfiStartup,
+    f: impl FnOnce(&mut PlayerFfiStartup) -> R,
+) -> Option<R> {
+    with_mut_ptr(startup, f)
 }
 
-pub(crate) fn snapshot_mut(
+pub(crate) fn with_snapshot_mut<R>(
     snapshot: *mut PlayerFfiSnapshot,
-) -> Option<&'static mut PlayerFfiSnapshot> {
-    if snapshot.is_null() {
-        return None;
-    }
-
-    unsafe { Some(&mut *snapshot) }
+    f: impl FnOnce(&mut PlayerFfiSnapshot) -> R,
+) -> Option<R> {
+    with_mut_ptr(snapshot, f)
 }
 
-pub(crate) fn video_frame_mut(
+pub(crate) fn with_video_frame_mut<R>(
     frame: *mut PlayerFfiVideoFrame,
-) -> Option<&'static mut PlayerFfiVideoFrame> {
-    if frame.is_null() {
-        return None;
-    }
-
-    unsafe { Some(&mut *frame) }
+    f: impl FnOnce(&mut PlayerFfiVideoFrame) -> R,
+) -> Option<R> {
+    with_mut_ptr(frame, f)
 }
 
-pub(crate) fn event_list_mut(
+pub(crate) fn with_event_list_mut<R>(
     events: *mut PlayerFfiEventList,
-) -> Option<&'static mut PlayerFfiEventList> {
-    if events.is_null() {
-        return None;
-    }
-
-    unsafe { Some(&mut *events) }
+    f: impl FnOnce(&mut PlayerFfiEventList) -> R,
+) -> Option<R> {
+    with_mut_ptr(events, f)
 }

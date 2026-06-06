@@ -958,12 +958,10 @@ pub unsafe extern "C" fn player_ffi_player_next_deadline_delay_ms(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
     ffi_void(|| {
-        let Some(error) = error_mut(error) else {
-            return;
-        };
-
-        free_c_string(&mut error.message);
-        *error = PlayerFfiError::default();
+        let _ = with_error_mut(error, |error| {
+            free_c_string(&mut error.message);
+            *error = PlayerFfiError::default();
+        });
     });
 }
 
@@ -976,11 +974,7 @@ pub unsafe extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_media_info_free(media_info: *mut PlayerFfiMediaInfo) {
     ffi_void(|| {
-        let Some(media_info) = media_info_mut(media_info) else {
-            return;
-        };
-
-        free_media_info(media_info);
+        let _ = with_media_info_mut(media_info, free_media_info);
     });
 }
 
@@ -995,11 +989,7 @@ pub unsafe extern "C" fn player_ffi_track_preferences_free(
     track_preferences: *mut PlayerFfiTrackPreferences,
 ) {
     ffi_void(|| {
-        let Some(track_preferences) = track_preferences_mut(track_preferences) else {
-            return;
-        };
-
-        free_track_preferences(track_preferences);
+        let _ = with_track_preferences_mut(track_preferences, free_track_preferences);
     });
 }
 
@@ -1012,11 +1002,7 @@ pub unsafe extern "C" fn player_ffi_track_preferences_free(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_startup_free(startup: *mut PlayerFfiStartup) {
     ffi_void(|| {
-        let Some(startup) = startup_mut(startup) else {
-            return;
-        };
-
-        free_startup(startup);
+        let _ = with_startup_mut(startup, free_startup);
     });
 }
 
@@ -1029,11 +1015,7 @@ pub unsafe extern "C" fn player_ffi_startup_free(startup: *mut PlayerFfiStartup)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_snapshot_free(snapshot: *mut PlayerFfiSnapshot) {
     ffi_void(|| {
-        let Some(snapshot) = snapshot_mut(snapshot) else {
-            return;
-        };
-
-        free_snapshot(snapshot);
+        let _ = with_snapshot_mut(snapshot, free_snapshot);
     });
 }
 
@@ -1046,11 +1028,7 @@ pub unsafe extern "C" fn player_ffi_snapshot_free(snapshot: *mut PlayerFfiSnapsh
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_video_frame_free(frame: *mut PlayerFfiVideoFrame) {
     ffi_void(|| {
-        let Some(frame) = video_frame_mut(frame) else {
-            return;
-        };
-
-        free_video_frame(frame);
+        let _ = with_video_frame_mut(frame, free_video_frame);
     });
 }
 
@@ -1063,19 +1041,17 @@ pub unsafe extern "C" fn player_ffi_video_frame_free(frame: *mut PlayerFfiVideoF
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_event_list_free(events: *mut PlayerFfiEventList) {
     ffi_void(|| {
-        let Some(events) = event_list_mut(events) else {
-            return;
-        };
-
-        if !events.ptr.is_null() {
-            unsafe {
-                let mut boxed =
-                    Box::from_raw(ptr::slice_from_raw_parts_mut(events.ptr, events.len));
-                for event in boxed.iter_mut() {
-                    free_event(event);
+        let _ = with_event_list_mut(events, |events| {
+            if !events.ptr.is_null() {
+                unsafe {
+                    let mut boxed =
+                        Box::from_raw(ptr::slice_from_raw_parts_mut(events.ptr, events.len));
+                    for event in boxed.iter_mut() {
+                        free_event(event);
+                    }
                 }
             }
-        }
-        *events = PlayerFfiEventList::default();
+            *events = PlayerFfiEventList::default();
+        });
     });
 }
