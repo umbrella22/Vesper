@@ -74,6 +74,7 @@ internal class VesperNativeJniBindings(
     private var currentVideoVariantObservationState: VesperVideoVariantObservation? = null
     private var currentVideoLayoutState: NativeVideoLayoutInfo? = null
     private var currentVideoDecoderName: String? = null
+    private val localBridgeEvents = ArrayDeque<NativeBridgeEvent>()
     private val preloadCoordinator =
         VesperNativePreloadCoordinator(
             bindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
@@ -455,7 +456,9 @@ internal class VesperNativeJniBindings(
         if (isDisposed.get()) {
             emptyList()
         } else {
-            sessionHandle?.let { VesperNativeJni.drainEvents(it).toList() } ?: emptyList()
+            val localEvents = localBridgeEvents.toList()
+            localBridgeEvents.clear()
+            localEvents + (sessionHandle?.let { VesperNativeJni.drainEvents(it).toList() } ?: emptyList())
         }
 
     override fun play() {
@@ -827,6 +830,7 @@ internal class VesperNativeJniBindings(
                         "height" to format.height.toString(),
                     ) + (currentVideoDecoderName?.let { mapOf("decoderName" to it) } ?: emptyMap()),
                 )
+                enqueueHdrCapabilityWarningIfNeeded(format)
                 pushTrackStateToRust()
                 notifyNativeUpdate()
             }
@@ -983,6 +987,27 @@ internal class VesperNativeJniBindings(
             kind = inferSourceKind(uri),
             protocol = inferSourceProtocol(uri),
         )
+    }
+
+    private fun enqueueHdrCapabilityWarningIfNeeded(format: Format) {
+        val hdrKind = format.detectRuntimeHdrKind()
+        if (hdrKind == null || hdrKind == "none") {
+            return
+        }
+        localBridgeEvents +=
+            NativeBridgeEvent.Warning(
+                VesperRuntimeWarning(
+                    domain = "capability",
+                    payload =
+                        mapOf(
+                            "reason" to "hdrNativeFrameUnsupported",
+                            "recommendedPlaybackPath" to "systemPlayer",
+                            "hdrKind" to hdrKind,
+                            "message" to
+                                "HDR and Dolby Vision content uses system playback; SDK-managed native-frame presentation is SDR-only.",
+                        ),
+                )
+            )
     }
 
     private fun notifyNativeUpdate() {
@@ -2113,6 +2138,22 @@ private fun buildMediaItem(source: VesperPlayerSource): MediaItem {
     }
 
     return builder.build()
+}
+
+private fun Format.detectRuntimeHdrKind(): String? {
+    val codec = codecs?.lowercase().orEmpty()
+    if (codec.split(',').any { value ->
+            val normalized = value.trim().removePrefix("video/")
+            normalized.startsWith("dvh1") || normalized.startsWith("dvhe")
+        }
+    ) {
+        return "dolbyVision"
+    }
+    return when (colorInfo?.colorTransfer) {
+        C.COLOR_TRANSFER_ST2084 -> "hdr10"
+        C.COLOR_TRANSFER_HLG -> "hlg"
+        else -> null
+    }
 }
 
 private fun buildDataSourceFactory(

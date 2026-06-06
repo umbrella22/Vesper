@@ -606,12 +606,16 @@ required or forced by a test profile. The repository smoke expectations live in
 FrameProcessor mobile remains opt-in and is only consumed by the explicit
 Native Frame Pipeline route. The host kits now report native-frame diagnostics
 for SourceNormalizer packet input, platform decoder adapter, presenter profile,
-fallback reason, and counters. iOS local/VOD native-frame playback can run
+fallback reason, and counters. iOS local/VOD SDR native-frame playback can run
 through VideoToolbox, MetalLayer presentation, and the Swift native audio
-bridge. Android still reports the planned MediaCodec/SurfaceView route and
-falls back until that packet lane is wired. `requireNativeFrame` reports a
-capability error when the requested native-frame lane is unavailable instead of
-silently using the system player. Default mobile playback is unchanged.
+bridge. Android can use the explicit MediaCodec/SurfaceView packet route when
+the required mobile plugin paths are present. HDR and Dolby Vision stay on
+platform system playback; `probePlaybackCapability` reports
+`recommendedPlaybackPath = systemPlayer` and emits a capability warning with
+`hdrNativeFrameUnsupported` instead of treating SDK-managed native-frame as an
+HDR path. `requireNativeFrame` reports a capability error when the requested
+native-frame lane is unavailable instead of silently using the system player.
+Default mobile playback is unchanged.
 
 Download task states:
 

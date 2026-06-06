@@ -89,7 +89,6 @@ void main() {
       ),
       codec: 'hvc1.1.6.L93.B0',
       requiresNativeFrame: true,
-      requiresHdrNativeFrame: true,
       sourceNormalizerConfiguration: sourceNormalizerConfiguration,
       nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
     );
@@ -101,7 +100,8 @@ void main() {
     expect(decodedRequest.source?.uri, request.source?.uri);
     expect(decodedRequest.codec, request.codec);
     expect(decodedRequest.requiresNativeFrame, isTrue);
-    expect(decodedRequest.requiresHdrNativeFrame, isTrue);
+    expect(
+        decodedRequest.toMap().containsKey('requiresHdrNativeFrame'), isFalse);
     expect(
       decodedRequest.sourceNormalizerConfiguration.mode,
       VesperSourceNormalizerMode.preflightOnly,
@@ -113,13 +113,13 @@ void main() {
 
     final result = VesperPlaybackCapabilityProbeResult.fromMap(
       <Object?, Object?>{
-        'status': 'unsupported',
+        'status': 'fallbackRequired',
         'codecFamily': 'hevc',
         'systemPlaybackSupported': true,
         'hardwareDecodeSupported': true,
         'sdkManagedNativeFrameSupported': false,
-        'hdrNativeFrameSupported': false,
-        'outputFormat': 'unknown',
+        'recommendedPlaybackPath': 'systemPlayer',
+        'outputFormat': 'surfaceOpaque',
         'hdrKind': 'dolbyVision',
         'dolbyVisionMode': 'unsupported',
         'confidence': 'sourceMetadata',
@@ -128,26 +128,33 @@ void main() {
         ],
         'diagnostics': <Object?, Object?>{
           'probeVersion': '1',
-          'hdrNativeFramePolicy': 'systemPlaybackOnly',
-          'nativeFrameRejectedForHdrProcessing': 'true',
+          'playbackPathPolicy': 'hdrSystemPlaybackOnly',
+          'recommendedPlaybackPathReason': 'hdrNativeFrameUnsupported',
         },
       },
     );
 
-    expect(result.status, VesperPlaybackCapabilityProbeStatus.unsupported);
+    expect(result.status, VesperPlaybackCapabilityProbeStatus.fallbackRequired);
     expect(result.codecFamily, VesperPlaybackCodecFamily.hevc);
-    expect(result.outputFormat, VesperPlaybackCapabilityOutputFormat.unknown);
+    expect(
+      result.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(result.outputFormat,
+        VesperPlaybackCapabilityOutputFormat.surfaceOpaque);
     expect(result.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
     expect(
       result.dolbyVisionMode,
       VesperPlaybackCapabilityDolbyVisionMode.unsupported,
     );
-    expect(result.confidence, VesperPlaybackCapabilityConfidence.sourceMetadata);
+    expect(
+        result.confidence, VesperPlaybackCapabilityConfidence.sourceMetadata);
     expect(
       result.missingCapabilities,
       <String>['hdrProgrammableProcessingNotSupported'],
     );
     expect(result.toMap()['codecFamily'], 'hevc');
+    expect(result.toMap().containsKey('hdrNativeFrameSupported'), isFalse);
   });
 
   test('download DTOs encode FLV byte ranges and target output', () {

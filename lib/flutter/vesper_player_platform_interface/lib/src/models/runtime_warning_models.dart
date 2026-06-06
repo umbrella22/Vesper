@@ -1,6 +1,6 @@
 part of '../models.dart';
 
-enum VesperRuntimeWarningDomain { frameProcessor }
+enum VesperRuntimeWarningDomain { frameProcessor, capability }
 
 enum VesperFrameProcessorWarningKind {
   slow,
@@ -120,9 +120,60 @@ final class VesperFrameProcessorWarning {
   }
 }
 
+enum VesperCapabilityWarningReason { hdrNativeFrameUnsupported }
+
+final class VesperCapabilityWarning {
+  const VesperCapabilityWarning({
+    required this.reason,
+    required this.recommendedPlaybackPath,
+    required this.hdrKind,
+    this.message,
+  });
+
+  factory VesperCapabilityWarning.fromMap(Map<Object?, Object?> map) {
+    return VesperCapabilityWarning(
+      reason: _decodeEnum(
+        VesperCapabilityWarningReason.values,
+        map['reason'],
+        VesperCapabilityWarningReason.hdrNativeFrameUnsupported,
+      ),
+      recommendedPlaybackPath: _decodeEnum(
+        VesperRecommendedPlaybackPath.values,
+        map['recommendedPlaybackPath'],
+        VesperRecommendedPlaybackPath.systemPlayer,
+      ),
+      hdrKind: _decodeEnum(
+        VesperPlaybackCapabilityHdrKind.values,
+        map['hdrKind'],
+        VesperPlaybackCapabilityHdrKind.unknown,
+      ),
+      message: map['message'] as String?,
+    );
+  }
+
+  final VesperCapabilityWarningReason reason;
+  final VesperRecommendedPlaybackPath recommendedPlaybackPath;
+  final VesperPlaybackCapabilityHdrKind hdrKind;
+  final String? message;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'reason': reason.name,
+      'recommendedPlaybackPath': recommendedPlaybackPath.name,
+      'hdrKind': hdrKind.name,
+      if (message != null) 'message': message,
+    };
+  }
+}
+
 final class VesperRuntimeWarning {
   const VesperRuntimeWarning.frameProcessor(this.frameProcessor)
-      : domain = VesperRuntimeWarningDomain.frameProcessor;
+      : domain = VesperRuntimeWarningDomain.frameProcessor,
+        capability = null;
+
+  const VesperRuntimeWarning.capability(this.capability)
+      : domain = VesperRuntimeWarningDomain.capability,
+        frameProcessor = null;
 
   factory VesperRuntimeWarning.fromMap(Map<Object?, Object?> map) {
     final domain = _decodeEnum(
@@ -131,6 +182,7 @@ final class VesperRuntimeWarning {
       VesperRuntimeWarningDomain.frameProcessor,
     );
     final rawFrameProcessor = _rawMap(map['frameProcessor']);
+    final rawCapability = _rawMap(map['capability']);
     return switch (domain) {
       VesperRuntimeWarningDomain.frameProcessor =>
         VesperRuntimeWarning.frameProcessor(
@@ -138,17 +190,23 @@ final class VesperRuntimeWarning {
             rawFrameProcessor ?? const <Object?, Object?>{},
           ),
         ),
+      VesperRuntimeWarningDomain.capability => VesperRuntimeWarning.capability(
+          VesperCapabilityWarning.fromMap(
+            rawCapability ?? const <Object?, Object?>{},
+          ),
+        ),
     };
   }
 
   final VesperRuntimeWarningDomain domain;
-  final VesperFrameProcessorWarning frameProcessor;
+  final VesperFrameProcessorWarning? frameProcessor;
+  final VesperCapabilityWarning? capability;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'domain': domain.name,
-      'frameProcessor': frameProcessor.toMap(),
+      if (frameProcessor != null) 'frameProcessor': frameProcessor!.toMap(),
+      if (capability != null) 'capability': capability!.toMap(),
     };
   }
 }
-

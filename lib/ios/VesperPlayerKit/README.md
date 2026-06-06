@@ -313,10 +313,13 @@ FrameProcessor mobile remains explicit through
 `VesperNativeFramePipelineConfiguration`. The iOS host kit now exposes the
 native-frame route decision for SourceNormalizer packet input, VideoToolbox,
 MetalLayer presentation, Swift native audio bridge status, fallback reason, and
-frame counters. Local/VOD native-frame playback is explicitly opt-in:
+frame counters. Local/VOD SDR native-frame playback is explicitly opt-in:
 `preferNativeFrame` falls back to AVPlayer when the packet, decoder, surface, or
 presenter path cannot start, while `requireNativeFrame` reports a capability
-error. Default AVPlayer playback is unchanged.
+error. HDR and Dolby Vision remain on AVPlayer / system playback; the capability
+probe reports `recommendedPlaybackPath = systemPlayer` with
+`hdrNativeFrameUnsupported` diagnostics instead of advertising native-frame HDR
+support. Default AVPlayer playback is unchanged.
 
 ## Testing The Package
 

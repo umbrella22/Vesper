@@ -46,8 +46,9 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
         @MainActor
         func attach(controller: VesperPlayerController, view: PlayerSurfaceView) {
             if let attachedController,
-               let attachedView,
-               attachedController !== controller || attachedView !== view {
+                let attachedView,
+                attachedController !== controller || attachedView !== view
+            {
                 attachedController.detachSurfaceHost(attachedView)
             }
             controller.attachSurfaceHost(view)
@@ -124,7 +125,9 @@ public final class PlayerSurfaceView: UIView {
         attachedPlayer = player
         playerLayer.player = player
         playerLayer.videoGravity = .resizeAspect
-        readyForDisplayObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) {
+        readyForDisplayObservation = playerLayer.observe(
+            \.isReadyForDisplay, options: [.initial, .new]
+        ) {
             [weak self] layer, _
             in
             guard layer.isReadyForDisplay else { return }
@@ -212,7 +215,8 @@ public final class PlayerSurfaceView: UIView {
         let drawableBounds = CGRect(origin: .zero, size: metalLayer.drawableSize)
         let imageExtent = image.extent
         guard imageExtent.width > 0, imageExtent.height > 0,
-              drawableBounds.width > 0, drawableBounds.height > 0 else {
+            drawableBounds.width > 0, drawableBounds.height > 0
+        else {
             retainedPixelBuffer.release()
             completion(false)
             return
@@ -225,11 +229,14 @@ public final class PlayerSurfaceView: UIView {
         let scaledHeight = imageExtent.height * scale
         let offsetX = (drawableBounds.width - scaledWidth) / 2
         let offsetY = (drawableBounds.height - scaledHeight) / 2
-        let fittedImage = image
-            .transformed(by: CGAffineTransform(
-                translationX: -imageExtent.origin.x,
-                y: -imageExtent.origin.y
-            ))
+        let fittedImage =
+            image
+            .transformed(
+                by: CGAffineTransform(
+                    translationX: -imageExtent.origin.x,
+                    y: -imageExtent.origin.y
+                )
+            )
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
@@ -241,8 +248,10 @@ public final class PlayerSurfaceView: UIView {
         clearPass.colorAttachments[0].texture = drawable.texture
         clearPass.colorAttachments[0].loadAction = .clear
         clearPass.colorAttachments[0].storeAction = .store
-        clearPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        guard let clearEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: clearPass) else {
+        clearPass.colorAttachments[0].clearColor = MTLClearColor(
+            red: 0, green: 0, blue: 0, alpha: 1)
+        guard let clearEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: clearPass)
+        else {
             retainedPixelBuffer.release()
             completion(false)
             return
@@ -272,6 +281,9 @@ public final class PlayerSurfaceView: UIView {
     }
 
     private func nativeFrameMetalPixelFormat() -> MTLPixelFormat {
+        // SDK-managed native-frame presentation is intentionally SDR-only today.
+        // HDR and Dolby Vision content should use system playback, where AVPlayer
+        // and the system compositor own the extended dynamic range path.
         return .bgra8Unorm
     }
 

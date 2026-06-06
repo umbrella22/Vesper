@@ -107,7 +107,7 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
       systemPlaybackSupported: false,
       hardwareDecodeSupported: false,
       sdkManagedNativeFrameSupported: false,
-      hdrNativeFrameSupported: false,
+      recommendedPlaybackPath: VesperRecommendedPlaybackPath.systemPlayer,
       outputFormat: VesperPlaybackCapabilityOutputFormat.unknown,
       hdrKind: VesperPlaybackCapabilityHdrKind.none,
       dolbyVisionMode: VesperPlaybackCapabilityDolbyVisionMode.none,

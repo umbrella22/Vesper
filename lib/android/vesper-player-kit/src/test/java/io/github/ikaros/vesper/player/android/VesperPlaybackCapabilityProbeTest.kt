@@ -27,6 +27,7 @@ class VesperPlaybackCapabilityProbeTest {
         assertEquals(VesperPlaybackCodecFamily.Hevc, result.codecFamily)
         assertTrue(result.hardwareDecodeSupported)
         assertTrue(result.sdkManagedNativeFrameSupported)
+        assertEquals(VesperRecommendedPlaybackPath.NativeFramePipeline, result.recommendedPlaybackPath)
         assertEquals(VesperPlaybackCapabilityOutputFormat.SurfaceOpaque, result.outputFormat)
         assertTrue(result.missingCapabilities.isEmpty())
     }
@@ -39,7 +40,6 @@ class VesperPlaybackCapabilityProbeTest {
                     VesperPlaybackCapabilityProbeRequest(
                         source = VesperPlayerSource.local("file:///tmp/hdr.mp4", "hdr.mp4"),
                         codec = "dvh1.05.06",
-                        requiresHdrNativeFrame = true,
                         sourceNormalizerConfiguration =
                             VesperSourceNormalizerConfiguration(
                                 mode = VesperSourceNormalizerMode.PreferNormalized,
@@ -54,13 +54,14 @@ class VesperPlaybackCapabilityProbeTest {
                 codecProbeProvider = hardwareCodecs("video/hevc"),
             )
 
-        assertEquals(VesperPlaybackCapabilityProbeStatus.Unsupported, result.status)
+        assertEquals(VesperPlaybackCapabilityProbeStatus.FallbackRequired, result.status)
         assertEquals(VesperPlaybackCodecFamily.Hevc, result.codecFamily)
-        assertFalse(result.hdrNativeFrameSupported)
-        assertEquals(VesperPlaybackCapabilityOutputFormat.Unknown, result.outputFormat)
+        assertEquals(VesperRecommendedPlaybackPath.SystemPlayer, result.recommendedPlaybackPath)
+        assertEquals(VesperPlaybackCapabilityHdrKind.DolbyVision, result.hdrKind)
+        assertEquals(VesperPlaybackCapabilityOutputFormat.SurfaceOpaque, result.outputFormat)
         assertTrue(result.missingCapabilities.contains("hdrProgrammableProcessingNotSupported"))
-        assertEquals("systemPlaybackOnly", result.diagnostics["hdrNativeFramePolicy"])
-        assertEquals("true", result.diagnostics["nativeFrameRejectedForHdrProcessing"])
+        assertEquals("hdrSystemPlaybackOnly", result.diagnostics["playbackPathPolicy"])
+        assertEquals("hdrNativeFrameUnsupported", result.diagnostics["recommendedPlaybackPathReason"])
     }
 
     @Test
@@ -88,10 +89,68 @@ class VesperPlaybackCapabilityProbeTest {
         assertEquals(VesperPlaybackCapabilityProbeStatus.FallbackRequired, result.status)
         assertEquals(VesperPlaybackCapabilityHdrKind.DolbyVision, result.hdrKind)
         assertEquals(VesperPlaybackCapabilityDolbyVisionMode.Unsupported, result.dolbyVisionMode)
-        assertFalse(result.hdrNativeFrameSupported)
+        assertEquals(VesperRecommendedPlaybackPath.SystemPlayer, result.recommendedPlaybackPath)
         assertTrue(result.missingCapabilities.contains("hdrProgrammableProcessingNotSupported"))
-        assertEquals("systemPlaybackOnly", result.diagnostics["hdrNativeFramePolicy"])
-        assertEquals("true", result.diagnostics["systemPlaybackSelectedForHdr"])
+        assertEquals("hdrSystemPlaybackOnly", result.diagnostics["playbackPathPolicy"])
+        assertEquals("hdrNativeFrameUnsupported", result.diagnostics["recommendedPlaybackPathReason"])
+    }
+
+    @Test
+    fun dolbyVisionDisplaySessionProbeCanRaiseConfidence() {
+        val result =
+            VesperPlaybackCapabilityProbe.probe(
+                request =
+                    VesperPlaybackCapabilityProbeRequest(
+                        source = VesperPlayerSource.local("file:///tmp/dv.mp4", "dv.mp4"),
+                        codec = "dvhe.05.06",
+                        nativeFramePipelineConfiguration =
+                            VesperNativeFramePipelineConfiguration(
+                                mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                            ),
+                    ),
+                codecProbeProvider = hardwareCodecs("video/hevc"),
+                sessionProbeProvider =
+                    VesperAndroidSessionProbeProvider {
+                        VesperAndroidSessionProbeResult(
+                            supportedHdrKinds = setOf(VesperPlaybackCapabilityHdrKind.DolbyVision),
+                            diagnostics = mapOf("sessionProbe" to "fakeDisplay"),
+                        )
+                    },
+            )
+
+        assertEquals(VesperPlaybackCapabilityConfidence.SessionProbe, result.confidence)
+        assertEquals("fakeDisplay", result.diagnostics["sessionProbe"])
+        assertFalse(result.missingCapabilities.contains("displayHdrCapability"))
+    }
+
+    @Test
+    fun dolbyVisionDisplaySessionProbeReportsMissingDisplayCapability() {
+        val result =
+            VesperPlaybackCapabilityProbe.probe(
+                request =
+                    VesperPlaybackCapabilityProbeRequest(
+                        source = VesperPlayerSource.local("file:///tmp/dv.mp4", "dv.mp4"),
+                        codec = "dvhe.05.06",
+                        nativeFramePipelineConfiguration =
+                            VesperNativeFramePipelineConfiguration(
+                                mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                            ),
+                    ),
+                codecProbeProvider = hardwareCodecs("video/hevc"),
+                sessionProbeProvider =
+                    VesperAndroidSessionProbeProvider {
+                        VesperAndroidSessionProbeResult(
+                            supportedHdrKinds = setOf(VesperPlaybackCapabilityHdrKind.Hdr10),
+                            diagnostics = mapOf("sessionProbe" to "fakeDisplay"),
+                        )
+                    },
+            )
+
+        assertEquals(VesperPlaybackCapabilityConfidence.SessionProbe, result.confidence)
+        assertTrue(result.missingCapabilities.contains("displayHdrCapability"))
+        assertEquals("false", result.diagnostics["displayHdrSupported"])
     }
 
     @Test

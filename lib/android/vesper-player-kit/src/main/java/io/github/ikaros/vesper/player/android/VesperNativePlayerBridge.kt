@@ -84,6 +84,7 @@ internal class VesperNativePlayerBridge(
     private var nativeFramePipelineLastLoggedPumpKey: String? = null
     private var nativeFramePipelineLastPublishedDiagnosticsKey: String? = null
     private var nativeFramePipelineDiagnosticsDirty = false
+    private val runtimeWarnings = ArrayDeque<VesperRuntimeWarning>()
     private var currentPluginDiagnostics: List<Map<String, Any?>> =
         initialSource?.let(::probePluginsForSource)
             ?: nativeFramePipelineDiagnostics()
@@ -734,6 +735,15 @@ internal class VesperNativePlayerBridge(
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
         benchmarkRecorder.drainEvents()
 
+    override fun drainRuntimeWarnings(): List<VesperRuntimeWarning> {
+        if (runtimeWarnings.isEmpty()) {
+            return emptyList()
+        }
+        val warnings = runtimeWarnings.toList()
+        runtimeWarnings.clear()
+        return warnings
+    }
+
     override fun benchmarkSummary(): VesperBenchmarkSummary =
         benchmarkRecorder.summary()
 
@@ -940,6 +950,9 @@ internal class VesperNativePlayerBridge(
                     updateState {
                         copy(playbackState = PlaybackStateUi.Finished, isBuffering = false)
                     }
+                }
+                is NativeBridgeEvent.Warning -> {
+                    runtimeWarnings += event.warning
                 }
                 is NativeBridgeEvent.Error -> {
                     recordBenchmark(

@@ -61,6 +61,8 @@ import io.github.ikaros.vesper.player.android.VesperDownloadTaskStatePatch
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityHdrKind
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
@@ -70,6 +72,7 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
+import io.github.ikaros.vesper.player.android.VesperRecommendedPlaybackPath
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlButton
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlKind
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControls
@@ -596,8 +599,12 @@ class VesperPlayerAndroidPlugin :
 
     private fun handleProbePlaybackCapability(call: MethodCall, result: MethodChannel.Result) {
         runCatching {
-            val request = call.argumentMap().toPlaybackCapabilityProbeRequest()
-            VesperPlayerControllerFactory.probePlaybackCapability(applicationContext, request).toMap()
+            val arguments = call.argumentMap()
+            val request = arguments.toPlaybackCapabilityProbeRequest()
+            val probeResult =
+                VesperPlayerControllerFactory.probePlaybackCapability(applicationContext, request)
+            emitCapabilityWarningIfNeeded(arguments["playerId"] as? String, probeResult)
+            probeResult.toMap()
         }.fold(
             onSuccess = result::success,
             onFailure = { error -> result.error("invalid_probe_request", error.message, null) },
@@ -1010,6 +1017,7 @@ class VesperPlayerAndroidPlugin :
             ) { _, _, _ ->
                 buildSnapshotMap(session)
             }.collect { snapshot ->
+                emitRuntimeWarnings(session)
                 emitSnapshot(session, snapshot)
             }
         }
@@ -1061,6 +1069,52 @@ class VesperPlayerAndroidPlugin :
             ),
         )
         emitBenchmarkConsoleLog(session, force = true)
+    }
+
+    private fun emitCapabilityWarningIfNeeded(
+        playerId: String?,
+        result: VesperPlaybackCapabilityProbeResult,
+    ) {
+        if (
+            result.recommendedPlaybackPath != VesperRecommendedPlaybackPath.SystemPlayer ||
+            result.hdrKind == VesperPlaybackCapabilityHdrKind.None
+        ) {
+            return
+        }
+        emitEvent(
+            mapOf(
+                "playerId" to (playerId ?: ""),
+                "type" to "warning",
+                "warning" to
+                    mapOf(
+                        "domain" to "capability",
+                        "capability" to
+                            mapOf(
+                                "reason" to "hdrNativeFrameUnsupported",
+                                "recommendedPlaybackPath" to "systemPlayer",
+                                "hdrKind" to result.hdrKind.toWarningWireName(),
+                                "message" to
+                                    "HDR and Dolby Vision content uses system playback; SDK-managed native-frame presentation is SDR-only.",
+                            ),
+                    ),
+            ),
+        )
+    }
+
+    private fun emitRuntimeWarnings(session: PlayerSession) {
+        session.controller.drainRuntimeWarnings().forEach { warning ->
+            emitEvent(
+                mapOf(
+                    "playerId" to session.id,
+                    "type" to "warning",
+                    "warning" to
+                        mapOf(
+                            "domain" to warning.domain,
+                            warning.domain to warning.payload,
+                        ),
+                ),
+            )
+        }
     }
 
     private fun emitDownloadSnapshot(session: DownloadSession) {
@@ -1294,3 +1348,12 @@ class VesperPlayerAndroidPlugin :
         downloadSessions.clear()
     }
 }
+
+private fun VesperPlaybackCapabilityHdrKind.toWarningWireName(): String =
+    when (this) {
+        VesperPlaybackCapabilityHdrKind.None -> "none"
+        VesperPlaybackCapabilityHdrKind.Hdr10 -> "hdr10"
+        VesperPlaybackCapabilityHdrKind.Hlg -> "hlg"
+        VesperPlaybackCapabilityHdrKind.DolbyVision -> "dolbyVision"
+        VesperPlaybackCapabilityHdrKind.Unknown -> "unknown"
+    }

@@ -217,16 +217,51 @@ void main() {
     expect(
         warningEvent.warning.domain, VesperRuntimeWarningDomain.frameProcessor);
     expect(
-      warningEvent.warning.frameProcessor.kind,
+      warningEvent.warning.frameProcessor?.kind,
       VesperFrameProcessorWarningKind.deadlineMissed,
     );
-    expect(warningEvent.warning.frameProcessor.pluginName, 'fixture-processor');
-    expect(warningEvent.warning.frameProcessor.processorIndex, 2);
-    expect(warningEvent.warning.frameProcessor.frameId, 7);
-    expect(warningEvent.warning.frameProcessor.framePtsUs, 33000);
     expect(
-      warningEvent.warning.frameProcessor.policyAction,
+      warningEvent.warning.frameProcessor?.pluginName,
+      'fixture-processor',
+    );
+    expect(warningEvent.warning.frameProcessor?.processorIndex, 2);
+    expect(warningEvent.warning.frameProcessor?.frameId, 7);
+    expect(warningEvent.warning.frameProcessor?.framePtsUs, 33000);
+    expect(
+      warningEvent.warning.frameProcessor?.policyAction,
       VesperFrameProcessorPolicyAction.bypassOriginalFrame,
+    );
+  });
+
+  test('player warning event decodes capability HDR fallback payload', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'ios-player',
+      'type': 'warning',
+      'warning': <Object?, Object?>{
+        'domain': 'capability',
+        'capability': <Object?, Object?>{
+          'reason': 'hdrNativeFrameUnsupported',
+          'recommendedPlaybackPath': 'systemPlayer',
+          'hdrKind': 'dolbyVision',
+          'message': 'HDR/Dolby Vision uses system playback.',
+        },
+      },
+    });
+
+    expect(event, isA<VesperPlayerWarningEvent>());
+    final warningEvent = event as VesperPlayerWarningEvent;
+    expect(warningEvent.warning.domain, VesperRuntimeWarningDomain.capability);
+    expect(
+      warningEvent.warning.capability?.reason,
+      VesperCapabilityWarningReason.hdrNativeFrameUnsupported,
+    );
+    expect(
+      warningEvent.warning.capability?.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(
+      warningEvent.warning.capability?.hdrKind,
+      VesperPlaybackCapabilityHdrKind.dolbyVision,
     );
   });
 
@@ -387,7 +422,8 @@ void main() {
         isFalse);
   });
 
-  test('platform create result preserves source normalizer bypass diagnostic extras',
+  test(
+      'platform create result preserves source normalizer bypass diagnostic extras',
       () {
     final result = VesperPlatformCreateResult.fromMap(<Object?, Object?>{
       'playerId': 'android-player',

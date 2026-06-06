@@ -30,6 +30,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResul
 import io.github.ikaros.vesper.player.android.VesperPlaybackCodecFamily
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperRecommendedPlaybackPath
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
 import io.github.ikaros.vesper.player.android.VesperTrackSelection
@@ -146,7 +147,7 @@ internal fun VesperPlaybackCapabilityProbeResult.toMap(): Map<String, Any?> =
         "systemPlaybackSupported" to systemPlaybackSupported,
         "hardwareDecodeSupported" to hardwareDecodeSupported,
         "sdkManagedNativeFrameSupported" to sdkManagedNativeFrameSupported,
-        "hdrNativeFrameSupported" to hdrNativeFrameSupported,
+        "recommendedPlaybackPath" to recommendedPlaybackPath.wireName,
         "outputFormat" to outputFormat.wireName,
         "hdrKind" to hdrKind.wireName,
         "dolbyVisionMode" to dolbyVisionMode.wireName,
@@ -208,6 +209,13 @@ private val VesperPlaybackCapabilityConfidence.wireName: String
             VesperPlaybackCapabilityConfidence.CodecOnly -> "codecOnly"
             VesperPlaybackCapabilityConfidence.SourceMetadata -> "sourceMetadata"
             VesperPlaybackCapabilityConfidence.SessionProbe -> "sessionProbe"
+        }
+
+private val VesperRecommendedPlaybackPath.wireName: String
+    get() =
+        when (this) {
+            VesperRecommendedPlaybackPath.NativeFramePipeline -> "nativeFramePipeline"
+            VesperRecommendedPlaybackPath.SystemPlayer -> "systemPlayer"
         }
 
 internal fun Throwable.toDownloadErrorMap(): Map<String, Any?> =

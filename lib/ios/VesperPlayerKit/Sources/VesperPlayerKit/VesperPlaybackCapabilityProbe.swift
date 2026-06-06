@@ -43,11 +43,28 @@ public enum VesperPlaybackCapabilityConfidence: String, Equatable {
     case sessionProbe
 }
 
+public enum VesperRecommendedPlaybackPath: String, Equatable {
+    case nativeFramePipeline
+    case systemPlayer
+}
+
+public struct VesperPlaybackCapabilitySessionProbeResult: Equatable {
+    public let supportedHdrKinds: Set<VesperPlaybackCapabilityHdrKind>
+    public let diagnostics: [String: String]
+
+    public init(
+        supportedHdrKinds: Set<VesperPlaybackCapabilityHdrKind> = [],
+        diagnostics: [String: String] = [:]
+    ) {
+        self.supportedHdrKinds = supportedHdrKinds
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct VesperPlaybackCapabilityProbeRequest: Equatable {
     public let source: VesperPlayerSource?
     public let codec: String?
     public let requiresNativeFrame: Bool
-    public let requiresHdrNativeFrame: Bool
     public let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
     public let frameProcessorConfiguration: VesperFrameProcessorConfiguration
     public let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
@@ -56,7 +73,6 @@ public struct VesperPlaybackCapabilityProbeRequest: Equatable {
         source: VesperPlayerSource? = nil,
         codec: String? = nil,
         requiresNativeFrame: Bool = false,
-        requiresHdrNativeFrame: Bool = false,
         sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
             VesperSourceNormalizerConfiguration(),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
@@ -67,7 +83,6 @@ public struct VesperPlaybackCapabilityProbeRequest: Equatable {
         self.source = source
         self.codec = codec
         self.requiresNativeFrame = requiresNativeFrame
-        self.requiresHdrNativeFrame = requiresHdrNativeFrame
         self.sourceNormalizerConfiguration = sourceNormalizerConfiguration
         self.frameProcessorConfiguration = frameProcessorConfiguration
         self.nativeFramePipelineConfiguration = nativeFramePipelineConfiguration
@@ -80,7 +95,7 @@ public struct VesperPlaybackCapabilityProbeResult: Equatable {
     public let systemPlaybackSupported: Bool
     public let hardwareDecodeSupported: Bool
     public let sdkManagedNativeFrameSupported: Bool
-    public let hdrNativeFrameSupported: Bool
+    public let recommendedPlaybackPath: VesperRecommendedPlaybackPath
     public let outputFormat: VesperPlaybackCapabilityOutputFormat
     public let hdrKind: VesperPlaybackCapabilityHdrKind
     public let dolbyVisionMode: VesperPlaybackCapabilityDolbyVisionMode
@@ -94,7 +109,7 @@ public struct VesperPlaybackCapabilityProbeResult: Equatable {
         systemPlaybackSupported: Bool,
         hardwareDecodeSupported: Bool,
         sdkManagedNativeFrameSupported: Bool,
-        hdrNativeFrameSupported: Bool,
+        recommendedPlaybackPath: VesperRecommendedPlaybackPath,
         outputFormat: VesperPlaybackCapabilityOutputFormat,
         hdrKind: VesperPlaybackCapabilityHdrKind,
         dolbyVisionMode: VesperPlaybackCapabilityDolbyVisionMode,
@@ -107,7 +122,7 @@ public struct VesperPlaybackCapabilityProbeResult: Equatable {
         self.systemPlaybackSupported = systemPlaybackSupported
         self.hardwareDecodeSupported = hardwareDecodeSupported
         self.sdkManagedNativeFrameSupported = sdkManagedNativeFrameSupported
-        self.hdrNativeFrameSupported = hdrNativeFrameSupported
+        self.recommendedPlaybackPath = recommendedPlaybackPath
         self.outputFormat = outputFormat
         self.hdrKind = hdrKind
         self.dolbyVisionMode = dolbyVisionMode
@@ -123,7 +138,7 @@ public struct VesperPlaybackCapabilityProbeResult: Equatable {
             "systemPlaybackSupported": systemPlaybackSupported,
             "hardwareDecodeSupported": hardwareDecodeSupported,
             "sdkManagedNativeFrameSupported": sdkManagedNativeFrameSupported,
-            "hdrNativeFrameSupported": hdrNativeFrameSupported,
+            "recommendedPlaybackPath": recommendedPlaybackPath.rawValue,
             "outputFormat": outputFormat.rawValue,
             "hdrKind": hdrKind.rawValue,
             "dolbyVisionMode": dolbyVisionMode.rawValue,
@@ -135,31 +150,40 @@ public struct VesperPlaybackCapabilityProbeResult: Equatable {
 }
 
 public enum VesperPlaybackCapabilityProbe {
+    public typealias SessionProbeProvider =
+        (VesperPlaybackCapabilityProbeRequest) -> VesperPlaybackCapabilitySessionProbeResult?
+
     public static func probe(
-        _ request: VesperPlaybackCapabilityProbeRequest
+        _ request: VesperPlaybackCapabilityProbeRequest,
+        sessionProbeProvider: SessionProbeProvider? = nil
     ) -> VesperPlaybackCapabilityProbeResult {
         let codecFamily = VesperPlaybackCodecFamily(
             candidate: VesperHardwareDecodeCandidateCodec(codecName: request.codec ?? "")
         )
-        let effectiveRequiresNativeFrame = request.requiresNativeFrame ||
-            request.nativeFramePipelineConfiguration.mode == .preferNativeFrame ||
-            request.nativeFramePipelineConfiguration.mode == .requireNativeFrame
+        let effectiveRequiresNativeFrame =
+            request.requiresNativeFrame
+            || request.nativeFramePipelineConfiguration.mode == .preferNativeFrame
+            || request.nativeFramePipelineConfiguration.mode == .requireNativeFrame
         let sourceIsRemote = request.source?.kind == .remote
         let sourceIsLocal = request.source?.kind == .local
         let codecKnown = codecFamily != .unknown
-        let hardwareDecodeSupported = request.codec.map {
-            VesperCodecSupport.hardwareDecodeSupported(for: $0)
-        } ?? false
+        let hardwareDecodeSupported =
+            request.codec.map {
+                VesperCodecSupport.hardwareDecodeSupported(for: $0)
+            } ?? false
         let systemPlaybackSupported = sourceIsRemote || sourceIsLocal || codecKnown
-        let isDolbyVision = request.codec.map(Self.codecLooksDolbyVision) ?? false
-        let nativeFrameRequested = effectiveRequiresNativeFrame
-        let rejectsHdrNativeFrame = request.requiresHdrNativeFrame || (isDolbyVision && nativeFrameRequested)
+        let hdrKind = request.codec.map(Self.detectHdrKind) ?? .none
+        let isHdrOrDolbyVision = hdrKind != .none && hdrKind != .unknown
+        let sessionProbeResult = isHdrOrDolbyVision ? sessionProbeProvider?(request) : nil
         var missing: [String] = []
         var diagnostics: [String: String] = [
             "probeVersion": "1",
             "sourceKind": request.source?.kind.rawValue ?? "unknown",
             "sourceProtocol": request.source?.`protocol`.rawValue ?? "unknown",
         ]
+        if let sessionProbeResult {
+            diagnostics.merge(sessionProbeResult.diagnostics) { _, new in new }
+        }
 
         if request.codec == nil {
             missing.append("codecMetadata")
@@ -167,47 +191,54 @@ public enum VesperPlaybackCapabilityProbe {
         if effectiveRequiresNativeFrame && sourceIsRemote {
             missing.append("hostManagedNetworkProbeNotImplemented")
         }
-        if effectiveRequiresNativeFrame && request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty {
+        if effectiveRequiresNativeFrame
+            && request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty
+        {
             missing.append("nativeFrameDecoderPlugin")
         }
-        if rejectsHdrNativeFrame && !request.sourceNormalizerConfiguration.supportsPacketInput {
-            missing.append("SourceNormalizerPacketHdrMetadata")
-        }
-        if rejectsHdrNativeFrame {
+        if isHdrOrDolbyVision {
             missing.append("hdrProgrammableProcessingNotSupported")
-            diagnostics["hdrNativeFramePolicy"] = "systemPlaybackOnly"
-            if request.nativeFramePipelineConfiguration.mode == .requireNativeFrame {
-                diagnostics["nativeFrameRejectedForHdrProcessing"] = "true"
-            } else {
-                diagnostics["systemPlaybackSelectedForHdr"] = "true"
+            diagnostics["playbackPathPolicy"] = "hdrSystemPlaybackOnly"
+            diagnostics["recommendedPlaybackPathReason"] = "hdrNativeFrameUnsupported"
+            if let sessionProbeResult, !sessionProbeResult.supportedHdrKinds.contains(hdrKind) {
+                missing.append("displayHdrCapability")
+                diagnostics["displayHdrSupported"] = "false"
             }
         }
-        if rejectsHdrNativeFrame && request.frameProcessorConfiguration.mode == .diagnosticsOnly {
+        if isHdrOrDolbyVision && request.frameProcessorConfiguration.mode == .diagnosticsOnly {
             diagnostics["frameProcessorProbe"] = "diagnosticsOnly"
         }
         if effectiveRequiresNativeFrame && !hardwareDecodeSupported {
             missing.append("deviceHardwareDecode")
         }
 
-        let outputFormat: VesperPlaybackCapabilityOutputFormat = rejectsHdrNativeFrame ? .unknown : .nv12
+        let nativeFrameSupported =
+            effectiveRequiresNativeFrame
+            ? hardwareDecodeSupported
+                && !request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty
+                && !sourceIsRemote
+            : hardwareDecodeSupported
+        let recommendedPlaybackPath: VesperRecommendedPlaybackPath
+        if isHdrOrDolbyVision {
+            recommendedPlaybackPath = .systemPlayer
+        } else if nativeFrameSupported && effectiveRequiresNativeFrame {
+            recommendedPlaybackPath = .nativeFramePipeline
+        } else {
+            recommendedPlaybackPath = .systemPlayer
+        }
+        let outputFormat: VesperPlaybackCapabilityOutputFormat =
+            recommendedPlaybackPath == .systemPlayer && isHdrOrDolbyVision ? .surfaceOpaque : .nv12
         let dolbyVisionMode: VesperPlaybackCapabilityDolbyVisionMode
-        if isDolbyVision && nativeFrameRequested {
+        if hdrKind == .dolbyVision {
             dolbyVisionMode = .unsupported
         } else {
             dolbyVisionMode = .none
         }
-        let nativeFrameSupported = effectiveRequiresNativeFrame
-            ? hardwareDecodeSupported &&
-                !request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty &&
-                !sourceIsRemote
-            : hardwareDecodeSupported
 
         let status: VesperPlaybackCapabilityProbeStatus
         if request.codec == nil {
             status = .unknown
         } else if !codecKnown {
-            status = .unsupported
-        } else if rejectsHdrNativeFrame && request.nativeFramePipelineConfiguration.mode == .requireNativeFrame {
             status = .unsupported
         } else if missing.isEmpty {
             status = .supported
@@ -223,31 +254,47 @@ public enum VesperPlaybackCapabilityProbe {
             systemPlaybackSupported: systemPlaybackSupported,
             hardwareDecodeSupported: hardwareDecodeSupported,
             sdkManagedNativeFrameSupported: nativeFrameSupported && missing.isEmpty,
-            hdrNativeFrameSupported: false,
+            recommendedPlaybackPath: recommendedPlaybackPath,
             outputFormat: outputFormat,
-            hdrKind: isDolbyVision ? .dolbyVision : (rejectsHdrNativeFrame ? .unknown : .none),
+            hdrKind: hdrKind,
             dolbyVisionMode: dolbyVisionMode,
-            confidence: sourceIsLocal ? .sourceMetadata : .codecOnly,
+            confidence: sessionProbeResult != nil
+                ? .sessionProbe : (sourceIsLocal ? .sourceMetadata : .codecOnly),
             missingCapabilities: missing,
             diagnostics: diagnostics
         )
     }
 
-    private static func codecLooksDolbyVision(_ codec: String) -> Bool {
-        codec
+    private static func detectHdrKind(_ codec: String) -> VesperPlaybackCapabilityHdrKind {
+        let normalizedCodecs =
+            codec
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            .contains { value in
-                let normalized = value.hasPrefix("video/")
+            .map { value in
+                let normalized =
+                    value.hasPrefix("video/")
                     ? String(value.dropFirst("video/".count))
                     : value
-                return normalized.hasPrefix("dvh1") || normalized.hasPrefix("dvhe")
+                return normalized
             }
+        if normalizedCodecs.contains(where: {
+            $0.hasPrefix("dvh1") || $0.hasPrefix("dvhe") || $0 == "dolbyvision"
+        }) {
+            return .dolbyVision
+        }
+        if normalizedCodecs.contains(where: { $0 == "hdr10" || $0 == "hdr10+" || $0 == "hdr10plus" }
+        ) {
+            return .hdr10
+        }
+        if normalizedCodecs.contains(where: { $0 == "hlg" }) {
+            return .hlg
+        }
+        return .none
     }
 }
 
-private extension VesperPlaybackCodecFamily {
-    init(candidate: VesperHardwareDecodeCandidateCodec) {
+extension VesperPlaybackCodecFamily {
+    fileprivate init(candidate: VesperHardwareDecodeCandidateCodec) {
         switch candidate {
         case .h264:
             self = .h264

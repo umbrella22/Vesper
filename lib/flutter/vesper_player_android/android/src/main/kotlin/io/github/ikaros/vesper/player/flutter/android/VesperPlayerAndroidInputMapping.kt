@@ -126,7 +126,6 @@ internal fun Map<String, Any?>.toPlaybackCapabilityProbeRequest():
         source = (this["source"] as? Map<*, *>)?.stringMap()?.toVesperPlayerSource(),
         codec = this["codec"] as? String,
         requiresNativeFrame = this["requiresNativeFrame"] as? Boolean ?: false,
-        requiresHdrNativeFrame = this["requiresHdrNativeFrame"] as? Boolean ?: false,
         sourceNormalizerConfiguration =
             (this["sourceNormalizer"] as? Map<*, *>)
                 ?.stringMap()

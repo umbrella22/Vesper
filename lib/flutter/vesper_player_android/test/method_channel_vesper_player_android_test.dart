@@ -185,14 +185,14 @@ void main() {
         .setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
       return <String, Object?>{
-        'status': 'unsupported',
+        'status': 'fallbackRequired',
         'codecFamily': 'hevc',
         'systemPlaybackSupported': true,
         'hardwareDecodeSupported': true,
         'sdkManagedNativeFrameSupported': false,
-        'hdrNativeFrameSupported': false,
-        'outputFormat': 'unknown',
-        'hdrKind': 'unknown',
+        'recommendedPlaybackPath': 'systemPlayer',
+        'outputFormat': 'surfaceOpaque',
+        'hdrKind': 'dolbyVision',
         'dolbyVisionMode': 'unsupported',
         'confidence': 'sourceMetadata',
         'missingCapabilities': <String>[
@@ -200,8 +200,8 @@ void main() {
         ],
         'diagnostics': <String, Object?>{
           'probeVersion': '1',
-          'hdrNativeFramePolicy': 'systemPlaybackOnly',
-          'nativeFrameRejectedForHdrProcessing': 'true',
+          'playbackPathPolicy': 'hdrSystemPlaybackOnly',
+          'recommendedPlaybackPathReason': 'hdrNativeFrameUnsupported',
         },
       };
     });
@@ -215,7 +215,6 @@ void main() {
     const request = VesperPlaybackCapabilityProbeRequest(
       source: source,
       codec: 'dvh1.05.06',
-      requiresHdrNativeFrame: true,
       nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
         mode: VesperNativeFramePipelineMode.requireNativeFrame,
         decoderPluginLibraryPaths: <String>['/tmp/libmediacodec.so'],
@@ -229,12 +228,17 @@ void main() {
       Map<Object?, Object?>.from(calls.single.arguments as Map),
       request.toMap(),
     );
-    expect(result.status, VesperPlaybackCapabilityProbeStatus.unsupported);
+    expect(result.status, VesperPlaybackCapabilityProbeStatus.fallbackRequired);
     expect(result.codecFamily, VesperPlaybackCodecFamily.hevc);
     expect(
-      result.outputFormat,
-      VesperPlaybackCapabilityOutputFormat.unknown,
+      result.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
     );
+    expect(
+      result.outputFormat,
+      VesperPlaybackCapabilityOutputFormat.surfaceOpaque,
+    );
+    expect(result.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
     expect(
       result.dolbyVisionMode,
       VesperPlaybackCapabilityDolbyVisionMode.unsupported,

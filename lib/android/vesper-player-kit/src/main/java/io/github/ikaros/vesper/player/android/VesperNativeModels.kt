@@ -357,6 +357,7 @@ internal sealed interface NativeBridgeEvent {
     data class SeekCompleted(val positionMs: Long) : NativeBridgeEvent
     data class RetryScheduled(val attempt: Int, val delayMs: Long) : NativeBridgeEvent
     data class Ended(val ended: Boolean = true) : NativeBridgeEvent
+    data class Warning(val warning: VesperRuntimeWarning) : NativeBridgeEvent
     data class Error(
         val message: String,
         val codeOrdinal: Int,

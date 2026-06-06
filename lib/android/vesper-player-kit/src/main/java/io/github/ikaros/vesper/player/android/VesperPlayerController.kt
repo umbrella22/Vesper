@@ -87,6 +87,8 @@ class VesperPlayerController internal constructor(
 
     fun clearSystemPlayback() = bridge.clearSystemPlayback()
 
+    fun drainRuntimeWarnings(): List<VesperRuntimeWarning> = bridge.drainRuntimeWarnings()
+
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> = bridge.drainBenchmarkEvents()
 
     fun benchmarkSummary(): VesperBenchmarkSummary = bridge.benchmarkSummary()
@@ -101,7 +103,10 @@ object VesperPlayerControllerFactory {
         context: Context,
         request: VesperPlaybackCapabilityProbeRequest,
     ): VesperPlaybackCapabilityProbeResult =
-        VesperPlaybackCapabilityProbe.probe(request)
+        VesperPlaybackCapabilityProbe.probe(
+            request,
+            sessionProbeProvider = VesperAndroidDisplaySessionProbeProvider.fromContext(context),
+        )
 
     fun createDefault(
         context: Context,

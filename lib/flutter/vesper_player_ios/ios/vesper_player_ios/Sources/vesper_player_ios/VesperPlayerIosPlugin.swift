@@ -45,7 +45,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         eventChannel.setStreamHandler(instance)
         downloadEventChannel.setStreamHandler(DownloadEventStreamHandler(plugin: instance))
         registrar.register(PlayerViewFactory(plugin: instance), withId: playerViewType)
-        registrar.register(AirPlayRouteButtonFactory(plugin: instance), withId: airPlayRouteButtonViewType)
+        registrar.register(
+            AirPlayRouteButtonFactory(plugin: instance), withId: airPlayRouteButtonViewType)
     }
 
     public func onListen(
@@ -190,7 +191,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "setVideoTrackSelection":
             handleSessionCommand(call, result: result) { session in
-                let selectionMap = try requireNestedMap(arguments: arguments(of: call), key: "selection")
+                let selectionMap = try requireNestedMap(
+                    arguments: arguments(of: call), key: "selection")
                 session.lastError = nil
                 session.controller.setVideoTrackSelection(try selectionMap.toTrackSelection())
                 emitSnapshot(for: session)
@@ -198,7 +200,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "setAudioTrackSelection":
             handleSessionCommand(call, result: result) { session in
-                let selectionMap = try requireNestedMap(arguments: arguments(of: call), key: "selection")
+                let selectionMap = try requireNestedMap(
+                    arguments: arguments(of: call), key: "selection")
                 session.lastError = nil
                 session.controller.setAudioTrackSelection(try selectionMap.toTrackSelection())
                 emitSnapshot(for: session)
@@ -206,7 +209,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "setSubtitleTrackSelection":
             handleSessionCommand(call, result: result) { session in
-                let selectionMap = try requireNestedMap(arguments: arguments(of: call), key: "selection")
+                let selectionMap = try requireNestedMap(
+                    arguments: arguments(of: call), key: "selection")
                 session.lastError = nil
                 session.controller.setSubtitleTrackSelection(try selectionMap.toTrackSelection())
                 emitSnapshot(for: session)
@@ -241,7 +245,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "updateViewport":
             handleSessionCommand(call, result: result) { session in
-                let viewportMap = try requireNestedMap(arguments: arguments(of: call), key: "viewport")
+                let viewportMap = try requireNestedMap(
+                    arguments: arguments(of: call), key: "viewport")
                 session.lastError = nil
                 session.viewport = viewportMap.toFlutterViewport()
                 session.viewportHint =
@@ -273,7 +278,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "updateSystemPlaybackMetadata":
             handleSessionCommand(call, result: result) { session in
-                let metadataMap = try requireNestedMap(arguments: arguments(of: call), key: "metadata")
+                let metadataMap = try requireNestedMap(
+                    arguments: arguments(of: call), key: "metadata")
                 session.lastError = nil
                 session.controller.updateSystemPlaybackMetadata(
                     metadataMap.toSystemPlaybackMetadata()
@@ -469,6 +475,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         }
     }
 
+    @MainActor
     private func handleProbePlaybackCapability(
         _ call: FlutterMethodCall,
         result: @escaping FlutterResult
@@ -478,7 +485,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             source: (try? nestedMap(args["source"])?.toRawVesperPlayerSource()) ?? nil,
             codec: args["codec"] as? String,
             requiresNativeFrame: args["requiresNativeFrame"] as? Bool ?? false,
-            requiresHdrNativeFrame: args["requiresHdrNativeFrame"] as? Bool ?? false,
             sourceNormalizerConfiguration: (try? nestedMap(args["sourceNormalizer"])?
                 .toSourceNormalizerConfiguration())
                 ?? VesperSourceNormalizerConfiguration(),
@@ -489,7 +495,12 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 .toNativeFramePipelineConfiguration())
                 ?? VesperNativeFramePipelineConfiguration()
         )
-        result(VesperPlayerControllerFactory.probePlaybackCapability(request).wireMap)
+        let probeResult = VesperPlayerControllerFactory.probePlaybackCapability(request)
+        emitCapabilityWarningIfNeeded(
+            playerId: args["playerId"] as? String,
+            result: probeResult
+        )
+        result(probeResult.wireMap)
     }
 
     @MainActor
@@ -578,8 +589,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             let value = try action(session)
             result(value)
         } catch {
-            if
-                let playerId = arguments(of: call)["playerId"] as? String,
+            if let playerId = arguments(of: call)["playerId"] as? String,
                 let session = sessions[playerId]
             {
                 session.lastError = errorMap(from: error)
@@ -607,8 +617,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             let value = try action(session)
             result(value)
         } catch {
-            if
-                let downloadId = arguments(of: call)["downloadId"] as? String,
+            if let downloadId = arguments(of: call)["downloadId"] as? String,
                 let session = downloadSessions[downloadId]
             {
                 session.lastError = downloadErrorMap(from: error)
@@ -746,7 +755,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     private func topViewController() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let window = scenes
+        let window =
+            scenes
             .flatMap(\.windows)
             .first(where: { $0.isKeyWindow })
         var controller = window?.rootViewController
@@ -798,6 +808,30 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func emitCapabilityWarningIfNeeded(
+        playerId: String?,
+        result: VesperPlaybackCapabilityProbeResult
+    ) {
+        guard result.recommendedPlaybackPath == .systemPlayer, result.hdrKind != .none else {
+            return
+        }
+        emitEvent([
+            "playerId": playerId ?? "",
+            "type": "warning",
+            "warning": [
+                "domain": "capability",
+                "capability": [
+                    "reason": "hdrNativeFrameUnsupported",
+                    "recommendedPlaybackPath": "systemPlayer",
+                    "hdrKind": result.hdrKind.rawValue,
+                    "message":
+                        "HDR and Dolby Vision content uses system playback; SDK-managed native-frame presentation is SDR-only.",
+                ],
+            ],
+        ])
+    }
+
+    @MainActor
     func emitDownloadSnapshot(for session: DownloadSession) {
         downloadEventSink?([
             "downloadId": session.id,
@@ -810,19 +844,19 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     func emitDownloadRuntimeEvents(for session: DownloadSession) {
         for event in session.manager.drainEvents() {
             switch event {
-            case let .created(task):
+            case .created(let task):
                 downloadEventSink?([
                     "downloadId": session.id,
                     "type": "taskCreated",
                     "task": task.toMap,
                 ])
-            case let .assetIndexUpdated(task):
+            case .assetIndexUpdated(let task):
                 downloadEventSink?([
                     "downloadId": session.id,
                     "type": "taskUpdated",
                     "task": task.toMap,
                 ])
-            case let .stateChanged(patch):
+            case .stateChanged(let patch):
                 if patch.state == .removed {
                     downloadEventSink?([
                         "downloadId": session.id,
@@ -836,7 +870,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                         "patch": patch.toMap,
                     ])
                 }
-            case let .progressUpdated(patch):
+            case .progressUpdated(let patch):
                 downloadEventSink?([
                     "downloadId": session.id,
                     "type": "taskUpdated",
@@ -986,14 +1020,15 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "supportsPlaybackRate": true,
             "supportsLiveEdgeSeeking": true,
             "isExperimental": true,
-            "supportedPlaybackRates": VesperPlayerController.supportedPlaybackRates.map(Double.init),
+            "supportedPlaybackRates": VesperPlayerController.supportedPlaybackRates.map(
+                Double.init),
         ]
     }
 
     @MainActor
     private func buildDownloadSnapshotMap(for session: DownloadSession) -> [String: Any] {
         [
-            "tasks": session.manager.snapshot.tasks.map(\.toMap),
+            "tasks": session.manager.snapshot.tasks.map(\.toMap)
         ]
     }
 

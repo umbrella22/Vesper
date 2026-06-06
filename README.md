@@ -429,10 +429,14 @@ The mobile SourceNormalizer artifact can run diagnostics/preflight and, in
 `preferNormalized` or `requireNormalized`, expose disk-backed fMP4 or
 short-window HLS output to Android ExoPlayer and iOS AVPlayer through local
 resource layers. Packet-stream output is also used by explicit SDK-managed
-native-frame routes: iOS can run the VideoToolbox/Metal native-frame path for
-local/VOD sources, while Android can opt into the MediaCodec/SurfaceView path
-when the SourceNormalizer, decoder, and optional FrameProcessor plugin paths
-are provided. Default mobile playback remains platform system-player first.
+native-frame routes for SDR processing experiments: iOS can run the
+VideoToolbox/Metal native-frame path for local/VOD sources, while Android can
+opt into the MediaCodec/SurfaceView path when the SourceNormalizer, decoder,
+and optional FrameProcessor plugin paths are provided. HDR and Dolby Vision
+sources stay on platform system playback; the mobile capability probe reports
+that policy through `recommendedPlaybackPath = systemPlayer` plus capability
+diagnostics instead of advertising SDK-managed native-frame HDR support.
+Default mobile playback remains platform system-player first.
 
 Release AARs / XCFrameworks are fully packaged binary artifacts. Host apps that
 consume these downloads do not run the repository's local JNI or FFmpeg

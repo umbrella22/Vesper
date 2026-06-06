@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import VesperPlayerKit
 
 final class VesperCodecSupportTests: XCTestCase {
@@ -56,7 +57,6 @@ final class VesperCodecSupportTests: XCTestCase {
                     label: "local-hdr.mov"
                 ),
                 codec: "dvh1.05.06",
-                requiresHdrNativeFrame: true,
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .requireNativeFrame,
                     decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
@@ -65,13 +65,14 @@ final class VesperCodecSupportTests: XCTestCase {
         )
 
         XCTAssertEqual(result.codecFamily, .hevc)
-        XCTAssertEqual(result.status, .unsupported)
-        XCTAssertTrue(result.missingCapabilities.contains("SourceNormalizerPacketHdrMetadata"))
+        XCTAssertEqual(result.status, .fallbackRequired)
         XCTAssertTrue(result.missingCapabilities.contains("hdrProgrammableProcessingNotSupported"))
-        XCTAssertEqual(result.outputFormat, .unknown)
-        XCTAssertFalse(result.hdrNativeFrameSupported)
-        XCTAssertEqual(result.diagnostics["hdrNativeFramePolicy"], "systemPlaybackOnly")
-        XCTAssertEqual(result.diagnostics["nativeFrameRejectedForHdrProcessing"], "true")
+        XCTAssertEqual(result.recommendedPlaybackPath, .systemPlayer)
+        XCTAssertEqual(result.hdrKind, .dolbyVision)
+        XCTAssertEqual(result.outputFormat, .surfaceOpaque)
+        XCTAssertEqual(result.diagnostics["playbackPathPolicy"], "hdrSystemPlaybackOnly")
+        XCTAssertEqual(
+            result.diagnostics["recommendedPlaybackPathReason"], "hdrNativeFrameUnsupported")
     }
 
     func testPlaybackCapabilityProbeRoutesDolbyVisionPreferNativeFrameToSystemPlayback() {
@@ -96,9 +97,62 @@ final class VesperCodecSupportTests: XCTestCase {
         XCTAssertEqual(result.status, .fallbackRequired)
         XCTAssertEqual(result.hdrKind, .dolbyVision)
         XCTAssertEqual(result.dolbyVisionMode, .unsupported)
-        XCTAssertFalse(result.hdrNativeFrameSupported)
+        XCTAssertEqual(result.recommendedPlaybackPath, .systemPlayer)
         XCTAssertTrue(result.missingCapabilities.contains("hdrProgrammableProcessingNotSupported"))
-        XCTAssertEqual(result.diagnostics["hdrNativeFramePolicy"], "systemPlaybackOnly")
-        XCTAssertEqual(result.diagnostics["systemPlaybackSelectedForHdr"], "true")
+        XCTAssertEqual(result.diagnostics["playbackPathPolicy"], "hdrSystemPlaybackOnly")
+        XCTAssertEqual(
+            result.diagnostics["recommendedPlaybackPathReason"], "hdrNativeFrameUnsupported")
+    }
+
+    func testPlaybackCapabilityProbeCanUseSessionProbeFeedback() {
+        let result = VesperPlaybackCapabilityProbe.probe(
+            VesperPlaybackCapabilityProbeRequest(
+                source: .localFile(
+                    url: URL(fileURLWithPath: "/tmp/local-dv.mov"),
+                    label: "local-dv.mov"
+                ),
+                codec: "dvh1.05.06",
+                nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+                    mode: .preferNativeFrame,
+                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                )
+            ),
+            sessionProbeProvider: { _ in
+                VesperPlaybackCapabilitySessionProbeResult(
+                    supportedHdrKinds: [.dolbyVision],
+                    diagnostics: ["sessionProbe": "fakeDisplay"]
+                )
+            }
+        )
+
+        XCTAssertEqual(result.confidence, .sessionProbe)
+        XCTAssertEqual(result.diagnostics["sessionProbe"], "fakeDisplay")
+        XCTAssertFalse(result.missingCapabilities.contains("displayHdrCapability"))
+    }
+
+    func testPlaybackCapabilityProbeReportsMissingDisplayHdrCapability() {
+        let result = VesperPlaybackCapabilityProbe.probe(
+            VesperPlaybackCapabilityProbeRequest(
+                source: .localFile(
+                    url: URL(fileURLWithPath: "/tmp/local-dv.mov"),
+                    label: "local-dv.mov"
+                ),
+                codec: "dvh1.05.06",
+                nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+                    mode: .preferNativeFrame,
+                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                )
+            ),
+            sessionProbeProvider: { _ in
+                VesperPlaybackCapabilitySessionProbeResult(
+                    supportedHdrKinds: [.hdr10],
+                    diagnostics: ["sessionProbe": "fakeDisplay"]
+                )
+            }
+        )
+
+        XCTAssertEqual(result.confidence, .sessionProbe)
+        XCTAssertTrue(result.missingCapabilities.contains("displayHdrCapability"))
+        XCTAssertEqual(result.diagnostics["displayHdrSupported"], "false")
     }
 }

@@ -256,6 +256,8 @@ internal class FakePlayerBridge(
 
     override fun clearSystemPlayback() = Unit
 
+    override fun drainRuntimeWarnings(): List<VesperRuntimeWarning> = emptyList()
+
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
         benchmarkRecorder.drainEvents()
 

@@ -243,6 +243,11 @@ data class VesperVideoVariantObservation(
         )
 }
 
+data class VesperRuntimeWarning(
+    val domain: String,
+    val payload: Map<String, Any?>,
+)
+
 internal interface PlayerBridge {
     val backend: PlayerBridgeBackend
     val uiState: StateFlow<PlayerHostUiState>
@@ -278,6 +283,7 @@ internal interface PlayerBridge {
     fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration)
     fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata)
     fun clearSystemPlayback()
+    fun drainRuntimeWarnings(): List<VesperRuntimeWarning>
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent>
     fun benchmarkSummary(): VesperBenchmarkSummary
 }

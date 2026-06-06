@@ -75,6 +75,11 @@ enum VesperPlaybackCapabilityConfidence {
   sessionProbe,
 }
 
+enum VesperRecommendedPlaybackPath {
+  nativeFramePipeline,
+  systemPlayer,
+}
+
 Map<String, Object?> vesperDecodeMap(Object? raw) {
   final decoded = _rawMap(raw);
   if (decoded != null) {

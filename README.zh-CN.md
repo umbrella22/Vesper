@@ -382,13 +382,16 @@ plugins 与 shared runtime 必须来自同一个 FFmpeg profile，保证
 移动端 SourceNormalizer artifact 可以做 diagnostics / preflight，并在
 `preferNormalized` 或 `requireNormalized` 下把 disk-backed fMP4 或
 short-window HLS 输出通过本地资源层交给 Android ExoPlayer 与 iOS AVPlayer。
-packet-stream 输出用于显式开启的 native frame pipeline。当前
+packet-stream 输出也用于显式开启的 SDR native frame pipeline 实验。当前
 `nativeFramePipelineConfiguration` 已经能在 iOS/Android 上暴露 route decision、
 decoder/presenter profile、fallback reason 与 counters；iOS 本地/VOD 已可显式走
 VideoToolbox、MetalLayer presentation 和 Swift native audio bridge。Android
 在提供 SourceNormalizer、MediaCodec decoder 和可选 FrameProcessor 插件路径后，可显式走
-MediaCodec/SurfaceView native-frame route。`preferNativeFrame` 在目标 lane 不可用时回退系统
-播放器；`requireNativeFrame` 会返回 capability error，不会静默改走默认播放。
+MediaCodec/SurfaceView native-frame route。HDR / Dolby Vision 保持走平台系统播放器；
+移动端 capability probe 通过 `recommendedPlaybackPath = systemPlayer` 和 capability
+diagnostics 表达这个策略，不把 SDK-managed native-frame 包装成 HDR 支持。
+`preferNativeFrame` 在目标 lane 不可用时回退系统播放器；`requireNativeFrame`
+会返回 capability error，不会静默改走默认播放。
 
 Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载物的 host app
 在其自身 Gradle / Xcode 构建中不会运行本仓库的 JNI 或 FFmpeg 生成任务。

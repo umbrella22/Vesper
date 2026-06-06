@@ -46,6 +46,34 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun refreshDrainsNativeRuntimeWarningsOnce() {
+        val bindings = FakeBindings()
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        bindings.events +=
+            NativeBridgeEvent.Warning(
+                VesperRuntimeWarning(
+                    domain = "capability",
+                    payload =
+                        mapOf(
+                            "reason" to "hdrNativeFrameUnsupported",
+                            "recommendedPlaybackPath" to "systemPlayer",
+                            "hdrKind" to "dolbyVision",
+                        ),
+                ),
+            )
+
+        bridge.refresh()
+
+        val warnings = bridge.drainRuntimeWarnings()
+        assertEquals(1, warnings.size)
+        assertEquals("capability", warnings.single().domain)
+        assertEquals("hdrNativeFrameUnsupported", warnings.single().payload["reason"])
+        assertEquals("systemPlayer", warnings.single().payload["recommendedPlaybackPath"])
+        assertEquals("dolbyVision", warnings.single().payload["hdrKind"])
+        assertTrue(bridge.drainRuntimeWarnings().isEmpty())
+    }
+
+    @Test
     fun surfaceHostAspectFitSizeDoesNotCropWideVideo() {
         val size =
             calculateAspectFitSize(

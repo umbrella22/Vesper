@@ -212,7 +212,6 @@ final class VesperPlaybackCapabilityProbeRequest {
     this.source,
     this.codec,
     this.requiresNativeFrame = false,
-    this.requiresHdrNativeFrame = false,
     this.sourceNormalizerConfiguration =
         const VesperSourceNormalizerConfiguration(),
     this.frameProcessorConfiguration =
@@ -229,7 +228,6 @@ final class VesperPlaybackCapabilityProbeRequest {
       source: rawSource.isEmpty ? null : VesperPlayerSource.fromMap(rawSource),
       codec: map['codec'] as String?,
       requiresNativeFrame: _decodeBool(map, 'requiresNativeFrame'),
-      requiresHdrNativeFrame: _decodeBool(map, 'requiresHdrNativeFrame'),
       sourceNormalizerConfiguration:
           VesperSourceNormalizerConfiguration.fromMap(
         vesperDecodeMap(map['sourceNormalizer']),
@@ -247,7 +245,6 @@ final class VesperPlaybackCapabilityProbeRequest {
   final VesperPlayerSource? source;
   final String? codec;
   final bool requiresNativeFrame;
-  final bool requiresHdrNativeFrame;
   final VesperSourceNormalizerConfiguration sourceNormalizerConfiguration;
   final VesperFrameProcessorConfiguration frameProcessorConfiguration;
   final VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration;
@@ -257,7 +254,6 @@ final class VesperPlaybackCapabilityProbeRequest {
       'source': source?.toMap(),
       'codec': codec,
       'requiresNativeFrame': requiresNativeFrame,
-      'requiresHdrNativeFrame': requiresHdrNativeFrame,
       if (sourceNormalizerConfiguration.hasOverrides)
         'sourceNormalizer': sourceNormalizerConfiguration.toMap(),
       if (frameProcessorConfiguration.hasOverrides)
@@ -275,7 +271,7 @@ final class VesperPlaybackCapabilityProbeResult {
     required this.systemPlaybackSupported,
     required this.hardwareDecodeSupported,
     required this.sdkManagedNativeFrameSupported,
-    required this.hdrNativeFrameSupported,
+    required this.recommendedPlaybackPath,
     required this.outputFormat,
     required this.hdrKind,
     required this.dolbyVisionMode,
@@ -302,7 +298,11 @@ final class VesperPlaybackCapabilityProbeResult {
       hardwareDecodeSupported: _decodeBool(map, 'hardwareDecodeSupported'),
       sdkManagedNativeFrameSupported:
           _decodeBool(map, 'sdkManagedNativeFrameSupported'),
-      hdrNativeFrameSupported: _decodeBool(map, 'hdrNativeFrameSupported'),
+      recommendedPlaybackPath: _decodeEnum(
+        VesperRecommendedPlaybackPath.values,
+        map['recommendedPlaybackPath'],
+        VesperRecommendedPlaybackPath.systemPlayer,
+      ),
       outputFormat: _decodeEnum(
         VesperPlaybackCapabilityOutputFormat.values,
         map['outputFormat'],
@@ -333,7 +333,7 @@ final class VesperPlaybackCapabilityProbeResult {
   final bool systemPlaybackSupported;
   final bool hardwareDecodeSupported;
   final bool sdkManagedNativeFrameSupported;
-  final bool hdrNativeFrameSupported;
+  final VesperRecommendedPlaybackPath recommendedPlaybackPath;
   final VesperPlaybackCapabilityOutputFormat outputFormat;
   final VesperPlaybackCapabilityHdrKind hdrKind;
   final VesperPlaybackCapabilityDolbyVisionMode dolbyVisionMode;
@@ -348,7 +348,7 @@ final class VesperPlaybackCapabilityProbeResult {
       'systemPlaybackSupported': systemPlaybackSupported,
       'hardwareDecodeSupported': hardwareDecodeSupported,
       'sdkManagedNativeFrameSupported': sdkManagedNativeFrameSupported,
-      'hdrNativeFrameSupported': hdrNativeFrameSupported,
+      'recommendedPlaybackPath': recommendedPlaybackPath.name,
       'outputFormat': outputFormat.name,
       'hdrKind': hdrKind.name,
       'dolbyVisionMode': dolbyVisionMode.name,
