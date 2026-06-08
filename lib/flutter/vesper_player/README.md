@@ -610,10 +610,11 @@ fallback reason, and counters. iOS local/VOD SDR native-frame playback can run
 through VideoToolbox, MetalLayer presentation, and the Swift native audio
 bridge. Android can use the explicit MediaCodec/SurfaceView packet route when
 the required mobile plugin paths are present. HDR and Dolby Vision stay on
-platform system playback; `probePlaybackCapability` reports
+platform system playback; the SDK-managed native-frame lane is SDR-only today
+and is not an HDR-ready path. `probePlaybackCapability` reports
 `recommendedPlaybackPath = systemPlayer` and emits a capability warning with
-`hdrNativeFrameUnsupported` instead of treating SDK-managed native-frame as an
-HDR path. `requireNativeFrame` reports a capability error when the requested
+`hdrNativeFrameUnsupported` instead of treating SDK-managed native-frame as HDR
+support. `requireNativeFrame` reports a capability error when the requested
 native-frame lane is unavailable instead of silently using the system player.
 Default mobile playback is unchanged.
 

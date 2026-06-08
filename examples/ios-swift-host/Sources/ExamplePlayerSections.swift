@@ -275,8 +275,14 @@ struct ExamplePluginDiagnosticsSection: View {
     let decoderPluginLibraryPaths: [String]
     let frameProcessorPluginLibraryPaths: [String]
     let pluginDiagnostics: [[String: Any]]
+    let hdrEvidencePresets: [ExampleHdrEvidenceSamplePreset]
+    let selectedHdrEvidencePreset: ExampleHdrEvidenceSamplePreset
+    let isCapturingHdrEvidence: Bool
+    let hdrEvidenceActiveSourceAvailable: Bool
     let onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Void
     let onNativeFramePipelineSettingChange: (ExampleNativeFramePipelineSetting) -> Void
+    let onHdrEvidencePresetChange: (ExampleHdrEvidenceSamplePreset) -> Void
+    let onCaptureHdrEvidence: () -> Void
 
     private var sourceNormalizerDiagnostics: [[String: Any]] {
         pluginDiagnostics.filter { diagnostic in
@@ -357,6 +363,60 @@ struct ExamplePluginDiagnosticsSection: View {
                     .foregroundStyle(palette.body)
                     .lineSpacing(4)
 
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(ExampleI18n.hdrEvidenceTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.title)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(hdrEvidencePresets) { preset in
+                                Button(preset.label) {
+                                    onHdrEvidencePresetChange(preset)
+                                }
+                                .buttonStyle(.plain)
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(
+                                    preset == selectedHdrEvidencePreset
+                                        ? palette.primaryAction
+                                        : Color.white.opacity(0.08),
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(
+                                    preset == selectedHdrEvidencePreset ? .white : palette.title
+                                )
+                            }
+                        }
+                    }
+
+                    Text(hdrEvidenceStatusText)
+                        .font(.footnote)
+                        .foregroundStyle(palette.body)
+                        .lineSpacing(4)
+
+                    Button(action: onCaptureHdrEvidence) {
+                        Text(
+                            isCapturingHdrEvidence
+                                ? ExampleI18n.hdrEvidenceCapturing
+                                : ExampleI18n.hdrEvidenceCapture
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        isCapturingHdrEvidence
+                            ? Color.white.opacity(0.08)
+                            : palette.primaryAction,
+                        in: Capsule()
+                    )
+                    .foregroundStyle(isCapturingHdrEvidence ? palette.body : .white)
+                    .disabled(isCapturingHdrEvidence)
+                }
+
                 ExampleFactRow(
                     label: ExampleI18n.pluginSourcePath,
                     value: pluginDisplayValue(sourceNormalizerPluginLibraryPaths),
@@ -393,6 +453,16 @@ struct ExamplePluginDiagnosticsSection: View {
                 )
             }
         }
+    }
+
+    private var hdrEvidenceStatusText: String {
+        if selectedHdrEvidencePreset.sampleId == "NETWORK-FAILURE-CONTROL" {
+            return ExampleI18n.hdrEvidenceNetworkControl
+        }
+        if hdrEvidenceActiveSourceAvailable {
+            return ExampleI18n.hdrEvidenceCurrentSource
+        }
+        return ExampleI18n.hdrEvidenceSelectSource
     }
 }
 

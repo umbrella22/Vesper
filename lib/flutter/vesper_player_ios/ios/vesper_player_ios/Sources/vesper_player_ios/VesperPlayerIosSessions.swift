@@ -13,6 +13,8 @@ final class PlayerSession {
     var lastError: [String: Any]?
     var viewport: FlutterViewport?
     var viewportHint: FlutterViewportHint = .hidden
+    var currentSourceFingerprint: VesperSourceFingerprint?
+    var recentHdrProbeEvidence: VesperHdrProbeEvidence?
 
     init(
         id: String,
@@ -33,6 +35,47 @@ final class PlayerSession {
     func advanceHostDetachGeneration() -> UInt64 {
         hostDetachGeneration &+= 1
         return hostDetachGeneration
+    }
+}
+
+struct VesperSourceFingerprint: Equatable {
+    let uri: String
+    let kind: String
+    let sourceProtocol: String
+
+    init(source: VesperPlayerSource) {
+        uri = source.uri
+        kind = source.kind.rawValue
+        sourceProtocol = source.protocol.rawValue
+    }
+}
+
+struct VesperHdrProbeEvidence: Equatable {
+    let sourceFingerprint: VesperSourceFingerprint
+    let hdrKind: VesperPlaybackCapabilityHdrKind
+    let confidence: VesperPlaybackCapabilityConfidence
+    let hdrMetadata: [String: Any]?
+
+    init?(source: VesperPlayerSource?, result: VesperPlaybackCapabilityProbeResult) {
+        guard let source,
+            result.recommendedPlaybackPath == .systemPlayer,
+            result.hdrKind != .none,
+            result.hdrKind != .unknown,
+            result.confidence == .sourceMetadata || result.confidence == .sessionProbe
+        else {
+            return nil
+        }
+
+        sourceFingerprint = VesperSourceFingerprint(source: source)
+        hdrKind = result.hdrKind
+        confidence = result.confidence
+        hdrMetadata = flutterHdrMetadataMap(from: result)
+    }
+
+    static func == (lhs: VesperHdrProbeEvidence, rhs: VesperHdrProbeEvidence) -> Bool {
+        lhs.sourceFingerprint == rhs.sourceFingerprint
+            && lhs.hdrKind == rhs.hdrKind
+            && lhs.confidence == rhs.confidence
     }
 }
 
@@ -83,4 +126,3 @@ struct FlutterViewportHint {
         ]
     }
 }
-

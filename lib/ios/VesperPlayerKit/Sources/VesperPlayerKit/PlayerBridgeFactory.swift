@@ -88,6 +88,9 @@ public enum VesperPlayerControllerFactory {
     public static func probePlaybackCapability(
         _ request: VesperPlaybackCapabilityProbeRequest
     ) -> VesperPlaybackCapabilityProbeResult {
-        VesperPlaybackCapabilityProbe.probe(request)
+        VesperPlaybackCapabilityProbe.probe(
+            request,
+            sessionProbeProvider: VesperIOSSessionProbeProvider.currentDisplay()
+        )
     }
 }

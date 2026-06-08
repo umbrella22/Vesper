@@ -15,6 +15,7 @@ void main() {
     expect(error.retriable, isFalse);
     expect(error.details['operation'], 'setAbrPolicy');
     expect(error.details['trackId'], 'video:missing');
+    expect(error.hdrCapabilityEvidence, isNull);
     expect(error.toMap()['code'], payload['code']);
     expect(error.toMap()['category'], payload['category']);
   });
@@ -88,6 +89,9 @@ void main() {
         protocol: VesperPlayerSourceProtocol.file,
       ),
       codec: 'hvc1.1.6.L93.B0',
+      width: 3840,
+      height: 2160,
+      frameRate: 59.94,
       requiresNativeFrame: true,
       sourceNormalizerConfiguration: sourceNormalizerConfiguration,
       nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
@@ -99,6 +103,9 @@ void main() {
 
     expect(decodedRequest.source?.uri, request.source?.uri);
     expect(decodedRequest.codec, request.codec);
+    expect(decodedRequest.width, 3840);
+    expect(decodedRequest.height, 2160);
+    expect(decodedRequest.frameRate, 59.94);
     expect(decodedRequest.requiresNativeFrame, isTrue);
     expect(
         decodedRequest.toMap().containsKey('requiresHdrNativeFrame'), isFalse);
@@ -130,6 +137,27 @@ void main() {
           'probeVersion': '1',
           'playbackPathPolicy': 'hdrSystemPlaybackOnly',
           'recommendedPlaybackPathReason': 'hdrNativeFrameUnsupported',
+          'assetVideoHdrMetadataProbe': 'formatDescription',
+          'assetVideoColorPrimaries': 'ITU_R_2020',
+          'assetVideoTransferFunction': 'SMPTE_ST_2084_PQ',
+          'assetVideoYCbCrMatrix': 'ITU_R_2020',
+          'assetVideoMasteringDisplayColorVolumePresent': 'true',
+          'assetVideoMasteringDisplayPrimary0': '0.38970,0.17204',
+          'assetVideoMasteringDisplayWhitePoint': '0.20000,0.20000',
+          'assetVideoMasteringDisplayMaxLuminanceNits': '1000',
+          'assetVideoMasteringDisplayMinLuminanceNits': '0.0001',
+          'assetVideoContentLightLevelInfoPresent': 'true',
+          'assetVideoMaxContentLightLevelNits': '1000',
+          'assetVideoMaxFrameAverageLightLevelNits': '400',
+          'dolbyVisionCodec': 'dvhe.08.07',
+          'dolbyVisionProfile': '8',
+          'dolbyVisionLevel': '7',
+          'dolbyVisionCompatibility': 'profile8Hdr10BaseLayer',
+          'dolbyVisionProfileFamily': 'profile8SingleLayerCompatible',
+          'dolbyVisionBaseLayer': 'hdr10BaseLayer',
+          'dolbyVisionFallbackTarget': 'hdr10BaseLayerSystemPlayer',
+          'dolbyVisionBaseLayerEvidence': 'assetVideoTransferFunction',
+          'dolbyVisionBaseLayerTransferFunction': 'SMPTE_ST_2084_PQ',
         },
       },
     );
@@ -149,11 +177,59 @@ void main() {
     );
     expect(
         result.confidence, VesperPlaybackCapabilityConfidence.sourceMetadata);
+    expect(result.hdrMetadata?.hdrKind,
+        VesperPlaybackCapabilityHdrKind.dolbyVision);
+    expect(result.hdrMetadata?.probe, 'formatDescription');
+    expect(result.hdrMetadata?.colorPrimaries, 'ITU_R_2020');
+    expect(result.hdrMetadata?.transferFunction, 'SMPTE_ST_2084_PQ');
+    expect(result.hdrMetadata?.yCbCrMatrix, 'ITU_R_2020');
+    expect(result.hdrMetadata?.masteringDisplayColorVolumePresent, isTrue);
+    expect(result.hdrMetadata?.masteringDisplayPrimary0?.x, 0.38970);
+    expect(result.hdrMetadata?.masteringDisplayWhitePoint?.y, 0.20000);
+    expect(result.hdrMetadata?.masteringDisplayMaxLuminanceNits, 1000);
+    expect(result.hdrMetadata?.masteringDisplayMinLuminanceNits, 0.0001);
+    expect(result.hdrMetadata?.maxContentLightLevelNits, 1000);
+    expect(result.hdrMetadata?.maxFrameAverageLightLevelNits, 400);
+    expect(result.hdrMetadata?.dolbyVisionCodec, 'dvhe.08.07');
+    expect(result.hdrMetadata?.dolbyVisionProfile, 8);
+    expect(
+      result.hdrMetadata?.dolbyVisionCompatibility,
+      'profile8Hdr10BaseLayer',
+    );
+    expect(
+      result.hdrMetadata?.dolbyVisionProfileFamily,
+      'profile8SingleLayerCompatible',
+    );
+    expect(
+      result.hdrMetadata?.dolbyVisionBaseLayer,
+      'hdr10BaseLayer',
+    );
+    expect(
+      result.hdrMetadata?.dolbyVisionFallbackTarget,
+      'hdr10BaseLayerSystemPlayer',
+    );
+    expect(
+      result.hdrMetadata?.dolbyVisionBaseLayerEvidence,
+      'assetVideoTransferFunction',
+    );
+    expect(
+      result.hdrMetadata?.dolbyVisionBaseLayerTransferFunction,
+      'SMPTE_ST_2084_PQ',
+    );
     expect(
       result.missingCapabilities,
       <String>['hdrProgrammableProcessingNotSupported'],
     );
     expect(result.toMap()['codecFamily'], 'hevc');
+    expect(
+      (result.toMap()['hdrMetadata'] as Map<Object?, Object?>)['probe'],
+      'formatDescription',
+    );
+    expect(
+      (result.toMap()['hdrMetadata']
+          as Map<Object?, Object?>)['dolbyVisionBaseLayerEvidence'],
+      'assetVideoTransferFunction',
+    );
     expect(result.toMap().containsKey('hdrNativeFrameSupported'), isFalse);
   });
 
@@ -1042,6 +1118,82 @@ void main() {
       }),
       throwsA(isA<FormatException>()),
     );
+  });
+
+  test('player error exposes typed HDR capability evidence from details', () {
+    final error = VesperPlayerError.fromMap(<Object?, Object?>{
+      'message': 'decoder unavailable',
+      'code': 'decodeFailure',
+      'category': 'decode',
+      'retriable': false,
+      'details': <Object?, Object?>{
+        'likelyHdrCapabilityIssue': 'true',
+        'hdrKind': 'dolbyVision',
+        'recommendedPlaybackPath': 'systemPlayer',
+        'confidence': 'sourceMetadata',
+        'errorCode': 'ERROR_CODE_DECODER_INIT_FAILED',
+        'capabilityFailureCause': 'decoderInit',
+        'capabilityFailureAxis': 'decoder',
+        'assetVideoHdrMetadataProbe': 'formatDescription',
+        'assetVideoTransferFunction': 'SMPTE_ST_2084_PQ',
+        'assetVideoMaxContentLightLevelNits': '1000',
+        'assetVideoMaxFrameAverageLightLevelNits': '400',
+        'dolbyVisionProfile': '8',
+        'dolbyVisionCompatibility': 'profile8Hdr10BaseLayer',
+        'dolbyVisionProfileFamily': 'profile8SingleLayerCompatible',
+        'dolbyVisionBaseLayer': 'hdr10BaseLayer',
+        'dolbyVisionFallbackTarget': 'hdr10BaseLayerSystemPlayer',
+        'dolbyVisionBaseLayerEvidence': 'assetVideoTransferFunction',
+        'dolbyVisionBaseLayerTransferFunction': 'SMPTE_ST_2084_PQ',
+        'avPlayerItemErrorStatusCode': '-11828',
+      },
+    });
+
+    final evidence = error.hdrCapabilityEvidence;
+    expect(evidence?.likelyHdrCapabilityIssue, isTrue);
+    expect(evidence?.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
+    expect(
+      evidence?.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(evidence?.confidence, 'sourceMetadata');
+    expect(evidence?.errorCode, 'ERROR_CODE_DECODER_INIT_FAILED');
+    expect(evidence?.capabilityFailureCause, 'decoderInit');
+    expect(evidence?.capabilityFailureAxis, 'decoder');
+    expect(evidence?.hdrMetadata?.probe, 'formatDescription');
+    expect(evidence?.hdrMetadata?.transferFunction, 'SMPTE_ST_2084_PQ');
+    expect(evidence?.hdrMetadata?.maxContentLightLevelNits, 1000);
+    expect(evidence?.hdrMetadata?.maxFrameAverageLightLevelNits, 400);
+    expect(evidence?.hdrMetadata?.dolbyVisionProfile, 8);
+    expect(
+      evidence?.hdrMetadata?.dolbyVisionCompatibility,
+      'profile8Hdr10BaseLayer',
+    );
+    expect(
+      evidence?.hdrMetadata?.dolbyVisionProfileFamily,
+      'profile8SingleLayerCompatible',
+    );
+    expect(
+      evidence?.hdrMetadata?.dolbyVisionBaseLayerEvidence,
+      'assetVideoTransferFunction',
+    );
+    expect(
+      evidence?.hdrMetadata?.dolbyVisionBaseLayerTransferFunction,
+      'SMPTE_ST_2084_PQ',
+    );
+    expect(evidence?.diagnostics['avPlayerItemErrorStatusCode'], '-11828');
+    expect(
+        evidence?.diagnostics.containsKey('capabilityFailureCause'), isFalse);
+    expect(evidence?.diagnostics.containsKey('capabilityFailureAxis'), isFalse);
+    expect(
+      evidence?.toMap()['capabilityFailureCause'],
+      'decoderInit',
+    );
+    expect(
+      evidence?.toMap()['capabilityFailureAxis'],
+      'decoder',
+    );
+    expect(error.toMap()['details'], error.details);
   });
 
   test('player snapshot decodes resilience policy shared semantics', () {

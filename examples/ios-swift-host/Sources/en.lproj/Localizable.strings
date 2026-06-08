@@ -140,6 +140,15 @@
 "example.plugins.cache" = "cache: %@";
 "example.plugins.resource" = "resource: %@";
 "example.plugins.native_frame_details" = "native-frame: %@";
+"example.plugins.hdr_evidence.title" = "HDR evidence";
+"example.plugins.hdr_evidence.network_control" = "Uses the fixed controlled network-failure URL.";
+"example.plugins.hdr_evidence.current_source" = "Uses the currently active source.";
+"example.plugins.hdr_evidence.select_source" = "Select a local file or remote URL before capturing this HDR evidence preset.";
+"example.plugins.hdr_evidence.capture" = "Capture HDR evidence";
+"example.plugins.hdr_evidence.capturing" = "Capturing HDR evidence";
+"example.plugins.hdr_evidence.network_control_label" = "Network failure control";
+"example.plugins.hdr_evidence.written" = "HDR evidence bundle written: %@";
+"example.plugins.hdr_evidence.failed" = "HDR evidence capture failed: %@";
 
 "example.message.preparing_selected_video" = "Preparing selected video...";
 "example.message.preparing_video_from_photos" = "Preparing video from Photos...";

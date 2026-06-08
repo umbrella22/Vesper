@@ -70,6 +70,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperBackgroundPlaybackMode
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControls
@@ -88,8 +89,10 @@ import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRou
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun PlayerHostApp(
@@ -130,6 +133,10 @@ internal fun PlayerHostApp(
     var nativeFramePipelineSetting by rememberSaveable {
         mutableStateOf(ExampleNativeFramePipelineSetting.DiagnosticsOnly)
     }
+    var selectedHdrEvidencePreset by remember {
+        mutableStateOf(exampleHdrEvidenceP0Presets[1])
+    }
+    var isCapturingHdrEvidence by remember { mutableStateOf(false) }
     val systemDarkTheme = isSystemInDarkTheme()
     val useDarkTheme =
         when (themeMode) {
@@ -272,6 +279,106 @@ internal fun PlayerHostApp(
                         Toast.LENGTH_SHORT,
                     ).show()
             }
+        }
+    }
+
+    fun captureHdrEvidence() {
+        if (isCapturingHdrEvidence) {
+            return
+        }
+        val preset = selectedHdrEvidencePreset
+        val source =
+            if (preset.sampleId == "NETWORK-FAILURE-CONTROL") {
+                VesperPlayerSource.remote(
+                    uri = ANDROID_HDR_EVIDENCE_NETWORK_CONTROL_URL,
+                    label = context.getString(R.string.example_plugins_hdr_evidence_network_control_label),
+                    protocol = VesperPlayerSourceProtocol.Progressive,
+                )
+            } else {
+                controllerRebuildSource
+            }
+        if (source == null) {
+            Toast
+                .makeText(
+                    context,
+                    R.string.example_plugins_hdr_evidence_select_source,
+                    Toast.LENGTH_SHORT,
+                ).show()
+            return
+        }
+
+        isCapturingHdrEvidence = true
+        Toast
+            .makeText(
+                context,
+                R.string.example_plugins_hdr_evidence_capturing,
+                Toast.LENGTH_SHORT,
+            ).show()
+        scope.launch {
+            val result =
+                runCatching {
+                    val networkFailureEvidence =
+                        if (preset.sampleId == "NETWORK-FAILURE-CONTROL") {
+                            activePlaybackSource = source
+                            controller.selectSource(source)
+                            controller.configureSystemPlayback(
+                                VesperSystemPlaybackConfiguration(
+                                    metadata =
+                                        VesperSystemPlaybackMetadata(
+                                            title = source.label.ifBlank { source.uri },
+                                            contentUri = source.uri,
+                                        ),
+                                    backgroundMode = VesperBackgroundPlaybackMode.Disabled,
+                                    controls = VesperSystemPlaybackControls.videoDefault(),
+                                ),
+                            )
+                            controller.play()
+                            withContext(Dispatchers.IO) {
+                                captureControlledNetworkFailureEvidence(source.uri)
+                            }
+                        } else {
+                            null
+                        }
+                    captureExampleHdrEvidenceBundle(
+                        ExampleHdrEvidenceCaptureContext(
+                            context = context,
+                            preset = preset,
+                            source = source,
+                            controller = controller,
+                            networkFailureEvidence = networkFailureEvidence,
+                            sourceNormalizerSetting = sourceNormalizerSetting,
+                            nativeFramePipelineSetting = nativeFramePipelineSetting,
+                            sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
+                            decoderMediaCodecPluginLibraryPaths = decoderMediaCodecPluginLibraryPaths,
+                            frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                        ),
+                    )
+                }
+            result.fold(
+                onSuccess = { directory ->
+                    Toast
+                        .makeText(
+                            context,
+                            context.getString(
+                                R.string.example_plugins_hdr_evidence_written,
+                                directory.absolutePath,
+                            ),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                },
+                onFailure = { error ->
+                    Toast
+                        .makeText(
+                            context,
+                            context.getString(
+                                R.string.example_plugins_hdr_evidence_failed,
+                                error.message ?: error::class.java.simpleName,
+                            ),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                },
+            )
+            isCapturingHdrEvidence = false
         }
     }
 
@@ -1305,8 +1412,16 @@ internal fun PlayerHostApp(
                                                 decoderMediaCodecPluginLibraryPaths,
                                             frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
                                             pluginDiagnostics = controller.pluginDiagnostics,
+                                            hdrEvidencePresets = exampleHdrEvidenceP0Presets,
+                                            selectedHdrEvidencePreset = selectedHdrEvidencePreset,
+                                            isCapturingHdrEvidence = isCapturingHdrEvidence,
+                                            hdrEvidenceActiveSourceAvailable = controllerRebuildSource != null,
                                             onSourceNormalizerSettingChange = ::applySourceNormalizerSetting,
                                             onNativeFramePipelineSettingChange = ::applyNativeFramePipelineSetting,
+                                            onHdrEvidencePresetChange = { preset ->
+                                                selectedHdrEvidencePreset = preset
+                                            },
+                                            onCaptureHdrEvidence = ::captureHdrEvidence,
                                         )
                                     }
 

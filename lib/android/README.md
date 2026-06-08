@@ -281,13 +281,15 @@ SurfaceView presentation, fallback reason, and frame counters. When
 SourceNormalizer, MediaCodec decoder, and optional FrameProcessor plugin paths
 are available, the explicit SDK-managed SDR native-frame route reads packets,
 decodes through MediaCodec, and presents through a `SurfaceView`. HDR and
-Dolby Vision are intentionally routed to ExoPlayer / system playback; the
-capability probe reports `recommendedPlaybackPath = systemPlayer` with an
+Dolby Vision are routed to ExoPlayer / system playback; the
+SDK-managed native-frame route is SDR-only today and is not an HDR-ready path.
+The capability probe reports `recommendedPlaybackPath = systemPlayer` with an
 `hdrNativeFrameUnsupported` capability warning rather than claiming programmable
-native-frame HDR support. `preferNativeFrame` falls back to ExoPlayer when that
-route is unavailable; `requireNativeFrame` reports a capability error.
-`TextureView` remains a system player surface and falls back or fails according
-to the selected mode. Default ExoPlayer playback is unchanged.
+native-frame HDR support.
+`preferNativeFrame` falls back to ExoPlayer when that route is unavailable;
+`requireNativeFrame` reports a capability error. `TextureView` remains a system
+player surface and falls back or fails according to the selected mode. Default
+ExoPlayer playback is unchanged.
 
 Build the runtime through the root FFmpeg profile CLI:
 

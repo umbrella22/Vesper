@@ -16,6 +16,8 @@ import 'example_player_models.dart';
 import 'example_player_sections.dart';
 import 'example_player_sheet.dart';
 import 'example_player_stage.dart';
+import 'hdr_evidence_capture.dart';
+import 'hdr_evidence_capture_output.dart';
 
 class PlayerHostPage extends StatefulWidget {
   const PlayerHostPage({
@@ -52,8 +54,11 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       ExampleResilienceProfile.balanced;
   ExampleSourceNormalizerSetting _sourceNormalizerSetting =
       ExampleSourceNormalizerSetting.preflightOnly;
+  ExampleHdrEvidenceSamplePreset _selectedHdrEvidencePreset =
+      exampleHdrEvidenceP0Presets[1];
   bool _isApplyingResilienceProfile = false;
   bool _isRebuildingController = false;
+  bool _isCapturingHdrEvidence = false;
   bool _sheetOpen = false;
   List<String> _playlistItemIds = <String>[flutterHlsPlaylistItemId];
   String? _activePlaylistItemId = flutterHlsPlaylistItemId;
@@ -74,6 +79,10 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       <VesperExternalPlaybackRoute>[];
   List<ExamplePendingDownloadTask> _pendingDownloadTasks =
       <ExamplePendingDownloadTask>[];
+
+  bool get _selectedHdrEvidencePresetUsesNetworkControl {
+    return _selectedHdrEvidencePreset.sampleId == 'NETWORK-FAILURE-CONTROL';
+  }
 
   @override
   void initState() {
@@ -719,6 +728,179 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     );
   }
 
+  Future<void> _captureHdrEvidenceBundle(
+    VesperPlayerController controller,
+  ) async {
+    if (_isCapturingHdrEvidence) {
+      return;
+    }
+    final preset = _selectedHdrEvidencePreset;
+    final source = _sourceForHdrEvidencePreset(preset);
+    if (source == null) {
+      _showMessage('请先选择本地文件或远程 URL，再采集该 HDR evidence 样本。');
+      return;
+    }
+
+    final sourceMetadata = await _confirmHdrEvidenceSourceMetadata(
+      preset: preset,
+      source: source,
+    );
+    if (!mounted || sourceMetadata == null) {
+      return;
+    }
+
+    setState(() {
+      _isCapturingHdrEvidence = true;
+    });
+    try {
+      final outputRoot =
+          await ExampleHdrEvidenceCaptureOutput.defaultOutputRoot();
+      final now = DateTime.now();
+      final captureDate = [
+        now.year.toString().padLeft(4, '0'),
+        now.month.toString().padLeft(2, '0'),
+        now.day.toString().padLeft(2, '0'),
+      ].join('-');
+      final deviceId = '${Platform.operatingSystem}-example-host';
+      final deviceEvidence =
+          await ExampleHdrEvidenceCaptureOutput.deviceEvidence();
+      final bundle = await ExampleHdrEvidenceCaptureRecorder(
+        controller: controller,
+        sampleId: preset.sampleId,
+        deviceId: deviceId,
+        platform: Platform.isIOS ? 'ios' : 'android',
+        captureDate: captureDate,
+        sdkCommit: 'local-debug',
+        source: source,
+        sourceMetadata: sourceMetadata,
+        device: <String, Object?>{
+          ...deviceEvidence,
+          'knownCaveats': <String>[
+            'Captured through example-host debug helper; fill device sheet before matrix use.',
+          ],
+        },
+        expectedAxis: preset.expectedAxis,
+        captureWindow: preset.sampleId == 'NETWORK-FAILURE-CONTROL'
+            ? const Duration(seconds: 30)
+            : const Duration(seconds: 3),
+      ).capture();
+      final directory = await ExampleHdrEvidenceBundleWriter(
+        outputRoot: outputRoot,
+      ).write(bundle, overwrite: true);
+      if (!mounted) {
+        return;
+      }
+      _showMessage('HDR evidence bundle 已写入：${directory.path}');
+    } catch (error) {
+      if (mounted) {
+        _showMessage('HDR evidence capture 失败：$error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCapturingHdrEvidence = false;
+        });
+      }
+    }
+  }
+
+  VesperPlayerSource? _sourceForHdrEvidencePreset(
+    ExampleHdrEvidenceSamplePreset preset,
+  ) {
+    if (preset.sampleId == 'NETWORK-FAILURE-CONTROL') {
+      return VesperPlayerSource.remote(
+        uri: exampleHdrEvidenceNetworkControlUrl,
+        label: 'HDR network failure control',
+        protocol: VesperPlayerSourceProtocol.progressive,
+      );
+    }
+    return _activePlaylistItemId == null
+        ? null
+        : _playlistSourceForItem(_activePlaylistItemId!);
+  }
+
+  Future<Map<String, Object?>?> _confirmHdrEvidenceSourceMetadata({
+    required ExampleHdrEvidenceSamplePreset preset,
+    required VesperPlayerSource source,
+  }) async {
+    final defaults = <String, Object?>{
+      ...preset.sourceMetadata,
+      'sourceUri': source.uri,
+      'sourceKind': _sourceKindForEvidenceSource(source),
+      'manifestKind': _manifestKindForEvidenceSource(source),
+    };
+    final controllers = <String, TextEditingController>{
+      for (final key in <String>[
+        'sourceUri',
+        'container',
+        'codec',
+        'sampleMimeType',
+        'width',
+        'height',
+        'frameRate',
+        'bitDepth',
+        'hdrKind',
+        'colorPrimaries',
+        'transferFunction',
+        'yCbCrMatrix',
+      ])
+        key: TextEditingController(text: _metadataText(defaults[key])),
+    };
+    try {
+      final result = await showDialog<Map<String, Object?>?>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: Text('确认 ${preset.label} evidence metadata'),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    for (final entry in controllers.entries)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: TextField(
+                          controller: entry.value,
+                          keyboardType: _keyboardTypeForMetadata(entry.key),
+                          decoration: InputDecoration(
+                            labelText: entry.key,
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(context).pop(<String, Object?>{
+                    ...defaults,
+                    for (final entry in controllers.entries)
+                      entry.key: _metadataValue(entry.key, entry.value.text),
+                  });
+                },
+                child: const Text('开始采集'),
+              ),
+            ],
+          );
+        },
+      );
+      return result;
+    } finally {
+      for (final controller in controllers.values) {
+        controller.dispose();
+      }
+    }
+  }
+
   Future<void> _pickLocalVideo(VesperPlayerController controller) async {
     try {
       final pickedVideo = await ExampleLocalMediaPicker.pickVideo();
@@ -793,6 +975,64 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
       source: source,
       localSource: source,
     );
+  }
+
+  String _sourceKindForEvidenceSource(VesperPlayerSource source) {
+    return switch (source.protocol) {
+      VesperPlayerSourceProtocol.file ||
+      VesperPlayerSourceProtocol.content => 'file',
+      VesperPlayerSourceProtocol.hls => 'hls',
+      VesperPlayerSourceProtocol.dash => 'progressive',
+      VesperPlayerSourceProtocol.progressive => 'progressive',
+      VesperPlayerSourceProtocol.unknown =>
+        source.kind == VesperPlayerSourceKind.local ? 'file' : 'progressive',
+    };
+  }
+
+  String _manifestKindForEvidenceSource(VesperPlayerSource source) {
+    return switch (source.protocol) {
+      VesperPlayerSourceProtocol.hls => 'hls',
+      VesperPlayerSourceProtocol.dash => 'dash',
+      _ => 'none',
+    };
+  }
+
+  String _metadataText(Object? value) {
+    if (value == null) {
+      return '';
+    }
+    return value.toString();
+  }
+
+  Object? _metadataValue(String key, String rawValue) {
+    final value = rawValue.trim();
+    if (value.isEmpty) {
+      return null;
+    }
+    switch (key) {
+      case 'width':
+      case 'height':
+      case 'bitDepth':
+        return int.tryParse(value) ?? value;
+      case 'frameRate':
+        return double.tryParse(value) ?? value;
+      default:
+        return value;
+    }
+  }
+
+  TextInputType _keyboardTypeForMetadata(String key) {
+    switch (key) {
+      case 'sourceUri':
+        return TextInputType.url;
+      case 'width':
+      case 'height':
+      case 'frameRate':
+      case 'bitDepth':
+        return const TextInputType.numberWithOptions(decimal: true);
+      default:
+        return TextInputType.text;
+    }
   }
 
   Future<void> _openToolSheet(
@@ -1236,8 +1476,21 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
                 _sourceNormalizerPluginLibraryPaths,
             frameProcessorPluginLibraryPaths: _frameProcessorPluginLibraryPaths,
             pluginDiagnostics: controller.pluginDiagnostics,
+            isCapturingHdrEvidence: _isCapturingHdrEvidence,
+            hdrEvidenceActiveSourceAvailable:
+                _selectedHdrEvidencePresetUsesNetworkControl ||
+                _activePlaylistItemId != null,
+            hdrEvidencePresets: exampleHdrEvidenceP0Presets,
+            selectedHdrEvidencePreset: _selectedHdrEvidencePreset,
             onSourceNormalizerSettingChange: (setting) =>
                 unawaited(_applySourceNormalizerSetting(setting)),
+            onHdrEvidencePresetChange: (preset) {
+              setState(() {
+                _selectedHdrEvidencePreset = preset;
+              });
+            },
+            onCaptureHdrEvidence: () =>
+                unawaited(_captureHdrEvidenceBundle(controller)),
           ),
           const SizedBox(height: 18),
           ExampleSystemPlaybackSection(

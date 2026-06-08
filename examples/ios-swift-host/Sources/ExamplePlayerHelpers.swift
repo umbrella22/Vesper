@@ -1,4 +1,7 @@
+import AVFoundation
+import Darwin
 import Foundation
+import UIKit
 import VesperPlayerKit
 
 enum ExampleLiveButtonState: Equatable {
@@ -1129,5 +1132,895 @@ func exampleIosHostLog(_ message: String) {
 extension Comparable {
     func clamped(to limits: ClosedRange<Self>) -> Self {
         min(max(self, limits.lowerBound), limits.upperBound)
+    }
+}
+
+let IOS_HDR_EVIDENCE_NETWORK_CONTROL_URL =
+    "https://127.0.0.1:9/vesper-hdr-network-control.mp4"
+
+struct ExampleHdrEvidenceSamplePreset: Identifiable, Equatable {
+    let sampleId: String
+    let label: String
+    let expectedAxis: String
+    let sourceMetadata: [String: Any]
+
+    var id: String { sampleId }
+
+    static func == (lhs: ExampleHdrEvidenceSamplePreset, rhs: ExampleHdrEvidenceSamplePreset) -> Bool {
+        lhs.sampleId == rhs.sampleId
+    }
+}
+
+let exampleHdrEvidenceP0Presets: [ExampleHdrEvidenceSamplePreset] = [
+    ExampleHdrEvidenceSamplePreset(
+        sampleId: "HDR10-HEVC-MAIN10-2160P60-PQ",
+        label: "HDR10 4K60 PQ",
+        expectedAxis: "display",
+        sourceMetadata: [
+            "container": "mov",
+            "codec": "hvc1",
+            "sampleMimeType": "video/hevc",
+            "width": 3840,
+            "height": 2160,
+            "frameRate": 60.0,
+            "bitDepth": 10,
+            "hdrKind": "hdr10",
+            "colorPrimaries": "BT.2020",
+            "transferFunction": "SMPTE_ST_2084_PQ",
+            "yCbCrMatrix": "BT.2020_NCL",
+            "controlPurpose": "none",
+        ]
+    ),
+    ExampleHdrEvidenceSamplePreset(
+        sampleId: "HEVC-SDR-CONTROL",
+        label: "HEVC SDR control",
+        expectedAxis: "none",
+        sourceMetadata: [
+            "container": "mp4",
+            "codec": "hvc1",
+            "sampleMimeType": "video/hevc",
+            "width": 1920,
+            "height": 1080,
+            "frameRate": 30.0,
+            "bitDepth": 8,
+            "hdrKind": "none",
+            "colorPrimaries": "BT.709",
+            "transferFunction": "BT.709",
+            "yCbCrMatrix": "BT.709",
+            "controlPurpose": "hevcSdrFalsePositive",
+        ]
+    ),
+    ExampleHdrEvidenceSamplePreset(
+        sampleId: "NETWORK-FAILURE-CONTROL",
+        label: "Network failure control",
+        expectedAxis: "network",
+        sourceMetadata: [
+            "sourceKind": "progressive",
+            "container": "mp4",
+            "codec": "none",
+            "sampleMimeType": "video/mp4",
+            "hdrKind": "none",
+            "sourceUri": IOS_HDR_EVIDENCE_NETWORK_CONTROL_URL,
+            "manifestKind": "none",
+            "controlPurpose": "networkFailure",
+        ]
+    ),
+]
+
+struct ExampleHdrEvidenceCaptureContext {
+    let preset: ExampleHdrEvidenceSamplePreset
+    let source: VesperPlayerSource
+    let controller: VesperPlayerController
+    let sourceNormalizerSetting: ExampleSourceNormalizerSetting
+    let nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
+    let sourceNormalizerPluginLibraryPaths: [String]
+    let decoderPluginLibraryPaths: [String]
+    let frameProcessorPluginLibraryPaths: [String]
+}
+
+enum ExampleHdrEvidenceCaptureError: LocalizedError {
+    case missingActiveSource
+
+    var errorDescription: String? {
+        switch self {
+        case .missingActiveSource:
+            return "Select a local file or remote URL before capturing this HDR evidence preset."
+        }
+    }
+}
+
+@MainActor
+func captureExampleHdrEvidenceBundle(
+    _ context: ExampleHdrEvidenceCaptureContext
+) async throws -> URL {
+    let sourceMetadata = exampleHdrEvidenceSourceMetadata(
+        preset: context.preset,
+        source: context.source
+    )
+    let probe = VesperPlayerControllerFactory.probePlaybackCapability(
+        VesperPlaybackCapabilityProbeRequest(
+            source: context.source,
+            codec: exampleHdrEvidenceProbeCodec(sourceMetadata),
+            width: sourceMetadata["width"] as? Int,
+            height: sourceMetadata["height"] as? Int,
+            frameRate: sourceMetadata["frameRate"] as? Double,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+                mode: context.sourceNormalizerSetting.mode,
+                pluginLibraryPaths: context.sourceNormalizerPluginLibraryPaths
+            ),
+            frameProcessorConfiguration: VesperFrameProcessorConfiguration(
+                mode: context.frameProcessorPluginLibraryPaths.isEmpty ? .disabled : .diagnosticsOnly,
+                pluginLibraryPaths: context.frameProcessorPluginLibraryPaths
+            ),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+                mode: context.nativeFramePipelineSetting.mode,
+                decoderPluginLibraryPaths: context.decoderPluginLibraryPaths,
+                frameProcessorPluginLibraryPaths: context.frameProcessorPluginLibraryPaths,
+                maxInFlightFrames: 2
+            )
+        )
+    )
+    let controlledNetworkFailureEvidence =
+        await exampleHdrEvidenceControlledNetworkFailureEvidence(
+            preset: context.preset,
+            source: context.source
+        )
+    let captureDate = exampleHdrEvidenceCaptureDate()
+    let deviceId = "ios-example-host"
+    let bundle = ExampleHdrEvidenceBundle(
+        sampleId: context.preset.sampleId,
+        deviceId: deviceId,
+        platform: "ios",
+        captureDate: captureDate,
+        sdkCommit: "local-debug",
+        sourceMetadata: sourceMetadata,
+        device: exampleHdrEvidenceDevice(
+            deviceId: deviceId,
+            captureDate: captureDate,
+            sdkCommit: "local-debug"
+        ),
+        probe: probe.wireMap,
+        playbackOutcome: exampleHdrEvidencePlaybackOutcome(
+            controller: context.controller,
+            probe: probe,
+            preset: context.preset,
+            controlledNetworkFailureEvidence: controlledNetworkFailureEvidence
+        ),
+        runtimeWarning: nil,
+        runtimeError: context.controller.lastError,
+        controlledNetworkFailureEvidence: controlledNetworkFailureEvidence,
+        expectedAxis: context.preset.expectedAxis,
+        missingEvidence: exampleHdrEvidenceMissingEvidence(
+            for: context.preset,
+            controlledNetworkFailureEvidence: controlledNetworkFailureEvidence
+        ),
+        platformLog: exampleHdrEvidencePlatformLog(
+            source: context.source,
+            controller: context.controller,
+            probe: probe,
+            controlledNetworkFailureEvidence: controlledNetworkFailureEvidence
+        ),
+        notes: nil
+    )
+    return try ExampleHdrEvidenceBundleWriter(
+        outputRoot: exampleHdrEvidenceOutputRoot()
+    ).write(bundle, overwrite: true)
+}
+
+private struct ExampleHdrEvidenceBundle {
+    let sampleId: String
+    let deviceId: String
+    let platform: String
+    let captureDate: String
+    let sdkCommit: String
+    let sourceMetadata: [String: Any]
+    let device: [String: Any]
+    let probe: [String: Any]
+    let playbackOutcome: String
+    let runtimeWarning: [String: Any]?
+    let runtimeError: VesperPlayerError?
+    let controlledNetworkFailureEvidence: ExampleControlledNetworkFailureEvidence?
+    let expectedAxis: String
+    let missingEvidence: [String]
+    let platformLog: String
+    let notes: String?
+}
+
+private struct ExampleControlledNetworkFailureEvidence {
+    let observed: Bool
+    let sourceUri: String
+    let errorDomain: String?
+    let errorCode: Int?
+    let errorDescription: String?
+    let durationMs: Int
+    let timedOut: Bool
+
+    var details: [String: String] {
+        var values: [String: String] = [
+            "sourceUri": sourceUri,
+            "durationMs": "\(durationMs)",
+            "timedOut": timedOut ? "true" : "false",
+            "iosRuntimeEvidenceSource": "ios-swift-host-controlled-url",
+        ]
+        if let errorDomain {
+            values["nsErrorDomain"] = errorDomain
+        }
+        if let errorCode {
+            values["nsErrorCode"] = "\(errorCode)"
+        }
+        if let errorDescription {
+            values["networkFailureMessage"] = errorDescription
+        }
+        return values
+    }
+}
+
+private struct ExampleHdrEvidenceBundleWriter {
+    let outputRoot: URL
+
+    func write(
+        _ bundle: ExampleHdrEvidenceBundle,
+        overwrite: Bool
+    ) throws -> URL {
+        let directory = outputRoot
+            .appendingPathComponent(bundle.captureDate, isDirectory: true)
+            .appendingPathComponent(bundle.deviceId, isDirectory: true)
+            .appendingPathComponent(bundle.sampleId, isDirectory: true)
+        if FileManager.default.fileExists(atPath: directory.path), overwrite {
+            try FileManager.default.removeItem(at: directory)
+        }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try writeJson(bundle.device, to: directory.appendingPathComponent("device.json"))
+        try writeJson(
+            exampleHdrEvidenceSourceMetadataJson(bundle),
+            to: directory.appendingPathComponent("source-metadata.json")
+        )
+        try writeJson(
+            exampleHdrEvidenceProbeJson(bundle, schema: "vesper-hdr-dv-probe-host-v1"),
+            to: directory.appendingPathComponent("probe-host.json")
+        )
+        try writeJson(
+            exampleHdrEvidenceFlutterProbeJson(bundle),
+            to: directory.appendingPathComponent("probe-flutter.json")
+        )
+        try writeJson(
+            exampleHdrEvidenceRuntimeWarningJson(bundle),
+            to: directory.appendingPathComponent("runtime-warning.json")
+        )
+        try writeJson(
+            exampleHdrEvidenceRuntimeErrorJson(bundle),
+            to: directory.appendingPathComponent("runtime-error.json")
+        )
+        try writeJson(
+            exampleHdrEvidenceTypedEvidenceJson(bundle),
+            to: directory.appendingPathComponent("typed-evidence.json")
+        )
+        try bundle.platformLog.write(
+            to: directory.appendingPathComponent("platform-log.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try exampleHdrEvidenceNotes(bundle, bundlePath: directory.path).write(
+            to: directory.appendingPathComponent("notes.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        return directory
+    }
+
+    private func writeJson(_ value: [String: Any], to url: URL) throws {
+        let data = try JSONSerialization.data(
+            withJSONObject: exampleHdrEvidenceJsonValue(value),
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        var output = data
+        output.append(0x0A)
+        try output.write(to: url, options: .atomic)
+    }
+}
+
+private func exampleHdrEvidenceOutputRoot() throws -> URL {
+    let documents = FileManager.default.urls(
+        for: .documentDirectory,
+        in: .userDomainMask
+    ).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+    let root = documents.appendingPathComponent("hdr-dv-evidence", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root
+}
+
+private func exampleHdrEvidenceDevice(
+    deviceId: String,
+    captureDate: String,
+    sdkCommit: String
+) -> [String: Any] {
+    let screen = UIScreen.main
+    return [
+        "schema": "vesper-hdr-dv-device-v1",
+        "deviceId": deviceId,
+        "platform": "ios",
+        "captureDate": captureDate,
+        "sdkCommit": sdkCommit,
+        "hostApp": [
+            "name": "ios-swift-host",
+            "version": Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? "debug",
+            "displayPath": "AVPlayer",
+        ],
+        "android": [
+            "manufacturer": "TBD",
+            "model": "TBD",
+            "apiLevel": "TBD",
+            "buildFingerprint": "TBD",
+            "displayHdrTypes": [],
+            "displayRefreshRate": NSNull(),
+            "displayModes": [],
+            "media3Version": "TBD",
+            "decoderCandidates": [
+                "hevc": [],
+                "dolbyVision": [],
+            ],
+        ],
+        "ios": [
+            "model": exampleDeviceModelIdentifier(),
+            "iosVersion": UIDevice.current.systemVersion,
+            "avPlayerEligibleForHdrPlayback": AVPlayer.eligibleForHDRPlayback,
+            "displayGamut": exampleDisplayGamutName(screen.traitCollection.displayGamut),
+            "nativeDisplaySize": [
+                "width": Int(screen.nativeBounds.width.rounded()),
+                "height": Int(screen.nativeBounds.height.rounded()),
+            ],
+            "maximumFramesPerSecond": screen.maximumFramesPerSecond,
+        ],
+        "knownCaveats": [
+            "Captured through ios-swift-host debug helper; native-host probe-flutter.json mirrors the host probe and is not Flutter parity evidence.",
+        ],
+    ]
+}
+
+private func exampleHdrEvidenceSourceMetadata(
+    preset: ExampleHdrEvidenceSamplePreset,
+    source: VesperPlayerSource
+) -> [String: Any] {
+    var metadata = preset.sourceMetadata
+    metadata["sourceUri"] = source.uri
+    metadata["sourceKind"] = exampleHdrEvidenceSourceKind(source)
+    metadata["manifestKind"] = exampleHdrEvidenceManifestKind(source)
+    return metadata
+}
+
+private func exampleHdrEvidenceSourceMetadataJson(
+    _ bundle: ExampleHdrEvidenceBundle
+) -> [String: Any] {
+    exampleMergeMaps(
+        [
+            "schema": "vesper-hdr-dv-source-metadata-v1",
+            "sampleId": bundle.sampleId,
+            "sourceKind": "TBD",
+            "sourceUri": "TBD",
+            "container": "TBD",
+            "manifestKind": "none",
+            "codec": "TBD",
+            "sampleMimeType": "TBD",
+            "width": NSNull(),
+            "height": NSNull(),
+            "frameRate": NSNull(),
+            "bitDepth": NSNull(),
+            "hdrKind": "none",
+            "colorPrimaries": "TBD",
+            "transferFunction": "TBD",
+            "yCbCrMatrix": "TBD",
+            "maxContentLightLevelNits": NSNull(),
+            "maxFrameAverageLightLevelNits": NSNull(),
+            "masteringDisplay": [
+                "present": NSNull(),
+                "primary0": NSNull(),
+                "primary1": NSNull(),
+                "primary2": NSNull(),
+                "whitePoint": NSNull(),
+                "maxLuminanceNits": NSNull(),
+                "minLuminanceNits": NSNull(),
+            ],
+            "dolbyVision": [
+                "codec": bundle.probe.pathValue("hdrMetadata", "dolbyVisionCodec"),
+                "profile": bundle.probe.pathValue("hdrMetadata", "dolbyVisionProfile"),
+                "level": bundle.probe.pathValue("hdrMetadata", "dolbyVisionLevel"),
+                "compatibility": bundle.probe.pathValue("hdrMetadata", "dolbyVisionCompatibility"),
+                "profileFamily": bundle.probe.pathValue("hdrMetadata", "dolbyVisionProfileFamily"),
+                "baseLayer": bundle.probe.pathValue("hdrMetadata", "dolbyVisionBaseLayer"),
+                "fallbackTarget": bundle.probe.pathValue("hdrMetadata", "dolbyVisionFallbackTarget"),
+                "baseLayerEvidence": bundle.probe.pathValue("hdrMetadata", "dolbyVisionBaseLayerEvidence"),
+                "baseLayerTransferFunction": bundle.probe.pathValue(
+                    "hdrMetadata",
+                    "dolbyVisionBaseLayerTransferFunction"
+                ),
+                "containerEvidence": NSNull(),
+            ],
+            "controlPurpose": "none",
+            "metadataTool": [
+                "name": "ios-swift-host-preset",
+                "version": "debug",
+                "command": "example native HDR evidence capture",
+            ],
+            "notes": [],
+        ],
+        bundle.sourceMetadata
+    )
+}
+
+private func exampleHdrEvidenceProbeJson(
+    _ bundle: ExampleHdrEvidenceBundle,
+    schema: String
+) -> [String: Any] {
+    [
+        "schema": schema,
+        "sampleId": bundle.sampleId,
+        "deviceId": bundle.deviceId,
+        "platform": bundle.platform,
+        "captureDate": bundle.captureDate,
+        "request": [
+            "codec": bundle.sourceMetadata["codec"] ?? NSNull(),
+            "width": bundle.sourceMetadata["width"] ?? NSNull(),
+            "height": bundle.sourceMetadata["height"] ?? NSNull(),
+            "frameRate": bundle.sourceMetadata["frameRate"] ?? NSNull(),
+            "hdrKind": bundle.sourceMetadata["hdrKind"] ?? NSNull(),
+            "sourceKind": bundle.sourceMetadata["sourceKind"] ?? NSNull(),
+            "manifestKind": bundle.sourceMetadata["manifestKind"] ?? NSNull(),
+        ],
+        "result": exampleHdrEvidenceProbeResult(bundle.probe),
+        "diagnosticGroups": exampleHdrEvidenceProbeDiagnosticGroups(bundle.probe),
+        "capturedVia": "ios-swift-host",
+    ]
+}
+
+private func exampleHdrEvidenceFlutterProbeJson(
+    _ bundle: ExampleHdrEvidenceBundle
+) -> [String: Any] {
+    var json = exampleHdrEvidenceProbeJson(
+        bundle,
+        schema: "vesper-hdr-dv-probe-flutter-v1"
+    )
+    json["capturedVia"] = "ios-swift-host-native-mirror"
+    json["matchesHostProbe"] = true
+    return json
+}
+
+private func exampleHdrEvidenceProbeResult(_ probe: [String: Any]) -> [String: Any] {
+    [
+        "status": probe["status"] ?? "unknown",
+        "recommendedPlaybackPath": probe["recommendedPlaybackPath"] ?? "systemPlayer",
+        "confidence": probe["confidence"] ?? "codecOnly",
+        "hdrKind": probe["hdrKind"] ?? "none",
+        "missingCapabilities": probe["missingCapabilities"] ?? [],
+        "hdrMetadata": probe["hdrMetadata"] as? [String: Any] ?? [:],
+    ]
+}
+
+private func exampleHdrEvidenceProbeDiagnosticGroups(_ probe: [String: Any]) -> [String: Any] {
+    let diagnostics = probe["diagnostics"] as? [String: String] ?? [:]
+    return [
+        "display": diagnostics.filter {
+            $0.key.hasPrefix("display") ||
+                $0.key.hasPrefix("avPlayer") ||
+                $0.key.hasPrefix("requestedFrameRate")
+        },
+        "codecFormat": diagnostics.filter { $0.key.hasPrefix("codecFormat") },
+        "asset": diagnostics.filter { $0.key.hasPrefix("asset") },
+        "dolbyVision": diagnostics.filter { $0.key.hasPrefix("dolbyVision") },
+        "other": diagnostics.filter { entry in
+            !entry.key.hasPrefix("display") &&
+                !entry.key.hasPrefix("avPlayer") &&
+                !entry.key.hasPrefix("requestedFrameRate") &&
+                !entry.key.hasPrefix("codecFormat") &&
+                !entry.key.hasPrefix("asset") &&
+                !entry.key.hasPrefix("dolbyVision")
+        },
+    ]
+}
+
+private func exampleHdrEvidenceRuntimeWarningJson(
+    _ bundle: ExampleHdrEvidenceBundle
+) -> [String: Any] {
+    [
+        "schema": "vesper-hdr-dv-runtime-warning-v1",
+        "sampleId": bundle.sampleId,
+        "deviceId": bundle.deviceId,
+        "platform": bundle.platform,
+        "captureDate": bundle.captureDate,
+        "observed": false,
+        "warning": exampleEmptyCapabilityEvidence(probe: bundle.probe),
+    ]
+}
+
+private func exampleHdrEvidenceRuntimeErrorJson(
+    _ bundle: ExampleHdrEvidenceBundle
+) -> [String: Any] {
+    let controlledNetworkFailureEvidence = bundle.controlledNetworkFailureEvidence
+    let error = bundle.runtimeError
+    let details = controlledNetworkFailureEvidence?.details ?? error?.details ?? [:]
+    let errorJson: [String: Any] = [
+        "code": controlledNetworkFailureEvidence?.observed == true
+            ? VesperPlayerErrorCode.backendFailure.rawValue
+            : error?.code.rawValue as Any,
+        "category": controlledNetworkFailureEvidence?.observed == true
+            ? VesperPlayerErrorCategory.network.rawValue
+            : error?.category.rawValue as Any,
+        "message": controlledNetworkFailureEvidence?.errorDescription as Any ?? error?.message as Any,
+        "retriable": controlledNetworkFailureEvidence?.observed == true ? true : error?.retriable as Any,
+        "details": details,
+    ]
+    let iosJson: [String: Any] = [
+        "avErrorCode": details["avErrorCode"] ?? NSNull(),
+        "nsErrorDomain": details["nsErrorDomain"] ?? NSNull(),
+        "nsErrorCode": details["nsErrorCode"] ?? NSNull(),
+        "iosRuntimeEvidenceSource": details["iosRuntimeEvidenceSource"] ?? NSNull(),
+        "iosRuntimeFailureCategory": details["iosRuntimeFailureCategory"] ?? NSNull(),
+        "iosRuntimeFailureRetriable": details["iosRuntimeFailureRetriable"] ?? NSNull(),
+        "iosRuntimeFailureCode": details["iosRuntimeFailureCode"] ?? NSNull(),
+        "capabilityFailureCause": details["capabilityFailureCause"] ?? NSNull(),
+        "missingCapabilities": details["missingCapabilities"] ?? NSNull(),
+        "sessionProbe": details["sessionProbe"] ?? NSNull(),
+        "displayHdrProbeAvailable": details["displayHdrProbeAvailable"] ?? NSNull(),
+        "displayHdrSupported": details["displayHdrSupported"] ?? NSNull(),
+        "displayGamut": details["displayGamut"] ?? NSNull(),
+        "avPlayerEligibleForHDRPlayback": details["avPlayerEligibleForHDRPlayback"] ?? NSNull(),
+        "hdrKindSupportBasis": details["hdrKindSupportBasis"] ?? NSNull(),
+        "displayFrameRateSupported": details["displayFrameRateSupported"] ?? NSNull(),
+        "displayMaximumFramesPerSecond": details["displayMaximumFramesPerSecond"] ?? NSNull(),
+        "displayNativeWidth": details["displayNativeWidth"] ?? NSNull(),
+        "displayNativeHeight": details["displayNativeHeight"] ?? NSNull(),
+        "requestedWidth": details["requestedWidth"] ?? NSNull(),
+        "requestedHeight": details["requestedHeight"] ?? NSNull(),
+        "requestedFrameRate": details["requestedFrameRate"] ?? NSNull(),
+        "avPlayerItemStatusEvidenceSource": details["avPlayerItemStatusEvidenceSource"] ?? NSNull(),
+        "avPlayerItemStatus": details["avPlayerItemStatus"] ?? NSNull(),
+        "avPlayerItemErrorLogEvidenceSource": details["avPlayerItemErrorLogEvidenceSource"] ?? NSNull(),
+        "avPlayerItemErrorLogEventCount": details["avPlayerItemErrorLogEventCount"] ?? NSNull(),
+        "avPlayerItemErrorLogRecentEventCount": details[
+            "avPlayerItemErrorLogRecentEventCount"
+        ] ?? NSNull(),
+        "avPlayerItemErrorLogEvents": details["avPlayerItemErrorLogEvents"] ?? NSNull(),
+        "avPlayerItemErrorStatusCode": details["avPlayerItemErrorStatusCode"] ?? NSNull(),
+        "avPlayerItemErrorDomain": details["avPlayerItemErrorDomain"] ?? NSNull(),
+        "avPlayerItemErrorComment": details["avPlayerItemErrorComment"] ?? NSNull(),
+        "networkEvidenceSource": controlledNetworkFailureEvidence?.observed == true
+            ? "ios-swift-host-controlled-url"
+            : NSNull(),
+        "networkFailureMessage": controlledNetworkFailureEvidence?.errorDescription as Any,
+        "networkFailureDurationMs": controlledNetworkFailureEvidence?.durationMs as Any,
+    ]
+    return [
+        "schema": "vesper-hdr-dv-runtime-error-v1",
+        "sampleId": bundle.sampleId,
+        "deviceId": bundle.deviceId,
+        "platform": bundle.platform,
+        "captureDate": bundle.captureDate,
+        "playbackOutcome": bundle.playbackOutcome,
+        "observed": controlledNetworkFailureEvidence?.observed == true || error != nil,
+        "error": errorJson,
+        "android": [:],
+        "ios": iosJson,
+        "expectedAxis": bundle.expectedAxis,
+        "axisSupportedByEvidence": exampleHdrEvidenceAxisSupportedByEvidence(bundle),
+        "missingEvidence": bundle.missingEvidence,
+        "matchesHostEvidence": true,
+        "evidenceMismatches": [],
+    ]
+}
+
+private func exampleHdrEvidenceTypedEvidenceJson(
+    _ bundle: ExampleHdrEvidenceBundle
+) -> [String: Any] {
+    let warningPresent = bundle.runtimeWarning != nil
+    let errorPresent = bundle.runtimeError != nil
+    return [
+        "schema": "vesper-hdr-dv-typed-evidence-v1",
+        "sampleId": bundle.sampleId,
+        "deviceId": bundle.deviceId,
+        "platform": bundle.platform,
+        "captureDate": bundle.captureDate,
+        "flutter": [
+            "vesperCapabilityWarning": exampleCapabilityEvidence(
+                present: warningPresent,
+                probe: bundle.probe
+            ),
+            "vesperHdrCapabilityEvidence": exampleCapabilityEvidence(
+                present: errorPresent,
+                probe: bundle.probe
+            ),
+        ],
+        "matchesHostEvidence": true,
+        "probeMismatches": [],
+        "evidenceMismatches": [],
+    ]
+}
+
+private func exampleCapabilityEvidence(
+    present: Bool,
+    probe: [String: Any]
+) -> [String: Any] {
+    var evidence = exampleEmptyCapabilityEvidence(probe: probe)
+    evidence["present"] = present
+    return evidence
+}
+
+private func exampleEmptyCapabilityEvidence(probe: [String: Any]) -> [String: Any] {
+    [
+        "reason": NSNull(),
+        "recommendedPlaybackPath": NSNull(),
+        "hdrKind": probe["hdrKind"] ?? "none",
+        "likelyHdrCapabilityIssue": false,
+        "confidence": probe["confidence"] ?? "codecOnly",
+        "errorCode": NSNull(),
+        "capabilityFailureCause": NSNull(),
+        "capabilityFailureAxis": NSNull(),
+        "hdrMetadata": probe["hdrMetadata"] as? [String: Any] ?? [:],
+        "diagnostics": probe["diagnostics"] as? [String: Any] ?? [:],
+        "message": NSNull(),
+    ]
+}
+
+private func exampleHdrEvidenceNotes(
+    _ bundle: ExampleHdrEvidenceBundle,
+    bundlePath: String
+) -> String {
+    bundle.notes ?? """
+    # HDR / Dolby Vision Evidence Notes
+
+    - Bundle path: `\(bundlePath)`
+    - Sample ID: `\(bundle.sampleId)`
+    - Device ID: `\(bundle.deviceId)`
+    - Platform: `\(bundle.platform)`
+    - Capture date: `\(bundle.captureDate)`
+    - Host app: `ios-swift-host`
+    - Playback outcome: `\(bundle.playbackOutcome)`
+    - Expected axis: `\(bundle.expectedAxis)`
+
+    ## Evidence Summary
+
+    - Native host probe captured in `probe-host.json`.
+    - `probe-flutter.json` mirrors the native host probe so the existing validator can compare route policy; it is not Flutter parity evidence.
+    - HDR/DV policy remains systemPlayer-only for this capture path.
+    - Source metadata uses the selected P0 preset plus the active source URI.
+    - Missing evidence: `\(bundle.missingEvidence.isEmpty ? "none" : bundle.missingEvidence.joined(separator: "; "))`
+    """
+}
+
+@MainActor
+private func exampleHdrEvidencePlatformLog(
+    source: VesperPlayerSource,
+    controller: VesperPlayerController,
+    probe: VesperPlaybackCapabilityProbeResult,
+    controlledNetworkFailureEvidence: ExampleControlledNetworkFailureEvidence?
+) -> String {
+    """
+    ios-swift-host HDR evidence capture
+    source=\(source.uri)
+    playbackState=\(controller.uiState.playbackState.rawValue)
+    route=\(probe.recommendedPlaybackPath.rawValue)
+    status=\(probe.status.rawValue)
+    hdrKind=\(probe.hdrKind.rawValue)
+    missingCapabilities=\(probe.missingCapabilities.joined(separator: ","))
+    controlledNetworkFailureObserved=\(controlledNetworkFailureEvidence?.observed == true)
+    controlledNetworkFailureDomain=\(controlledNetworkFailureEvidence?.errorDomain ?? "none")
+    controlledNetworkFailureCode=\(controlledNetworkFailureEvidence.map { "\($0.errorCode ?? 0)" } ?? "none")
+    controlledNetworkFailureDurationMs=\(controlledNetworkFailureEvidence.map { "\($0.durationMs)" } ?? "none")
+    pluginDiagnostics=\(controller.pluginDiagnostics)
+    """
+}
+
+private func exampleHdrEvidenceProbeCodec(_ metadata: [String: Any]) -> String? {
+    let codec = (metadata["codec"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let hdrKind = (metadata["hdrKind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let codec, !codec.isEmpty, codec != "none" else {
+        return nil
+    }
+    guard let hdrKind, hdrKind != "none", hdrKind != "unknown" else {
+        return codec
+    }
+    return "\(codec),\(hdrKind)"
+}
+
+@MainActor
+private func exampleHdrEvidencePlaybackOutcome(
+    controller: VesperPlayerController,
+    probe: VesperPlaybackCapabilityProbeResult,
+    preset: ExampleHdrEvidenceSamplePreset,
+    controlledNetworkFailureEvidence: ExampleControlledNetworkFailureEvidence?
+) -> String {
+    if preset.sampleId == "NETWORK-FAILURE-CONTROL",
+        controlledNetworkFailureEvidence?.observed == true {
+        return "failure"
+    }
+    if controller.lastError != nil {
+        return "failure"
+    }
+    if preset.sampleId == "NETWORK-FAILURE-CONTROL" {
+        return "notRun"
+    }
+    if probe.recommendedPlaybackPath == .systemPlayer,
+        probe.missingCapabilities.contains("hdrProgrammableProcessingNotSupported") {
+        return "fallback"
+    }
+    return "success"
+}
+
+private func exampleHdrEvidenceMissingEvidence(
+    for preset: ExampleHdrEvidenceSamplePreset,
+    controlledNetworkFailureEvidence: ExampleControlledNetworkFailureEvidence?
+) -> [String] {
+    if preset.sampleId == "NETWORK-FAILURE-CONTROL" {
+        if controlledNetworkFailureEvidence?.observed == true {
+            return []
+        }
+        return ["controlled network failure must be observed in runtime-error.json"]
+    }
+    return []
+}
+
+private func exampleHdrEvidenceAxisSupportedByEvidence(
+    _ bundle: ExampleHdrEvidenceBundle
+) -> Any {
+    if bundle.expectedAxis == "none" {
+        return true
+    }
+    if bundle.sampleId == "NETWORK-FAILURE-CONTROL" {
+        return bundle.controlledNetworkFailureEvidence?.observed == true
+    }
+    return NSNull()
+}
+
+private func exampleHdrEvidenceControlledNetworkFailureEvidence(
+    preset: ExampleHdrEvidenceSamplePreset,
+    source: VesperPlayerSource
+) async -> ExampleControlledNetworkFailureEvidence? {
+    guard preset.sampleId == "NETWORK-FAILURE-CONTROL",
+        let url = URL(string: source.uri)
+    else {
+        return nil
+    }
+
+    let startedAt = Date()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 3
+    configuration.timeoutIntervalForResource = 3
+    let session = URLSession(configuration: configuration)
+    defer {
+        session.invalidateAndCancel()
+    }
+
+    do {
+        _ = try await session.data(from: url)
+        let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        return ExampleControlledNetworkFailureEvidence(
+            observed: false,
+            sourceUri: source.uri,
+            errorDomain: nil,
+            errorCode: nil,
+            errorDescription: "controlled URL unexpectedly returned data",
+            durationMs: durationMs,
+            timedOut: false
+        )
+    } catch {
+        let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        let nsError = error as NSError
+        return ExampleControlledNetworkFailureEvidence(
+            observed: true,
+            sourceUri: source.uri,
+            errorDomain: nsError.domain,
+            errorCode: nsError.code,
+            errorDescription: nsError.localizedDescription,
+            durationMs: durationMs,
+            timedOut: nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut
+        )
+    }
+}
+
+private func exampleHdrEvidenceCaptureDate() -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.string(from: Date())
+}
+
+private func exampleDeviceModelIdentifier() -> String {
+    var systemInfo = utsname()
+    uname(&systemInfo)
+    return withUnsafePointer(to: &systemInfo.machine) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: 1) {
+            String(cString: $0)
+        }
+    }
+}
+
+private func exampleDisplayGamutName(_ gamut: UIDisplayGamut) -> String {
+    switch gamut {
+    case .P3:
+        return "P3"
+    case .SRGB:
+        return "SRGB"
+    case .unspecified:
+        return "unspecified"
+    @unknown default:
+        return "unknown"
+    }
+}
+
+private func exampleHdrEvidenceSourceKind(_ source: VesperPlayerSource) -> String {
+    switch source.protocol {
+    case .file, .content:
+        return "file"
+    case .hls:
+        return "hls"
+    case .dash, .progressive:
+        return "progressive"
+    case .unknown:
+        return source.kind == .local ? "file" : "progressive"
+    }
+}
+
+private func exampleHdrEvidenceManifestKind(_ source: VesperPlayerSource) -> String {
+    switch source.protocol {
+    case .hls:
+        return "hls"
+    case .dash:
+        return "dash"
+    case .unknown, .file, .content, .progressive:
+        return "none"
+    }
+}
+
+private func exampleHdrEvidenceJsonValue(_ value: Any) -> Any {
+    if value is NSNull {
+        return value
+    }
+    if let dictionary = value as? [String: Any] {
+        var output: [String: Any] = [:]
+        dictionary.forEach { key, value in
+            output[key] = exampleHdrEvidenceJsonValue(value)
+        }
+        return output
+    }
+    if let array = value as? [Any] {
+        return array.map(exampleHdrEvidenceJsonValue)
+    }
+    let mirror = Mirror(reflecting: value)
+    if mirror.displayStyle == .optional {
+        guard let child = mirror.children.first else {
+            return NSNull()
+        }
+        return exampleHdrEvidenceJsonValue(child.value)
+    }
+    return value
+}
+
+private func exampleMergeMaps(
+    _ defaults: [String: Any],
+    _ overrides: [String: Any]
+) -> [String: Any] {
+    var result = defaults
+    for (key, override) in overrides {
+        if let base = result[key] as? [String: Any],
+            let overrideMap = override as? [String: Any] {
+            result[key] = exampleMergeMaps(base, overrideMap)
+        } else {
+            result[key] = override
+        }
+    }
+    return result
+}
+
+private extension Dictionary where Key == String, Value == Any {
+    func pathValue(_ first: String, _ second: String) -> Any {
+        guard let child = self[first] as? [String: Any] else {
+            return NSNull()
+        }
+        return child[second] ?? NSNull()
     }
 }

@@ -5,6 +5,7 @@ import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
 import 'example_player_helpers.dart';
 import 'example_player_models.dart';
+import 'hdr_evidence_capture.dart';
 
 class ExamplePlayerHeader extends StatelessWidget {
   const ExamplePlayerHeader({
@@ -296,7 +297,13 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
     required this.sourceNormalizerPluginLibraryPaths,
     required this.frameProcessorPluginLibraryPaths,
     required this.pluginDiagnostics,
+    required this.isCapturingHdrEvidence,
+    required this.hdrEvidenceActiveSourceAvailable,
+    required this.hdrEvidencePresets,
+    required this.selectedHdrEvidencePreset,
     required this.onSourceNormalizerSettingChange,
+    required this.onHdrEvidencePresetChange,
+    required this.onCaptureHdrEvidence,
   });
 
   final ExampleHostPalette palette;
@@ -304,8 +311,14 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
   final List<String> sourceNormalizerPluginLibraryPaths;
   final List<String> frameProcessorPluginLibraryPaths;
   final List<VesperPluginDiagnostic> pluginDiagnostics;
+  final bool isCapturingHdrEvidence;
+  final bool hdrEvidenceActiveSourceAvailable;
+  final List<ExampleHdrEvidenceSamplePreset> hdrEvidencePresets;
+  final ExampleHdrEvidenceSamplePreset selectedHdrEvidencePreset;
   final ValueChanged<ExampleSourceNormalizerSetting>
   onSourceNormalizerSettingChange;
+  final ValueChanged<ExampleHdrEvidenceSamplePreset> onHdrEvidencePresetChange;
+  final VoidCallback onCaptureHdrEvidence;
 
   List<VesperPluginDiagnostic> get sourceNormalizerDiagnostics {
     return pluginDiagnostics
@@ -387,6 +400,66 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
             emptyLabel: '暂无 FrameProcessor debug 诊断。',
             diagnostics: frameProcessorDiagnostics,
             palette: palette,
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'HDR evidence',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: palette.title,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: hdrEvidencePresets
+                  .map(
+                    (preset) => Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: ChoiceChip(
+                        label: Text(preset.label),
+                        selected:
+                            preset.sampleId ==
+                            selectedHdrEvidencePreset.sampleId,
+                        onSelected: isCapturingHdrEvidence
+                            ? null
+                            : (_) => onHdrEvidencePresetChange(preset),
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            selectedHdrEvidencePreset.sampleId == 'NETWORK-FAILURE-CONTROL'
+                ? 'Network control uses a fixed local HTTPS failure URL and should not produce HDR capability evidence.'
+                : hdrEvidenceActiveSourceAvailable
+                ? 'This preset will use the current active source; confirm metadata before capture.'
+                : 'Select a local file or remote URL before capturing this preset.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: palette.body, height: 1.45),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed:
+                isCapturingHdrEvidence ||
+                    (!hdrEvidenceActiveSourceAvailable &&
+                        selectedHdrEvidencePreset.sampleId !=
+                            'NETWORK-FAILURE-CONTROL')
+                ? null
+                : onCaptureHdrEvidence,
+            icon: isCapturingHdrEvidence
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.fact_check_rounded, size: 18),
+            label: Text(
+              isCapturingHdrEvidence ? '正在采集 HDR evidence' : '采集 HDR evidence',
+            ),
           ),
         ],
       ),

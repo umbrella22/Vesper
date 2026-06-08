@@ -243,6 +243,41 @@ void main() {
           'reason': 'hdrNativeFrameUnsupported',
           'recommendedPlaybackPath': 'systemPlayer',
           'hdrKind': 'dolbyVision',
+          'likelyHdrCapabilityIssue': true,
+          'confidence': 'sourceMetadata',
+          'errorCode': 'ERROR_CODE_DECODER_INIT_FAILED',
+          'capabilityFailureCause': 'decoderInit',
+          'capabilityFailureAxis': 'decoder',
+          'appProbeStatus': 'fallbackRequired',
+          'appProbeRecommendedPlaybackPath': 'systemPlayer',
+          'appProbeConfidence': 'sessionProbe',
+          'appProbeHdrKind': 'dolbyVision',
+          'appProbeDolbyVisionMode': 'compatibleBaseLayer',
+          'appProbeMissingCapabilities':
+              'hdrProgrammableProcessingNotSupported,displayHdrCapability',
+          'appProbeSourceUri': 'https://example.com/movie-dv.mp4',
+          'appProbeSourceProtocol': 'progressive',
+          'appProbeSourceMatchesRuntime': true,
+          'appProbeRuntimeRecommendedPathMatches': true,
+          'appProbeRuntimeHdrKindMatches': true,
+          'appProbeRuntimeDolbyVisionModeMatches': true,
+          'appProbeRuntimeSystemPlayerRecommendationConfirmed': true,
+          'appProbeDisplayHdrSupported': 'false',
+          'appProbeDisplayFrameRateSupported': 'true',
+          'appProbeCodecFormatSupported': 'false',
+          'appProbeCodecFormatMissingCapability': 'codecProfileLevel',
+          'appProbeCodecFormatSampleMimeType': 'video/dolby-vision',
+          'appProbeCodecFormatCodecs': 'dvhe.08.07',
+          'appProbeCodecFormatWidth': '3840',
+          'appProbeCodecFormatHeight': '2160',
+          'appProbeCodecFormatFrameRate': '60.0',
+          'runtimeFormatHdrMetadataProbe': 'media3FormatColorInfo',
+          'runtimeFormatColorSpace': 'bt2020',
+          'runtimeFormatColorRange': 'limited',
+          'runtimeFormatColorTransfer': 'st2084',
+          'runtimeFormatHdrStaticInfoPresent': true,
+          'runtimeFormatMaxContentLightLevelNits': 1000,
+          'runtimeFormatMaxFrameAverageLightLevelNits': 400,
           'message': 'HDR/Dolby Vision uses system playback.',
         },
       },
@@ -262,6 +297,232 @@ void main() {
     expect(
       warningEvent.warning.capability?.hdrKind,
       VesperPlaybackCapabilityHdrKind.dolbyVision,
+    );
+    expect(
+      warningEvent.warning.capability?.likelyHdrCapabilityIssue,
+      isTrue,
+    );
+    expect(
+      warningEvent.warning.capability?.confidence,
+      'sourceMetadata',
+    );
+    expect(
+      warningEvent.warning.capability?.errorCode,
+      'ERROR_CODE_DECODER_INIT_FAILED',
+    );
+    expect(
+      warningEvent.warning.capability?.capabilityFailureCause,
+      'decoderInit',
+    );
+    expect(
+      warningEvent.warning.capability?.capabilityFailureAxis,
+      'decoder',
+    );
+    final appProbe = warningEvent.warning.capability?.appProbeConvergence;
+    expect(
+        appProbe?.status, VesperPlaybackCapabilityProbeStatus.fallbackRequired);
+    expect(
+      appProbe?.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(
+        appProbe?.confidence, VesperPlaybackCapabilityConfidence.sessionProbe);
+    expect(appProbe?.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
+    expect(
+      appProbe?.dolbyVisionMode,
+      VesperPlaybackCapabilityDolbyVisionMode.compatibleBaseLayer,
+    );
+    expect(
+      appProbe?.missingCapabilities,
+      <String>[
+        'hdrProgrammableProcessingNotSupported',
+        'displayHdrCapability',
+      ],
+    );
+    expect(appProbe?.sourceUri, 'https://example.com/movie-dv.mp4');
+    expect(appProbe?.sourceProtocol, VesperPlayerSourceProtocol.progressive);
+    expect(appProbe?.sourceMatchesRuntime, isTrue);
+    expect(appProbe?.runtimeRecommendedPathMatches, isTrue);
+    expect(appProbe?.runtimeHdrKindMatches, isTrue);
+    expect(appProbe?.runtimeDolbyVisionModeMatches, isTrue);
+    expect(appProbe?.runtimeSystemPlayerRecommendationConfirmed, isTrue);
+    expect(appProbe?.displayHdrSupported, isFalse);
+    expect(appProbe?.displayFrameRateSupported, isTrue);
+    expect(appProbe?.codecFormatSupported, isFalse);
+    expect(appProbe?.codecFormatMissingCapability, 'codecProfileLevel');
+    expect(appProbe?.codecFormatSampleMimeType, 'video/dolby-vision');
+    expect(appProbe?.codecFormatCodecs, 'dvhe.08.07');
+    expect(appProbe?.codecFormatWidth, 3840);
+    expect(appProbe?.codecFormatHeight, 2160);
+    expect(appProbe?.codecFormatFrameRate, 60.0);
+    expect(
+      warningEvent.warning.capability?.diagnostics
+          .containsKey('appProbeStatus'),
+      isFalse,
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics
+          .containsKey('appProbeRuntimeHdrKindMatches'),
+      isFalse,
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics
+          .containsKey('capabilityFailureCause'),
+      isFalse,
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics
+          .containsKey('capabilityFailureAxis'),
+      isFalse,
+    );
+    expect(
+      warningEvent
+          .warning.capability?.diagnostics['runtimeFormatHdrMetadataProbe'],
+      'media3FormatColorInfo',
+    );
+    expect(
+      warningEvent
+          .warning.capability?.diagnostics['runtimeFormatColorTransfer'],
+      'st2084',
+    );
+    expect(
+      warningEvent.warning.capability
+          ?.diagnostics['runtimeFormatMaxContentLightLevelNits'],
+      1000,
+    );
+    expect(
+      warningEvent.warning.capability?.hdrMetadata?.probe,
+      'media3FormatColorInfo',
+    );
+    expect(
+      warningEvent.warning.capability?.hdrMetadata?.colorSpace,
+      'bt2020',
+    );
+    expect(
+      warningEvent.warning.capability?.hdrMetadata?.colorRange,
+      'limited',
+    );
+    expect(
+      warningEvent.warning.capability?.hdrMetadata?.transferFunction,
+      'st2084',
+    );
+    expect(
+      warningEvent.warning.capability?.hdrMetadata?.hdrStaticInfoPresent,
+      isTrue,
+    );
+    expect(
+      warningEvent.warning.capability?.hdrMetadata?.maxContentLightLevelNits,
+      1000,
+    );
+    expect(
+      warningEvent
+          .warning.capability?.hdrMetadata?.maxFrameAverageLightLevelNits,
+      400,
+    );
+    expect(
+      warningEvent.warning.capability
+          ?.toMap()['runtimeFormatMaxFrameAverageLightLevelNits'],
+      400,
+    );
+    expect(
+      (warningEvent.warning.capability?.toMap()['hdrMetadata']
+          as Map<Object?, Object?>)['transferFunction'],
+      'st2084',
+    );
+    expect(
+      warningEvent.warning.capability?.toMap()['appProbeStatus'],
+      'fallbackRequired',
+    );
+    expect(
+      warningEvent.warning.capability?.toMap()['appProbeMissingCapabilities'],
+      <String>[
+        'hdrProgrammableProcessingNotSupported',
+        'displayHdrCapability',
+      ],
+    );
+  });
+
+  test('player warning event decodes iOS runtime HDR capability hint', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'ios-player',
+      'type': 'warning',
+      'warning': <Object?, Object?>{
+        'domain': 'capability',
+        'capability': <Object?, Object?>{
+          'reason': 'hdrNativeFrameUnsupported',
+          'recommendedPlaybackPath': 'systemPlayer',
+          'hdrKind': 'hdr10',
+          'likelyHdrCapabilityIssue': true,
+          'confidence': 'sessionProbe',
+          'errorCode': 'decodeFailure',
+          'capabilityFailureCause': 'decoderNotFound',
+          'assetVideoTrackCount': '1',
+          'assetVideoCodec': 'hvc1',
+          'assetVideoWidth': '3840',
+          'assetVideoHeight': '2160',
+          'assetVideoFrameRate': '59.94',
+          'assetVideoEstimatedDataRate': '25000000',
+          'avPlayerItemErrorLogEventCount': '1',
+          'avPlayerItemErrorStatusCode': '-11828',
+          'message':
+              'Playback failed after an HDR/Dolby Vision capability probe.',
+        },
+      },
+    });
+
+    expect(event, isA<VesperPlayerWarningEvent>());
+    final warningEvent = event as VesperPlayerWarningEvent;
+    expect(
+      warningEvent.warning.capability?.hdrKind,
+      VesperPlaybackCapabilityHdrKind.hdr10,
+    );
+    expect(
+      warningEvent.warning.capability?.likelyHdrCapabilityIssue,
+      isTrue,
+    );
+    expect(
+      warningEvent.warning.capability?.confidence,
+      'sessionProbe',
+    );
+    expect(warningEvent.warning.capability?.errorCode, 'decodeFailure');
+    expect(
+      warningEvent.warning.capability?.capabilityFailureCause,
+      'decoderNotFound',
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics['assetVideoTrackCount'],
+      '1',
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics['assetVideoCodec'],
+      'hvc1',
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics['assetVideoWidth'],
+      '3840',
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics['assetVideoHeight'],
+      '2160',
+    );
+    expect(
+      warningEvent.warning.capability?.diagnostics['assetVideoFrameRate'],
+      '59.94',
+    );
+    expect(
+      warningEvent
+          .warning.capability?.diagnostics['assetVideoEstimatedDataRate'],
+      '25000000',
+    );
+    expect(
+      warningEvent
+          .warning.capability?.diagnostics['avPlayerItemErrorLogEventCount'],
+      '1',
+    );
+    expect(
+      warningEvent
+          .warning.capability?.diagnostics['avPlayerItemErrorStatusCode'],
+      '-11828',
     );
   });
 

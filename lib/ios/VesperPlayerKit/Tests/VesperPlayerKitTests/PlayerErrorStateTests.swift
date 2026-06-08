@@ -198,6 +198,366 @@ final class PlayerErrorStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.sourceLabel, "Local")
         XCTAssertNil(bridge.lastError)
     }
+
+    func testNativeBridgeAddsHdrFailureEvidenceToDecodeErrors() {
+        let source = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/local-dv-profile8.mov"),
+            label: "DV Profile 8"
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let probeResult = VesperPlaybackCapabilityProbe.probe(
+            VesperPlaybackCapabilityProbeRequest(
+                source: source,
+                codec: "dvhe.08.07"
+            )
+        )
+
+        bridge.updateCurrentHdrFailureEvidence(probeResult, source: source)
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.decoderNotFound.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "decoder unavailable"]
+            ),
+            fallbackMessage: "decoder unavailable",
+            itemStatusDetails: playerItemStatusDetailsForTesting(.failed)
+        )
+
+        XCTAssertEqual(bridge.lastError?.category, .decode)
+        XCTAssertEqual(bridge.lastError?.details["likelyHdrCapabilityIssue"], "true")
+        XCTAssertEqual(bridge.lastError?.details["capabilityFailureCause"], "decoderNotFound")
+        XCTAssertEqual(bridge.lastError?.details["hdrKind"], "dolbyVision")
+        XCTAssertEqual(bridge.lastError?.details["recommendedPlaybackPath"], "systemPlayer")
+        XCTAssertEqual(
+            bridge.lastError?.details["iosRuntimeEvidenceSource"],
+            "hostKitHdrRuntimeFailureEvidence"
+        )
+        XCTAssertEqual(
+            bridge.lastError?.details["avPlayerItemStatusEvidenceSource"],
+            "avPlayerItemStatus"
+        )
+        XCTAssertEqual(bridge.lastError?.details["avPlayerItemStatus"], "failed")
+        XCTAssertEqual(bridge.lastError?.details["iosRuntimeFailureCategory"], "decode")
+        XCTAssertEqual(bridge.lastError?.details["iosRuntimeFailureRetriable"], "false")
+        XCTAssertEqual(bridge.lastError?.details["iosRuntimeFailureCode"], "decodeFailure")
+        XCTAssertEqual(bridge.lastError?.details["dolbyVisionProfile"], "8")
+        XCTAssertEqual(
+            bridge.lastError?.details["dolbyVisionCompatibility"],
+            "compatibleBaseLayerCandidate"
+        )
+        XCTAssertEqual(
+            bridge.lastError?.details["dolbyVisionProfileFamily"],
+            "profile8SingleLayerCompatible"
+        )
+        XCTAssertEqual(
+            bridge.lastError?.details["dolbyVisionBaseLayer"],
+            "compatibleBaseLayerUnknown"
+        )
+        XCTAssertEqual(
+            bridge.lastError?.details["dolbyVisionFallbackTarget"],
+            "compatibleBaseLayerSystemPlayer"
+        )
+        XCTAssertEqual(bridge.lastError?.details["dolbyVisionCodec"], "dvhe.08.07")
+    }
+
+    func testNativeBridgeAddsPlayerItemErrorLogDetailsToHdrDecodeErrors() {
+        let source = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/local-dv-profile8.mov"),
+            label: "DV Profile 8"
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let probeResult = VesperPlaybackCapabilityProbe.probe(
+            VesperPlaybackCapabilityProbeRequest(
+                source: source,
+                codec: "dvhe.08.07"
+            )
+        )
+
+        bridge.updateCurrentHdrFailureEvidence(probeResult, source: source)
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.decoderNotFound.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "decoder unavailable"]
+            ),
+            fallbackMessage: "decoder unavailable",
+            itemErrorLogDetails: playerItemErrorLogDetailsForTesting(
+                eventCount: 2,
+                uri: "https://media.example.invalid/video/profile8.m3u8",
+                serverAddress: "203.0.113.10",
+                playbackSessionID: "session-42",
+                errorStatusCode: -12906,
+                errorDomain: "CoreMediaErrorDomain",
+                errorComment: "format description reports unsupported Dolby Vision profile"
+            )
+        )
+
+        XCTAssertEqual(bridge.lastError?.details["likelyHdrCapabilityIssue"], "true")
+        XCTAssertEqual(
+            bridge.lastError?.details["avPlayerItemErrorLogEvidenceSource"],
+            "avPlayerItemErrorLog"
+        )
+        XCTAssertEqual(bridge.lastError?.details["avPlayerItemErrorLogEventCount"], "2")
+        XCTAssertEqual(bridge.lastError?.details["avPlayerItemErrorStatusCode"], "-12906")
+        XCTAssertEqual(bridge.lastError?.details["avPlayerItemErrorDomain"], "CoreMediaErrorDomain")
+        XCTAssertEqual(
+            bridge.lastError?.details["avPlayerItemErrorComment"],
+            "format description reports unsupported Dolby Vision profile"
+        )
+        XCTAssertEqual(bridge.lastError?.details["avPlayerItemErrorPlaybackSessionID"], "session-42")
+    }
+
+    func testNativeBridgeAddsHdrFailureCauseToFormatCapabilityErrors() {
+        let source = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/local-dv-profile8.mov"),
+            label: "DV Profile 8"
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let probeResult = VesperPlaybackCapabilityProbe.probe(
+            VesperPlaybackCapabilityProbeRequest(
+                source: source,
+                codec: "dvhe.08.07"
+            )
+        )
+
+        bridge.updateCurrentHdrFailureEvidence(probeResult, source: source)
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.fileFormatNotRecognized.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "file format not recognized"]
+            ),
+            fallbackMessage: "file format not recognized"
+        )
+
+        XCTAssertEqual(bridge.lastError?.category, .capability)
+        XCTAssertEqual(bridge.lastError?.details["likelyHdrCapabilityIssue"], "true")
+        XCTAssertEqual(bridge.lastError?.details["capabilityFailureCause"], "fileFormatNotRecognized")
+        XCTAssertEqual(bridge.lastError?.details["hdrKind"], "dolbyVision")
+        XCTAssertEqual(bridge.lastError?.details["recommendedPlaybackPath"], "systemPlayer")
+    }
+
+    func testNativeBridgeAddsHdrFailureCauseToTemporaryDecoderErrors() {
+        let source = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/local-dv-profile8.mov"),
+            label: "DV Profile 8"
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let probeResult = VesperPlaybackCapabilityProbe.probe(
+            VesperPlaybackCapabilityProbeRequest(
+                source: source,
+                codec: "dvhe.08.07"
+            )
+        )
+
+        bridge.updateCurrentHdrFailureEvidence(probeResult, source: source)
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.decoderTemporarilyUnavailable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "decoder temporarily unavailable"]
+            ),
+            fallbackMessage: "decoder temporarily unavailable"
+        )
+
+        XCTAssertEqual(bridge.lastError?.category, .decode)
+        XCTAssertEqual(bridge.lastError?.details["likelyHdrCapabilityIssue"], "true")
+        XCTAssertEqual(bridge.lastError?.details["capabilityFailureCause"], "decoderTemporarilyUnavailable")
+        XCTAssertEqual(bridge.lastError?.details["hdrKind"], "dolbyVision")
+        XCTAssertEqual(bridge.lastError?.details["recommendedPlaybackPath"], "systemPlayer")
+    }
+
+    func testPlayerItemErrorLogDetailsTruncateLongValues() throws {
+        let longComment = String(repeating: "x", count: 300)
+
+        let details = playerItemErrorLogDetailsForTesting(
+            eventCount: 1,
+            uri: nil,
+            serverAddress: nil,
+            playbackSessionID: nil,
+            errorStatusCode: 500,
+            errorDomain: "CoreMediaErrorDomain",
+            errorComment: longComment
+        )
+
+        let comment = try XCTUnwrap(details["avPlayerItemErrorComment"])
+        XCTAssertEqual(comment.count, 256)
+        XCTAssertTrue(comment.hasSuffix("..."))
+    }
+
+    func testPlayerItemErrorLogDetailsIncludeBoundedRecentEventList() throws {
+        let details = playerItemErrorLogDetailsForTesting(
+            eventCount: 6,
+            events: (1...6).map {
+                [
+                    "uri": "https://media.example.invalid/\($0).m4s",
+                    "serverAddress": "203.0.113.\($0)",
+                    "playbackSessionID": "session-\($0)",
+                    "errorStatusCode": -12900 - $0,
+                    "errorDomain": "CoreMediaErrorDomain",
+                    "errorComment": "event-\($0)",
+                ]
+            }
+        )
+
+        XCTAssertEqual(details["avPlayerItemErrorLogEventCount"], "6")
+        XCTAssertEqual(details["avPlayerItemErrorLogRecentEventCount"], "5")
+        XCTAssertEqual(details["avPlayerItemErrorStatusCode"], "-12906")
+        XCTAssertEqual(details["avPlayerItemErrorComment"], "event-6")
+
+        let eventSummary = try XCTUnwrap(details["avPlayerItemErrorLogEvents"])
+        let data = try XCTUnwrap(eventSummary.data(using: .utf8))
+        let events = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        )
+        XCTAssertEqual(events.count, 5)
+        XCTAssertEqual(events.first?["errorComment"] as? String, "event-2")
+        XCTAssertEqual(events.last?["errorComment"] as? String, "event-6")
+    }
+
+    func testNativeBridgeAddsAssetVideoCombinationEvidenceToHdrDecodeErrors() {
+        let source = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/local-hdr-4k60.mov"),
+            label: "HDR 4K60"
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let probeResult = VesperPlaybackCapabilityProbe.withAssetProbeResult(
+            VesperPlaybackCapabilityProbe.probe(
+                VesperPlaybackCapabilityProbeRequest(source: source)
+            ),
+            assetProbeResult: VesperPlaybackCapabilityAssetProbeResult(
+                isPlayable: true,
+                videoTrackCount: 1,
+                metadataHdrKind: .hdr10,
+                diagnostics: [
+                    "assetProbe": "iosAVAsset",
+                    "assetVideoTrackCount": "1",
+                    "assetVideoCodec": "hvc1",
+                    "assetVideoWidth": "3840",
+                    "assetVideoHeight": "2160",
+                    "assetVideoFrameRate": "59.94",
+                    "assetVideoEstimatedDataRate": "25000000",
+                    "assetVideoTransferFunction": "SMPTE_ST_2084_PQ",
+                ]
+            )
+        )
+
+        bridge.updateCurrentHdrFailureEvidence(probeResult, source: source)
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.decoderNotFound.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "decoder unavailable"]
+            ),
+            fallbackMessage: "decoder unavailable"
+        )
+
+        XCTAssertEqual(bridge.lastError?.details["likelyHdrCapabilityIssue"], "true")
+        XCTAssertEqual(bridge.lastError?.details["assetVideoTrackCount"], "1")
+        XCTAssertEqual(bridge.lastError?.details["assetVideoCodec"], "hvc1")
+        XCTAssertEqual(bridge.lastError?.details["assetVideoWidth"], "3840")
+        XCTAssertEqual(bridge.lastError?.details["assetVideoHeight"], "2160")
+        XCTAssertEqual(bridge.lastError?.details["assetVideoFrameRate"], "59.94")
+        XCTAssertEqual(bridge.lastError?.details["assetVideoEstimatedDataRate"], "25000000")
+    }
+
+    func testNativeBridgeAddsDisplayEligibilityEvidenceToHdrDecodeErrors() {
+        let source = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/local-hdr-4k120.mov"),
+            label: "HDR 4K120"
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let probeResult = VesperPlaybackCapabilityProbe.probe(
+            VesperPlaybackCapabilityProbeRequest(
+                source: source,
+                codec: "hdr10",
+                width: 3840,
+                height: 2160,
+                frameRate: 120
+            ),
+            sessionProbeProvider: { request in
+                VesperIOSSessionProbeProvider.probe(
+                    request,
+                    environment: VesperIOSSessionProbeEnvironment(
+                        displayGamut: .srgb,
+                        hdrPlaybackEligible: false,
+                        maximumFramesPerSecond: 60,
+                        nativeWidth: 1334,
+                        nativeHeight: 750
+                    )
+                )
+            }
+        )
+
+        bridge.updateCurrentHdrFailureEvidence(probeResult, source: source)
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.decoderNotFound.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "decoder unavailable"]
+            ),
+            fallbackMessage: "decoder unavailable"
+        )
+
+        XCTAssertEqual(bridge.lastError?.details["likelyHdrCapabilityIssue"], "true")
+        XCTAssertEqual(bridge.lastError?.details["hdrKind"], "hdr10")
+        XCTAssertEqual(bridge.lastError?.details["confidence"], "sessionProbe")
+        XCTAssertEqual(
+            bridge.lastError?.details["missingCapabilities"],
+            "hdrProgrammableProcessingNotSupported,displayHdrCapability,displayFrameRate"
+        )
+        XCTAssertEqual(
+            bridge.lastError?.details["sessionProbe"],
+            "iosDisplayAndPlayerHdrEligibility"
+        )
+        XCTAssertEqual(bridge.lastError?.details["displayHdrProbeAvailable"], "true")
+        XCTAssertEqual(bridge.lastError?.details["displayHdrSupported"], "false")
+        XCTAssertEqual(bridge.lastError?.details["displayGamut"], "srgb")
+        XCTAssertEqual(bridge.lastError?.details["avPlayerEligibleForHDRPlayback"], "false")
+        XCTAssertEqual(bridge.lastError?.details["displayFrameRateSupported"], "false")
+        XCTAssertEqual(bridge.lastError?.details["displayMaximumFramesPerSecond"], "60")
+        XCTAssertEqual(bridge.lastError?.details["displayNativeWidth"], "1334")
+        XCTAssertEqual(bridge.lastError?.details["displayNativeHeight"], "750")
+        XCTAssertEqual(bridge.lastError?.details["requestedWidth"], "3840")
+        XCTAssertEqual(bridge.lastError?.details["requestedHeight"], "2160")
+        XCTAssertEqual(bridge.lastError?.details["requestedFrameRate"], "120.0")
+    }
+
+    func testNativeBridgeDoesNotAddHdrEvidenceToNetworkErrors() {
+        let source = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/local-hdr.mov"),
+            label: "HDR"
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let probeResult = VesperPlaybackCapabilityProbe.withAssetProbeResult(
+            VesperPlaybackCapabilityProbe.probe(
+                VesperPlaybackCapabilityProbeRequest(source: source)
+            ),
+            assetProbeResult: VesperPlaybackCapabilityAssetProbeResult(
+                isPlayable: true,
+                videoTrackCount: 1,
+                metadataHdrKind: .hdr10,
+                diagnostics: [
+                    "assetProbe": "iosAVAsset",
+                    "assetVideoTransferFunction": "SMPTE_ST_2084_PQ",
+                ]
+            )
+        )
+
+        bridge.updateCurrentHdrFailureEvidence(probeResult, source: source)
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: NSURLErrorDomain,
+                code: NSURLErrorNetworkConnectionLost,
+                userInfo: [NSLocalizedDescriptionKey: "network lost"]
+            ),
+            fallbackMessage: "network lost"
+        )
+
+        XCTAssertEqual(bridge.lastError?.category, .network)
+        XCTAssertNil(bridge.lastError?.details["likelyHdrCapabilityIssue"])
+        XCTAssertNil(bridge.lastError?.details["capabilityFailureCause"])
+    }
 }
 
 @MainActor

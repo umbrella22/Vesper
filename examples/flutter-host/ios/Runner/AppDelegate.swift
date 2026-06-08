@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import Flutter
 import MediaPlayer
 import Photos
@@ -51,6 +52,10 @@ import UIKit
         )
       case "saveVideoToGallery":
         self?.handleSaveVideoToGallery(call: call, result: result)
+      case "hdrEvidenceOutputRoot":
+        result(self?.hdrEvidenceOutputRoot().path)
+      case "hdrEvidenceDevice":
+        result(self?.hdrEvidenceDevice())
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -334,6 +339,53 @@ import UIKit
       return fileURL
     }
     return URL(fileURLWithPath: completedPath)
+  }
+
+  private func hdrEvidenceOutputRoot() -> URL {
+    let documents =
+      FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+      ?? URL(fileURLWithPath: NSTemporaryDirectory())
+    let root = documents.appendingPathComponent("hdr-dv-evidence", isDirectory: true)
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root
+  }
+
+  private func hdrEvidenceDevice() -> [String: Any] {
+    let screen = UIScreen.main
+    return [
+      "ios": [
+        "model": deviceModelIdentifier(),
+        "iosVersion": UIDevice.current.systemVersion,
+        "avPlayerEligibleForHdrPlayback": AVPlayer.eligibleForHDRPlayback,
+        "displayGamut": displayGamutName(screen.traitCollection.displayGamut),
+        "nativeDisplaySize": [
+          "width": Int(screen.nativeBounds.width.rounded()),
+          "height": Int(screen.nativeBounds.height.rounded()),
+        ],
+        "maximumFramesPerSecond": screen.maximumFramesPerSecond,
+      ],
+    ]
+  }
+
+  private func displayGamutName(_ gamut: UIDisplayGamut) -> String {
+    switch gamut {
+    case .P3:
+      return "P3"
+    case .SRGB:
+      return "SRGB"
+    case .unspecified:
+      return "unspecified"
+    @unknown default:
+      return "unknown"
+    }
+  }
+
+  private func deviceModelIdentifier() -> String {
+    var systemInfo = utsname()
+    uname(&systemInfo)
+    return withUnsafePointer(to: &systemInfo.machine) { pointer in
+      pointer.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+    }
   }
 }
 

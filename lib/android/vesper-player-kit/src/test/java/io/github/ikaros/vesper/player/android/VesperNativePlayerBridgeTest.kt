@@ -1,11 +1,14 @@
 package io.github.ikaros.vesper.player.android
 
 import android.view.Surface
+import androidx.media3.common.C
+import androidx.media3.common.ColorInfo
 import androidx.media3.common.Format
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -71,6 +74,337 @@ class VesperNativePlayerBridgeTest {
         assertEquals("systemPlayer", warnings.single().payload["recommendedPlaybackPath"])
         assertEquals("dolbyVision", warnings.single().payload["hdrKind"])
         assertTrue(bridge.drainRuntimeWarnings().isEmpty())
+    }
+
+    @Test
+    fun runtimeHdrEvidenceIncludesFormatColorMetadataAndStaticInfo() {
+        val hdrStaticInfo =
+            ByteArray(25).apply {
+                this[21] = 0x03.toByte()
+                this[22] = 0xE8.toByte()
+                this[23] = 0x01.toByte()
+                this[24] = 0x90.toByte()
+            }
+        val evidence =
+            Format.Builder()
+                .setCodecs("hvc1.2.4.L153.B0")
+                .setSampleMimeType("video/hevc")
+                .setWidth(3840)
+                .setHeight(2160)
+                .setFrameRate(59.94f)
+                .setColorInfo(
+                    ColorInfo.Builder()
+                        .setColorSpace(C.COLOR_SPACE_BT2020)
+                        .setColorRange(C.COLOR_RANGE_LIMITED)
+                        .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+                        .setHdrStaticInfo(hdrStaticInfo)
+                        .setLumaBitdepth(10)
+                        .setChromaBitdepth(10)
+                        .build()
+                )
+                .build()
+                .androidRuntimeHdrEvidence()
+
+        assertNotNull(evidence)
+        val diagnostics = checkNotNull(evidence).diagnostics
+        assertEquals("hdr10", evidence.hdrKind)
+        assertEquals("media3FormatColorInfo", diagnostics["runtimeFormatHdrMetadataProbe"])
+        assertEquals("hvc1.2.4.L153.B0", diagnostics["runtimeFormatCodecs"])
+        assertEquals("video/hevc", diagnostics["runtimeFormatSampleMimeType"])
+        assertEquals("3840", diagnostics["runtimeFormatWidth"])
+        assertEquals("2160", diagnostics["runtimeFormatHeight"])
+        assertEquals("bt2020", diagnostics["runtimeFormatColorSpace"])
+        assertEquals("limited", diagnostics["runtimeFormatColorRange"])
+        assertEquals("st2084", diagnostics["runtimeFormatColorTransfer"])
+        assertEquals("10", diagnostics["runtimeFormatLumaBitDepth"])
+        assertEquals("10", diagnostics["runtimeFormatChromaBitDepth"])
+        assertEquals("true", diagnostics["runtimeFormatHdrStaticInfoPresent"])
+        assertEquals("25", diagnostics["runtimeFormatHdrStaticInfoByteLength"])
+        assertEquals("1000", diagnostics["runtimeFormatMaxContentLightLevelNits"])
+        assertEquals("400", diagnostics["runtimeFormatMaxFrameAverageLightLevelNits"])
+
+        val metadata = evidence.metadata
+        assertEquals(10, metadata?.lumaBitDepth)
+        assertEquals(10, metadata?.chromaBitDepth)
+        assertEquals(true, metadata?.hdrStaticInfoPresent)
+        assertEquals(25, metadata?.hdrStaticInfoByteLength)
+        assertEquals(1000, metadata?.maxContentLightLevelNits)
+        assertEquals(400, metadata?.maxFrameAverageLightLevelNits)
+    }
+
+    @Test
+    fun runtimeHdrEvidenceRecognizesHlgAndDolbyVisionWithoutStaticInfo() {
+        val hlgEvidence =
+            Format.Builder()
+                .setColorInfo(
+                    ColorInfo.Builder()
+                        .setColorSpace(C.COLOR_SPACE_BT2020)
+                        .setColorRange(C.COLOR_RANGE_LIMITED)
+                        .setColorTransfer(C.COLOR_TRANSFER_HLG)
+                        .build()
+                )
+                .build()
+                .androidRuntimeHdrEvidence()
+
+        assertEquals("hlg", checkNotNull(hlgEvidence).hdrKind)
+        assertEquals("hlg", hlgEvidence.diagnostics["runtimeFormatColorTransfer"])
+        assertFalse(hlgEvidence.diagnostics.containsKey("runtimeFormatHdrStaticInfoPresent"))
+
+        val dolbyVisionEvidence =
+            Format.Builder()
+                .setCodecs("dvhe.08.07")
+                .build()
+                .androidRuntimeHdrEvidence()
+
+        assertEquals("dolbyVision", checkNotNull(dolbyVisionEvidence).hdrKind)
+        assertEquals("dvhe.08.07", dolbyVisionEvidence.diagnostics["runtimeFormatCodecs"])
+    }
+
+    @Test
+    fun runtimeDolbyVisionEvidencePayloadIncludesTypedMetadata() {
+        val evidence =
+            Format.Builder()
+                .setCodecs("dvhe.08.07")
+                .setSampleMimeType("video/dolby-vision")
+                .setColorInfo(
+                    ColorInfo.Builder()
+                        .setColorSpace(C.COLOR_SPACE_BT2020)
+                        .setColorRange(C.COLOR_RANGE_LIMITED)
+                        .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+                        .build()
+                )
+                .build()
+                .androidRuntimeHdrEvidence()
+
+        val warningPayload = checkNotNull(evidence).capabilityWarningPayload()
+        val metadata = warningPayload["hdrMetadata"] as? Map<*, *>
+
+        assertEquals("hdrNativeFrameUnsupported", warningPayload["reason"])
+        assertEquals("systemPlayer", warningPayload["recommendedPlaybackPath"])
+        assertEquals("dolbyVision", warningPayload["hdrKind"])
+        assertEquals("media3FormatColorInfo", evidence.metadata?.probe)
+        assertEquals("dolbyVision", metadata?.get("hdrKind"))
+        assertEquals("compatibleBaseLayer", metadata?.get("dolbyVisionMode"))
+        assertEquals("dvhe.08.07", metadata?.get("dolbyVisionCodec"))
+        assertEquals(8, metadata?.get("dolbyVisionProfile"))
+        assertEquals(7, metadata?.get("dolbyVisionLevel"))
+        assertEquals("profile8Hdr10BaseLayer", metadata?.get("dolbyVisionCompatibility"))
+        assertEquals("profile8SingleLayerCompatible", metadata?.get("dolbyVisionProfileFamily"))
+        assertEquals("hdr10BaseLayer", metadata?.get("dolbyVisionBaseLayer"))
+        assertEquals("hdr10BaseLayerSystemPlayer", metadata?.get("dolbyVisionFallbackTarget"))
+        assertEquals("runtimeFormatColorTransfer", metadata?.get("dolbyVisionBaseLayerEvidence"))
+        assertEquals("st2084", metadata?.get("dolbyVisionBaseLayerTransferFunction"))
+        assertEquals("runtimeFormatColorTransfer", warningPayload["dolbyVisionBaseLayerEvidence"])
+        assertEquals("st2084", warningPayload["dolbyVisionBaseLayerTransferFunction"])
+        assertEquals("profile8Hdr10BaseLayer", warningPayload["dolbyVisionCompatibility"])
+    }
+
+    @Test
+    fun runtimeHdrFailurePayloadIncludesTypedEvidenceAndErrorCode() {
+        val evidence =
+            Format.Builder()
+                .setColorInfo(
+                    ColorInfo.Builder()
+                        .setColorSpace(C.COLOR_SPACE_BT2020)
+                        .setColorRange(C.COLOR_RANGE_LIMITED)
+                        .setColorTransfer(C.COLOR_TRANSFER_HLG)
+                        .build()
+                )
+                .build()
+                .androidRuntimeHdrEvidence()
+
+        val payload =
+            checkNotNull(evidence).failureHintPayload(
+                "ERROR_CODE_DECODING_FAILED",
+                NativePlaybackError(
+                    codeOrdinal = DECODE_FAILURE_ORDINAL,
+                    categoryOrdinal = DECODE_CATEGORY_ORDINAL,
+                    retriable = false,
+                    likelyCapabilityIssue = true,
+                    capabilityFailureCause = AndroidCapabilityFailureCause.DecodeFailed,
+                    capabilityFailureAxis = AndroidCapabilityFailureAxis.DisplaySurface,
+                    causeEvidence =
+                        AndroidPlaybackFailureCauseEvidence(
+                            causeClass = "android.media.MediaCodec.CodecException",
+                            causeMessage = "codec init failed",
+                            rootCauseClass = "java.lang.IllegalStateException",
+                            rootCauseMessage = "surface rejected",
+                        ),
+                ),
+            )
+        val metadata = payload["hdrMetadata"] as? Map<*, *>
+
+        assertEquals(true, payload["likelyHdrCapabilityIssue"])
+        assertEquals("sessionProbe", payload["confidence"])
+        assertEquals("ERROR_CODE_DECODING_FAILED", payload["errorCode"])
+        assertEquals("decodeFailed", payload["capabilityFailureCause"])
+        assertEquals("displaySurface", payload["capabilityFailureAxis"])
+        assertEquals("android.media.MediaCodec.CodecException", payload["playbackFailureCauseClass"])
+        assertEquals("codec init failed", payload["playbackFailureCauseMessage"])
+        assertEquals("java.lang.IllegalStateException", payload["playbackFailureRootCauseClass"])
+        assertEquals("surface rejected", payload["playbackFailureRootCauseMessage"])
+        assertEquals("hlg", payload["hdrKind"])
+        assertEquals("hlg", metadata?.get("hdrKind"))
+        assertEquals("hlg", metadata?.get("transferFunction"))
+        assertEquals("bt2020", metadata?.get("colorSpace"))
+        assertEquals("hlg", payload["runtimeFormatColorTransfer"])
+    }
+
+    @Test
+    fun runtimeHdrFailurePayloadIncludesRendererRuntimeConvergenceDiagnostics() {
+        val evidence =
+            Format.Builder()
+                .setSampleMimeType("video/dolby-vision")
+                .setCodecs("dvh1.08.06")
+                .setWidth(3840)
+                .setHeight(2160)
+                .setFrameRate(59.94f)
+                .setColorInfo(
+                    ColorInfo.Builder()
+                        .setColorSpace(C.COLOR_SPACE_BT2020)
+                        .setColorRange(C.COLOR_RANGE_LIMITED)
+                        .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+                        .build()
+                )
+                .build()
+                .androidRuntimeHdrEvidence()
+
+        val payload =
+            checkNotNull(evidence).failureHintPayload(
+                "ERROR_CODE_DECODING_FAILED",
+                NativePlaybackError(
+                    codeOrdinal = DECODE_FAILURE_ORDINAL,
+                    categoryOrdinal = DECODE_CATEGORY_ORDINAL,
+                    retriable = false,
+                    likelyCapabilityIssue = true,
+                    capabilityFailureCause = AndroidCapabilityFailureCause.DecodeFailed,
+                    capabilityFailureAxis = AndroidCapabilityFailureAxis.Renderer,
+                    causeEvidence =
+                        AndroidPlaybackFailureCauseEvidence(
+                            causeClass = "androidx.media3.exoplayer.video.MediaCodecVideoRenderer",
+                            causeMessage = "renderer failed",
+                            rootCauseClass = null,
+                            rootCauseMessage = null,
+                            rendererName = "MediaCodecVideoRenderer",
+                            rendererIndex = 0,
+                            rendererFormatSupport = "handled",
+                            rendererFormatSampleMimeType = "video/dolby-vision",
+                            rendererFormatCodecs = "dvh1.08.06",
+                            rendererFormatWidth = 3840,
+                            rendererFormatHeight = 2160,
+                            rendererFormatFrameRate = 59.94f,
+                        ),
+                ),
+            )
+
+        assertEquals("renderer", payload["capabilityFailureAxis"])
+        assertEquals("MediaCodecVideoRenderer", payload["playbackFailureRendererName"])
+        assertEquals("handled", payload["playbackFailureRendererFormatSupport"])
+        assertEquals("true", payload["playbackFailureRendererFormatSupported"])
+        assertEquals("true", payload["playbackFailureRendererFormatMimeMatchesRuntime"])
+        assertEquals("true", payload["playbackFailureRendererFormatCodecsMatchRuntime"])
+        assertEquals("true", payload["playbackFailureRendererFormatSizeMatchesRuntime"])
+        assertEquals("true", payload["playbackFailureRendererFormatFrameRateMatchesRuntime"])
+    }
+
+    @Test
+    fun runtimeHdrFailurePayloadIncludesSessionProbeRuntimeConvergenceDiagnostics() {
+        val evidence =
+            Format.Builder()
+                .setSampleMimeType("video/dolby-vision")
+                .setCodecs("dvh1.08.06")
+                .setWidth(3840)
+                .setHeight(2160)
+                .setFrameRate(59.94f)
+                .setColorInfo(
+                    ColorInfo.Builder()
+                        .setColorSpace(C.COLOR_SPACE_BT2020)
+                        .setColorRange(C.COLOR_RANGE_LIMITED)
+                        .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+                        .build()
+                )
+                .build()
+                .androidRuntimeHdrEvidence()
+        val sessionProbe =
+            AndroidRuntimeSessionProbeSnapshot(
+                VesperPlaybackCapabilityProbeResult(
+                    status = VesperPlaybackCapabilityProbeStatus.FallbackRequired,
+                    codecFamily = VesperPlaybackCodecFamily.Hevc,
+                    systemPlaybackSupported = true,
+                    hardwareDecodeSupported = true,
+                    sdkManagedNativeFrameSupported = false,
+                    recommendedPlaybackPath = VesperRecommendedPlaybackPath.SystemPlayer,
+                    outputFormat = VesperPlaybackCapabilityOutputFormat.SurfaceOpaque,
+                    hdrKind = VesperPlaybackCapabilityHdrKind.DolbyVision,
+                    dolbyVisionMode = VesperPlaybackCapabilityDolbyVisionMode.CompatibleBaseLayer,
+                    confidence = VesperPlaybackCapabilityConfidence.SessionProbe,
+                    missingCapabilities = listOf("hdrProgrammableProcessingNotSupported"),
+                    diagnostics =
+                        mapOf(
+                            "codecFormatSupported" to "true",
+                            "codecFormatSampleMimeType" to "video/dolby-vision",
+                            "codecFormatCodecs" to "dvh1.08.06",
+                            "codecFormatWidth" to "3840",
+                            "codecFormatHeight" to "2160",
+                            "codecFormatFrameRate" to "59.94",
+                            "displayHdrSupported" to "true",
+                            "displayFrameRateSupported" to "true",
+                        ),
+                )
+            )
+
+        val payload =
+            checkNotNull(evidence).failureHintPayload(
+                "ERROR_CODE_DECODING_FAILED",
+                NativePlaybackError(
+                    codeOrdinal = DECODE_FAILURE_ORDINAL,
+                    categoryOrdinal = DECODE_CATEGORY_ORDINAL,
+                    retriable = false,
+                    likelyCapabilityIssue = true,
+                    capabilityFailureCause = AndroidCapabilityFailureCause.DecodeFailed,
+                    capabilityFailureAxis = AndroidCapabilityFailureAxis.Renderer,
+                ),
+                sessionProbe,
+            )
+
+        assertEquals("fallbackRequired", payload["runtimeSessionProbeStatus"])
+        assertEquals("systemPlayer", payload["runtimeSessionProbeRecommendedPlaybackPath"])
+        assertEquals("sessionProbe", payload["runtimeSessionProbeConfidence"])
+        assertEquals("dolbyVision", payload["runtimeSessionProbeHdrKind"])
+        assertEquals("compatibleBaseLayer", payload["runtimeSessionProbeDolbyVisionMode"])
+        assertEquals(
+            "hdrProgrammableProcessingNotSupported",
+            payload["runtimeSessionProbeMissingCapabilities"],
+        )
+        assertEquals("true", payload["runtimeSessionProbeCodecFormatSupported"])
+        assertEquals("video/dolby-vision", payload["runtimeSessionProbeCodecFormatSampleMimeType"])
+        assertEquals("dvh1.08.06", payload["runtimeSessionProbeCodecFormatCodecs"])
+        assertEquals("3840", payload["runtimeSessionProbeCodecFormatWidth"])
+        assertEquals("2160", payload["runtimeSessionProbeCodecFormatHeight"])
+        assertEquals("59.94", payload["runtimeSessionProbeCodecFormatFrameRate"])
+        assertEquals("true", payload["runtimeSessionProbeDisplayHdrSupported"])
+        assertEquals("true", payload["runtimeSessionProbeDisplayFrameRateSupported"])
+        assertEquals("true", payload["runtimeSessionProbeCodecFormatMimeMatchesRuntime"])
+        assertEquals("true", payload["runtimeSessionProbeCodecFormatCodecsMatchRuntime"])
+        assertEquals("true", payload["runtimeSessionProbeCodecFormatSizeMatchesRuntime"])
+        assertEquals("true", payload["runtimeSessionProbeCodecFormatFrameRateMatchesRuntime"])
+    }
+
+    @Test
+    fun runtimeHdrEvidenceIgnoresSdrColorTransfer() {
+        val evidence =
+            Format.Builder()
+                .setColorInfo(
+                    ColorInfo.Builder()
+                        .setColorSpace(C.COLOR_SPACE_BT709)
+                        .setColorRange(C.COLOR_RANGE_LIMITED)
+                        .setColorTransfer(C.COLOR_TRANSFER_SDR)
+                        .build()
+                )
+                .build()
+                .androidRuntimeHdrEvidence()
+
+        assertNull(evidence)
     }
 
     @Test

@@ -4,8 +4,22 @@ import android.view.View
 import android.widget.FrameLayout
 import io.flutter.plugin.platform.PlatformView
 import io.github.ikaros.vesper.player.android.VesperDownloadManager
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeRequest
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import kotlinx.coroutines.Job
+
+internal data class SourceBoundCapabilityProbe(
+    val sourceUri: String?,
+    val sourceProtocol: String?,
+    val result: VesperPlaybackCapabilityProbeResult,
+) {
+    fun sourceMatches(request: VesperPlaybackCapabilityProbeRequest?): Boolean {
+        val requestSource = request?.source ?: return sourceUri == null
+        return sourceUri == requestSource.uri &&
+            sourceProtocol == requestSource.protocol.toWireName()
+    }
+}
 
 internal data class PlayerSession(
     val id: String,
@@ -19,6 +33,7 @@ internal data class PlayerSession(
     var lastEmittedSnapshot: Map<String, Any?>? = null,
     var viewport: FlutterViewport? = null,
     var viewportHint: FlutterViewportHint = FlutterViewportHint.hidden(),
+    var recentCapabilityProbe: SourceBoundCapabilityProbe? = null,
 ) {
     fun hasAttachedHost(): Boolean = hostView != null
 

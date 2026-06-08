@@ -169,6 +169,21 @@ enum ExampleI18n {
     static var pluginNoFrameProcessorDiagnostics: String { string("example.plugins.no_frame_processor_diagnostics") }
     static var pluginNoNativeFrameDiagnostics: String { string("example.plugins.no_native_frame_diagnostics") }
     static var pluginUnknownRecord: String { string("example.plugins.unknown_record") }
+    static var hdrEvidenceTitle: String { string("example.plugins.hdr_evidence.title") }
+    static var hdrEvidenceNetworkControl: String { string("example.plugins.hdr_evidence.network_control") }
+    static var hdrEvidenceCurrentSource: String { string("example.plugins.hdr_evidence.current_source") }
+    static var hdrEvidenceSelectSource: String { string("example.plugins.hdr_evidence.select_source") }
+    static var hdrEvidenceCapture: String { string("example.plugins.hdr_evidence.capture") }
+    static var hdrEvidenceCapturing: String { string("example.plugins.hdr_evidence.capturing") }
+    static var hdrEvidenceNetworkControlLabel: String {
+        string("example.plugins.hdr_evidence.network_control_label")
+    }
+    static func hdrEvidenceWritten(_ path: String) -> String {
+        string("example.plugins.hdr_evidence.written", path)
+    }
+    static func hdrEvidenceFailed(_ reason: String) -> String {
+        string("example.plugins.hdr_evidence.failed", reason)
+    }
     static func pluginParticipation(_ value: String) -> String {
         string("example.plugins.participation", value)
     }

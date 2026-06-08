@@ -125,6 +125,9 @@ internal fun Map<String, Any?>.toPlaybackCapabilityProbeRequest():
     VesperPlaybackCapabilityProbeRequest(
         source = (this["source"] as? Map<*, *>)?.stringMap()?.toVesperPlayerSource(),
         codec = this["codec"] as? String,
+        width = (this["width"] as? Number)?.toInt(),
+        height = (this["height"] as? Number)?.toInt(),
+        frameRate = (this["frameRate"] as? Number)?.toFloat(),
         requiresNativeFrame = this["requiresNativeFrame"] as? Boolean ?: false,
         sourceNormalizerConfiguration =
             (this["sourceNormalizer"] as? Map<*, *>)

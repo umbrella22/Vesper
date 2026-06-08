@@ -61,6 +61,7 @@ import io.github.ikaros.vesper.player.android.VesperDownloadTaskStatePatch
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityConfidence
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityHdrKind
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
@@ -256,6 +257,7 @@ class VesperPlayerAndroidPlugin :
             "selectSource" -> handleSessionCommand(call, result) { session ->
                 val sourceMap = requireNestedMap(call.argumentMap(), "source")
                 session.lastError = null
+                session.recentCapabilityProbe = null
                 session.controller.selectSource(sourceMap.toVesperPlayerSource())
                 emitSnapshot(session)
                 null
@@ -603,6 +605,11 @@ class VesperPlayerAndroidPlugin :
             val request = arguments.toPlaybackCapabilityProbeRequest()
             val probeResult =
                 VesperPlayerControllerFactory.probePlaybackCapability(applicationContext, request)
+            (arguments["playerId"] as? String)
+                ?.let(sessions::get)
+                ?.let { session ->
+                    session.recentCapabilityProbe = request.toSourceBoundProbe(probeResult)
+                }
             emitCapabilityWarningIfNeeded(arguments["playerId"] as? String, probeResult)
             probeResult.toMap()
         }.fold(
@@ -1093,6 +1100,9 @@ class VesperPlayerAndroidPlugin :
                                 "reason" to "hdrNativeFrameUnsupported",
                                 "recommendedPlaybackPath" to "systemPlayer",
                                 "hdrKind" to result.hdrKind.toWarningWireName(),
+                                "likelyHdrCapabilityIssue" to true,
+                                "confidence" to result.confidence.warningWireName,
+                                "hdrMetadata" to result.toMap()["hdrMetadata"],
                                 "message" to
                                     "HDR and Dolby Vision content uses system playback; SDK-managed native-frame presentation is SDR-only.",
                             ),
@@ -1103,6 +1113,12 @@ class VesperPlayerAndroidPlugin :
 
     private fun emitRuntimeWarnings(session: PlayerSession) {
         session.controller.drainRuntimeWarnings().forEach { warning ->
+            val payload =
+                if (warning.domain == "capability") {
+                    warning.payload.withAppProbeConvergence(session.recentCapabilityProbe)
+                } else {
+                    warning.payload
+                }
             emitEvent(
                 mapOf(
                     "playerId" to session.id,
@@ -1110,7 +1126,7 @@ class VesperPlayerAndroidPlugin :
                     "warning" to
                         mapOf(
                             "domain" to warning.domain,
-                            warning.domain to warning.payload,
+                            warning.domain to payload,
                         ),
                 ),
             )
@@ -1357,3 +1373,11 @@ private fun VesperPlaybackCapabilityHdrKind.toWarningWireName(): String =
         VesperPlaybackCapabilityHdrKind.DolbyVision -> "dolbyVision"
         VesperPlaybackCapabilityHdrKind.Unknown -> "unknown"
     }
+
+private val VesperPlaybackCapabilityConfidence.warningWireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityConfidence.CodecOnly -> "codecOnly"
+            VesperPlaybackCapabilityConfidence.SourceMetadata -> "sourceMetadata"
+            VesperPlaybackCapabilityConfidence.SessionProbe -> "sessionProbe"
+        }

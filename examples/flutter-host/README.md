@@ -91,6 +91,44 @@ profile, cache usage, fallback reason, and participation. FrameProcessor
 remains debug diagnostics only in this example and is never marked as
 participating in mobile playback.
 
+## HDR / Dolby Vision Evidence Capture
+
+The example host includes internal debug helpers for HDR / Dolby Vision evidence
+bundles in `lib/src/hdr_evidence_capture.dart`. These helpers can normalize one
+real playback run into the local `devnotes/evidence/hdr-dv/<date>/<device-id>/<sample-id>/`
+bundle shape used by the HDR long-term matrix.
+
+The debug diagnostics panel exposes the P0 presets used by the first real-device
+gate: `HDR10-HEVC-MAIN10-2160P60-PQ`, `HEVC-SDR-CONTROL`, and
+`NETWORK-FAILURE-CONTROL`. HDR10 and HEVC SDR captures use the current active
+source and ask you to confirm source metadata before recording. The network
+control uses the fixed URL
+`https://127.0.0.1:9/vesper-hdr-network-control.mp4`, records a 30 second
+capture window, and must not produce HDR capability evidence.
+
+Android and iOS expose a debug-only `hdrEvidenceDevice` MethodChannel method so
+the bundle `device.json` includes the real device sheet baseline: display HDR /
+refresh data and decoder candidates on Android, and AVPlayer HDR eligibility,
+display gamut, native size, and maximum FPS on iOS. This method belongs only to
+the example host; it is not part of the Vesper public SDK.
+
+After copying a real-device bundle from the app-local `hdr-dv-evidence` output
+root into `devnotes/evidence/hdr-dv/`, validate it before updating the matrix:
+
+```sh
+python3 devnotes/evidence/hdr-dv/tools/hdr_evidence.py verify \
+  devnotes/evidence/hdr-dv/<date>/<device-id>/<sample-id> --json
+
+python3 devnotes/evidence/hdr-dv/tools/hdr_evidence.py summarize \
+  devnotes/evidence/hdr-dv/<date>/<device-id>/<sample-id> --json
+```
+
+This is not a public SDK API and does not make the SDK-managed native-frame path
+HDR-ready. HDR / Dolby Vision samples should continue to route to platform
+system playback; the bundle records probe, warning, error, and typed evidence so
+that the matrix can be audited with
+`devnotes/evidence/hdr-dv/tools/hdr_evidence.py`.
+
 ## Test
 
 ```sh

@@ -70,6 +70,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     private var currentPluginDiagnostics: [[String: Any]]
     private let nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator
     private var nativeFramePipelineFallbackIssue: VesperNativeFramePipelineIssue?
+    private var currentHdrFailureEvidence: VesperNativeHdrFailureEvidence?
     private var fixedTrackConvergenceState: FixedTrackConvergenceState?
     private var fixedTrackIssueActive = false
     private var audioSessionActive = false
@@ -277,6 +278,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         cancelStopSeekTimeout()
         pendingResilienceRestore = nil
         currentSource = nil
+        currentHdrFailureEvidence = nil
         hasAppliedDefaultTrackPreferences = false
         pendingAutoPlay = false
         pendingNativeFrameSurfaceLoad = false
@@ -300,6 +302,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             "selectSource source=\(source.uri) label=\(source.label) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
         )
         currentSource = source
+        currentHdrFailureEvidence = nil
         cancelPendingRetry(resetAttempts: true)
         pendingResilienceRestore = nil
         pendingAutoPlay = true
@@ -1140,6 +1143,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         preloadCoordinator.warmCurrentSource(source: currentSource, url: url)
         releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
         let item = makePlayerItem(for: playbackSource, url: url)
+        refreshCurrentHdrFailureEvidence(for: playbackSource, item: item)
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
         let player = AVPlayer(playerItem: item)
@@ -1152,6 +1156,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         removeObservers()
         pendingPlaybackStart = false
         hasAppliedDefaultTrackPreferences = false
+        currentHdrFailureEvidence = nil
         resetTrackState()
         applyDashStartupAbrLimitIfNeeded(for: playbackSource, to: item)
         self.player = player
@@ -1406,6 +1411,39 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         return AVPlayerItem(asset: asset)
     }
 
+    private func refreshCurrentHdrFailureEvidence(for source: VesperPlayerSource, item: AVPlayerItem) {
+        currentHdrFailureEvidence = nil
+        let asset = item.asset
+        Task { @MainActor [weak self, weak item] in
+            let assetProbeResult = await VesperIOSAssetProbeProvider.probe(asset)
+            guard let self,
+                let item,
+                self.player?.currentItem === item,
+                self.currentSource == source
+            else {
+                return
+            }
+            let baseResult = VesperPlaybackCapabilityProbe.probe(
+                VesperPlaybackCapabilityProbeRequest(source: source)
+            )
+            let result = VesperPlaybackCapabilityProbe.withAssetProbeResult(
+                baseResult,
+                assetProbeResult: assetProbeResult
+            )
+            self.updateCurrentHdrFailureEvidence(result, source: source)
+        }
+    }
+
+    func updateCurrentHdrFailureEvidence(
+        _ result: VesperPlaybackCapabilityProbeResult,
+        source: VesperPlayerSource
+    ) {
+        guard currentSource == source else {
+            return
+        }
+        currentHdrFailureEvidence = VesperNativeHdrFailureEvidence(source: source, result: result)
+    }
+
     private func openSourceNormalizerResourceIfNeeded(
         for source: VesperPlayerSource
     ) -> VesperSourceNormalizerResourceOpenResult? {
@@ -1614,10 +1652,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                     self.refreshPlaybackState()
                 case .failed:
                     self.pendingPlaybackStart = false
-                    logPlayerItemErrorLog(item)
+                    let itemStatusDetails = playerItemStatusDetails(item.status)
+                    let itemErrorLogDetails = playerItemErrorLogDetails(item)
                     self.handlePlaybackFailure(
                         error: item.error,
-                        fallbackMessage: errorMessage
+                        fallbackMessage: errorMessage,
+                        itemStatusDetails: itemStatusDetails,
+                        itemErrorLogDetails: itemErrorLogDetails
                     )
                 case .unknown:
                     break
@@ -2841,27 +2882,35 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
     }
 
-    private func handlePlaybackFailure(error: Error?, fallbackMessage: String) {
+    private func handlePlaybackFailure(
+        error: Error?,
+        fallbackMessage: String,
+        itemStatusDetails: [String: String] = [:],
+        itemErrorLogDetails: [String: String] = [:]
+    ) {
         let resolvedError = classifyPlaybackFailure(error, fallbackMessage: fallbackMessage)
+            .enrichedWithDetails(itemStatusDetails)
+            .enrichedWithDetails(itemErrorLogDetails)
         iosHostLog(
             "playbackFailure category=\(resolvedError.category.rawValue) retriable=\(resolvedError.retriable) message=\(resolvedError.message)"
         )
+        let enrichedError = resolvedError.enrichedWithHdrFailureEvidence(currentHdrFailureEvidence)
         releaseDashStartupAbrLimitIfNeeded(reason: "playbackFailure", item: player?.currentItem)
         recordBenchmark(
             "playback_error",
             attributes: [
-                "category": resolvedError.category.rawValue,
-                "retriable": "\(resolvedError.retriable)",
+                "category": enrichedError.category.rawValue,
+                "retriable": "\(enrichedError.retriable)",
             ]
         )
         fixedTrackIssueActive = false
-        publishedLastError = resolvedError.toPlayerError()
+        publishedLastError = enrichedError.toPlayerError()
 
-        if scheduleRetryIfPossible(for: resolvedError) {
+        if scheduleRetryIfPossible(for: enrichedError) {
             return
         }
 
-        updateErrorState(message: resolvedError.message)
+        updateErrorState(message: enrichedError.message)
     }
 
     private func updateErrorState(message: String) {
@@ -2948,6 +2997,20 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         initialize()
     }
 
+    func handlePlaybackFailureForTesting(
+        error: Error?,
+        fallbackMessage: String,
+        itemStatusDetails: [String: String] = [:],
+        itemErrorLogDetails: [String: String] = [:]
+    ) {
+        handlePlaybackFailure(
+            error: error,
+            fallbackMessage: fallbackMessage,
+            itemStatusDetails: itemStatusDetails,
+            itemErrorLogDetails: itemErrorLogDetails
+        )
+    }
+
     private func retryDelayMs(forAttempt attempt: Int, retryPolicy: VesperRetryPolicy) -> UInt64 {
         let policy = retryPolicy
         let multiplier: Double
@@ -2983,7 +3046,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 code: .unsupported,
                 category: .capability,
                 retriable: false,
-                message: nsError.localizedDescription
+                message: nsError.localizedDescription,
+                capabilityFailureCause: .hostNativeFrameUnsupported
             )
         }
         if nsError.domain == NSURLErrorDomain {
@@ -3011,7 +3075,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
                 return ResolvedBridgeError(
                     category: .capability,
                     retriable: false,
-                    message: nsError.localizedDescription
+                    message: nsError.localizedDescription,
+                    capabilityFailureCause: .filePermissionDenied
                 )
             default:
                 break
@@ -3020,17 +3085,26 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
         if nsError.domain == AVFoundationErrorDomain || nsError.domain == AVError.errorDomain {
             switch AVError.Code(rawValue: nsError.code) {
-            case .decoderNotFound, .decoderTemporarilyUnavailable:
+            case .decoderNotFound:
                 return ResolvedBridgeError(
                     category: .decode,
                     retriable: false,
-                    message: nsError.localizedDescription
+                    message: nsError.localizedDescription,
+                    capabilityFailureCause: .decoderNotFound
+                )
+            case .decoderTemporarilyUnavailable:
+                return ResolvedBridgeError(
+                    category: .decode,
+                    retriable: false,
+                    message: nsError.localizedDescription,
+                    capabilityFailureCause: .decoderTemporarilyUnavailable
                 )
             case .fileFormatNotRecognized:
                 return ResolvedBridgeError(
                     category: .capability,
                     retriable: false,
-                    message: nsError.localizedDescription
+                    message: nsError.localizedDescription,
+                    capabilityFailureCause: .fileFormatNotRecognized
                 )
             case .contentIsUnavailable, .mediaServicesWereReset:
                 return ResolvedBridgeError(
@@ -3562,17 +3636,23 @@ private struct ResolvedBridgeError {
     let category: VesperPlayerErrorCategory
     let retriable: Bool
     let message: String
+    let details: [String: String]
+    let capabilityFailureCause: VesperIOSCapabilityFailureCause?
 
     init(
         code: VesperPlayerErrorCode? = nil,
         category: VesperPlayerErrorCategory,
         retriable: Bool,
-        message: String
+        message: String,
+        details: [String: String] = [:],
+        capabilityFailureCause: VesperIOSCapabilityFailureCause? = nil
     ) {
         self.code = code ?? Self.defaultCode(for: category)
         self.category = category
         self.retriable = retriable
         self.message = message
+        self.details = details
+        self.capabilityFailureCause = capabilityFailureCause
     }
 
     func toPlayerError() -> VesperPlayerError {
@@ -3580,7 +3660,43 @@ private struct ResolvedBridgeError {
             message: message,
             code: code,
             category: category,
-            retriable: retriable
+            retriable: retriable,
+            details: details
+        )
+    }
+
+    func enrichedWithDetails(_ additionalDetails: [String: String]) -> ResolvedBridgeError {
+        guard !additionalDetails.isEmpty else {
+            return self
+        }
+        var enrichedDetails = details
+        enrichedDetails.merge(additionalDetails) { current, _ in current }
+        return ResolvedBridgeError(
+            code: code,
+            category: category,
+            retriable: retriable,
+            message: message,
+            details: enrichedDetails,
+            capabilityFailureCause: capabilityFailureCause
+        )
+    }
+
+    func enrichedWithHdrFailureEvidence(
+        _ evidence: VesperNativeHdrFailureEvidence?
+    ) -> ResolvedBridgeError {
+        guard let runtimeEvidence = VesperNativeHdrRuntimeFailureEvidence(
+            resolvedError: self,
+            hdrEvidence: evidence
+        ) else {
+            return self
+        }
+        return ResolvedBridgeError(
+            code: code,
+            category: category,
+            retriable: retriable,
+            message: message,
+            details: runtimeEvidence.details,
+            capabilityFailureCause: capabilityFailureCause
         )
     }
 
@@ -3601,6 +3717,230 @@ private struct ResolvedBridgeError {
         case .network, .platform:
             return .backendFailure
         }
+    }
+}
+
+private enum VesperIOSCapabilityFailureCause: String {
+    case hostNativeFrameUnsupported
+    case filePermissionDenied
+    case decoderNotFound
+    case decoderTemporarilyUnavailable
+    case fileFormatNotRecognized
+}
+
+private struct VesperNativeHdrRuntimeFailureEvidence {
+    let resolvedError: ResolvedBridgeError
+    let hdrEvidence: VesperNativeHdrFailureEvidence
+
+    init?(
+        resolvedError: ResolvedBridgeError,
+        hdrEvidence: VesperNativeHdrFailureEvidence?
+    ) {
+        guard let hdrEvidence,
+            resolvedError.category == .decode || resolvedError.category == .capability
+        else {
+            return nil
+        }
+        self.resolvedError = resolvedError
+        self.hdrEvidence = hdrEvidence
+    }
+
+    var details: [String: String] {
+        var values = resolvedError.details
+        values.merge(hdrEvidence.details) { current, _ in current }
+        if values["capabilityFailureCause"] == nil,
+           let capabilityFailureCause = resolvedError.capabilityFailureCause {
+            values["capabilityFailureCause"] = capabilityFailureCause.rawValue
+        }
+        values["iosRuntimeEvidenceSource"] = "hostKitHdrRuntimeFailureEvidence"
+        values["iosRuntimeFailureCategory"] = resolvedError.category.rawValue
+        values["iosRuntimeFailureRetriable"] = String(resolvedError.retriable)
+        values["iosRuntimeFailureCode"] = resolvedError.code.rawValue
+        return values
+    }
+}
+
+private struct VesperNativeHdrFailureEvidence {
+    let sourceUri: String
+    let sourceProtocol: VesperPlayerSourceProtocol
+    let hdrKind: VesperPlaybackCapabilityHdrKind
+    let recommendedPlaybackPath: VesperRecommendedPlaybackPath
+    let confidence: VesperPlaybackCapabilityConfidence
+    let hdrMetadata: VesperPlaybackCapabilityHdrMetadata?
+    let missingCapabilities: [String]
+    let diagnostics: [String: String]
+
+    init?(source: VesperPlayerSource, result: VesperPlaybackCapabilityProbeResult) {
+        guard result.hdrKind != .none,
+            result.hdrKind != .unknown,
+            result.recommendedPlaybackPath == .systemPlayer
+        else {
+            return nil
+        }
+        sourceUri = source.uri
+        sourceProtocol = source.protocol
+        hdrKind = result.hdrKind
+        recommendedPlaybackPath = result.recommendedPlaybackPath
+        confidence = result.confidence
+        hdrMetadata = result.hdrMetadata
+        missingCapabilities = result.missingCapabilities
+        diagnostics = result.diagnostics
+    }
+
+    var details: [String: String] {
+        var values = [
+            "likelyHdrCapabilityIssue": "true",
+            "hdrKind": hdrKind.rawValue,
+            "recommendedPlaybackPath": recommendedPlaybackPath.rawValue,
+            "confidence": confidence.rawValue,
+            "sourceProtocol": sourceProtocol.rawValue,
+            "sourceUri": sourceUri,
+        ]
+        values.merge(hdrMetadata?.failureEvidenceDetails ?? [:]) { current, _ in current }
+        if !missingCapabilities.isEmpty {
+            values["missingCapabilities"] = missingCapabilities.joined(separator: ",")
+        }
+        values.merge(diagnosticFailureEvidenceDetails) { current, _ in current }
+        return values
+    }
+
+    private var diagnosticFailureEvidenceDetails: [String: String] {
+        var values: [String: String] = [:]
+        for key in [
+            "hdrKindSource",
+            "assetProbe",
+            "assetVideoMetadataHdrKind",
+            "assetVideoTrackCount",
+            "assetVideoCodec",
+            "assetVideoWidth",
+            "assetVideoHeight",
+            "assetVideoFrameRate",
+            "assetVideoEstimatedDataRate",
+            "sessionProbe",
+            "displayHdrProbeAvailable",
+            "displayHdrSupported",
+            "displayGamut",
+            "avPlayerEligibleForHDRPlayback",
+            "hdrKindSupportBasis",
+            "displayFrameRateSupported",
+            "displayMaximumFramesPerSecond",
+            "displayNativeWidth",
+            "displayNativeHeight",
+            "requestedWidth",
+            "requestedHeight",
+            "requestedFrameRate",
+        ] {
+            if let value = diagnostics[key], !value.isEmpty {
+                values[key] = value
+            }
+        }
+        return values
+    }
+}
+
+private extension VesperPlaybackCapabilityHdrMetadata {
+    var failureEvidenceDetails: [String: String] {
+        var values: [String: String] = [:]
+        putString(hdrKind?.rawValue, for: "hdrKind", into: &values)
+        putString(dolbyVisionMode?.rawValue, for: "dolbyVisionMode", into: &values)
+        putString(probe, for: "hdrMetadataProbe", into: &values)
+        putString(codec, for: "assetVideoCodec", into: &values)
+        putString(sampleMimeType, for: "runtimeFormatSampleMimeType", into: &values)
+        putString(colorPrimaries, for: "assetVideoColorPrimaries", into: &values)
+        putString(colorSpace, for: "runtimeFormatColorSpace", into: &values)
+        putString(colorRange, for: "runtimeFormatColorRange", into: &values)
+        putString(transferFunction, for: "assetVideoTransferFunction", into: &values)
+        putString(yCbCrMatrix, for: "assetVideoYCbCrMatrix", into: &values)
+        putString(
+            alternativeTransferCharacteristics,
+            for: "assetVideoAlternativeTransferCharacteristics",
+            into: &values
+        )
+        putInt(lumaBitDepth, for: "runtimeFormatLumaBitDepth", into: &values)
+        putInt(chromaBitDepth, for: "runtimeFormatChromaBitDepth", into: &values)
+        putBool(hdrStaticInfoPresent, for: "runtimeFormatHdrStaticInfoPresent", into: &values)
+        putInt(hdrStaticInfoByteLength, for: "runtimeFormatHdrStaticInfoByteLength", into: &values)
+        putString(hdrStaticInfoParseError, for: "runtimeFormatHdrStaticInfoParseError", into: &values)
+        putInt(maxContentLightLevelNits, for: "assetVideoMaxContentLightLevelNits", into: &values)
+        putInt(maxFrameAverageLightLevelNits, for: "assetVideoMaxFrameAverageLightLevelNits", into: &values)
+        putBool(
+            masteringDisplayColorVolumePresent,
+            for: "assetVideoMasteringDisplayColorVolumePresent",
+            into: &values
+        )
+        putInt(
+            masteringDisplayColorVolumeByteLength,
+            for: "assetVideoMasteringDisplayColorVolumeByteLength",
+            into: &values
+        )
+        putString(
+            masteringDisplayColorVolumeParseError,
+            for: "assetVideoMasteringDisplayColorVolumeParseError",
+            into: &values
+        )
+        putPoint(masteringDisplayPrimary0, for: "assetVideoMasteringDisplayPrimary0", into: &values)
+        putPoint(masteringDisplayPrimary1, for: "assetVideoMasteringDisplayPrimary1", into: &values)
+        putPoint(masteringDisplayPrimary2, for: "assetVideoMasteringDisplayPrimary2", into: &values)
+        putPoint(masteringDisplayWhitePoint, for: "assetVideoMasteringDisplayWhitePoint", into: &values)
+        putDouble(
+            masteringDisplayMaxLuminanceNits,
+            for: "assetVideoMasteringDisplayMaxLuminanceNits",
+            into: &values
+        )
+        putDouble(
+            masteringDisplayMinLuminanceNits,
+            for: "assetVideoMasteringDisplayMinLuminanceNits",
+            into: &values
+        )
+        putString(dolbyVisionCodec, for: "dolbyVisionCodec", into: &values)
+        putInt(dolbyVisionProfile, for: "dolbyVisionProfile", into: &values)
+        putInt(dolbyVisionLevel, for: "dolbyVisionLevel", into: &values)
+        putString(dolbyVisionCompatibility, for: "dolbyVisionCompatibility", into: &values)
+        putString(dolbyVisionProfileFamily, for: "dolbyVisionProfileFamily", into: &values)
+        putString(dolbyVisionBaseLayer, for: "dolbyVisionBaseLayer", into: &values)
+        putString(dolbyVisionFallbackTarget, for: "dolbyVisionFallbackTarget", into: &values)
+        putString(dolbyVisionBaseLayerEvidence, for: "dolbyVisionBaseLayerEvidence", into: &values)
+        putString(dolbyVisionBaseLayerTransferFunction, for: "dolbyVisionBaseLayerTransferFunction", into: &values)
+        return values
+    }
+
+    private func putString(_ value: String?, for key: String, into values: inout [String: String]) {
+        guard let value, !value.isEmpty else {
+            return
+        }
+        values[key] = value
+    }
+
+    private func putInt(_ value: Int?, for key: String, into values: inout [String: String]) {
+        guard let value else {
+            return
+        }
+        values[key] = String(value)
+    }
+
+    private func putBool(_ value: Bool?, for key: String, into values: inout [String: String]) {
+        guard let value else {
+            return
+        }
+        values[key] = String(value)
+    }
+
+    private func putDouble(_ value: Double?, for key: String, into values: inout [String: String]) {
+        guard let value else {
+            return
+        }
+        values[key] = String(value)
+    }
+
+    private func putPoint(
+        _ point: VesperHdrChromaticityPoint?,
+        for key: String,
+        into values: inout [String: String]
+    ) {
+        guard let point else {
+            return
+        }
+        values[key] = "\(point.x),\(point.y)"
     }
 }
 
@@ -4005,15 +4345,195 @@ private func itemStatusName(_ status: AVPlayerItem.Status) -> String {
     }
 }
 
-private func logPlayerItemErrorLog(_ item: AVPlayerItem) {
-    guard let events = item.errorLog()?.events, !events.isEmpty else {
-        return
+private let maxPlayerItemErrorLogDetailLength = 256
+private let maxPlayerItemErrorLogEvents = 5
+
+private struct VesperNativePlayerItemStatusEvidence {
+    let status: AVPlayerItem.Status
+
+    var details: [String: String] {
+        [
+            "avPlayerItemStatusEvidenceSource": "avPlayerItemStatus",
+            "avPlayerItemStatus": itemStatusName(status),
+        ]
     }
-    for event in events.suffix(5) {
+}
+
+func playerItemStatusDetailsForTesting(_ status: AVPlayerItem.Status) -> [String: String] {
+    playerItemStatusDetails(status)
+}
+
+private func playerItemStatusDetails(_ status: AVPlayerItem.Status) -> [String: String] {
+    VesperNativePlayerItemStatusEvidence(status: status).details
+}
+
+private struct VesperNativePlayerItemErrorLogEvidence {
+    let eventCount: Int
+    let events: [VesperNativePlayerItemErrorLogEventEvidence]
+
+    var details: [String: String] {
+        guard let latest = events.last else {
+            return [:]
+        }
+        var details = [
+            "avPlayerItemErrorLogEvidenceSource": "avPlayerItemErrorLog",
+            "avPlayerItemErrorLogEventCount": String(eventCount),
+            "avPlayerItemErrorLogRecentEventCount": String(events.count),
+            "avPlayerItemErrorStatusCode": String(latest.errorStatusCode),
+            "avPlayerItemErrorDomain": truncatedErrorLogValue(latest.errorDomain),
+        ]
+        putTruncated(latest.uri, for: "avPlayerItemErrorUri", into: &details)
+        putTruncated(latest.serverAddress, for: "avPlayerItemErrorServerAddress", into: &details)
+        putTruncated(latest.playbackSessionID, for: "avPlayerItemErrorPlaybackSessionID", into: &details)
+        putTruncated(latest.errorComment, for: "avPlayerItemErrorComment", into: &details)
+        if let eventsSummary {
+            details["avPlayerItemErrorLogEvents"] = eventsSummary
+        }
+        return details
+    }
+
+    private var eventsSummary: String? {
+        let eventObjects = events.map { $0.summaryObject }
+        guard JSONSerialization.isValidJSONObject(eventObjects),
+            let data = try? JSONSerialization.data(withJSONObject: eventObjects, options: [.sortedKeys]),
+            let value = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return value
+    }
+
+    private func putTruncated(
+        _ value: String?,
+        for key: String,
+        into details: inout [String: String]
+    ) {
+        guard let value, !value.isEmpty else {
+            return
+        }
+        details[key] = truncatedErrorLogValue(value)
+    }
+}
+
+private struct VesperNativePlayerItemErrorLogEventEvidence {
+    let uri: String?
+    let serverAddress: String?
+    let playbackSessionID: String?
+    let errorStatusCode: Int
+    let errorDomain: String
+    let errorComment: String?
+
+    var summaryObject: [String: Any] {
+        var values: [String: Any] = [
+            "errorStatusCode": errorStatusCode,
+            "errorDomain": truncatedErrorLogValue(errorDomain),
+        ]
+        putTruncated(uri, for: "uri", into: &values)
+        putTruncated(serverAddress, for: "serverAddress", into: &values)
+        putTruncated(playbackSessionID, for: "playbackSessionID", into: &values)
+        putTruncated(errorComment, for: "errorComment", into: &values)
+        return values
+    }
+
+    private func putTruncated(
+        _ value: String?,
+        for key: String,
+        into values: inout [String: Any]
+    ) {
+        guard let value, !value.isEmpty else {
+            return
+        }
+        values[key] = truncatedErrorLogValue(value)
+    }
+}
+
+private func playerItemErrorLogDetails(_ item: AVPlayerItem) -> [String: String] {
+    guard let events = item.errorLog()?.events, !events.isEmpty else {
+        return [:]
+    }
+    let recentEvents = Array(events.suffix(maxPlayerItemErrorLogEvents))
+    for event in recentEvents {
         iosHostLog(
             "itemErrorLog uri=\(event.uri ?? "nil") status=\(event.errorStatusCode) domain=\(event.errorDomain) comment=\(event.errorComment ?? "nil")"
         )
     }
+    return playerItemErrorLogDetails(
+        eventCount: events.count,
+        events: recentEvents.map {
+            VesperNativePlayerItemErrorLogEventEvidence(
+                uri: $0.uri,
+                serverAddress: $0.serverAddress,
+                playbackSessionID: $0.playbackSessionID,
+                errorStatusCode: $0.errorStatusCode,
+                errorDomain: $0.errorDomain,
+                errorComment: $0.errorComment
+            )
+        }
+    )
+}
+
+func playerItemErrorLogDetailsForTesting(
+    eventCount: Int,
+    uri: String?,
+    serverAddress: String?,
+    playbackSessionID: String?,
+    errorStatusCode: Int,
+    errorDomain: String,
+    errorComment: String?
+) -> [String: String] {
+    playerItemErrorLogDetails(
+        eventCount: eventCount,
+        events: [
+            VesperNativePlayerItemErrorLogEventEvidence(
+                uri: uri,
+                serverAddress: serverAddress,
+                playbackSessionID: playbackSessionID,
+                errorStatusCode: errorStatusCode,
+                errorDomain: errorDomain,
+                errorComment: errorComment
+            ),
+        ]
+    )
+}
+
+func playerItemErrorLogDetailsForTesting(
+    eventCount: Int,
+    events: [[String: Any?]]
+) -> [String: String] {
+    playerItemErrorLogDetails(
+        eventCount: eventCount,
+        events: events.suffix(maxPlayerItemErrorLogEvents).map {
+            VesperNativePlayerItemErrorLogEventEvidence(
+                uri: $0["uri"] as? String,
+                serverAddress: $0["serverAddress"] as? String,
+                playbackSessionID: $0["playbackSessionID"] as? String,
+                errorStatusCode: $0["errorStatusCode"] as? Int ?? 0,
+                errorDomain: $0["errorDomain"] as? String ?? "unknown",
+                errorComment: $0["errorComment"] as? String
+            )
+        }
+    )
+}
+
+private func playerItemErrorLogDetails(
+    eventCount: Int,
+    events: [VesperNativePlayerItemErrorLogEventEvidence]
+) -> [String: String] {
+    VesperNativePlayerItemErrorLogEvidence(
+        eventCount: eventCount,
+        events: events
+    ).details
+}
+
+private func truncatedErrorLogValue(_ value: String) -> String {
+    guard value.count > maxPlayerItemErrorLogDetailLength else {
+        return value
+    }
+    let endIndex = value.index(
+        value.startIndex,
+        offsetBy: maxPlayerItemErrorLogDetailLength - 3
+    )
+    return String(value[..<endIndex]) + "..."
 }
 
 private extension CMTime {

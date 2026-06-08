@@ -316,8 +316,9 @@ MetalLayer presentation, Swift native audio bridge status, fallback reason, and
 frame counters. Local/VOD SDR native-frame playback is explicitly opt-in:
 `preferNativeFrame` falls back to AVPlayer when the packet, decoder, surface, or
 presenter path cannot start, while `requireNativeFrame` reports a capability
-error. HDR and Dolby Vision remain on AVPlayer / system playback; the capability
-probe reports `recommendedPlaybackPath = systemPlayer` with
+error. HDR and Dolby Vision remain on AVPlayer / system playback; the
+SDK-managed native-frame path is SDR-only today and is not an HDR-ready path.
+The capability probe reports `recommendedPlaybackPath = systemPlayer` with
 `hdrNativeFrameUnsupported` diagnostics instead of advertising native-frame HDR
 support. Default AVPlayer playback is unchanged.
 

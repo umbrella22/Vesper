@@ -5,6 +5,19 @@ import Flutter
 import UIKit
 import VesperPlayerKit
 
+private let runtimeHdrCapabilityDiagnosticKeys: [String] = [
+    "assetVideoTrackCount",
+    "assetVideoCodec",
+    "assetVideoWidth",
+    "assetVideoHeight",
+    "assetVideoFrameRate",
+    "assetVideoEstimatedDataRate",
+    "avPlayerItemErrorLogEventCount",
+    "avPlayerItemErrorStatusCode",
+    "avPlayerItemErrorDomain",
+    "avPlayerItemErrorComment",
+]
+
 public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private static let hostDetachGraceDelayNanoseconds: UInt64 = 250_000_000
 
@@ -116,8 +129,11 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         case "selectSource":
             handleSessionCommand(call, result: result) { session in
                 let sourceMap = try requireNestedMap(arguments: arguments(of: call), key: "source")
+                let source = try sourceMap.toVesperPlayerSource()
                 session.lastError = nil
-                session.controller.selectSource(try sourceMap.toVesperPlayerSource())
+                session.currentSourceFingerprint = VesperSourceFingerprint(source: source)
+                session.recentHdrProbeEvidence = nil
+                session.controller.selectSource(source)
                 emitSnapshot(for: session)
                 return nil
             }
@@ -462,6 +478,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 ),
                 benchmarkConsoleLogging: benchmarkConfiguration.consoleLogging
             )
+            session.currentSourceFingerprint = initialSource.map(VesperSourceFingerprint.init(source:))
             sessions[session.id] = session
             observeSession(session)
 
@@ -484,6 +501,9 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         let request = VesperPlaybackCapabilityProbeRequest(
             source: (try? nestedMap(args["source"])?.toRawVesperPlayerSource()) ?? nil,
             codec: args["codec"] as? String,
+            width: (args["width"] as? NSNumber)?.intValue,
+            height: (args["height"] as? NSNumber)?.intValue,
+            frameRate: (args["frameRate"] as? NSNumber)?.doubleValue,
             requiresNativeFrame: args["requiresNativeFrame"] as? Bool ?? false,
             sourceNormalizerConfiguration: (try? nestedMap(args["sourceNormalizer"])?
                 .toSourceNormalizerConfiguration())
@@ -496,11 +516,24 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 ?? VesperNativeFramePipelineConfiguration()
         )
         let probeResult = VesperPlayerControllerFactory.probePlaybackCapability(request)
-        emitCapabilityWarningIfNeeded(
-            playerId: args["playerId"] as? String,
-            result: probeResult
-        )
-        result(probeResult.wireMap)
+        Task { @MainActor in
+            let enrichedResult = await enrichPlaybackCapabilityProbeResult(
+                probeResult,
+                request: request
+            )
+            if let source = request.source {
+                let sourceFingerprint = VesperSourceFingerprint(source: source)
+                let evidence = VesperHdrProbeEvidence(source: source, result: enrichedResult)
+                sessions.values
+                    .filter { $0.currentSourceFingerprint == sourceFingerprint }
+                    .forEach { $0.recentHdrProbeEvidence = evidence }
+            }
+            emitCapabilityWarningIfNeeded(
+                playerId: args["playerId"] as? String,
+                result: enrichedResult
+            )
+            result(flutterPlaybackCapabilityResultMap(enrichedResult))
+        }
     }
 
     @MainActor
@@ -798,12 +831,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func emitError(for session: PlayerSession, error: Error) {
+        let resolvedErrorMap = resolvedPlayerErrorMap(for: session) ?? errorMap(from: error)
         emitEvent([
             "playerId": session.id,
             "type": "error",
-            "error": resolvedPlayerErrorMap(for: session) ?? errorMap(from: error),
+            "error": resolvedErrorMap,
             "snapshot": buildSnapshotMap(for: session),
         ])
+        emitRuntimeHdrCapabilityWarningIfNeeded(for: session, errorMap: resolvedErrorMap)
         emitBenchmarkConsoleLog(for: session, force: true)
     }
 
@@ -812,7 +847,10 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         playerId: String?,
         result: VesperPlaybackCapabilityProbeResult
     ) {
-        guard result.recommendedPlaybackPath == .systemPlayer, result.hdrKind != .none else {
+        guard result.recommendedPlaybackPath == .systemPlayer,
+            result.hdrKind != .none,
+            result.hdrKind != .unknown
+        else {
             return
         }
         emitEvent([
@@ -824,11 +862,333 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     "reason": "hdrNativeFrameUnsupported",
                     "recommendedPlaybackPath": "systemPlayer",
                     "hdrKind": result.hdrKind.rawValue,
+                    "likelyHdrCapabilityIssue": true,
+                    "confidence": result.confidence.rawValue,
+                    "hdrMetadata": flutterHdrMetadataMap(from: result),
                     "message":
                         "HDR and Dolby Vision content uses system playback; SDK-managed native-frame presentation is SDR-only.",
                 ],
             ],
         ])
+    }
+
+    private func enrichPlaybackCapabilityProbeResult(
+        _ result: VesperPlaybackCapabilityProbeResult,
+        request: VesperPlaybackCapabilityProbeRequest
+    ) async -> VesperPlaybackCapabilityProbeResult {
+        guard let assetProbeResult = await probeAssetPlaybackCapability(request) else {
+            return result
+        }
+        return mergeAssetProbeResult(
+            result,
+            assetProbeResult: assetProbeResult
+        )
+    }
+
+    private func probeAssetPlaybackCapability(
+        _ request: VesperPlaybackCapabilityProbeRequest
+    ) async -> IosFlutterAssetProbeResult? {
+        guard let source = request.source,
+            source.protocol == .file || source.protocol == .progressive || source.protocol == .hls
+        else {
+            return nil
+        }
+        guard let url = URL(string: source.uri) else {
+            return IosFlutterAssetProbeResult(
+                diagnostics: [
+                    "assetProbe": "iosAVAsset",
+                    "assetProbeError": "invalidSourceUrl",
+                ]
+            )
+        }
+
+        let asset = AVURLAsset(url: url)
+        var diagnostics: [String: String] = [
+            "assetProbe": "iosAVAsset",
+            "assetProbeAvailable": "true",
+        ]
+
+        do {
+            let isPlayable = try await asset.load(.isPlayable)
+            diagnostics["assetPlayable"] = String(isPlayable)
+
+            let videoTracks = try await asset.loadTracks(withMediaType: .video)
+            diagnostics["assetVideoTrackCount"] = String(videoTracks.count)
+            if let firstVideoTrack = videoTracks.first {
+                diagnostics.merge(await videoDiagnostics(for: firstVideoTrack)) { _, new in new }
+            }
+
+            return IosFlutterAssetProbeResult(
+                isPlayable: isPlayable,
+                metadataHdrKind: detectMetadataHdrKind(diagnostics),
+                diagnostics: diagnostics
+            )
+        } catch {
+            diagnostics["assetProbeError"] = String(describing: type(of: error))
+            diagnostics["assetProbeErrorMessage"] = error.localizedDescription
+            return IosFlutterAssetProbeResult(diagnostics: diagnostics)
+        }
+    }
+
+    private func mergeAssetProbeResult(
+        _ result: VesperPlaybackCapabilityProbeResult,
+        assetProbeResult: IosFlutterAssetProbeResult
+    ) -> VesperPlaybackCapabilityProbeResult {
+        var missing = result.missingCapabilities
+        var diagnostics = result.diagnostics
+        diagnostics.merge(assetProbeResult.diagnostics) { _, new in new }
+        let metadataHdrKind = assetProbeResult.metadataHdrKind
+        let effectiveHdrKind =
+            result.hdrKind == .none || result.hdrKind == .unknown
+            ? (metadataHdrKind ?? result.hdrKind)
+            : result.hdrKind
+        let isHdrOrDolbyVision = effectiveHdrKind != .none && effectiveHdrKind != .unknown
+        if assetProbeResult.isPlayable == false, !missing.contains("assetPlayable") {
+            missing.append("assetPlayable")
+        }
+        if isHdrOrDolbyVision, !missing.contains("hdrProgrammableProcessingNotSupported") {
+            missing.append("hdrProgrammableProcessingNotSupported")
+            diagnostics["playbackPathPolicy"] = "hdrSystemPlaybackOnly"
+            diagnostics["recommendedPlaybackPathReason"] = "hdrNativeFrameUnsupported"
+            if let metadataHdrKind {
+                diagnostics["hdrKindSource"] = "assetMetadata"
+                diagnostics["assetVideoMetadataHdrKind"] = metadataHdrKind.rawValue
+            }
+        }
+
+        let status: VesperPlaybackCapabilityProbeStatus
+        if result.status == .unsupported || result.status == .unknown {
+            status = result.status
+        } else if assetProbeResult.isPlayable == false {
+            status = .unsupported
+        } else if isHdrOrDolbyVision && result.status == .supported {
+            status = .fallbackRequired
+        } else {
+            status = result.status
+        }
+        let recommendedPlaybackPath: VesperRecommendedPlaybackPath =
+            isHdrOrDolbyVision ? .systemPlayer : result.recommendedPlaybackPath
+        let outputFormat: VesperPlaybackCapabilityOutputFormat =
+            recommendedPlaybackPath == .systemPlayer && isHdrOrDolbyVision
+            ? .surfaceOpaque
+            : result.outputFormat
+        let dolbyVisionMode: VesperPlaybackCapabilityDolbyVisionMode =
+            effectiveHdrKind == .dolbyVision && result.dolbyVisionMode == .none
+            ? .unsupported
+            : result.dolbyVisionMode
+        let confidence = confidenceAfterAssetProbe(
+            baseConfidence: result.confidence,
+            metadataHdrKind: metadataHdrKind
+        )
+
+        return VesperPlaybackCapabilityProbeResult(
+            status: status,
+            codecFamily: result.codecFamily,
+            systemPlaybackSupported: result.systemPlaybackSupported &&
+                assetProbeResult.isPlayable != false,
+            hardwareDecodeSupported: result.hardwareDecodeSupported,
+            sdkManagedNativeFrameSupported: result.sdkManagedNativeFrameSupported,
+            recommendedPlaybackPath: recommendedPlaybackPath,
+            outputFormat: outputFormat,
+            hdrKind: effectiveHdrKind,
+            dolbyVisionMode: dolbyVisionMode,
+            confidence: confidence,
+            missingCapabilities: missing,
+            diagnostics: diagnostics
+        )
+    }
+
+    private func confidenceAfterAssetProbe(
+        baseConfidence: VesperPlaybackCapabilityConfidence,
+        metadataHdrKind: VesperPlaybackCapabilityHdrKind?
+    ) -> VesperPlaybackCapabilityConfidence {
+        guard baseConfidence != .sessionProbe,
+            let metadataHdrKind,
+            metadataHdrKind != .none,
+            metadataHdrKind != .unknown
+        else {
+            return baseConfidence
+        }
+        return .sourceMetadata
+    }
+
+    private func videoDiagnostics(for track: AVAssetTrack) async -> [String: String] {
+        var diagnostics: [String: String] = [:]
+
+        if let naturalSize = try? await track.load(.naturalSize) {
+            let width = abs(Int(naturalSize.width.rounded()))
+            let height = abs(Int(naturalSize.height.rounded()))
+            if width > 0 {
+                diagnostics["assetVideoWidth"] = String(width)
+            }
+            if height > 0 {
+                diagnostics["assetVideoHeight"] = String(height)
+            }
+        }
+
+        if let nominalFrameRate = try? await track.load(.nominalFrameRate),
+            nominalFrameRate.isFinite,
+            nominalFrameRate > 0
+        {
+            diagnostics["assetVideoFrameRate"] = String(Double(nominalFrameRate))
+        }
+
+        if let estimatedDataRate = try? await track.load(.estimatedDataRate),
+            estimatedDataRate.isFinite,
+            estimatedDataRate > 0
+        {
+            diagnostics["assetVideoEstimatedDataRate"] = String(Int(estimatedDataRate.rounded()))
+        }
+
+        if let formatDescription = (try? await track.load(.formatDescriptions))?.first {
+            diagnostics["assetVideoCodec"] = iosFlutterFourCharCodeString(
+                CMFormatDescriptionGetMediaSubType(formatDescription)
+            )
+            diagnostics.merge(formatDescriptionColorDiagnostics(formatDescription)) { _, new in new }
+        }
+
+        return diagnostics
+    }
+
+    private func formatDescriptionColorDiagnostics(
+        _ formatDescription: CMFormatDescription
+    ) -> [String: String] {
+        guard let extensions = CMFormatDescriptionGetExtensions(formatDescription) as? [String: Any]
+        else {
+            return [:]
+        }
+
+        var diagnostics: [String: String] = [:]
+        copyExtension(
+            kCMFormatDescriptionExtension_ColorPrimaries,
+            from: extensions,
+            into: &diagnostics,
+            diagnosticKey: "assetVideoColorPrimaries"
+        )
+        copyExtension(
+            kCMFormatDescriptionExtension_TransferFunction,
+            from: extensions,
+            into: &diagnostics,
+            diagnosticKey: "assetVideoTransferFunction"
+        )
+        copyExtension(
+            kCMFormatDescriptionExtension_YCbCrMatrix,
+            from: extensions,
+            into: &diagnostics,
+            diagnosticKey: "assetVideoYCbCrMatrix"
+        )
+        diagnostics.merge(iosFlutterHdrStaticMetadataDiagnostics(from: extensions)) { _, new in
+            new
+        }
+        if diagnostics["assetVideoTransferFunction"] != nil ||
+            diagnostics["assetVideoAlternativeTransferCharacteristics"] != nil ||
+            diagnostics["assetVideoMasteringDisplayColorVolumePresent"] == "true" ||
+            diagnostics["assetVideoContentLightLevelInfoPresent"] == "true"
+        {
+            diagnostics["assetVideoHdrMetadataProbe"] = "formatDescription"
+        }
+        return diagnostics
+    }
+
+    private func copyExtension(
+        _ key: CFString,
+        from extensions: [String: Any],
+        into diagnostics: inout [String: String],
+        diagnosticKey: String
+    ) {
+        guard let value = extensions[key as String] else {
+            return
+        }
+        diagnostics[diagnosticKey] = String(describing: value)
+    }
+
+    private func detectMetadataHdrKind(
+        _ diagnostics: [String: String]
+    ) -> VesperPlaybackCapabilityHdrKind? {
+        if let codec = diagnostics["assetVideoCodec"]?.lowercased(),
+            codec.hasPrefix("dvh1") || codec.hasPrefix("dvhe") || codec == "dolbyvision"
+        {
+            return .dolbyVision
+        }
+        guard let transferFunction = diagnostics["assetVideoTransferFunction"]?.lowercased() else {
+            return nil
+        }
+        if transferFunction.contains("hlg") ||
+            transferFunction.contains("arib") ||
+            transferFunction.contains("std-b67") ||
+            transferFunction.contains("std_b67")
+        {
+            return .hlg
+        }
+        if transferFunction.contains("pq") ||
+            transferFunction.contains("2084") ||
+            transferFunction.contains("st2084") ||
+            transferFunction.contains("st_2084")
+        {
+            return .hdr10
+        }
+        return nil
+    }
+
+    @MainActor
+    private func emitRuntimeHdrCapabilityWarningIfNeeded(
+        for session: PlayerSession,
+        errorMap: [String: Any]
+    ) {
+        guard let evidence = session.recentHdrProbeEvidence,
+            isRuntimeCapabilityLikeError(errorMap),
+            evidence.sourceFingerprint == session.currentSourceFingerprint
+        else {
+            return
+        }
+
+        let errorDetails = errorMap["details"] as? [String: Any]
+        var capability: [String: Any] = [
+            "reason": "hdrNativeFrameUnsupported",
+            "recommendedPlaybackPath": "systemPlayer",
+            "hdrKind": evidence.hdrKind.rawValue,
+            "likelyHdrCapabilityIssue": true,
+            "confidence": evidence.confidence.rawValue,
+            "errorCode": errorMap["code"] as? String ?? "unknown",
+            "message":
+                "Playback failed after an HDR/Dolby Vision capability probe; device or display HDR capability may be involved.",
+        ]
+        if let capabilityFailureCause = errorDetails?["capabilityFailureCause"] as? String,
+           !capabilityFailureCause.isEmpty {
+            capability["capabilityFailureCause"] = capabilityFailureCause
+        }
+        copyRuntimeHdrCapabilityDiagnostics(from: errorDetails, into: &capability)
+        if let hdrMetadata = evidence.hdrMetadata {
+            capability["hdrMetadata"] = hdrMetadata
+        }
+
+        emitEvent([
+            "playerId": session.id,
+            "type": "warning",
+            "warning": [
+                "domain": "capability",
+                "capability": capability,
+            ],
+        ])
+    }
+
+    private func isRuntimeCapabilityLikeError(_ errorMap: [String: Any]) -> Bool {
+        let category = errorMap["category"] as? String
+        let code = errorMap["code"] as? String
+        return category == "capability" || category == "decode" || code == "unsupported"
+            || code == "decodeFailure"
+    }
+
+    private func copyRuntimeHdrCapabilityDiagnostics(
+        from errorDetails: [String: Any]?,
+        into capability: inout [String: Any]
+    ) {
+        guard let errorDetails else { return }
+        for key in runtimeHdrCapabilityDiagnosticKeys {
+            if let value = errorDetails[key] {
+                capability[key] = value
+            }
+        }
     }
 
     @MainActor
@@ -1058,4 +1418,135 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "type": "disposed",
         ])
     }
+}
+
+private struct IosFlutterAssetProbeResult: Equatable {
+    let isPlayable: Bool?
+    let metadataHdrKind: VesperPlaybackCapabilityHdrKind?
+    let diagnostics: [String: String]
+
+    init(
+        isPlayable: Bool? = nil,
+        metadataHdrKind: VesperPlaybackCapabilityHdrKind? = nil,
+        diagnostics: [String: String] = [:]
+    ) {
+        self.isPlayable = isPlayable
+        self.metadataHdrKind = metadataHdrKind
+        self.diagnostics = diagnostics
+    }
+}
+
+private func iosFlutterFourCharCodeString(_ value: UInt32) -> String {
+    let scalarValues = [
+        UInt8((value >> 24) & 0xFF),
+        UInt8((value >> 16) & 0xFF),
+        UInt8((value >> 8) & 0xFF),
+        UInt8(value & 0xFF),
+    ]
+    let printable = scalarValues.allSatisfy { (0x20 ... 0x7E).contains($0) }
+    guard printable else {
+        return String(format: "0x%08X", value)
+    }
+    return String(bytes: scalarValues, encoding: .ascii) ?? String(format: "0x%08X", value)
+}
+
+private func iosFlutterHdrStaticMetadataDiagnostics(from extensions: [String: Any]) -> [String: String] {
+    var diagnostics: [String: String] = [:]
+    if let alternativeTransfer =
+        extensions[kCMFormatDescriptionExtension_AlternativeTransferCharacteristics as String]
+    {
+        diagnostics["assetVideoAlternativeTransferCharacteristics"] = String(describing: alternativeTransfer)
+    }
+    appendIosFlutterMasteringDisplayColorVolume(from: extensions, into: &diagnostics)
+    appendIosFlutterContentLightLevelInfo(from: extensions, into: &diagnostics)
+    return diagnostics
+}
+
+private func appendIosFlutterMasteringDisplayColorVolume(
+    from extensions: [String: Any],
+    into diagnostics: inout [String: String]
+) {
+    guard let data = iosFlutterDataValue(
+        extensions[kCMFormatDescriptionExtension_MasteringDisplayColorVolume as String]
+    ) else {
+        return
+    }
+    diagnostics["assetVideoMasteringDisplayColorVolumePresent"] = "true"
+    diagnostics["assetVideoMasteringDisplayColorVolumeByteLength"] = String(data.count)
+    guard data.count >= 24 else {
+        diagnostics["assetVideoMasteringDisplayColorVolumeParseError"] = "tooShort"
+        return
+    }
+
+    diagnostics["assetVideoMasteringDisplayPrimary0"] = iosFlutterChromaticityPair(
+        iosFlutterReadUInt16(data, offset: 0),
+        iosFlutterReadUInt16(data, offset: 2)
+    )
+    diagnostics["assetVideoMasteringDisplayPrimary1"] = iosFlutterChromaticityPair(
+        iosFlutterReadUInt16(data, offset: 4),
+        iosFlutterReadUInt16(data, offset: 6)
+    )
+    diagnostics["assetVideoMasteringDisplayPrimary2"] = iosFlutterChromaticityPair(
+        iosFlutterReadUInt16(data, offset: 8),
+        iosFlutterReadUInt16(data, offset: 10)
+    )
+    diagnostics["assetVideoMasteringDisplayWhitePoint"] = iosFlutterChromaticityPair(
+        iosFlutterReadUInt16(data, offset: 12),
+        iosFlutterReadUInt16(data, offset: 14)
+    )
+    diagnostics["assetVideoMasteringDisplayMaxLuminanceNits"] = String(
+        iosFlutterReadUInt32(data, offset: 16)
+    )
+    diagnostics["assetVideoMasteringDisplayMinLuminanceNits"] = iosFlutterDecimalString(
+        Double(iosFlutterReadUInt32(data, offset: 20)) / 10_000,
+        digits: 4
+    )
+}
+
+private func appendIosFlutterContentLightLevelInfo(
+    from extensions: [String: Any],
+    into diagnostics: inout [String: String]
+) {
+    guard let data = iosFlutterDataValue(
+        extensions[kCMFormatDescriptionExtension_ContentLightLevelInfo as String]
+    ) else {
+        return
+    }
+    diagnostics["assetVideoContentLightLevelInfoPresent"] = "true"
+    diagnostics["assetVideoContentLightLevelInfoByteLength"] = String(data.count)
+    guard data.count >= 4 else {
+        diagnostics["assetVideoContentLightLevelInfoParseError"] = "tooShort"
+        return
+    }
+
+    diagnostics["assetVideoMaxContentLightLevelNits"] = String(iosFlutterReadUInt16(data, offset: 0))
+    diagnostics["assetVideoMaxFrameAverageLightLevelNits"] = String(
+        iosFlutterReadUInt16(data, offset: 2)
+    )
+}
+
+private func iosFlutterDataValue(_ value: Any?) -> Data? {
+    if let data = value as? Data {
+        return data
+    }
+    return (value as? NSData).map(Data.init)
+}
+
+private func iosFlutterReadUInt16(_ data: Data, offset: Int) -> UInt16 {
+    (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
+}
+
+private func iosFlutterReadUInt32(_ data: Data, offset: Int) -> UInt32 {
+    (UInt32(data[offset]) << 24) |
+        (UInt32(data[offset + 1]) << 16) |
+        (UInt32(data[offset + 2]) << 8) |
+        UInt32(data[offset + 3])
+}
+
+private func iosFlutterChromaticityPair(_ x: UInt16, _ y: UInt16) -> String {
+    "\(iosFlutterDecimalString(Double(x) / 50_000, digits: 5)),\(iosFlutterDecimalString(Double(y) / 50_000, digits: 5))"
+}
+
+private func iosFlutterDecimalString(_ value: Double, digits: Int) -> String {
+    String(format: "%.\(digits)f", locale: Locale(identifier: "en_US_POSIX"), value)
 }

@@ -240,6 +240,34 @@ void main() {
         'missingCapabilities': <String>[
           'hdrProgrammableProcessingNotSupported'
         ],
+        'hdrMetadata': <String, Object?>{
+          'hdrKind': 'dolbyVision',
+          'dolbyVisionMode': 'unsupported',
+          'probe': 'formatDescription',
+          'codec': 'dvh1',
+          'colorPrimaries': 'ITU_R_2020',
+          'transferFunction': 'SMPTE_ST_2084_PQ',
+          'yCbCrMatrix': 'ITU_R_2020',
+          'masteringDisplayColorVolumePresent': true,
+          'masteringDisplayPrimary0': <String, Object?>{
+            'x': 0.38970,
+            'y': 0.17204,
+          },
+          'masteringDisplayWhitePoint': <String, Object?>{
+            'x': 0.20000,
+            'y': 0.20000,
+          },
+          'masteringDisplayMaxLuminanceNits': 1000.0,
+          'masteringDisplayMinLuminanceNits': 0.0001,
+          'maxContentLightLevelNits': 1000,
+          'maxFrameAverageLightLevelNits': 400,
+          'dolbyVisionProfile': 5,
+          'dolbyVisionLevel': 6,
+          'dolbyVisionCompatibility': 'noCompatibleBaseLayer',
+          'dolbyVisionProfileFamily': 'profile5SingleLayer',
+          'dolbyVisionBaseLayer': 'none',
+          'dolbyVisionFallbackTarget': 'dolbyVisionSystemPlayer',
+        },
         'diagnostics': <String, Object?>{
           'probeVersion': '1',
           'playbackPathPolicy': 'hdrSystemPlaybackOnly',
@@ -257,6 +285,9 @@ void main() {
     const request = VesperPlaybackCapabilityProbeRequest(
       source: source,
       codec: 'dvh1.05.06',
+      width: 3840,
+      height: 2160,
+      frameRate: 59.94,
       nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
         mode: VesperNativeFramePipelineMode.preferNativeFrame,
         decoderPluginLibraryPaths: <String>[
@@ -285,6 +316,25 @@ void main() {
       result.dolbyVisionMode,
       VesperPlaybackCapabilityDolbyVisionMode.unsupported,
     );
+    expect(result.hdrMetadata?.probe, 'formatDescription');
+    expect(result.hdrMetadata?.codec, 'dvh1');
+    expect(result.hdrMetadata?.colorPrimaries, 'ITU_R_2020');
+    expect(result.hdrMetadata?.transferFunction, 'SMPTE_ST_2084_PQ');
+    expect(result.hdrMetadata?.yCbCrMatrix, 'ITU_R_2020');
+    expect(result.hdrMetadata?.masteringDisplayColorVolumePresent, isTrue);
+    expect(result.hdrMetadata?.masteringDisplayPrimary0?.x, 0.38970);
+    expect(result.hdrMetadata?.masteringDisplayWhitePoint?.y, 0.20000);
+    expect(result.hdrMetadata?.masteringDisplayMaxLuminanceNits, 1000.0);
+    expect(result.hdrMetadata?.masteringDisplayMinLuminanceNits, 0.0001);
+    expect(result.hdrMetadata?.maxContentLightLevelNits, 1000);
+    expect(result.hdrMetadata?.maxFrameAverageLightLevelNits, 400);
+    expect(result.hdrMetadata?.dolbyVisionProfile, 5);
+    expect(
+        result.hdrMetadata?.dolbyVisionCompatibility, 'noCompatibleBaseLayer');
+    expect(result.hdrMetadata?.dolbyVisionProfileFamily, 'profile5SingleLayer');
+    expect(result.hdrMetadata?.dolbyVisionBaseLayer, 'none');
+    expect(result.hdrMetadata?.dolbyVisionFallbackTarget,
+        'dolbyVisionSystemPlayer');
   });
 
   test('createPlayer accepts explicit render surface kind', () async {
@@ -428,6 +478,120 @@ void main() {
       () => platform.refreshPlayer('ios-player'),
       throwsA(isA<PlatformException>()),
     );
+  });
+
+  test('snapshot decodes native HDR failure evidence details', () async {
+    const eventChannel = EventChannel('io.github.ikaros.vesper_player/events');
+    final platform = MethodChannelVesperPlayerIos();
+    final events = <VesperPlayerEvent>[];
+
+    final subscription = platform.eventsFor('ios-player').listen(events.add);
+    addTearDown(subscription.cancel);
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+      eventChannel.name,
+      const StandardMethodCodec().encodeSuccessEnvelope(<String, Object?>{
+        'playerId': 'ios-player',
+        'type': 'snapshot',
+        'snapshot': <String, Object?>{
+          'title': 'Demo',
+          'subtitle': 'Decoder failed',
+          'sourceLabel': 'HDR',
+          'playbackState': 'ready',
+          'playbackRate': 1.0,
+          'isBuffering': false,
+          'isInterrupted': false,
+          'hasVideoSurface': false,
+          'timeline': const VesperTimeline.initial().toMap(),
+          'lastError': <String, Object?>{
+            'message': 'decoder unavailable',
+            'code': 'decodeFailure',
+            'category': 'decode',
+            'retriable': false,
+            'details': <String, Object?>{
+              'likelyHdrCapabilityIssue': 'true',
+              'hdrKind': 'dolbyVision',
+              'recommendedPlaybackPath': 'systemPlayer',
+              'confidence': 'sourceMetadata',
+              'capabilityFailureCause': 'decoderNotFound',
+              'assetVideoTrackCount': '1',
+              'assetVideoCodec': 'hvc1',
+              'assetVideoWidth': '3840',
+              'assetVideoHeight': '2160',
+              'assetVideoFrameRate': '59.94',
+              'assetVideoEstimatedDataRate': '25000000',
+              'assetVideoTransferFunction': 'SMPTE_ST_2084_PQ',
+              'dolbyVisionProfile': '8',
+              'dolbyVisionCompatibility': 'profile8Hdr10BaseLayer',
+              'dolbyVisionProfileFamily': 'profile8SingleLayerCompatible',
+              'dolbyVisionBaseLayer': 'hdr10BaseLayer',
+              'dolbyVisionFallbackTarget': 'hdr10BaseLayerSystemPlayer',
+              'dolbyVisionBaseLayerEvidence': 'assetVideoTransferFunction',
+              'dolbyVisionBaseLayerTransferFunction': 'SMPTE_ST_2084_PQ',
+              'hdrMetadata': <String, Object?>{
+                'hdrKind': 'dolbyVision',
+                'dolbyVisionMode': 'compatibleBaseLayer',
+                'transferFunction': 'SMPTE_ST_2084_PQ',
+                'dolbyVisionProfile': 8,
+                'dolbyVisionCompatibility': 'profile8Hdr10BaseLayer',
+                'dolbyVisionProfileFamily': 'profile8SingleLayerCompatible',
+                'dolbyVisionBaseLayer': 'hdr10BaseLayer',
+                'dolbyVisionFallbackTarget': 'hdr10BaseLayerSystemPlayer',
+                'dolbyVisionBaseLayerEvidence': 'assetVideoTransferFunction',
+                'dolbyVisionBaseLayerTransferFunction': 'SMPTE_ST_2084_PQ',
+              },
+            },
+          },
+        },
+      }),
+      (_) {},
+    );
+
+    expect(events.single, isA<VesperPlayerSnapshotEvent>());
+    final snapshot = (events.single as VesperPlayerSnapshotEvent).snapshot;
+    expect(snapshot?.lastError?.details['likelyHdrCapabilityIssue'], 'true');
+    expect(snapshot?.lastError?.details['hdrKind'], 'dolbyVision');
+    expect(snapshot?.lastError?.details['hdrMetadata'],
+        isA<Map<Object?, Object?>>());
+    expect(
+      snapshot?.lastError?.details['recommendedPlaybackPath'],
+      'systemPlayer',
+    );
+    expect(snapshot?.lastError?.details['assetVideoWidth'], '3840');
+    expect(snapshot?.lastError?.details['assetVideoFrameRate'], '59.94');
+    expect(snapshot?.lastError?.details['dolbyVisionProfile'], '8');
+    final evidence = snapshot?.lastError?.hdrCapabilityEvidence;
+    expect(evidence?.likelyHdrCapabilityIssue, isTrue);
+    expect(evidence?.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
+    expect(
+      evidence?.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(evidence?.confidence, 'sourceMetadata');
+    expect(evidence?.capabilityFailureCause, 'decoderNotFound');
+    expect(evidence?.hdrMetadata?.dolbyVisionProfile, 8);
+    expect(
+      evidence?.hdrMetadata?.dolbyVisionMode,
+      VesperPlaybackCapabilityDolbyVisionMode.compatibleBaseLayer,
+    );
+    expect(
+      evidence?.hdrMetadata?.dolbyVisionCompatibility,
+      'profile8Hdr10BaseLayer',
+    );
+    expect(
+      evidence?.hdrMetadata?.dolbyVisionProfileFamily,
+      'profile8SingleLayerCompatible',
+    );
+    expect(evidence?.hdrMetadata?.dolbyVisionBaseLayerEvidence,
+        'assetVideoTransferFunction');
+    expect(evidence?.hdrMetadata?.dolbyVisionBaseLayerTransferFunction,
+        'SMPTE_ST_2084_PQ');
+    expect(evidence?.diagnostics['assetVideoTrackCount'], '1');
+    expect(evidence?.diagnostics['assetVideoCodec'], 'hvc1');
+    expect(evidence?.diagnostics['assetVideoWidth'], '3840');
+    expect(evidence?.diagnostics['assetVideoHeight'], '2160');
+    expect(evidence?.diagnostics['assetVideoFrameRate'], '59.94');
+    expect(evidence?.diagnostics['assetVideoEstimatedDataRate'], '25000000');
   });
 
   test('download output helpers forward payloads', () async {

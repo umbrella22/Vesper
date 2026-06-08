@@ -163,6 +163,15 @@
     <string name="example_plugins_route">route：%1$s</string>
     <string name="example_plugins_cache">cache：%1$s</string>
     <string name="example_plugins_resource">resource：%1$s</string>
+    <string name="example_plugins_hdr_evidence_title">HDR evidence</string>
+    <string name="example_plugins_hdr_evidence_network_control">使用固定的受控网络失败 URL。</string>
+    <string name="example_plugins_hdr_evidence_current_source">使用当前正在播放的 source。</string>
+    <string name="example_plugins_hdr_evidence_select_source">请先选择本地文件或远程 URL，再采集该 HDR evidence 样本。</string>
+    <string name="example_plugins_hdr_evidence_capture">采集 HDR evidence</string>
+    <string name="example_plugins_hdr_evidence_capturing">正在采集 HDR evidence</string>
+    <string name="example_plugins_hdr_evidence_network_control_label">网络失败对照</string>
+    <string name="example_plugins_hdr_evidence_written">HDR evidence bundle 已写入：%1$s</string>
+    <string name="example_plugins_hdr_evidence_failed">HDR evidence capture 失败：%1$s</string>
 
     <string name="example_sheet_menu_subtitle">打开音轨、字幕、画质和速度控制，同时避免播放器浮层过于拥挤。</string>
     <string name="example_sheet_quality_subtitle">切换自适应视频，或将流固定到某个具体画质轨道。</string>

@@ -5,7 +5,9 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Surface
+import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.ColorInfo
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -18,6 +20,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -28,6 +31,7 @@ import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
@@ -74,6 +78,8 @@ internal class VesperNativeJniBindings(
     private var currentVideoVariantObservationState: VesperVideoVariantObservation? = null
     private var currentVideoLayoutState: NativeVideoLayoutInfo? = null
     private var currentVideoDecoderName: String? = null
+    private var currentRuntimeHdrEvidence: AndroidRuntimeHdrEvidence? = null
+    private var currentRuntimeSessionProbe: AndroidRuntimeSessionProbeSnapshot? = null
     private val localBridgeEvents = ArrayDeque<NativeBridgeEvent>()
     private val preloadCoordinator =
         VesperNativePreloadCoordinator(
@@ -772,6 +778,7 @@ internal class VesperNativeJniBindings(
                     ),
                 )
                 val classified = classifyPlaybackException(error)
+                enqueueHdrFailureHintIfNeeded(error, classified)
                 sessionHandle?.let { handle ->
                     VesperNativeJni.reportError(
                         handle,
@@ -830,6 +837,8 @@ internal class VesperNativeJniBindings(
                         "height" to format.height.toString(),
                     ) + (currentVideoDecoderName?.let { mapOf("decoderName" to it) } ?: emptyMap()),
                 )
+                currentRuntimeHdrEvidence = format.androidRuntimeHdrEvidence()
+                currentRuntimeSessionProbe = buildRuntimeSessionProbeSnapshot(format)
                 enqueueHdrCapabilityWarningIfNeeded(format)
                 pushTrackStateToRust()
                 notifyNativeUpdate()
@@ -990,8 +999,22 @@ internal class VesperNativeJniBindings(
     }
 
     private fun enqueueHdrCapabilityWarningIfNeeded(format: Format) {
-        val hdrKind = format.detectRuntimeHdrKind()
-        if (hdrKind == null || hdrKind == "none") {
+        val evidence = format.androidRuntimeHdrEvidence() ?: return
+        localBridgeEvents +=
+            NativeBridgeEvent.Warning(
+                VesperRuntimeWarning(
+                    domain = "capability",
+                    payload = evidence.capabilityWarningPayload(),
+                )
+            )
+    }
+
+    private fun enqueueHdrFailureHintIfNeeded(
+        error: PlaybackException,
+        classified: NativePlaybackError,
+    ) {
+        val evidence = currentRuntimeHdrEvidence ?: return
+        if (!classified.likelyCapabilityIssue) {
             return
         }
         localBridgeEvents +=
@@ -999,15 +1022,30 @@ internal class VesperNativeJniBindings(
                 VesperRuntimeWarning(
                     domain = "capability",
                     payload =
-                        mapOf(
-                            "reason" to "hdrNativeFrameUnsupported",
-                            "recommendedPlaybackPath" to "systemPlayer",
-                            "hdrKind" to hdrKind,
-                            "message" to
-                                "HDR and Dolby Vision content uses system playback; SDK-managed native-frame presentation is SDR-only.",
+                        evidence.failureHintPayload(
+                            error.errorCodeName,
+                            classified,
+                            currentRuntimeSessionProbe,
                         ),
                 )
             )
+    }
+
+    private fun buildRuntimeSessionProbeSnapshot(format: Format): AndroidRuntimeSessionProbeSnapshot? {
+        val codec = nativeTrackCodec(format)?.takeIf(String::isNotBlank) ?: return null
+        val result =
+            VesperPlaybackCapabilityProbe.probe(
+                request =
+                    VesperPlaybackCapabilityProbeRequest(
+                        source = player?.currentMediaItem?.localConfiguration?.uri?.toString()?.let(::currentSourceOrFallback),
+                        codec = codec,
+                        width = format.width.takeIf { it != Format.NO_VALUE && it > 0 },
+                        height = format.height.takeIf { it != Format.NO_VALUE && it > 0 },
+                        frameRate = format.frameRate.takeIf { it.isFinite() && it > 0f },
+                    ),
+                sessionProbeProvider = VesperAndroidDisplaySessionProbeProvider.fromContext(appContext),
+            )
+        return AndroidRuntimeSessionProbeSnapshot(result)
     }
 
     private fun notifyNativeUpdate() {
@@ -2140,6 +2178,336 @@ private fun buildMediaItem(source: VesperPlayerSource): MediaItem {
     return builder.build()
 }
 
+internal data class AndroidRuntimeHdrEvidence(
+    val hdrKind: String,
+    val diagnostics: Map<String, Any?>,
+) {
+    val metadata: VesperPlaybackCapabilityHdrMetadata? =
+        VesperPlaybackCapabilityProbe.buildHdrMetadata(
+            hdrKind = hdrKind.toPlaybackCapabilityHdrKind(),
+            dolbyVisionMode = diagnostics.dolbyVisionMode(hdrKind),
+            diagnostics = diagnostics.stringDiagnostics(),
+        )
+
+    fun capabilityWarningPayload(): Map<String, Any?> =
+        basePayload(
+            message =
+                "HDR and Dolby Vision content uses system playback; SDK-managed native-frame presentation is SDR-only.",
+        )
+
+    fun failureHintPayload(
+        errorCodeName: String,
+        classified: NativePlaybackError? = null,
+        runtimeSessionProbe: AndroidRuntimeSessionProbeSnapshot? = null,
+    ): Map<String, Any?> =
+        basePayload(
+            message =
+                "Playback failed after an HDR/Dolby Vision runtime format was observed; this may be an HDR capability issue.",
+            extras =
+                linkedMapOf<String, Any?>(
+                    "likelyHdrCapabilityIssue" to true,
+                    "confidence" to "sessionProbe",
+                    "errorCode" to errorCodeName,
+                ).apply {
+                    classified?.capabilityFailureCause?.let {
+                        put("capabilityFailureCause", it.wireName)
+                    }
+                    classified?.capabilityFailureAxis?.let {
+                        put("capabilityFailureAxis", it.wireName)
+                    }
+                    putAll(classified?.causeEvidence?.diagnostics().orEmpty())
+                    putAll(classified?.causeEvidence.runtimeFormatConvergenceDiagnostics(diagnostics))
+                    putAll(runtimeSessionProbe?.diagnostics.orEmpty())
+                    putAll(runtimeSessionProbe?.runtimeFormatConvergenceDiagnostics(diagnostics).orEmpty())
+                },
+        )
+
+    private fun basePayload(
+        message: String,
+        extras: Map<String, Any?> = emptyMap(),
+    ): Map<String, Any?> =
+        linkedMapOf<String, Any?>(
+            "reason" to "hdrNativeFrameUnsupported",
+            "recommendedPlaybackPath" to "systemPlayer",
+            "hdrKind" to hdrKind,
+            "message" to message,
+        )
+            .apply {
+                putAll(extras)
+                putAll(metadata?.runtimeDiagnostics().orEmpty())
+                putAll(diagnostics)
+            }
+}
+
+internal data class AndroidRuntimeSessionProbeSnapshot(
+    val result: VesperPlaybackCapabilityProbeResult,
+) {
+    val diagnostics: Map<String, Any?> =
+        linkedMapOf<String, Any?>(
+            "runtimeSessionProbeStatus" to result.status.runtimeWireName,
+            "runtimeSessionProbeRecommendedPlaybackPath" to result.recommendedPlaybackPath.runtimeWireName,
+            "runtimeSessionProbeConfidence" to result.confidence.runtimeWireName,
+            "runtimeSessionProbeHdrKind" to result.hdrKind.runtimeWireName,
+            "runtimeSessionProbeDolbyVisionMode" to result.dolbyVisionMode.runtimeWireName,
+            "runtimeSessionProbeMissingCapabilities" to result.missingCapabilities.joinToString(","),
+        ).apply {
+            result.diagnostics["codecFormatSupported"]?.let {
+                put("runtimeSessionProbeCodecFormatSupported", it)
+            }
+            result.diagnostics["codecFormatMissingCapability"]?.let {
+                put("runtimeSessionProbeCodecFormatMissingCapability", it)
+            }
+            result.diagnostics["codecFormatSampleMimeType"]?.let {
+                put("runtimeSessionProbeCodecFormatSampleMimeType", it)
+            }
+            result.diagnostics["codecFormatCodecs"]?.let {
+                put("runtimeSessionProbeCodecFormatCodecs", it)
+            }
+            result.diagnostics["codecFormatWidth"]?.let {
+                put("runtimeSessionProbeCodecFormatWidth", it)
+            }
+            result.diagnostics["codecFormatHeight"]?.let {
+                put("runtimeSessionProbeCodecFormatHeight", it)
+            }
+            result.diagnostics["codecFormatFrameRate"]?.let {
+                put("runtimeSessionProbeCodecFormatFrameRate", it)
+            }
+            result.diagnostics["displayHdrSupported"]?.let {
+                put("runtimeSessionProbeDisplayHdrSupported", it)
+            }
+            result.diagnostics["displayFrameRateSupported"]?.let {
+                put("runtimeSessionProbeDisplayFrameRateSupported", it)
+            }
+        }
+
+    fun runtimeFormatConvergenceDiagnostics(
+        runtimeDiagnostics: Map<String, Any?>,
+    ): Map<String, Any?> {
+        val output = linkedMapOf<String, Any?>()
+        val probeDiagnostics = result.diagnostics
+        compareString(
+            output = output,
+            key = "runtimeSessionProbeCodecFormatMimeMatchesRuntime",
+            left = probeDiagnostics["codecFormatSampleMimeType"],
+            right = runtimeDiagnostics.stringValue("runtimeFormatSampleMimeType"),
+        )
+        compareString(
+            output = output,
+            key = "runtimeSessionProbeCodecFormatCodecsMatchRuntime",
+            left = probeDiagnostics["codecFormatCodecs"],
+            right = runtimeDiagnostics.stringValue("runtimeFormatCodecs"),
+        )
+        compareInt(
+            output = output,
+            key = "runtimeSessionProbeCodecFormatSizeMatchesRuntime",
+            leftWidth = probeDiagnostics["codecFormatWidth"]?.toIntOrNull(),
+            leftHeight = probeDiagnostics["codecFormatHeight"]?.toIntOrNull(),
+            rightWidth = runtimeDiagnostics.intValue("runtimeFormatWidth"),
+            rightHeight = runtimeDiagnostics.intValue("runtimeFormatHeight"),
+        )
+        compareFloat(
+            output = output,
+            key = "runtimeSessionProbeCodecFormatFrameRateMatchesRuntime",
+            left = probeDiagnostics["codecFormatFrameRate"]?.toFloatOrNull(),
+            right = runtimeDiagnostics.floatValue("runtimeFormatFrameRate"),
+        )
+        return output
+    }
+
+    private fun compareString(
+        output: MutableMap<String, Any?>,
+        key: String,
+        left: String?,
+        right: String?,
+    ) {
+        if (left != null && right != null) {
+            output[key] = (left == right).toString()
+        }
+    }
+
+    private fun compareInt(
+        output: MutableMap<String, Any?>,
+        key: String,
+        leftWidth: Int?,
+        leftHeight: Int?,
+        rightWidth: Int?,
+        rightHeight: Int?,
+    ) {
+        if (leftWidth != null && leftHeight != null && rightWidth != null && rightHeight != null) {
+            output[key] = (leftWidth == rightWidth && leftHeight == rightHeight).toString()
+        }
+    }
+
+    private fun compareFloat(
+        output: MutableMap<String, Any?>,
+        key: String,
+        left: Float?,
+        right: Float?,
+    ) {
+        if (left != null && right != null) {
+            output[key] = left.nearlyEquals(right).toString()
+        }
+    }
+}
+
+private val VesperPlaybackCapabilityProbeStatus.runtimeWireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityProbeStatus.Supported -> "supported"
+            VesperPlaybackCapabilityProbeStatus.FallbackRequired -> "fallbackRequired"
+            VesperPlaybackCapabilityProbeStatus.Unsupported -> "unsupported"
+            VesperPlaybackCapabilityProbeStatus.Unknown -> "unknown"
+        }
+
+private val VesperRecommendedPlaybackPath.runtimeWireName: String
+    get() =
+        when (this) {
+            VesperRecommendedPlaybackPath.NativeFramePipeline -> "nativeFramePipeline"
+            VesperRecommendedPlaybackPath.SystemPlayer -> "systemPlayer"
+        }
+
+private val VesperPlaybackCapabilityConfidence.runtimeWireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityConfidence.CodecOnly -> "codecOnly"
+            VesperPlaybackCapabilityConfidence.SourceMetadata -> "sourceMetadata"
+            VesperPlaybackCapabilityConfidence.SessionProbe -> "sessionProbe"
+        }
+
+private fun String.toPlaybackCapabilityHdrKind(): VesperPlaybackCapabilityHdrKind =
+    when (this) {
+        "hdr10" -> VesperPlaybackCapabilityHdrKind.Hdr10
+        "hlg" -> VesperPlaybackCapabilityHdrKind.Hlg
+        "dolbyVision" -> VesperPlaybackCapabilityHdrKind.DolbyVision
+        else -> VesperPlaybackCapabilityHdrKind.Unknown
+    }
+
+private fun Map<String, Any?>.dolbyVisionMode(hdrKind: String): VesperPlaybackCapabilityDolbyVisionMode {
+    stringValue("runtimeFormatCodecs")
+        .detectDolbyVisionCodecInfo()
+        ?.dolbyVisionMode
+        ?.let { return it }
+    stringValue("dolbyVisionCodec")
+        .detectDolbyVisionCodecInfo()
+        ?.dolbyVisionMode
+        ?.let { return it }
+    return if (hdrKind == "dolbyVision") {
+        VesperPlaybackCapabilityDolbyVisionMode.Unsupported
+    } else {
+        VesperPlaybackCapabilityDolbyVisionMode.None
+    }
+}
+
+private fun Map<String, Any?>.stringDiagnostics(): Map<String, String> =
+    mapNotNull { (key, value) ->
+        value?.toString()?.let { key to it }
+    }.toMap()
+
+private fun VesperPlaybackCapabilityHdrMetadata.runtimeDiagnostics(): Map<String, Any?> {
+    val values =
+        linkedMapOf<String, Any?>().also { output ->
+            hdrKind?.let { output["hdrKind"] = it.runtimeWireName }
+            dolbyVisionMode?.let { output["dolbyVisionMode"] = it.runtimeWireName }
+            probe?.let { output["probe"] = it }
+            codec?.let { output["codec"] = it }
+            sampleMimeType?.let { output["sampleMimeType"] = it }
+            colorPrimaries?.let { output["colorPrimaries"] = it }
+            colorSpace?.let { output["colorSpace"] = it }
+            colorRange?.let { output["colorRange"] = it }
+            transferFunction?.let { output["transferFunction"] = it }
+            yCbCrMatrix?.let { output["yCbCrMatrix"] = it }
+            alternativeTransferCharacteristics?.let {
+                output["alternativeTransferCharacteristics"] = it
+            }
+            lumaBitDepth?.let { output["lumaBitDepth"] = it }
+            chromaBitDepth?.let { output["chromaBitDepth"] = it }
+            hdrStaticInfoPresent?.let { output["hdrStaticInfoPresent"] = it }
+            hdrStaticInfoByteLength?.let { output["hdrStaticInfoByteLength"] = it }
+            hdrStaticInfoParseError?.let { output["hdrStaticInfoParseError"] = it }
+            maxContentLightLevelNits?.let { output["maxContentLightLevelNits"] = it }
+            maxFrameAverageLightLevelNits?.let { output["maxFrameAverageLightLevelNits"] = it }
+            masteringDisplayColorVolumePresent?.let {
+                output["masteringDisplayColorVolumePresent"] = it
+            }
+            masteringDisplayColorVolumeByteLength?.let {
+                output["masteringDisplayColorVolumeByteLength"] = it
+            }
+            masteringDisplayColorVolumeParseError?.let {
+                output["masteringDisplayColorVolumeParseError"] = it
+            }
+            masteringDisplayPrimary0?.let { output["masteringDisplayPrimary0"] = it.runtimeMap() }
+            masteringDisplayPrimary1?.let { output["masteringDisplayPrimary1"] = it.runtimeMap() }
+            masteringDisplayPrimary2?.let { output["masteringDisplayPrimary2"] = it.runtimeMap() }
+            masteringDisplayWhitePoint?.let { output["masteringDisplayWhitePoint"] = it.runtimeMap() }
+            masteringDisplayMaxLuminanceNits?.let { output["masteringDisplayMaxLuminanceNits"] = it }
+            masteringDisplayMinLuminanceNits?.let { output["masteringDisplayMinLuminanceNits"] = it }
+            dolbyVisionCodec?.let { output["dolbyVisionCodec"] = it }
+            dolbyVisionProfile?.let { output["dolbyVisionProfile"] = it }
+            dolbyVisionLevel?.let { output["dolbyVisionLevel"] = it }
+            dolbyVisionCompatibility?.let { output["dolbyVisionCompatibility"] = it }
+            dolbyVisionProfileFamily?.let { output["dolbyVisionProfileFamily"] = it }
+            dolbyVisionBaseLayer?.let { output["dolbyVisionBaseLayer"] = it }
+            dolbyVisionFallbackTarget?.let { output["dolbyVisionFallbackTarget"] = it }
+            dolbyVisionBaseLayerEvidence?.let { output["dolbyVisionBaseLayerEvidence"] = it }
+            dolbyVisionBaseLayerTransferFunction?.let { output["dolbyVisionBaseLayerTransferFunction"] = it }
+        }
+    return values.takeIf { it.isNotEmpty() }?.let { mapOf("hdrMetadata" to it) }.orEmpty()
+}
+
+private val VesperPlaybackCapabilityHdrKind.runtimeWireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityHdrKind.None -> "none"
+            VesperPlaybackCapabilityHdrKind.Hdr10 -> "hdr10"
+            VesperPlaybackCapabilityHdrKind.Hlg -> "hlg"
+            VesperPlaybackCapabilityHdrKind.DolbyVision -> "dolbyVision"
+            VesperPlaybackCapabilityHdrKind.Unknown -> "unknown"
+        }
+
+private val VesperPlaybackCapabilityDolbyVisionMode.runtimeWireName: String
+    get() =
+        when (this) {
+            VesperPlaybackCapabilityDolbyVisionMode.None -> "none"
+            VesperPlaybackCapabilityDolbyVisionMode.FullChainCandidate -> "fullChainCandidate"
+            VesperPlaybackCapabilityDolbyVisionMode.CompatibleBaseLayer -> "compatibleBaseLayer"
+            VesperPlaybackCapabilityDolbyVisionMode.Unsupported -> "unsupported"
+        }
+
+private fun VesperHdrChromaticityPoint.runtimeMap(): Map<String, Double> =
+    mapOf("x" to x, "y" to y)
+
+private fun Map<String, Any?>.stringValue(key: String): String? =
+    when (val value = this[key]) {
+        is String -> value.takeIf(String::isNotEmpty)
+        is Number, is Boolean -> value.toString()
+        else -> null
+    }
+
+private fun Map<String, Any?>.intValue(key: String): Int? =
+    when (val value = this[key]) {
+        is Number -> value.toInt()
+        is String -> value.toIntOrNull()
+        else -> null
+    }
+
+private fun Map<String, Any?>.floatValue(key: String): Float? =
+    when (val value = this[key]) {
+        is Number -> value.toFloat()
+        is String -> value.toFloatOrNull()
+        else -> null
+    }
+
+private fun Float.nearlyEquals(other: Float): Boolean =
+    kotlin.math.abs(this - other) <= 0.01f
+
+internal fun Format.androidRuntimeHdrEvidence(): AndroidRuntimeHdrEvidence? {
+    val hdrKind = detectRuntimeHdrKind() ?: return null
+    return AndroidRuntimeHdrEvidence(
+        hdrKind = hdrKind,
+        diagnostics = androidRuntimeHdrDiagnostics(),
+    )
+}
+
 private fun Format.detectRuntimeHdrKind(): String? {
     val codec = codecs?.lowercase().orEmpty()
     if (codec.split(',').any { value ->
@@ -2155,6 +2523,89 @@ private fun Format.detectRuntimeHdrKind(): String? {
         else -> null
     }
 }
+
+@OptIn(UnstableApi::class)
+private fun Format.androidRuntimeHdrDiagnostics(): Map<String, Any?> {
+    val diagnostics = linkedMapOf<String, Any?>(
+        "runtimeFormatHdrMetadataProbe" to "media3FormatColorInfo",
+    )
+    codecs?.takeIf(String::isNotBlank)?.let {
+        diagnostics["runtimeFormatCodecs"] = it
+        it.detectDolbyVisionCodecInfo()?.diagnostics?.let(diagnostics::putAll)
+    }
+    sampleMimeType?.takeIf(String::isNotBlank)?.let {
+        diagnostics["runtimeFormatSampleMimeType"] = it
+    }
+    width.takeIf { it != Format.NO_VALUE && it > 0 }?.let {
+        diagnostics["runtimeFormatWidth"] = it
+    }
+    height.takeIf { it != Format.NO_VALUE && it > 0 }?.let {
+        diagnostics["runtimeFormatHeight"] = it
+    }
+    frameRate.takeIf { it.isFinite() && it > 0f }?.let {
+        diagnostics["runtimeFormatFrameRate"] = it.toString()
+    }
+    colorInfo?.appendRuntimeColorDiagnosticsTo(diagnostics)
+    diagnostics.putAll(diagnostics.stringDiagnostics().withDolbyVisionProfile8Refinement())
+    return diagnostics
+}
+
+@OptIn(UnstableApi::class)
+private fun ColorInfo.appendRuntimeColorDiagnosticsTo(diagnostics: MutableMap<String, Any?>) {
+    diagnostics["runtimeFormatColorSpace"] = colorSpace.toRuntimeColorSpaceName()
+    diagnostics["runtimeFormatColorRange"] = colorRange.toRuntimeColorRangeName()
+    diagnostics["runtimeFormatColorTransfer"] = colorTransfer.toRuntimeColorTransferName()
+    lumaBitdepth.takeIf { it != Format.NO_VALUE && it > 0 }?.let {
+        diagnostics["runtimeFormatLumaBitDepth"] = it
+    }
+    chromaBitdepth.takeIf { it != Format.NO_VALUE && it > 0 }?.let {
+        diagnostics["runtimeFormatChromaBitDepth"] = it
+    }
+    hdrStaticInfo?.appendRuntimeHdrStaticInfoDiagnosticsTo(diagnostics)
+}
+
+private fun ByteArray.appendRuntimeHdrStaticInfoDiagnosticsTo(diagnostics: MutableMap<String, Any?>) {
+    diagnostics["runtimeFormatHdrStaticInfoPresent"] = true
+    diagnostics["runtimeFormatHdrStaticInfoByteLength"] = size
+    if (size < 25) {
+        diagnostics["runtimeFormatHdrStaticInfoParseError"] = "tooShort"
+        return
+    }
+    diagnostics["runtimeFormatMaxContentLightLevelNits"] = readUnsignedShortBigEndian(21)
+    diagnostics["runtimeFormatMaxFrameAverageLightLevelNits"] = readUnsignedShortBigEndian(23)
+}
+
+private fun ByteArray.readUnsignedShortBigEndian(offset: Int): Int =
+    ((this[offset].toInt() and 0xFF) shl 8) or (this[offset + 1].toInt() and 0xFF)
+
+private fun Int.toRuntimeColorSpaceName(): String =
+    when (this) {
+        Format.NO_VALUE -> "unknown"
+        C.COLOR_SPACE_BT601 -> "bt601"
+        C.COLOR_SPACE_BT709 -> "bt709"
+        C.COLOR_SPACE_BT2020 -> "bt2020"
+        else -> "unknown($this)"
+    }
+
+private fun Int.toRuntimeColorRangeName(): String =
+    when (this) {
+        Format.NO_VALUE -> "unknown"
+        C.COLOR_RANGE_LIMITED -> "limited"
+        C.COLOR_RANGE_FULL -> "full"
+        else -> "unknown($this)"
+    }
+
+private fun Int.toRuntimeColorTransferName(): String =
+    when (this) {
+        Format.NO_VALUE -> "unknown"
+        C.COLOR_TRANSFER_LINEAR -> "linear"
+        C.COLOR_TRANSFER_SDR -> "sdr"
+        C.COLOR_TRANSFER_SRGB -> "srgb"
+        C.COLOR_TRANSFER_GAMMA_2_2 -> "gamma2.2"
+        C.COLOR_TRANSFER_ST2084 -> "st2084"
+        C.COLOR_TRANSFER_HLG -> "hlg"
+        else -> "unknown($this)"
+    }
 
 private fun buildDataSourceFactory(
     appContext: Context,
@@ -2268,7 +2719,139 @@ internal data class NativePlaybackError(
     val codeOrdinal: Int,
     val categoryOrdinal: Int,
     val retriable: Boolean,
+    val likelyCapabilityIssue: Boolean = false,
+    val capabilityFailureCause: AndroidCapabilityFailureCause? = null,
+    val capabilityFailureAxis: AndroidCapabilityFailureAxis? = null,
+    val causeEvidence: AndroidPlaybackFailureCauseEvidence? = null,
 )
+
+internal data class AndroidPlaybackFailureCauseEvidence(
+    val causeClass: String?,
+    val causeMessage: String?,
+    val rootCauseClass: String?,
+    val rootCauseMessage: String?,
+    val rendererName: String? = null,
+    val rendererIndex: Int? = null,
+    val rendererFormatSupport: String? = null,
+    val rendererFormatSampleMimeType: String? = null,
+    val rendererFormatCodecs: String? = null,
+    val rendererFormatWidth: Int? = null,
+    val rendererFormatHeight: Int? = null,
+    val rendererFormatFrameRate: Float? = null,
+) {
+    fun diagnostics(): Map<String, String> =
+        linkedMapOf<String, String>().also { output ->
+            causeClass?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureCauseClass"] = it
+            }
+            causeMessage?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureCauseMessage"] = it
+            }
+            rootCauseClass?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureRootCauseClass"] = it
+            }
+            rootCauseMessage?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureRootCauseMessage"] = it
+            }
+            rendererName?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureRendererName"] = it
+            }
+            rendererIndex?.let {
+                output["playbackFailureRendererIndex"] = it.toString()
+            }
+            rendererFormatSupport?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureRendererFormatSupport"] = it
+            }
+            rendererFormatSampleMimeType?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureRendererFormatSampleMimeType"] = it
+            }
+            rendererFormatCodecs?.takeIf { it.isNotBlank() }?.let {
+                output["playbackFailureRendererFormatCodecs"] = it
+            }
+            rendererFormatWidth?.takeIf { it > 0 }?.let {
+                output["playbackFailureRendererFormatWidth"] = it.toString()
+            }
+            rendererFormatHeight?.takeIf { it > 0 }?.let {
+                output["playbackFailureRendererFormatHeight"] = it.toString()
+            }
+            rendererFormatFrameRate?.takeIf { it > 0f }?.let {
+                output["playbackFailureRendererFormatFrameRate"] = it.toString()
+            }
+        }
+}
+
+private fun AndroidPlaybackFailureCauseEvidence?.runtimeFormatConvergenceDiagnostics(
+    runtimeDiagnostics: Map<String, Any?>,
+): Map<String, String> {
+    this ?: return emptyMap()
+    val rendererMimeType = rendererFormatSampleMimeType?.takeIf(String::isNotBlank)
+    val runtimeMimeType = runtimeDiagnostics.stringValue("runtimeFormatSampleMimeType")
+    val rendererCodecs = rendererFormatCodecs?.takeIf(String::isNotBlank)
+    val runtimeCodecs = runtimeDiagnostics.stringValue("runtimeFormatCodecs")
+    val rendererWidth = rendererFormatWidth
+    val runtimeWidth = runtimeDiagnostics.intValue("runtimeFormatWidth")
+    val rendererHeight = rendererFormatHeight
+    val runtimeHeight = runtimeDiagnostics.intValue("runtimeFormatHeight")
+    val rendererFrameRate = rendererFormatFrameRate
+    val runtimeFrameRate = runtimeDiagnostics.floatValue("runtimeFormatFrameRate")
+    return linkedMapOf<String, String>().also { output ->
+        rendererFormatSupport?.takeIf(String::isNotBlank)?.let {
+            output["playbackFailureRendererFormatSupported"] = (it == "handled").toString()
+        }
+        if (rendererMimeType != null && runtimeMimeType != null) {
+            output["playbackFailureRendererFormatMimeMatchesRuntime"] =
+                (rendererMimeType == runtimeMimeType).toString()
+        }
+        if (rendererCodecs != null && runtimeCodecs != null) {
+            output["playbackFailureRendererFormatCodecsMatchRuntime"] =
+                (rendererCodecs == runtimeCodecs).toString()
+        }
+        if (rendererWidth != null && runtimeWidth != null && rendererHeight != null && runtimeHeight != null) {
+            output["playbackFailureRendererFormatSizeMatchesRuntime"] =
+                (rendererWidth == runtimeWidth && rendererHeight == runtimeHeight).toString()
+        }
+        if (rendererFrameRate != null && runtimeFrameRate != null) {
+            output["playbackFailureRendererFormatFrameRateMatchesRuntime"] =
+                rendererFrameRate.nearlyEquals(runtimeFrameRate).toString()
+        }
+    }
+}
+
+internal enum class AndroidCapabilityFailureCause {
+    ContainerUnsupported,
+    ManifestUnsupported,
+    DecoderInit,
+    DecoderQuery,
+    DecodeFailed,
+}
+
+private val AndroidCapabilityFailureCause.wireName: String
+    get() =
+        when (this) {
+            AndroidCapabilityFailureCause.ContainerUnsupported -> "containerUnsupported"
+            AndroidCapabilityFailureCause.ManifestUnsupported -> "manifestUnsupported"
+            AndroidCapabilityFailureCause.DecoderInit -> "decoderInit"
+            AndroidCapabilityFailureCause.DecoderQuery -> "decoderQuery"
+            AndroidCapabilityFailureCause.DecodeFailed -> "decodeFailed"
+        }
+
+internal enum class AndroidCapabilityFailureAxis {
+    Container,
+    Manifest,
+    Decoder,
+    Renderer,
+    DisplaySurface,
+}
+
+private val AndroidCapabilityFailureAxis.wireName: String
+    get() =
+        when (this) {
+            AndroidCapabilityFailureAxis.Container -> "container"
+            AndroidCapabilityFailureAxis.Manifest -> "manifest"
+            AndroidCapabilityFailureAxis.Decoder -> "decoder"
+            AndroidCapabilityFailureAxis.Renderer -> "renderer"
+            AndroidCapabilityFailureAxis.DisplaySurface -> "displaySurface"
+        }
 
 private data class ResolvedCachePolicy(
     val enabled: Boolean,
@@ -2298,8 +2881,10 @@ private object VesperMediaCacheStore {
     }
 }
 
-internal fun classifyPlaybackException(error: PlaybackException): NativePlaybackError =
-    if (error.hasCause(HlsPlaylistTracker.PlaylistStuckException::class.java)) {
+internal fun classifyPlaybackException(error: PlaybackException): NativePlaybackError {
+    val causeEvidence = error.playbackFailureCauseEvidence()
+    val classified =
+        if (error.hasCause(HlsPlaylistTracker.PlaylistStuckException::class.java)) {
         NativePlaybackError(
             codeOrdinal = BACKEND_FAILURE_ORDINAL,
             categoryOrdinal = NETWORK_CATEGORY_ORDINAL,
@@ -2327,12 +2912,31 @@ internal fun classifyPlaybackException(error: PlaybackException): NativePlayback
 
             PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
             PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED,
+            -> NativePlaybackError(
+                codeOrdinal = UNSUPPORTED_ORDINAL,
+                categoryOrdinal = CAPABILITY_CATEGORY_ORDINAL,
+                retriable = false,
+                likelyCapabilityIssue = true,
+            )
+
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            -> NativePlaybackError(
+                codeOrdinal = UNSUPPORTED_ORDINAL,
+                categoryOrdinal = CAPABILITY_CATEGORY_ORDINAL,
+                retriable = false,
+                likelyCapabilityIssue = true,
+                capabilityFailureCause = AndroidCapabilityFailureCause.ContainerUnsupported,
+                capabilityFailureAxis = AndroidCapabilityFailureAxis.Container,
+            )
+
             PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
             -> NativePlaybackError(
                 codeOrdinal = UNSUPPORTED_ORDINAL,
                 categoryOrdinal = CAPABILITY_CATEGORY_ORDINAL,
                 retriable = false,
+                likelyCapabilityIssue = true,
+                capabilityFailureCause = AndroidCapabilityFailureCause.ManifestUnsupported,
+                capabilityFailureAxis = AndroidCapabilityFailureAxis.Manifest,
             )
 
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
@@ -2344,12 +2948,35 @@ internal fun classifyPlaybackException(error: PlaybackException): NativePlayback
             )
 
             PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            -> NativePlaybackError(
+                codeOrdinal = DECODE_FAILURE_ORDINAL,
+                categoryOrdinal = DECODE_CATEGORY_ORDINAL,
+                retriable = false,
+                likelyCapabilityIssue = true,
+                capabilityFailureCause = AndroidCapabilityFailureCause.DecoderInit,
+                capabilityFailureAxis = causeEvidence.runtimeFailureAxis()
+                    ?: AndroidCapabilityFailureAxis.Decoder,
+            )
+
             PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            -> NativePlaybackError(
+                codeOrdinal = DECODE_FAILURE_ORDINAL,
+                categoryOrdinal = DECODE_CATEGORY_ORDINAL,
+                retriable = false,
+                likelyCapabilityIssue = true,
+                capabilityFailureCause = AndroidCapabilityFailureCause.DecoderQuery,
+                capabilityFailureAxis = AndroidCapabilityFailureAxis.Decoder,
+            )
+
             PlaybackException.ERROR_CODE_DECODING_FAILED,
             -> NativePlaybackError(
                 codeOrdinal = DECODE_FAILURE_ORDINAL,
                 categoryOrdinal = DECODE_CATEGORY_ORDINAL,
                 retriable = false,
+                likelyCapabilityIssue = true,
+                capabilityFailureCause = AndroidCapabilityFailureCause.DecodeFailed,
+                capabilityFailureAxis = causeEvidence.runtimeFailureAxis()
+                    ?: AndroidCapabilityFailureAxis.Decoder,
             )
 
             PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
@@ -2370,6 +2997,41 @@ internal fun classifyPlaybackException(error: PlaybackException): NativePlayback
                 )
         }
     }
+    return classified.copy(causeEvidence = causeEvidence)
+}
+
+private fun AndroidPlaybackFailureCauseEvidence?.runtimeFailureAxis(): AndroidCapabilityFailureAxis? {
+    this ?: return null
+    rendererFormatSupport?.lowercase()?.let { support ->
+        if (support != "handled") {
+            return AndroidCapabilityFailureAxis.Decoder
+        }
+    }
+    rendererName?.lowercase()?.let { name ->
+        if (name.contains("video")) {
+            return AndroidCapabilityFailureAxis.Renderer
+        }
+    }
+    val haystack =
+        listOfNotNull(
+            causeClass,
+            causeMessage,
+            rootCauseClass,
+            rootCauseMessage,
+        ).joinToString(separator = " ").lowercase()
+    return when {
+        haystack.contains("surface") ||
+            haystack.contains("egl") ||
+            haystack.contains("glsurface") ||
+            haystack.contains("display") -> AndroidCapabilityFailureAxis.DisplaySurface
+        haystack.contains("renderer") ||
+            haystack.contains("mediacodecvideorenderer") -> AndroidCapabilityFailureAxis.Renderer
+        haystack.contains("mediacodec") ||
+            haystack.contains("decoder") ||
+            haystack.contains("codec") -> AndroidCapabilityFailureAxis.Decoder
+        else -> null
+    }
+}
 
 private fun Throwable.hasCause(type: Class<out Throwable>): Boolean {
     var current: Throwable? = this
@@ -2381,6 +3043,59 @@ private fun Throwable.hasCause(type: Class<out Throwable>): Boolean {
     }
     return false
 }
+
+@OptIn(UnstableApi::class)
+private fun PlaybackException.playbackFailureCauseEvidence(): AndroidPlaybackFailureCauseEvidence? {
+    val directCause = cause ?: return null
+    val rootCause = directCause.rootCause()
+    val exoError = this as? ExoPlaybackException
+    val rendererFormat = exoError?.rendererFormat
+    return AndroidPlaybackFailureCauseEvidence(
+        causeClass = directCause.javaClass.name,
+        causeMessage = directCause.message?.boundedFailureMessage(),
+        rootCauseClass = if (rootCause !== directCause) rootCause.javaClass.name else null,
+        rootCauseMessage = if (rootCause !== directCause) {
+            rootCause.message?.boundedFailureMessage()
+        } else {
+            null
+        },
+        rendererName = exoError?.rendererName,
+        rendererIndex = exoError?.rendererIndex?.takeIf { it >= 0 },
+        rendererFormatSupport = exoError?.rendererFormatSupport?.formatSupportName(),
+        rendererFormatSampleMimeType = rendererFormat?.sampleMimeType,
+        rendererFormatCodecs = rendererFormat?.codecs,
+        rendererFormatWidth = rendererFormat?.width?.takeIf { it > 0 },
+        rendererFormatHeight = rendererFormat?.height?.takeIf { it > 0 },
+        rendererFormatFrameRate = rendererFormat?.frameRate?.takeIf { it > 0f },
+    )
+}
+
+private fun Int.formatSupportName(): String =
+    when (this) {
+        C.FORMAT_HANDLED -> "handled"
+        C.FORMAT_EXCEEDS_CAPABILITIES -> "exceedsCapabilities"
+        C.FORMAT_UNSUPPORTED_DRM -> "unsupportedDrm"
+        C.FORMAT_UNSUPPORTED_SUBTYPE -> "unsupportedSubtype"
+        C.FORMAT_UNSUPPORTED_TYPE -> "unsupportedType"
+        else -> toString()
+    }
+
+private fun Throwable.rootCause(): Throwable {
+    var current = this
+    while (current.cause != null && current.cause !== current) {
+        current = current.cause ?: break
+    }
+    return current
+}
+
+private fun String.boundedFailureMessage(): String =
+    if (length <= MAX_PLAYBACK_FAILURE_CAUSE_MESSAGE_CHARS) {
+        this
+    } else {
+        take(MAX_PLAYBACK_FAILURE_CAUSE_MESSAGE_CHARS - 3) + "..."
+    }
+
+private const val MAX_PLAYBACK_FAILURE_CAUSE_MESSAGE_CHARS = 256
 
 internal const val INVALID_SOURCE_ORDINAL = 2
 internal const val BACKEND_FAILURE_ORDINAL = 3

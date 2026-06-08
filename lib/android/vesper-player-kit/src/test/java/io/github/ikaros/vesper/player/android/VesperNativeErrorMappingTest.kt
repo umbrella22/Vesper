@@ -1,6 +1,10 @@
 package io.github.ikaros.vesper.player.android
 
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.C
+import androidx.media3.common.Format
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlaybackException
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -97,6 +101,181 @@ class VesperNativeErrorMappingTest {
         assertEquals(DECODE_FAILURE_ORDINAL, error.codeOrdinal)
         assertEquals(DECODE_CATEGORY_ORDINAL, error.categoryOrdinal)
         assertFalse(error.retriable)
+        assertTrue(error.likelyCapabilityIssue)
+        assertEquals(AndroidCapabilityFailureCause.DecodeFailed, error.capabilityFailureCause)
+    }
+
+    @Test
+    fun playbackExceptionUnsupportedErrorsAreLikelyCapabilityIssues() {
+        val error =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
+            )
+
+        assertTrue(error.likelyCapabilityIssue)
+    }
+
+    @Test
+    fun playbackExceptionCapabilityErrorsExposeFailureCause() {
+        val container =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED)
+            )
+        val manifest =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED)
+            )
+        val decoderInit =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED)
+            )
+        val decoderQuery =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED)
+            )
+
+        assertEquals(AndroidCapabilityFailureCause.ContainerUnsupported, container.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureCause.ManifestUnsupported, manifest.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureCause.DecoderInit, decoderInit.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureCause.DecoderQuery, decoderQuery.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureAxis.Container, container.capabilityFailureAxis)
+        assertEquals(AndroidCapabilityFailureAxis.Manifest, manifest.capabilityFailureAxis)
+        assertEquals(AndroidCapabilityFailureAxis.Decoder, decoderInit.capabilityFailureAxis)
+        assertEquals(AndroidCapabilityFailureAxis.Decoder, decoderQuery.capabilityFailureAxis)
+    }
+
+    @Test
+    fun playbackExceptionClassificationCarriesBoundedCauseEvidence() {
+        val rootMessage = "root decoder detail"
+        val directMessage = "x".repeat(300)
+        val error =
+            classifyPlaybackException(
+                playbackException(
+                    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+                    IllegalStateException(
+                        directMessage,
+                        IllegalArgumentException(rootMessage),
+                    ),
+                )
+            )
+
+        val causeEvidence = checkNotNull(error.causeEvidence)
+
+        assertEquals(IllegalStateException::class.java.name, causeEvidence.causeClass)
+        assertEquals(256, causeEvidence.causeMessage?.length)
+        assertTrue(causeEvidence.causeMessage?.endsWith("...") ?: false)
+        assertEquals(IllegalArgumentException::class.java.name, causeEvidence.rootCauseClass)
+        assertEquals(rootMessage, causeEvidence.rootCauseMessage)
+    }
+
+    @Test
+    fun playbackExceptionClassificationRefinesRuntimeFailureAxisFromCauseEvidence() {
+        val surface =
+            classifyPlaybackException(
+                playbackException(
+                    PlaybackException.ERROR_CODE_DECODING_FAILED,
+                    IllegalStateException(
+                        "decoder failed",
+                        IllegalArgumentException("surface rejected frame"),
+                    ),
+                )
+            )
+        val renderer =
+            classifyPlaybackException(
+                playbackException(
+                    PlaybackException.ERROR_CODE_DECODING_FAILED,
+                    IllegalStateException("MediaCodecVideoRenderer failed"),
+                )
+            )
+
+        assertEquals(AndroidCapabilityFailureCause.DecodeFailed, surface.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureAxis.DisplaySurface, surface.capabilityFailureAxis)
+        assertEquals(AndroidCapabilityFailureCause.DecodeFailed, renderer.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureAxis.Renderer, renderer.capabilityFailureAxis)
+    }
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    @Test
+    fun exoRendererExceptionCarriesRendererContextAndRefinesFailureAxis() {
+        val error =
+            classifyPlaybackException(
+                ExoPlaybackException.createForRenderer(
+                    IllegalStateException("renderer failed"),
+                    "MediaCodecVideoRenderer",
+                    2,
+                    Format.Builder()
+                        .setSampleMimeType("video/dolby-vision")
+                        .setCodecs("dvh1.08.06")
+                        .setWidth(3840)
+                        .setHeight(2160)
+                        .setFrameRate(60f)
+                        .build(),
+                    C.FORMAT_HANDLED,
+                    null,
+                    false,
+                    PlaybackException.ERROR_CODE_DECODING_FAILED,
+                )
+            )
+
+        val diagnostics = checkNotNull(error.causeEvidence).diagnostics()
+
+        assertEquals(AndroidCapabilityFailureCause.DecodeFailed, error.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureAxis.Renderer, error.capabilityFailureAxis)
+        assertEquals("MediaCodecVideoRenderer", diagnostics["playbackFailureRendererName"])
+        assertEquals("2", diagnostics["playbackFailureRendererIndex"])
+        assertEquals("handled", diagnostics["playbackFailureRendererFormatSupport"])
+        assertEquals("video/dolby-vision", diagnostics["playbackFailureRendererFormatSampleMimeType"])
+        assertEquals("dvh1.08.06", diagnostics["playbackFailureRendererFormatCodecs"])
+        assertEquals("3840", diagnostics["playbackFailureRendererFormatWidth"])
+        assertEquals("2160", diagnostics["playbackFailureRendererFormatHeight"])
+        assertEquals("60.0", diagnostics["playbackFailureRendererFormatFrameRate"])
+    }
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    @Test
+    fun exoRendererExceptionWithUnsupportedFormatRefinesFailureAxisToDecoder() {
+        val error =
+            classifyPlaybackException(
+                ExoPlaybackException.createForRenderer(
+                    IllegalStateException("format exceeds renderer capabilities"),
+                    "MediaCodecVideoRenderer",
+                    1,
+                    Format.Builder()
+                        .setSampleMimeType("video/hevc")
+                        .setWidth(3840)
+                        .setHeight(2160)
+                        .setFrameRate(120f)
+                        .build(),
+                    C.FORMAT_EXCEEDS_CAPABILITIES,
+                    null,
+                    false,
+                    PlaybackException.ERROR_CODE_DECODING_FAILED,
+                )
+            )
+
+        val diagnostics = checkNotNull(error.causeEvidence).diagnostics()
+
+        assertEquals(AndroidCapabilityFailureCause.DecodeFailed, error.capabilityFailureCause)
+        assertEquals(AndroidCapabilityFailureAxis.Decoder, error.capabilityFailureAxis)
+        assertEquals("exceedsCapabilities", diagnostics["playbackFailureRendererFormatSupport"])
+        assertEquals("120.0", diagnostics["playbackFailureRendererFormatFrameRate"])
+    }
+
+    @Test
+    fun playbackExceptionNetworkAndSourceErrorsDoNotExposeCapabilityFailureCause() {
+        val network =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
+            )
+        val source =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)
+            )
+
+        assertEquals(null, network.capabilityFailureCause)
+        assertEquals(null, source.capabilityFailureCause)
+        assertEquals(null, network.capabilityFailureAxis)
+        assertEquals(null, source.capabilityFailureAxis)
     }
 
     @Test
@@ -122,6 +301,7 @@ class VesperNativeErrorMappingTest {
         assertEquals(BACKEND_FAILURE_ORDINAL, error.codeOrdinal)
         assertEquals(PLATFORM_CATEGORY_ORDINAL, error.categoryOrdinal)
         assertFalse(error.retriable)
+        assertFalse(error.likelyCapabilityIssue)
     }
 
     @Test
@@ -145,8 +325,11 @@ class VesperNativeErrorMappingTest {
         assertEquals(7, PLATFORM_CATEGORY_ORDINAL)
     }
 
-    private fun playbackException(errorCode: Int): PlaybackException =
-        PlaybackException("playback failed", null, errorCode)
+    private fun playbackException(
+        errorCode: Int,
+        cause: Throwable? = null,
+    ): PlaybackException =
+        PlaybackException("playback failed", cause, errorCode)
 }
 
 internal fun contractText(name: String): String = contractFile(name).readText()

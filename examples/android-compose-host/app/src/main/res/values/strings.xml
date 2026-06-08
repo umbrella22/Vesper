@@ -167,6 +167,15 @@
     <string name="example_plugins_route">route: %1$s</string>
     <string name="example_plugins_cache">cache: %1$s</string>
     <string name="example_plugins_resource">resource: %1$s</string>
+    <string name="example_plugins_hdr_evidence_title">HDR evidence</string>
+    <string name="example_plugins_hdr_evidence_network_control">Uses the fixed controlled network-failure URL.</string>
+    <string name="example_plugins_hdr_evidence_current_source">Uses the currently active source.</string>
+    <string name="example_plugins_hdr_evidence_select_source">Select a local file or remote URL before capturing this HDR evidence preset.</string>
+    <string name="example_plugins_hdr_evidence_capture">Capture HDR evidence</string>
+    <string name="example_plugins_hdr_evidence_capturing">Capturing HDR evidence</string>
+    <string name="example_plugins_hdr_evidence_network_control_label">Network failure control</string>
+    <string name="example_plugins_hdr_evidence_written">HDR evidence bundle written: %1$s</string>
+    <string name="example_plugins_hdr_evidence_failed">HDR evidence capture failed: %1$s</string>
 
     <string name="example_sheet_menu_subtitle">Open track, subtitle, quality, and speed controls without crowding the player overlay.</string>
     <string name="example_sheet_quality_subtitle">Switch adaptive video or pin the stream to a specific quality track.</string>

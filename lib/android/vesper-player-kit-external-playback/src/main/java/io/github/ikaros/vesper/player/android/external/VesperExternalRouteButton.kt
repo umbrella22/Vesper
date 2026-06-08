@@ -22,7 +22,6 @@ class VesperExternalRouteButton @JvmOverloads constructor(
     init {
         CastButtonFactory.setUpMediaRouteButton(context, this)
         dialogFactory = VesperExternalRouteButtonDialogFactory(routeTheme(context, null).buttonTheme)
-        setAlwaysVisible(true)
     }
 
     companion object {
@@ -35,7 +34,6 @@ class VesperExternalRouteButton @JvmOverloads constructor(
             return MediaRouteButton(themedContext).also { button ->
                 CastButtonFactory.setUpMediaRouteButton(themedContext, button)
                 button.dialogFactory = VesperExternalRouteButtonDialogFactory(theme.buttonTheme)
-                button.setAlwaysVisible(true)
             }
         }
     }

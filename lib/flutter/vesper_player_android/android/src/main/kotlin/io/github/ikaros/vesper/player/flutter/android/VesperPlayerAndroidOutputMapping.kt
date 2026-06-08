@@ -20,10 +20,12 @@ import io.github.ikaros.vesper.player.android.VesperDownloadState
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskProgressPatch
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskStatePatch
+import io.github.ikaros.vesper.player.android.VesperHdrChromaticityPoint
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityConfidence
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityDolbyVisionMode
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityHdrKind
+import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityHdrMetadata
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityOutputFormat
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeStatus
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
@@ -152,9 +154,182 @@ internal fun VesperPlaybackCapabilityProbeResult.toMap(): Map<String, Any?> =
         "hdrKind" to hdrKind.wireName,
         "dolbyVisionMode" to dolbyVisionMode.wireName,
         "confidence" to confidence.wireName,
+        "hdrMetadata" to hdrMetadataMap(),
         "missingCapabilities" to missingCapabilities,
         "diagnostics" to diagnostics,
     )
+
+private fun VesperPlaybackCapabilityProbeResult.hdrMetadataMap(): Map<String, Any?>? {
+    val values = hdrMetadata?.toMap()?.toMutableMap() ?: linkedMapOf()
+    if (!values.containsKey("hdrKind") &&
+        hdrKind != VesperPlaybackCapabilityHdrKind.None &&
+        hdrKind != VesperPlaybackCapabilityHdrKind.Unknown
+    ) {
+        values["hdrKind"] = hdrKind.wireName
+    }
+    if (!values.containsKey("dolbyVisionMode") &&
+        dolbyVisionMode != VesperPlaybackCapabilityDolbyVisionMode.None
+    ) {
+        values["dolbyVisionMode"] = dolbyVisionMode.wireName
+    }
+    diagnostics.firstString("runtimeFormatHdrMetadataProbe", "assetVideoHdrMetadataProbe", "assetProbe")?.let {
+        values["probe"] = it
+    }
+    diagnostics.firstString("assetVideoCodec", "runtimeFormatCodecs")?.let {
+        values["codec"] = it
+    }
+    diagnostics.stringValue("runtimeFormatSampleMimeType")?.let {
+        values["sampleMimeType"] = it
+    }
+    diagnostics.stringValue("assetVideoColorPrimaries")?.let {
+        values["colorPrimaries"] = it
+    }
+    diagnostics.stringValue("runtimeFormatColorSpace")?.let {
+        values["colorSpace"] = it
+    }
+    diagnostics.stringValue("runtimeFormatColorRange")?.let {
+        values["colorRange"] = it
+    }
+    diagnostics.firstString("assetVideoTransferFunction", "runtimeFormatColorTransfer")?.let {
+        values["transferFunction"] = it
+    }
+    diagnostics.stringValue("assetVideoYCbCrMatrix")?.let {
+        values["yCbCrMatrix"] = it
+    }
+    diagnostics.stringValue("assetVideoAlternativeTransferCharacteristics")?.let {
+        values["alternativeTransferCharacteristics"] = it
+    }
+    diagnostics.intValue("runtimeFormatLumaBitDepth")?.let {
+        values["lumaBitDepth"] = it
+    }
+    diagnostics.intValue("runtimeFormatChromaBitDepth")?.let {
+        values["chromaBitDepth"] = it
+    }
+    diagnostics.boolValue("runtimeFormatHdrStaticInfoPresent")?.let {
+        values["hdrStaticInfoPresent"] = it
+    }
+    diagnostics.intValue("runtimeFormatHdrStaticInfoByteLength")?.let {
+        values["hdrStaticInfoByteLength"] = it
+    }
+    diagnostics.stringValue("runtimeFormatHdrStaticInfoParseError")?.let {
+        values["hdrStaticInfoParseError"] = it
+    }
+    diagnostics.firstInt("assetVideoMaxContentLightLevelNits", "runtimeFormatMaxContentLightLevelNits")?.let {
+        values["maxContentLightLevelNits"] = it
+    }
+    diagnostics.firstInt("assetVideoMaxFrameAverageLightLevelNits", "runtimeFormatMaxFrameAverageLightLevelNits")?.let {
+        values["maxFrameAverageLightLevelNits"] = it
+    }
+    diagnostics.boolValue("assetVideoMasteringDisplayColorVolumePresent")?.let {
+        values["masteringDisplayColorVolumePresent"] = it
+    }
+    diagnostics.intValue("assetVideoMasteringDisplayColorVolumeByteLength")?.let {
+        values["masteringDisplayColorVolumeByteLength"] = it
+    }
+    diagnostics.stringValue("assetVideoMasteringDisplayColorVolumeParseError")?.let {
+        values["masteringDisplayColorVolumeParseError"] = it
+    }
+    diagnostics.chromaticityPoint("assetVideoMasteringDisplayPrimary0")?.let {
+        values["masteringDisplayPrimary0"] = it
+    }
+    diagnostics.chromaticityPoint("assetVideoMasteringDisplayPrimary1")?.let {
+        values["masteringDisplayPrimary1"] = it
+    }
+    diagnostics.chromaticityPoint("assetVideoMasteringDisplayPrimary2")?.let {
+        values["masteringDisplayPrimary2"] = it
+    }
+    diagnostics.chromaticityPoint("assetVideoMasteringDisplayWhitePoint")?.let {
+        values["masteringDisplayWhitePoint"] = it
+    }
+    diagnostics.doubleValue("assetVideoMasteringDisplayMaxLuminanceNits")?.let {
+        values["masteringDisplayMaxLuminanceNits"] = it
+    }
+    diagnostics.doubleValue("assetVideoMasteringDisplayMinLuminanceNits")?.let {
+        values["masteringDisplayMinLuminanceNits"] = it
+    }
+    diagnostics.stringValue("dolbyVisionCodec")?.let {
+        values["dolbyVisionCodec"] = it
+    }
+    diagnostics.intValue("dolbyVisionProfile")?.let {
+        values["dolbyVisionProfile"] = it
+    }
+    diagnostics.intValue("dolbyVisionLevel")?.let {
+        values["dolbyVisionLevel"] = it
+    }
+    diagnostics.stringValue("dolbyVisionCompatibility")?.let {
+        values["dolbyVisionCompatibility"] = it
+    }
+    diagnostics.stringValue("dolbyVisionProfileFamily")?.let {
+        values["dolbyVisionProfileFamily"] = it
+    }
+    diagnostics.stringValue("dolbyVisionBaseLayer")?.let {
+        values["dolbyVisionBaseLayer"] = it
+    }
+    diagnostics.stringValue("dolbyVisionFallbackTarget")?.let {
+        values["dolbyVisionFallbackTarget"] = it
+    }
+    diagnostics.stringValue("dolbyVisionBaseLayerEvidence")?.let {
+        values["dolbyVisionBaseLayerEvidence"] = it
+    }
+    diagnostics.stringValue("dolbyVisionBaseLayerTransferFunction")?.let {
+        values["dolbyVisionBaseLayerTransferFunction"] = it
+    }
+    return values.takeIf { it.isNotEmpty() }
+}
+
+private fun VesperPlaybackCapabilityHdrMetadata.toMap(): Map<String, Any?> =
+    linkedMapOf<String, Any?>().also { values ->
+        hdrKind?.let { values["hdrKind"] = it.wireName }
+        dolbyVisionMode?.let { values["dolbyVisionMode"] = it.wireName }
+        probe?.let { values["probe"] = it }
+        codec?.let { values["codec"] = it }
+        sampleMimeType?.let { values["sampleMimeType"] = it }
+        colorPrimaries?.let { values["colorPrimaries"] = it }
+        colorSpace?.let { values["colorSpace"] = it }
+        colorRange?.let { values["colorRange"] = it }
+        transferFunction?.let { values["transferFunction"] = it }
+        yCbCrMatrix?.let { values["yCbCrMatrix"] = it }
+        alternativeTransferCharacteristics?.let {
+            values["alternativeTransferCharacteristics"] = it
+        }
+        lumaBitDepth?.let { values["lumaBitDepth"] = it }
+        chromaBitDepth?.let { values["chromaBitDepth"] = it }
+        hdrStaticInfoPresent?.let { values["hdrStaticInfoPresent"] = it }
+        hdrStaticInfoByteLength?.let { values["hdrStaticInfoByteLength"] = it }
+        hdrStaticInfoParseError?.let { values["hdrStaticInfoParseError"] = it }
+        maxContentLightLevelNits?.let { values["maxContentLightLevelNits"] = it }
+        maxFrameAverageLightLevelNits?.let { values["maxFrameAverageLightLevelNits"] = it }
+        masteringDisplayColorVolumePresent?.let {
+            values["masteringDisplayColorVolumePresent"] = it
+        }
+        masteringDisplayColorVolumeByteLength?.let {
+            values["masteringDisplayColorVolumeByteLength"] = it
+        }
+        masteringDisplayColorVolumeParseError?.let {
+            values["masteringDisplayColorVolumeParseError"] = it
+        }
+        masteringDisplayPrimary0?.let { values["masteringDisplayPrimary0"] = it.toMap() }
+        masteringDisplayPrimary1?.let { values["masteringDisplayPrimary1"] = it.toMap() }
+        masteringDisplayPrimary2?.let { values["masteringDisplayPrimary2"] = it.toMap() }
+        masteringDisplayWhitePoint?.let { values["masteringDisplayWhitePoint"] = it.toMap() }
+        masteringDisplayMaxLuminanceNits?.let { values["masteringDisplayMaxLuminanceNits"] = it }
+        masteringDisplayMinLuminanceNits?.let { values["masteringDisplayMinLuminanceNits"] = it }
+        dolbyVisionCodec?.let { values["dolbyVisionCodec"] = it }
+        dolbyVisionProfile?.let { values["dolbyVisionProfile"] = it }
+        dolbyVisionLevel?.let { values["dolbyVisionLevel"] = it }
+        dolbyVisionCompatibility?.let { values["dolbyVisionCompatibility"] = it }
+        dolbyVisionProfileFamily?.let { values["dolbyVisionProfileFamily"] = it }
+        dolbyVisionBaseLayer?.let { values["dolbyVisionBaseLayer"] = it }
+        dolbyVisionFallbackTarget?.let { values["dolbyVisionFallbackTarget"] = it }
+        dolbyVisionBaseLayerEvidence?.let { values["dolbyVisionBaseLayerEvidence"] = it }
+        dolbyVisionBaseLayerTransferFunction?.let { values["dolbyVisionBaseLayerTransferFunction"] = it }
+    }
+
+private fun VesperHdrChromaticityPoint.toMap(): Map<String, Double> =
+    mapOf("x" to x, "y" to y)
+
+internal fun VesperPlaybackCapabilityProbeStatus.toWireName(): String =
+    wireName
 
 private val VesperPlaybackCapabilityProbeStatus.wireName: String
     get() =
@@ -184,6 +359,9 @@ private val VesperPlaybackCapabilityOutputFormat.wireName: String
             VesperPlaybackCapabilityOutputFormat.Unknown -> "unknown"
         }
 
+internal fun VesperPlaybackCapabilityHdrKind.toWireName(): String =
+    wireName
+
 private val VesperPlaybackCapabilityHdrKind.wireName: String
     get() =
         when (this) {
@@ -194,6 +372,9 @@ private val VesperPlaybackCapabilityHdrKind.wireName: String
             VesperPlaybackCapabilityHdrKind.Unknown -> "unknown"
         }
 
+internal fun VesperPlaybackCapabilityDolbyVisionMode.toWireName(): String =
+    wireName
+
 private val VesperPlaybackCapabilityDolbyVisionMode.wireName: String
     get() =
         when (this) {
@@ -203,6 +384,9 @@ private val VesperPlaybackCapabilityDolbyVisionMode.wireName: String
             VesperPlaybackCapabilityDolbyVisionMode.Unsupported -> "unsupported"
         }
 
+internal fun VesperPlaybackCapabilityConfidence.toWireName(): String =
+    wireName
+
 private val VesperPlaybackCapabilityConfidence.wireName: String
     get() =
         when (this) {
@@ -211,12 +395,56 @@ private val VesperPlaybackCapabilityConfidence.wireName: String
             VesperPlaybackCapabilityConfidence.SessionProbe -> "sessionProbe"
         }
 
+internal fun VesperRecommendedPlaybackPath.toWireName(): String =
+    wireName
+
 private val VesperRecommendedPlaybackPath.wireName: String
     get() =
         when (this) {
             VesperRecommendedPlaybackPath.NativeFramePipeline -> "nativeFramePipeline"
             VesperRecommendedPlaybackPath.SystemPlayer -> "systemPlayer"
         }
+
+private fun Map<String, Any?>.firstString(vararg keys: String): String? =
+    keys.firstNotNullOfOrNull(::stringValue)
+
+private fun Map<String, Any?>.firstInt(vararg keys: String): Int? =
+    keys.firstNotNullOfOrNull(::intValue)
+
+private fun Map<String, Any?>.stringValue(key: String): String? =
+    (this[key] as? String)?.takeIf(String::isNotEmpty)
+
+private fun Map<String, Any?>.boolValue(key: String): Boolean? =
+    when (val value = this[key]) {
+        is Boolean -> value
+        is String -> value.toBooleanStrictOrNull()
+        else -> null
+    }
+
+private fun Map<String, Any?>.intValue(key: String): Int? =
+    when (val value = this[key]) {
+        is Number -> value.toInt()
+        is String -> value.toIntOrNull()
+        else -> null
+    }
+
+private fun Map<String, Any?>.doubleValue(key: String): Double? =
+    when (val value = this[key]) {
+        is Number -> value.toDouble()
+        is String -> value.toDoubleOrNull()
+        else -> null
+    }?.takeIf(Double::isFinite)
+
+private fun Map<String, Any?>.chromaticityPoint(key: String): Map<String, Double>? {
+    val value = this[key] as? String ?: return null
+    val parts = value.split(',')
+    if (parts.size != 2) {
+        return null
+    }
+    val x = parts[0].trim().toDoubleOrNull() ?: return null
+    val y = parts[1].trim().toDoubleOrNull() ?: return null
+    return mapOf("x" to x, "y" to y)
+}
 
 internal fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
     mapOf(

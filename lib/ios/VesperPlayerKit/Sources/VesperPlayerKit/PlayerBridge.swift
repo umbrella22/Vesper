@@ -448,17 +448,20 @@ public struct VesperPlayerError: Equatable {
     public let code: VesperPlayerErrorCode
     public let category: VesperPlayerErrorCategory
     public let retriable: Bool
+    public let details: [String: String]
 
     public init(
         message: String,
         code: VesperPlayerErrorCode,
         category: VesperPlayerErrorCategory,
-        retriable: Bool
+        retriable: Bool,
+        details: [String: String] = [:]
     ) {
         self.message = message
         self.code = code
         self.category = category
         self.retriable = retriable
+        self.details = details
     }
 }
 

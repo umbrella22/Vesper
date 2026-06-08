@@ -124,6 +124,8 @@ struct PlayerHostView: View {
     @State private var sourceNormalizerSetting: ExampleSourceNormalizerSetting = .preflightOnly
     @State private var nativeFramePipelineSetting: ExampleNativeFramePipelineSetting = .disabled
     @State private var isApplyingResilienceProfile = false
+    @State private var selectedHdrEvidencePreset = exampleHdrEvidenceP0Presets[1]
+    @State private var isCapturingHdrEvidence = false
     @State private var hasHandledFinishedPlayback = false
     @State private var controlsHideTask: Task<Void, Never>?
     @State private var queuedRemoteSource: VesperPlayerSource?
@@ -470,8 +472,16 @@ struct PlayerHostView: View {
                     decoderPluginLibraryPaths: decoderPluginLibraryPaths,
                     frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths,
                     pluginDiagnostics: controller.pluginDiagnostics,
+                    hdrEvidencePresets: exampleHdrEvidenceP0Presets,
+                    selectedHdrEvidencePreset: selectedHdrEvidencePreset,
+                    isCapturingHdrEvidence: isCapturingHdrEvidence,
+                    hdrEvidenceActiveSourceAvailable: activePlaylistSource() != nil,
                     onSourceNormalizerSettingChange: applySourceNormalizerSetting,
-                    onNativeFramePipelineSettingChange: applyNativeFramePipelineSetting
+                    onNativeFramePipelineSettingChange: applyNativeFramePipelineSetting,
+                    onHdrEvidencePresetChange: { preset in
+                        selectedHdrEvidencePreset = preset
+                    },
+                    onCaptureHdrEvidence: captureHdrEvidence
                 )
 
                 ExampleResilienceSection(
@@ -653,6 +663,55 @@ struct PlayerHostView: View {
             previousUiState: previousUiState,
             nativeFramePipelineSetting: resolvedSetting
         )
+    }
+
+    private func captureHdrEvidence() {
+        guard !isCapturingHdrEvidence else {
+            return
+        }
+
+        let preset = selectedHdrEvidencePreset
+        let source: VesperPlayerSource
+        if preset.sampleId == "NETWORK-FAILURE-CONTROL" {
+            guard let url = URL(string: IOS_HDR_EVIDENCE_NETWORK_CONTROL_URL) else {
+                hostMessage = ExampleI18n.invalidRemoteUrl
+                return
+            }
+            source = .remoteUrl(
+                url,
+                label: ExampleI18n.hdrEvidenceNetworkControlLabel,
+                protocol: .progressive
+            )
+        } else if let activeSource = activePlaylistSource() {
+            source = activeSource
+        } else {
+            hostMessage = ExampleI18n.hdrEvidenceSelectSource
+            return
+        }
+
+        isCapturingHdrEvidence = true
+        hostMessage = ExampleI18n.hdrEvidenceCapturing
+        Task { @MainActor in
+            await Task.yield()
+            do {
+                let directory = try await captureExampleHdrEvidenceBundle(
+                    ExampleHdrEvidenceCaptureContext(
+                        preset: preset,
+                        source: source,
+                        controller: controller,
+                        sourceNormalizerSetting: sourceNormalizerSetting,
+                        nativeFramePipelineSetting: nativeFramePipelineSetting,
+                        sourceNormalizerPluginLibraryPaths: sourceNormalizerPluginLibraryPaths,
+                        decoderPluginLibraryPaths: decoderPluginLibraryPaths,
+                        frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths
+                    )
+                )
+                hostMessage = ExampleI18n.hdrEvidenceWritten(directory.path)
+            } catch {
+                hostMessage = ExampleI18n.hdrEvidenceFailed(error.localizedDescription)
+            }
+            isCapturingHdrEvidence = false
+        }
     }
 
     private func initializeReplacementController(

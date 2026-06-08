@@ -3,9 +3,13 @@ package io.github.ikaros.vesper.example.flutterhost
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.provider.OpenableColumns
+import android.view.Display
 import dalvik.system.BaseDexClassLoader
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -31,6 +35,8 @@ class MainActivity : FlutterActivity() {
         "bundledFrameProcessorPluginLibraryPaths" ->
           result.success(bundledPluginLibraryPaths("player_frame_processor_diagnostic"))
         "saveVideoToGallery" -> saveVideoToGallery(call, result)
+        "hdrEvidenceOutputRoot" -> result.success(hdrEvidenceOutputRoot().absolutePath)
+        "hdrEvidenceDevice" -> result.success(hdrEvidenceDevice())
         else -> result.notImplemented()
       }
     }
@@ -163,6 +169,74 @@ class MainActivity : FlutterActivity() {
         },
       )
     }.start()
+  }
+
+  private fun hdrEvidenceOutputRoot(): File {
+    val root =
+      getExternalFilesDir(null)?.let { File(it, "hdr-dv-evidence") }
+        ?: File(filesDir, "hdr-dv-evidence")
+    if (!root.exists()) {
+      root.mkdirs()
+    }
+    return root
+  }
+
+  private fun hdrEvidenceDevice(): Map<String, Any?> {
+    val display = windowManager.defaultDisplay
+    return mapOf(
+      "android" to mapOf(
+        "manufacturer" to Build.MANUFACTURER,
+        "model" to Build.MODEL,
+        "apiLevel" to Build.VERSION.SDK_INT,
+        "buildFingerprint" to Build.FINGERPRINT,
+        "displayHdrTypes" to hdrTypeNames(display),
+        "displayRefreshRate" to display.refreshRate.toDouble(),
+        "displayModes" to display.supportedModes.map { mode ->
+          "${mode.physicalWidth}x${mode.physicalHeight}@${"%.2f".format(mode.refreshRate)}"
+        },
+        "media3Version" to "1.9.3",
+        "decoderCandidates" to mapOf(
+          "hevc" to decoderCandidates("video/hevc"),
+          "dolbyVision" to decoderCandidates("video/dolby-vision"),
+        ),
+      ),
+    )
+  }
+
+  private fun hdrTypeNames(display: Display): List<String> {
+    return display.hdrCapabilities.supportedHdrTypes.map { type ->
+      when (type) {
+        Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION -> "DOLBY_VISION"
+        Display.HdrCapabilities.HDR_TYPE_HDR10 -> "HDR10"
+        Display.HdrCapabilities.HDR_TYPE_HLG -> "HLG"
+        Display.HdrCapabilities.HDR_TYPE_HDR10_PLUS -> "HDR10_PLUS"
+        else -> "UNKNOWN_$type"
+      }
+    }
+  }
+
+  private fun decoderCandidates(mimeType: String): List<String> {
+    return runCatching {
+      MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+        .filter { codecInfo ->
+          !codecInfo.isEncoder &&
+            codecInfo.supportedTypes.any { type -> type.equals(mimeType, ignoreCase = true) } &&
+            codecInfo.isHardwareAcceleratedCompat()
+        }
+        .map(MediaCodecInfo::getName)
+        .distinct()
+    }.getOrDefault(emptyList())
+  }
+
+  private fun MediaCodecInfo.isHardwareAcceleratedCompat(): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      isHardwareAccelerated
+    } else {
+      val lowerName = name.lowercase()
+      !lowerName.startsWith("omx.google.") &&
+        !lowerName.startsWith("c2.android.") &&
+        !lowerName.contains("software")
+    }
   }
 
   private fun currentBrightnessRatio(): Double {

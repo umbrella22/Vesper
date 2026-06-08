@@ -140,6 +140,15 @@
 "example.plugins.cache" = "cache：%@";
 "example.plugins.resource" = "resource：%@";
 "example.plugins.native_frame_details" = "native-frame：%@";
+"example.plugins.hdr_evidence.title" = "HDR evidence";
+"example.plugins.hdr_evidence.network_control" = "使用固定的受控网络失败 URL。";
+"example.plugins.hdr_evidence.current_source" = "使用当前正在播放的 source。";
+"example.plugins.hdr_evidence.select_source" = "请先选择本地文件或远程 URL，再采集该 HDR evidence 样本。";
+"example.plugins.hdr_evidence.capture" = "采集 HDR evidence";
+"example.plugins.hdr_evidence.capturing" = "正在采集 HDR evidence";
+"example.plugins.hdr_evidence.network_control_label" = "网络失败对照";
+"example.plugins.hdr_evidence.written" = "HDR evidence bundle 已写入：%@";
+"example.plugins.hdr_evidence.failed" = "HDR evidence capture 失败：%@";
 
 "example.message.preparing_selected_video" = "正在准备所选视频...";
 "example.message.preparing_video_from_photos" = "正在准备来自相册的视频...";

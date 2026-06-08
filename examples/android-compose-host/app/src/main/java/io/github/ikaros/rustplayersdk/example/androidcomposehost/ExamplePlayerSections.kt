@@ -607,8 +607,14 @@ internal fun ExamplePluginDiagnosticsSection(
     decoderMediaCodecPluginLibraryPaths: List<String>,
     frameProcessorPluginLibraryPaths: List<String>,
     pluginDiagnostics: List<Map<String, Any?>>,
+    hdrEvidencePresets: List<ExampleHdrEvidenceSamplePreset>,
+    selectedHdrEvidencePreset: ExampleHdrEvidenceSamplePreset,
+    isCapturingHdrEvidence: Boolean,
+    hdrEvidenceActiveSourceAvailable: Boolean,
     onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Unit,
     onNativeFramePipelineSettingChange: (ExampleNativeFramePipelineSetting) -> Unit,
+    onHdrEvidencePresetChange: (ExampleHdrEvidenceSamplePreset) -> Unit,
+    onCaptureHdrEvidence: () -> Unit,
 ) {
     val sourceNormalizerDiagnostics = exampleSourceNormalizerDiagnostics(pluginDiagnostics)
     val frameProcessorDiagnostics = exampleFrameProcessorDiagnostics(pluginDiagnostics)
@@ -662,6 +668,57 @@ internal fun ExamplePluginDiagnosticsSection(
                 ),
             )
 
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = stringResource(R.string.example_plugins_hdr_evidence_title),
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        color = palette.title,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                AdaptiveChipWrap(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalSpacing = 10.dp,
+                    verticalSpacing = 10.dp,
+                ) {
+                    hdrEvidencePresets.forEach { preset ->
+                        SelectionChip(
+                            label = preset.label,
+                            selected = preset == selectedHdrEvidencePreset,
+                            onClick = { onHdrEvidencePresetChange(preset) },
+                        )
+                    }
+                }
+                Text(
+                    text =
+                        hdrEvidenceStatusText(
+                            selectedHdrEvidencePreset = selectedHdrEvidencePreset,
+                            activeSourceAvailable = hdrEvidenceActiveSourceAvailable,
+                        ),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = palette.body,
+                        lineHeight = 22.sp,
+                    ),
+                )
+                Button(
+                    onClick = onCaptureHdrEvidence,
+                    enabled = !isCapturingHdrEvidence,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.primaryAction,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(
+                        text =
+                            if (isCapturingHdrEvidence) {
+                                stringResource(R.string.example_plugins_hdr_evidence_capturing)
+                            } else {
+                                stringResource(R.string.example_plugins_hdr_evidence_capture)
+                            },
+                    )
+                }
+            }
+
             ExampleFactRow(
                 label = stringResource(R.string.example_plugins_source_normalizer_path),
                 value = sourceNormalizerPluginLibraryPaths.joinToString().ifBlank {
@@ -705,6 +762,20 @@ internal fun ExamplePluginDiagnosticsSection(
         }
     }
 }
+
+@Composable
+private fun hdrEvidenceStatusText(
+    selectedHdrEvidencePreset: ExampleHdrEvidenceSamplePreset,
+    activeSourceAvailable: Boolean,
+): String =
+    when {
+        selectedHdrEvidencePreset.sampleId == "NETWORK-FAILURE-CONTROL" ->
+            stringResource(R.string.example_plugins_hdr_evidence_network_control)
+        activeSourceAvailable ->
+            stringResource(R.string.example_plugins_hdr_evidence_current_source)
+        else ->
+            stringResource(R.string.example_plugins_hdr_evidence_select_source)
+    }
 
 @Composable
 private fun PluginDiagnosticGroup(
