@@ -190,7 +190,9 @@ default.
 For SourceNormalizer v1, `diagnosticsOnly` loads the optional plugin and reports
 capabilities through `pluginDiagnostics`; `preflightOnly` may also open and
 close a packet session for the selected source. AVPlayer still receives the
-original source, and preflight failures are non-fatal. Hosts that embed
+original source, and preflight failures are non-fatal. Apps can depend on
+`vesper_player_source_normalizer_ffmpeg` and use the bundled configuration
+presets instead of app-side framework-path wiring. Hosts that embed
 `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` must also embed and
 sign the matching `VesperPlayerFfmpegRuntime.xcframework.zip`; both artifacts
 must have matching `profile-hash.txt` values. The shared runtime framework is

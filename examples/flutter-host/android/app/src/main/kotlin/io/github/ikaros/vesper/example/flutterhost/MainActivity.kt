@@ -30,8 +30,6 @@ class MainActivity : FlutterActivity() {
         "pickVideo" -> launchVideoPicker(result)
         "bundledDownloadPluginLibraryPaths" ->
           result.success(bundledPluginLibraryPaths("vesper_remux_ffmpeg"))
-        "bundledSourceNormalizerPluginLibraryPaths" ->
-          result.success(bundledPluginLibraryPaths("player_source_normalizer_ffmpeg"))
         "bundledFrameProcessorPluginLibraryPaths" ->
           result.success(bundledPluginLibraryPaths("player_frame_processor_diagnostic"))
         "saveVideoToGallery" -> saveVideoToGallery(call, result)

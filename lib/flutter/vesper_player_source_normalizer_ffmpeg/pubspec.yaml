@@ -1,0 +1,27 @@
+name: vesper_player_source_normalizer_ffmpeg
+description: Optional FFmpeg SourceNormalizer native artifacts for Vesper Player Flutter hosts.
+version: 0.3.0
+homepage: https://github.com/umbrella22/Vesper
+repository: https://github.com/umbrella22/Vesper
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.44.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.github.ikaros.vesper.player.flutter.source_normalizer_ffmpeg
+        pluginClass: VesperPlayerSourceNormalizerFfmpegPlugin
+      ios:
+        pluginClass: VesperPlayerSourceNormalizerFfmpegPlugin

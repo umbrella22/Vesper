@@ -15,6 +15,16 @@ final class VesperSourceNormalizerConfiguration {
     this.runtimeProfile,
   });
 
+  const VesperSourceNormalizerConfiguration.preferBundled({
+    this.runtimeProfile,
+  })  : mode = VesperSourceNormalizerMode.preferNormalized,
+        pluginLibraryPaths = const <String>[];
+
+  const VesperSourceNormalizerConfiguration.requireBundled({
+    this.runtimeProfile,
+  })  : mode = VesperSourceNormalizerMode.requireNormalized,
+        pluginLibraryPaths = const <String>[];
+
   factory VesperSourceNormalizerConfiguration.fromMap(
     Map<Object?, Object?> map,
   ) {

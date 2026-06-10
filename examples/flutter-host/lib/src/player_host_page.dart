@@ -153,19 +153,16 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   }) async {
     VesperPlayerController? nextController;
     try {
-      final pluginPaths =
-          await Future.wait<List<String>>(<Future<List<String>>>[
-            ExampleLocalMediaPicker.bundledSourceNormalizerPluginLibraryPaths(),
-            ExampleLocalMediaPicker.bundledFrameProcessorPluginLibraryPaths(),
-          ]);
+      final frameProcessorPluginPaths =
+          await ExampleLocalMediaPicker.bundledFrameProcessorPluginLibraryPaths();
       if (mounted) {
         setState(() {
-          _sourceNormalizerPluginLibraryPaths = pluginPaths[0];
-          _frameProcessorPluginLibraryPaths = pluginPaths[1];
+          _sourceNormalizerPluginLibraryPaths = const <String>[];
+          _frameProcessorPluginLibraryPaths = frameProcessorPluginPaths;
         });
       } else {
-        _sourceNormalizerPluginLibraryPaths = pluginPaths[0];
-        _frameProcessorPluginLibraryPaths = pluginPaths[1];
+        _sourceNormalizerPluginLibraryPaths = const <String>[];
+        _frameProcessorPluginLibraryPaths = frameProcessorPluginPaths;
       }
 
       final selectedSource = initialSource ?? flutterHlsDemoSource();
@@ -173,15 +170,12 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         initialSource: selectedSource,
         renderSurfaceKind: VesperPlayerRenderSurfaceKind.surfaceView,
         resiliencePolicy: _selectedResilienceProfile.policy,
-        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
-          mode: _sourceNormalizerSetting.mode,
-          pluginLibraryPaths: pluginPaths[0],
-        ),
+        sourceNormalizerConfiguration: _sourceNormalizerConfiguration(),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration(
-          mode: pluginPaths[1].isEmpty
+          mode: frameProcessorPluginPaths.isEmpty
               ? VesperFrameProcessorMode.disabled
               : VesperFrameProcessorMode.diagnosticsOnly,
-          pluginLibraryPaths: pluginPaths[1],
+          pluginLibraryPaths: frameProcessorPluginPaths,
         ),
       );
       await nextController.initialize();
@@ -202,6 +196,21 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
         _disposeControllerSilently(nextController);
       }
       rethrow;
+    }
+  }
+
+  VesperSourceNormalizerConfiguration _sourceNormalizerConfiguration() {
+    switch (_sourceNormalizerSetting.mode) {
+      case VesperSourceNormalizerMode.preferNormalized:
+        return const VesperSourceNormalizerConfiguration.preferBundled();
+      case VesperSourceNormalizerMode.requireNormalized:
+        return const VesperSourceNormalizerConfiguration.requireBundled();
+      case VesperSourceNormalizerMode.disabled:
+      case VesperSourceNormalizerMode.diagnosticsOnly:
+      case VesperSourceNormalizerMode.preflightOnly:
+        return VesperSourceNormalizerConfiguration(
+          mode: _sourceNormalizerSetting.mode,
+        );
     }
   }
 

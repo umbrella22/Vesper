@@ -104,8 +104,15 @@ object VesperPlayerControllerFactory {
         request: VesperPlaybackCapabilityProbeRequest,
     ): VesperPlaybackCapabilityProbeResult =
         VesperPlaybackCapabilityProbe.probe(
-            request,
-            sessionProbeProvider = VesperAndroidDisplaySessionProbeProvider.fromContext(context),
+            request.copy(
+                sourceNormalizerConfiguration =
+                    VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
+                        context = context.applicationContext,
+                        configuration = request.sourceNormalizerConfiguration,
+                    ),
+            ),
+            sessionProbeProvider =
+                VesperAndroidDisplaySessionProbeProvider.fromContext(context.applicationContext),
         )
 
     fun createDefault(

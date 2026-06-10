@@ -19,7 +19,6 @@ void main() {
         .setMockMethodCallHandler(channel, (call) async {
           return switch (call.method) {
             'bundledDownloadPluginLibraryPaths' => const <String>[],
-            'bundledSourceNormalizerPluginLibraryPaths' => const <String>[],
             'bundledFrameProcessorPluginLibraryPaths' => const <String>[],
             _ => null,
           };

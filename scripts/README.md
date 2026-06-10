@@ -34,6 +34,7 @@ scripts/
 ./scripts/vesper android source-normalizer-plugin /tmp/vesper-android-source-normalizer release --profile default
 ./scripts/vesper android frame-processor-plugin /tmp/vesper-android-frame-processor release
 ./scripts/vesper android stage-release
+VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
 
 ./scripts/vesper ios ffi release
@@ -44,6 +45,7 @@ scripts/
 ./scripts/vesper ios stage-frame-processor-plugin-release /tmp/vesper-ios-release ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios kit-xcframework
 ./scripts/vesper ios stage-release
+VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper ios stage-release
 
 ./scripts/vesper desktop ensure-ffmpeg
 ./scripts/vesper desktop verify-decoder-diagnostics
@@ -54,6 +56,7 @@ scripts/
 ./scripts/vesper mobile verify-no-remux ios
 ./scripts/vesper flutter stage-pub /tmp/vesper-flutter-pub
 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
+VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
 ./scripts/vesper release prepare-from-tag vMAJOR.MINOR.PATCH
 ./scripts/vesper release verify-current
 ./scripts/vesper release notes <tag> [output-path]
@@ -74,6 +77,11 @@ The pub helpers stage temporary packages, remove `publish_to: none`, copy the
 root license, and rewrite internal package dependencies to hosted constraints
 for the selected version. If no version argument is passed, the staging helper
 uses the current `vesper_player` package version.
+
+Default Flutter pub staging, dry-run, and publish commands include only the
+main package family. Optional native dependency packages such as
+`vesper_player_source_normalizer_ffmpeg` are skipped unless
+`VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1` is set.
 
 Release workflows do not hardcode product versions. They derive the numeric
 product version from the pushed tag, apply it to the CI workspace with
@@ -106,7 +114,11 @@ semantics by validating `--disable-network` and `--disable-openssl`.
 
 Android FFmpeg runtime packaging is split from consumers. The root command builds
 `vesper-player-kit-ffmpeg-runtime` by default; pass `--android-artifact prebuilts`
-only when a private flow needs raw prebuilts. `player-remux-ffmpeg`,
+only when a private flow needs raw prebuilts. Default Android release staging
+publishes the host kit and Compose AARs only. Set
+`VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1`, or run the dedicated plugin build
+commands, when you intentionally want optional FFmpeg runtime, SourceNormalizer,
+Decoder, FrameProcessor, or external-playback extension AARs. `player-remux-ffmpeg`,
 `player-source-normalizer-ffmpeg`, and the external-playback relay FFmpeg JNI
 library must package only their own plugin/JNI libraries and depend on the
 shared runtime AAR. The FrameProcessor diagnostic plugin is not FFmpeg-backed.
@@ -122,8 +134,13 @@ The external-playback relay FFmpeg JNI library is built by the Android
 `buildRelayFfmpegAndroidJni` task. Release and example builds use the `default`
 profile so the shared runtime and relay JNI profile hashes match.
 
-iOS core kit packaging does not include FFmpeg. Optional remux support is staged
-as two signable XCFrameworks: one shared FFmpeg runtime and one remux plugin:
+iOS core kit packaging does not include FFmpeg. Default iOS release staging
+publishes only `VesperPlayerKit` framework artifacts. Set
+`VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1`, or run dedicated plugin release
+commands, when you intentionally want optional FFmpeg runtime, remux,
+SourceNormalizer, decoder, or FrameProcessor XCFrameworks. Optional remux
+support is staged as two signable XCFrameworks: one shared FFmpeg runtime and
+one remux plugin:
 
 ```sh
 ./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release \

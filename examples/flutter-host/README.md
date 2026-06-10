@@ -73,9 +73,12 @@ from the same FFmpeg profile where applicable.
 
 ## Optional Plugin Diagnostics
 
-The Flutter example asks the native Android / iOS host for bundled plugin binary
-paths and passes only those plugin paths to `VesperPlayerController.create`.
-FFmpeg runtime libraries are provided by the Android runtime AAR or by the iOS
+The Flutter example depends on `vesper_player_source_normalizer_ffmpeg` and uses
+`VesperSourceNormalizerConfiguration.preferBundled()` /
+`VesperSourceNormalizerConfiguration.requireBundled()` so Android and iOS host
+kits can discover bundled SourceNormalizer binaries themselves. FrameProcessor
+remains explicit and still uses native host plugin paths. FFmpeg runtime
+libraries are provided by the Android runtime AAR or by the iOS
 `VesperPlayerFfmpegRuntime.framework`; neither runtime is passed as a plugin
 path.
 

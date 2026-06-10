@@ -38,13 +38,6 @@ abstract final class ExampleLocalMediaPicker {
     return _bundledPluginLibraryPaths('bundledDownloadPluginLibraryPaths');
   }
 
-  static Future<List<String>>
-  bundledSourceNormalizerPluginLibraryPaths() async {
-    return _bundledPluginLibraryPaths(
-      'bundledSourceNormalizerPluginLibraryPaths',
-    );
-  }
-
   static Future<List<String>> bundledFrameProcessorPluginLibraryPaths() async {
     return _bundledPluginLibraryPaths(
       'bundledFrameProcessorPluginLibraryPaths',

@@ -723,6 +723,10 @@ void main() {
       pluginLibraryPaths: <String>['/tmp/libplayer_source_normalizer.dylib'],
       runtimeProfile: 'generic-fallback',
     );
+    const preferBundled = VesperSourceNormalizerConfiguration.preferBundled();
+    const requireBundled = VesperSourceNormalizerConfiguration.requireBundled(
+      runtimeProfile: 'generic-fallback',
+    );
     const frameProcessor = VesperFrameProcessorConfiguration(
       mode: VesperFrameProcessorMode.diagnosticsOnly,
       pluginLibraryPaths: <String>['/tmp/libplayer_frame_processor.dylib'],
@@ -738,9 +742,18 @@ void main() {
 
     expect(
       VesperSourceNormalizerConfiguration.fromMap(sourceNormalizer.toMap())
-          .mode,
+      .mode,
       VesperSourceNormalizerMode.requireNormalized,
     );
+    expect(preferBundled.toMap(), <String, Object?>{
+      'mode': 'preferNormalized',
+      'pluginLibraryPaths': <String>[],
+    });
+    expect(requireBundled.toMap(), <String, Object?>{
+      'mode': 'requireNormalized',
+      'pluginLibraryPaths': <String>[],
+      'runtimeProfile': 'generic-fallback',
+    });
     expect(
       VesperFrameProcessorConfiguration.fromMap(frameProcessor.toMap()).mode,
       VesperFrameProcessorMode.diagnosticsOnly,

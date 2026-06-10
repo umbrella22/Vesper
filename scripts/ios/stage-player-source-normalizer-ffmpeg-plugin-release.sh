@@ -148,6 +148,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip"
   echo "Output zip:"
   echo "  $OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip"
+  echo "SPM package metadata:"
+  echo "  $OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPluginPackage/Package.swift"
   exit 0
 fi
 
@@ -256,6 +258,68 @@ verify_no_runtime_dylibs() {
   fi
 }
 
+write_spm_binary_package() {
+  local output_dir="$1"
+  local runtime_zip="$2"
+  local plugin_zip="$3"
+  local package_dir="$output_dir/VesperPlayerSourceNormalizerFfmpegPluginPackage"
+  local package_manifest="$package_dir/Package.swift"
+  local default_base_url="https://github.com/umbrella22/Vesper/releases/download/v$VESPER_RELEASE_VERSION"
+  local binary_base_url="${VESPER_IOS_BINARY_BASE_URL:-$default_base_url}"
+  local runtime_checksum
+  local plugin_checksum
+
+  vesper_require_command swift
+
+  if [[ ! -f "$runtime_zip" ]]; then
+    echo "Missing iOS FFmpeg runtime zip for SPM package metadata: $runtime_zip" >&2
+    exit 1
+  fi
+  if [[ ! -f "$plugin_zip" ]]; then
+    echo "Missing iOS source normalizer plugin zip for SPM package metadata: $plugin_zip" >&2
+    exit 1
+  fi
+
+  runtime_checksum="$(swift package compute-checksum "$runtime_zip")"
+  plugin_checksum="$(swift package compute-checksum "$plugin_zip")"
+
+  rm -rf "$package_dir"
+  mkdir -p "$package_dir"
+  cat >"$package_manifest" <<EOF
+// swift-tools-version: 5.10
+import PackageDescription
+
+let package = Package(
+    name: "VesperPlayerSourceNormalizerFfmpegPluginPackage",
+    platforms: [
+        .iOS(.v17),
+    ],
+    products: [
+        .library(
+            name: "VesperPlayerFfmpegRuntime",
+            targets: ["VesperPlayerFfmpegRuntime"]
+        ),
+        .library(
+            name: "VesperPlayerSourceNormalizerFfmpegPlugin",
+            targets: ["VesperPlayerSourceNormalizerFfmpegPlugin"]
+        ),
+    ],
+    targets: [
+        .binaryTarget(
+            name: "VesperPlayerFfmpegRuntime",
+            url: "$binary_base_url/VesperPlayerFfmpegRuntime.xcframework.zip",
+            checksum: "$runtime_checksum"
+        ),
+        .binaryTarget(
+            name: "VesperPlayerSourceNormalizerFfmpegPlugin",
+            url: "$binary_base_url/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip",
+            checksum: "$plugin_checksum"
+        ),
+    ]
+)
+EOF
+}
+
 vesper_require_command xcodebuild
 vesper_require_command install_name_tool
 vesper_require_command otool
@@ -323,7 +387,14 @@ ditto -c -k --sequesterRsrc --keepParent \
   "$XCFRAMEWORK_PATH" \
   "$OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip"
 
+write_spm_binary_package \
+  "$OUTPUT_DIR" \
+  "$OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" \
+  "$OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip"
+
 echo "Staged optional iOS FFmpeg source normalizer plugin release artifact:"
 echo "  $OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip"
 echo "Requires shared iOS FFmpeg runtime artifact:"
 echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip"
+echo "Staged checksum-based SPM binary package metadata:"
+echo "  $OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPluginPackage/Package.swift"

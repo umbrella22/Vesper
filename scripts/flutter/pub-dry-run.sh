@@ -9,15 +9,24 @@ VERSION="${2:-}"
 
 "$ROOT_DIR/scripts/flutter/stage-pub-packages.sh" "$STAGE_DIR" ${VERSION:+"$VERSION"}
 
-packages=(
+core_packages=(
   vesper_player_platform_interface
   vesper_player_android
   vesper_player_ios
-  vesper_player_macos
   vesper_player
   vesper_player_external_playback
   vesper_player_ui
 )
+optional_plugin_packages=(
+  vesper_player_source_normalizer_ffmpeg
+)
+packages=("${core_packages[@]}")
+
+case "${VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS:-0}" in
+  1|true|TRUE|yes|YES)
+    packages+=("${optional_plugin_packages[@]}")
+    ;;
+esac
 
 write_overrides() {
   local package="$1"

@@ -13,7 +13,23 @@ OUTPUT_DIR="${1:-$ROOT_DIR/dist/release/ios}"
 FRAMEWORK_NAME="VesperPlayerKit.framework"
 BINARY_NAME="VesperPlayerKit"
 
+include_optional_plugins=0
+case "${VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS:-0}" in
+  1|true|TRUE|yes|YES)
+    include_optional_plugins=1
+    ;;
+esac
+
 mkdir -p "$OUTPUT_DIR"
+
+if [[ "$include_optional_plugins" -eq 0 ]]; then
+  rm -f \
+    "$OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" \
+    "$OUTPUT_DIR/VesperPlayerRemuxFfmpegPlugin.xcframework.zip" \
+    "$OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" \
+    "$OUTPUT_DIR/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" \
+    "$OUTPUT_DIR/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip"
+fi
 
 "$ROOT_DIR/scripts/ios/build-vesper-player-kit-xcframework.sh"
 
@@ -78,46 +94,50 @@ ditto -c -k --sequesterRsrc --keepParent \
   "$ARM64_XCFRAMEWORK_PATH" \
   "$OUTPUT_DIR/VesperPlayerKit.xcframework.zip"
 
-"$ROOT_DIR/scripts/ios/stage-player-remux-ffmpeg-plugin-release.sh" \
-  "$OUTPUT_DIR" \
-  --profile default \
-  ios-arm64 ios-simulator-arm64
+if [[ "$include_optional_plugins" -eq 1 ]]; then
+  "$ROOT_DIR/scripts/ios/stage-player-remux-ffmpeg-plugin-release.sh" \
+    "$OUTPUT_DIR" \
+    --profile default \
+    ios-arm64 ios-simulator-arm64
 
-"$ROOT_DIR/scripts/ios/stage-player-source-normalizer-ffmpeg-plugin-release.sh" \
-  "$OUTPUT_DIR" \
-  --profile default \
-  ios-arm64 ios-simulator-arm64
+  "$ROOT_DIR/scripts/ios/stage-player-source-normalizer-ffmpeg-plugin-release.sh" \
+    "$OUTPUT_DIR" \
+    --profile default \
+    ios-arm64 ios-simulator-arm64
 
-"$ROOT_DIR/scripts/ios/stage-player-decoder-videotoolbox-plugin-release.sh" \
-  "$OUTPUT_DIR" \
-  ios-arm64 ios-simulator-arm64
+  "$ROOT_DIR/scripts/ios/stage-player-decoder-videotoolbox-plugin-release.sh" \
+    "$OUTPUT_DIR" \
+    ios-arm64 ios-simulator-arm64
 
-"$ROOT_DIR/scripts/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" \
-  "$OUTPUT_DIR" \
-  ios-arm64 ios-simulator-arm64
+  "$ROOT_DIR/scripts/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" \
+    "$OUTPUT_DIR" \
+    ios-arm64 ios-simulator-arm64
 
-if [[ ! -f "$OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" ]]; then
-  echo "Missing staged iOS FFmpeg runtime artifact:" >&2
-  echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" >&2
-  exit 1
-fi
+  if [[ ! -f "$OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" ]]; then
+    echo "Missing staged iOS FFmpeg runtime artifact:" >&2
+    echo "  $OUTPUT_DIR/VesperPlayerFfmpegRuntime.xcframework.zip" >&2
+    exit 1
+  fi
 
-if [[ ! -f "$OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" ]]; then
-  echo "Missing staged iOS SourceNormalizer artifact:" >&2
-  echo "  $OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" >&2
-  exit 1
-fi
+  if [[ ! -f "$OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" ]]; then
+    echo "Missing staged iOS SourceNormalizer artifact:" >&2
+    echo "  $OUTPUT_DIR/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" >&2
+    exit 1
+  fi
 
-if [[ ! -f "$OUTPUT_DIR/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" ]]; then
-  echo "Missing staged iOS VideoToolbox decoder artifact:" >&2
-  echo "  $OUTPUT_DIR/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" >&2
-  exit 1
-fi
+  if [[ ! -f "$OUTPUT_DIR/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" ]]; then
+    echo "Missing staged iOS VideoToolbox decoder artifact:" >&2
+    echo "  $OUTPUT_DIR/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" >&2
+    exit 1
+  fi
 
-if [[ ! -f "$OUTPUT_DIR/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip" ]]; then
-  echo "Missing staged iOS FrameProcessor diagnostic artifact:" >&2
-  echo "  $OUTPUT_DIR/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip" >&2
-  exit 1
+  if [[ ! -f "$OUTPUT_DIR/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip" ]]; then
+    echo "Missing staged iOS FrameProcessor diagnostic artifact:" >&2
+    echo "  $OUTPUT_DIR/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip" >&2
+    exit 1
+  fi
+else
+  echo "Skipped optional iOS plugin XCFrameworks. Set VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 to stage them."
 fi
 
 echo "Staged VesperPlayerKit iOS release assets into:"

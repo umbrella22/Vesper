@@ -398,32 +398,23 @@ name:
 - Android core: `VesperPlayerKit-android-<abi>.aar`
 - Android Compose adapter: `VesperPlayerKitCompose-android-<abi>.aar`
 - Android Compose UI: `VesperPlayerKitComposeUi-android-<abi>.aar`
-- Android external playback: `VesperPlayerKitExternalPlayback-android-<abi>.aar`
-- Android FFmpeg runtime: `VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
-- Optional Android MediaCodec decoder plugin: `VesperPlayerKitDecoderMediaCodec-android-<abi>.aar`
-- Optional Android SourceNormalizer FFmpeg plugin: `VesperPlayerKitSourceNormalizerFfmpeg-android-<abi>.aar`
-- Optional Android FrameProcessor diagnostic plugin: `VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar`
 - Android Compose sample APK: `VesperPlayerAndroidComposeHost-android-<abi>-debug-signed.apk`
 - Flutter Android sample APK: `VesperPlayerFlutterHost-android-<abi>-debug-signed.apk`
 - iOS framework slices: `VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework: `VesperPlayerKit.xcframework.zip`
-- Optional iOS FFmpeg runtime: `VesperPlayerFfmpegRuntime.xcframework.zip`
-- Optional iOS FFmpeg remux plugin: `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
-- Optional iOS SourceNormalizer FFmpeg plugin: `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`
-- Optional iOS FrameProcessor diagnostic plugin: `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
 - `SHA256SUMS.txt` for release artifact verification
 
 Android packaging is currently `arm64-v8a` only, including the downloadable
 sample APKs. The sample APKs are debug-signed for side-load evaluation only and
 are not production app-store artifacts. iOS packaging is arm64 only for device,
-Apple Silicon Simulator, and optional Catalyst slices. The iOS core
-`VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
-and SourceNormalizer support are shipped as separate optional runtime
-and plugin artifacts that the host app signs and embeds. Plugin library path
-configuration points only at plugin binaries; the shared FFmpeg runtime is a
-package dependency, not a plugin path. All FFmpeg-backed optional plugins and
-their shared runtime must come from the same FFmpeg profile so
-`profile-hash.txt` values match.
+Apple Silicon Simulator, and optional Catalyst slices. Default mobile releases
+do not publish optional plugin binaries. The iOS core `VesperPlayerKit.xcframework`
+does not embed FFmpeg; FFmpeg-backed remux support and SourceNormalizer support
+are staged through explicit optional runtime and plugin release commands that
+the host app signs and embeds. Plugin library path configuration points only at
+plugin binaries; the shared FFmpeg runtime is a package dependency, not a plugin
+path. All FFmpeg-backed optional plugins and their shared runtime must come from
+the same FFmpeg profile so `profile-hash.txt` values match.
 
 Optional SourceNormalizer, decoder, and FrameProcessor artifacts are for
 diagnostics and explicit opt-in workflows. Default mobile playback remains

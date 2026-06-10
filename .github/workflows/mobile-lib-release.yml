@@ -182,49 +182,19 @@ jobs:
             fi
           done < <(find release-assets/android -type f -name '*.aar' -print0)
 
-          source_normalizer="release-assets/android/VesperPlayerKitSourceNormalizerFfmpeg-android-${{ matrix.abi }}.aar"
-          decoder_mediacodec="release-assets/android/VesperPlayerKitDecoderMediaCodec-android-${{ matrix.abi }}.aar"
-          frame_processor="release-assets/android/VesperPlayerKitFrameProcessorDiagnostic-android-${{ matrix.abi }}.aar"
-          runtime="release-assets/android/VesperPlayerKitFfmpegRuntime-android-${{ matrix.abi }}.aar"
-
-          for required in "$source_normalizer" "$decoder_mediacodec" "$frame_processor" "$runtime"; do
-            if [[ ! -f "$required" ]]; then
-              echo "Missing expected Android optional artifact: $required" >&2
+          optional_artifacts=(
+            "release-assets/android/VesperPlayerKitExternalPlayback-android-${{ matrix.abi }}.aar"
+            "release-assets/android/VesperPlayerKitFfmpegRuntime-android-${{ matrix.abi }}.aar"
+            "release-assets/android/VesperPlayerKitDecoderMediaCodec-android-${{ matrix.abi }}.aar"
+            "release-assets/android/VesperPlayerKitSourceNormalizerFfmpeg-android-${{ matrix.abi }}.aar"
+            "release-assets/android/VesperPlayerKitFrameProcessorDiagnostic-android-${{ matrix.abi }}.aar"
+          )
+          for unexpected in "${optional_artifacts[@]}"; do
+            if [[ -f "$unexpected" ]]; then
+              echo "Default Android release must not stage optional plugin artifact: $unexpected" >&2
               exit 1
             fi
           done
-
-          if ! unzip -Z1 "$decoder_mediacodec" | grep -q '^jni/${{ matrix.abi }}/libplayer_decoder_mediacodec\.so$'; then
-            echo "Android MediaCodec decoder AAR is missing libplayer_decoder_mediacodec.so." >&2
-            unzip -Z1 "$decoder_mediacodec" >&2
-            exit 1
-          fi
-          if unzip -Z1 "$decoder_mediacodec" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >/dev/null; then
-            echo "Android MediaCodec decoder AAR must not bundle FFmpeg runtime libraries." >&2
-            unzip -Z1 "$decoder_mediacodec" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >&2
-            exit 1
-          fi
-          if unzip -Z1 "$source_normalizer" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >/dev/null; then
-            echo "Android SourceNormalizer plugin AAR must not bundle FFmpeg runtime libraries." >&2
-            unzip -Z1 "$source_normalizer" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >&2
-            exit 1
-          fi
-          if unzip -Z1 "$frame_processor" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >/dev/null; then
-            echo "Android FrameProcessor diagnostic AAR must not bundle FFmpeg runtime libraries." >&2
-            unzip -Z1 "$frame_processor" | grep -E '(^|/)jni/[^/]+/(libav|libsw|libxml2|libssl|libcrypto).*\.so$' >&2
-            exit 1
-          fi
-
-          temp_dir="$(mktemp -d)"
-          trap 'rm -rf "$temp_dir"' EXIT
-          unzip -q "$runtime" assets/vesper-ffmpeg-runtime/profile-hash.txt -d "$temp_dir/runtime"
-          unzip -q "$source_normalizer" assets/vesper-source-normalizer-ffmpeg/profile-hash.txt -d "$temp_dir/source-normalizer"
-          if ! cmp -s \
-            "$temp_dir/runtime/assets/vesper-ffmpeg-runtime/profile-hash.txt" \
-            "$temp_dir/source-normalizer/assets/vesper-source-normalizer-ffmpeg/profile-hash.txt"; then
-            echo "Android FFmpeg runtime and SourceNormalizer plugin profile hashes differ." >&2
-            exit 1
-          fi
 
       - name: Upload VesperPlayerKit Android release asset
         uses: actions/upload-artifact@v4
@@ -389,67 +359,21 @@ jobs:
 
           temp_dir="$(mktemp -d)"
           trap 'rm -rf "$temp_dir"' EXIT
-          unzip -q release-assets/ios/VesperPlayerKit.xcframework.zip -d "$temp_dir"
-          unzip -q release-assets/ios/VesperPlayerFfmpegRuntime.xcframework.zip -d "$temp_dir"
-          unzip -q release-assets/ios/VesperPlayerRemuxFfmpegPlugin.xcframework.zip -d "$temp_dir"
-          unzip -q release-assets/ios/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip -d "$temp_dir"
-          unzip -q release-assets/ios/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip -d "$temp_dir"
+          optional_artifacts=(
+            "release-assets/ios/VesperPlayerFfmpegRuntime.xcframework.zip"
+            "release-assets/ios/VesperPlayerRemuxFfmpegPlugin.xcframework.zip"
+            "release-assets/ios/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip"
+            "release-assets/ios/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip"
+            "release-assets/ios/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip"
+          )
+          for unexpected in "${optional_artifacts[@]}"; do
+            if [[ -f "$unexpected" ]]; then
+              echo "Default iOS release must not stage optional plugin artifact: $unexpected" >&2
+              exit 1
+            fi
+          done
 
-          if ! find "$temp_dir" -path '*VesperPlayerFfmpegRuntime.framework/Frameworks/libav*.dylib*' -type f | grep -q .; then
-            echo "Shared iOS FFmpeg runtime does not contain FFmpeg dylibs." >&2
-            exit 1
-          fi
-          if find "$temp_dir" -path '*VesperPlayerRemuxFfmpegPlugin.framework/*' -type f \
-            \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \) | grep -q .; then
-            echo "iOS remux plugin must not bundle FFmpeg runtime dylibs." >&2
-            find "$temp_dir" -path '*VesperPlayerRemuxFfmpegPlugin.framework/*' -type f \
-              \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \)
-            exit 1
-          fi
-          if find "$temp_dir" -path '*VesperPlayerSourceNormalizerFfmpegPlugin.framework/*' -type f \
-            \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \) | grep -q .; then
-            echo "iOS SourceNormalizer plugin must not bundle FFmpeg runtime dylibs." >&2
-            find "$temp_dir" -path '*VesperPlayerSourceNormalizerFfmpegPlugin.framework/*' -type f \
-              \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \)
-            exit 1
-          fi
-          if find "$temp_dir" -path '*VesperPlayerFrameProcessorDiagnosticPlugin.framework/*' -type f \
-            \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \) | grep -q .; then
-            echo "iOS FrameProcessor diagnostic plugin must not bundle FFmpeg runtime dylibs." >&2
-            find "$temp_dir" -path '*VesperPlayerFrameProcessorDiagnosticPlugin.framework/*' -type f \
-              \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \)
-            exit 1
-          fi
-          profile_hash_count=0
-          while IFS= read -r runtime_hash; do
-            profile_hash_count=$((profile_hash_count + 1))
-            plugin_hash="${runtime_hash//VesperPlayerFfmpegRuntime/VesperPlayerRemuxFfmpegPlugin}"
-            if [[ ! -f "$plugin_hash" ]]; then
-              echo "Missing matching iOS remux plugin profile hash for $runtime_hash" >&2
-              exit 1
-            fi
-            if ! cmp -s "$runtime_hash" "$plugin_hash"; then
-              echo "iOS FFmpeg runtime and remux plugin profile hashes differ:" >&2
-              echo "  runtime: $runtime_hash" >&2
-              echo "  plugin:  $plugin_hash" >&2
-              exit 1
-            fi
-            source_normalizer_hash="${runtime_hash//VesperPlayerFfmpegRuntime/VesperPlayerSourceNormalizerFfmpegPlugin}"
-            if [[ ! -f "$source_normalizer_hash" ]]; then
-              echo "Missing matching iOS SourceNormalizer plugin profile hash for $runtime_hash" >&2
-              exit 1
-            fi
-            if ! cmp -s "$runtime_hash" "$source_normalizer_hash"; then
-              echo "iOS FFmpeg runtime and SourceNormalizer plugin profile hashes differ:" >&2
-              echo "  runtime:          $runtime_hash" >&2
-              echo "  sourceNormalizer: $source_normalizer_hash" >&2
-              exit 1
-            fi
-          done < <(find "$temp_dir" -path '*VesperPlayerFfmpegRuntime.framework/Resources/profile-hash.txt' -type f | sort)
-          if [[ "$profile_hash_count" -eq 0 ]]; then
-            echo "Shared iOS FFmpeg runtime did not include profile-hash.txt." >&2
-            exit 1
-          fi
+          unzip -q release-assets/ios/VesperPlayerKit.xcframework.zip -d "$temp_dir"
 
           while IFS= read -r -d '' binary; do
             info="$(lipo -info "$binary")"
@@ -462,12 +386,7 @@ jobs:
           done < <(
             find "$temp_dir" \
               \( \
-                -path '*VesperPlayerKit.framework/VesperPlayerKit' -o \
-                -path '*VesperPlayerFfmpegRuntime.framework/VesperPlayerFfmpegRuntime' -o \
-                -path '*VesperPlayerFfmpegRuntime.framework/Frameworks/lib*.dylib*' -o \
-                -path '*VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin' -o \
-                -path '*VesperPlayerSourceNormalizerFfmpegPlugin.framework/VesperPlayerSourceNormalizerFfmpegPlugin' -o \
-                -path '*VesperPlayerFrameProcessorDiagnosticPlugin.framework/VesperPlayerFrameProcessorDiagnosticPlugin' \
+                -path '*VesperPlayerKit.framework/VesperPlayerKit' \
               \) \
               -print0
           )

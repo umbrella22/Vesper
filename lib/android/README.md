@@ -40,15 +40,15 @@ GitHub Releases publish the following artifacts via
 - `VesperPlayerKit-android-arm64-v8a.aar`
 - `VesperPlayerKitCompose-android-arm64-v8a.aar`
 - `VesperPlayerKitComposeUi-android-arm64-v8a.aar`
-- `VesperPlayerKitExternalPlayback-android-arm64-v8a.aar`
-- `VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar`
-- `VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar`
-- `VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar`
-- `VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar`
 
 Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
 emulator. See [Release Downloads](../../README.md#release-downloads) for the
 public package names and artifact-selection notes.
+
+Default Android releases do not publish optional plugin AARs. Use the dedicated
+plugin build commands, or set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1` for
+release staging, when you intentionally need FFmpeg runtime, SourceNormalizer,
+Decoder, FrameProcessor, or external-playback extension artifacts.
 
 The optional `vesper-player-kit-compose-ui` module remains available both as a
 source module and as a release AAR.
@@ -66,18 +66,22 @@ From the repository root:
 ```sh
 ./scripts/vesper android aar
 ./scripts/vesper android stage-release
+VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ```
 
 Without a Gradle CLI, open `lib/android` in Android Studio and run:
 
 - `:vesper-player-kit:assembleRelease`
+- `:vesper-player-kit-compose:assembleRelease`
+- `:vesper-player-kit-compose-ui:assembleRelease`
+
+Optional plugin and extension modules can still be assembled explicitly:
+
 - `:vesper-player-kit-external-playback:assembleRelease`
 - `:vesper-player-kit-ffmpeg-runtime:assembleRelease`
 - `:vesper-player-kit-decoder-mediacodec:assembleRelease`
 - `:vesper-player-kit-source-normalizer-ffmpeg:assembleRelease`
 - `:vesper-player-kit-frame-processor-diagnostic:assembleRelease`
-- `:vesper-player-kit-compose:assembleRelease`
-- `:vesper-player-kit-compose-ui:assembleRelease`
 
 ## Public API
 

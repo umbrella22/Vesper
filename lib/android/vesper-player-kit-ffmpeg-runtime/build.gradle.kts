@@ -27,6 +27,12 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
 }
 
 extensions.configure<KotlinAndroidProjectExtension>("kotlin") {

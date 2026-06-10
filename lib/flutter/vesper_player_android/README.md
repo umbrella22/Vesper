@@ -173,11 +173,12 @@ by default.
 For SourceNormalizer v1, `diagnosticsOnly` loads the optional plugin and reports
 capabilities through `pluginDiagnostics`; `preflightOnly` may also open and
 close a packet session for the selected source. The Android player still gives
-the original source to ExoPlayer, and preflight failures are non-fatal. Hosts
-that package `VesperPlayerKitSourceNormalizerFfmpeg-android-<abi>.aar` must also
-package the matching `VesperPlayerKitFfmpegRuntime-android-<abi>.aar`; the
-SourceNormalizer AAR carries plugin metadata/profile hash but must not contain
-FFmpeg runtime `.so` files.
+the original source to ExoPlayer, and preflight failures are non-fatal. Apps can
+depend on `vesper_player_source_normalizer_ffmpeg` and use the bundled
+configuration presets instead of app-side library-path wiring. Hosts that
+package `vesper-player-kit-source-normalizer-ffmpeg` must also package the
+matching `vesper-player-kit-ffmpeg-runtime`; the SourceNormalizer AAR carries
+plugin metadata/profile hash but must not contain FFmpeg runtime `.so` files.
 
 For FrameProcessor v1,
 `VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar` is a diagnostics

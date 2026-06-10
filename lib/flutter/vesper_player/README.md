@@ -587,8 +587,13 @@ configurations:
 - `nativeFramePipelineConfiguration` with `disabled`, `diagnosticsOnly`,
   `preferNativeFrame`, and `requireNativeFrame` modes
 
-Both are disabled by default. `pluginLibraryPaths` must contain plugin binary
-paths only: Android `.so` paths or iOS plugin framework binary paths. The
+Both are disabled by default. Apps can depend on the optional
+`vesper_player_source_normalizer_ffmpeg` package and pass
+`VesperSourceNormalizerConfiguration.preferBundled()` or
+`VesperSourceNormalizerConfiguration.requireBundled()` to use the published
+Android AAR / iOS SPM binary artifacts without host-app path lookup code.
+`pluginLibraryPaths` remains available for custom builds and must contain plugin
+binary paths only: Android `.so` paths or iOS plugin framework binary paths. The
 Android FFmpeg runtime AAR and iOS `VesperPlayerFfmpegRuntime.xcframework.zip`
 are package dependencies and should not be placed in `pluginLibraryPaths`.
 

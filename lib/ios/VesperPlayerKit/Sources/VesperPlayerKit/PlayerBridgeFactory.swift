@@ -24,7 +24,7 @@ enum PlayerBridgeFactory {
     ) -> VesperPlayerController {
         switch defaultBackend {
         case .fakeDemo:
-            VesperPlayerController(
+            return VesperPlayerController(
                 FakePlayerBridge(
                     initialSource: initialSource,
                     resiliencePolicy: resiliencePolicy,
@@ -35,14 +35,18 @@ enum PlayerBridgeFactory {
                 keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
         case .rustNativeStub:
-            VesperPlayerController(
+            let resolvedSourceNormalizerConfiguration =
+                VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
+                    sourceNormalizerConfiguration
+                )
+            return VesperPlayerController(
                 VesperNativePlayerBridge(
                     initialSource: initialSource,
                     resiliencePolicy: resiliencePolicy,
                     trackPreferencePolicy: trackPreferencePolicy,
                     preloadBudgetPolicy: preloadBudgetPolicy,
                     benchmarkConfiguration: benchmarkConfiguration,
-                    sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+                    sourceNormalizerConfiguration: resolvedSourceNormalizerConfiguration,
                     frameProcessorConfiguration: frameProcessorConfiguration,
                     nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
                 ),
@@ -89,7 +93,20 @@ public enum VesperPlayerControllerFactory {
         _ request: VesperPlaybackCapabilityProbeRequest
     ) -> VesperPlaybackCapabilityProbeResult {
         VesperPlaybackCapabilityProbe.probe(
-            request,
+            VesperPlaybackCapabilityProbeRequest(
+                source: request.source,
+                codec: request.codec,
+                width: request.width,
+                height: request.height,
+                frameRate: request.frameRate,
+                requiresNativeFrame: request.requiresNativeFrame,
+                sourceNormalizerConfiguration:
+                    VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
+                        request.sourceNormalizerConfiguration
+                    ),
+                frameProcessorConfiguration: request.frameProcessorConfiguration,
+                nativeFramePipelineConfiguration: request.nativeFramePipelineConfiguration
+            ),
             sessionProbeProvider: VesperIOSSessionProbeProvider.currentDisplay()
         )
     }

@@ -36,13 +36,6 @@ import UIKit
             binaryName: "VesperPlayerRemuxFfmpegPlugin"
           ) ?? []
         )
-      case "bundledSourceNormalizerPluginLibraryPaths":
-        result(
-          self?.bundledFrameworkPluginLibraryPaths(
-            frameworkName: "VesperPlayerSourceNormalizerFfmpegPlugin",
-            binaryName: "VesperPlayerSourceNormalizerFfmpegPlugin"
-          ) ?? []
-        )
       case "bundledFrameProcessorPluginLibraryPaths":
         result(
           self?.bundledFrameworkPluginLibraryPaths(

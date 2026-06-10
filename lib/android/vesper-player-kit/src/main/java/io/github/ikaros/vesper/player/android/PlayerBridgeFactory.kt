@@ -34,15 +34,21 @@ internal object PlayerBridgeFactory {
                     appContext = context.applicationContext,
                 )
             PlayerBridgeBackend.VesperNativeStub -> {
+                val appContext = context.applicationContext
+                val resolvedSourceNormalizerConfiguration =
+                    VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
+                        context = appContext,
+                        configuration = sourceNormalizerConfiguration,
+                    )
                 val benchmarkRecorder = VesperBenchmarkRecorder(benchmarkConfiguration)
                 VesperNativePlayerBridge(
                     bindings =
                         VesperNativeJniBindings(
-                            context = context.applicationContext,
+                            context = appContext,
                             preloadBudgetPolicy = preloadBudgetPolicy,
                             decoderBackend = decoderBackend,
                             benchmarkRecorder = benchmarkRecorder,
-                            sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                            sourceNormalizerConfiguration = resolvedSourceNormalizerConfiguration,
                         ),
                     initialSource = initialSource,
                     currentResiliencePolicy = resiliencePolicy,
@@ -51,9 +57,9 @@ internal object PlayerBridgeFactory {
                     decoderBackend = decoderBackend,
                     benchmarkRecorder = benchmarkRecorder,
                     keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
-                    appContext = context.applicationContext,
+                    appContext = appContext,
                     surfaceKind = surfaceKind,
-                    sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                    sourceNormalizerConfiguration = resolvedSourceNormalizerConfiguration,
                     frameProcessorConfiguration = frameProcessorConfiguration,
                     nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
                 )

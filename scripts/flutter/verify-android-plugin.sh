@@ -9,7 +9,15 @@ PROJECT_DIR="$ROOT_DIR/examples/flutter-host/android"
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$ROOT_DIR/.gradle/gradle-user-home}"
 
 GRADLE_CMD=("$(vesper_android_resolve_gradle "$PROJECT_DIR")")
-
-exec "${GRADLE_CMD[@]}" -p "$PROJECT_DIR" \
-  ":vesper_player_android:compileDebugKotlin" \
+gradle_tasks=(
+  ":vesper_player_android:compileDebugKotlin"
   ":vesper_player_external_playback:compileDebugKotlin"
+)
+
+case "${VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS:-0}" in
+  1|true|TRUE|yes|YES)
+    gradle_tasks+=(":vesper_player_source_normalizer_ffmpeg:compileDebugKotlin")
+    ;;
+esac
+
+exec "${GRADLE_CMD[@]}" -p "$PROJECT_DIR" "${gradle_tasks[@]}"
